@@ -1,0 +1,69 @@
+cabal-version: 3.0
+name: backend
+version: 0.1.0.0
+build-type: Simple
+
+common warnings
+    ghc-options: -Wall
+
+executable backend
+    import: warnings
+    main-is: Main.hs
+    -- The -threaded flag is CRITICAL here. We use blocking file locks (flock) to synchronize
+    -- access to the git repository. Without this flag, the app runs on a single OS thread.
+    -- If one request waits for a lock, it puts that single OS thread to sleep, freezing the
+    -- entire app. This includes the request that currently holds the lock, meaning it can
+    -- never finish its work and release the lock, resulting in a permanent freeze.
+    ghc-options: -threaded
+    other-modules: Config,
+                   ProcessLimiter,
+                   UserRepo,
+                   Cache,
+                   OutPaths,
+                   Handlers.Store,
+                   Handlers.SrcFiles,
+                   Handlers.CommitHash,
+                   Handlers.Projects,
+                   Handlers.ProjectEntities,
+                   Handlers.Statuses,
+                   Handlers.Steps,
+                   Handlers.StepConfig,
+                   Handlers.RunStep,
+                   Handlers.StatusStream,
+                   Handlers.Upload,
+                   Bus,
+                   NixUtils
+    build-depends: base ^>=4.19.2.0,
+                   stm,
+                   async,
+                   tomland,
+                   servant,
+                   servant-server,
+                   servant-multipart,
+                   warp,
+                   wai-cors,
+                   text,
+                   wai,
+                   directory,
+                   filepath,
+                   bytestring,
+                   cassava,
+                   vector,
+                   conduit,
+                   conduit-extra,
+                   resourcet,
+                   http-media,
+                   process,
+                   aeson,
+                   containers,
+                   time,
+                   unix,
+                   http-types,
+                   hnix,
+                   prettyprinter,
+                   data-fix,
+                   mtl,
+                   temporary,
+                   filelock
+    hs-source-dirs: src
+    default-language: Haskell2010

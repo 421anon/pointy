@@ -1,0 +1,67 @@
+site_name: Pointy Notebook
+site_description: "An open platform for defining, managing, and executing reproducible scientific workflows."
+
+theme:
+  name: material
+  icon:
+    logo: material/horse-variant-fast
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Fira Sans
+    code: Fira Mono
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.path
+    - navigation.footer
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/theme-screenshots.js
+
+markdown_extensions:
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.smartsymbols
+
+nav:
+  - Overview: index.md
+  - User Guide:
+    - Managing Projects: projects.md
+    - Building Workflows (Steps): steps.md
+    - Execution and Data Management: execution.md
+  - Instance Admin Guide:
+    - Architecture & Configuration: admin.md
+    - Setting Up the User Repository: user-repo-setup.md
+    - Type Reference: type-reference.md
+    - CLI Reference: cli-reference.md
+docs_dir: pages

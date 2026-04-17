@@ -1,0 +1,62 @@
+.select-container {
+    position: relative;
+    flex: 0 0 50%;
+    min-width: 0;
+}
+
+.select-container--right {
+    margin-left: auto;
+}
+
+#select-input {
+    all: unset;
+    flex-grow: 1;
+    color: var(--text-primary);
+    position: relative;
+    min-width: 0;
+    white-space: nowrap;
+    height: 24px;
+}
+
+.select-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    max-height: 200px;
+    overflow-y: auto;
+    box-shadow: var(--shadow-elevated);
+    margin-top: var(--spacing-2xs);
+    max-height: min(40vh, 320px);
+    overflow-x: hidden;
+}
+
+.select-menu-item {
+    padding: var(--spacing-sm);
+    cursor: pointer;
+    color: var(--text-primary);
+
+    &.active {
+        background-color: var(--bg-hover);
+    }
+}
+
+.input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.material-symbols-outlined.remove-selected-icon {
+  cursor: pointer;
+}
+
+.form-input-icon {
+  align-self: center;
+  color: var(--text-secondary);
+  margin-right: var(--spacing-xs);
+}

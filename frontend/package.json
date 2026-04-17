@@ -1,0 +1,22 @@
+{
+  "name": "pointy-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "webpack --mode=production",
+    "production": "webpack serve --mode=development",
+    "dev-vm": "PROXY_TARGET=http://localhost:8080 webpack serve --mode=development",
+    "watch": "webpack --mode=development --watch"
+  },
+  "devDependencies": {
+    "css-loader": "^7.1.2",
+    "elm-webpack-loader": "^8.0.0",
+    "html-webpack-plugin": "^5.6.3",
+    "sass": "^1.89.2",
+    "sass-loader": "^16.0.5",
+    "style-loader": "^4.0.0",
+    "webpack": "^5.101.0",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.2.2"
+  }
+}

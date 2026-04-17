@@ -1,0 +1,26 @@
+/* Wider content area for technical prose */
+.md-grid {
+  max-width: 1100px;
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-left-width: 4px;
+  border-radius: 4px;
+}
+
+.md-typeset pre > code {
+  border-radius: 4px;
+}
+
+.md-nav__item--section > .md-nav__link {
+  letter-spacing: 0.02em;
+}
+
+.md-content img[data-theme-screenshot="true"] {
+  transition: opacity 0.15s ease-in-out;
+}
+
+.md-content img[data-theme-screenshot="true"][data-theme-screenshot-ready="false"] {
+  opacity: 0;
+}

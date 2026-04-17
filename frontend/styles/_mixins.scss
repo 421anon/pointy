@@ -1,0 +1,64 @@
+@mixin button-base {
+    font: inherit;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+
+    &:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px var(--focus-ring);
+    }
+}
+
+@mixin interactive-element {
+    &:hover {
+        background: var(--bg-elevated);
+        color: var(--text-primary);
+    }
+}
+
+@mixin form-control {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font: inherit;
+    border-radius: var(--radius-sm);
+    padding: 0 var(--spacing-sm);
+    caret-color: var(--text-primary);
+    height: 34px;
+    width: 100%;
+
+    &:focus-within {
+        outline: none;
+        border-color: var(--text-primary);
+    }
+
+    &::placeholder {
+        color: var(--text-muted);
+    }
+}
+
+/* Readonly/disabled utilities */
+@mixin readonly-disabled {
+    opacity: 0.6;
+    cursor: text;
+    caret-color: transparent;
+}
+
+@mixin neutral-focus {
+    outline: none;
+    box-shadow: none;
+    border-color: var(--border-color);
+}
+
+@mixin icon-btn-base {
+    @include button-base;
+    @include interactive-element;
+    background: none;
+    border: none;
+    min-width: 32px;
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+}

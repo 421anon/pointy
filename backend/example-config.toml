@@ -1,0 +1,4 @@
+[user-repo]
+url = "git@example.com:your-org/user-repo.git"
+keyfile = "/home/backend/.ssh/id_ed25519_deploy"
+branch = "main"
