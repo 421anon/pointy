@@ -4,6 +4,8 @@ Pointy Notebook is a web interface for building and running step-based workflows
 
 Pointy is built on top of [`pointy-stdlib`](https://github.com/421anon/pointy-stdlib), which provides the Nix flake library (`pointy-stdlib.lib.mkFlake`) that turns the user repository into the flake outputs Pointy's backend consumes.
 
+![Project view](docs/pages/screenshots/light/project-view.png)
+
 ## Documentation
 
 User and admin guides live under `docs/`. Build them with `nix build .#docs` and open `./result/index.html`. Highlights:
