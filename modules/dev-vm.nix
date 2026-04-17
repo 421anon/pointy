@@ -68,14 +68,18 @@
 
   systemd.services.backend.preStart =
     let
-      devConfig = ../backend/dev-config.toml;
+      devConfigPath = builtins.getEnv "POINTY_DEV_CONFIG";
+      devConfig = builtins.path {
+        path = devConfigPath;
+        name = "dev-config.toml";
+      };
     in
-    if builtins.pathExists devConfig then
+    if devConfigPath == "" then
+      throw "POINTY_DEV_CONFIG is not set — launch the dev VM via `nix run .#dev-vm` so the gitignored backend/dev-config.toml is passed in at invocation"
+    else
       ''
         cp ${devConfig} /home/backend/config.toml && chmod u+w /home/backend/config.toml
-      ''
-    else
-      throw "backend/dev-config.toml is missing — copy backend/example-config.toml to backend/dev-config.toml and fill in your settings";
+      '';
 
   # Simple nginx configuration for dev
   services.nginx = {

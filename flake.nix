@@ -43,7 +43,12 @@
               type = "app";
               program = toString (pkgs.writeScript "dev-vm" ''
                 #!${pkgs.bash}/bin/bash
-                exec ${nixos-shell.packages.${system}.nixos-shell}/bin/nixos-shell --flake .#dev-vm
+                if [ ! -f backend/dev-config.toml ]; then
+                  echo "error: backend/dev-config.toml is missing — copy backend/example-config.toml to backend/dev-config.toml and fill in your settings" >&2
+                  exit 1
+                fi
+                export POINTY_DEV_CONFIG="$(realpath backend/dev-config.toml)"
+                exec ${nixos-shell.packages.${system}.nixos-shell}/bin/nixos-shell --flake .#dev-vm --impure
               '');
             };
             take-screenshots = mkApp "take-screenshots" ''
