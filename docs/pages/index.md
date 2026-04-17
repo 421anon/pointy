@@ -14,7 +14,7 @@ Pointy Notebook is a web interface for building and running step-based workflows
 
 - [Architecture & Configuration](admin.md) — runtime architecture, backend config, sync behaviour, status streaming, and GC roots.
 - [Setting Up the User Repository](user-repo-setup.md) — create the Git-backed flake that defines templates, steps, projects, and source files.
-- [Type Reference](type-reference.md) — reference for the template option types exposed by `trotter-system`.
+- [Type Reference](type-reference.md) — reference for the template option types exposed by `pointy-stdlib`.
 - [CLI Reference](cli-reference.md) — inspect and build flake outputs directly with `nix`.
 
 ## Core concepts

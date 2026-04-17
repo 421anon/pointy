@@ -10,21 +10,21 @@ For how these outputs are created, see [Setting Up the User Repository](user-rep
 
 ## Flake outputs
 
-### System-independent outputs (`.#trotter.*`)
+### System-independent outputs (`.#pointy.*`)
 
 | <div style="width: 220px">Attribute</div> | What it contains                                                                                                                                                                     |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `trotter.stepConfig` | Template schema derived from `templates/`: step kinds, argument names, types, and display hints.                                                                                     |
-| `trotter.stepDefs`   | Evaluated step definitions from `steps/`: type, name, and raw argument values for every step.                                                                                        |
-| `trotter.projects`   | Evaluated project definitions from `projects/`: project metadata plus assigned steps, per-project hidden flags, and sort order.                                                      |
-| `trotter.srcFiles`   | The evaluated source-files path used by builds. Because flakes copy local sources into the store, this is usually a `/nix/store/...-srcFiles` path, not your editable checkout path. |
+| `pointy.stepConfig` | Template schema derived from `templates/`: step kinds, argument names, types, and display hints.                                                                                     |
+| `pointy.stepDefs`   | Evaluated step definitions from `steps/`: type, name, and raw argument values for every step.                                                                                        |
+| `pointy.projects`   | Evaluated project definitions from `projects/`: project metadata plus assigned steps, per-project hidden flags, and sort order.                                                      |
+| `pointy.srcFiles`   | The evaluated source-files path used by builds. Because flakes copy local sources into the store, this is usually a `/nix/store/...-srcFiles` path, not your editable checkout path. |
 
-### Per-system outputs (`.#trotter.*`)
+### Per-system outputs (`.#pointy.*`)
 
 | <div style="width: 220px">Attribute</div> | What it contains                                                                                                                                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `trotter.steps.<id>`      | The fully evaluated derivation for step `<id>`. This is the same flake output the backend builds; the backend simply uses a pinned Git commit and runs it under `systemd-run`. |
-| `trotter.projectOutPaths` | A nested map of `project-id → step-id → store-path`. Steps that cannot be evaluated are reported as `/invalid`.                                                                |
+| `pointy.steps.<id>`      | The fully evaluated derivation for step `<id>`. This is the same flake output the backend builds; the backend simply uses a pinned Git commit and runs it under `systemd-run`. |
+| `pointy.projectOutPaths` | A nested map of `project-id → step-id → store-path`. Steps that cannot be evaluated are reported as `/invalid`.                                                                |
 
 ---
 
@@ -33,7 +33,7 @@ For how these outputs are created, see [Setting Up the User Repository](user-rep
 ### Build a step from your current checkout
 
 ```sh
-nix build .#trotter.steps.42
+nix build .#pointy.steps.42
 ```
 
 This creates a `./result` symlink pointing to the built output in the Nix store.
@@ -41,7 +41,7 @@ This creates a `./result` symlink pointing to the built output in the Nix store.
 ### Build the same output from a pinned commit
 
 ```sh
-nix build "git+file://$PWD?rev=<commit-hash>&allRefs=true#trotter.steps.42"
+nix build "git+file://$PWD?rev=<commit-hash>&allRefs=true#pointy.steps.42"
 ```
 
 This mirrors the backend's commit-pinned evaluation model more closely than building from the working tree.
@@ -49,7 +49,7 @@ This mirrors the backend's commit-pinned evaluation model more closely than buil
 ### Get a step's output path without building
 
 ```sh
-nix eval --raw .#trotter.steps.42.outPath
+nix eval --raw .#pointy.steps.42.outPath
 ```
 
 This returns the expected store path for step `42`. The path is deterministic, but it will only exist in the local store after a successful build.
@@ -57,7 +57,7 @@ This returns the expected store path for step `42`. The path is deterministic, b
 ### Check whether that output already exists in the store
 
 ```sh
-nix path-info "$(nix eval --raw .#trotter.steps.42.outPath)"
+nix path-info "$(nix eval --raw .#pointy.steps.42.outPath)"
 ```
 
 ---
@@ -67,7 +67,7 @@ nix path-info "$(nix eval --raw .#trotter.steps.42.outPath)"
 ### Show all template schemas
 
 ```sh
-nix eval --json .#trotter.stepConfig | jq .
+nix eval --json .#pointy.stepConfig | jq .
 ```
 
 This returns a JSON object keyed by template name. It is the same schema the frontend reads to decide which widgets to render.
@@ -75,33 +75,33 @@ This returns a JSON object keyed by template name. It is the same schema the fro
 ### Show all step definitions
 
 ```sh
-nix eval --json .#trotter.stepDefs | jq .
+nix eval --json .#pointy.stepDefs | jq .
 ```
 
 ### Show one step definition
 
 ```sh
-nix eval --json .#trotter.stepDefs.42
+nix eval --json .#pointy.stepDefs.42
 ```
 
 ### Show all project definitions
 
 ```sh
-nix eval --json .#trotter.projects | jq .
+nix eval --json .#pointy.projects | jq .
 ```
 
 ### Inspect a step's Pointy metadata
 
 ```sh
-nix eval --json .#trotter.steps.42.meta.trotter
+nix eval --json .#pointy.steps.42.meta.pointy
 ```
 
-This shows the `type` and `id` exported through `passthru.meta.trotter`.
+This shows the `type` and `id` exported through `passthru.meta.pointy`.
 
 ### Show the evaluated `srcFiles` path
 
 ```sh
-nix eval --raw .#trotter.srcFiles
+nix eval --raw .#pointy.srcFiles
 ```
 
 This is useful for seeing what build-time path the flake exposes. If you want to **edit** source files, use your repository checkout, not the `/nix/store/...` path returned by this command.
@@ -113,13 +113,13 @@ This is useful for seeing what build-time path the flake exposes. If you want to
 ### List files in a step's output
 
 ```sh
-nix build .#trotter.steps.42 && ls ./result
+nix build .#pointy.steps.42 && ls ./result
 ```
 
 ### Inspect the evaluated `installPhase`
 
 ```sh
-nix eval --raw .#trotter.steps.42.config.mkDerivation.installPhase
+nix eval --raw .#pointy.steps.42.config.mkDerivation.installPhase
 ```
 
 This shows the evaluated `installPhase` string for step `42`. It is a good first stop when debugging template behaviour.
@@ -129,7 +129,7 @@ Note that helper scripts created elsewhere in the template may still appear here
 ### Show all project output paths
 
 ```sh
-nix eval --json .#trotter.projectOutPaths | jq .
+nix eval --json .#pointy.projectOutPaths | jq .
 ```
 
 This returns a nested map of `project-id → step-id → store-path`. Paths for steps that cannot be evaluated are reported as `/invalid`.
@@ -139,5 +139,5 @@ This returns a nested map of `project-id → step-id → store-path`. Paths for 
 ## Tips
 
 - Use `nix eval --json ... | jq .` for readable interactive inspection.
-- `nix show-derivation .#trotter.steps.42` shows the full `.drv` for a step.
+- `nix show-derivation .#pointy.steps.42` shows the full `.drv` for a step.
 - The web UI's share links and read-only commit views are backed by the same commit-pinned flake state shown above.

@@ -2,7 +2,7 @@
 
 Pointy Notebook is a web interface for building and running step-based workflows backed by Nix. Users arrange work as projects of steps — file uploads and derivation steps — that connect through a dependency graph; the backend evaluates and builds each step from a Git-pinned user repository.
 
-Pointy is built on top of [`trotter-system`](https://gitlab.com/ggpeti/trotter-system), which provides the Nix flake library (`trotter.lib.mkFlake`) that turns the user repository into the flake outputs Pointy's backend consumes.
+Pointy is built on top of [`pointy-stdlib`](https://github.com/421anon/pointy-stdlib), which provides the Nix flake library (`pointy-stdlib.lib.mkFlake`) that turns the user repository into the flake outputs Pointy's backend consumes.
 
 ## Documentation
 

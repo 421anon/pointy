@@ -48,7 +48,7 @@ postStepHandler maybeProjectId jsonBody = do
         case maybeProjectId of
             Just projectId -> assignRecordToProject ctx projectId stepId
             Nothing -> return ()
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixInRepo ctx ["eval", "--json"] ("#trotter.stepDefs." ++ show stepId)) $ \err -> do
+        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixInRepo ctx ["eval", "--json"] ("#pointy.stepDefs." ++ show stepId)) $ \err -> do
             let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
             _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err

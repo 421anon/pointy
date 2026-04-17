@@ -13,11 +13,11 @@ getStepConfigHandler :: Maybe Text -> Handler LBS.ByteString
 getStepConfigHandler mCommit = do
     result <- liftIO $ case mCommit of
         Just commit -> withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
-            output <- runNixInRepo (ReadRepoContext repoPath $ unpack commit) ["eval", "--json"] "#trotter.stepConfig"
+            output <- runNixInRepo (ReadRepoContext repoPath $ unpack commit) ["eval", "--json"] "#pointy.stepConfig"
             return (TLE.encodeUtf8 (TL.pack output))
         Nothing -> withReadRepoTransaction $ \ctx -> do
             fetchRepo
-            output <- runNixInRepo ctx ["eval", "--json"] "#trotter.stepConfig"
+            output <- runNixInRepo ctx ["eval", "--json"] "#pointy.stepConfig"
             return (TLE.encodeUtf8 (TL.pack output))
     case result of
         Right output -> return output

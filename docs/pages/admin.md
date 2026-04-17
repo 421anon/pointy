@@ -49,7 +49,7 @@ Responsibilities are split like this:
 
 - `templates/` and `srcFiles/` are admin-authored
 - `steps/` and `projects/` are backend-managed
-- `flake.nix` wires everything together through `trotter.lib.mkFlake`
+- `flake.nix` wires everything together through `pointy-stdlib.lib.mkFlake`
 
 You can keep any additional repo content you want — for example helper Nix files or a `packages/` directory — but that layout is your own convention, not something Pointy discovers automatically.
 

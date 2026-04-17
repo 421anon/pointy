@@ -43,7 +43,7 @@ getProjectsHandler :: Maybe T.Text -> Handler LB.ByteString
 getProjectsHandler commit = do
     result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
         let targetCommit = maybe commitHash T.unpack commit
-        output <- runNixInRepo (ReadRepoContext repoPath targetCommit) ["eval", "--json"] "#trotter.projects"
+        output <- runNixInRepo (ReadRepoContext repoPath targetCommit) ["eval", "--json"] "#pointy.projects"
         return $ LB.fromStrict $ TE.encodeUtf8 $ T.pack output
     case result of
         Right output -> return output
@@ -73,7 +73,7 @@ postProjectHandler jsonBody = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         projectId <- saveProject ctx Nothing jsonBody
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixInRepo ctx ["eval", "--json"] ("#trotter.projects." ++ show projectId)) $ \err -> do
+        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixInRepo ctx ["eval", "--json"] ("#pointy.projects." ++ show projectId)) $ \err -> do
             let outputPath = worktreePath </> "projects" </> show projectId ++ ".nix"
             _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err

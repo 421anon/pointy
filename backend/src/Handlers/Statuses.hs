@@ -156,11 +156,11 @@ broadcastProjectStatus pid mStatusOverride = do
 broadcastStatusForStepProjects :: Int -> Maybe (Text, Maybe Text) -> IO ()
 broadcastStatusForStepProjects sid mStatusOverride = do
     result <- withReadRepoTransaction $ \ctx -> do
-        output <- runNixInRepo ctx ["eval", "--json"] "#trotter.projects"
+        output <- runNixInRepo ctx ["eval", "--json"] "#pointy.projects"
         let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
         case decodeResult of
             Left err -> do
-                liftIO $ putStrLn $ "Error parsing json in broadcastStatusForStepProjects for #trotter.projects: " ++ err
+                liftIO $ putStrLn $ "Error parsing json in broadcastStatusForStepProjects for #pointy.projects: " ++ err
                 return ()
             Right projects -> do
                 let targetProjects = filter (projectContainsStep sid) (Map.elems projects)

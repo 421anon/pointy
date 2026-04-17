@@ -101,7 +101,7 @@ buildStep ctx@(ReadRepoContext repoPath targetCommit) eid = do
                               , "--wait"
                               ]
                                 ++ pathEnvArg
-                                ++ ["nix", "build", "--no-link", "--no-eval-cache", flakeRefBase ++ "#trotter.steps." ++ show eid]
+                                ++ ["nix", "build", "--no-link", "--no-eval-cache", flakeRefBase ++ "#pointy.steps." ++ show eid]
                             )
                             ""
                 _ <- liftIO $ registerGcRootForOutPath outPath
@@ -127,12 +127,12 @@ requireOutPathFromCache (ReadRepoContext _ targetCommit) eid = do
 
 cacheProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
 cacheProjectOutPathsForCommit ctx@(ReadRepoContext _ targetCommit) = do
-    output <- runNixInRepo ctx ["eval", "--json"] "#trotter.projectOutPaths"
+    output <- runNixInRepo ctx ["eval", "--json"] "#pointy.projectOutPaths"
     projectOutPaths <-
         ExceptT $ do
             return $
                 case eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map.Map Int (Map.Map Int FilePath)) of
-                    Left err -> Left $ "Failed to parse #trotter.projectOutPaths: " ++ err
+                    Left err -> Left $ "Failed to parse #pointy.projectOutPaths: " ++ err
                     Right paths -> Right paths
 
     liftIO $
@@ -146,7 +146,7 @@ cacheProjectOutPathsForCommit ctx@(ReadRepoContext _ targetCommit) = do
 
 getDependencies :: ReadRepoContext -> Int -> ExceptT String IO [Int]
 getDependencies ctx stepId = do
-    result <- liftIO $ runExceptT $ runNixInRepo ctx ["eval", "--json"] ("#trotter.dependencies." ++ show stepId)
+    result <- liftIO $ runExceptT $ runNixInRepo ctx ["eval", "--json"] ("#pointy.dependencies." ++ show stepId)
     case result of
         Left _ -> return []
         Right stdout ->

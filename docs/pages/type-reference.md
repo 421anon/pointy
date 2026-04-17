@@ -1,29 +1,29 @@
 # Type Reference
 
-This page documents the option types that template authors use inside `options.trotter.<name>`. They are available as `config._trotter.lib.types` inside a module, so templates typically open a `with config._trotter.lib.types;` block in their `options` section.
+This page documents the option types that template authors use inside `options.pointy.<name>`. They are available as `config._pointy.lib.types` inside a module, so templates typically open a `with config._pointy.lib.types;` block in their `options` section.
 
-Pointy serializes these types into `.#trotter.stepConfig`, which the frontend uses to decide which widgets to render. The current UI uses option names as field labels; `description` values are still carried through the schema, but they are not currently rendered as on-screen labels.
+Pointy serializes these types into `.#pointy.stepConfig`, which the frontend uses to decide which widgets to render. The current UI uses option names as field labels; `description` values are still carried through the schema, but they are not currently rendered as on-screen labels.
 
 ## Step type declarations
 
 These are set at the top level of a template file, outside `module`, to tell Pointy what kind of step the template represents.
 
-### `trotter.type.derivation`
+### `pointy.type.derivation`
 
 ```nix
-trotter.type.derivation = { };
+pointy.type.derivation = { };
 # or, to make repository source files available at build time:
-trotter.type.derivation = { withSrcFiles = true; };
+pointy.type.derivation = { withSrcFiles = true; };
 ```
 
 This declares a runnable derivation step.
 
 If `withSrcFiles = true`, Pointy symlinks every top-level entry from `srcFiles/<step-id>/` into the build working directory before the build runs, and the frontend shows a **Source Files** section for that step type.
 
-### `trotter.type.fileUpload`
+### `pointy.type.fileUpload`
 
 ```nix
-trotter.type.fileUpload = {
+pointy.type.fileUpload = {
   allowedExtensions = [ ".fastq.gz" ".fastq" ];
   description = "sequencing reads";
 };
@@ -41,13 +41,13 @@ At build time, `cfg.uploaded` is a Nix store path pointing at the uploaded paylo
 
 ## Option types
 
-These are used inside `options.trotter.<name>` to declare the arguments that users fill in through the UI form.
+These are used inside `options.pointy.<name>` to declare the arguments that users fill in through the UI form.
 
-### `trotter.string`
+### `pointy.string`
 
 ```nix
 lib.mkOption {
-  type = trotter.string {
+  type = pointy.string {
     description = "schema metadata";
     display = { ... }; # optional, see below
   };
@@ -63,11 +63,11 @@ By default this renders a plain text input. The optional `display` attribute cha
 | `display.command = "tool-name"` | Command-prefixed argument box    |
 | `display.textarea = { }`        | Auto-growing multi-line textarea |
 
-### `trotter.step`
+### `pointy.step`
 
 ```nix
 lib.mkOption {
-  type = trotter.step {
+  type = pointy.step {
     description = "schema metadata";
     allowedTypes = [ "typeA" "typeB" ]; # optional
   };
@@ -80,16 +80,16 @@ Important frontend behaviour: the selector offers steps that are already assigne
 
 At build time the selected value resolves to the Nix store path of the chosen step's output, so it can be used directly in `installPhase`.
 
-### `trotter.listOf`
+### `pointy.listOf`
 
 ```nix
 lib.mkOption {
-  type = trotter.listOf (trotter.step { description = "dependency"; });
+  type = pointy.listOf (pointy.step { description = "dependency"; });
   default = [];
 }
 # or a list of strings:
 lib.mkOption {
-  type = trotter.listOf (trotter.string { description = "nixpkgs attribute"; });
+  type = pointy.listOf (pointy.string { description = "nixpkgs attribute"; });
   default = [];
 }
 ```
@@ -108,20 +108,20 @@ Every template should declare an `id` option as follows:
 
 ```nix
 id = lib.mkOption {
-  type = trotter.string { description = ""; };
+  type = pointy.string { description = ""; };
   visible = false;
 };
 ```
 
 Pointy populates `id` automatically with the numeric step identifier.
 
-Templates normally forward it into `passthru.meta.trotter`:
+Templates normally forward it into `passthru.meta.pointy`:
 
 ```nix
-passthru.meta.trotter = {
+passthru.meta.pointy = {
   type = "<template-name>";
   inherit (cfg) id;
 };
 ```
 
-This keeps the step id available to templates and to downstream tooling such as scripts that inspect `meta.trotter`.
+This keeps the step id available to templates and to downstream tooling such as scripts that inspect `meta.pointy`.

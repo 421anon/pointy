@@ -7,7 +7,7 @@ The user repository is a Git repository and Nix flake that Pointy treats as the 
 - project membership and ordering
 - optional per-step source files
 
-Pointy expects this repository to be wired through `trotter.lib.mkFlake`, which generates the flake outputs the backend and frontend read. See [Architecture & Configuration](admin.md) for the runtime overview.
+Pointy expects this repository to be wired through `pointy-stdlib.lib.mkFlake`, which generates the flake outputs the backend and frontend read. See [Architecture & Configuration](admin.md) for the runtime overview.
 
 ## Minimal repository structure
 
@@ -35,19 +35,19 @@ At the repository root, create a `flake.nix` like this:
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs";
-    trotter = {
-      url = "gitlab:ggpeti/trotter-system";
+    pointy-stdlib = {
+      url = "github:421anon/pointy-stdlib";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
   outputs =
-    inputs@{ trotter, ... }:
-    trotter.lib.mkFlake { inherit inputs; } {
-      trotter = {
-        stepDefs = trotter.lib.loadDir ./steps;
-        templates = trotter.lib.loadDir ./templates;
-        projects = trotter.lib.loadDir ./projects;
+    inputs@{ pointy-stdlib, ... }:
+    pointy-stdlib.lib.mkFlake { inherit inputs; } {
+      pointy = {
+        stepDefs = pointy-stdlib.lib.loadDir ./steps;
+        templates = pointy-stdlib.lib.loadDir ./templates;
+        projects = pointy-stdlib.lib.loadDir ./projects;
         srcFiles = ./srcFiles;
       };
     };
@@ -56,11 +56,11 @@ At the repository root, create a `flake.nix` like this:
 
 This is enough to expose the flake outputs that Pointy needs, including:
 
-- `.#trotter.stepConfig`
-- `.#trotter.stepDefs`
-- `.#trotter.projects`
-- `.#trotter.srcFiles`
-- per-system `.#trotter.steps.<id>` and `.#trotter.projectOutPaths`
+- `.#pointy.stepConfig`
+- `.#pointy.stepDefs`
+- `.#pointy.projects`
+- `.#pointy.srcFiles`
+- per-system `.#pointy.steps.<id>` and `.#pointy.projectOutPaths`
 
 See the [CLI Reference](cli-reference.md) for concrete commands against those outputs.
 
@@ -72,20 +72,20 @@ Templates receive `pkgs`. The supported way to add custom packages is to extend 
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs";
-    trotter = {
-      url = "gitlab:ggpeti/trotter-system";
+    pointy-stdlib = {
+      url = "github:421anon/pointy-stdlib";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     myTool.url = "github:example/my-tool";
   };
 
   outputs =
-    inputs@{ trotter, ... }:
-    trotter.lib.mkFlake { inherit inputs; } {
-      trotter = {
-        stepDefs = trotter.lib.loadDir ./steps;
-        templates = trotter.lib.loadDir ./templates;
-        projects = trotter.lib.loadDir ./projects;
+    inputs@{ pointy-stdlib, ... }:
+    pointy-stdlib.lib.mkFlake { inherit inputs; } {
+      pointy = {
+        stepDefs = pointy-stdlib.lib.loadDir ./steps;
+        templates = pointy-stdlib.lib.loadDir ./templates;
+        projects = pointy-stdlib.lib.loadDir ./projects;
         srcFiles = ./srcFiles;
       };
 
@@ -111,7 +111,7 @@ A `packages/` directory is just a repository convention; Pointy does not load it
 
 Every template file has two parts:
 
-1. a top-level `trotter.type...` declaration that tells Pointy what kind of step it is
+1. a top-level `pointy.type...` declaration that tells Pointy what kind of step it is
 2. a `module = ...` definition that declares options and build behaviour
 
 There are two top-level step kinds: file upload and derivation.
@@ -122,7 +122,7 @@ This pattern matches the sample `dataSource` template:
 
 ```nix
 {
-  trotter.type.fileUpload = {
+  pointy.type.fileUpload = {
     allowedExtensions = [ ".fastq.gz" ".fastq" ".fq.gz" ".fq" ];
     description = "data source";
   };
@@ -130,7 +130,7 @@ This pattern matches the sample `dataSource` template:
   module =
     { dream2nix, config, lib, ... }:
     let
-      cfg = config.trotter.dataSource;
+      cfg = config.pointy.dataSource;
     in
     {
       imports = [ dream2nix.modules.dream2nix.mkDerivation ];
@@ -142,16 +142,16 @@ This pattern matches the sample `dataSource` template:
           dontUnpack = true;
           installPhase = "ln -s ${cfg.uploaded} $out";
           dontFixup = true;
-          passthru.meta.trotter = {
+          passthru.meta.pointy = {
             type = "dataSource";
             inherit (cfg) id;
           };
         };
       };
 
-      options.trotter.dataSource = with config._trotter.lib.types; {
+      options.pointy.dataSource = with config._pointy.lib.types; {
         id = lib.mkOption {
-          type = trotter.string { description = ""; };
+          type = pointy.string { description = ""; };
           visible = false;
         };
 
@@ -173,12 +173,12 @@ This pattern matches the sample `fastqc` template:
 
 ```nix
 {
-  trotter.type.derivation = { };
+  pointy.type.derivation = { };
 
   module =
     { dream2nix, config, lib, pkgs, ... }:
     let
-      cfg = config.trotter.fastqc;
+      cfg = config.pointy.fastqc;
     in
     {
       imports = [ dream2nix.modules.dream2nix.mkDerivation ];
@@ -197,28 +197,28 @@ This pattern matches the sample `fastqc` template:
               --outdir $out \
               *.fastq* \
           '' + cfg.extraArgs;
-          passthru.meta.trotter = {
+          passthru.meta.pointy = {
             type = "fastqc";
             inherit (cfg) id;
           };
         };
       };
 
-      options.trotter.fastqc = with config._trotter.lib.types; {
+      options.pointy.fastqc = with config._pointy.lib.types; {
         id = lib.mkOption {
-          type = trotter.string { description = ""; };
+          type = pointy.string { description = ""; };
           visible = false;
         };
 
         dataSource = lib.mkOption {
-          type = trotter.step {
+          type = pointy.step {
             allowedTypes = [ "dataSource" "merge" ];
             description = "The data source for FastQC";
           };
         };
 
         extraArgs = lib.mkOption {
-          type = trotter.string {
+          type = pointy.string {
             description = "Extra arguments for the fastqc command";
             display.command = "fastqc";
           };
@@ -231,9 +231,9 @@ This pattern matches the sample `fastqc` template:
 
 Notes:
 
-- `trotter.step` options resolve to upstream step outputs at build time.
-- `trotter.string` with `display.command` renders a command-style argument field in the UI.
-- `passthru.meta.trotter` should include both the template `type` and the step `id`.
+- `pointy.step` options resolve to upstream step outputs at build time.
+- `pointy.string` with `display.command` renders a command-style argument field in the UI.
+- `passthru.meta.pointy` should include both the template `type` and the step `id`.
 
 For the available option types, see the [Type Reference](type-reference.md).
 
@@ -243,12 +243,12 @@ Every template should define an `id` option like this:
 
 ```nix
 id = lib.mkOption {
-  type = trotter.string { description = ""; };
+  type = pointy.string { description = ""; };
   visible = false;
 };
 ```
 
-Pointy injects the numeric step identifier into this option. Templates then commonly forward it into `passthru.meta.trotter.id`.
+Pointy injects the numeric step identifier into this option. Templates then commonly forward it into `passthru.meta.pointy.id`.
 
 This is useful both for step metadata and for templates that need the step id inside the build or in helper scripts.
 
@@ -257,7 +257,7 @@ This is useful both for step metadata and for templates that need the step id in
 If a derivation type should receive repository-backed source files at build time, enable `withSrcFiles`:
 
 ```nix
-trotter.type.derivation = {
+pointy.type.derivation = {
   withSrcFiles = true;
 };
 ```

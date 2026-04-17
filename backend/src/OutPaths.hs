@@ -74,7 +74,7 @@ getProjectOutPaths pid targetCommit =
                 runNixInRepo
                     (ReadRepoContext repoPath (unpack targetCommit))
                     ["eval", "--json"]
-                    ("#trotter.projectOutPaths." ++ show pid)
+                    ("#pointy.projectOutPaths." ++ show pid)
         case result of
             Left _ -> return Map.empty
             Right output ->
@@ -97,7 +97,7 @@ cacheProjectOutPaths = do
                     runNixInRepo
                         (ReadRepoContext repoPath (unpack targetCommit))
                         ["eval", "--json"]
-                        "#trotter.projects"
+                        "#pointy.projects"
             case result of
                 Left _ -> return ()
                 Right output ->

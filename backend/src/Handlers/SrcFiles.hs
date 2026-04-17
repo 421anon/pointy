@@ -35,10 +35,10 @@ getUserRepoInfoHandler = do
 getSrcFilesBasePath :: Handler Text
 getSrcFilesBasePath = do
     result <- liftIO $ withReadRepoTransaction $ \ctx -> do
-        output <- runNixInRepo ctx ["eval", "--raw"] "#trotter.srcFiles"
+        output <- runNixInRepo ctx ["eval", "--raw"] "#pointy.srcFiles"
         return $ T.strip (T.pack output)
     case result of
-        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate trotter.srcFiles: " <> err))}
+        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}
         Right path -> return path
 
 listSrcFilesHandler :: Int -> Maybe FilePath -> Handler [DirEntry]
