@@ -4,7 +4,7 @@ site_description: "An open platform for defining, managing, and executing reprod
 theme:
   name: material
   icon:
-    logo: material/horse-variant-fast
+    logo: octicons/pin-24
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
