@@ -66,9 +66,16 @@
     '';
   };
 
-  systemd.services.backend.preStart = ''
-    cp ${../backend/example-config.toml} /home/backend/config.toml && chmod u+w /home/backend/config.toml
-  '';
+  systemd.services.backend.preStart =
+    let
+      devConfig = ../backend/dev-config.toml;
+    in
+    if builtins.pathExists devConfig then
+      ''
+        cp ${devConfig} /home/backend/config.toml && chmod u+w /home/backend/config.toml
+      ''
+    else
+      throw "backend/dev-config.toml is missing — copy backend/example-config.toml to backend/dev-config.toml and fill in your settings";
 
   # Simple nginx configuration for dev
   services.nginx = {
