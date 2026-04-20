@@ -275,6 +275,10 @@ body {
   }
 }
 
+.app:has(.last-successes-popover:popover-open) {
+  pointer-events: none;
+}
+
 .last-successes-popover {
   margin: 0;
   padding: 0;
@@ -299,6 +303,7 @@ body {
     min-width: 160px;
     max-height: 50vh;
     overflow-y: auto;
+    pointer-events: auto;
   }
 
   &::backdrop {
