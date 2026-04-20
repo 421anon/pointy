@@ -24,6 +24,7 @@ import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), dndSystem)
 import Model.Lenses exposing (..)
+import Model.Core as Model
 import Model.Lib exposing (sortProjects)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
 import Ports
@@ -477,6 +478,43 @@ runStep spec id =
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
             (\_ -> setStatus (ApiData.loading <| Just (StatusFailure Nothing)))
+
+
+fetchLastSuccessesFor : Int -> Flow Model ()
+fetchLastSuccessesFor stepId =
+    Flow.forAll currentProjectId
+        (\projectId ->
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        case Dict.get stepId (Model.getLastSuccesses model) of
+                            Just (ApiData.Loading _) ->
+                                Flow.pure ()
+
+                            Just (ApiData.Success _) ->
+                                Flow.pure ()
+
+                            _ ->
+                                let
+                                    mCommit_ =
+                                        try (route << Route.project << mCommit << just) model
+                                in
+                                Flow.over lastSuccesses (Dict.insert stepId (ApiData.loading Nothing))
+                                    |> Flow.seq (Api.fetchStepLastSuccesses projectId stepId mCommit_)
+                                    |> Flow.andThen
+                                        (\result ->
+                                            Flow.over lastSuccesses (Dict.insert stepId (ApiData.fromResult result))
+                                        )
+                    )
+        )
+
+
+navigateToSuccessCommit : Int -> String -> Flow Model ()
+navigateToSuccessCommit stepId commit =
+    Flow.forAll currentProjectId
+        (\projectId ->
+            goToRoute (Project { projectId = projectId, mHighlight = Just { id = stepId, path = [] }, mCommit = Just commit })
+        )
 
 
 stopStep : StepSpec -> Int -> Flow Model ()

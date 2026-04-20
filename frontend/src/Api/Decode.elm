@@ -317,3 +317,10 @@ stepConfigEntry =
 stepConfig : Decoder StepConfig
 stepConfig =
     Decode.dict stepConfigEntry
+
+
+stepLastSuccess : Decoder { commit : String, outPath : String }
+stepLastSuccess =
+    Decode.succeed (\c op -> { commit = c, outPath = op })
+        |> required "commit" Decode.string
+        |> required "outPath" Decode.string
