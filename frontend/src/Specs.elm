@@ -36,6 +36,7 @@ steps name stepType =
             , hidden = False
             , sortKey = Nothing
             , name = name
+            , note = ""
             , args = Dict.empty
             , runState = ApiData.loading Nothing
             , isUpdating = False

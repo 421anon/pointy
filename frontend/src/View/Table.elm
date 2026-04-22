@@ -23,7 +23,7 @@ import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), UploadProgress, dndSystem, getSortKey)
-import Model.Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables)
+import Model.Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
@@ -497,6 +497,14 @@ viewAddOrEditRecordForm model spec table record =
                 TagProjects ->
                     []
 
+        noteInput =
+            case TableSpec.getTag spec of
+                TagSteps tableId _ ->
+                    viewStepNoteField model readOnly tableId
+
+                TagProjects ->
+                    Html.nothing
+
         nameInput =
             let
                 originalRecord =
@@ -622,6 +630,7 @@ viewAddOrEditRecordForm model spec table record =
                 [ Html.viewIf (not editing && TableSpec.getTag spec /= TagProjects) modeSelector
                 , Html.viewIf (not editing && table.addMode == AddExisting && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
                 , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
+                , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
                 , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|
                     Html.div [ class "form-group" ] extraFields
                 , Html.div [ class "form-actions" ]
@@ -883,6 +892,36 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
             Derivation args _ ->
                 List.map viewField (Dict.toList args)
+
+
+viewStepNoteField : Model -> Bool -> String -> Html (Flow Model ())
+viewStepNoteField model readOnly tableId =
+    let
+        noteLens =
+            currentTableOf tableId << edited << just << note
+
+        currentNote =
+            try noteLens model |> Maybe.withDefault ""
+
+        originalRecord =
+            try (currentTableOf tableId << edited << just) model
+                |> Maybe.andThen .id
+                |> Maybe.andThen (\id_ -> try (currentTableOf tableId << records << success << by .id (Just id_)) model)
+    in
+    Html.div [ class "form-field" ]
+        [ Html.label [ class "form-label" ] [ Html.text "Note:" ]
+        , Html.textarea
+            [ value currentNote
+            , Events.onInput (Flow.modify << set noteLens)
+            , placeholder "Notes about this step..."
+            , class "form-input"
+            , class "form-input-note"
+            , classList [ ( "field-changed", fieldChanged .note currentNote originalRecord ) ]
+            , readonly readOnly
+            , id (tableId ++ "-note-input")
+            ]
+            []
+        ]
 
 
 textField :

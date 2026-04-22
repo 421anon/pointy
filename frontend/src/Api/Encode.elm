@@ -63,6 +63,7 @@ stepValue : StepType -> StepRecord -> Encode.Value
 stepValue stepType record =
     Encode.object
         [ ( "name", Encode.string record.name )
+        , ( "note", Encode.string record.note )
         , ( "type", Encode.string record.type_ )
         , ( "args", stepArgsValue stepType record.args )
         ]

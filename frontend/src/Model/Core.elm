@@ -46,6 +46,7 @@ type alias StepRunState =
 type alias StepRecord =
     BaseRecord
         { type_ : String
+        , note : String
         , runState : ApiData StepRunState
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder

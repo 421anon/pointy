@@ -663,6 +663,18 @@ $form-vertical-gap: var(--spacing-md);
   resize: vertical;
 }
 
+.form-input-note {
+  background-color: transparent;
+  height: 100px;
+  padding: var(--spacing-sm);
+  resize: vertical;
+  overflow: auto;
+
+  &[readonly] {
+    font-style: italic;
+  }
+}
+
 .form-actions {
   display: flex;
   gap: var(--spacing-sm);

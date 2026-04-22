@@ -336,6 +336,11 @@ name =
     lens "name" .name (\t name_ -> { t | name = name_ })
 
 
+note : Lens ls { a | note : String } String x y
+note =
+    lens "note" .note (\t note_ -> { t | note = note_ })
+
+
 outPath : Lens ls { a | outPath : b } b x y
 outPath =
     lens "outPath" .outPath (\t outPath_ -> { t | outPath = outPath_ })
