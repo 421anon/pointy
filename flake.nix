@@ -44,16 +44,17 @@
               program = toString (pkgs.writeScript "dev-vm" ''
                 #!${pkgs.bash}/bin/bash
                 if [ ! -f backend/dev-config.toml ]; then
-                  echo "error: backend/dev-config.toml is missing — copy backend/example-config.toml to backend/dev-config.toml and fill in your settings" >&2
+                  echo "error: backend/dev-config.toml is missing. Copy backend/example-config.toml to backend/dev-config.toml and fill in your settings." >&2
                   exit 1
                 fi
-                export POINTY_DEV_CONFIG="$(realpath backend/dev-config.toml)"
-                exec ${nixos-shell.packages.${system}.nixos-shell}/bin/nixos-shell --flake .#dev-vm --impure
+                export POINTY_DEV_CONFIG_DIR="$(realpath backend)"
+                exec ${nixos-shell.packages.${system}.nixos-shell}/bin/nixos-shell --flake .#dev-vm
               '');
             };
             take-screenshots = mkApp "take-screenshots" ''
+              set -euo pipefail
               export SCREENSHOTS_OUT="''${SCREENSHOTS_OUT:-$(pwd)/docs/pages/screenshots}"
-              export POINTY_USER_REPO="''${POINTY_USER_REPO:-$(dirname "$(pwd)")/trotter-user}"
+              export POINTY_USER_REPO="''${POINTY_USER_REPO:-$(dirname "$(pwd)")/pointy-welker}"
               mkdir -p "$SCREENSHOTS_OUT" "$SCREENSHOTS_OUT/light" "$SCREENSHOTS_OUT/dark"
               echo "Screenshots → $SCREENSHOTS_OUT"
               echo "Modes       → light, dark"
