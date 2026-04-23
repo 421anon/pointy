@@ -4,14 +4,10 @@
 const { chromium } = require("playwright-core");
 const fs = require("fs");
 const path = require("path");
-const {
-  parseArgs,
-  screenshotLocator,
-  withHoveredLocator,
-  waitForBackend,
-  waitForApp,
-  createContextWithStepTracking,
-} = require("./lib/helpers");
+const { parseArgs,
+screenshotLocator,
+withHoveredLocator,
+waitForBackend, waitForApp, waitForProjectRows, createContextWithStepTracking, } = require("./lib/helpers")
 
 async function main() {
   const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
@@ -36,21 +32,17 @@ async function main() {
   await waitForApp(page);
 
   const projectsTable = page.locator("#table-projects").first();
-  const firstProjectRecord = page.locator("#table-projects .table-record").first();
+  const firstProjectRecord = await waitForProjectRows(page);
 
-  if (await firstProjectRecord.count()) {
-    const firstActionBtn = firstProjectRecord
-      .locator(".table-record-actions .icon-btn");
+  const firstActionBtn = firstProjectRecord
+    .locator(".table-record-actions .icon-btn");
 
-    await withHoveredLocator(
-      page,
-      firstActionBtn,
-      async () => screenshotLocator(output, "projects-home.png", projectsTable),
-      "project row action button",
-    );
-  } else {
-    await screenshotLocator(output, "projects-home.png", projectsTable);
-  }
+  await withHoveredLocator(
+    page,
+    firstActionBtn,
+    async () => screenshotLocator(output, "projects-home.png", projectsTable),
+    "project row action button",
+  );
 
   await browser.close();
 }

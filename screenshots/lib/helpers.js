@@ -74,6 +74,196 @@ async function clickFirstVisible(locator) {
   return true;
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function getVisibleStepRows(page) {
+  const stepRows = page.locator('.table[id^="table-"]:not(#table-projects) .table-record[id]');
+  const count = await stepRows.count();
+  const visibleRows = [];
+
+  for (let i = 0; i < count; i++) {
+    const row = stepRows.nth(i);
+    if (await row.isVisible().catch(() => false)) {
+      visibleRows.push(row);
+    }
+  }
+
+  return visibleRows;
+}
+
+async function getStepRowDisplayName(stepRow) {
+  return stepRow.locator(".table-record-name").first().evaluate((el) => {
+    const clone = el.cloneNode(true);
+    clone
+      .querySelectorAll(".table-record-id, .pending-record-indicator, .shareable-icon")
+      .forEach((node) => node.remove());
+
+    return (clone.textContent || "").replace(/\s+/g, " ").trim();
+  });
+}
+
+async function getDirectoryFileName(fileRow) {
+  return fileRow.locator(".file-name").first().evaluate((el) => {
+    return (el.textContent || "").replace(/\s+/g, " ").trim();
+  });
+}
+
+function matchesPreferredName(name, preferredNames) {
+  return preferredNames.some((preferredName) => {
+    if (preferredName instanceof RegExp) {
+      return preferredName.test(name);
+    }
+
+    return preferredName === name;
+  });
+}
+
+/**
+ * Find a visible previewable file row in a directory section.
+ */
+async function findPreviewableFileInSection(
+  sectionLocator,
+  { preferredNames = [], preferNonHtml = false } = {},
+) {
+  const fileRows = sectionLocator.locator(".directory-file-container");
+  const count = await fileRows.count();
+  const candidates = [];
+
+  for (let i = 0; i < count; i++) {
+    const fileRow = fileRows.nth(i);
+    if (!(await fileRow.isVisible().catch(() => false))) continue;
+
+    const previewButton = await firstVisibleLocator(
+      fileRow.locator("button.dir-item-icon-btn").filter({
+        has: sectionLocator.page().locator(".material-symbols-outlined", {
+          hasText: /^visibility(_off)?$/ ,
+        }),
+      }),
+    );
+
+    if (!previewButton) continue;
+
+    let fileName = "";
+    try {
+      fileName = await getDirectoryFileName(fileRow);
+    } catch (_err) {
+      continue;
+    }
+
+    if (!fileName) continue;
+
+    candidates.push({ fileRow, fileName, previewButton });
+  }
+
+  const preferredCandidate = candidates.find(({ fileName }) =>
+    matchesPreferredName(fileName, preferredNames),
+  );
+  if (preferredCandidate) return preferredCandidate;
+
+  if (preferNonHtml) {
+    const nonHtmlCandidate = candidates.find(
+      ({ fileName }) => !/\.html$/i.test(fileName),
+    );
+    if (nonHtmlCandidate) return nonHtmlCandidate;
+  }
+
+  return candidates[0] || null;
+}
+
+/**
+ * Find the first visible step row exposing a specific row action button.
+ */
+async function findVisibleStepRowWithButton(page, buttonTitle) {
+  const visibleRows = await getVisibleStepRows(page);
+
+  for (const stepRow of visibleRows) {
+    const button = await firstVisibleLocator(
+      stepRow.locator(`button.icon-btn[title="${buttonTitle}"]`),
+    );
+
+    if (button) {
+      return { stepRow, button };
+    }
+  }
+
+  return { stepRow: null, button: null };
+}
+
+/**
+ * Find a visible step row with Clone plus its visible cloned counterpart.
+ */
+function getCloneBaseName(stepName) {
+  const cloneSuffixIndex = stepName.indexOf(" (Clone");
+  return cloneSuffixIndex === -1
+    ? stepName
+    : stepName.slice(0, cloneSuffixIndex);
+}
+
+async function findVisibleClonePair(page) {
+  const visibleRows = await getVisibleStepRows(page);
+  const stepInfos = [];
+
+  for (const stepRow of visibleRows) {
+    const cloneButton = await firstVisibleLocator(
+      stepRow.locator('button.icon-btn[title="Clone"]'),
+    );
+
+    if (!cloneButton) continue;
+
+    let stepName = "";
+    try {
+      stepName = await getStepRowDisplayName(stepRow);
+    } catch (_err) {
+      continue;
+    }
+
+    if (!stepName) continue;
+
+    stepInfos.push({
+      stepRow,
+      cloneButton,
+      stepName,
+      cloneBaseName: getCloneBaseName(stepName),
+    });
+  }
+
+  for (let i = 0; i < stepInfos.length; i++) {
+    const source = stepInfos[i];
+    const cloneNamePattern = new RegExp(
+      `^${escapeRegExp(source.cloneBaseName)} \\(Clone(?: \\d+)?\\)$`,
+    );
+
+    for (const candidate of visibleRows.slice(i + 1)) {
+      let candidateName = "";
+      try {
+        candidateName = await getStepRowDisplayName(candidate);
+      } catch (_err) {
+        continue;
+      }
+
+      if (cloneNamePattern.test(candidateName) && candidateName !== source.stepName) {
+        return {
+          sourceStepRow: source.stepRow,
+          cloneStepRow: candidate,
+          cloneButton: source.cloneButton,
+          sourceStepName: source.stepName,
+          cloneStepName: candidateName,
+        };
+      }
+    }
+  }
+
+  return {
+    sourceStepRow: null,
+    cloneStepRow: null,
+    cloneButton: null,
+    sourceStepName: null,
+    cloneStepName: null,
+  };
+}
+
 /**
  * Expand all collapsed folders within a directory section.
  */
@@ -285,6 +475,38 @@ async function waitForApp(page) {
 }
 
 /**
+ * Wait for the projects table to finish loading and render a visible row.
+ */
+async function waitForProjectRows(page) {
+  const projectsTable = page.locator("#table-projects").first();
+  const loadingPlaceholder = projectsTable.locator(".table-records-loading").first();
+  const firstProjectRow = projectsTable.locator(".table-record").first();
+
+  await projectsTable.waitFor({ state: "visible", timeout: 30000 });
+
+  try {
+    await loadingPlaceholder.waitFor({ state: "hidden", timeout: 30000 });
+    await firstProjectRow.waitFor({ state: "visible", timeout: 30000 });
+  } catch (err) {
+    let tableText = "<unavailable>";
+
+    try {
+      tableText = (await projectsTable.innerText()).replace(/\s+/g, " ").trim();
+      if (!tableText) tableText = "<empty>";
+    } catch (_err) {
+      // Ignore diagnostic failures while building the error message.
+    }
+
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Projects table never rendered a visible project row. Current table text: ${tableText}. Cause: ${reason}`
+    );
+  }
+
+  return firstProjectRow;
+}
+
+/**
  * Poll /backend/projects until the backend is up and serving data.
  */
 async function waitForBackend(page, baseUrl) {
@@ -401,6 +623,9 @@ module.exports = {
   clickIfExists,
   firstVisibleLocator,
   clickFirstVisible,
+  findPreviewableFileInSection,
+  findVisibleStepRowWithButton,
+  findVisibleClonePair,
   expandAllVisibleFolders,
   waitForNoLoading,
   waitForDirectoryContents,
@@ -409,6 +634,7 @@ module.exports = {
   waitForStepStatusEvent,
   waitForMaterialIcons,
   waitForApp,
+  waitForProjectRows,
   waitForBackend,
   createContextWithStepTracking,
 };

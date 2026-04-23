@@ -7,13 +7,16 @@ const path = require("path");
 const {
   parseArgs,
   screenshotLocator,
-  clickFirstVisible,
   withHoveredLocator,
+  clickFirstVisible,
   waitForNoLoading,
   waitForDirectoryContents,
   expandAllVisibleFolders,
+  findPreviewableFileInSection,
+  findVisibleStepRowWithButton,
   waitForBackend,
   waitForApp,
+  waitForProjectRows,
   waitForStepStatusEvent,
   createContextWithStepTracking,
 } = require("./lib/helpers");
@@ -40,69 +43,55 @@ async function main() {
   await page.goto(`${baseUrl}/`, { waitUntil: "load" });
   await waitForApp(page);
 
-  const firstProjectRow = await page.$("#table-projects .table-record");
-  if (firstProjectRow) {
-    await page.evaluate(() => {
-      window.__pointyStepStatusEventCount = 0;
-      window.__pointyLastStepStatusEventType = null;
-    });
-    await firstProjectRow.click();
-    await waitForApp(page);
-    await waitForStepStatusEvent(page);
+  const firstProjectRow = await waitForProjectRows(page);
+  await page.evaluate(() => {
+    window.__pointyStepStatusEventCount = 0;
+    window.__pointyLastStepStatusEventType = null;
+  });
+  await firstProjectRow.click();
+  await waitForApp(page);
+  await waitForStepStatusEvent(page);
 
-    const outputStepRow = page.locator('.table-record[id="91"]').first();
-    const outputStepRowVisible = await outputStepRow
+  const { stepRow: outputStepRow, button: browseBtn } =
+    await findVisibleStepRowWithButton(page, "Browse output files");
+
+  if (outputStepRow && browseBtn) {
+    const outputSection = outputStepRow.locator(".output-files-section").first();
+    const browseBtnVisible = await browseBtn
       .waitFor({ state: "visible", timeout: 30000 })
       .then(() => true)
       .catch(() => false);
 
-    if (outputStepRowVisible) {
-      const outputSection = outputStepRow.locator(".output-files-section").first();
-      const browseBtn = outputStepRow
-        .locator('button.icon-btn[title="Browse output files"]')
-        .first();
+    if (!browseBtnVisible) {
+      console.warn("Browse output files button was not visible on any visible step row.");
+    } else {
+      if (!(await outputSection.isVisible().catch(() => false))) {
+        await clickFirstVisible(browseBtn);
+      }
 
-      const browseBtnVisible = await browseBtn
-        .waitFor({ state: "visible", timeout: 30000 })
-        .then(() => true)
-        .catch(() => false);
+      await waitForNoLoading(outputStepRow);
+      await outputSection.waitFor({ state: "visible", timeout: 30000 });
 
-      if (!browseBtnVisible) {
-        console.warn("Browse output files button not visible on step row with id=91.");
+      await waitForDirectoryContents(outputSection);
+      await expandAllVisibleFolders(outputSection);
+      await waitForDirectoryContents(outputSection);
+
+      const previewableOutputFile = await findPreviewableFileInSection(outputSection, {
+        preferredNames: [/^hello$/],
+        preferNonHtml: true,
+      });
+
+      if (!previewableOutputFile) {
+        console.warn(
+          "No previewable output file row was visible in the output files section.",
+        );
       } else {
-        if (!(await outputSection.isVisible().catch(() => false))) {
-          await clickFirstVisible(browseBtn);
-        }
+        const { fileRow, previewButton } = previewableOutputFile;
+        const fileViewer = fileRow.locator(".file-content-viewer").first();
 
-        await waitForNoLoading(outputStepRow);
-        await outputSection.waitFor({ state: "visible", timeout: 30000 });
-
-        await waitForDirectoryContents(outputSection);
-        await expandAllVisibleFolders(outputSection);
-        await waitForDirectoryContents(outputSection);
-
-        const helloRow = outputSection
-          .locator(".directory-file-container")
-          .filter({
-            has: page.locator(".file-name", { hasText: /^hello$/ }),
-          })
-          .first();
-
-        await helloRow.waitFor({ state: "visible", timeout: 10000 });
-
-        const previewBtn = helloRow
-          .locator("button.dir-item-icon-btn")
-          .filter({
-            has: page.locator(".material-symbols-outlined", {
-              hasText: /^visibility(_off)?$/,
-            }),
-          })
-          .first();
-
-        const fileViewer = helloRow.locator(".file-content-viewer").first();
         if (!(await fileViewer.isVisible().catch(() => false))) {
-          await previewBtn.click();
-          await waitForNoLoading(helloRow);
+          await previewButton.click();
+          await waitForNoLoading(fileRow);
           await fileViewer.waitFor({ state: "visible", timeout: 10000 });
           await waitForNoLoading(fileViewer);
         }
@@ -116,16 +105,18 @@ async function main() {
           async (hoveredBtn) => {
             await hoveredBtn.hover();
             await page.waitForTimeout(100);
-            await screenshotLocator(output, "output-files-browser.png", outputStepRow);
+            await screenshotLocator(
+              output,
+              "output-files-browser.png",
+              outputStepRow,
+            );
           },
           "browse output files button",
         );
       }
-    } else {
-      console.warn("Step row with id=91 was not visible.");
     }
   } else {
-    console.warn("No project rows found in #table-projects.");
+    console.warn("No visible step row exposed a Browse output files button.");
   }
 
   await browser.close();

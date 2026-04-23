@@ -10,8 +10,10 @@ const {
   withHoveredLocator,
   waitForBackend,
   waitForApp,
+  waitForProjectRows,
   waitForStepStatusEvent,
   createContextWithStepTracking,
+  findVisibleStepRowWithButton,
 } = require("./lib/helpers");
 
 async function main() {
@@ -36,48 +38,31 @@ async function main() {
   await page.goto(`${baseUrl}/`, { waitUntil: "load" });
   await waitForApp(page);
 
-  const firstProjectRow = await page.$("#table-projects .table-record");
-  if (firstProjectRow) {
-    await page.evaluate(() => {
-      window.__pointyStepStatusEventCount = 0;
-      window.__pointyLastStepStatusEventType = null;
-    });
-    await firstProjectRow.click();
-    await waitForApp(page);
-    await waitForStepStatusEvent(page);
+  const firstProjectRow = await waitForProjectRows(page);
+  await page.evaluate(() => {
+    window.__pointyStepStatusEventCount = 0;
+    window.__pointyLastStepStatusEventType = null;
+  });
+  await firstProjectRow.click();
+  await waitForApp(page);
+  await waitForStepStatusEvent(page);
 
-    const stepRow = page.locator('.table-record[id="91"]').first();
-    const stepRowVisible = await stepRow
-      .waitFor({ state: "visible", timeout: 30000 })
-      .then(() => true)
-      .catch(() => false);
+  const { stepRow, button: removeBtn } = await findVisibleStepRowWithButton(
+    page,
+    "Remove",
+  );
 
-    if (stepRowVisible) {
-      const stepHeader = stepRow.locator(".table-record-header").first();
-      const removeBtn = stepRow
-        .locator('button.icon-btn[title="Remove"]')
-        .first();
-      const removeBtnVisible = await removeBtn
-        .waitFor({ state: "visible", timeout: 30000 })
-        .then(() => true)
-        .catch(() => false);
-
-      if (removeBtnVisible) {
-        await withHoveredLocator(
-          page,
-          removeBtn,
-          async () =>
-            screenshotLocator(output, "steps-assign-unassign.png", stepHeader),
-          "remove button for step 91",
-        );
-      } else {
-        console.warn("Remove button not visible on step row with id=91.");
-      }
-    } else {
-      console.warn("Step row with id=91 was not visible.");
-    }
+  if (stepRow && removeBtn) {
+    const stepHeader = stepRow.locator(".table-record-header").first();
+    await withHoveredLocator(
+      page,
+      removeBtn,
+      async () =>
+        screenshotLocator(output, "steps-assign-unassign.png", stepHeader),
+      "remove button for a visible step row",
+    );
   } else {
-    console.warn("No project rows found in #table-projects.");
+    console.warn("No visible step row exposed a Remove button.");
   }
 
   await browser.close();

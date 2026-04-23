@@ -4,14 +4,10 @@
 const { chromium } = require("playwright-core");
 const fs = require("fs");
 const path = require("path");
-const {
-  parseArgs,
-  screenshotLocator,
-  waitForBackend,
-  waitForApp,
-  waitForStepStatusEvent,
-  createContextWithStepTracking,
-} = require("./lib/helpers");
+const { parseArgs,
+screenshotLocator,
+waitForBackend, waitForApp, waitForProjectRows, waitForStepStatusEvent,
+createContextWithStepTracking, } = require("./lib/helpers")
 
 async function main() {
   const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
@@ -35,24 +31,20 @@ async function main() {
   await page.goto(`${baseUrl}/`, { waitUntil: "load" });
   await waitForApp(page);
 
-  const firstProjectRow = await page.$("#table-projects .table-record");
-  if (firstProjectRow) {
-    await page.evaluate(() => {
-      window.__pointyStepStatusEventCount = 0;
-      window.__pointyLastStepStatusEventType = null;
-    });
-    await firstProjectRow.click();
-    await waitForApp(page);
-    await waitForStepStatusEvent(page);
+  const firstProjectRow = await waitForProjectRows(page);
+  await page.evaluate(() => {
+    window.__pointyStepStatusEventCount = 0;
+    window.__pointyLastStepStatusEventType = null;
+  });
+  await firstProjectRow.click();
+  await waitForApp(page);
+  await waitForStepStatusEvent(page);
 
-    await screenshotLocator(
-      output,
-      "steps-search-box.png",
-      page.locator(".page-header .select-container .tag-wrapper").first(),
-    );
-  } else {
-    console.warn("No project rows found in #table-projects.");
-  }
+  await screenshotLocator(
+    output,
+    "steps-search-box.png",
+    page.locator(".page-header .select-container .tag-wrapper").first(),
+  );
 
   await browser.close();
 }

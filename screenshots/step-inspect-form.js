@@ -10,8 +10,10 @@ const {
   withHoveredLocator,
   waitForBackend,
   waitForApp,
+  waitForProjectRows,
   waitForStepStatusEvent,
   createContextWithStepTracking,
+  findVisibleStepRowWithButton,
 } = require("./lib/helpers");
 
 async function main() {
@@ -36,85 +38,68 @@ async function main() {
   await page.goto(`${baseUrl}/`, { waitUntil: "load" });
   await waitForApp(page);
 
-  const firstProjectRow = await page.$("#table-projects .table-record");
-  if (firstProjectRow) {
-    await page.evaluate(() => {
-      window.__pointyStepStatusEventCount = 0;
-      window.__pointyLastStepStatusEventType = null;
-    });
-    await firstProjectRow.click();
-    await waitForApp(page);
-    await waitForStepStatusEvent(page);
+  const firstProjectRow = await waitForProjectRows(page);
+  await page.evaluate(() => {
+    window.__pointyStepStatusEventCount = 0;
+    window.__pointyLastStepStatusEventType = null;
+  });
+  await firstProjectRow.click();
+  await waitForApp(page);
+  await waitForStepStatusEvent(page);
 
-    const alignmentStepRow = page.locator('.table-record[id="97"]').first();
-    const alignmentStepRowVisible = await alignmentStepRow
-      .waitFor({ state: "visible", timeout: 30000 })
-      .then(() => true)
-      .catch(() => false);
+  const { stepRow, button: inspectBtn } = await findVisibleStepRowWithButton(
+    page,
+    "Inspect Parameters",
+  );
 
-    if (alignmentStepRowVisible) {
-      const inspectBtn = alignmentStepRow
-        .locator('button.icon-btn[title="Inspect Parameters"]')
-        .first();
-      const inspectBtnVisible = await inspectBtn
-        .waitFor({ state: "visible", timeout: 30000 })
-        .then(() => true)
-        .catch(() => false);
+  if (stepRow && inspectBtn) {
+    await stepRow.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
 
-      if (inspectBtnVisible) {
-        await alignmentStepRow.scrollIntoViewIfNeeded();
-        await page.waitForTimeout(300);
+    await withHoveredLocator(
+      page,
+      inspectBtn,
+      async (hoveredInspectBtn) => {
+        await hoveredInspectBtn.click();
+        await page.waitForTimeout(500);
 
-        await withHoveredLocator(
-          page,
-          inspectBtn,
-          async (hoveredInspectBtn) => {
-            await hoveredInspectBtn.click();
-            await page.waitForTimeout(500);
+        const inspectForm = page.locator(".table-form-wrapper").first();
+        await inspectForm
+          .waitFor({ state: "visible", timeout: 10000 })
+          .catch(() => {});
 
-            const inspectForm = page.locator(".table-form-wrapper").first();
-            await inspectForm
-              .waitFor({ state: "visible", timeout: 10000 })
-              .catch(() => {});
+        await hoveredInspectBtn.hover();
+        await page.waitForTimeout(100);
 
-            await hoveredInspectBtn.hover();
-            await page.waitForTimeout(100);
+        const headerBox = await stepRow
+          .locator(".table-record-header")
+          .first()
+          .boundingBox();
+        const formBox = await inspectForm.boundingBox();
 
-            const headerBox = await alignmentStepRow
-              .locator(".table-record-header")
-              .first()
-              .boundingBox();
-            const formBox = await inspectForm.boundingBox();
-
-            if (headerBox && formBox) {
-              const x = Math.min(headerBox.x, formBox.x);
-              const y = headerBox.y;
-              const width =
-                Math.max(
-                  headerBox.x + headerBox.width,
-                  formBox.x + formBox.width,
-                ) - x;
-              const height = formBox.y + formBox.height - y;
-              const filePath = path.join(output, "step-inspect-form.png");
-              await page.screenshot({
-                path: filePath,
-                clip: { x, y, width, height },
-              });
-              console.log(`Saved ${filePath}`);
-            } else {
-              await screenshot(page, output, "step-inspect-form.png");
-            }
-          },
-          "inspect button for step 97",
-        );
-      } else {
-        console.warn("Inspect Parameters button not visible on step row with id=97.");
-      }
-    } else {
-      console.warn("Step row with id=97 was not visible.");
-    }
+        if (headerBox && formBox) {
+          const x = Math.min(headerBox.x, formBox.x);
+          const y = headerBox.y;
+          const width =
+            Math.max(
+              headerBox.x + headerBox.width,
+              formBox.x + formBox.width,
+            ) - x;
+          const height = formBox.y + formBox.height - y;
+          const filePath = path.join(output, "step-inspect-form.png");
+          await page.screenshot({
+            path: filePath,
+            clip: { x, y, width, height },
+          });
+          console.log(`Saved ${filePath}`);
+        } else {
+          await screenshot(page, output, "step-inspect-form.png");
+        }
+      },
+      "inspect button for a visible shareable step",
+    );
   } else {
-    console.warn("No project rows found in #table-projects.");
+    console.warn("No visible step row exposed an Inspect Parameters button.");
   }
 
   await browser.close();

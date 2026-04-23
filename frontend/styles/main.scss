@@ -672,6 +672,7 @@ $form-vertical-gap: var(--spacing-md);
 
   &[readonly] {
     font-style: italic;
+    border: none;
   }
 }
 

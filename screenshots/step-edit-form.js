@@ -7,12 +7,13 @@ const path = require("path");
 const {
   parseArgs,
   screenshot,
-  firstVisibleLocator,
   waitForBackend,
   waitForApp,
+  waitForProjectRows,
   waitForStepStatusEvent,
   waitForMaterialIcons,
   createContextWithStepTracking,
+  findVisibleStepRowWithButton,
 } = require("./lib/helpers");
 
 async function main() {
@@ -37,35 +38,24 @@ async function main() {
   await page.goto(`${baseUrl}/`, { waitUntil: "load" });
   await waitForApp(page);
 
-  const firstProjectRow = await page.$("#table-projects .table-record");
-  if (firstProjectRow) {
-    await page.evaluate(() => {
-      window.__pointyStepStatusEventCount = 0;
-      window.__pointyLastStepStatusEventType = null;
-    });
-    await firstProjectRow.click();
-    await waitForApp(page);
-    await waitForStepStatusEvent(page);
+  const firstProjectRow = await waitForProjectRows(page);
+  await page.evaluate(() => {
+    window.__pointyStepStatusEventCount = 0;
+    window.__pointyLastStepStatusEventType = null;
+  });
+  await firstProjectRow.click();
+  await waitForApp(page);
+  await waitForStepStatusEvent(page);
 
-    let editStepBtn = await firstVisibleLocator(
-      page.locator('.table-record[id="97"] button.icon-btn[title="Edit"]'),
-    );
-    if (!editStepBtn) {
-      editStepBtn = await firstVisibleLocator(
-        page.locator('.table-record[id] button.icon-btn[title="Edit"]'),
-      );
-    }
+  const { button: editStepBtn } = await findVisibleStepRowWithButton(page, "Edit");
 
-    if (editStepBtn) {
-      await editStepBtn.click();
-      await page.waitForTimeout(500);
-      await waitForMaterialIcons(page);
-      await screenshot(page, output, "step-edit-form.png");
-    } else {
-      console.warn("Edit button not found on any visible step row.");
-    }
+  if (editStepBtn) {
+    await editStepBtn.click();
+    await page.waitForTimeout(500);
+    await waitForMaterialIcons(page);
+    await screenshot(page, output, "step-edit-form.png");
   } else {
-    console.warn("No project rows found in #table-projects.");
+    console.warn("No visible step row exposed an Edit button.");
   }
 
   await browser.close();

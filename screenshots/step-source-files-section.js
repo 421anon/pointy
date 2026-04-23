@@ -11,8 +11,11 @@ const {
   waitForNoLoading,
   waitForDirectoryContents,
   expandAllVisibleFolders,
+  findPreviewableFileInSection,
+  findVisibleStepRowWithButton,
   waitForBackend,
   waitForApp,
+  waitForProjectRows,
   waitForStepStatusEvent,
   createContextWithStepTracking,
 } = require("./lib/helpers");
@@ -39,68 +42,57 @@ async function main() {
   await page.goto(`${baseUrl}/`, { waitUntil: "load" });
   await waitForApp(page);
 
-  const firstProjectRow = await page.$("#table-projects .table-record");
-  if (firstProjectRow) {
-    await page.evaluate(() => {
-      window.__pointyStepStatusEventCount = 0;
-      window.__pointyLastStepStatusEventType = null;
-    });
-    await firstProjectRow.click();
-    await waitForApp(page);
-    await waitForStepStatusEvent(page);
+  const firstProjectRow = await waitForProjectRows(page);
+  await page.evaluate(() => {
+    window.__pointyStepStatusEventCount = 0;
+    window.__pointyLastStepStatusEventType = null;
+  });
+  await firstProjectRow.click();
+  await waitForApp(page);
+  await waitForStepStatusEvent(page);
 
-    const srcFilesStepRow = page.locator('.table-record[id="91"]').first();
-    const srcFilesStepRowVisible = await srcFilesStepRow
+  const { stepRow: srcFilesStepRow, button: browseSrcBtn } =
+    await findVisibleStepRowWithButton(page, "Browse source files");
+
+  if (srcFilesStepRow && browseSrcBtn) {
+    const srcSection = srcFilesStepRow.locator(".src-files-section").first();
+    const browseSrcBtnVisible = await browseSrcBtn
       .waitFor({ state: "visible", timeout: 30000 })
       .then(() => true)
       .catch(() => false);
 
-    if (srcFilesStepRowVisible) {
-      const srcSection = srcFilesStepRow.locator(".src-files-section").first();
-      const browseSrcBtn = srcFilesStepRow
-        .locator('button.icon-btn[title="Browse source files"]')
-        .first();
-
-      const browseSrcBtnVisible = await browseSrcBtn
-        .waitFor({ state: "visible", timeout: 30000 })
-        .then(() => true)
-        .catch(() => false);
-
-      if (!browseSrcBtnVisible) {
-        console.warn("Browse source files button not visible on step row with id=91.");
-      } else {
+    if (!browseSrcBtnVisible) {
+      console.warn("Browse source files button was not visible on any visible step row.");
+    } else {
+      if (!(await srcSection.isVisible().catch(() => false))) {
         await browseSrcBtn.click();
-        await waitForNoLoading(srcFilesStepRow);
-        await srcSection.waitFor({ state: "visible", timeout: 30000 });
+      }
 
-        await waitForDirectoryContents(srcSection);
-        await expandAllVisibleFolders(srcSection);
+      await waitForNoLoading(srcFilesStepRow);
+      await srcSection.waitFor({ state: "visible", timeout: 30000 });
 
-        const mainPyRow = srcSection
-          .locator(".directory-file-container")
-          .filter({
-            has: page.locator(".file-name", { hasText: /^main\.py$/ }),
-          })
-          .first();
+      await waitForDirectoryContents(srcSection);
+      await expandAllVisibleFolders(srcSection);
+      await waitForDirectoryContents(srcSection);
 
-        await mainPyRow.waitFor({ state: "visible", timeout: 10000 });
+      const previewableSourceFile = await findPreviewableFileInSection(srcSection, {
+        preferredNames: [/^main\.py$/],
+      });
 
-        const previewBtn = mainPyRow
-          .locator("button.dir-item-icon-btn")
-          .filter({
-            has: page.locator(".material-symbols-outlined", {
-              hasText: /^visibility(_off)?$/,
-            }),
-          })
-          .first();
+      if (!previewableSourceFile) {
+        console.warn(
+          "No previewable source file row was visible in the source files section.",
+        );
+      } else {
+        const { fileRow, previewButton } = previewableSourceFile;
+        const fileViewer = fileRow.locator(".file-content-viewer").first();
 
-        const fileViewer = mainPyRow.locator(".file-content-viewer").first();
         if (!(await fileViewer.isVisible().catch(() => false))) {
-          await previewBtn.click();
+          await previewButton.click();
           await waitForNoLoading(srcFilesStepRow);
           await fileViewer.waitFor({ state: "visible", timeout: 10000 });
           await page.waitForTimeout(1000);
-          await waitForNoLoading(mainPyRow);
+          await waitForNoLoading(fileRow);
         }
 
         await srcFilesStepRow.scrollIntoViewIfNeeded();
@@ -112,16 +104,18 @@ async function main() {
           async (hoveredBtn) => {
             await hoveredBtn.hover();
             await page.waitForTimeout(100);
-            await screenshotLocator(output, "step-source-files-section.png", srcFilesStepRow);
+            await screenshotLocator(
+              output,
+              "step-source-files-section.png",
+              srcFilesStepRow,
+            );
           },
           "browse source files button",
         );
       }
-    } else {
-      console.warn("Step row with id=91 was not visible.");
     }
   } else {
-    console.warn("No project rows found in #table-projects.");
+    console.warn("No visible step row exposed a Browse source files button.");
   }
 
   await browser.close();

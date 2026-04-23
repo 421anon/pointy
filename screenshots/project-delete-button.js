@@ -4,13 +4,9 @@
 const { chromium } = require("playwright-core");
 const fs = require("fs");
 const path = require("path");
-const {
-  parseArgs,
-  screenshotLocator,
-  waitForBackend,
-  waitForApp,
-  createContextWithStepTracking,
-} = require("./lib/helpers");
+const { parseArgs,
+screenshotLocator,
+waitForBackend, waitForApp, waitForProjectRows, createContextWithStepTracking, } = require("./lib/helpers")
 
 async function main() {
   const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
@@ -34,17 +30,13 @@ async function main() {
   await page.goto(`${baseUrl}/`, { waitUntil: "load" });
   await waitForApp(page);
 
-  const firstProjectRecord = page.locator("#table-projects .table-record").first();
+  const firstProjectRecord = await waitForProjectRows(page);
 
-  if (await firstProjectRecord.count()) {
-    await screenshotLocator(
-      output,
-      "project-delete-button.png",
-      firstProjectRecord.locator('button.icon-btn[title="Remove"]').first(),
-    );
-  } else {
-    console.warn("No project rows found in #table-projects.");
-  }
+  await screenshotLocator(
+    output,
+    "project-delete-button.png",
+    firstProjectRecord.locator('button.icon-btn[title="Remove"]').first(),
+  );
 
   await browser.close();
 }
