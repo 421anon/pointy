@@ -2,38 +2,17 @@
 "use strict";
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
-const path = require("path");
 const {
-  parseArgs,
+  runStandalone,
+  prepareProjectsPage,
   screenshotLocator,
-  waitForBackend,
-  waitForApp,
   waitForMaterialIcons,
-  createContextWithStepTracking,
 } = require("./lib/helpers");
 
-async function main() {
-  const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
-    parseArgs(process.argv.slice(2));
+async function capture(session) {
+  const { page, output } = session;
 
-  fs.mkdirSync(output, { recursive: true });
-
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await createContextWithStepTracking(browser);
-  const page = await context.newPage();
-
-  await waitForBackend(page, baseUrl);
-  await page.goto(`${baseUrl}/`, { waitUntil: "load" });
-  await waitForApp(page);
+  await prepareProjectsPage(session);
 
   const addProjectBtn = await page.$(
     "#table-projects .table-header-controls button.icon-btn",
@@ -48,13 +27,15 @@ async function main() {
       page.locator(".table-form-wrapper .form").first(),
     );
   } else {
-    console.warn("Add project button not found in #table-projects header.");
+    session.warn("Add project button not found in #table-projects header.");
   }
-
-  await browser.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { capture };
+
+if (require.main === module) {
+  runStandalone(capture, chromium).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

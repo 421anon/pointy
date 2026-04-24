@@ -143,13 +143,14 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ args ->
+        (\id name type_ note args ->
             { id = Just id
             , clientId = Nothing
             , type_ = type_
             , hidden = False
             , sortKey = Nothing
             , name = name
+            , note = note
             , runState = NotAsked
             , args = args
             , isUpdating = False
@@ -162,6 +163,7 @@ stepValueOnly stepType_ =
         |> required "id" Decode.int
         |> required "name" Decode.string
         |> required "type" Decode.string
+        |> optional "note" Decode.string ""
         |> required "args" (stepArgs stepType_)
 
 

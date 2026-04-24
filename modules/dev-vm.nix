@@ -37,6 +37,10 @@
         source = "/nix/var/log";
         target = "/nix/var/log";
       };
+      dev-config = {
+        source = "$POINTY_DEV_CONFIG_DIR";
+        target = "/shared/dev-config";
+      };
     };
   };
 
@@ -66,20 +70,14 @@
     '';
   };
 
-  systemd.services.backend.preStart =
-    let
-      devConfigPath = builtins.getEnv "POINTY_DEV_CONFIG";
-      devConfig = builtins.path {
-        path = devConfigPath;
-        name = "dev-config.toml";
-      };
-    in
-    if devConfigPath == "" then
-      throw "POINTY_DEV_CONFIG is not set — launch the dev VM via `nix run .#dev-vm` so the gitignored backend/dev-config.toml is passed in at invocation"
-    else
-      ''
-        cp ${devConfig} /home/backend/config.toml && chmod u+w /home/backend/config.toml
-      '';
+  systemd.services.backend.preStart = ''
+    if [ ! -f /shared/dev-config/dev-config.toml ]; then
+      echo "error: /shared/dev-config/dev-config.toml is missing — launch the VM via `nix run .#dev-vm` so backend/dev-config.toml is shared into the guest" >&2
+      exit 1
+    fi
+    cp /shared/dev-config/dev-config.toml /home/backend/config.toml
+    chmod u+w /home/backend/config.toml
+  '';
 
   # Simple nginx configuration for dev
   services.nginx = {

@@ -74,6 +74,10 @@ If you want to branch from a shareable step instead of changing it in place, use
 
 When you edit a step, Pointy highlights any field with a yellow border whose value currently differs from the saved step definition. This is a live editing aid: it shows what you have changed in the current form before you click **Save**.
 
+### Notes on steps
+
+Each step has a free-form **Note** field for your own commentary — explanations, caveats, links, anything that helps you or a collaborator make sense of the step later. Notes live on the step definition, so they travel with the step across every project it is assigned to.
+
 ## Reusing a step across projects
 
 A single step can be assigned to multiple projects.

@@ -443,7 +443,7 @@ body {
   padding: var(--spacing-sm);
   background: var(--bg-secondary);
   color: var(--text-primary);
-  white-space: nowrap;
+  white-space: pre;
   overflow-x: auto;
 }
 
@@ -661,6 +661,19 @@ $form-vertical-gap: var(--spacing-md);
   font-family: monospace;
   min-height: 200px;
   resize: vertical;
+}
+
+.form-input-note {
+  background-color: transparent;
+  height: 100px;
+  padding: var(--spacing-sm);
+  resize: vertical;
+  overflow: auto;
+
+  &[readonly] {
+    font-style: italic;
+    border: none;
+  }
 }
 
 .form-actions {
@@ -1061,6 +1074,7 @@ select.field-changed,
   padding: 0 6px;
   align-items: center;
   height: 24px;
+  line-height: 24px;
 }
 
 .tag:has(.remove-selected-icon) {

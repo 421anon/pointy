@@ -34,11 +34,6 @@ in
     tryFiles = "$uri $uri/ /index.html";
   };
 
-  # Point the backend at the host's user-repo shared into the VM.
-  systemd.services.backend.preStart = lib.mkForce ''
-    cp ${../screenshots/dev-config.toml} /home/backend/config.toml
-    chmod u+w /home/backend/config.toml
-  '';
 
   # Stream backend stdout/stderr to the shared dir for host-side inspection.
   systemd.services.backend.serviceConfig.StandardOutput = "append:/screenshots/backend.log";
@@ -68,6 +63,14 @@ in
 
   environment.systemPackages = [ takeScreenshots ];
 
+  fonts = {
+    fontconfig.enable = true;
+    packages = with pkgs; [
+      dejavu_fonts
+      liberation_ttf
+    ];
+  };
+
   virtualisation = {
     # Smaller footprint than the interactive dev-vm.
     memorySize = lib.mkForce 4096;
@@ -77,6 +80,11 @@ in
     # No display window — everything runs headlessly inside the VM.
     graphics = false;
     sharedDirectories = {
+      # Input: checked-in backend config for screenshot generation.
+      dev-config = lib.mkForce {
+        source = "${../screenshots}";
+        target = "/shared/dev-config";
+      };
       # Output: written by playwright, read by the host after the VM exits.
       screenshots = {
         source = "$SCREENSHOTS_OUT";

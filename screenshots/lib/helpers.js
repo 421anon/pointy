@@ -20,13 +20,30 @@ function normalizeTheme(theme) {
   return theme === "light" || theme === "dark" ? theme : null;
 }
 
+const browserLaunchOptions = {
+  headless: true,
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+  ],
+};
+
+async function launchBrowser(chromium) {
+  return chromium.launch(browserLaunchOptions);
+}
+
+async function closeBrowser(browser) {
+  await browser.close();
+}
+
+
 /**
  * Take a screenshot of the entire page viewport.
  */
 async function screenshot(page, outputDir, name) {
   const filePath = path.join(outputDir, name);
   await page.screenshot({ path: filePath, fullPage: false });
-  console.log(`Saved ${filePath}`);
 }
 
 /**
@@ -35,7 +52,6 @@ async function screenshot(page, outputDir, name) {
 async function screenshotLocator(outputDir, name, locator) {
   const filePath = path.join(outputDir, name);
   await locator.screenshot({ path: filePath });
-  console.log(`Saved ${filePath}`);
 }
 
 /**
@@ -72,6 +88,271 @@ async function clickFirstVisible(locator) {
   await candidate.click();
   await waitForMaterialIcons(locator.page());
   return true;
+}
+
+async function resetStepStatusTracking(page) {
+  await page.evaluate(() => {
+    window.__pointyStepStatusEventCount = 0;
+    window.__pointyLastStepStatusEventType = null;
+  });
+}
+
+async function dismissTableForms(page) {
+  for (let i = 0; i < 5; i++) {
+    const cancelButton = await firstVisibleLocator(
+      page.locator(".table-form-wrapper button", { hasText: /^Cancel$/ }),
+    );
+    if (!cancelButton) return;
+    await cancelButton.click();
+    await waitForMaterialIcons(page);
+  }
+}
+
+async function prepareProjectsPage(session) {
+  const { page, baseUrl } = session;
+
+  if (session.location !== "projects") {
+    await page.goto(`${baseUrl}/`, { waitUntil: "load" });
+    await waitForApp(page);
+    session.location = "projects";
+  }
+
+  await dismissTableForms(page);
+  return waitForProjectRows(page);
+}
+
+async function prepareProjectPage(session) {
+  const { page } = session;
+
+  if (session.location !== "project") {
+    const firstProjectRow = await prepareProjectsPage(session);
+    await resetStepStatusTracking(page);
+    await firstProjectRow.click();
+    await waitForApp(page);
+    await waitForStepStatusEvent(page);
+    session.location = "project";
+  }
+
+  await dismissTableForms(page);
+  return page;
+}
+
+async function runStandalone(capture, chromium) {
+  const {
+    output = path.join(__dirname, "../docs/pages/screenshots"),
+    url: baseUrl = "http://localhost",
+  } = parseArgs(process.argv.slice(2));
+
+  fs.mkdirSync(output, { recursive: true });
+
+  const browser = await launchBrowser(chromium);
+  const context = await createContextWithStepTracking(browser);
+  const page = await context.newPage();
+
+  try {
+    await waitForBackend(page, baseUrl);
+    await capture({
+      browser,
+      context,
+      page,
+      output,
+      baseUrl,
+      location: "unknown",
+      warn: console.warn.bind(console),
+    });
+  } finally {
+    await closeBrowser(browser);
+  }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function getVisibleStepRows(page) {
+  const stepRows = page.locator('.table[id^="table-"]:not(#table-projects) .table-record[id]');
+  const count = await stepRows.count();
+  const visibleRows = [];
+
+  for (let i = 0; i < count; i++) {
+    const row = stepRows.nth(i);
+    if (await row.isVisible().catch(() => false)) {
+      visibleRows.push(row);
+    }
+  }
+
+  return visibleRows;
+}
+
+async function getStepRowDisplayName(stepRow) {
+  return stepRow.locator(".table-record-name").first().evaluate((el) => {
+    const clone = el.cloneNode(true);
+    clone
+      .querySelectorAll(".table-record-id, .pending-record-indicator, .shareable-icon, .edit-icon")
+      .forEach((node) => node.remove());
+
+    return (clone.textContent || "").replace(/\s+/g, " ").trim();
+  });
+}
+
+async function getDirectoryFileName(fileRow) {
+  return fileRow.locator(".file-name").first().evaluate((el) => {
+    return (el.textContent || "").replace(/\s+/g, " ").trim();
+  });
+}
+
+function matchesPreferredName(name, preferredNames) {
+  return preferredNames.some((preferredName) => {
+    if (preferredName instanceof RegExp) {
+      return preferredName.test(name);
+    }
+
+    return preferredName === name;
+  });
+}
+
+/**
+ * Find a visible previewable file row in a directory section.
+ */
+async function findPreviewableFileInSection(
+  sectionLocator,
+  { preferredNames = [], preferNonHtml = false } = {},
+) {
+  const fileRows = sectionLocator.locator(".directory-file-container");
+  const count = await fileRows.count();
+  const candidates = [];
+
+  for (let i = 0; i < count; i++) {
+    const fileRow = fileRows.nth(i);
+    if (!(await fileRow.isVisible().catch(() => false))) continue;
+
+    const previewButton = await firstVisibleLocator(
+      fileRow.locator("button.dir-item-icon-btn").filter({
+        has: sectionLocator.page().locator(".material-symbols-outlined", {
+          hasText: /^visibility(_off)?$/ ,
+        }),
+      }),
+    );
+
+    if (!previewButton) continue;
+
+    let fileName = "";
+    try {
+      fileName = await getDirectoryFileName(fileRow);
+    } catch (_err) {
+      continue;
+    }
+
+    if (!fileName) continue;
+
+    candidates.push({ fileRow, fileName, previewButton });
+  }
+
+  const preferredCandidate = candidates.find(({ fileName }) =>
+    matchesPreferredName(fileName, preferredNames),
+  );
+  if (preferredCandidate) return preferredCandidate;
+
+  if (preferNonHtml) {
+    const nonHtmlCandidate = candidates.find(
+      ({ fileName }) => !/\.html$/i.test(fileName),
+    );
+    if (nonHtmlCandidate) return nonHtmlCandidate;
+  }
+
+  return candidates[0] || null;
+}
+
+/**
+ * Find the first visible step row exposing a specific row action button.
+ */
+async function findVisibleStepRowWithButton(page, buttonTitle) {
+  const visibleRows = await getVisibleStepRows(page);
+
+  for (const stepRow of visibleRows) {
+    const button = await firstVisibleLocator(
+      stepRow.locator(`button.icon-btn[title="${buttonTitle}"]`),
+    );
+
+    if (button) {
+      return { stepRow, button };
+    }
+  }
+
+  return { stepRow: null, button: null };
+}
+
+/**
+ * Find a visible step row with Clone plus its visible cloned counterpart.
+ */
+function getCloneBaseName(stepName) {
+  const cloneSuffixIndex = stepName.indexOf(" (Clone");
+  return cloneSuffixIndex === -1
+    ? stepName
+    : stepName.slice(0, cloneSuffixIndex);
+}
+
+async function findVisibleClonePair(page) {
+  const visibleRows = await getVisibleStepRows(page);
+  const stepInfos = [];
+
+  for (const stepRow of visibleRows) {
+    const cloneButton = await firstVisibleLocator(
+      stepRow.locator('button.icon-btn[title="Clone"]'),
+    );
+
+    if (!cloneButton) continue;
+
+    let stepName = "";
+    try {
+      stepName = await getStepRowDisplayName(stepRow);
+    } catch (_err) {
+      continue;
+    }
+
+    if (!stepName) continue;
+
+    stepInfos.push({
+      stepRow,
+      cloneButton,
+      stepName,
+      cloneBaseName: getCloneBaseName(stepName),
+    });
+  }
+
+  for (let i = 0; i < stepInfos.length; i++) {
+    const source = stepInfos[i];
+    const cloneNamePattern = new RegExp(
+      `^${escapeRegExp(source.cloneBaseName)} \\(Clone(?: \\d+)?\\)$`,
+    );
+
+    for (const candidate of visibleRows.slice(i + 1)) {
+      let candidateName = "";
+      try {
+        candidateName = await getStepRowDisplayName(candidate);
+      } catch (_err) {
+        continue;
+      }
+
+      if (cloneNamePattern.test(candidateName) && candidateName !== source.stepName) {
+        return {
+          sourceStepRow: source.stepRow,
+          cloneStepRow: candidate,
+          cloneButton: source.cloneButton,
+          sourceStepName: source.stepName,
+          cloneStepName: candidateName,
+        };
+      }
+    }
+  }
+
+  return {
+    sourceStepRow: null,
+    cloneStepRow: null,
+    cloneButton: null,
+    sourceStepName: null,
+    cloneStepName: null,
+  };
 }
 
 /**
@@ -142,8 +423,7 @@ async function waitForDirectoryContents(locator) {
           const text = (node.textContent || "").trim();
           return (
             text === "Directory is empty" ||
-            text === "Failed to load" ||
-            text === "Loading directory contents..."
+            text === "Failed to load"
           );
         }),
       );
@@ -199,10 +479,10 @@ async function showTitleAsTooltip(page, locator) {
 /**
  * Execute an action with a locator in a hovered state.
  */
-async function withHoveredLocator(page, locator, action, label = "hover target") {
+async function withHoveredLocator(page, locator, action, label, warn) {
   const visibleLocator = await firstVisibleLocator(locator);
   if (!visibleLocator) {
-    console.warn(`No visible ${label} found.`);
+    warn(`No visible ${label} found.`);
     return false;
   }
 
@@ -285,6 +565,38 @@ async function waitForApp(page) {
 }
 
 /**
+ * Wait for the projects table to finish loading and render a visible row.
+ */
+async function waitForProjectRows(page) {
+  const projectsTable = page.locator("#table-projects").first();
+  const loadingPlaceholder = projectsTable.locator(".table-records-loading").first();
+  const firstProjectRow = projectsTable.locator(".table-record").first();
+
+  await projectsTable.waitFor({ state: "visible", timeout: 30000 });
+
+  try {
+    await loadingPlaceholder.waitFor({ state: "hidden", timeout: 30000 });
+    await firstProjectRow.waitFor({ state: "visible", timeout: 30000 });
+  } catch (err) {
+    let tableText = "<unavailable>";
+
+    try {
+      tableText = (await projectsTable.innerText()).replace(/\s+/g, " ").trim();
+      if (!tableText) tableText = "<empty>";
+    } catch (_err) {
+      // Ignore diagnostic failures while building the error message.
+    }
+
+    const reason = err.message;
+    throw new Error(
+      `Projects table never rendered a visible project row. Current table text: ${tableText}. Cause: ${reason}`
+    );
+  }
+
+  return firstProjectRow;
+}
+
+/**
  * Poll /backend/projects until the backend is up and serving data.
  */
 async function waitForBackend(page, baseUrl) {
@@ -319,7 +631,7 @@ async function waitForBackend(page, baseUrl) {
         try {
           fs.writeFileSync(readyMarker, `${Date.now()}\n`);
         } catch (err) {
-          console.warn(`Failed to write backend readiness marker ${readyMarker}: ${String(err)}`);
+          console.warn(`Failed to write backend readiness marker ${readyMarker}: ${err.message}`);
         }
       }
 
@@ -394,13 +706,22 @@ async function createContextWithStepTracking(browser) {
   return context;
 }
 
+
 module.exports = {
   parseArgs,
+  launchBrowser,
+  closeBrowser,
+  runStandalone,
+  prepareProjectsPage,
+  prepareProjectPage,
   screenshot,
   screenshotLocator,
   clickIfExists,
   firstVisibleLocator,
   clickFirstVisible,
+  findPreviewableFileInSection,
+  findVisibleStepRowWithButton,
+  findVisibleClonePair,
   expandAllVisibleFolders,
   waitForNoLoading,
   waitForDirectoryContents,
@@ -409,6 +730,7 @@ module.exports = {
   waitForStepStatusEvent,
   waitForMaterialIcons,
   waitForApp,
+  waitForProjectRows,
   waitForBackend,
   createContextWithStepTracking,
 };

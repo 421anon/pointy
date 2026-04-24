@@ -2,107 +2,61 @@
 "use strict";
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
-const path = require("path");
 const {
-  parseArgs,
+  runStandalone,
+  prepareProjectPage,
   screenshotLocator,
-  clickFirstVisible,
   withHoveredLocator,
+  clickFirstVisible,
   waitForNoLoading,
   waitForDirectoryContents,
   expandAllVisibleFolders,
-  waitForBackend,
-  waitForApp,
-  waitForStepStatusEvent,
-  createContextWithStepTracking,
+  findPreviewableFileInSection,
+  findVisibleStepRowWithButton,
 } = require("./lib/helpers");
 
-async function main() {
-  const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
-    parseArgs(process.argv.slice(2));
+async function capture(session) {
+  const { page, output } = session;
+  await prepareProjectPage(session);
 
-  fs.mkdirSync(output, { recursive: true });
+  const { stepRow: outputStepRow, button: browseBtn } =
+    await findVisibleStepRowWithButton(page, "Browse output files");
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await createContextWithStepTracking(browser);
-  const page = await context.newPage();
-
-  await waitForBackend(page, baseUrl);
-  await page.goto(`${baseUrl}/`, { waitUntil: "load" });
-  await waitForApp(page);
-
-  const firstProjectRow = await page.$("#table-projects .table-record");
-  if (firstProjectRow) {
-    await page.evaluate(() => {
-      window.__pointyStepStatusEventCount = 0;
-      window.__pointyLastStepStatusEventType = null;
-    });
-    await firstProjectRow.click();
-    await waitForApp(page);
-    await waitForStepStatusEvent(page);
-
-    const outputStepRow = page.locator('.table-record[id="91"]').first();
-    const outputStepRowVisible = await outputStepRow
+  if (outputStepRow && browseBtn) {
+    const outputSection = outputStepRow.locator(".output-files-section").first();
+    const browseBtnVisible = await browseBtn
       .waitFor({ state: "visible", timeout: 30000 })
       .then(() => true)
       .catch(() => false);
 
-    if (outputStepRowVisible) {
-      const outputSection = outputStepRow.locator(".output-files-section").first();
-      const browseBtn = outputStepRow
-        .locator('button.icon-btn[title="Browse output files"]')
-        .first();
+    if (!browseBtnVisible) {
+      session.warn("Browse output files button was not visible on any visible step row.");
+    } else {
+      if (!(await outputSection.isVisible().catch(() => false))) {
+        await clickFirstVisible(browseBtn);
+      }
 
-      const browseBtnVisible = await browseBtn
-        .waitFor({ state: "visible", timeout: 30000 })
-        .then(() => true)
-        .catch(() => false);
+      await waitForNoLoading(outputStepRow);
+      await outputSection.waitFor({ state: "visible", timeout: 30000 });
 
-      if (!browseBtnVisible) {
-        console.warn("Browse output files button not visible on step row with id=91.");
+      await waitForDirectoryContents(outputSection);
+      await expandAllVisibleFolders(outputSection);
+      await waitForDirectoryContents(outputSection);
+
+      const previewableOutputFile = await findPreviewableFileInSection(outputSection, {
+        preferredNames: [/^hello$/],
+        preferNonHtml: true,
+      });
+
+      if (!previewableOutputFile) {
+        session.warn("No previewable output file row was visible in the output files section.");
       } else {
-        if (!(await outputSection.isVisible().catch(() => false))) {
-          await clickFirstVisible(browseBtn);
-        }
+        const { fileRow, previewButton } = previewableOutputFile;
+        const fileViewer = fileRow.locator(".file-content-viewer").first();
 
-        await waitForNoLoading(outputStepRow);
-        await outputSection.waitFor({ state: "visible", timeout: 30000 });
-
-        await waitForDirectoryContents(outputSection);
-        await expandAllVisibleFolders(outputSection);
-        await waitForDirectoryContents(outputSection);
-
-        const helloRow = outputSection
-          .locator(".directory-file-container")
-          .filter({
-            has: page.locator(".file-name", { hasText: /^hello$/ }),
-          })
-          .first();
-
-        await helloRow.waitFor({ state: "visible", timeout: 10000 });
-
-        const previewBtn = helloRow
-          .locator("button.dir-item-icon-btn")
-          .filter({
-            has: page.locator(".material-symbols-outlined", {
-              hasText: /^visibility(_off)?$/,
-            }),
-          })
-          .first();
-
-        const fileViewer = helloRow.locator(".file-content-viewer").first();
         if (!(await fileViewer.isVisible().catch(() => false))) {
-          await previewBtn.click();
-          await waitForNoLoading(helloRow);
+          await previewButton.click();
+          await waitForNoLoading(fileRow);
           await fileViewer.waitFor({ state: "visible", timeout: 10000 });
           await waitForNoLoading(fileViewer);
         }
@@ -116,22 +70,28 @@ async function main() {
           async (hoveredBtn) => {
             await hoveredBtn.hover();
             await page.waitForTimeout(100);
-            await screenshotLocator(output, "output-files-browser.png", outputStepRow);
+            await screenshotLocator(
+              output,
+              "output-files-browser.png",
+              outputStepRow,
+            );
           },
           "browse output files button",
+          session.warn,
         );
       }
-    } else {
-      console.warn("Step row with id=91 was not visible.");
     }
   } else {
-    console.warn("No project rows found in #table-projects.");
+    session.warn("No visible step row exposed a Browse output files button.");
   }
 
-  await browser.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { capture };
+
+if (require.main === module) {
+  runStandalone(capture, chromium).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
