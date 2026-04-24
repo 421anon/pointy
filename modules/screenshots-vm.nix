@@ -63,6 +63,14 @@ in
 
   environment.systemPackages = [ takeScreenshots ];
 
+  fonts = {
+    fontconfig.enable = true;
+    packages = with pkgs; [
+      dejavu_fonts
+      liberation_ttf
+    ];
+  };
+
   virtualisation = {
     # Smaller footprint than the interactive dev-vm.
     memorySize = lib.mkForce 4096;

@@ -2,53 +2,34 @@
 "use strict";
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
-const path = require("path");
-const { parseArgs,
+const {
+  runStandalone,
+  prepareProjectPage,
   screenshotLocator,
   clickFirstVisible,
   withHoveredLocator,
   waitForNoLoading,
   waitForDirectoryContents,
-  findVisibleStepRowWithButton,
-  waitForBackend, waitForApp, waitForProjectRows, waitForStepStatusEvent,
-  createContextWithStepTracking, } = require("./lib/helpers")
+} = require("./lib/helpers");
 
-async function main() {
-  const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
-    parseArgs(process.argv.slice(2));
+async function capture(session) {
+  const { page, output } = session;
+  await prepareProjectPage(session);
 
-  fs.mkdirSync(output, { recursive: true });
+  const outputStepRow = page
+    .locator('.table-record')
+    .filter({
+      has: page.locator(".table-record-id", { hasText: /^105$/ }),
+    })
+    .filter({
+      has: page.locator('button.icon-btn[title="Browse output files"]'),
+    })
+    .first();
+  const browseBtn = outputStepRow
+    .locator('button.icon-btn[title="Browse output files"]')
+    .first();
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await createContextWithStepTracking(browser);
-  const page = await context.newPage();
-
-  await waitForBackend(page, baseUrl);
-  await page.goto(`${baseUrl}/`, { waitUntil: "load" });
-  await waitForApp(page);
-
-  const firstProjectRow = await waitForProjectRows(page);
-  await page.evaluate(() => {
-    window.__pointyStepStatusEventCount = 0;
-    window.__pointyLastStepStatusEventType = null;
-  });
-  await firstProjectRow.click();
-  await waitForApp(page);
-  await waitForStepStatusEvent(page);
-
-  const { stepRow: outputStepRow, button: browseBtn } =
-    await findVisibleStepRowWithButton(page, "Browse output files");
-
-  if (outputStepRow) {
+  if (await outputStepRow.isVisible().catch(() => false)) {
     const outputSection = outputStepRow.locator(".output-files-section").first();
 
     if (!(await outputSection.isVisible().catch(() => false))) {
@@ -114,15 +95,19 @@ async function main() {
         await screenshotLocator(output, "output-files-html-preview.png", outputStepRow);
       },
       "preview button",
+      session.warn,
     );
   } else {
-    console.warn("No visible step row exposed a Browse output files button.");
+    session.warn("Step 105 did not expose a visible Browse output files button.");
   }
 
-  await browser.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { capture };
+
+if (require.main === module) {
+  runStandalone(capture, chromium).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

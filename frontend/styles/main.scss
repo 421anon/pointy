@@ -443,7 +443,7 @@ body {
   padding: var(--spacing-sm);
   background: var(--bg-secondary);
   color: var(--text-primary);
-  white-space: nowrap;
+  white-space: pre;
   overflow-x: auto;
 }
 
@@ -1074,6 +1074,7 @@ select.field-changed,
   padding: 0 6px;
   align-items: center;
   height: 24px;
+  line-height: 24px;
 }
 
 .tag:has(.remove-selected-icon) {

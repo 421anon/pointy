@@ -2,8 +2,8 @@
 "use strict";
 
 const fs = require("fs");
-const { spawn } = require("child_process");
 const path = require("path");
+const { chromium } = require("playwright-core");
 
 // List of all screenshot generator scripts
 const screenshotScripts = [
@@ -60,11 +60,14 @@ function resolveScriptsDir() {
 
 function parseRunnerArgs(args) {
   let output = path.join(__dirname, "../docs/pages/screenshots");
+  let url = "http://localhost";
   let themes = [];
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--output" && args[i + 1]) {
       output = args[++i];
+    } else if (args[i] === "--url" && args[i + 1]) {
+      url = args[++i];
     } else if (args[i] === "--theme" && args[i + 1]) {
       themes = args[++i]
         .split(",")
@@ -88,114 +91,124 @@ function parseRunnerArgs(args) {
     themes = ["light", "dark"];
   }
 
-  return { output, themes };
+  return { output, url, themes };
 }
 
-function runScript(scriptPath, args, extraEnv = {}) {
-  return new Promise((resolve, reject) => {
-    console.log(`\n${"=".repeat(80)}`);
-    console.log(`Running: ${path.basename(scriptPath)}`);
-    console.log("=".repeat(80));
 
-    const child = spawn("node", [scriptPath, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...extraEnv },
-    });
+function timestamp() {
+  return new Date().toISOString();
+}
 
-    let stderrOutput = "";
+function formatDuration(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
 
-    child.stdout.on("data", (chunk) => {
-      process.stdout.write(chunk);
-    });
+function log(message) {
+  console.log(`[${timestamp()}] ${message}`);
+}
 
-    child.stderr.on("data", (chunk) => {
-      stderrOutput += chunk.toString();
-      process.stderr.write(chunk);
-    });
+function logError(message) {
+  console.error(`[${timestamp()}] ${message}`);
+}
 
-    child.on("error", (err) => {
-      console.error(`Failed to start ${scriptPath}:`, err);
-      reject(err);
-    });
+function logErrorLines(label, output) {
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    logError(`${label} ${line}`);
+  }
+}
 
-    child.on("exit", (code) => {
-      if (code === 0) {
-        if (stderrOutput.trim().length > 0) {
-          console.error(`✗ Failed: ${path.basename(scriptPath)} emitted warnings on stderr`);
-          reject(new Error("Script emitted warnings"));
-        } else {
-          console.log(`✓ Completed: ${path.basename(scriptPath)}`);
-          resolve();
-        }
-      } else {
-        console.error(`✗ Failed: ${path.basename(scriptPath)} (exit code ${code})`);
-        reject(new Error(`Script exited with code ${code}`));
-      }
-    });
-  });
+async function runCapture(scriptPath, session, label) {
+  const startedAt = Date.now();
+  log(`start ${label}`);
+
+  const captureSession = {
+    ...session,
+    warn: (message) => logError(`${label} warn ${message}`),
+  };
+
+  try {
+    const { capture } = require(scriptPath);
+    if (typeof capture !== "function") {
+      throw new Error(`${path.basename(scriptPath)} does not export capture(session)`);
+    }
+
+    await capture(captureSession);
+    session.location = captureSession.location;
+    log(`ok ${label} ${formatDuration(Date.now() - startedAt)}`);
+  } catch (err) {
+    logError(`fail ${label} ${formatDuration(Date.now() - startedAt)}`);
+    logErrorLines(label, err.stack || err.message);
+    throw err;
+  }
 }
 
 async function main() {
+  const runStartedAt = Date.now();
   const args = process.argv.slice(2);
-  const { output, themes } = parseRunnerArgs(args);
+  const { output, url: baseUrl, themes } = parseRunnerArgs(args);
   const backendReadyMarker = path.join(output, ".backend-ready");
 
   const scriptsDir = resolveScriptsDir();
-  console.log(`Using scripts directory: ${scriptsDir}`);
-
-  console.log("Running all screenshot generation scripts...");
-  console.log(`Total scripts: ${screenshotScripts.length}`);
-  console.log(`Themes: ${themes.join(", ")}`);
-  console.log(`Output root: ${output}`);
-  console.log(`Args: ${args.join(" ")}`);
+  const {
+    launchBrowser,
+    closeBrowser,
+    createContextWithStepTracking,
+    waitForBackend,
+  } = require(path.join(scriptsDir, "lib/helpers"));
+  log(`run start scripts=${screenshotScripts.length} themes=${themes.join(",")} output=${output}`);
 
   fs.rmSync(backendReadyMarker, { force: true });
+  process.env.SCREENSHOT_BACKEND_READY_FILE = backendReadyMarker;
 
-  let successCount = 0;
-  let failureCount = 0;
+  let completedCount = 0;
   const totalRuns = screenshotScripts.length * themes.length;
+  const browser = await launchBrowser(chromium);
+  log("browser shared-started");
 
-  for (const theme of themes) {
-    const themeOutput = path.join(output, theme);
-    fs.rmSync(themeOutput, { recursive: true, force: true });
-    fs.mkdirSync(themeOutput, { recursive: true });
+  try {
+    for (const theme of themes) {
+      const themeOutput = path.join(output, theme);
+      fs.rmSync(themeOutput, { recursive: true, force: true });
+      fs.mkdirSync(themeOutput, { recursive: true });
 
-    console.log(`\n${"#".repeat(80)}`);
-    console.log(`Generating ${theme} screenshots in ${themeOutput}`);
-    console.log("#".repeat(80));
+      process.env.SCREENSHOT_THEME = theme;
+      const context = await createContextWithStepTracking(browser);
+      const page = await context.newPage();
+      const session = {
+        browser,
+        context,
+        page,
+        output: themeOutput,
+        baseUrl,
+        location: "unknown",
+      };
 
-    for (const scriptName of screenshotScripts) {
-      const scriptPath = path.join(scriptsDir, scriptName);
+      log(`theme start ${theme} output=${themeOutput}`);
+
       try {
-        await runScript(
-          scriptPath,
-          [...args, "--output", themeOutput, "--theme", theme],
-          {
-            SCREENSHOT_THEME: theme,
-            SCREENSHOT_BACKEND_READY_FILE: backendReadyMarker,
-          },
-        );
-        successCount++;
-      } catch (err) {
-        console.error(`Error running ${scriptName} for ${theme}:`, err.message);
-        failureCount++;
-        // Continue with other screenshots even if one fails
+        await waitForBackend(page, baseUrl);
+
+        for (const scriptName of screenshotScripts) {
+          const scriptPath = path.join(scriptsDir, scriptName);
+          await runCapture(scriptPath, session, `${theme}/${scriptName}`);
+          completedCount++;
+        }
+      } finally {
+        await context.close();
       }
     }
+  } finally {
+    await closeBrowser(browser);
   }
 
-  console.log(`\n${"=".repeat(80)}`);
-  console.log("Screenshot generation complete!");
-  console.log(`Success: ${successCount}/${totalRuns}`);
-  console.log(`Failures: ${failureCount}/${totalRuns}`);
-  console.log("=".repeat(80));
-
-  if (failureCount > 0) {
-    process.exit(1);
-  }
+  log(`run done success=${completedCount}/${totalRuns} duration=${formatDuration(Date.now() - runStartedAt)}`);
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  logError(`fatal ${err.message}`);
   process.exit(1);
 });

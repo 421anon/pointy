@@ -2,47 +2,19 @@
 "use strict";
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
-const path = require("path");
-const { parseArgs,
-screenshotLocator,
-firstVisibleLocator,
-clickFirstVisible,
-withHoveredLocator,
-waitForBackend, waitForApp, waitForProjectRows, waitForStepStatusEvent,
-waitForMaterialIcons,
-createContextWithStepTracking, } = require("./lib/helpers")
+const {
+  clickFirstVisible,
+  firstVisibleLocator,
+  prepareProjectPage,
+  runStandalone,
+  screenshotLocator,
+  waitForMaterialIcons,
+  withHoveredLocator,
+} = require("./lib/helpers");
 
-async function main() {
-  const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
-    parseArgs(process.argv.slice(2));
-
-  fs.mkdirSync(output, { recursive: true });
-
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await createContextWithStepTracking(browser);
-  const page = await context.newPage();
-
-  await waitForBackend(page, baseUrl);
-  await page.goto(`${baseUrl}/`, { waitUntil: "load" });
-  await waitForApp(page);
-
-  const firstProjectRow = await waitForProjectRows(page);
-  await page.evaluate(() => {
-    window.__pointyStepStatusEventCount = 0;
-    window.__pointyLastStepStatusEventType = null;
-  });
-  await firstProjectRow.click();
-  await waitForApp(page);
-  await waitForStepStatusEvent(page);
+async function capture(session) {
+  const { page, output } = session;
+  await prepareProjectPage(session);
 
   const derivationHeader = await firstVisibleLocator(
     page.locator(
@@ -77,21 +49,24 @@ async function main() {
               derivationHeader,
             ),
           "derivation stop button",
+          session.warn,
         );
       } else {
-        console.warn("Stop button did not appear after clicking Run.");
+        session.warn("Stop button did not appear after clicking Run.");
       }
     } else {
-      console.warn("No visible Run button found in derivation header.");
+      session.warn("No visible Run button found in derivation header.");
     }
   } else {
-    console.warn("No visible derivation step header found.");
+    session.warn("No visible derivation step header found.");
   }
-
-  await browser.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { capture };
+
+if (require.main === module) {
+  runStandalone(capture, chromium).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

@@ -2,10 +2,9 @@
 "use strict";
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
-const path = require("path");
 const {
-  parseArgs,
+  runStandalone,
+  prepareProjectPage,
   screenshotLocator,
   withHoveredLocator,
   clickFirstVisible,
@@ -14,43 +13,11 @@ const {
   expandAllVisibleFolders,
   findPreviewableFileInSection,
   findVisibleStepRowWithButton,
-  waitForBackend,
-  waitForApp,
-  waitForProjectRows,
-  waitForStepStatusEvent,
-  createContextWithStepTracking,
 } = require("./lib/helpers");
 
-async function main() {
-  const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
-    parseArgs(process.argv.slice(2));
-
-  fs.mkdirSync(output, { recursive: true });
-
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await createContextWithStepTracking(browser);
-  const page = await context.newPage();
-
-  await waitForBackend(page, baseUrl);
-  await page.goto(`${baseUrl}/`, { waitUntil: "load" });
-  await waitForApp(page);
-
-  const firstProjectRow = await waitForProjectRows(page);
-  await page.evaluate(() => {
-    window.__pointyStepStatusEventCount = 0;
-    window.__pointyLastStepStatusEventType = null;
-  });
-  await firstProjectRow.click();
-  await waitForApp(page);
-  await waitForStepStatusEvent(page);
+async function capture(session) {
+  const { page, output } = session;
+  await prepareProjectPage(session);
 
   const { stepRow: outputStepRow, button: browseBtn } =
     await findVisibleStepRowWithButton(page, "Browse output files");
@@ -63,7 +30,7 @@ async function main() {
       .catch(() => false);
 
     if (!browseBtnVisible) {
-      console.warn("Browse output files button was not visible on any visible step row.");
+      session.warn("Browse output files button was not visible on any visible step row.");
     } else {
       if (!(await outputSection.isVisible().catch(() => false))) {
         await clickFirstVisible(browseBtn);
@@ -82,9 +49,7 @@ async function main() {
       });
 
       if (!previewableOutputFile) {
-        console.warn(
-          "No previewable output file row was visible in the output files section.",
-        );
+        session.warn("No previewable output file row was visible in the output files section.");
       } else {
         const { fileRow, previewButton } = previewableOutputFile;
         const fileViewer = fileRow.locator(".file-content-viewer").first();
@@ -112,17 +77,21 @@ async function main() {
             );
           },
           "browse output files button",
+          session.warn,
         );
       }
     }
   } else {
-    console.warn("No visible step row exposed a Browse output files button.");
+    session.warn("No visible step row exposed a Browse output files button.");
   }
 
-  await browser.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { capture };
+
+if (require.main === module) {
+  runStandalone(capture, chromium).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

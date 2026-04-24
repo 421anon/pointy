@@ -2,45 +2,17 @@
 "use strict";
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
-const path = require("path");
-const { parseArgs,
-screenshotLocator,
-clickIfExists,
-waitForBackend, waitForApp, waitForProjectRows, waitForStepStatusEvent,
-waitForMaterialIcons,
-createContextWithStepTracking, } = require("./lib/helpers")
+const {
+  runStandalone,
+  prepareProjectPage,
+  screenshotLocator,
+  clickIfExists,
+  waitForMaterialIcons,
+} = require("./lib/helpers");
 
-async function main() {
-  const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
-    parseArgs(process.argv.slice(2));
-
-  fs.mkdirSync(output, { recursive: true });
-
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await createContextWithStepTracking(browser);
-  const page = await context.newPage();
-
-  await waitForBackend(page, baseUrl);
-  await page.goto(`${baseUrl}/`, { waitUntil: "load" });
-  await waitForApp(page);
-
-  const firstProjectRow = await waitForProjectRows(page);
-  await page.evaluate(() => {
-    window.__pointyStepStatusEventCount = 0;
-    window.__pointyLastStepStatusEventType = null;
-  });
-  await firstProjectRow.click();
-  await waitForApp(page);
-  await waitForStepStatusEvent(page);
+async function capture(session) {
+  const { page, output } = session;
+  await prepareProjectPage(session);
 
   const addStepBtn = await page.$(
     '.table[id^="table-"]:not(#table-projects) .table-header-controls button.icon-btn',
@@ -75,16 +47,18 @@ async function main() {
         addExistingForm,
       );
     } else {
-      console.warn("Add existing form not found.");
+      session.warn("Add existing form not found.");
     }
   } else {
-    console.warn("Add step button not found.");
+    session.warn("Add step button not found.");
   }
-
-  await browser.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { capture };
+
+if (require.main === module) {
+  runStandalone(capture, chromium).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

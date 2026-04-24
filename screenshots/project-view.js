@@ -2,44 +2,17 @@
 "use strict";
 
 const { chromium } = require("playwright-core");
-const fs = require("fs");
+const {
+  runStandalone,
+  prepareProjectPage,
+  screenshot,
+  showTitleAsTooltip,
+} = require("./lib/helpers");
 const path = require("path");
-const { parseArgs,
-screenshot,
-showTitleAsTooltip,
-waitForBackend, waitForApp, waitForProjectRows, waitForStepStatusEvent,
-createContextWithStepTracking, } = require("./lib/helpers")
 
-async function main() {
-  const { output = path.join(__dirname, "../docs/pages/screenshots"), url: baseUrl = "http://localhost" } =
-    parseArgs(process.argv.slice(2));
-
-  fs.mkdirSync(output, { recursive: true });
-
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  const context = await createContextWithStepTracking(browser);
-  const page = await context.newPage();
-
-  await waitForBackend(page, baseUrl);
-  await page.goto(`${baseUrl}/`, { waitUntil: "load" });
-  await waitForApp(page);
-
-  const firstProjectRow = await waitForProjectRows(page);
-  await page.evaluate(() => {
-    window.__pointyStepStatusEventCount = 0;
-    window.__pointyLastStepStatusEventType = null;
-  });
-  await firstProjectRow.click();
-  await waitForApp(page);
-  await waitForStepStatusEvent(page);
+async function capture(session) {
+  const { page, output } = session;
+  await prepareProjectPage(session);
 
   // Scroll to bottom to ensure all steps are visible (including script 1)
   const lastStepRow = page
@@ -66,7 +39,6 @@ async function main() {
   // Use fullPage to capture all steps
   const projectViewPath = path.join(output, "project-view.png");
   await page.screenshot({ path: projectViewPath, fullPage: true });
-  console.log(`Saved ${projectViewPath}`);
 
   // Screenshot 2: With tooltip on failed step (for Step statuses section)
   const failedStepRow = page
@@ -101,10 +73,13 @@ async function main() {
     await cleanupTooltip();
   }
 
-  await browser.close();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { capture };
+
+if (require.main === module) {
+  runStandalone(capture, chromium).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
