@@ -58,7 +58,7 @@ view model =
                 Route.NotFound ->
                     view404
     in
-    { title = try (currentProject << success << name) model |> Maybe.map (\n -> n ++ " • " ++ "Bioprojekt") |> Maybe.withDefault "Bioprojekt"
+    { title = try (currentProject << success << name) model |> Maybe.map (\n -> n ++ " • " ++ "Pointy") |> Maybe.withDefault "Pointy"
     , body =
         [ Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
         , Html.div [ Html.Attributes.class "toast-container" ] <|
