@@ -21,6 +21,7 @@ import Handlers.SrcFiles (UserRepoInfo, downloadSrcFilesHandler, getUserRepoInfo
 import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
 import Handlers.Statuses (getProjectOutPathsHandler)
 import Handlers.StepConfig (getStepConfigHandler)
+import Handlers.StepLastSuccess (StepLastSuccess, getStepLastSuccessesHandler)
 import Handlers.Steps (patchStepHandler, postStepHandler)
 import Handlers.Store (DirEntry, downloadHandler, listHandler, storeFilesHandler)
 import Handlers.Upload (uploadHandler)
@@ -53,6 +54,7 @@ type API =
         :<|> "project-entities" :> "batch" :> QueryParam' '[Required, Strict] "project_id" Int :> ReqBody '[JSON] [Int] :> Post '[JSON] NoContent
         :<|> "project-entities" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam' '[Required, Strict] "entity_id" Int :> Delete '[JSON] NoContent
         :<|> "project-out-paths" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[JSON] (Map Int Text)
+        :<|> "step-last-successes" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam "commit" Text :> Get '[JSON] [StepLastSuccess]
         :<|> "step-status-stream" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam "commit" Text :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
         :<|> "step-config" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
         :<|> "step" :> QueryParam' '[Required, Strict] "id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Patch '[JSON] NoContent
@@ -79,6 +81,7 @@ server =
         :<|> batchAssignRecordsHandler
         :<|> unassignRecordHandler
         :<|> getProjectOutPathsHandler
+        :<|> getStepLastSuccessesHandler
         :<|> stepStatusStreamHandler
         :<|> getStepConfigHandler
         :<|> patchStepHandler
@@ -160,6 +163,13 @@ corsPolicy req = case pathInfo req of
                 , corsOrigins = Nothing
                 }
     ["project-out-paths"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["GET", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["step-last-successes"] ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]

@@ -444,3 +444,8 @@ uploadProgress =
 stepStatusHooks : Lens ls Model (Dict Int (Flow Model ())) x y
 stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
+
+
+lastSuccesses : Lens ls Model (Dict Int (ApiData (List Model.LastSuccess))) x y
+lastSuccesses =
+    lens ".lastSuccesses" Model.getLastSuccesses (\(Model m) ls -> Model { m | lastSuccesses = ls })

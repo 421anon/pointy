@@ -111,6 +111,12 @@ type alias UserRepoInfo =
     }
 
 
+type alias LastSuccess =
+    { commit : String
+    , outPath : String
+    }
+
+
 type Model
     = Model
         { projects : Table ProjectRecord
@@ -128,6 +134,7 @@ type Model
         , userRepoInfo : ApiData UserRepoInfo
         , uploadProgress : Dict Int UploadProgress
         , stepStatusHooks : Dict Int (Flow Model ())
+        , lastSuccesses : Dict Int (ApiData (List LastSuccess))
         }
 
 
@@ -191,6 +198,11 @@ getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
 
+getLastSuccesses : Model -> Dict Int (ApiData (List LastSuccess))
+getLastSuccesses (Model model) =
+    model.lastSuccesses
+
+
 dndSystem : DnDList.System a DnDList.Msg
 dndSystem =
     let
@@ -249,6 +261,7 @@ initialModel key route flags =
         , userRepoInfo = NotAsked
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
+        , lastSuccesses = Dict.empty
         }
 
 

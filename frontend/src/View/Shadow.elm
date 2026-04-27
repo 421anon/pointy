@@ -2,12 +2,14 @@ module View.Shadow exposing (viewProject)
 
 import Accessors exposing (has, just, try)
 import Actions
-import Api.ApiData as ApiData
+import Api.ApiData as ApiData exposing (ApiData(..))
 import Dict
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes
+import Html.Attributes exposing (attribute, class, id, style, title)
+import Html.Events as Events
 import Html.Extra as Html
+import Json.Decode as Decode
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses exposing (mCommit, route)
 import Model.Shadow exposing (StepType(..))
@@ -15,9 +17,63 @@ import Model.TableSpec as TableSpec
 import Route
 import Specs
 import View.FileBrowser as FileBrowser
-import View.Icons exposing (iconCustom)
+import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Table exposing (viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+
+
+viewLastSuccessesPopover : Model -> Int -> Html (Flow Model ())
+viewLastSuccessesPopover model stepId =
+    let
+        popoverId =
+            "last-successes-popover-" ++ String.fromInt stepId
+
+        body =
+            case Dict.get stepId (Model.getLastSuccesses model) of
+                Just (Success []) ->
+                    [ Html.div [ class "last-successes-message" ] [ Html.text "No previous successful version" ] ]
+
+                Just (Success entries) ->
+                    List.map (viewLastSuccessEntry stepId) entries
+
+                Just (Error _) ->
+                    [ Html.div [ class "last-successes-message" ] [ Html.text "Failed to load history" ] ]
+
+                _ ->
+                    [ Html.div [ class "last-successes-message" ]
+                        [ Html.span [ class "shimmer-text", class "shimmer-text--medium-contrast" ] [ Html.text "Loading..." ] ]
+                    ]
+    in
+    Html.span []
+        [ Html.button
+            [ class "icon-btn"
+            , title "Find last successful version"
+            , attribute "popovertarget" popoverId
+            , style "anchor-name" ("--anchor-" ++ popoverId)
+            , Events.onClick (Actions.fetchLastSuccessesFor stepId)
+            ]
+            [ icon True "restore"
+            , Html.span [ class "icon-btn-text" ] [ Html.text "Find last successful version" ]
+            ]
+        , Html.div
+            [ class "last-successes-popover"
+            , id popoverId
+            , attribute "popover" "auto"
+            , style "position-anchor" ("--anchor-" ++ popoverId)
+            , Events.on "click" (Decode.succeed (Actions.hidePopover popoverId))
+            ]
+            body
+        ]
+
+
+viewLastSuccessEntry : Int -> Model.LastSuccess -> Html (Flow Model ())
+viewLastSuccessEntry stepId entry =
+    Html.button
+        [ class "last-successes-entry"
+        , title entry.commit
+        , Events.onClick (Actions.navigateToSuccessCommit stepId entry.commit)
+        ]
+        [ Html.text (String.left 8 entry.commit) ]
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
@@ -108,13 +164,18 @@ viewSection model sectionName stepType steps =
                                 case r.id of
                                     Just id ->
                                         let
+                                            mStatus =
+                                                TableSpec.getStatus spec r |> ApiData.toMaybe
+
                                             isRunning =
-                                                TableSpec.getStatus spec r
-                                                    |> ApiData.toMaybe
-                                                    |> (==) (Just Model.StatusRunning)
+                                                mStatus == Just Model.StatusRunning
+
+                                            isNotStarted =
+                                                mStatus == Just Model.StatusNotStarted
                                         in
                                         [ viewRunButton "Run" (Actions.runStep spec id)
                                         , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
+                                        , Html.viewIf isNotStarted (viewLastSuccessesPopover model id)
                                         ]
 
                                     Nothing ->

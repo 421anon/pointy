@@ -275,6 +275,60 @@ body {
   }
 }
 
+.app:has(.last-successes-popover:popover-open) {
+  pointer-events: none;
+}
+
+.last-successes-popover {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+
+  &:popover-open {
+    display: flex;
+    position: absolute;
+    position-area: bottom span-left;
+    position-try-fallbacks: top span-left, bottom span-right, top span-right;
+    margin: 0;
+    margin-top: var(--spacing-xs);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--color-gray-500);
+    padding: var(--spacing-sm);
+    flex-direction: column;
+    gap: var(--spacing-2xs);
+    box-shadow: var(--shadow-elevated);
+    border-radius: var(--radius-sm);
+    align-items: stretch;
+    min-width: 160px;
+    max-height: 50vh;
+    overflow-y: auto;
+    pointer-events: auto;
+  }
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.4);
+  }
+}
+
+.last-successes-entry {
+  @include mixins.button-base;
+  @include mixins.interactive-element;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  text-align: left;
+  font-family: monospace;
+  font-size: var(--font-size-sm);
+}
+
+.last-successes-message {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .record-name-container {
   position: relative;
   display: inline-block;

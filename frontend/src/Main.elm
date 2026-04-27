@@ -59,7 +59,7 @@ setRouteFromUrl url =
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq
-                        (Flow.over (Model.Lenses.projects << Model.Lenses.records) Api.ApiData.toLoading
+                        (Flow.setAll (Model.Lenses.projects << Model.Lenses.records) Api.ApiData.NotAsked
                             |> Flow.seq Actions.loadStepConfig
                             |> Flow.seq Actions.loadProjects
                             |> Flow.when (mOldCommit /= mNewCommit)

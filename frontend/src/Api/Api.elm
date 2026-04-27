@@ -11,6 +11,7 @@ module Api.Api exposing
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchStepConfig
+    , fetchStepLastSuccesses
     , fetchUserRepoInfo
     , runStep
     , saveProject
@@ -141,6 +142,18 @@ fetchStepConfig commit =
         Http.get
             { url = appendCommitQuery "/backend/step-config" commit
             , expect = Http.expectJson identity Decode.stepConfig
+            }
+
+
+fetchStepLastSuccesses : Int -> Int -> Maybe String -> Flow s (Result Http.Error (List { commit : String, outPath : String }))
+fetchStepLastSuccesses projectId stepId commit =
+    Flow.lift <|
+        Http.get
+            { url =
+                appendCommitQuery
+                    ("/backend/step-last-successes?id=" ++ String.fromInt stepId ++ "&project_id=" ++ String.fromInt projectId)
+                    commit
+            , expect = Http.expectJson identity (Json.Decode.list Decode.stepLastSuccess)
             }
 
 
