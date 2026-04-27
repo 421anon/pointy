@@ -689,26 +689,6 @@ $form-vertical-gap: var(--spacing-md);
   gap: var(--spacing-xs);
 }
 
-// Select components
-.select {
-  @include mixins.form-control;
-  @include mixins.button-base;
-
-  &:hover {
-    border-color: var(--text-primary);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-
-    &:hover {
-      border-color: var(--border-color);
-      background: var(--bg-elevated);
-    }
-  }
-}
-
 $readonly-disabled-targets: (
   "input.form-input",
   "textarea.file-content",
