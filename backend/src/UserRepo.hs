@@ -301,14 +301,27 @@ commitAndPushChanges (WriteRepoContext worktreePath) message = ExceptT $ do
     cfg <- resolveConfigPath >>= loadConfig
     let keyfile = userRepoKeyfile (configUserRepo cfg)
         branch = T.unpack $ userRepoBranch (configUserRepo cfg)
-    _ <- runGitIn worktreePath ["add", "-A"]
-    (statusCode, statusOut, _) <- runGitIn worktreePath ["status", "--porcelain"]
-    if statusCode == ExitSuccess && not (null statusOut)
-        then do
-            _ <- runGitIn worktreePath ["commit", "-m", message]
-            pushWithRetry worktreePath keyfile branch
-        else return $ Right ()
+    (addCode, addOut, addErr) <- runGitIn worktreePath ["add", "-A"]
+    case addCode of
+        ExitFailure code -> return $ Left $ formatGitFailure "git add" code addOut addErr
+        ExitSuccess -> do
+            (statusCode, statusOut, statusErr) <- runGitIn worktreePath ["status", "--porcelain"]
+            case statusCode of
+                ExitFailure code -> return $ Left $ formatGitFailure "git status" code statusOut statusErr
+                ExitSuccess | null statusOut -> return $ Left "No changes to commit; nothing was pushed."
+                ExitSuccess -> do
+                    (commitCode, commitOut, commitErr) <- runGitIn worktreePath ["commit", "-m", message]
+                    case commitCode of
+                        ExitSuccess -> pushWithRetry worktreePath keyfile branch
+                        ExitFailure code -> return $ Left $ formatGitFailure "git commit" code commitOut commitErr
   where
+    formatGitFailure command code stdout stderr =
+        command ++ " failed with exit code " ++ show code ++ formatGitOutput stdout stderr
+
+    formatGitOutput stdout stderr =
+        (if null stdout then "" else "\nstdout:\n" ++ stdout)
+            ++ (if null stderr then "" else "\nstderr:\n" ++ stderr)
+
     pushWithRetry wp kf br = do
         (exitCode, _, stderr) <- runGitWithSshKey kf wp ["push", "origin", "HEAD:" ++ br]
         case exitCode of
