@@ -4,14 +4,29 @@ This page documents the option types that template authors use inside `options.p
 
 Pointy serializes these types into `.#pointy.stepConfig`, which the frontend uses to decide which widgets to render.
 
-## User-facing labels and hints
+## Top-level template metadata
 
-Two optional fields control what users see in the UI:
+These fields sit at the top level of a template file, alongside `sortKey`, `pointy.type`, and `module`:
 
-- `displayName` — short label shown in table headings, modal titles, form labels, and the type chip in step selectors. When omitted, the raw attribute name is used.
-- `description` — longer help text shown as a hint under the field (for option types) or as an intro paragraph in the create/edit modal (for step type declarations).
+- `displayName` (optional) — short label shown in table headings, modal titles, and the type chip in step selectors. When omitted, the raw attribute name is used.
+- `description` (optional) — intro paragraph rendered in the create/edit modal.
+- `sortKey` (optional) — integer that orders step-type sections in the project view.
 
-Both can be set on step type declarations (`pointy.type.derivation`, `pointy.type.fileUpload`) and on option types (`pointy.string`, `pointy.step`, indirectly on `pointy.listOf` via its inner type).
+Example:
+
+```nix
+{
+  sortKey = 3;
+  displayName = "Alignment";
+  description = "Align reads to a library with STAR.";
+
+  pointy.type.derivation = { };
+
+  module = { ... };
+}
+```
+
+For per-option labels and hints, see `pointy.string` / `pointy.step` below.
 
 ## Step type declarations
 
@@ -21,16 +36,12 @@ These are set at the top level of a template file, outside `module`, to tell Poi
 
 ```nix
 pointy.type.derivation = {
-  displayName = "Alignment";
-  description = "Align reads to a library with STAR.";
   withSrcFiles = false; # default
 };
 ```
 
 This declares a runnable derivation step.
 
-- `displayName` (optional) — friendly name shown in table headings and modal titles.
-- `description` (optional) — intro paragraph rendered in the create/edit modal.
 - `withSrcFiles = true` makes Pointy symlink every top-level entry from `srcFiles/<step-id>/` into the build working directory before the build runs, and the frontend shows a **Source Files** section for that step type.
 
 ### `pointy.type.fileUpload`
@@ -38,16 +49,12 @@ This declares a runnable derivation step.
 ```nix
 pointy.type.fileUpload = {
   allowedExtensions = [ ".fastq.gz" ".fastq" ];
-  displayName = "Data Source";
-  description = "Sequencing reads as FASTQ files.";
 };
 ```
 
 This declares a file upload step.
 
 - `allowedExtensions` restricts the frontend file picker.
-- `displayName` (optional) — friendly name shown in table headings and modal titles.
-- `description` (optional) — intro paragraph rendered in the create/edit modal.
 - file-upload templates usually also declare an `uploaded` option of type `lib.types.package`; Pointy fills that option automatically.
 
 At build time, `cfg.uploaded` is a Nix store path pointing at the uploaded payload directory.

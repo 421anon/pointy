@@ -122,10 +122,12 @@ This pattern matches the sample `dataSource` template:
 
 ```nix
 {
+  sortKey = 2;
+  displayName = "Data Source";
+  description = "Sequencing reads as FASTQ files.";
+
   pointy.type.fileUpload = {
     allowedExtensions = [ ".fastq.gz" ".fastq" ".fq.gz" ".fq" ];
-    displayName = "Data Source";
-    description = "Sequencing reads as FASTQ files.";
   };
 
   module =
@@ -174,10 +176,11 @@ This pattern matches the sample `fastqc` template:
 
 ```nix
 {
-  pointy.type.derivation = {
-    displayName = "FastQC";
-    description = "Per-base quality report with FastQC.";
-  };
+  sortKey = 5;
+  displayName = "FastQC";
+  description = "Per-base quality report with FastQC.";
+
+  pointy.type.derivation = { };
 
   module =
     { dream2nix, config, lib, pkgs, ... }:
