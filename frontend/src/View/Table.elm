@@ -951,7 +951,7 @@ viewStepNoteField model readOnly tableId =
                 |> Maybe.andThen (\id_ -> try (currentTableOf tableId << records << success << by .id (Just id_)) model)
     in
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label" ] [ Html.text "Note:" ]
+        [ Html.label [ class "form-label", for (tableId ++ "-note-input") ] [ Html.text "Note" ]
         , Html.textarea
             [ value currentNote
             , Events.onInput (Flow.modify << set noteLens)
@@ -966,9 +966,17 @@ viewStepNoteField model readOnly tableId =
         ]
 
 
-viewFormHint : Maybe String -> Html msg
-viewFormHint mHint =
-    Html.viewMaybe (\h -> Html.small [ class "form-hint" ] [ Html.text h ]) mHint
+viewLabelWithHint : { label : String, mHint : Maybe String, htmlFor : String } -> Html msg
+viewLabelWithHint { label, mHint, htmlFor } =
+    case mHint of
+        Nothing ->
+            Html.label [ class "form-label", for htmlFor ] [ Html.text label ]
+
+        Just hint ->
+            Html.div [ class "form-label-group" ]
+                [ Html.label [ class "form-label", for htmlFor ] [ Html.text label ]
+                , Html.small [ class "form-hint" ] [ Html.text hint ]
+                ]
 
 
 textField :
@@ -984,8 +992,7 @@ textField :
     -> Html (Flow Model ())
 textField config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label", for config.id ] [ Html.text config.label ]
-        , viewFormHint config.mHint
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.input
             [ type_ "text"
             , value config.value
@@ -1014,8 +1021,7 @@ commandField :
     -> Html (Flow Model ())
 commandField config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label", for config.id ] [ Html.text config.label ]
-        , viewFormHint config.mHint
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.div
             [ class "command-input"
             , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
@@ -1050,8 +1056,7 @@ textArea :
     -> Html (Flow Model ())
 textArea config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label", for config.id ] [ Html.text config.label ]
-        , viewFormHint config.mHint
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.textarea
             [ value config.value
             , Events.onInput config.onInput
@@ -1087,8 +1092,7 @@ listField :
     -> Html (Flow Model ())
 listField config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label", for config.id ] [ Html.text config.label ]
-        , viewFormHint config.mHint
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.Keyed.node "div"
             [ class "tag-wrapper"
             , class "form-input"
