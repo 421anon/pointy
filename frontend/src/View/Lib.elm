@@ -39,6 +39,7 @@ viewSearchBox model =
         , readOnly = False
         , hasChanged = False
         , label = ""
+        , mHint = Nothing
         , placeholder = "Search for steps"
         , inputIcon = Just "search"
         , toInputItemName = .name

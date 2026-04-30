@@ -124,7 +124,8 @@ This pattern matches the sample `dataSource` template:
 {
   pointy.type.fileUpload = {
     allowedExtensions = [ ".fastq.gz" ".fastq" ".fq.gz" ".fq" ];
-    description = "data source";
+    displayName = "Data Source";
+    description = "Sequencing reads as FASTQ files.";
   };
 
   module =
@@ -173,7 +174,10 @@ This pattern matches the sample `fastqc` template:
 
 ```nix
 {
-  pointy.type.derivation = { };
+  pointy.type.derivation = {
+    displayName = "FastQC";
+    description = "Per-base quality report with FastQC.";
+  };
 
   module =
     { dream2nix, config, lib, pkgs, ... }:
@@ -213,13 +217,15 @@ This pattern matches the sample `fastqc` template:
         dataSource = lib.mkOption {
           type = pointy.step {
             allowedTypes = [ "dataSource" "merge" ];
-            description = "The data source for FastQC";
+            displayName = "Reads";
+            description = "FASTQ source to QC.";
           };
         };
 
         extraArgs = lib.mkOption {
           type = pointy.string {
-            description = "Extra arguments for the fastqc command";
+            displayName = "Extra FastQC args";
+            description = "Extra flags appended to the fastqc command.";
             display.command = "fastqc";
           };
           default = "";
@@ -233,6 +239,7 @@ Notes:
 
 - `pointy.step` options resolve to upstream step outputs at build time.
 - `pointy.string` with `display.command` renders a command-style argument field in the UI.
+- `displayName` becomes the visible form label; `description` becomes the hint shown under the field.
 - `passthru.meta.pointy` should include both the template `type` and the step `id`.
 
 For the available option types, see the [Type Reference](type-reference.md).

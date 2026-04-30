@@ -3,6 +3,7 @@ module Model.TableSpec exposing
     , TableSpec(..)
     , getApiPath
     , getDefaultRecord
+    , getDescription
     , getDirectoryView
     , getDisplayName
     , getEncodeRecord
@@ -37,6 +38,7 @@ type TableSpec a
         , defaultRecord : a
         , apiPath : String
         , displayName : String
+        , description : Maybe String
         , upsertRecord : TableSpec a -> Flow Model ()
         }
 
@@ -58,6 +60,11 @@ getName (TableSpec spec) =
 getDisplayName : TableSpec a -> String
 getDisplayName (TableSpec spec) =
     spec.displayName
+
+
+getDescription : TableSpec a -> Maybe String
+getDescription (TableSpec spec) =
+    spec.description
 
 
 getLens : TableSpec a -> Traversal Model (Table a) x y

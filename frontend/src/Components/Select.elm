@@ -104,6 +104,7 @@ view :
     , readOnly : Bool
     , hasChanged : Bool
     , label : String
+    , mHint : Maybe String
     , placeholder : String
     , inputIcon : Maybe String
     , toInputItemName : Item -> String
@@ -120,7 +121,7 @@ view :
     , inputItemStyle : Item -> List (Html.Attribute Never)
     }
     -> Html (Flow s ())
-view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toMenuItemName, toMenuItemTooltip, onChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
+view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toMenuItemName, toMenuItemTooltip, onChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
     let
         optic_ =
             remkT optic
@@ -259,6 +260,7 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
     Html.div
         [ class "form-field", class "select-container", classList [ ( "select-container--right", alignRight ) ] ]
         [ Html.viewIf (not <| String.isEmpty label) (Html.label [ class "form-label" ] [ Html.text label ])
+        , Html.viewMaybe (\h -> Html.small [ class "form-hint" ] [ Html.text h ]) mHint
         , Html.Keyed.node "div"
             [ class "tag-wrapper", class "form-input", classList [ ( "disabled", readOnly ), ( "field-changed", hasChanged ) ] ]
             ((inputIcon |> Maybe.unwrap [] (\icon -> [ ( "form-input-icon", iconCustom True icon [ class "form-input-icon" ] ) ]))
