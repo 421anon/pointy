@@ -9,12 +9,16 @@ import Dict
 import Extra.Accessors exposing (where_)
 import Model.Core exposing (ProjectRecord, StepRecord, TableTag(..), initialTable)
 import Model.Lenses as Lenses exposing (currentTableOf)
-import Model.Shadow as Shadow exposing (StepConfig, StepType, WithSrcFiles(..))
+import Model.Shadow as Shadow exposing (StepConfig, StepConfigEntry, WithSrcFiles(..))
 import Model.TableSpec exposing (TableSpec(..))
 
 
-steps : String -> StepType -> TableSpec StepRecord
-steps name stepType =
+steps : String -> StepConfigEntry -> TableSpec StepRecord
+steps name entry =
+    let
+        stepType =
+            entry.stepType
+    in
     TableSpec
         { tag = TagSteps name stepType
         , name = name
@@ -45,7 +49,8 @@ steps name stepType =
                 , expanded = False
                 }
             }
-        , displayName = name
+        , displayName = Maybe.withDefault name entry.displayName
+        , description = entry.description
         , apiPath = "/step"
         , upsertRecord = Actions.upsertStep
         }
@@ -72,6 +77,7 @@ projects stepConfig =
             , isUpdating = False
             }
         , displayName = "Projects"
+        , description = Nothing
         , apiPath = "/projects"
         , upsertRecord = Actions.upsertProject
         }

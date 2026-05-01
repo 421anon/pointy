@@ -650,6 +650,27 @@ $form-vertical-gap: var(--spacing-md);
   gap: 0.25rem;
 }
 
+.form-label-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.form-hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  line-height: 1.3;
+}
+
+.form-intro {
+  padding: var(--spacing-sm) var(--spacing-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+}
+
 .form-input {
   @include mixins.form-control;
 }

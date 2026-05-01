@@ -96,7 +96,7 @@ dndSubscription model =
         |> Maybe.unwrap []
             (\config ->
                 Actions.dndSub model Nothing (Specs.projects config)
-                    :: List.map (\( name, entry ) -> Actions.dndSub model mProjectId (Specs.steps name entry.stepType)) (Dict.toList config)
+                    :: List.map (\( name, entry ) -> Actions.dndSub model mProjectId (Specs.steps name entry)) (Dict.toList config)
             )
         |> Sub.batch
 

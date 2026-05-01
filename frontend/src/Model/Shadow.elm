@@ -68,7 +68,7 @@ tListValue =
 
 
 type alias ArgType =
-    { description : String, type_ : StepArgType }
+    { description : String, type_ : StepArgType, displayName : Maybe String }
 
 
 type StepType
@@ -98,6 +98,8 @@ derivation =
 type alias StepConfigEntry =
     { stepType : StepType
     , sortKey : Maybe Int
+    , displayName : Maybe String
+    , description : Maybe String
     }
 
 

@@ -427,7 +427,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                              else
                                 "chevron_right"
                             )
-                        , Html.span [ class "table-content-header" ] [ Html.text (TableSpec.getName spec) ]
+                        , Html.span [ class "table-content-header" ] [ Html.text (TableSpec.getDisplayName spec) ]
                         , ApiData.unwrap Html.nothing (viewStatusCountBadge spec) table.records
                         ]
                     , Html.div [ class "table-header-controls" ]
@@ -511,8 +511,9 @@ viewAddOrEditRecordForm model spec table record =
                     try (records << success << by .id record.id) table
             in
             textField
-                { label = "Name:"
-                , placeholder = TableSpec.getName spec ++ " name"
+                { label = "Name"
+                , mHint = Nothing
+                , placeholder = TableSpec.getDisplayName spec ++ " name"
                 , value = record.name
                 , onInput = Actions.editRecordName (TableSpec.getLens spec)
                 , hasChanged = fieldChanged .name record.name originalRecord
@@ -571,6 +572,7 @@ viewAddOrEditRecordForm model spec table record =
                 , readOnly = False
                 , hasChanged = False
                 , label = "Select records"
+                , mHint = Nothing
                 , placeholder = ""
                 , inputIcon = Nothing
                 , toInputItemName = .name
@@ -626,6 +628,14 @@ viewAddOrEditRecordForm model spec table record =
     Html.div [ class "table-form-wrapper" ]
         [ Html.div [ formClasses, Events.on "keydown" handleEnter ]
             [ Html.header [ class "form-header" ] [ Html.text headerTitle ]
+            , Html.viewMaybe
+                (\d -> Html.p [ class "form-intro" ] [ Html.text d ])
+                (if editing || table.addMode == AddNew then
+                    TableSpec.getDescription spec
+
+                 else
+                    Nothing
+                )
             , Html.div [ class "form-body" ]
                 [ Html.viewIf (not editing && TableSpec.getTag spec /= TagProjects) modeSelector
                 , Html.viewIf (not editing && table.addMode == AddExisting && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
@@ -680,8 +690,26 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 |> Maybe.andThen .id
                 |> Maybe.andThen (\id_ -> try (currentTableOf tableId << records << success << by .id (Just id_)) model)
 
-        viewField ( paramName, { type_ } ) =
+        stepConfig_ =
+            Model.getStepConfig model |> ApiData.toMaybe |> Maybe.withDefault Dict.empty
+
+        typeDisplayName typeName =
+            Dict.get typeName stepConfig_
+                |> Maybe.andThen .displayName
+                |> Maybe.withDefault typeName
+
+        viewField ( paramName, { type_, description, displayName } ) =
             let
+                fieldLabel =
+                    Maybe.withDefault paramName displayName
+
+                fieldHint =
+                    if String.isEmpty description then
+                        Nothing
+
+                    else
+                        Just description
+
                 paramLens =
                     argsLens << key paramName
 
@@ -700,7 +728,8 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                 buildListField listLens tagStrings addTag =
                     listField
-                        { label = paramName ++ ":"
+                        { label = fieldLabel
+                        , mHint = fieldHint
                         , tags = tagStrings
                         , onAdd = addTag
                         , onRemoveLast = Flow.modify (over listLens (\xs -> List.take (List.length xs - 1) xs)) |> Flow.seq (focus fieldId)
@@ -745,7 +774,16 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 |> List.filter (\item -> not (List.member item.id selectedIds))
 
                         toTooltip =
-                            .id >> Maybe.unwrap [] (\id -> [ "id: " ++ String.fromInt id ])
+                            .id
+                                >> Maybe.unwrap []
+                                    (\id ->
+                                        case getStep (Just id) of
+                                            Just step ->
+                                                [ "id: " ++ String.fromInt id ++ " — " ++ typeDisplayName step.type_ ]
+
+                                            Nothing ->
+                                                [ "id: " ++ String.fromInt id ]
+                                    )
 
                         toHighlightRoute stepId =
                             try currentProjectId model
@@ -769,7 +807,8 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , availableItems = availableItems
                         , readOnly = readOnly
                         , hasChanged = fieldHasChanged
-                        , label = paramName ++ ":"
+                        , label = fieldLabel
+                        , mHint = fieldHint
                         , placeholder = ""
                         , inputIcon = Nothing
                         , toInputItemName = .name
@@ -777,7 +816,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , onInputItemClick = .id >> Maybe.andThen toHighlightRoute >> Maybe.map Actions.goToRoute
                         , toMenuItemName =
                             \item ->
-                                Maybe.map2 (\id s -> "[" ++ String.fromInt id ++ "] [" ++ s.type_ ++ "] " ++ item.name) item.id (getStep item.id) |> Maybe.withDefault item.name
+                                Maybe.map2 (\id s -> "[" ++ String.fromInt id ++ "] [" ++ typeDisplayName s.type_ ++ "] " ++ item.name) item.id (getStep item.id) |> Maybe.withDefault item.name
                         , toMenuItemTooltip = toTooltip
                         , onChange = Flow.pure ()
                         , onRemove = .id >> Maybe.unwrap (Flow.pure ()) onRemoveStep
@@ -808,8 +847,9 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                     case display of
                         TextField ->
                             textField
-                                { label = paramName ++ ":"
-                                , placeholder = paramName
+                                { label = fieldLabel
+                                , mHint = fieldHint
+                                , placeholder = fieldLabel
                                 , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                 , onInput = Flow.modify << set paramLens << Just << TStringValue
                                 , hasChanged = fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
@@ -819,7 +859,8 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                         TextArea ->
                             textArea
-                                { label = paramName ++ ":"
+                                { label = fieldLabel
+                                , mHint = fieldHint
                                 , placeholder = ""
                                 , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                 , onInput = Flow.modify << set paramLens << Just << TStringValue
@@ -830,8 +871,9 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                         Command cmdPrefix ->
                             commandField
-                                { label = paramName ++ ":"
-                                , placeholder = paramName
+                                { label = fieldLabel
+                                , mHint = fieldHint
+                                , placeholder = fieldLabel
                                 , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                 , onInput = Flow.modify << set paramLens << Just << TStringValue
                                 , hasChanged = fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
@@ -909,7 +951,7 @@ viewStepNoteField model readOnly tableId =
                 |> Maybe.andThen (\id_ -> try (currentTableOf tableId << records << success << by .id (Just id_)) model)
     in
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label" ] [ Html.text "Note:" ]
+        [ Html.label [ class "form-label", for (tableId ++ "-note-input") ] [ Html.text "Note" ]
         , Html.textarea
             [ value currentNote
             , Events.onInput (Flow.modify << set noteLens)
@@ -924,8 +966,22 @@ viewStepNoteField model readOnly tableId =
         ]
 
 
+viewLabelWithHint : { label : String, mHint : Maybe String, htmlFor : String } -> Html msg
+viewLabelWithHint { label, mHint, htmlFor } =
+    case mHint of
+        Nothing ->
+            Html.label [ class "form-label", for htmlFor ] [ Html.text label ]
+
+        Just hint ->
+            Html.div [ class "form-label-group" ]
+                [ Html.label [ class "form-label", for htmlFor ] [ Html.text label ]
+                , Html.small [ class "form-hint" ] [ Html.text hint ]
+                ]
+
+
 textField :
     { label : String
+    , mHint : Maybe String
     , placeholder : String
     , value : String
     , onInput : String -> Flow Model ()
@@ -936,7 +992,7 @@ textField :
     -> Html (Flow Model ())
 textField config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label" ] [ Html.text config.label ]
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.input
             [ type_ "text"
             , value config.value
@@ -953,6 +1009,7 @@ textField config =
 
 commandField :
     { label : String
+    , mHint : Maybe String
     , placeholder : String
     , value : String
     , onInput : String -> Flow Model ()
@@ -964,7 +1021,7 @@ commandField :
     -> Html (Flow Model ())
 commandField config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label" ] [ Html.text config.label ]
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.div
             [ class "command-input"
             , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
@@ -988,6 +1045,7 @@ commandField config =
 
 textArea :
     { label : String
+    , mHint : Maybe String
     , placeholder : String
     , value : String
     , onInput : String -> Flow Model ()
@@ -998,7 +1056,7 @@ textArea :
     -> Html (Flow Model ())
 textArea config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label" ] [ Html.text config.label ]
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.textarea
             [ value config.value
             , Events.onInput config.onInput
@@ -1017,6 +1075,7 @@ textArea config =
 
 listField :
     { label : String
+    , mHint : Maybe String
     , tags :
         List
             { body : Html (Flow Model ())
@@ -1033,7 +1092,7 @@ listField :
     -> Html (Flow Model ())
 listField config =
     Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label" ] [ Html.text config.label ]
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
         , Html.Keyed.node "div"
             [ class "tag-wrapper"
             , class "form-input"

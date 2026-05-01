@@ -280,6 +280,7 @@ argType =
     Decode.succeed ArgType
         |> required "description" Decode.string
         |> required "type" stepArgType
+        |> optional "displayName" (maybe Decode.string) Nothing
 
 
 stepType : Decoder StepType
@@ -314,6 +315,8 @@ stepConfigEntry =
     Decode.succeed StepConfigEntry
         |> required "type" stepType
         |> optional "sortKey" (maybe Decode.int) Nothing
+        |> optional "displayName" (maybe Decode.string) Nothing
+        |> optional "description" (maybe Decode.string) Nothing
 
 
 stepConfig : Decoder StepConfig

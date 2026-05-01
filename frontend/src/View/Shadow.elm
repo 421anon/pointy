@@ -10,7 +10,7 @@ import Html.Attributes
 import Html.Extra as Html
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses exposing (mCommit, route)
-import Model.Shadow exposing (StepType(..))
+import Model.Shadow exposing (StepConfigEntry, StepType(..))
 import Model.TableSpec as TableSpec
 import Route
 import Specs
@@ -68,16 +68,19 @@ viewProject model proj =
                                 |> Maybe.map (\entry -> ( sectionName, entry, steps ))
                         )
                     |> List.sortBy (\( name, entry, _ ) -> ( entry.sortKey |> Maybe.withDefault 2147483647, name ))
-                    |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry.stepType steps)
+                    |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry steps)
                 )
         }
 
 
-viewSection : Model -> String -> StepType -> Table StepRecord -> Html (Flow Model ())
-viewSection model sectionName stepType steps =
+viewSection : Model -> String -> StepConfigEntry -> Table StepRecord -> Html (Flow Model ())
+viewSection model sectionName entry steps =
     let
+        stepType =
+            entry.stepType
+
         spec =
-            Specs.steps sectionName stepType
+            Specs.steps sectionName entry
 
         isReadOnly =
             has (route << Route.project << mCommit << just) model

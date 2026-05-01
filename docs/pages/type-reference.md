@@ -2,7 +2,31 @@
 
 This page documents the option types that template authors use inside `options.pointy.<name>`. They are available as `config._pointy.lib.types` inside a module, so templates typically open a `with config._pointy.lib.types;` block in their `options` section.
 
-Pointy serializes these types into `.#pointy.stepConfig`, which the frontend uses to decide which widgets to render. The current UI uses option names as field labels; `description` values are still carried through the schema, but they are not currently rendered as on-screen labels.
+Pointy serializes these types into `.#pointy.stepConfig`, which the frontend uses to decide which widgets to render.
+
+## Top-level template metadata
+
+These fields sit at the top level of a template file, alongside `sortKey`, `pointy.type`, and `module`:
+
+- `displayName` (optional) — short label shown in table headings, modal titles, and the type chip in step selectors. When omitted, the raw attribute name is used.
+- `description` (optional) — intro paragraph rendered in the create/edit modal.
+- `sortKey` (optional) — integer that orders step-type sections in the project view.
+
+Example:
+
+```nix
+{
+  sortKey = 3;
+  displayName = "Alignment";
+  description = "Align reads to a library with STAR.";
+
+  pointy.type.derivation = { };
+
+  module = { ... };
+}
+```
+
+For per-option labels and hints, see `pointy.string` / `pointy.step` below.
 
 ## Step type declarations
 
@@ -11,28 +35,26 @@ These are set at the top level of a template file, outside `module`, to tell Poi
 ### `pointy.type.derivation`
 
 ```nix
-pointy.type.derivation = { };
-# or, to make repository source files available at build time:
-pointy.type.derivation = { withSrcFiles = true; };
+pointy.type.derivation = {
+  withSrcFiles = false; # default
+};
 ```
 
 This declares a runnable derivation step.
 
-If `withSrcFiles = true`, Pointy symlinks every top-level entry from `srcFiles/<step-id>/` into the build working directory before the build runs, and the frontend shows a **Source Files** section for that step type.
+- `withSrcFiles = true` makes Pointy symlink every top-level entry from `srcFiles/<step-id>/` into the build working directory before the build runs, and the frontend shows a **Source Files** section for that step type.
 
 ### `pointy.type.fileUpload`
 
 ```nix
 pointy.type.fileUpload = {
   allowedExtensions = [ ".fastq.gz" ".fastq" ];
-  description = "sequencing reads";
 };
 ```
 
 This declares a file upload step.
 
 - `allowedExtensions` restricts the frontend file picker.
-- `description` is carried in the generated step schema.
 - file-upload templates usually also declare an `uploaded` option of type `lib.types.package`; Pointy fills that option automatically.
 
 At build time, `cfg.uploaded` is a Nix store path pointing at the uploaded payload directory.
@@ -48,7 +70,8 @@ These are used inside `options.pointy.<name>` to declare the arguments that user
 ```nix
 lib.mkOption {
   type = pointy.string {
-    description = "schema metadata";
+    displayName = "Extra STAR args"; # optional, used as form label
+    description = "Help text shown under the field.";
     display = { ... }; # optional, see below
   };
   default = ""; # optional
@@ -68,7 +91,8 @@ By default this renders a plain text input. The optional `display` attribute cha
 ```nix
 lib.mkOption {
   type = pointy.step {
-    description = "schema metadata";
+    displayName = "Reads"; # optional, used as form label
+    description = "Help text shown under the field.";
     allowedTypes = [ "typeA" "typeB" ]; # optional
   };
 }
@@ -84,17 +108,23 @@ At build time the selected value resolves to the Nix store path of the chosen st
 
 ```nix
 lib.mkOption {
-  type = pointy.listOf (pointy.step { description = "dependency"; });
+  type = pointy.listOf (pointy.step {
+    displayName = "Step deps";
+    description = "Other steps to symlink into the build directory.";
+  });
   default = [];
 }
 # or a list of strings:
 lib.mkOption {
-  type = pointy.listOf (pointy.string { description = "nixpkgs attribute"; });
+  type = pointy.listOf (pointy.string {
+    displayName = "nixpkgs deps";
+    description = "Attribute paths into pkgs.";
+  });
   default = [];
 }
 ```
 
-This wraps another Pointy type to make it repeatable. The UI renders an add/remove list, and the final value becomes a Nix list of the resolved inner values.
+This wraps another Pointy type to make it repeatable. The UI renders an add/remove list, and the final value becomes a Nix list of the resolved inner values. The inner type's `displayName` and `description` apply to the whole list field.
 
 ---
 
