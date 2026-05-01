@@ -6,6 +6,22 @@
     <title>Pointy Notebook</title>
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL@0..1" rel="stylesheet">
     <script>
+      (async () => {
+        if (!('serviceWorker' in navigator)) return;
+
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        if (registrations.length === 0) return;
+
+        const results = await Promise.all(
+          registrations.map(reg => reg.unregister())
+        );
+
+        if (results.some(Boolean)) {
+          location.reload();
+        }
+      })();
+    </script>
+    <script>
       (function() {
         var theme = localStorage.getItem('theme');
         if (theme === 'light' || theme === 'dark') {
