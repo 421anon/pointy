@@ -476,7 +476,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 -- Adding a new record
                                 Just r
 
-                            else if table.addMode == AddExisting then
+                            else if table.addMode == AddFromOtherProject then
                                 -- Adding an existing record (show form so user can click Save)
                                 Just r
 
@@ -500,7 +500,7 @@ viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord
 viewAddOrEditRecordForm model spec table record =
     let
         editing =
-            record.id /= Nothing && (table.addMode /= AddExisting)
+            record.id /= Nothing && (table.addMode /= AddFromOtherProject)
 
         readOnly =
             table.inspected
@@ -560,7 +560,7 @@ viewAddOrEditRecordForm model spec table record =
         modeSelector =
             Html.div [ class "form-mode-selector" ]
                 [ radioButton AddNew "Create New"
-                , radioButton AddExisting "Add Existing"
+                , radioButton AddFromOtherProject "Add from other project"
                 ]
 
         viewSelectExisting state =
@@ -614,8 +614,8 @@ viewAddOrEditRecordForm model spec table record =
                 ( False, False, AddNew ) ->
                     "Create New " ++ displayName
 
-                ( False, False, AddExisting ) ->
-                    "Add Existing " ++ displayName
+                ( False, False, AddFromOtherProject ) ->
+                    "Add from other project: " ++ displayName
 
                 ( False, True, _ ) ->
                     "Edit " ++ displayName
@@ -654,7 +654,7 @@ viewAddOrEditRecordForm model spec table record =
                 )
             , Html.div [ class "form-body" ]
                 [ Html.viewIf (not editing && TableSpec.getTag spec /= TagProjects) modeSelector
-                , Html.viewIf (not editing && table.addMode == AddExisting && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
+                , Html.viewIf (not editing && table.addMode == AddFromOtherProject && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
                 , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
                 , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
                 , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|

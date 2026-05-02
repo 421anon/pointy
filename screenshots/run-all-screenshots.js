@@ -20,7 +20,7 @@ const screenshotScripts = [
   "steps-visibility-controls.js",
   "steps-visibility-button.js",
   "steps-reorder-handle.js",
-  "steps-add-existing-form.js",
+  "steps-add-from-other-project-form.js",
   "steps-assign-unassign.js",
 
   // Step types
