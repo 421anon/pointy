@@ -692,6 +692,72 @@ $form-vertical-gap: var(--spacing-md);
   resize: vertical;
 }
 
+code-editor.code-input {
+  display: block;
+  width: 100%;
+
+  .cm-editor {
+    width: 100%;
+    overflow: hidden;
+    color: var(--text-primary);
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+  }
+
+  .cm-editor.cm-focused {
+    outline: none;
+    border-color: var(--text-primary);
+  }
+
+  .cm-content {
+    padding: var(--spacing-sm);
+    caret-color: var(--text-primary);
+  }
+
+  .cm-cursor,
+  .cm-dropCursor {
+    border-left-color: var(--text-primary);
+  }
+
+  .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
+  .cm-editor > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
+  .cm-content ::selection {
+    background-color: var(--code-selection-bg) !important;
+  }
+
+  .cm-gutters {
+    color: var(--text-muted);
+    background-color: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+  }
+
+  .cm-activeLine {
+    background-color: transparent;
+  }
+
+  .cm-activeLineGutter {
+    background-color: var(--bg-secondary);
+  }
+
+  .cm-scroller {
+    min-height: 200px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+
+  &.field-changed .cm-editor {
+    border-color: var(--state-warning) !important;
+  }
+
+  &.disabled .cm-editor {
+    @include mixins.readonly-disabled;
+  }
+
+  &.disabled .cm-editor.cm-focused {
+    @include mixins.neutral-focus;
+  }
+}
+
 .form-input-note {
   background-color: transparent;
   height: 100px;

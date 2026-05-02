@@ -16,6 +16,7 @@ type TStringDisplay
     = TextField
     | TextArea
     | Command String
+    | Code String
 
 
 type StepArgValue
