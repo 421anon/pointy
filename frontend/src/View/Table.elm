@@ -417,16 +417,32 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                 table.records
 
         viewContent =
+            let
+                isEmpty =
+                    ApiData.unwrap False List.isEmpty table.records
+
+                headerAttrs =
+                    [ class "table-header"
+                    , classList [ ( "table-header-empty", isEmpty ) ]
+                    ]
+                        ++ (if isEmpty then
+                                []
+
+                            else
+                                [ Events.onClick (Actions.toggleTable lens) ]
+                           )
+            in
             Html.div [ class "table", id ("table-" ++ TableSpec.getName spec) ]
-                [ Html.div [ Events.onClick (Actions.toggleTable lens), class "table-header" ]
+                [ Html.div headerAttrs
                     [ Html.div [ class "table-header-content" ]
-                        [ icon True
+                        [ iconCustom True
                             (if table.isOpen then
                                 "expand_more"
 
                              else
                                 "chevron_right"
                             )
+                            [ class "table-header-chevron" ]
                         , Html.span [ class "table-content-header" ] [ Html.text (TableSpec.getDisplayName spec) ]
                         , ApiData.unwrap Html.nothing (viewStatusCountBadge spec) table.records
                         ]

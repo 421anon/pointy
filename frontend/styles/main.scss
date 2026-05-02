@@ -47,7 +47,15 @@ body {
   cursor: pointer;
   font-size: var(--font-size-md);
 
-  &:hover .table-header-content .table-content-header {
+  &.table-header-empty {
+    cursor: default;
+
+    .table-header-chevron {
+      visibility: hidden;
+    }
+  }
+
+  &:not(.table-header-empty):hover .table-header-content .table-content-header {
     color: var(--text-primary);
   }
 }
