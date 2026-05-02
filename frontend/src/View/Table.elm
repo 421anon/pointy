@@ -559,7 +559,7 @@ viewAddOrEditRecordForm model spec table record =
 
         modeSelector =
             Html.div [ class "form-mode-selector" ]
-                [ radioButton AddNew "Create New"
+                [ radioButton AddNew "Create new"
                 , radioButton AddFromOtherProject "Add from other project"
                 ]
 
@@ -612,7 +612,7 @@ viewAddOrEditRecordForm model spec table record =
             in
             case ( readOnly, editing, table.addMode ) of
                 ( False, False, AddNew ) ->
-                    "Create New " ++ displayName
+                    "Create new " ++ displayName
 
                 ( False, False, AddFromOtherProject ) ->
                     "Add from other project: " ++ displayName

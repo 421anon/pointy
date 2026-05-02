@@ -36,7 +36,7 @@ Use the **+** button in a step table header to add a step of that type.
 
 When adding a step, you can choose between:
 
-- **Create New** — create a brand-new step definition
+- **Create new** — create a brand-new step definition
 - **Add from other project** — assign an already-existing step to the current project
 
 ![The add-step form switched to Add from other project, showing how an existing step can be linked into the current project.](screenshots/light/steps-add-from-other-project-form.png)
