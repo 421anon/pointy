@@ -22,7 +22,7 @@ type Status
 
 type AddMode
     = AddNew
-    | AddExisting
+    | AddFromOtherProject
 
 
 type alias BaseRecord a =

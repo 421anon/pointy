@@ -100,7 +100,7 @@ lib.mkOption {
 
 This renders a step selector filtered by `allowedTypes`. If `allowedTypes` is omitted, any step type is allowed.
 
-Important frontend behaviour: the selector offers steps that are already assigned to the **current project**. If you need to reference a step from another project, first add it to the current project with **Add Existing**. See [Building Workflows (Steps)](steps.md#creating-steps).
+Important frontend behaviour: the selector offers steps that are already assigned to the **current project**. If you need to reference a step from another project, first add it to the current project with **Add from other project**. See [Building Workflows (Steps)](steps.md#creating-steps).
 
 At build time the selected value resolves to the Nix store path of the chosen step's output, so it can be used directly in `installPhase`.
 

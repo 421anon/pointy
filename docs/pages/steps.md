@@ -36,10 +36,10 @@ Use the **+** button in a step table header to add a step of that type.
 
 When adding a step, you can choose between:
 
-- **Create New** — create a brand-new step definition
-- **Add Existing** — assign an already-existing step to the current project
+- **Create new** — create a brand-new step definition
+- **Add from other project** — assign an already-existing step to the current project
 
-![The add-step form switched to Add Existing, showing how an existing step can be linked into the current project.](screenshots/light/steps-add-existing-form.png)
+![The add-step form switched to Add from other project, showing how an existing step can be linked into the current project.](screenshots/light/steps-add-from-other-project-form.png)
 
 ## Configuring step arguments
 
@@ -54,7 +54,7 @@ Depending on the template, you may need to:
 
 ![The step edit form for a derivation step. Step-reference arguments are chosen from selectors in the form.](screenshots/light/step-edit-form.png)
 
-Step-reference selectors choose from steps that are already assigned to the **current project**. If you want to reference a step that currently lives in another project, first add that step to the current project with **Add Existing**.
+Step-reference selectors choose from steps that are already assigned to the **current project**. If you want to reference a step that currently lives in another project, first add that step to the current project with **Add from other project**.
 
 ## Editing, inspecting, and cloning
 

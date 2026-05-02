@@ -326,14 +326,14 @@ upsertProject spec =
             (\model ->
                 Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
                     |> Flow.assertJust
-                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddExisting)
+                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddFromOtherProject)
                     |> Flow.andThen
                         (\( edited_, addMode_ ) ->
                             case ( edited_.id, addMode_ ) of
                                 ( Nothing, AddNew ) ->
                                     createProject edited_ |> Flow.return ()
 
-                                ( Nothing, AddExisting ) ->
+                                ( Nothing, AddFromOtherProject ) ->
                                     Flow.pure ()
 
                                 ( Just _, _ ) ->
@@ -363,7 +363,7 @@ upsertStep spec =
             (\model ->
                 Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
                     |> Flow.assertJust
-                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddExisting)
+                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddFromOtherProject)
                     |> Flow.andThen
                         (\( edited_, addMode_ ) ->
                             Flow.forAll currentProjectId
@@ -372,7 +372,7 @@ upsertStep spec =
                                         ( Nothing, AddNew ) ->
                                             createStep spec edited_ |> Flow.return ()
 
-                                        ( Nothing, AddExisting ) ->
+                                        ( Nothing, AddFromOtherProject ) ->
                                             Flow.setting (TableSpec.getLens spec << isUpdating)
                                                 (batchAssignRecordsToProject (all (lens << selectExistingSteps << selected << each << recordId << just) model) projectId)
                                                 |> Flow.seq (Flow.setAll (lens << selectExistingSteps << selected) [])

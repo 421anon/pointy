@@ -417,16 +417,32 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                 table.records
 
         viewContent =
+            let
+                isEmpty =
+                    ApiData.unwrap False List.isEmpty table.records
+
+                headerAttrs =
+                    [ class "table-header"
+                    , classList [ ( "table-header-empty", isEmpty ) ]
+                    ]
+                        ++ (if isEmpty then
+                                []
+
+                            else
+                                [ Events.onClick (Actions.toggleTable lens) ]
+                           )
+            in
             Html.div [ class "table", id ("table-" ++ TableSpec.getName spec) ]
-                [ Html.div [ Events.onClick (Actions.toggleTable lens), class "table-header" ]
+                [ Html.div headerAttrs
                     [ Html.div [ class "table-header-content" ]
-                        [ icon True
+                        [ iconCustom True
                             (if table.isOpen then
                                 "expand_more"
 
                              else
                                 "chevron_right"
                             )
+                            [ class "table-header-chevron" ]
                         , Html.span [ class "table-content-header" ] [ Html.text (TableSpec.getDisplayName spec) ]
                         , ApiData.unwrap Html.nothing (viewStatusCountBadge spec) table.records
                         ]
@@ -460,7 +476,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 -- Adding a new record
                                 Just r
 
-                            else if table.addMode == AddExisting then
+                            else if table.addMode == AddFromOtherProject then
                                 -- Adding an existing record (show form so user can click Save)
                                 Just r
 
@@ -484,7 +500,7 @@ viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord
 viewAddOrEditRecordForm model spec table record =
     let
         editing =
-            record.id /= Nothing && (table.addMode /= AddExisting)
+            record.id /= Nothing && (table.addMode /= AddFromOtherProject)
 
         readOnly =
             table.inspected
@@ -543,8 +559,8 @@ viewAddOrEditRecordForm model spec table record =
 
         modeSelector =
             Html.div [ class "form-mode-selector" ]
-                [ radioButton AddNew "Create New"
-                , radioButton AddExisting "Add Existing"
+                [ radioButton AddNew "Create new"
+                , radioButton AddFromOtherProject "Add from other project"
                 ]
 
         viewSelectExisting state =
@@ -596,10 +612,10 @@ viewAddOrEditRecordForm model spec table record =
             in
             case ( readOnly, editing, table.addMode ) of
                 ( False, False, AddNew ) ->
-                    "Create New " ++ displayName
+                    "Create new " ++ displayName
 
-                ( False, False, AddExisting ) ->
-                    "Add Existing " ++ displayName
+                ( False, False, AddFromOtherProject ) ->
+                    "Add from other project: " ++ displayName
 
                 ( False, True, _ ) ->
                     "Edit " ++ displayName
@@ -638,7 +654,7 @@ viewAddOrEditRecordForm model spec table record =
                 )
             , Html.div [ class "form-body" ]
                 [ Html.viewIf (not editing && TableSpec.getTag spec /= TagProjects) modeSelector
-                , Html.viewIf (not editing && table.addMode == AddExisting && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
+                , Html.viewIf (not editing && table.addMode == AddFromOtherProject && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
                 , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
                 , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
                 , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|

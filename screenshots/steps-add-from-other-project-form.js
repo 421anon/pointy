@@ -39,15 +39,15 @@ async function capture(session) {
       await waitForMaterialIcons(page);
     }
 
-    const addExistingForm = page.locator(".table-form-wrapper .form").first();
-    if (await addExistingForm.count()) {
+    const addFromOtherProjectForm = page.locator(".table-form-wrapper .form").first();
+    if (await addFromOtherProjectForm.count()) {
       await screenshotLocator(
         output,
-        "steps-add-existing-form.png",
-        addExistingForm,
+        "steps-add-from-other-project-form.png",
+        addFromOtherProjectForm,
       );
     } else {
-      session.warn("Add existing form not found.");
+      session.warn("Add from other project form not found.");
     }
   } else {
     session.warn("Add step button not found.");
