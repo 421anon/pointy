@@ -637,7 +637,7 @@ viewAddOrEditRecordForm model spec table record =
             in
             Keyboard.decodeCombinations
                 [ ( Keyboard.enter
-                  , Decode.succeed (TableSpec.getUpsertRecord spec) |> Decode.when targetDecoder allowEnter
+                  , Decode.field "target" (Decode.whenNotInside "code-input" (TableSpec.getUpsertRecord spec)) |> Decode.when targetDecoder allowEnter
                   )
                 ]
     in
@@ -898,6 +898,18 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 , commandPrefix = cmdPrefix
                                 }
 
+                        Code language ->
+                            codeField
+                                { label = fieldLabel
+                                , mHint = fieldHint
+                                , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
+                                , onInput = Flow.modify << set paramLens << Just << TStringValue
+                                , hasChanged = fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                                , readOnly = readOnly
+                                , id = paramName ++ "-input"
+                                , language = language
+                                }
+
                 TList (TStep mAllowedStepTypes) ->
                     let
                         listLens =
@@ -1084,6 +1096,34 @@ textArea config =
             , id config.id
             , rows 1
             , attribute "data-auto-resize" "true"
+            ]
+            []
+        ]
+
+
+codeField :
+    { label : String
+    , mHint : Maybe String
+    , value : String
+    , onInput : String -> Flow Model ()
+    , hasChanged : Bool
+    , readOnly : Bool
+    , id : String
+    , language : String
+    }
+    -> Html (Flow Model ())
+codeField config =
+    Html.div [ class "form-field" ]
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
+        , Html.node "code-editor"
+            [ value config.value
+            , Events.onInput config.onInput
+            , class "code-input"
+            , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
+            , readonly config.readOnly
+            , id config.id
+            , attribute "language" config.language
+            , attribute "aria-label" config.label
             ]
             []
         ]

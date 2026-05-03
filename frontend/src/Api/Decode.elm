@@ -220,11 +220,25 @@ stepArgType =
 
 tStringDisplay : Decoder TStringDisplay
 tStringDisplay =
-    firstMatching
-        [ Decode.field "textarea" (Decode.succeed TextArea)
-        , Decode.field "command" (Decode.map Command Decode.string)
-        , Decode.succeed TextField
-        ]
+    Decode.value
+        |> Decode.andThen
+            (\displayJson ->
+                case Decode.decodeValue (Decode.field "code" Decode.value) displayJson of
+                    Ok codeJson ->
+                        case Decode.decodeValue (Decode.field "language" Decode.string) codeJson of
+                            Ok language ->
+                                Decode.succeed (Code language)
+
+                            Err err ->
+                                Decode.fail ("Invalid code display: " ++ Decode.errorToString err)
+
+                    Err _ ->
+                        firstMatching
+                            [ Decode.field "textarea" (Decode.succeed TextArea)
+                            , Decode.field "command" (Decode.map Command Decode.string)
+                            , Decode.succeed TextField
+                            ]
+            )
 
 
 stepArgValue : StepArgType -> Decoder StepArgValue

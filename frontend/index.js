@@ -1,6 +1,7 @@
 import "./styles/main.scss";
 import { Elm } from "./src/Main.elm";
 import { connectPorts } from "./ffi.js";
+import "./code-editor.js";
 
 // Initialize the Elm app
 const app = Elm.Main.init({
