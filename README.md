@@ -1,6 +1,8 @@
 # Pointy Notebook
 
-A notebook for keeping, organizing and sharing research computation.
+A notebook for writing, running, organizing and sharing research computation.
+
+[Demo](https://demo.pointy.cloud/)
 
 ![Project view](docs/pages/screenshots/light/project-view.png)
 
