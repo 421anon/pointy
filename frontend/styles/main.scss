@@ -1269,22 +1269,20 @@ select.field-changed,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border-radius: 50%;
-  border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-  color: var(--text-muted);
+  border: 2px solid var(--text-secondary);
+  background: var(--text-primary);
+  color: var(--bg-primary);
   box-shadow: var(--shadow-elevated);
-  opacity: 0.7;
   cursor: pointer;
-  transition: color 0.15s ease, opacity 0.15s ease, border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
   &:hover {
-    color: var(--text-primary);
-    border-color: var(--text-secondary);
-    opacity: 1;
+    border-color: var(--text-primary);
+    box-shadow: var(--shadow-elevated), 0 0 0 2px var(--focus-ring);
   }
 }
 
