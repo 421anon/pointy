@@ -31,6 +31,7 @@ type alias SelectState =
 type alias Item =
     { id : Maybe Int
     , name : String
+    , mProjectId : Maybe Int
     }
 
 
