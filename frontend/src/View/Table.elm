@@ -569,7 +569,7 @@ viewAddOrEditRecordForm model spec table record =
                     try currentProjectId model
 
                 availableItems =
-                    List.map (\{ id, name } -> { id = id, name = name, mContextId = Nothing })
+                    List.map (\{ id, name } -> { id = id, name = name, mProjectId = Nothing })
                         (all (allEntities (where_ (\{ id } -> id /= mProjectId) << tables << key (TableSpec.getName spec) << just)) model
                             |> List.filter
                                 (\r -> r.id |> Maybe.unwrap True (\id -> not (List.member id (ApiData.withDefault [] table.records |> List.filterMap .id))))
@@ -778,7 +778,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                                                     else
                                                         step.name ++ " (not in project)"
-                                        , mContextId = Nothing
+                                        , mProjectId = Nothing
                                         }
                                     )
 
@@ -787,7 +787,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                         availableItems =
                             allSteps mAllowedStepTypes
-                                |> List.filterMap (\step -> step.id |> Maybe.map (\id -> { id = Just id, name = step.name, mContextId = Nothing }))
+                                |> List.filterMap (\step -> step.id |> Maybe.map (\id -> { id = Just id, name = step.name, mProjectId = Nothing }))
                                 |> List.filter (\item -> not (List.member item.id selectedIds))
 
                         toTooltip =

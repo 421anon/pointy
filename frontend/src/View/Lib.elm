@@ -54,7 +54,7 @@ viewSearchBox model =
         , onSelect =
             \item ->
                 Maybe.unwrap (Flow.pure ())
-                    (\stepId -> Actions.onSelectSearch stepId item.mContextId)
+                    (Actions.onSelectSearch item.mProjectId)
                     item.id
         , alignRight = True
         , inputItemStyle = \_ -> []
