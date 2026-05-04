@@ -51,7 +51,11 @@ viewSearchBox model =
         , onRemove = \_ -> Flow.pure ()
         , activeAfterSelect = False
         , clearInputAfterSelect = False
-        , onSelect = .id >> Maybe.unwrap (Flow.pure ()) Actions.onSelectSearch
+        , onSelect =
+            \item ->
+                Maybe.unwrap (Flow.pure ())
+                    (\stepId -> Actions.onSelectSearch stepId item.mContextId)
+                    item.id
         , alignRight = True
         , inputItemStyle = \_ -> []
         }

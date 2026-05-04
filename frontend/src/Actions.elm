@@ -876,17 +876,22 @@ updateSortKeys mProjectId tableSpec records_ =
         |> Flow.return ()
 
 
-onSelectSearch : Int -> Flow Model ()
-onSelectSearch stepId =
+onSelectSearch : Int -> Maybe Int -> Flow Model ()
+onSelectSearch stepId mProjectId =
     Flow.get
         |> Flow.andThen
             (\model ->
                 let
                     mCommit_ =
                         try (route << Route.project << mCommit << just) model
+
+                    pickedProjectId =
+                        Maybe.or mProjectId
+                            (try (projectsContainingEntity stepId) model
+                                |> Maybe.andThen .id
+                            )
                 in
-                try (projectsContainingEntity stepId) model
-                    |> Maybe.andThen .id
+                pickedProjectId
                     |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, path = [] }, mCommit = mCommit_ }))
             )
 

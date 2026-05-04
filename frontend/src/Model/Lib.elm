@@ -30,6 +30,7 @@ getSearchItems model =
                         (\step ->
                             { id = Just (step.id |> Maybe.withDefault 0)
                             , name = "(" ++ step.type_ ++ ") " ++ step.name ++ " — " ++ project.name
+                            , mContextId = project.id
                             }
                         )
             )
