@@ -127,6 +127,7 @@ type Model
         , commitHash : ApiData String
         , userRepoInfo : ApiData UserRepoInfo
         , uploadProgress : Dict Int UploadProgress
+        , stepLogs : Dict String (ApiData String)
         , stepStatusHooks : Dict Int (Flow Model ())
         }
 
@@ -179,6 +180,24 @@ getCommitHash (Model model) =
 getUserRepoInfo : Model -> ApiData UserRepoInfo
 getUserRepoInfo (Model model) =
     model.userRepoInfo
+
+
+getStepLogs : Model -> Dict String (ApiData String)
+getStepLogs (Model model) =
+    model.stepLogs
+
+
+stepLogKey : Int -> Maybe String -> String
+stepLogKey id commit =
+    String.fromInt id
+        ++ "@"
+        ++ (case commit of
+                Just hash ->
+                    "commit:" ++ hash
+
+                Nothing ->
+                    "current"
+           )
 
 
 getUploadProgress : Model -> Dict Int UploadProgress
@@ -247,6 +266,7 @@ initialModel key route flags =
         , stepConfig = NotAsked
         , commitHash = NotAsked
         , userRepoInfo = NotAsked
+        , stepLogs = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
         }

@@ -440,6 +440,42 @@ goToRoute route =
     Flow.get |> Flow.andThen (\model -> Flow.lift (Nav.pushUrl (Model.getKey model) (Route.toString route)))
 
 
+clearStepLog : Int -> Maybe String -> Flow Model ()
+clearStepLog id commit =
+    Flow.over stepLogs (Dict.remove (Model.stepLogKey id commit))
+
+
+loadStepLog : Int -> Flow Model ()
+loadStepLog id =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    mCommit_ =
+                        try (route << Route.project << mCommit << just) model
+
+                    key =
+                        Model.stepLogKey id mCommit_
+                in
+                Flow.over stepLogs (Dict.insert key (ApiData.loading Nothing))
+                    |> Flow.seq
+                        (Api.fetchStepLog id mCommit_
+                            |> Flow.andThen
+                                (\result ->
+                                    Flow.over stepLogs (Dict.insert key (ApiData.fromResult result))
+                                        |> Flow.seq
+                                            (case result of
+                                                Ok _ ->
+                                                    Flow.pure ()
+
+                                                Err error ->
+                                                    addToast False (Http.errorMessage error)
+                                            )
+                                )
+                        )
+            )
+
+
 runStep : StepSpec -> Int -> Flow Model ()
 runStep spec id =
     let
@@ -459,6 +495,7 @@ runStep spec id =
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (toggleSrcEntry id (Just False) [])
                     |> Flow.seq (toggleOutputEntry id (Just False) [])
+                    |> Flow.seq (clearStepLog id mCommit_)
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq
                         (registerStepStatusHook id

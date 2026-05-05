@@ -11,6 +11,7 @@ module Api.Api exposing
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchStepConfig
+    , fetchStepLog
     , fetchUserRepoInfo
     , runStep
     , saveProject
@@ -56,6 +57,25 @@ appendCommitQuery url commit =
 
         Nothing ->
             url
+
+
+stringResponse : (String -> a) -> Http.Response String -> Result Http.Error a
+stringResponse onSuccess response =
+    case response of
+        Http.BadUrl_ badUrl ->
+            Err (Http.BadUrl badUrl)
+
+        Http.Timeout_ ->
+            Err Http.Timeout
+
+        Http.NetworkError_ ->
+            Err Http.NetworkError
+
+        Http.BadStatus_ _ body ->
+            Err (Http.BadBody body)
+
+        Http.GoodStatus_ _ body ->
+            Ok (onSuccess body)
 
 
 request : String -> String -> Http.Body -> Flow s (Result Http.Error ())
@@ -239,23 +259,7 @@ runStep id commit =
             { url = requestUrl
             , body = Http.emptyBody
             , expect =
-                Http.expectStringResponse identity <|
-                    \response ->
-                        case response of
-                            Http.BadUrl_ badUrl ->
-                                Err (Http.BadUrl badUrl)
-
-                            Http.Timeout_ ->
-                                Err Http.Timeout
-
-                            Http.NetworkError_ ->
-                                Err Http.NetworkError
-
-                            Http.BadStatus_ _ body ->
-                                Err (Http.BadBody body)
-
-                            Http.GoodStatus_ _ _ ->
-                                Ok ()
+                Http.expectStringResponse identity (stringResponse (always ()))
             }
 
 
@@ -270,23 +274,16 @@ stopStep id commit =
             { url = requestUrl
             , body = Http.emptyBody
             , expect =
-                Http.expectStringResponse identity <|
-                    \response ->
-                        case response of
-                            Http.BadUrl_ badUrl ->
-                                Err (Http.BadUrl badUrl)
+                Http.expectStringResponse identity (stringResponse (always ()))
+            }
 
-                            Http.Timeout_ ->
-                                Err Http.Timeout
 
-                            Http.NetworkError_ ->
-                                Err Http.NetworkError
-
-                            Http.BadStatus_ _ body ->
-                                Err (Http.BadBody body)
-
-                            Http.GoodStatus_ _ _ ->
-                                Ok ()
+fetchStepLog : Int -> Maybe String -> Flow s (Result Http.Error String)
+fetchStepLog id commit =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery ("/backend/step-log?id=" ++ String.fromInt id) commit
+            , expect = Http.expectStringResponse identity (stringResponse identity)
             }
 
 

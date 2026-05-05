@@ -129,6 +129,11 @@ userRepoInfo =
     lens ".userRepoInfo" Model.getUserRepoInfo (\(Model m) userRepoInfo_ -> Model { m | userRepoInfo = userRepoInfo_ })
 
 
+stepLogs : Lens ls Model (Dict String (ApiData String)) x y
+stepLogs =
+    lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
+
+
 isOpen : Lens ls { a | isOpen : b } b x y
 isOpen =
     lens ".isOpen" .isOpen (\t isOpen_ -> { t | isOpen = isOpen_ })

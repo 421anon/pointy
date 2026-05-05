@@ -9,6 +9,7 @@ import Components.Select as Select
 import Dict
 import Extra.Accessors exposing (by, where_)
 import Extra.Decode as Decode
+import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (..)
@@ -88,6 +89,14 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
     let
         lens =
             TableSpec.getLens spec
+
+        currentRouteCommit =
+            case Model.getRoute model of
+                Route.Project { mCommit } ->
+                    mCommit
+
+                _ ->
+                    Nothing
 
         ( highlightedEntityId, isReadOnly ) =
             case Model.getRoute model of
@@ -204,14 +213,75 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                             "Failure"
                                     )
                     in
-                    Html.span
-                        [ class "status-indicator-wrapper"
-                        , title statusText
-                        ]
-                        [ Html.span
-                            [ class ("status-indicator " ++ colorClass) ]
-                            []
-                        ]
+                    case ( s, record.id ) of
+                        ( StatusFailure _, Just stepId ) ->
+                            let
+                                logKey =
+                                    Model.stepLogKey stepId currentRouteCommit
+
+                                logState =
+                                    Dict.get logKey (Model.getStepLogs model) |> Maybe.withDefault NotAsked
+
+                                popoverId =
+                                    "step-log-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt stepId
+                            in
+                            Html.span []
+                                [ Html.button
+                                    [ class "status-indicator-wrapper status-log-trigger"
+                                    , title statusText
+                                    , attribute "popovertarget" popoverId
+                                    , style "anchor-name" ("--anchor-" ++ popoverId)
+                                    , Events.onClick (Actions.loadStepLog stepId)
+                                    ]
+                                    [ Html.span
+                                        [ class ("status-indicator " ++ colorClass) ]
+                                        []
+                                    ]
+                                , Html.div
+                                    [ class "step-log-popover"
+                                    , id popoverId
+                                    , attribute "popover" "auto"
+                                    , style "position-anchor" ("--anchor-" ++ popoverId)
+                                    ]
+                                    [ Html.div [ class "step-log-popover-header" ]
+                                        [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
+                                        , Html.button
+                                            [ class "icon-btn"
+                                            , title "Close"
+                                            , Events.onClick (Actions.hidePopover popoverId)
+                                            ]
+                                            [ icon True "close" ]
+                                        ]
+                                    , Html.div [ class "step-log-popover-body" ]
+                                        [ case logState of
+                                            NotAsked ->
+                                                Html.text "Loading build log..."
+
+                                            Loading _ ->
+                                                Html.text "Loading build log..."
+
+                                            Success log ->
+                                                if String.isEmpty log then
+                                                    Html.text "Build log is empty."
+
+                                                else
+                                                    Html.pre [ class "step-log-pre" ] [ Html.text log ]
+
+                                            Error err ->
+                                                Html.text (Http.errorMessage err)
+                                        ]
+                                    ]
+                                ]
+
+                        _ ->
+                            Html.span
+                                [ class "status-indicator-wrapper"
+                                , title statusText
+                                ]
+                                [ Html.span
+                                    [ class ("status-indicator " ++ colorClass) ]
+                                    []
+                                ]
 
                 viewStatusApiData aStatus =
                     ApiData.foldVisible

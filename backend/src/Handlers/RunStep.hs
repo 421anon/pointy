@@ -2,6 +2,7 @@
 
 module Handlers.RunStep (
     runStepHandler,
+    stepLogHandler,
     stopStepHandler,
 ) where
 
@@ -21,7 +22,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.Statuses (addDependencyRunningOverrides, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
 import ProcessLimiter (readProcessWithExitCodeL)
-import Servant (Handler, NoContent (..))
+import Servant (Handler, NoContent (..), err404, err500, errBody)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
@@ -68,11 +69,37 @@ runStepSync eid commit = do
         Left err -> putStrLn $ "runStepAsync error: " ++ err
         Right _ -> return ()
 
-buildStep :: ReadRepoContext -> Int -> IO ()
-buildStep ctx@(ReadRepoContext repoPath targetCommit) eid = do
-    result <- runExceptT $ do
-        let flakeRefBase = "git+file://" ++ repoPath ++ "?rev=" ++ targetCommit ++ "&allRefs=true"
+stepLogHandler :: Int -> Maybe T.Text -> Handler T.Text
+stepLogHandler eid commit = do
+    result <- liftIO $ runExceptT $ do
+        (repoPath, targetCommit) <-
+            ExceptT $
+                withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) ->
+                    return (repoPath, maybe commitHash T.unpack commit)
 
+        let ctx = ReadRepoContext repoPath targetCommit
+        liftIO $ readProcessWithExitCodeL "nix" ["log", stepInstallable ctx eid] ""
+
+    case result of
+        Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+        Right (ExitSuccess, stdout, _) -> return $ T.pack stdout
+        Right (ExitFailure _, stdout, stderr) -> do
+            let logError =
+                    if not (null stderr)
+                        then stderr
+                        else
+                            if not (null stdout)
+                                then stdout
+                                else "No build log available for step " ++ show eid
+            throwError $ err404{errBody = TLE.encodeUtf8 (TL.pack logError)}
+
+stepInstallable :: ReadRepoContext -> Int -> String
+stepInstallable (ReadRepoContext repoPath targetCommit) eid =
+    "git+file://" ++ repoPath ++ "?rev=" ++ targetCommit ++ "&allRefs=true#pointy.steps." ++ show eid
+
+buildStep :: ReadRepoContext -> Int -> IO ()
+buildStep ctx eid = do
+    result <- runExceptT $ do
         mGitExe <- liftIO $ findExecutable "git"
         gitExe <- case mGitExe of
             Nothing -> throwError "git executable not found"
@@ -101,7 +128,7 @@ buildStep ctx@(ReadRepoContext repoPath targetCommit) eid = do
                               , "--wait"
                               ]
                                 ++ pathEnvArg
-                                ++ ["nix", "build", "--no-link", "--no-eval-cache", flakeRefBase ++ "#pointy.steps." ++ show eid]
+                                ++ ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx eid]
                             )
                             ""
                 _ <- liftIO $ registerGcRootForOutPath outPath

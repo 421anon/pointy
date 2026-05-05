@@ -16,7 +16,7 @@ import Data.Text (Text)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (RawJSON, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
-import Handlers.RunStep (runStepHandler, stopStepHandler)
+import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.SrcFiles (UserRepoInfo, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler)
 import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
 import Handlers.Statuses (getProjectOutPathsHandler)
@@ -59,6 +59,7 @@ type API =
         :<|> "step" :> QueryParam "project_id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Post '[RawJSON] LBS.ByteString
         :<|> "run-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
         :<|> "stop-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
+        :<|> "step-log" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[PlainText] Text
         :<|> "upload" :> QueryParam' '[Required, Strict] "id" Int :> MultipartForm Tmp (MultipartData Tmp) :> Post '[PlainText] Text
 
 server :: Server API
@@ -85,6 +86,7 @@ server =
         :<|> postStepHandler
         :<|> runStepHandler
         :<|> stopStepHandler
+        :<|> stepLogHandler
         :<|> uploadHandler
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy
@@ -199,6 +201,13 @@ corsPolicy req = case pathInfo req of
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
                 , corsMethods = ["POST", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["step-log"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["GET", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     ["upload"] ->
