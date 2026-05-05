@@ -1,8 +1,8 @@
 module View.Table exposing (viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
-import Ansi.Log as AnsiLog
 import Accessors exposing (all, each, just, key, lens, over, set, try)
 import Actions
+import Ansi.Log as AnsiLog
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Basics.Extra exposing (flip)
 import Browser.Dom as Dom
@@ -387,12 +387,6 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
                                         [ iconCustom True "progress_activity" [ class "pending-record-icon" ]
                                         ]
-                                , Html.viewIf (TableSpec.getShareable spec record && TableSpec.getTag spec /= TagProjects && record.id /= Nothing) <|
-                                    Html.span
-                                        [ class "status-icon shareable-icon"
-                                        , title "Shareable – inspect, clone, or share this step state"
-                                        ]
-                                        [ icon True "share" ]
                                 ]
                             , let
                                 popoverId =
