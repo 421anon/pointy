@@ -1,5 +1,6 @@
 module View.Table exposing (viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
+import Ansi.Log as AnsiLog
 import Accessors exposing (all, each, just, key, lens, over, set, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..), success)
@@ -265,7 +266,8 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                                     Html.text "Build log is empty."
 
                                                 else
-                                                    Html.pre [ class "step-log-pre" ] [ Html.text log ]
+                                                    Html.div [ class "step-log-pre" ]
+                                                        [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
 
                                             Error err ->
                                                 Html.text (Http.errorMessage err)

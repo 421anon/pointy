@@ -80,6 +80,16 @@
         version = "1.0.0";
       };
 
+      "vito/elm-ansi" = {
+        sha256 = "15ifz0glwpkr8hdp0yix9p8190z5c0pb1wi23jb5blxjprh65mdb";
+        version = "12.0.0";
+      };
+
+      "BrianHicks/elm-trend" = {
+        sha256 = "05vc6rj9x9ik177r9397f8g3nk8hpl51viikm3pg1ddpl5frx1hr";
+        version = "2.1.3";
+      };
+
       "MartinSStewart/elm-serialize" = {
         sha256 = "0zmlha3fjq2d4gbpchmsyndg8d27ywsx00vnw4vsz58ylc0k7zvy";
         version = "1.3.1";
@@ -103,6 +113,11 @@
       "elm-community/list-extra" = {
         sha256 = "02grd0p5hc2gvdy4n723d1s28pm1grn95jrzic6jcgb26qh16vcc";
         version = "8.7.0";
+      };
+
+      "elm-explorations/benchmark" = {
+        sha256 = "1pw199iz8597a66h77f1wqwvd725ccq2qmdb9yglsm630hwnbadl";
+        version = "1.0.2";
       };
 
       "elm/bytes" = {
@@ -150,6 +165,11 @@
         version = "1.1.8";
       };
 
+      "mdgriffith/style-elements" = {
+        sha256 = "01c9qdixydg1irwlmccx1m874j320ik4yddjkx3dsmk5pbbf2kdf";
+        version = "5.0.2";
+      };
+
       "miniBill/elm-oklch" = {
         sha256 = "1vzh2h50kk1q219g5jrkhvf15g6g7d1k8rdzvf2wcim5q5bar7pq";
         version = "1.0.0";
@@ -163,6 +183,11 @@
       "myrho/elm-round" = {
         sha256 = "0zv0a60wzkx4xib7h07ijcg72mcyb3vb914hk5pjp6rf4k2lv9kj";
         version = "1.0.5";
+      };
+
+      "robinheghan/murmur3" = {
+        sha256 = "15asmgr2zqh7rkywrg5647rpdqkpzxk02v5qc6ndj60jza3gsmjk";
+        version = "1.0.0";
       };
 
       "rtfeldman/elm-iso8601-date-strings" = {
