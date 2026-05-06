@@ -10,6 +10,8 @@
     ./shared.nix
   ];
 
+  services.openssh.enable = true;
+
   virtualisation = {
     memorySize = 8192;
     diskSize = 20480;
