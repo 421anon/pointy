@@ -9,12 +9,9 @@ in
 {
   # Nix configuration
   nix = {
-    settings.auto-optimise-store = true;
     settings.experimental-features = "nix-command flakes pipe-operators";
     registry.nixpkgs.flake = self.inputs.nixpkgs;
   };
-
-  services.openssh.enable = true;
 
   security.polkit = {
     enable = true;
@@ -73,28 +70,6 @@ in
     recommendedOptimisation = true;
     recommendedGzipSettings = true;
     recommendedProxySettings = true;
-    proxyTimeout = "300s";
-    clientMaxBodySize = "10G";
   };
 
-  # System packages
-  environment.systemPackages = with pkgs; [
-    git
-    kitty.terminfo
-    pv
-    tree
-    jq
-    btop
-    screen
-    socat
-    vim
-    xpra
-  ];
-
-  environment.variables = {
-    HISTSIZE = "100000";
-    HISTFILESIZE = "100000";
-  };
-
-  system.stateVersion = "23.05";
 }
