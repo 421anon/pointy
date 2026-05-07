@@ -12,6 +12,7 @@ module Handlers.Statuses (
     broadcastStatusForStepProjects,
 ) where
 
+import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
 import Bus (broadcastSnapshot)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
@@ -56,38 +57,29 @@ checkStatus path = do
     if exitCode == ExitSuccess
         then return ("running", Nothing)
         else do
+            -- Note: systemd-run is invoked with --collect, which GCs the unit shortly
+            -- after exit. is-failed is therefore racy on fast failures; the BFS over input
+            -- derivations performed by resolveBuildLog is the durable signal.
             (failedCode, _, _) <- readProcessWithExitCodeL "systemctl" ["is-failed", unitName] ""
             if failedCode == ExitSuccess
-                then do
-                    (st, mErr) <- checkNixLogForFailure path
-                    if st == "failure"
-                        then return ("failure", mErr)
-                        else return ("failure", Nothing)
+                then resolveFailure path "failure"
                 else do
                     result <- runExceptT $ runNix ["path-info", path]
                     case result of
                         Right _ -> return ("success", Nothing)
-                        Left _ -> checkNixLogForFailure path
+                        Left _ -> resolveFailure path "not-started"
 
-checkNixLogForFailure :: FilePath -> IO (Text, Maybe Text)
-checkNixLogForFailure path = do
-    derivationResult <- runExceptT $ runNix ["path-info", "--derivation", path]
-    case derivationResult of
-        Right derivationPath ->
-            case lines derivationPath of
-                derivation : _ -> do
-                    logResult <- runExceptT $ runNix ["log", derivation]
-                    case logResult of
-                        Right logOutput -> return ("failure", lastMeaningfulLine logOutput)
-                        Left _ -> return ("not-started", Nothing)
-                [] -> return ("not-started", Nothing)
-        Left _ -> return ("not-started", Nothing)
-
-lastMeaningfulLine :: String -> Maybe Text
-lastMeaningfulLine output =
-    case filter (not . null) (lines output) of
-        [] -> Nothing
-        ls -> Just (pack (last ls))
+{- | Look up a failure log via 'resolveBuildLog'. The fallback state is used
+when no log can be resolved: when systemd already confirmed failure we
+still report "failure" (without a message); when there is no other
+evidence the step might simply never have been queued.
+-}
+resolveFailure :: FilePath -> Text -> IO (Text, Maybe Text)
+resolveFailure path fallback = do
+    mResolved <- resolveBuildLog path
+    case mResolved of
+        Just rl -> return ("failure", lastMeaningfulLine (resolvedLog rl))
+        Nothing -> return (fallback, Nothing)
 
 getStatuses :: Text -> Map Int Text -> IO (Map Int (Text, Maybe Text))
 getStatuses targetCommit outPaths = do

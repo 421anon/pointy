@@ -6,6 +6,7 @@ module Handlers.RunStep (
     stopStepHandler,
 ) where
 
+import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
 import Cache (getOutPathFromCache, memoizeStepOutPaths)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
@@ -78,20 +79,26 @@ stepLogHandler eid commit = do
                     return (repoPath, maybe commitHash T.unpack commit)
 
         let ctx = ReadRepoContext repoPath targetCommit
-        liftIO $ readProcessWithExitCodeL "nix" ["log", stepInstallable ctx eid] ""
+        liftIO $ resolveBuildLog (stepInstallable ctx eid)
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-        Right (ExitSuccess, stdout, _) -> return $ T.pack stdout
-        Right (ExitFailure _, stdout, stderr) -> do
-            let logError =
-                    if not (null stderr)
-                        then stderr
-                        else
-                            if not (null stdout)
-                                then stdout
-                                else "No build log available for step " ++ show eid
-            throwError $ err404{errBody = TLE.encodeUtf8 (TL.pack logError)}
+        Right Nothing ->
+            throwError $
+                err404
+                    { errBody =
+                        TLE.encodeUtf8 (TL.pack ("No build log available for step " ++ show eid))
+                    }
+        Right (Just rl) -> return (renderResolvedLog rl)
+
+{- | Render a resolved log for the wire. Logs that come from an input
+derivation (rather than the step itself) are prefixed so the user knows
+the failure originated in a build prerequisite.
+-}
+renderResolvedLog :: ResolvedLog -> T.Text
+renderResolvedLog (ResolvedLog _ logText StepDrv) = T.pack logText
+renderResolvedLog (ResolvedLog drv logText (InputDrv _ _)) =
+    T.pack ("Build prerequisite failed: " ++ drv ++ "\n-----\n" ++ logText)
 
 stepInstallable :: ReadRepoContext -> Int -> String
 stepInstallable (ReadRepoContext repoPath targetCommit) eid =
