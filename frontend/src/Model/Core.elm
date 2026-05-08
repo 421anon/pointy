@@ -279,8 +279,8 @@ initialModel key route flags =
 type alias FileView =
     { isViewing : Bool
     , zoom : Float
+    , selectedRange : Maybe Route.LineRange
     }
-
 
 type alias DirectoryFile =
     { content : ApiData String
@@ -311,7 +311,7 @@ extractDirectoryItemBase item =
                 , size = file.size
                 , viewable = file.viewable
                 , mimeType = file.mimeType
-                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom }
+                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, selectedRange = file.view.selectedRange }
                 }
 
         Folder folder ->
@@ -335,6 +335,7 @@ updateDirectoryItemBase item baseItem =
                         in
                         { view
                             | isViewing = base.view.isViewing
+                            , selectedRange = base.view.selectedRange
                         }
                 }
 

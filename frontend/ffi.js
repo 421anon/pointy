@@ -12,6 +12,29 @@ function copyToClipboard(text) {
   navigator.clipboard.writeText(text);
 }
 
+function getSelectedLineRange(viewerId) {
+  const container = document.getElementById(viewerId);
+  if (!container) return null;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
+    return null;
+  }
+  const lineOf = (node) => {
+    let el = node.nodeType === 1 ? node : node.parentElement;
+    while (el && el !== container) {
+      if (el.dataset && el.dataset.line) return parseInt(el.dataset.line, 10);
+      el = el.parentElement;
+    }
+    return null;
+  };
+  const a = lineOf(range.startContainer);
+  const b = lineOf(range.endContainer);
+  if (a == null || b == null) return null;
+  return { from: Math.min(a, b), to: Math.max(a, b) };
+}
+
 function zoomIframe({ id, zoom }) {
   const iframe = document.getElementById(id);
   if (!iframe) return;
@@ -107,12 +130,13 @@ export function connectPorts(app) {
     closeStepStatusStream,
     zoomIframe,
     toggleTheme,
+    getSelectedLineRange,
   };
 
   if (app.ports && app.ports.ffiOut) {
     app.ports.ffiOut.subscribe((req) => {
-      ffiFns[req.fn]?.(req.value);
-      app.ports.ffiIn.send({ key: req.key, value: null });
+      const value = ffiFns[req.fn]?.(req.value);
+      app.ports.ffiIn.send({ key: req.key, value: value ?? null });
     });
   }
 

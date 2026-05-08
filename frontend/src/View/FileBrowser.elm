@@ -1,6 +1,6 @@
 module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 
-import Accessors exposing (Prism, has, just, prism, snd, try)
+import Accessors exposing (Prism, has, just, prism, snd, try, values)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData, success)
 import Basics.Extra exposing (flip)
@@ -9,15 +9,16 @@ import Extra.Accessors exposing (where_)
 import Filesize
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (class, href, id, readonly, rel, src, style, target, value)
+import Html.Attributes exposing (class, classList, href, id, rel, src, style, target)
 import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
-import Model.Lenses exposing (currentProjectId, fileZoomAt, mimeType)
+import Model.Lenses exposing (currentProject, currentProjectId, fileSelectedRangeAt, fileZoomAt, mimeType, srcFilesFileSelectedRangeAt, tables)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
+import Route
 import View.Icons exposing (icon)
 import View.Lib exposing (viewLoading)
 
@@ -41,12 +42,12 @@ srcDir =
         )
 
 
-renderDirectoryContents : StepSpec -> Maybe Int -> Maybe DirContext -> Bool -> List String -> String -> ApiData (Dict String DirectoryItem) -> Html (Flow Model ())
-renderDirectoryContents spec mRecordId mDirCtx isLocked directoryPath cssClass children =
+renderDirectoryContents : Model -> StepSpec -> Maybe Int -> Maybe DirContext -> Bool -> List String -> String -> ApiData (Dict String DirectoryItem) -> Html (Flow Model ())
+renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssClass children =
     let
         viewContents childrenDict =
             Html.div [ class "directory-tree" ]
-                (Dict.toList childrenDict |> List.map (\( itemName, item ) -> viewDirectoryItemWithPath spec mRecordId mDirCtx isLocked directoryPath itemName item))
+                (Dict.toList childrenDict |> List.map (\( itemName, item ) -> viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item))
     in
     Html.div [ class cssClass ]
         [ ApiData.foldVisible
@@ -66,14 +67,15 @@ renderDirectoryContents spec mRecordId mDirCtx isLocked directoryPath cssClass c
         ]
 
 
-viewDirectorySection : StepSpec -> StepRecord -> Html (Flow Model ())
-viewDirectorySection spec step =
+viewDirectorySection : Model -> StepSpec -> StepRecord -> Html (Flow Model ())
+viewDirectorySection model spec step =
     ApiData.toMaybe step.runState
         |> Html.viewMaybe
             (\rs ->
                 Html.div [ class "output-files-section" ]
                     [ Html.h3 [] [ Html.text "Output Files" ]
-                    , renderDirectoryContents spec
+                    , renderDirectoryContents model
+                        spec
                         step.id
                         (if String.isEmpty rs.outPath then
                             Nothing
@@ -118,7 +120,8 @@ viewSrcFilesSection model stepType spec step =
         Html.div [ class "src-files-section" ]
             [ Html.h3 [] [ Html.text "Source Files" ]
             , viewInstructions
-            , renderDirectoryContents spec
+            , renderDirectoryContents model
+                spec
                 step.id
                 (Maybe.map SrcDir step.id)
                 False
@@ -129,7 +132,8 @@ viewSrcFilesSection model stepType spec step =
 
 
 viewDirectoryItemWithPath :
-    StepSpec
+    Model
+    -> StepSpec
     -> Maybe Int
     -> Maybe DirContext
     -> Bool
@@ -137,7 +141,7 @@ viewDirectoryItemWithPath :
     -> String
     -> DirectoryItem
     -> Html (Flow Model ())
-viewDirectoryItemWithPath spec mRecordId mDirCtx isLocked directoryPath itemName item =
+viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item =
     let
         path =
             directoryPath ++ [ itemName ]
@@ -145,23 +149,64 @@ viewDirectoryItemWithPath spec mRecordId mDirCtx isLocked directoryPath itemName
         anchor =
             String.join "/" <| Maybe.unwrap "" String.fromInt mRecordId :: path
 
+        mSelectedRange =
+            case ( mRecordId, mDirCtx ) of
+                ( Just recordId, Just (OutputDir _) ) ->
+                    try (currentProject << success << tables << values << fileSelectedRangeAt recordId path << just) model
+
+                ( Just recordId, Just (SrcDir _) ) ->
+                    try (currentProject << success << tables << values << srcFilesFileSelectedRangeAt recordId path << just) model
+
+                _ ->
+                    Nothing
+
+        captureAction =
+            case ( mRecordId, mDirCtx ) of
+                ( Just recordId, Just (OutputDir _) ) ->
+                    Just (Actions.captureFileSelection False recordId path)
+
+                ( Just recordId, Just (SrcDir _) ) ->
+                    Just (Actions.captureFileSelection True recordId path)
+
+                _ ->
+                    Nothing
+
         shareButton =
             let
                 shareAction =
-                    Flow.get
-                        |> Flow.andThen
-                            (\m ->
-                                Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId path)
-                                    (try currentProjectId m)
-                                    mRecordId
-                                    |> Maybe.withDefault Flow.none
-                            )
+                    Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId path mSelectedRange)
+                        (try currentProjectId model)
+                        mRecordId
+                        |> Maybe.withDefault Flow.none
+
+                shareTooltip =
+                    Maybe.unwrap "Share" (\range -> "Share lines " ++ Route.formatLineRange range) mSelectedRange
             in
             Html.button
                 [ class "dir-item-icon-btn"
+                , Html.Attributes.title shareTooltip
                 , Html.Events.stopPropagationOn "click" (Decode.succeed ( shareAction, True ))
                 ]
                 [ icon True "share" ]
+
+        shareSelectionBanner =
+            case ( mSelectedRange, mRecordId, try currentProjectId model ) of
+                ( Just range, Just recordId, Just projectId ) ->
+                    Html.div [ class "range-share-banner" ]
+                        [ Html.span [ class "range-share-label" ]
+                            [ Html.text ("Lines " ++ Route.formatLineRange range ++ " selected") ]
+                        , Html.button
+                            [ class "range-share-btn"
+                            , Html.Events.stopPropagationOn "click"
+                                (Decode.succeed ( Actions.shareEntity projectId recordId path (Just range), True ))
+                            ]
+                            [ icon True "share"
+                            , Html.text ("Share lines " ++ Route.formatLineRange range)
+                            ]
+                        ]
+
+                _ ->
+                    Html.nothing
     in
     case item of
         File file ->
@@ -296,23 +341,48 @@ viewDirectoryItemWithPath spec mRecordId mDirCtx isLocked directoryPath itemName
 
                           else
                             let
-                                viewContent content =
-                                    Html.textarea
-                                        [ readonly True
-                                        , class "file-content"
-                                        , value content
-                                        , style "height" (calculateTextareaHeight (Just content))
+                                renderLine n line =
+                                    let
+                                        lineNum =
+                                            n + 1
+                                    in
+                                    Html.div
+                                        [ classList
+                                            [ ( "file-line", True )
+                                            , ( "highlighted", Maybe.unwrap False (\{ from, to } -> lineNum >= from && lineNum <= to) mSelectedRange )
+                                            ]
+                                        , id ("line-" ++ anchor ++ "-" ++ String.fromInt lineNum)
+                                        , Html.Attributes.attribute "data-line" (String.fromInt lineNum)
                                         ]
-                                        []
+                                        [ Html.span [ class "file-line-number" ] [ Html.text (String.fromInt lineNum) ]
+                                        , Html.span [ class "file-line-content" ] [ Html.text line ]
+                                        ]
+
+                                viewContent text =
+                                    let
+                                        lines =
+                                            String.split "\n" text
+                                    in
+                                    Html.div
+                                        ([ class "file-content"
+                                         , id ("viewer-" ++ anchor)
+                                         , style "max-height" (calculateViewerHeight (List.length lines))
+                                         ]
+                                            ++ Maybe.unwrap [] (\a -> [ Html.Events.on "mouseup" (Decode.succeed a) ]) captureAction
+                                        )
+                                        (List.indexedMap renderLine lines)
                             in
-                            ApiData.foldVisible
-                                Html.nothing
-                                (Maybe.map (viewLoading << viewContent)
-                                    >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])
-                                )
-                                viewContent
-                                (always <| Html.span [ class "file-error" ] [ Html.text "Failed to load file" ])
-                                file.content
+                            Html.div [ class "file-viewer" ]
+                                [ shareSelectionBanner
+                                , ApiData.foldVisible
+                                    Html.nothing
+                                    (Maybe.map (viewLoading << viewContent)
+                                        >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])
+                                    )
+                                    viewContent
+                                    (always <| Html.span [ class "file-error" ] [ Html.text "Failed to load file" ])
+                                    file.content
+                                ]
                         ]
                 ]
 
@@ -367,40 +437,26 @@ viewDirectoryItemWithPath spec mRecordId mDirCtx isLocked directoryPath itemName
                         , Html.viewIf (isLocked && not isSrcDir) shareButton
                         ]
                 , Html.viewIf folder.expanded <|
-                    renderDirectoryContents spec mRecordId mDirCtx isLocked path "folder-contents" folder.children
+                    renderDirectoryContents model spec mRecordId mDirCtx isLocked path "folder-contents" folder.children
                 ]
 
 
-calculateTextareaHeight : Maybe String -> String
-calculateTextareaHeight maybeContent =
-    case maybeContent of
-        Nothing ->
-            "100px"
+calculateViewerHeight : Int -> String
+calculateViewerHeight lineCount =
+    let
+        lineHeight =
+            17
 
-        Just content ->
-            let
-                lineCount =
-                    content
-                        |> String.split "\n"
-                        |> List.length
+        padding =
+            16
 
-                -- Each line is approximately 17px (12px font + 1.4 line-height)
-                lineHeight =
-                    17
+        calculatedHeight =
+            lineCount * lineHeight + padding
 
-                padding =
-                    16
+        cappedHeight =
+            min calculatedHeight 600
 
-                -- var(--spacing-sm) * 2
-                calculatedHeight =
-                    lineCount * lineHeight + padding
-
-                -- Cap at 300px by default, but allow CSS resize to go higher
-                cappedHeight =
-                    min calculatedHeight 300
-
-                -- Ensure minimum of 100px
-                finalHeight =
-                    max cappedHeight 100
-            in
-            String.fromInt finalHeight ++ "px"
+        finalHeight =
+            max cappedHeight 100
+    in
+    String.fromInt finalHeight ++ "px"

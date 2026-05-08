@@ -613,8 +613,8 @@ cloneStep spec record =
         |> Flow.return ()
 
 
-shareEntity : Int -> Int -> List String -> Flow Model ()
-shareEntity projectId entityId pathSegments =
+shareEntity : Int -> Int -> List String -> Maybe Route.LineRange -> Flow Model ()
+shareEntity projectId entityId pathSegments mRange =
     Flow.get
         |> Flow.andThen
             (\model ->
@@ -622,7 +622,7 @@ shareEntity projectId entityId pathSegments =
                     route_ =
                         Route.Project
                             { projectId = projectId
-                            , mHighlight = Just { id = entityId, path = pathSegments }
+                            , mHighlight = Just { id = entityId, path = pathSegments, range = mRange }
                             , mCommit = try (commitHash << success) model
                             }
                 in
@@ -812,25 +812,38 @@ runAndClearStepStatusHook stepId =
         ((|>) (Flow.setAll (stepStatusHooks << keyI stepId) Nothing) << Flow.seq)
 
 
-deepOpenEntryOrDefer : Int -> List String -> Flow Model ()
-deepOpenEntryOrDefer id path =
+deepOpenEntryOrDefer : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
+deepOpenEntryOrDefer id path mRange =
     Flow.try
         (projects << records << success << each << tables << values << records << success << by .id (Just id) << runState << success << status << success << where_ ((==) StatusSuccess))
         (\mStatus ->
             case mStatus of
                 Just _ ->
-                    deepOpenEntry id path
+                    deepOpenEntry id path mRange
 
                 Nothing ->
-                    registerStepStatusHook id (deepOpenEntry id path)
+                    registerStepStatusHook id (deepOpenEntry id path mRange)
                         |> Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt id) 0 0))
         )
 
 
-deepOpenEntry : Int -> List String -> Flow Model ()
-deepOpenEntry stepId path =
+deepOpenEntry : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
+deepOpenEntry stepId path mRange =
     Flow.forAll (currentProject << success << tables << values << recordById stepId << runState << success << status << success << where_ ((==) StatusSuccess))
         (\_ ->
+            let
+                fileAnchor =
+                    String.join "/" (String.fromInt stepId :: path)
+
+                applyRange =
+                    case mRange of
+                        Just range ->
+                            Flow.setAll (currentProject << success << tables << values << fileSelectedRangeAt stepId path) (Just range)
+                                |> Flow.seq (Flow.attemptTask (Scroll.scrollElementY ("viewer-" ++ fileAnchor) ("line-" ++ fileAnchor ++ "-" ++ String.fromInt range.from) 0.05 0))
+
+                        Nothing ->
+                            Flow.pure ()
+            in
             List.prefixes path
                 |> List.map
                     (\pathPart ->
@@ -838,7 +851,30 @@ deepOpenEntry stepId path =
                             |> Flow.seq (Flow.attemptTask (Scroll.scrollY (String.join "/" <| String.fromInt stepId :: pathPart) 0 0))
                     )
                 |> List.foldl Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt stepId) 0 0))
+                |> Flow.seq applyRange
         )
+
+
+lineRangeDecoder : Decode.Decoder (Maybe Route.LineRange)
+lineRangeDecoder =
+    Decode.nullable
+        (Decode.map2 (\f t -> { from = f, to = t })
+            (Decode.field "from" Decode.int)
+            (Decode.field "to" Decode.int)
+        )
+
+
+captureFileSelection : Bool -> Int -> List String -> Flow Model ()
+captureFileSelection isSrc recordId path =
+    callJs "getSelectedLineRange" Encode.string lineRangeDecoder ("viewer-" ++ String.join "/" (String.fromInt recordId :: path))
+        |> Flow.andThen
+            (\mRange ->
+                if isSrc then
+                    Flow.setAll (currentProject << success << tables << values << srcFilesFileSelectedRangeAt recordId path) mRange
+
+                else
+                    Flow.setAll (currentProject << success << tables << values << fileSelectedRangeAt recordId path) mRange
+            )
 
 
 addToast : Bool -> String -> Flow Model ()
@@ -952,7 +988,7 @@ onSelectSearch mProjectId stepId =
                         mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
                 in
                 pickedProjectId
-                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, path = [] }, mCommit = mCommit_ }))
+                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, path = [], range = Nothing }, mCommit = mCommit_ }))
             )
 
 

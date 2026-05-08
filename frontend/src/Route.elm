@@ -1,4 +1,4 @@
-module Route exposing (Highlight, ProjectParams, Route(..), fromUrl, href, project, toString)
+module Route exposing (Highlight, LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, href, parseLineRange, project, toString)
 
 import Accessors exposing (Prism, prism)
 import Html
@@ -24,6 +24,13 @@ type alias ProjectParams =
 type alias Highlight =
     { id : Int
     , path : List String
+    , range : Maybe LineRange
+    }
+
+
+type alias LineRange =
+    { from : Int
+    , to : Int
     }
 
 
@@ -45,8 +52,20 @@ parser : Parser (Route -> a) a
 parser =
     Parser.oneOf
         [ Parser.map Home Parser.top
-        , Parser.map (\id hi mCommit -> Project { projectId = id, mHighlight = hi, mCommit = mCommit })
-            (Parser.s "project" </> Parser.int <?> Query.custom "hi" highlightParser <?> Query.string "commit")
+        , Parser.map
+            (\id basicHi mCommit mLines ->
+                Project
+                    { projectId = id
+                    , mHighlight = Maybe.map (\hi -> { hi | range = mLines }) basicHi
+                    , mCommit = mCommit
+                    }
+            )
+            (Parser.s "project"
+                </> Parser.int
+                <?> Query.custom "hi" highlightParser
+                <?> Query.string "commit"
+                <?> Query.custom "lines" lineRangeParser
+            )
         ]
 
 
@@ -54,10 +73,39 @@ highlightParser : List String -> Maybe Highlight
 highlightParser strs =
     case Maybe.map (String.split "/") <| List.head strs of
         Just (idStr :: rest) ->
-            String.toInt idStr |> Maybe.map (\id -> { id = id, path = rest })
+            String.toInt idStr |> Maybe.map (\id -> { id = id, path = rest, range = Nothing })
 
         _ ->
             Nothing
+
+
+lineRangeParser : List String -> Maybe LineRange
+lineRangeParser strs =
+    List.head strs |> Maybe.andThen parseLineRange
+
+
+parseLineRange : String -> Maybe LineRange
+parseLineRange raw =
+    case String.split "-" raw of
+        [ a ] ->
+            String.toInt a |> Maybe.map (\n -> { from = n, to = n })
+
+        [ a, b ] ->
+            Maybe.map2 (\f t -> { from = min f t, to = max f t })
+                (String.toInt a)
+                (String.toInt b)
+
+        _ ->
+            Nothing
+
+
+formatLineRange : LineRange -> String
+formatLineRange { from, to } =
+    if from == to then
+        String.fromInt from
+
+    else
+        String.fromInt from ++ "-" ++ String.fromInt to
 
 
 fromUrl : Url -> Route
@@ -103,8 +151,13 @@ toString route =
                 commitStr =
                     Maybe.map (\c -> "commit=" ++ c) mCommit
 
+                linesStr =
+                    mHighlight
+                        |> Maybe.andThen .range
+                        |> Maybe.map (\r -> "lines=" ++ formatLineRange r)
+
                 queryParts =
-                    List.filterMap identity [ hiStr, commitStr ]
+                    List.filterMap identity [ hiStr, commitStr, linesStr ]
             in
             if List.isEmpty queryParts then
                 baseUrl
