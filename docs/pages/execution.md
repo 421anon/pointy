@@ -84,9 +84,13 @@ From there you can:
 - expand folders
 - preview supported files inline
 - download files
-- share the whole output, a folder, or a specific file
+- share the whole output, a folder, a specific file, or selected lines from a previewed text file
 
 ![The output files browser open on a script step, showing an expanded output folder with a previewed hello file displaying its Hello World content.](screenshots/light/output-files-browser.png)
+
+For text outputs, select one or more lines in the preview before sharing. Pointy highlights the selected range and shows a **Share lines** action above the file. The copied link keeps the same commit pin as other share links and adds a `lines=` query parameter, so recipients land on the same output file with the selected lines highlighted.
+
+![An output file preview with a selected line range and the Share lines action visible above the highlighted text.](screenshots/light/output-file-line-range-share.png)
 
 HTML outputs support both:
 
@@ -119,7 +123,7 @@ A share link:
 
 - opens the project in a **read-only** view
 - pins the page to a specific Git commit
-- can deep-link to the step itself or to a specific output file or folder inside it
+- can deep-link to the step itself, to a specific output file or folder inside it, or to selected lines inside a previewed text file
 
 This is what makes share links stable: the recipient sees the version of the workflow state that the link was created for, not whatever happens to be current later on.
 

@@ -38,6 +38,7 @@ const screenshotScripts = [
   "output-file-share-button.js",
   "output-files-browser.js",
   "output-files-html-preview.js",
+  "output-file-line-range-share.js",
 ];
 
 function resolveScriptsDir() {
