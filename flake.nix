@@ -70,6 +70,11 @@
             };
             backend = pkgs.haskellPackages.callCabal2nix "backend" ./backend { };
             docs = pkgs.callPackage ./docs { };
+            screenshots = pkgs.runCommand "pointy-screenshots" { } ''
+              mkdir -p $out/light $out/dark
+              cp ${./docs/pages/screenshots}/light/*.png $out/light/
+              cp ${./docs/pages/screenshots}/dark/*.png $out/dark/
+            '';
           };
           devShells = {
             backend = self.packages.${system}.backend.env.overrideAttrs (oldAttrs: {
