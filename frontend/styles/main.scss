@@ -444,14 +444,80 @@ body {
 
 .file-content {
   width: 100%;
-  resize: vertical;
   font-family: "Courier New", monospace;
   font-size: var(--font-size-sm);
   line-height: 1.4;
   border: 1px solid var(--border-color);
-  padding: var(--spacing-sm);
   background: var(--bg-secondary);
   color: var(--text-primary);
+  overflow: auto;
+  padding: var(--spacing-sm) 0;
+}
+
+.file-line {
+  display: flex;
+  align-items: flex-start;
+  font-family: inherit;
+  white-space: pre;
+
+  &.highlighted {
+    background: var(--color-highlight, rgba(255, 213, 79, 0.18));
+  }
+}
+
+.file-line-number {
+  flex: 0 0 auto;
+  min-width: 3.5em;
+  padding: 0 var(--spacing-sm);
+  text-align: right;
+  color: var(--text-muted);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.file-viewer {
+  position: relative;
+}
+
+.range-share-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.range-share-label {
+  color: var(--text-secondary);
+}
+
+.range-share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: 1px solid var(--text-secondary);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+}
+
+.file-line-content {
+  flex: 1 1 auto;
+  padding-right: var(--spacing-sm);
   white-space: pre;
   overflow-x: auto;
 }
@@ -787,7 +853,6 @@ code-editor.code-input {
 
 $readonly-disabled-targets: (
   "input.form-input",
-  "textarea.file-content",
   ".command-input-textarea"
 );
 

@@ -70,8 +70,8 @@ setRouteFromUrl url =
                                 (Flow.async <| Actions.listenAndProcessStepStatus projectId mCommit)
                                     |> Flow.seq
                                         (case mHighlight of
-                                            Just { id, path } ->
-                                                Actions.deepOpenEntryOrDefer id path
+                                            Just { id, path, range } ->
+                                                Actions.deepOpenEntryOrDefer id path range
 
                                             Nothing ->
                                                 Flow.pure ()

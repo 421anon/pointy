@@ -155,7 +155,7 @@ viewSection model sectionName entry steps =
                             cloneActions ++ uploadActions
                 in
                 editActions ++ runActions
-        , directorySection = FileBrowser.viewDirectorySection spec
+        , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
         , onRecordClick =
             \record ->
