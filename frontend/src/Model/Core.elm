@@ -64,6 +64,8 @@ type alias Table a =
     , isOpen : Bool
     , showHiddenRecords : Bool
     , edited : Maybe a
+    , drafts : Dict Int a
+    , newDraft : Maybe a
     , addMode : AddMode
     , nameEditOnly : Bool
     , inspected : Bool
@@ -229,6 +231,8 @@ initialTable =
     , isOpen = True
     , showHiddenRecords = False
     , edited = Nothing
+    , drafts = Dict.empty
+    , newDraft = Nothing
     , addMode = AddNew
     , nameEditOnly = False
     , inspected = False

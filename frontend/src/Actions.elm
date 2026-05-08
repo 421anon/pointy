@@ -51,6 +51,14 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
     let
         updateTable t =
             let
+                stashed =
+                    case ( t.inspected, t.edited ) of
+                        ( False, Just r ) ->
+                            set (draftAt r.id) (Just r) t
+
+                        _ ->
+                            t
+
                 mRecordToEdit =
                     try (success << by .id mRecordId) t.records
 
@@ -61,7 +69,7 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
                     (t.edited |> Maybe.andThen .id) == Nothing
 
                 togglingCurrentRecord =
-                    mRecordToEdit == t.edited
+                    (t.edited |> Maybe.map .id) == Just mRecordId
 
                 clickedNewRecord =
                     mRecordToEdit == Nothing
@@ -73,10 +81,16 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
                     if formIsOpen && not switchingMode && (togglingCurrentRecord || (clickedNewRecord && notEditingExistingRecord)) then
                         Nothing
 
-                    else
+                    else if inspected then
                         Just (Maybe.withDefault (TableSpec.getDefaultRecord spec) mRecordToEdit)
+
+                    else
+                        get (draftAt mRecordId) stashed
+                            |> Maybe.orElse mRecordToEdit
+                            |> Maybe.withDefault (TableSpec.getDefaultRecord spec)
+                            |> Just
             in
-            { t | nameEditOnly = False, inspected = inspected, edited = newedited }
+            { stashed | nameEditOnly = False, inspected = inspected, edited = newedited }
 
         scrollAction =
             Flow.attemptTask (Scroll.scrollY (Maybe.unwrap ("table-" ++ TableSpec.getName spec) String.fromInt mRecordId) 0 0)
@@ -421,7 +435,19 @@ upsertStep spec =
 
 endRecordEdit : A_Traversal s (Table (BaseRecord a)) -> Flow s ()
 endRecordEdit lens =
-    Flow.over (remkT lens) (\t -> { t | edited = Nothing, addMode = AddNew })
+    Flow.over (remkT lens)
+        (\t ->
+            let
+                cleared =
+                    case ( t.inspected, t.edited ) of
+                        ( False, Just r ) ->
+                            set (draftAt r.id) Nothing t
+
+                        _ ->
+                            t
+            in
+            { cleared | edited = Nothing, addMode = AddNew }
+        )
 
 
 onUrlRequest : Browser.UrlRequest -> Flow Model ()

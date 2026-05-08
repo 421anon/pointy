@@ -114,6 +114,26 @@ edited =
     lens ".edited" .edited (\t record -> { t | edited = record })
 
 
+drafts : Lens ls { a | drafts : b } b x y
+drafts =
+    lens ".drafts" .drafts (\t drafts_ -> { t | drafts = drafts_ })
+
+
+newDraft : Lens ls { a | newDraft : Maybe b } (Maybe b) x y
+newDraft =
+    lens ".newDraft" .newDraft (\t record -> { t | newDraft = record })
+
+
+draftAt : Maybe Int -> Lens ls (Table a) (Maybe a) x y
+draftAt mId =
+    case mId of
+        Just rid ->
+            drafts << Dict.Accessors.at_ String.fromInt rid
+
+        Nothing ->
+            newDraft
+
+
 stepConfig : Lens ls Model (ApiData StepConfig) x y
 stepConfig =
     lens ".stepConfig" Model.getStepConfig (\(Model m) stepConfig_ -> Model { m | stepConfig = stepConfig_ })
