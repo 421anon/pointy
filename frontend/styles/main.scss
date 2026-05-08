@@ -1289,7 +1289,8 @@ select.field-changed,
   height: 24px;
 }
 
-.tag-wrapper:has(.list-field-input) {
+.tag-wrapper:has(.list-field-input),
+.tag-wrapper.disabled {
   min-height: 34px;
 }
 
