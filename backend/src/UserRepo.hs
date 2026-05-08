@@ -308,7 +308,7 @@ commitAndPushChanges (WriteRepoContext worktreePath) message = ExceptT $ do
             (statusCode, statusOut, statusErr) <- runGitIn worktreePath ["status", "--porcelain"]
             case statusCode of
                 ExitFailure code -> return $ Left $ formatGitFailure "git status" code statusOut statusErr
-                ExitSuccess | null statusOut -> return $ Left "No changes to commit; nothing was pushed."
+                ExitSuccess | null statusOut -> return $ Right ()
                 ExitSuccess -> do
                     (commitCode, commitOut, commitErr) <- runGitIn worktreePath ["commit", "-m", message]
                     case commitCode of
