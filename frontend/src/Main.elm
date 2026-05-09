@@ -62,6 +62,7 @@ setRouteFromUrl url =
                         (Flow.over (Model.Lenses.projects << Model.Lenses.records) Api.ApiData.toLoading
                             |> Flow.seq Actions.loadStepConfig
                             |> Flow.seq Actions.loadProjects
+                            |> Flow.seq (Flow.setAll Model.Lenses.isSwitchingCommit False)
                             |> Flow.when (mOldCommit /= mNewCommit)
                         )
                     |> Flow.seq

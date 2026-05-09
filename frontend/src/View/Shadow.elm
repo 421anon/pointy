@@ -7,7 +7,9 @@ import Dict
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
+import Html.Events as Events
 import Html.Extra as Html
+import Json.Decode as Decode
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses exposing (mCommit, route)
 import Model.Shadow exposing (StepConfigEntry, StepType(..))
@@ -16,7 +18,7 @@ import Route
 import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
-import View.Lib exposing (viewPage, viewSearchBox)
+import View.Lib exposing (viewLoading, viewPage, viewSearchBox)
 import View.Table exposing (viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
@@ -35,19 +37,22 @@ viewProject model proj =
                     ]
                 , Html.viewMaybe
                     (\commit ->
+                        let
+                            currentVersionRoute =
+                                case Model.getRoute model of
+                                    Route.Project params ->
+                                        Route.Project { params | mCommit = Nothing }
+
+                                    other ->
+                                        other
+                        in
                         Html.div [ Html.Attributes.class "read-only-badge" ]
                             [ Html.text "Read-only view (Commit: "
                             , Html.text commit
                             , Html.text ") "
                             , Html.a
-                                [ Route.href
-                                    (case Model.getRoute model of
-                                        Route.Project params ->
-                                            Route.Project { params | mCommit = Nothing }
-
-                                        other ->
-                                            other
-                                    )
+                                [ Route.href currentVersionRoute
+                                , Events.preventDefaultOn "click" (Decode.succeed ( Actions.viewCurrentVersion currentVersionRoute, True ))
                                 ]
                                 [ Html.text "View current version" ]
                             ]
@@ -57,19 +62,27 @@ viewProject model proj =
             , viewSearchBox model
             ]
         , content =
-            Html.div [ Html.Attributes.class "sections" ]
-                (proj.tables
-                    |> Dict.toList
-                    |> List.filterMap
-                        (\( sectionName, steps ) ->
-                            Model.getStepConfig model
-                                |> ApiData.toMaybe
-                                |> Maybe.andThen (Dict.get sectionName)
-                                |> Maybe.map (\entry -> ( sectionName, entry, steps ))
+            let
+                sections =
+                    Html.div [ Html.Attributes.class "sections" ]
+                        (proj.tables
+                            |> Dict.toList
+                            |> List.filterMap
+                                (\( sectionName, steps ) ->
+                                    Model.getStepConfig model
+                                        |> ApiData.toMaybe
+                                        |> Maybe.andThen (Dict.get sectionName)
+                                        |> Maybe.map (\entry -> ( sectionName, entry, steps ))
+                                )
+                            |> List.sortBy (\( name, entry, _ ) -> ( entry.sortKey |> Maybe.withDefault 2147483647, name ))
+                            |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry steps)
                         )
-                    |> List.sortBy (\( name, entry, _ ) -> ( entry.sortKey |> Maybe.withDefault 2147483647, name ))
-                    |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry steps)
-                )
+            in
+            if Model.getIsSwitchingCommit model then
+                viewLoading sections
+
+            else
+                sections
         }
 
 
