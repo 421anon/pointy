@@ -282,6 +282,7 @@ type alias FileView =
     , selectedRange : Maybe Route.LineRange
     }
 
+
 type alias DirectoryFile =
     { content : ApiData String
     , size : Int
@@ -381,8 +382,29 @@ updateStepRecordTable new old =
                         (\newRecord -> newRecord.id == oldRecord.id)
                         (\newRecord -> { newRecord | runState = oldRecord.runState })
                 )
+
+        mergedRecords =
+            ApiData.update mergeRecords new.records old.records
+
+        refreshedEdited =
+            if old.inspected then
+                old.edited
+                    |> Maybe.andThen .id
+                    |> Maybe.andThen
+                        (\editedId ->
+                            mergedRecords
+                                |> ApiData.toMaybe
+                                |> Maybe.andThen (List.find (\record -> record.id == Just editedId))
+                        )
+
+            else
+                old.edited
     in
-    { old | records = ApiData.update mergeRecords new.records old.records }
+    { old
+        | records = mergedRecords
+        , edited = refreshedEdited
+        , inspected = old.inspected && Maybe.isJust refreshedEdited
+    }
 
 
 updateProjectRecordList : List ProjectRecord -> List ProjectRecord -> List ProjectRecord

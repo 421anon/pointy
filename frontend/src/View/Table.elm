@@ -598,7 +598,7 @@ viewAddOrEditRecordForm model spec table record =
                 , placeholder = TableSpec.getDisplayName spec ++ " name"
                 , value = record.name
                 , onInput = Actions.editRecordName (TableSpec.getLens spec)
-                , hasChanged = fieldChanged .name record.name originalRecord
+                , hasChanged = not readOnly && fieldChanged .name record.name originalRecord
                 , readOnly = readOnly
                 , id = TableSpec.getName spec ++ "-name-input"
                 }
@@ -806,7 +806,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                            )
 
                 fieldHasChanged =
-                    fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                    not readOnly && fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
 
                 buildListField listLens tagStrings addTag =
                     listField
@@ -935,7 +935,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 , placeholder = fieldLabel
                                 , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                 , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                                , hasChanged = fieldHasChanged
                                 , readOnly = readOnly
                                 , id = paramName ++ "-input"
                                 }
@@ -947,7 +947,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 , placeholder = ""
                                 , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                 , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                                , hasChanged = fieldHasChanged
                                 , readOnly = readOnly
                                 , id = paramName ++ "-input"
                                 }
@@ -959,7 +959,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 , placeholder = fieldLabel
                                 , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                 , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                                , hasChanged = fieldHasChanged
                                 , readOnly = readOnly
                                 , id = paramName ++ "-input"
                                 , commandPrefix = cmdPrefix
@@ -971,7 +971,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 , mHint = fieldHint
                                 , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                 , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                                , hasChanged = fieldHasChanged
                                 , readOnly = readOnly
                                 , id = paramName ++ "-input"
                                 , language = language
@@ -1053,7 +1053,7 @@ viewStepNoteField model readOnly tableId =
             , placeholder "Notes about this step..."
             , class "form-input"
             , class "form-input-note"
-            , classList [ ( "field-changed", fieldChanged .note currentNote originalRecord ) ]
+            , classList [ ( "field-changed", not readOnly && fieldChanged .note currentNote originalRecord ) ]
             , readonly readOnly
             , id (tableId ++ "-note-input")
             ]
