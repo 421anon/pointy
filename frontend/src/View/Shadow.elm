@@ -1,17 +1,15 @@
 module View.Shadow exposing (viewProject)
 
-import Accessors exposing (has, just, try)
+import Accessors exposing (get, has, just, try)
 import Actions
 import Api.ApiData as ApiData
 import Dict
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
-import Html.Events as Events
 import Html.Extra as Html
-import Json.Decode as Decode
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses exposing (mCommit, route)
+import Model.Lenses exposing (currentProject, mCommit, route)
 import Model.Shadow exposing (StepConfigEntry, StepType(..))
 import Model.TableSpec as TableSpec
 import Route
@@ -51,9 +49,7 @@ viewProject model proj =
                             , Html.text commit
                             , Html.text ") "
                             , Html.a
-                                [ Route.href currentVersionRoute
-                                , Events.preventDefaultOn "click" (Decode.succeed ( Actions.viewCurrentVersion currentVersionRoute, True ))
-                                ]
+                                [ Route.href currentVersionRoute ]
                                 [ Html.text "View current version" ]
                             ]
                     )
@@ -78,11 +74,15 @@ viewProject model proj =
                             |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry steps)
                         )
             in
-            if Model.getIsSwitchingCommit model then
-                viewLoading sections
+            case ( Model.getCommitHash model, get currentProject model ) of
+                ( ApiData.Loading _, _ ) ->
+                    viewLoading sections
 
-            else
-                sections
+                ( _, ApiData.Loading _ ) ->
+                    viewLoading sections
+
+                _ ->
+                    sections
         }
 
 

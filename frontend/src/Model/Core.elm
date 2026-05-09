@@ -131,7 +131,6 @@ type Model
         , uploadProgress : Dict Int UploadProgress
         , stepLogs : Dict String (ApiData String)
         , stepStatusHooks : Dict Int (Flow Model ())
-        , isSwitchingCommit : Bool
         }
 
 
@@ -212,10 +211,6 @@ getStepStatusHooks : Model -> Dict Int (Flow Model ())
 getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
-getIsSwitchingCommit : Model -> Bool
-getIsSwitchingCommit (Model model) =
-    model.isSwitchingCommit
-
 
 dndSystem : DnDList.System a DnDList.Msg
 dndSystem =
@@ -278,7 +273,6 @@ initialModel key route flags =
         , stepLogs = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
-        , isSwitchingCommit = False
         }
 
 
@@ -287,6 +281,7 @@ type alias FileView =
     , zoom : Float
     , selectedRange : Maybe Route.LineRange
     }
+
 
 type alias DirectoryFile =
     { content : ApiData String

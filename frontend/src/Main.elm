@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Accessors exposing (just, set, try)
+import Accessors exposing (each, just, set, try)
 import Actions
 import Api.ApiData exposing (success)
 import Browser.Navigation as Nav
@@ -9,7 +9,7 @@ import Flow exposing (Flow)
 import Http
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (currentProjectId, route, stepConfig)
+import Model.Lenses exposing (commitHash, currentProjectId, mCommit, projectStepRecords, projects, records, route, runState, stepConfig)
 import Route
 import Specs
 import Url exposing (Url)
@@ -52,17 +52,20 @@ setRouteFromUrl url =
             (\model ->
                 let
                     mOldCommit =
-                        try (route << Route.project << Model.Lenses.mCommit << just) model
+                        try (route << Route.project << mCommit << just) model
 
                     mNewCommit =
-                        try (Route.project << Model.Lenses.mCommit << just) newRoute
+                        try (Route.project << mCommit << just) newRoute
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq
-                        (Flow.over (Model.Lenses.projects << Model.Lenses.records) Api.ApiData.toLoading
+                        (Flow.setAll
+                            (projects << records << success << each << projectStepRecords << runState)
+                            (Api.ApiData.loading Nothing)
+                            |> Flow.seq (Flow.over (projects << records) Api.ApiData.toLoading)
+                            |> Flow.seq (Flow.over commitHash Api.ApiData.toLoading)
                             |> Flow.seq Actions.loadStepConfig
                             |> Flow.seq Actions.loadProjects
-                            |> Flow.seq (Flow.setAll Model.Lenses.isSwitchingCommit False)
                             |> Flow.when (mOldCommit /= mNewCommit)
                         )
                     |> Flow.seq

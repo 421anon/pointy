@@ -46,7 +46,7 @@ module.exports = {
     historyApiFallback: true,
     proxy: [
       {
-        context: ["/api", "/backend", "/docs"],
+        context: ["/backend", "/docs"],
         target: process.env.PROXY_TARGET || "http://localhost:8080",
         secure: !process.env.PROXY_TARGET, // disable SSL for local dev
         changeOrigin: true,

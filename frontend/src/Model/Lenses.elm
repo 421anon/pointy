@@ -143,10 +143,6 @@ commitHash : Lens ls Model (ApiData String) x y
 commitHash =
     lens ".commitHash" Model.getCommitHash (\(Model m) commitHash_ -> Model { m | commitHash = commitHash_ })
 
-isSwitchingCommit : Lens ls Model Bool x y
-isSwitchingCommit =
-    lens ".isSwitchingCommit" Model.getIsSwitchingCommit (\(Model m) isSwitchingCommit_ -> Model { m | isSwitchingCommit = isSwitchingCommit_ })
-
 
 userRepoInfo : Lens ls Model (ApiData UserRepoInfo) x y
 userRepoInfo =

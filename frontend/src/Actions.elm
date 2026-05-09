@@ -465,11 +465,6 @@ goToRoute : Route -> Flow Model ()
 goToRoute route =
     Flow.get |> Flow.andThen (\model -> Flow.lift (Nav.pushUrl (Model.getKey model) (Route.toString route)))
 
-viewCurrentVersion : Route -> Flow Model ()
-viewCurrentVersion targetRoute =
-    Flow.setAll isSwitchingCommit True
-        |> Flow.seq (goToRoute targetRoute)
-
 
 clearStepLog : Int -> Maybe String -> Flow Model ()
 clearStepLog id commit =
