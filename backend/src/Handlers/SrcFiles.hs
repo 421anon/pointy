@@ -17,6 +17,7 @@ import GHC.Generics (Generic)
 import Handlers.Store (DirEntry, downloadHandler, listHandler)
 import Servant (Handler, Header, Headers, ServerError (..), err500, throwError)
 import qualified Servant.Types.SourceT as S
+import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
 import UserRepo (runNixInRepo, withReadRepoTransaction)
 
@@ -45,7 +46,10 @@ listSrcFilesHandler :: Int -> Maybe FilePath -> Handler [DirEntry]
 listSrcFilesHandler stepId mRel = do
     basePath <- getSrcFilesBasePath
     let fullBasePath = T.unpack basePath </> show stepId
-    listHandler (T.pack fullBasePath) mRel
+    exists <- liftIO $ doesDirectoryExist fullBasePath
+    if exists
+        then listHandler (T.pack fullBasePath) mRel
+        else return []
 
 downloadSrcFilesHandler :: Int -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadSrcFilesHandler stepId rel = do
