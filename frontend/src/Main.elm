@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Accessors exposing (just, set, try)
+import Accessors exposing (each, just, set, try)
 import Actions
 import Api.ApiData exposing (success)
 import Browser.Navigation as Nav
@@ -59,7 +59,8 @@ setRouteFromUrl url =
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq
-                        (Flow.over (Model.Lenses.projects << Model.Lenses.records) Api.ApiData.toLoading
+                        (Flow.over (Model.Lenses.projects << Model.Lenses.records << success << each << Model.Lenses.projectStepRecords << Model.Lenses.runState) Api.ApiData.toLoading
+                            |> Flow.seq (Flow.over (Model.Lenses.projects << Model.Lenses.records) Api.ApiData.toLoading)
                             |> Flow.seq Actions.loadStepConfig
                             |> Flow.seq Actions.loadProjects
                             |> Flow.when (mOldCommit /= mNewCommit)
