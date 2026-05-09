@@ -769,7 +769,19 @@ toggleSrcEntry recordId mOpen path =
                 (\_ ->
                     callApi (allStepTables << srcFilesChildrenAt recordId path)
                         (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId path)
-                        |> Flow.return ()
+                        |> Flow.andThen
+                            (\result ->
+                                case ( List.isEmpty path, result ) of
+                                    ( True, Ok dict ) ->
+                                        if Dict.isEmpty dict then
+                                            addToast False "No source files for this step"
+
+                                        else
+                                            Flow.setAll isExpanded True
+
+                                    _ ->
+                                        Flow.pure ()
+                            )
                 )
 
         fileAction =
@@ -792,9 +804,16 @@ toggleSrcEntry recordId mOpen path =
             let
                 newlyExpanded =
                     Maybe.withDefault (not wasExpanded) mOpen
+
+                immediateExpand =
+                    if List.isEmpty path && newlyExpanded then
+                        False
+
+                    else
+                        newlyExpanded
             in
             Flow.setAll (allStepTables << srcFilesChildrenAt recordId path) NotAsked
-                |> Flow.seq (Flow.setAll isExpanded newlyExpanded)
+                |> Flow.seq (Flow.setAll isExpanded immediateExpand)
                 |> Flow.seq (Flow.when newlyExpanded <| Flow.batchM [ folderAction, fileAction ])
                 |> Flow.return newlyExpanded
         )
