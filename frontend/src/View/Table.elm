@@ -1074,6 +1074,14 @@ viewLabelWithHint { label, mHint, htmlFor } =
                 ]
 
 
+formField : { r | label : String, mHint : Maybe String, id : String } -> Html (Flow Model ()) -> Html (Flow Model ())
+formField config inputEl =
+    Html.div [ class "form-field" ]
+        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
+        , inputEl
+        ]
+
+
 textField :
     { label : String
     , mHint : Maybe String
@@ -1086,9 +1094,8 @@ textField :
     }
     -> Html (Flow Model ())
 textField config =
-    Html.div [ class "form-field" ]
-        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
-        , Html.input
+    formField config
+        (Html.input
             [ type_ "text"
             , value config.value
             , Events.onInput config.onInput
@@ -1099,7 +1106,7 @@ textField config =
             , id config.id
             ]
             []
-        ]
+        )
 
 
 commandField :
@@ -1115,9 +1122,8 @@ commandField :
     }
     -> Html (Flow Model ())
 commandField config =
-    Html.div [ class "form-field" ]
-        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
-        , Html.div
+    formField config
+        (Html.div
             [ class "command-input"
             , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
             ]
@@ -1135,7 +1141,7 @@ commandField config =
                 ]
                 []
             ]
-        ]
+        )
 
 
 textArea :
@@ -1150,9 +1156,8 @@ textArea :
     }
     -> Html (Flow Model ())
 textArea config =
-    Html.div [ class "form-field" ]
-        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
-        , Html.textarea
+    formField config
+        (Html.textarea
             [ value config.value
             , Events.onInput config.onInput
             , placeholder config.placeholder
@@ -1165,7 +1170,7 @@ textArea config =
             , attribute "data-auto-resize" "true"
             ]
             []
-        ]
+        )
 
 
 codeField :
@@ -1180,9 +1185,8 @@ codeField :
     }
     -> Html (Flow Model ())
 codeField config =
-    Html.div [ class "form-field" ]
-        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
-        , Html.node "code-editor"
+    formField config
+        (Html.node "code-editor"
             [ value config.value
             , Events.onInput config.onInput
             , class "code-input"
@@ -1193,7 +1197,7 @@ codeField config =
             , attribute "aria-label" config.label
             ]
             []
-        ]
+        )
 
 
 listField :
@@ -1214,9 +1218,8 @@ listField :
     }
     -> Html (Flow Model ())
 listField config =
-    Html.div [ class "form-field" ]
-        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
-        , Html.Keyed.node "div"
+    formField config
+        (Html.Keyed.node "div"
             [ class "tag-wrapper"
             , class "form-input"
             , classList [ ( "field-changed", config.hasChanged ) ]
@@ -1318,7 +1321,7 @@ listField config =
                      )
                    ]
             )
-        ]
+        )
 
 
 fieldChanged : (b -> c) -> c -> Maybe b -> Bool

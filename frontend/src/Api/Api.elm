@@ -92,6 +92,16 @@ request method url body =
             }
 
 
+stepAction : String -> Int -> Maybe String -> Flow s (Result Http.Error ())
+stepAction action id commit =
+    Flow.lift <|
+        Http.post
+            { url = appendCommitQuery ("/backend/" ++ action ++ "?id=" ++ String.fromInt id) commit
+            , body = Http.emptyBody
+            , expect = Http.expectStringResponse identity (stringResponse (always ()))
+            }
+
+
 createProject : StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
 createProject stepConfig record =
     Flow.lift <|
@@ -175,37 +185,18 @@ fetchCommitHash =
 
 deleteProject : Int -> Flow s (Result Http.Error ())
 deleteProject projectId =
-    Flow.lift <|
-        Http.request
-            { method = "DELETE"
-            , headers = []
-            , url = "/backend/projects?id=" ++ String.fromInt projectId
-            , body = Http.emptyBody
-            , expect = Http.expectWhatever identity
-            , timeout = Nothing
-            , tracker = Nothing
-            }
+    request "DELETE" ("/backend/projects?id=" ++ String.fromInt projectId) Http.emptyBody
 
 
 assignRecordToProject : Int -> Int -> Flow s (Result Http.Error ())
 assignRecordToProject projectId recordId =
-    let
-        url =
-            "/backend/project-entities?project_id="
-                ++ String.fromInt projectId
-                ++ "&entity_id="
-                ++ String.fromInt recordId
-    in
-    Flow.lift <|
-        Http.request
-            { method = "POST"
-            , headers = []
-            , url = url
-            , body = Http.emptyBody
-            , expect = Http.expectWhatever identity
-            , timeout = Nothing
-            , tracker = Nothing
-            }
+    request "POST"
+        ("/backend/project-entities?project_id="
+            ++ String.fromInt projectId
+            ++ "&entity_id="
+            ++ String.fromInt recordId
+        )
+        Http.emptyBody
 
 
 batchAssignRecordsToProject : Int -> List Int -> Flow s (Result Http.Error ())
@@ -215,67 +206,28 @@ batchAssignRecordsToProject projectId recordIds =
             "/backend/project-entities/batch?project_id="
                 ++ String.fromInt projectId
     in
-    Flow.lift <|
-        Http.request
-            { method = "POST"
-            , headers = []
-            , url = url
-            , body = Http.jsonBody (Json.Encode.list Json.Encode.int recordIds)
-            , expect = Http.expectWhatever identity
-            , timeout = Nothing
-            , tracker = Nothing
-            }
+    request "POST" url (Http.jsonBody (Json.Encode.list Json.Encode.int recordIds))
 
 
 unassignRecordFromProject : Int -> Int -> Flow s (Result Http.Error ())
 unassignRecordFromProject projectId recordId =
-    let
-        url =
-            "/backend/project-entities?project_id="
-                ++ String.fromInt projectId
-                ++ "&entity_id="
-                ++ String.fromInt recordId
-    in
-    Flow.lift <|
-        Http.request
-            { method = "DELETE"
-            , headers = []
-            , url = url
-            , body = Http.emptyBody
-            , expect = Http.expectWhatever identity
-            , timeout = Nothing
-            , tracker = Nothing
-            }
+    request "DELETE"
+        ("/backend/project-entities?project_id="
+            ++ String.fromInt projectId
+            ++ "&entity_id="
+            ++ String.fromInt recordId
+        )
+        Http.emptyBody
 
 
 runStep : Int -> Maybe String -> Flow s (Result Http.Error ())
 runStep id commit =
-    let
-        requestUrl =
-            appendCommitQuery ("/backend/run-step?id=" ++ String.fromInt id) commit
-    in
-    Flow.lift <|
-        Http.post
-            { url = requestUrl
-            , body = Http.emptyBody
-            , expect =
-                Http.expectStringResponse identity (stringResponse (always ()))
-            }
+    stepAction "run-step" id commit
 
 
 stopStep : Int -> Maybe String -> Flow s (Result Http.Error ())
 stopStep id commit =
-    let
-        requestUrl =
-            appendCommitQuery ("/backend/stop-step?id=" ++ String.fromInt id) commit
-    in
-    Flow.lift <|
-        Http.post
-            { url = requestUrl
-            , body = Http.emptyBody
-            , expect =
-                Http.expectStringResponse identity (stringResponse (always ()))
-            }
+    stepAction "stop-step" id commit
 
 
 fetchStepLog : Int -> Maybe String -> Flow s (Result Http.Error String)
