@@ -119,20 +119,29 @@ editRecordName lens value =
     Flow.over (remkT lens << edited << just) (\record -> { record | name = value })
 
 
-createProject : ProjectRecord -> FlowError Http.Error Model ProjectRecord
-createProject record =
-    Flow.forAll (stepConfig << success)
-        (\stepConfig_ ->
-            Flow.forAll nextClientId
-                (\cid ->
-                    Flow.over nextClientId ((+) 1)
-                        |> Flow.seq (Flow.over (projects << records << success) (\rs -> rs ++ [ { record | id = Nothing, clientId = Just cid, isUpdating = True } ]))
-                        |> Flow.seq (endRecordEdit projects)
-                        |> Flow.seq
-                            (callApi void (Api.createProject stepConfig_ record)
-                                |> FlowError.andThen
-                                    (\newRecord ->
-                                        Flow.over (projects << records << success)
+optimisticCreate :
+    A_Traversal Model (Table (BaseRecord a))
+    -> BaseRecord a
+    -> FlowError Http.Error Model (BaseRecord a)
+    -> FlowError Http.Error Model (BaseRecord a)
+optimisticCreate tableLens record apiCall =
+    let
+        recordsLens =
+            remkT tableLens << records << success
+    in
+    Flow.forAll nextClientId
+        (\cid ->
+            Flow.over nextClientId ((+) 1)
+                |> Flow.seq (Flow.over recordsLens (\rs -> rs ++ [ { record | id = Nothing, clientId = Just cid, isUpdating = True } ]))
+                |> Flow.seq (endRecordEdit tableLens)
+                |> Flow.seq
+                    (callApi void apiCall
+                        |> FlowError.andThen
+                            (\newRecord ->
+                                Flow.pure newRecord.id
+                                    |> Flow.assertJust
+                                    |> Flow.seq
+                                        (Flow.over recordsLens
                                             (List.map
                                                 (\r ->
                                                     if r.clientId == Just cid then
@@ -142,16 +151,27 @@ createProject record =
                                                         r
                                                 )
                                             )
-                                            |> Flow.seq refetchCommitHash
-                                            |> Flow.return newRecord
-                                    )
-                                |> FlowError.catchError
-                                    (\e ->
-                                        Flow.over (projects << records << success) (List.filter (\r -> r.clientId /= Just cid))
-                                            |> Flow.seq (FlowError.throwError e)
-                                    )
+                                        )
+                                    |> Flow.seq refetchCommitHash
+                                    |> Flow.return newRecord
                             )
-                )
+                        |> FlowError.catchError
+                            (\e ->
+                                Flow.over recordsLens (List.filter (\r -> r.clientId /= Just cid))
+                                    |> Flow.seq (FlowError.throwError e)
+                            )
+                    )
+        )
+
+
+createProject : ProjectRecord -> FlowError Http.Error Model ProjectRecord
+createProject record =
+    Flow.forAll (stepConfig << success)
+        (\stepConfig_ ->
+            optimisticCreate
+                projects
+                record
+                (Api.createProject stepConfig_ record)
         )
 
 
@@ -165,43 +185,30 @@ createStep spec record =
                         tableLens =
                             projects << records << success << by .id (Just projectId) << tableInProject (TableSpec.getName spec)
                     in
-                    Flow.forAll nextClientId
-                        (\cid ->
-                            Flow.over nextClientId ((+) 1)
-                                |> Flow.seq (Flow.over (tableLens << records << success) (\rs -> rs ++ [ { record | id = Nothing, clientId = Just cid, isUpdating = True } ]))
-                                |> Flow.seq (endRecordEdit tableLens)
-                                |> Flow.seq
-                                    (callApi void (Api.createStep (Just projectId) stepType record)
-                                        |> FlowError.andThen
-                                            (\newRecord ->
-                                                Flow.pure newRecord.id
-                                                    |> Flow.assertJust
-                                                    |> Flow.seq
-                                                        (Flow.over (tableLens << records << success)
-                                                            (List.map
-                                                                (\r ->
-                                                                    if r.clientId == Just cid then
-                                                                        { newRecord | clientId = Nothing }
-
-                                                                    else
-                                                                        r
-                                                                )
-                                                            )
-                                                        )
-                                                    |> Flow.seq refetchCommitHash
-                                                    |> Flow.return newRecord
-                                            )
-                                        |> FlowError.catchError
-                                            (\e ->
-                                                Flow.over (tableLens << records << success) (List.filter (\r -> r.clientId /= Just cid))
-                                                    |> Flow.seq (FlowError.throwError e)
-                                            )
-                                    )
-                        )
+                    optimisticCreate
+                        tableLens
+                        record
+                        (Api.createStep (Just projectId) stepType record)
 
                 _ ->
                     FlowError.throwError (Http.BadBody "Invalid step table specification")
         )
+
+
+persistRecordChange : Maybe Int -> TableSpec (BaseRecord a) -> BaseRecord a -> FlowError Http.Error Model ()
+persistRecordChange mProjectId spec record =
+    case ( mProjectId, getTag spec, record.id ) of
+        ( Just projectId, _, _ ) ->
+            saveProject projectId
+
+        ( Nothing, TagProjects, Just id ) ->
+            saveProject id
+
+        ( Nothing, TagSteps _ _, _ ) ->
+            callApi void (Api.saveRecord spec record)
+
+        _ ->
+            Flow.pure (Ok ())
 
 
 toggleRecordVisibility : TableSpec (BaseRecord a) -> Maybe Int -> Maybe Bool -> BaseRecord a -> Flow Model ()
@@ -214,20 +221,7 @@ toggleRecordVisibility spec mProjectId mHidden record =
             TableSpec.getLens spec << records << success << by .id hiddenRecord.id
     in
     Flow.setAll recordLens hiddenRecord
-        |> Flow.seq
-            (case ( mProjectId, getTag spec, hiddenRecord.id ) of
-                ( Just projectId, _, _ ) ->
-                    saveProject projectId
-
-                ( Nothing, TagProjects, Just id ) ->
-                    saveProject id
-
-                ( Nothing, TagSteps _ _, _ ) ->
-                    callApi void (Api.saveRecord spec hiddenRecord)
-
-                _ ->
-                    Flow.pure (Ok ())
-            )
+        |> Flow.seq (persistRecordChange mProjectId spec hiddenRecord)
         |> FlowError.foldResult
             (\_ -> refetchCommitHash)
             (\_ -> Flow.setAll recordLens record)
@@ -351,17 +345,7 @@ upsertProject spec =
                                     Flow.pure ()
 
                                 ( Just _, _ ) ->
-                                    let
-                                        clearUpdating =
-                                            Flow.over (lens << records << success << by .id edited_.id << isUpdating) (always False)
-                                                |> Flow.seq refetchCommitHash
-                                    in
-                                    Flow.over (lens << records << success) (List.updateIf (\r -> r.id == edited_.id) (always { edited_ | isUpdating = True }))
-                                        |> Flow.seq (endRecordEdit lens)
-                                        |> Flow.seq
-                                            (callApi void (Api.saveRecord spec edited_)
-                                                |> FlowError.foldResult (always clearUpdating) (always clearUpdating)
-                                            )
+                                    saveExistingRecord lens edited_ (always edited_) spec
                         )
             )
 
@@ -400,33 +384,17 @@ upsertStep spec =
                                                         argsChanged =
                                                             originalArgs /= Just edited_.args
 
-                                                        clearUpdating =
-                                                            Flow.over (lens << records << success << by .id (Just stepId) << isUpdating) (always False)
-                                                                |> Flow.seq refetchCommitHash
-                                                    in
-                                                    Flow.when argsChanged (Flow.setAll (lens << recordById stepId << runState) (ApiData.loading Nothing))
-                                                        |> Flow.seq
-                                                            (Flow.over (lens << records << success)
-                                                                (List.updateIf
-                                                                    (\r -> r.id == Just stepId)
-                                                                    (\r ->
-                                                                        { edited_
-                                                                            | isUpdating = True
-                                                                            , runState =
-                                                                                if argsChanged then
-                                                                                    ApiData.loading Nothing
+                                                        mergeFn r =
+                                                            { edited_
+                                                                | runState =
+                                                                    if argsChanged then
+                                                                        ApiData.loading Nothing
 
-                                                                                else
-                                                                                    r.runState
-                                                                        }
-                                                                    )
-                                                                )
-                                                                |> Flow.seq (endRecordEdit lens)
-                                                                |> Flow.seq
-                                                                    (callApi void (Api.saveRecord spec edited_)
-                                                                        |> FlowError.foldResult (always clearUpdating) (always clearUpdating)
-                                                                    )
-                                                            )
+                                                                    else
+                                                                        r.runState
+                                                            }
+                                                    in
+                                                    saveExistingRecord lens edited_ mergeFn spec
                                                 )
                                 )
                         )
@@ -448,6 +416,30 @@ endRecordEdit lens =
             in
             { cleared | edited = Nothing, addMode = AddNew }
         )
+
+
+saveExistingRecord : A_Traversal Model (Table (BaseRecord a)) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model ()
+saveExistingRecord lens record mergeFn spec =
+    let
+        clearUpdating =
+            Flow.over (remkT lens << records << success << by .id record.id << isUpdating) (always False)
+                |> Flow.seq refetchCommitHash
+    in
+    Flow.over (remkT lens << records << success)
+        (List.updateIf (\r -> r.id == record.id)
+            (\r ->
+                let
+                    m =
+                        mergeFn r
+                in
+                { m | isUpdating = True }
+            )
+        )
+        |> Flow.seq (endRecordEdit lens)
+        |> Flow.seq
+            (callApi void (Api.saveRecord spec record)
+                |> FlowError.foldResult (always clearUpdating) (always clearUpdating)
+            )
 
 
 onUrlRequest : Browser.UrlRequest -> Flow Model ()
@@ -666,6 +658,12 @@ downloadSrcFile id path =
     Flow.lift (Nav.load ("/backend/src-files/download?id=" ++ String.fromInt id ++ "&path=" ++ path))
 
 
+shouldSkipFileContents : { r | mimeType : Maybe String } -> Bool
+shouldSkipFileContents file_ =
+    has (mimeType << just << where_ (String.startsWith "image/")) file_
+        || has (mimeType << just << where_ (String.startsWith "text/html")) file_
+
+
 toggleFile : Int -> List String -> Flow Model ()
 toggleFile recordId path =
     toggleOutputEntry recordId Nothing path |> Flow.return ()
@@ -725,12 +723,7 @@ toggleOutputEntry recordId mOpen path =
                 (\outPath_ ->
                     Flow.forAll (allStepTables << directoryItemAtPath recordId path << file)
                         (\file_ ->
-                            Flow.when
-                                (not
-                                    (has (mimeType << just << where_ (String.startsWith "image/")) file_
-                                        || has (mimeType << just << where_ (String.startsWith "text/html")) file_
-                                    )
-                                )
+                            Flow.when (not (shouldSkipFileContents file_))
                                 (callApi (allStepTables << fileContentAt recordId path)
                                     (Api.fetchFileContents outPath_ path)
                                     |> Flow.return ()
@@ -775,12 +768,7 @@ toggleSrcEntry recordId mOpen path =
         fileAction =
             Flow.forAll (allStepTables << srcFilesItemAtPath recordId path << file)
                 (\file_ ->
-                    Flow.when
-                        (not
-                            (has (mimeType << just << where_ (String.startsWith "image/")) file_
-                                || has (mimeType << just << where_ (String.startsWith "text/html")) file_
-                            )
-                        )
+                    Flow.when (not (shouldSkipFileContents file_))
                         (callApi (allStepTables << srcFilesFileContentAt recordId path)
                             (Api.fetchSrcFileContents recordId path)
                             |> Flow.return ()
@@ -926,51 +914,41 @@ dndSub model maybeProjectId tableSpec =
         |> Sub.map (dndMsgToIO maybeProjectId tableSpec)
 
 
+computeChangedSortRecords : List (BaseRecord a) -> List (BaseRecord a) -> List (BaseRecord a)
+computeChangedSortRecords oldRecords newRecords =
+    List.map2 Tuple.pair oldRecords newRecords
+        |> List.filterMap
+            (\( old, new ) ->
+                if old.sortKey /= new.sortKey then
+                    Just new
+
+                else
+                    Nothing
+            )
+
+
 updateSortKeys : Maybe Int -> TableSpec (BaseRecord a) -> List (BaseRecord a) -> Flow Model ()
 updateSortKeys mProjectId tableSpec records_ =
     let
         allUpdatedRecords =
             List.indexedMap (\i -> set sortKey (Just i)) records_
+
+        changedRecords =
+            computeChangedSortRecords records_ allUpdatedRecords
+
+        persistChangedRecords =
+            Flow.batchM (List.map (persistRecordChange Nothing tableSpec) changedRecords)
+                |> Flow.seq refetchCommitHash
+                |> Flow.return (Ok ())
     in
     Flow.setAll (TableSpec.getLens tableSpec << records << success) allUpdatedRecords
         |> Flow.seq
-            (case ( mProjectId, getTag tableSpec ) of
-                ( Just projectId, _ ) ->
+            (case mProjectId of
+                Just projectId ->
                     saveProject projectId
 
-                ( Nothing, TagProjects ) ->
-                    let
-                        changedRecords =
-                            List.map2 Tuple.pair records_ allUpdatedRecords
-                                |> List.filterMap
-                                    (\( old, new ) ->
-                                        if old.sortKey /= new.sortKey then
-                                            Just new
-
-                                        else
-                                            Nothing
-                                    )
-                    in
-                    Flow.batchM (List.filterMap (\rec -> Maybe.map saveProject rec.id) changedRecords)
-                        |> Flow.seq refetchCommitHash
-                        |> Flow.return (Ok ())
-
-                ( Nothing, TagSteps _ _ ) ->
-                    let
-                        changedRecords =
-                            List.map2 Tuple.pair records_ allUpdatedRecords
-                                |> List.filterMap
-                                    (\( old, new ) ->
-                                        if old.sortKey /= new.sortKey then
-                                            Just new
-
-                                        else
-                                            Nothing
-                                    )
-                    in
-                    Flow.batchM (List.map (Api.saveRecord tableSpec >> callApi void) changedRecords)
-                        |> Flow.seq refetchCommitHash
-                        |> Flow.return (Ok ())
+                Nothing ->
+                    persistChangedRecords
             )
         |> Flow.return ()
 
