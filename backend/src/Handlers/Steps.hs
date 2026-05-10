@@ -2,7 +2,6 @@
 
 module Handlers.Steps (patchStepHandler, postStepHandler) where
 
-import Control.Concurrent (forkIO)
 import Control.Monad.Except (ExceptT (..), catchError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString.Lazy as LBS
@@ -13,7 +12,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (evaluateJsonToNix)
-import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
+import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
 import OutPaths (withWriteRepoTransaction)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), throwError)
@@ -36,7 +35,7 @@ patchStepHandler stepId jsonBody = do
                 commitAndPushChanges ctx $ "Update step " ++ show stepId
             case result of
                 Right _ -> do
-                    _ <- liftIO $ forkIO $ broadcastStatusForStepProjects stepId Nothing
+                    liftIO $ forkBroadcastStatusForStepProjectsAtHead stepId
                     return NoContent
                 Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
@@ -60,9 +59,7 @@ postStepHandler maybeProjectId jsonBody = do
     case result of
         Right output -> do
             case maybeProjectId of
-                Just projectId -> do
-                    _ <- liftIO $ forkIO $ broadcastProjectStatus projectId Nothing
-                    return ()
+                Just projectId -> liftIO $ forkBroadcastProjectStatusAtHead projectId
                 Nothing -> return ()
             return output
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}

@@ -10,16 +10,18 @@ module Handlers.Statuses (
     removeDependencyRunningOverrides,
     broadcastProjectStatus,
     broadcastStatusForStepProjects,
+    forkBroadcastProjectStatusAtHead,
+    forkBroadcastStatusForStepProjectsAtHead,
 ) where
 
 import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
 import Bus (broadcastSnapshot)
 import Control.Concurrent (forkIO)
+import Control.Monad (forM_, void)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception (SomeException, catch)
-import Control.Monad (forM_)
-import Control.Monad.Except (ExceptT (..), runExceptT)
+import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
 import Data.List (foldl')
@@ -130,24 +132,19 @@ applyDependencyRunningOverrides targetCommit statuses = do
             sid
             acc
 
-broadcastProjectStatus :: Int -> Maybe (Int, (Text, Maybe Text)) -> IO ()
-broadcastProjectStatus pid mStatusOverride = do
-    result <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> ExceptT $ do
-        let targetCommit = pack hash
-        outPaths <- getProjectOutPaths pid targetCommit
-        stats <- getStatuses targetCommit outPaths
-        let finalStats = case mStatusOverride of
-                Just (sid, st) -> Map.insert sid st stats
-                Nothing -> stats
-        broadcastSnapshot pid finalStats outPaths
-        return $ Right ()
-    case result of
-        Left err -> putStrLn $ "Error broadcasting project status: " ++ err
-        Right _ -> return ()
+broadcastProjectStatus :: Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> IO ()
+broadcastProjectStatus pid targetCommit mStatusOverride = do
+    outPaths <- getProjectOutPaths pid targetCommit
+    stats <- getStatuses targetCommit outPaths
+    let finalStats = case mStatusOverride of
+            Just (sid, st) -> Map.insert sid st stats
+            Nothing -> stats
+    broadcastSnapshot pid targetCommit finalStats outPaths
 
-broadcastStatusForStepProjects :: Int -> Maybe (Text, Maybe Text) -> IO ()
-broadcastStatusForStepProjects sid mStatusOverride = do
-    result <- withReadRepoTransaction $ \ctx -> do
+broadcastStatusForStepProjects :: Int -> Text -> Maybe (Text, Maybe Text) -> IO ()
+broadcastStatusForStepProjects sid targetCommit mStatusOverride = do
+    result <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
+        let ctx = ReadRepoContext repoPath (unpack targetCommit)
         output <- runNixInRepo ctx ["eval", "--json"] "#pointy.projects"
         let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
         case decodeResult of
@@ -157,11 +154,25 @@ broadcastStatusForStepProjects sid mStatusOverride = do
             Right projects -> do
                 let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
                 liftIO $ forM_ targetProjects $ \p ->
-                    forkIO $ broadcastProjectStatus (projectDefId p) (fmap (sid,) mStatusOverride)
+                    forkIO $ broadcastProjectStatus (projectDefId p) targetCommit (fmap (sid,) mStatusOverride)
                 return ()
     case result of
         Left err -> putStrLn $ "Error broadcasting statuses for step " ++ show sid ++ ": " ++ err
         Right _ -> return ()
+
+forkBroadcastProjectStatusAtHead :: Int -> IO ()
+forkBroadcastProjectStatusAtHead pid = do
+    eHead <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
+    case eHead of
+        Left err -> putStrLn $ "forkBroadcastProjectStatusAtHead skipped: " ++ err
+        Right c -> void $ forkIO $ broadcastProjectStatus pid c Nothing
+
+forkBroadcastStatusForStepProjectsAtHead :: Int -> IO ()
+forkBroadcastStatusForStepProjectsAtHead sid = do
+    eHead <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
+    case eHead of
+        Left err -> putStrLn $ "forkBroadcastStatusForStepProjectsAtHead skipped: " ++ err
+        Right c -> void $ forkIO $ broadcastStatusForStepProjects sid c Nothing
 
 projectContainsStep :: Int -> ProjectDef -> Bool
 projectContainsStep sid p =

@@ -59,10 +59,10 @@ runStepSync eid commit = do
                 (addDependencyRunningOverrides targetCommitText stepIds)
                 ( do
                     removeDependencyRunningOverrides targetCommitText stepIds
-                    mapM_ (`broadcastStatusForStepProjects` Nothing) stepIds
+                    mapM_ (\sid -> broadcastStatusForStepProjects sid targetCommitText Nothing) stepIds
                 )
                 ( do
-                    mapM_ (`broadcastStatusForStepProjects` Nothing) stepIds
+                    mapM_ (\sid -> broadcastStatusForStepProjects sid targetCommitText Nothing) stepIds
                     mapConcurrently_ (buildStep ctx) stepIds
                 )
 
@@ -116,13 +116,14 @@ buildStep ctx eid = do
 
         outPathText <- requireOutPathFromCache ctx eid
         let outPath = T.unpack outPathText
+        let targetCommitText = T.pack (readCommitHash ctx)
         built <- liftIO $ isBuilt outPath
         if built
-            then liftIO $ broadcastStatusForStepProjects eid Nothing
+            then liftIO $ broadcastStatusForStepProjects eid targetCommitText Nothing
             else do
                 let unitName = outPathToUnitName outPath
                 _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["reset-failed", unitName] ""
-                liftIO $ broadcastStatusForStepProjects eid (Just ("running", Nothing))
+                liftIO $ broadcastStatusForStepProjects eid targetCommitText (Just ("running", Nothing))
                 _ <-
                     liftIO $
                         readProcessWithExitCodeL
@@ -139,7 +140,7 @@ buildStep ctx eid = do
                             )
                             ""
                 _ <- liftIO $ registerGcRootForOutPath outPath
-                liftIO $ broadcastStatusForStepProjects eid Nothing
+                liftIO $ broadcastStatusForStepProjects eid targetCommitText Nothing
 
     case result of
         Left err -> putStrLn $ "buildStep error: " ++ err
@@ -217,7 +218,7 @@ stopStepSync eid commit = do
                 let unitName = outPathToUnitName $ T.unpack outPathText
                 _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["stop", unitName] ""
                 liftIO $ removeDependencyRunningOverrides targetCommit [eid]
-                liftIO $ broadcastStatusForStepProjects eid Nothing
+                liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of
         Left err -> putStrLn $ "stopStep error: " ++ err

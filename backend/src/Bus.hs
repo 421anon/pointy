@@ -7,6 +7,7 @@ import System.IO.Unsafe (unsafePerformIO)
 
 data ProjectSnapshot = ProjectSnapshot
     { projectId :: Int
+    , commit :: Text
     , statuses :: Map Int (Text, Maybe Text)
     , outPaths :: Map Int Text
     }
@@ -16,8 +17,8 @@ data ProjectSnapshot = ProjectSnapshot
 statusBus :: TChan ProjectSnapshot
 statusBus = unsafePerformIO newBroadcastTChanIO
 
-broadcastSnapshot :: Int -> Map Int (Text, Maybe Text) -> Map Int Text -> IO ()
-broadcastSnapshot pid stats paths = atomically $ writeTChan statusBus (ProjectSnapshot pid stats paths)
+broadcastSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> Map Int Text -> IO ()
+broadcastSnapshot pid c stats paths = atomically $ writeTChan statusBus (ProjectSnapshot pid c stats paths)
 
 subscribe :: IO (TChan ProjectSnapshot)
 subscribe = atomically $ dupTChan statusBus
