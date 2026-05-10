@@ -459,6 +459,7 @@ body {
   align-items: flex-start;
   font-family: inherit;
   white-space: pre;
+  min-width: max-content;
 
   &.highlighted {
     background: var(--color-highlight, rgba(255, 213, 79, 0.18));
