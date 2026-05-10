@@ -2,12 +2,11 @@
 
 module Handlers.ProjectEntities (assignRecordHandler, assignRecordToProject, batchAssignRecordsHandler, unassignRecordHandler) where
 
-import Control.Concurrent (forkIO)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Handlers.Statuses (broadcastProjectStatus)
+import Handlers.Statuses (forkBroadcastProjectStatusAtHead)
 import OutPaths (withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), err500, errBody, throwError)
 import System.FilePath ((</>))
@@ -25,7 +24,7 @@ assignRecordHandler projectId recordId = do
     case result of
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
         Right _ -> do
-            _ <- liftIO $ forkIO $ broadcastProjectStatus projectId Nothing
+            liftIO $ forkBroadcastProjectStatusAtHead projectId
             return NoContent
 
 assignRecordToProject :: WriteRepoContext -> Int -> Int -> ExceptT String IO ()
@@ -40,7 +39,7 @@ batchAssignRecordsHandler projectId recordIds = do
     case result of
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
         Right _ -> do
-            _ <- liftIO $ forkIO $ broadcastProjectStatus projectId Nothing
+            liftIO $ forkBroadcastProjectStatusAtHead projectId
             return NoContent
 
 unassignRecordHandler :: Int -> Int -> Handler NoContent
@@ -51,7 +50,7 @@ unassignRecordHandler projectId recordId = do
     case result of
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
         Right _ -> do
-            _ <- liftIO $ forkIO $ broadcastProjectStatus projectId Nothing
+            liftIO $ forkBroadcastProjectStatusAtHead projectId
             return NoContent
 
 addRecord :: Int -> T.Text

@@ -76,7 +76,7 @@ streamLoop projectId targetCommit previousStatuses heartbeatTick busChan = do
         threadDelay 500000
         busUpdates <- atomically $ drainTChan busChan
 
-        let mLatestSnapshot = find (\snapshot -> Bus.projectId snapshot == projectId) (reverse busUpdates)
+        let mLatestSnapshot = find (\snapshot -> Bus.projectId snapshot == projectId && Bus.commit snapshot == targetCommit) (reverse busUpdates)
 
         case mLatestSnapshot of
             Just snapshot -> do
