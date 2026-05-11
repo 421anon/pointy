@@ -150,11 +150,11 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
             String.join "/" <| Maybe.unwrap "" String.fromInt mRecordId :: path
 
         mGutterRecordId =
-            case ( mRecordId, mDirCtx ) of
-                ( Just recordId, Just (OutputDir _) ) ->
-                    Just recordId
+            case mDirCtx of
+                Just _ ->
+                    mRecordId
 
-                _ ->
+                Nothing ->
                     Nothing
 
         mSelectedRange =
@@ -324,8 +324,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         gutterAttrs =
                                             Maybe.unwrap []
                                                 (\recordId ->
-                                                    [ Html.Events.preventDefaultOn "mousedown" (Decode.succeed ( Actions.startGutterDrag recordId path lineNum, True ))
-                                                    , Html.Events.onMouseEnter (Actions.extendGutterDrag recordId path lineNum)
+                                                    [ Html.Events.on "pointerdown" (Decode.succeed (Actions.startGutterDrag recordId path lineNum))
+                                                    , Html.Events.on "pointerenter" (Decode.succeed (Actions.extendGutterDrag recordId path lineNum))
                                                     ]
                                                 )
                                                 mGutterRecordId

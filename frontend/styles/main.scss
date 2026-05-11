@@ -483,6 +483,7 @@ body {
 
   &.is-gutter {
     cursor: ns-resize;
+    touch-action: none;
 
     &:hover {
       background: var(--bg-hover);

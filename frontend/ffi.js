@@ -53,6 +53,15 @@ function toggleTheme() {
   localStorage.setItem("theme", next);
 }
 
+// Release the implicit pointer capture browsers set on touch pointerdown.
+// Without this, pointerenter/leave do not fire on sibling gutter rows
+// during a touch drag, preventing cross-row selection.
+document.addEventListener("pointerdown", (e) => {
+  if (e.target?.matches?.(".file-line-number.is-gutter")) {
+    e.target.releasePointerCapture(e.pointerId);
+  }
+});
+
 export function connectPorts(app) {
   function emitToElm(type, data) {
     if (app.ports && app.ports.stepStatusIn) {
