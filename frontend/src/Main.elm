@@ -61,7 +61,6 @@ setRouteFromUrl url =
 
                     isDragging =
                         has (gutterDrag << just) model
-
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq
