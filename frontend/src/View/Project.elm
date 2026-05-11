@@ -1,7 +1,7 @@
 module View.Project exposing (..)
 
 import Accessors exposing (get)
-import Api.ApiData as ApiData exposing (ApiData(..), visibleLoadingValue)
+import Api.ApiData as ApiData exposing (ApiData(..))
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (class)
@@ -26,8 +26,8 @@ viewCurrentProject model =
                 Just _ ->
                     Html.nothing
 
-        Loading loadingState ->
-            visibleLoadingValue loadingState
+        Loading mProject ->
+            mProject
                 |> Maybe.map (viewProject model)
                 |> Maybe.withDefault (Html.span [ class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading project..." ])
 

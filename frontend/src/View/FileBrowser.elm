@@ -278,10 +278,10 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                             , Html.Events.onClick
                                 (case mDirCtx of
                                     Just (OutputDir op) ->
-                                        Actions.downloadFile op (String.join "/" path)
+                                        Actions.downloadFile op path
 
                                     Just (SrcDir id) ->
-                                        Actions.downloadSrcFile id (String.join "/" path)
+                                        Actions.downloadSrcFile id path
 
                                     Nothing ->
                                         Flow.pure ()

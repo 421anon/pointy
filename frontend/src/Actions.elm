@@ -648,14 +648,14 @@ callApiMerge merge lens apiCall =
             )
 
 
-downloadFile : String -> String -> Flow Model ()
-downloadFile outPath_ path =
-    Flow.lift (Nav.load ("/backend/store/download?outPath=" ++ outPath_ ++ "&path=" ++ path))
+downloadFile : String -> List String -> Flow Model ()
+downloadFile outPath filePath =
+    Flow.lift (Nav.load (Api.fileDownloadUrl outPath filePath))
 
 
-downloadSrcFile : Int -> String -> Flow Model ()
-downloadSrcFile id path =
-    Flow.lift (Nav.load ("/backend/src-files/download?id=" ++ String.fromInt id ++ "&path=" ++ path))
+downloadSrcFile : Int -> List String -> Flow Model ()
+downloadSrcFile id filePath =
+    Flow.lift (Nav.load (Api.srcFileDownloadUrl id filePath))
 
 
 shouldSkipFileContents : { r | mimeType : Maybe String } -> Bool

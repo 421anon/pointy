@@ -4,35 +4,16 @@ import Accessors exposing (Prism, prism)
 import Http
 
 
-type alias LoadingState a =
-    { lastKnown : Maybe a
-    , predicted : Maybe a
-    }
-
-
 type ApiData a
     = NotAsked
-    | Loading (LoadingState a)
+    | Loading (Maybe a)
     | Success a
     | Error Http.Error
 
 
 loading : Maybe a -> ApiData a
-loading maybeValue =
+loading =
     Loading
-        { lastKnown = maybeValue
-        , predicted = Nothing
-        }
-
-
-visibleLoadingValue : LoadingState a -> Maybe a
-visibleLoadingValue loadingState =
-    case loadingState.predicted of
-        Just predicted ->
-            Just predicted
-
-        Nothing ->
-            loadingState.lastKnown
 
 
 map : (a -> b) -> ApiData a -> ApiData b
@@ -41,11 +22,8 @@ map f apiData =
         NotAsked ->
             NotAsked
 
-        Loading loadingState_ ->
-            Loading
-                { lastKnown = Maybe.map f loadingState_.lastKnown
-                , predicted = Maybe.map f loadingState_.predicted
-                }
+        Loading mv ->
+            Loading (Maybe.map f mv)
 
         Success value ->
             Success (f value)
@@ -68,29 +46,29 @@ update f new old =
         ( Success a, Error _ ) ->
             Success a
 
-        ( Success a, Loading loadingB ) ->
-            case visibleLoadingValue loadingB of
+        ( Success a, Loading mb ) ->
+            case mb of
                 Just b ->
                     Success (f a b)
 
                 Nothing ->
                     Success a
 
-        ( Loading loadingA, Loading loadingB ) ->
-            case ( visibleLoadingValue loadingA, visibleLoadingValue loadingB ) of
+        ( Loading ma, Loading mb ) ->
+            case ( ma, mb ) of
                 ( Just a, Just b ) ->
-                    loading (Just (f a b))
+                    Loading (Just (f a b))
 
                 _ ->
-                    loading Nothing
+                    Loading Nothing
 
-        ( Loading loadingA, Success b ) ->
-            case visibleLoadingValue loadingA of
+        ( Loading ma, Success b ) ->
+            case ma of
                 Just a ->
-                    loading (Just (f a b))
+                    Loading (Just (f a b))
 
                 Nothing ->
-                    loading Nothing
+                    Loading Nothing
 
         ( Error err, _ ) ->
             Error err
@@ -111,11 +89,8 @@ andThenMaybe f error apiData =
         NotAsked ->
             NotAsked
 
-        Loading loadingState_ ->
-            Loading
-                { lastKnown = Maybe.andThen f loadingState_.lastKnown
-                , predicted = Maybe.andThen f loadingState_.predicted
-                }
+        Loading mv ->
+            Loading (Maybe.andThen f mv)
 
         Success value ->
             fromMaybe error (f value)
@@ -140,8 +115,8 @@ toMaybe apiData =
         NotAsked ->
             Nothing
 
-        Loading loadingState_ ->
-            visibleLoadingValue loadingState_
+        Loading mv ->
+            mv
 
         Success value ->
             Just value
@@ -212,13 +187,13 @@ toLoading : ApiData a -> ApiData a
 toLoading apiData =
     case apiData of
         Success value ->
-            loading (Just value)
+            Loading (Just value)
 
-        Loading loadingState ->
-            Loading loadingState
+        Loading mv ->
+            Loading mv
 
         _ ->
-            loading Nothing
+            Loading Nothing
 
 
 foldVisible : b -> (Maybe a -> b) -> (a -> b) -> (Http.Error -> b) -> ApiData a -> b
@@ -227,8 +202,8 @@ foldVisible onNotAsked onLoading onSuccess onError apiData =
         NotAsked ->
             onNotAsked
 
-        Loading loadingState_ ->
-            onLoading (visibleLoadingValue loadingState_)
+        Loading mv ->
+            onLoading mv
 
         Success value ->
             onSuccess value

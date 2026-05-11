@@ -13,9 +13,11 @@ module Api.Api exposing
     , fetchStepConfig
     , fetchStepLog
     , fetchUserRepoInfo
+    , fileDownloadUrl
     , runStep
     , saveProject
     , saveRecord
+    , srcFileDownloadUrl
     , stopStep
     , unassignRecordFromProject
     , uploadFiles
@@ -57,6 +59,16 @@ appendCommitQuery url commit =
 
         Nothing ->
             url
+
+
+fileDownloadUrl : String -> List String -> String
+fileDownloadUrl outPath filePath =
+    "/backend/store/download?outPath=" ++ outPath ++ "&path=" ++ String.join "/" filePath
+
+
+srcFileDownloadUrl : Int -> List String -> String
+srcFileDownloadUrl id filePath =
+    "/backend/src-files/download?id=" ++ String.fromInt id ++ "&path=" ++ String.join "/" filePath
 
 
 stringResponse : (String -> a) -> Http.Response String -> Result Http.Error a
@@ -252,7 +264,7 @@ fetchFileContents : String -> List String -> Flow s (Result Http.Error String)
 fetchFileContents outPath filePath =
     Flow.lift <|
         Http.get
-            { url = "/backend/store/download?outPath=" ++ outPath ++ "&path=" ++ String.join "/" filePath
+            { url = fileDownloadUrl outPath filePath
             , expect = Http.expectString identity
             }
 
@@ -287,6 +299,6 @@ fetchSrcFileContents : Int -> List String -> Flow s (Result Http.Error String)
 fetchSrcFileContents id filePath =
     Flow.lift <|
         Http.get
-            { url = "/backend/src-files/download?id=" ++ String.fromInt id ++ "&path=" ++ String.join "/" filePath
+            { url = srcFileDownloadUrl id filePath
             , expect = Http.expectString identity
             }
