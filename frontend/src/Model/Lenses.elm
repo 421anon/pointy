@@ -186,12 +186,6 @@ fileZoom =
         << lens ".zoom" .zoom (\view zoom_ -> { view | zoom = zoom_ })
 
 
-fileSelectedRange : Lens ls { a | view : { b | selectedRange : c } } c x y
-fileSelectedRange =
-    lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
-        << lens ".selectedRange" .selectedRange (\view sr -> { view | selectedRange = sr })
-
-
 children : Lens ls { a | children : b } b x y
 children =
     lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
@@ -302,11 +296,6 @@ fileZoomAt recordId_ path =
     directoryItemAtPath recordId_ path << file << fileZoom
 
 
-fileSelectedRangeAt : Int -> List String -> Traversal (Table StepRecord) (Maybe Route.LineRange) x y
-fileSelectedRangeAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileSelectedRange
-
-
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
 folderExpandedAt recordId_ path =
     directoryItemAtPath recordId_ path << folder << folderExpanded
@@ -340,11 +329,6 @@ srcFilesFileIsViewingAt recordId_ path =
 srcFilesFileZoomAt : Int -> List String -> Traversal (Table StepRecord) Float x y
 srcFilesFileZoomAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileZoom
-
-
-srcFilesFileSelectedRangeAt : Int -> List String -> Traversal (Table StepRecord) (Maybe Route.LineRange) x y
-srcFilesFileSelectedRangeAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileSelectedRange
 
 
 srcFilesFolderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -485,3 +469,8 @@ uploadProgress =
 stepStatusHooks : Lens ls Model (Dict Int (Flow Model ())) x y
 stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
+
+
+gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y
+gutterDrag =
+    lens ".gutterDrag" Model.getGutterDrag (\(Model m) drag -> Model { m | gutterDrag = drag })

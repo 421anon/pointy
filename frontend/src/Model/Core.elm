@@ -131,7 +131,15 @@ type Model
         , uploadProgress : Dict Int UploadProgress
         , stepLogs : Dict String (ApiData String)
         , stepStatusHooks : Dict Int (Flow Model ())
+        , gutterDrag : Maybe GutterDrag
         }
+
+
+type alias GutterDrag =
+    { recordId : Int
+    , path : List String
+    , anchor : Int
+    }
 
 
 getProjects : Model -> Table ProjectRecord
@@ -212,6 +220,11 @@ getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
 
+getGutterDrag : Model -> Maybe GutterDrag
+getGutterDrag (Model model) =
+    model.gutterDrag
+
+
 dndSystem : DnDList.System a DnDList.Msg
 dndSystem =
     let
@@ -273,13 +286,13 @@ initialModel key route flags =
         , stepLogs = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
+        , gutterDrag = Nothing
         }
 
 
 type alias FileView =
     { isViewing : Bool
     , zoom : Float
-    , selectedRange : Maybe Route.LineRange
     }
 
 
@@ -312,7 +325,7 @@ extractDirectoryItemBase item =
                 , size = file.size
                 , viewable = file.viewable
                 , mimeType = file.mimeType
-                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, selectedRange = file.view.selectedRange }
+                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom }
                 }
 
         Folder folder ->
@@ -336,7 +349,6 @@ updateDirectoryItemBase item baseItem =
                         in
                         { view
                             | isViewing = base.view.isViewing
-                            , selectedRange = base.view.selectedRange
                         }
                 }
 

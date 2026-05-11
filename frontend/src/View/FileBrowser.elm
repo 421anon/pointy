@@ -1,6 +1,6 @@
 module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 
-import Accessors exposing (Prism, has, just, prism, snd, try, values)
+import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData, success)
 import Basics.Extra exposing (flip)
@@ -15,7 +15,7 @@ import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
-import Model.Lenses exposing (currentProject, currentProjectId, fileSelectedRangeAt, fileZoomAt, mimeType, srcFilesFileSelectedRangeAt, tables)
+import Model.Lenses exposing (currentProjectId, fileZoomAt, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -149,27 +149,21 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
         anchor =
             String.join "/" <| Maybe.unwrap "" String.fromInt mRecordId :: path
 
+        mGutterRecordId =
+            case ( mRecordId, mDirCtx ) of
+                ( Just recordId, Just (OutputDir _) ) ->
+                    Just recordId
+
+                _ ->
+                    Nothing
+
         mSelectedRange =
-            case ( mRecordId, mDirCtx ) of
-                ( Just recordId, Just (OutputDir _) ) ->
-                    try (currentProject << success << tables << values << fileSelectedRangeAt recordId path << just) model
-
-                ( Just recordId, Just (SrcDir _) ) ->
-                    try (currentProject << success << tables << values << srcFilesFileSelectedRangeAt recordId path << just) model
-
-                _ ->
-                    Nothing
-
-        captureAction =
-            case ( mRecordId, mDirCtx ) of
-                ( Just recordId, Just (OutputDir _) ) ->
-                    Just (Actions.captureFileSelection False recordId path)
-
-                ( Just recordId, Just (SrcDir _) ) ->
-                    Just (Actions.captureFileSelection True recordId path)
-
-                _ ->
-                    Nothing
+            mGutterRecordId
+                |> Maybe.andThen
+                    (\recordId ->
+                        try (route << Route.project << mHighlight << just << where_ (\hi -> hi.id == recordId && hi.path == path)) model
+                            |> Maybe.andThen .range
+                    )
 
         shareButton =
             let
@@ -188,25 +182,6 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 , Html.Events.stopPropagationOn "click" (Decode.succeed ( shareAction, True ))
                 ]
                 [ icon True "share" ]
-
-        shareSelectionBanner =
-            case ( mSelectedRange, mRecordId, try currentProjectId model ) of
-                ( Just range, Just recordId, Just projectId ) ->
-                    Html.div [ class "range-share-banner" ]
-                        [ Html.span [ class "range-share-label" ]
-                            [ Html.text ("Lines " ++ Route.formatLineRange range ++ " selected") ]
-                        , Html.button
-                            [ class "range-share-btn"
-                            , Html.Events.stopPropagationOn "click"
-                                (Decode.succeed ( Actions.shareEntity projectId recordId path (Just range), True ))
-                            ]
-                            [ icon True "share"
-                            , Html.text ("Share lines " ++ Route.formatLineRange range)
-                            ]
-                        ]
-
-                _ ->
-                    Html.nothing
     in
     case item of
         File file ->
@@ -345,6 +320,15 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     let
                                         lineNum =
                                             n + 1
+
+                                        gutterAttrs =
+                                            Maybe.unwrap []
+                                                (\recordId ->
+                                                    [ Html.Events.preventDefaultOn "mousedown" (Decode.succeed ( Actions.startGutterDrag recordId path lineNum, True ))
+                                                    , Html.Events.onMouseEnter (Actions.extendGutterDrag recordId path lineNum)
+                                                    ]
+                                                )
+                                                mGutterRecordId
                                     in
                                     Html.div
                                         [ classList
@@ -352,9 +336,15 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             , ( "highlighted", Maybe.unwrap False (\{ from, to } -> lineNum >= from && lineNum <= to) mSelectedRange )
                                             ]
                                         , id ("line-" ++ anchor ++ "-" ++ String.fromInt lineNum)
-                                        , Html.Attributes.attribute "data-line" (String.fromInt lineNum)
                                         ]
-                                        [ Html.span [ class "file-line-number" ] [ Html.text (String.fromInt lineNum) ]
+                                        [ Html.span
+                                            (classList
+                                                [ ( "file-line-number", True )
+                                                , ( "is-gutter", Maybe.isJust mGutterRecordId )
+                                                ]
+                                                :: gutterAttrs
+                                            )
+                                            [ Html.text (String.fromInt lineNum) ]
                                         , Html.span [ class "file-line-content" ] [ Html.text line ]
                                         ]
 
@@ -364,17 +354,14 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             String.split "\n" text
                                     in
                                     Html.div
-                                        ([ class "file-content"
-                                         , id ("viewer-" ++ anchor)
-                                         , style "max-height" (calculateViewerHeight (List.length lines))
-                                         ]
-                                            ++ Maybe.unwrap [] (\a -> [ Html.Events.on "mouseup" (Decode.succeed a) ]) captureAction
-                                        )
+                                        [ class "file-content"
+                                        , id ("viewer-" ++ anchor)
+                                        , style "max-height" (calculateViewerHeight (List.length lines))
+                                        ]
                                         (List.indexedMap renderLine lines)
                             in
                             Html.div [ class "file-viewer" ]
-                                [ shareSelectionBanner
-                                , ApiData.foldVisible
+                                [ ApiData.foldVisible
                                     Html.nothing
                                     (Maybe.map (viewLoading << viewContent)
                                         >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])

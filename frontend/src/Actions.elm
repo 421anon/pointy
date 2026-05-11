@@ -458,6 +458,11 @@ goToRoute route =
     Flow.get |> Flow.andThen (\model -> Flow.lift (Nav.pushUrl (Model.getKey model) (Route.toString route)))
 
 
+replaceRoute : Route -> Flow Model ()
+replaceRoute route =
+    Flow.get |> Flow.andThen (\model -> Flow.lift (Nav.replaceUrl (Model.getKey model) (Route.toString route)))
+
+
 clearStepLog : Int -> Maybe String -> Flow Model ()
 clearStepLog id commit =
     Flow.over stepLogs (Dict.remove (Model.stepLogKey id commit))
@@ -823,11 +828,10 @@ deepOpenEntry stepId path mRange =
                 fileAnchor =
                     String.join "/" (String.fromInt stepId :: path)
 
-                applyRange =
+                scrollToRange =
                     case mRange of
                         Just range ->
-                            Flow.setAll (currentProject << success << tables << values << fileSelectedRangeAt stepId path) (Just range)
-                                |> Flow.seq (Flow.attemptTask (Scroll.scrollElementY ("viewer-" ++ fileAnchor) ("line-" ++ fileAnchor ++ "-" ++ String.fromInt range.from) 0.05 0))
+                            Flow.attemptTask (Scroll.scrollElementY ("viewer-" ++ fileAnchor) ("line-" ++ fileAnchor ++ "-" ++ String.fromInt range.from) 0.05 0)
 
                         Nothing ->
                             Flow.pure ()
@@ -839,30 +843,43 @@ deepOpenEntry stepId path mRange =
                             |> Flow.seq (Flow.attemptTask (Scroll.scrollY (String.join "/" <| String.fromInt stepId :: pathPart) 0 0))
                     )
                 |> List.foldl Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt stepId) 0 0))
-                |> Flow.seq applyRange
+                |> Flow.seq scrollToRange
         )
 
 
-lineRangeDecoder : Decode.Decoder (Maybe Route.LineRange)
-lineRangeDecoder =
-    Decode.nullable
-        (Decode.map2 (\f t -> { from = f, to = t })
-            (Decode.field "from" Decode.int)
-            (Decode.field "to" Decode.int)
+startGutterDrag : Int -> List String -> Int -> Flow Model ()
+startGutterDrag recordId path line =
+    Flow.setAll gutterDrag (Just { recordId = recordId, path = path, anchor = line })
+        |> Flow.seq (updateGutterRange recordId path { from = line, to = line })
+
+
+extendGutterDrag : Int -> List String -> Int -> Flow Model ()
+extendGutterDrag recordId path line =
+    Flow.forAll (gutterDrag << just << where_ (\d -> d.recordId == recordId && d.path == path))
+        (\drag ->
+            updateGutterRange recordId path { from = min drag.anchor line, to = max drag.anchor line }
         )
 
 
-captureFileSelection : Bool -> Int -> List String -> Flow Model ()
-captureFileSelection isSrc recordId path =
-    callJs "getSelectedLineRange" Encode.string lineRangeDecoder ("viewer-" ++ String.join "/" (String.fromInt recordId :: path))
-        |> Flow.andThen
-            (\mRange ->
-                if isSrc then
-                    Flow.setAll (currentProject << success << tables << values << srcFilesFileSelectedRangeAt recordId path) mRange
+endGutterDrag : Flow Model ()
+endGutterDrag =
+    Flow.setAll gutterDrag Nothing
 
-                else
-                    Flow.setAll (currentProject << success << tables << values << fileSelectedRangeAt recordId path) mRange
-            )
+
+updateGutterRange : Int -> List String -> Route.LineRange -> Flow Model ()
+updateGutterRange recordId path range =
+    let
+        newHighlight =
+            { id = recordId, path = path, range = Just range }
+    in
+    Flow.forAll (route << Route.project)
+        (\params ->
+            if params.mHighlight == Just newHighlight then
+                Flow.pure ()
+
+            else
+                replaceRoute (Project { params | mHighlight = Just newHighlight })
+        )
 
 
 addToast : Bool -> String -> Flow Model ()

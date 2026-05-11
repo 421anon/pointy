@@ -1,15 +1,17 @@
 module Main exposing (main)
 
-import Accessors exposing (each, just, set, try)
+import Accessors exposing (each, has, just, set, try)
 import Actions
 import Api.ApiData exposing (success)
+import Browser.Events
 import Browser.Navigation as Nav
 import Dict
 import Flow exposing (Flow)
 import Http
+import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, mCommit, projectStepRecords, projects, records, route, runState, stepConfig)
+import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, projectStepRecords, projects, records, route, runState, stepConfig)
 import Route
 import Specs
 import Url exposing (Url)
@@ -56,6 +58,10 @@ setRouteFromUrl url =
 
                     mNewCommit =
                         try (Route.project << mCommit << just) newRoute
+
+                    isDragging =
+                        has (gutterDrag << just) model
+
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq
@@ -75,7 +81,11 @@ setRouteFromUrl url =
                                     |> Flow.seq
                                         (case mHighlight of
                                             Just { id, path, range } ->
-                                                Actions.deepOpenEntryOrDefer id path range
+                                                if isDragging then
+                                                    Flow.pure ()
+
+                                                else
+                                                    Actions.deepOpenEntryOrDefer id path range
 
                                             Nothing ->
                                                 Flow.pure ()
@@ -110,7 +120,17 @@ subscriptions model =
     Sub.batch
         [ dndSubscription model
         , uploadProgressSubscription model
+        , gutterDragSubscription model
         ]
+
+
+gutterDragSubscription : Model -> Sub (Flow Model ())
+gutterDragSubscription model =
+    if has (gutterDrag << just) model then
+        Browser.Events.onMouseUp (Decode.succeed Actions.endGutterDrag)
+
+    else
+        Sub.none
 
 
 uploadProgressSubscription : Model -> Sub (Flow Model ())
