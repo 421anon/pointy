@@ -11,6 +11,7 @@ import Maybe.Extra as Maybe
 import Model.Shadow exposing (StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
 import Toast exposing (Toast)
+import Time
 
 
 type Status
@@ -33,6 +34,7 @@ type alias BaseRecord a =
         , sortKey : Maybe Int
         , name : String
         , isUpdating : Bool
+        , lastModifiedAt : Maybe Time.Posix
     }
 
 
@@ -131,6 +133,7 @@ type Model
         , uploadProgress : Dict Int UploadProgress
         , stepLogs : Dict String (ApiData String)
         , stepStatusHooks : Dict Int (Flow Model ())
+        , now : Time.Posix
         }
 
 
@@ -212,6 +215,11 @@ getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
 
+getNow : Model -> Time.Posix
+getNow (Model model) =
+    model.now
+
+
 dndSystem : DnDList.System a DnDList.Msg
 dndSystem =
     let
@@ -273,6 +281,7 @@ initialModel key route flags =
         , stepLogs = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
+        , now = Time.millisToPosix 0
         }
 
 

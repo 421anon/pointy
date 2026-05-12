@@ -141,15 +141,18 @@ optimisticCreate tableLens record apiCall =
                                 Flow.pure newRecord.id
                                     |> Flow.assertJust
                                     |> Flow.seq
-                                        (Flow.over recordsLens
-                                            (List.map
-                                                (\r ->
-                                                    if r.clientId == Just cid then
-                                                        { newRecord | clientId = Nothing }
+                                        (Flow.forAll now
+                                            (\posix ->
+                                                Flow.over recordsLens
+                                                    (List.map
+                                                        (\r ->
+                                                            if r.clientId == Just cid then
+                                                                { newRecord | clientId = Nothing, lastModifiedAt = Just posix }
 
-                                                    else
-                                                        r
-                                                )
+                                                            else
+                                                                r
+                                                        )
+                                                    )
                                             )
                                         )
                                     |> Flow.seq refetchCommitHash
@@ -422,7 +425,11 @@ saveExistingRecord : A_Traversal Model (Table (BaseRecord a)) -> BaseRecord a ->
 saveExistingRecord lens record mergeFn spec =
     let
         clearUpdating =
-            Flow.over (remkT lens << records << success << by .id record.id << isUpdating) (always False)
+            Flow.forAll now
+                (\posix ->
+                    Flow.over (remkT lens << records << success << by .id record.id)
+                        (\r -> { r | isUpdating = False, lastModifiedAt = Just posix })
+                )
                 |> Flow.seq refetchCommitHash
     in
     Flow.over (remkT lens << records << success)

@@ -13,6 +13,7 @@ import Model.Core as Model exposing (DirectoryFile, DirectoryFolder, DirectoryIt
 import Model.Shadow exposing (StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Toast exposing (Toast)
+import Time
 
 
 blackhole : Prism pr s Never x y
@@ -485,3 +486,8 @@ uploadProgress =
 stepStatusHooks : Lens ls Model (Dict Int (Flow Model ())) x y
 stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
+
+
+now : Lens ls Model Time.Posix x y
+now =
+    lens ".now" Model.getNow (\(Model m) t -> Model { m | now = t })

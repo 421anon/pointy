@@ -21,6 +21,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Keyboard
+import Iso8601
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
@@ -32,6 +33,7 @@ import Route exposing (Route)
 import Set
 import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewLoading)
+import Time.Distance
 
 
 viewStatusCountBadge : TableSpec (BaseRecord a) -> List (BaseRecord a) -> Html msg
@@ -383,6 +385,17 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                             [ Html.text (String.fromInt id_) ]
                                     )
                                     record.id
+                                , Html.viewMaybe
+                                    (\posix ->
+                                        let iso = Iso8601.fromTime posix in
+                                        Html.node "time"
+                                            [ class "table-record-mtime"
+                                            , attribute "datetime" iso
+                                            , title ("Last modified: " ++ iso)
+                                            ]
+                                            [ Html.text (Time.Distance.inWords posix (Model.getNow model)) ]
+                                    )
+                                    record.lastModifiedAt
                                 , Html.viewIf (record.id == Nothing) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
                                         [ iconCustom True "progress_activity" [ class "pending-record-icon" ]
