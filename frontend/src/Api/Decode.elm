@@ -3,6 +3,7 @@ module Api.Decode exposing (..)
 import Api.ApiData exposing (ApiData(..))
 import Dict exposing (Dict)
 import Extra.Decode exposing (firstMatching)
+import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (optional, required)
 import Model.Core exposing (DirectoryItem(..), FileView, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), initialTable)
@@ -88,7 +89,7 @@ status =
 projectRecord : StepConfig -> Decoder ProjectRecord
 projectRecord stepConfig_ =
     Decode.succeed
-        (\id name hidden sortKey steps ->
+        (\id name hidden sortKey lastModifiedAt steps ->
             let
                 stepsByType =
                     List.foldl
@@ -103,12 +104,14 @@ projectRecord stepConfig_ =
             , name = name
             , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) stepsByType
             , isUpdating = False
+            , lastModifiedAt = lastModifiedAt
             }
         )
         |> required "id" Decode.int
         |> required "name" Decode.string
         |> required "hidden" Decode.bool
         |> required "sortKey" (maybe Decode.int)
+        |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
         |> required "steps" (Decode.list (stepRecord stepConfig_))
 
 
@@ -143,7 +146,7 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ note args ->
+        (\id name type_ note args lastModifiedAt ->
             { id = Just id
             , clientId = Nothing
             , type_ = type_
@@ -154,6 +157,7 @@ stepValueOnly stepType_ =
             , runState = NotAsked
             , args = args
             , isUpdating = False
+            , lastModifiedAt = lastModifiedAt
             , srcFiles =
                 { children = NotAsked
                 , expanded = False
@@ -165,6 +169,7 @@ stepValueOnly stepType_ =
         |> required "type" Decode.string
         |> optional "note" Decode.string ""
         |> required "args" (stepArgs stepType_)
+        |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
 directoryItem : FileView -> Decoder ( String, DirectoryItem )

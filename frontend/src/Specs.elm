@@ -44,6 +44,7 @@ steps name entry =
             , args = Dict.empty
             , runState = ApiData.loading Nothing
             , isUpdating = False
+            , lastModifiedAt = Nothing
             , srcFiles =
                 { children = NotAsked
                 , expanded = False
@@ -75,6 +76,7 @@ projects stepConfig =
             , name = ""
             , tables = Dict.map (always <| always initialTable) stepConfig
             , isUpdating = False
+            , lastModifiedAt = Nothing
             }
         , displayName = "Projects"
         , description = Nothing

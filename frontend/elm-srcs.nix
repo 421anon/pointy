@@ -60,6 +60,11 @@
         version = "1.1.4";
       };
 
+      "elm/time" = {
+        sha256 = "0vch7i86vn0x8b850w1p69vplll1bnbkp8s383z7pinyg94cm2z1";
+        version = "1.0.0";
+      };
+
       "elm/url" = {
         sha256 = "0av8x5syid40sgpl5vd7pry2rq0q4pga28b4yykn9gd9v12rs3l4";
         version = "1.0.0";
@@ -73,6 +78,16 @@
       "erlandsona/elm-accessors" = {
         sha256 = "0ky3c5mwa2k7c1nxhy6qkwxv42jv2g9z88z6i7vvqb9kh8d6bnm4";
         version = "4.2.0";
+      };
+
+      "gingko/time-distance" = {
+        sha256 = "0pfhk4ggp77gbvx6w9bv1ngh7cxgsvwkh0pv3bpk74kghhqfdm96";
+        version = "2.4.0";
+      };
+
+      "rtfeldman/elm-iso8601-date-strings" = {
+        sha256 = "1ah491kgyicgvy1c9myylqvhzb7ya9kgmn0hcsv23ymvqgaf6b1a";
+        version = "1.1.4";
       };
 
       "ursi/elm-scroll" = {
@@ -135,11 +150,6 @@
         version = "1.0.0";
       };
 
-      "elm/time" = {
-        sha256 = "0vch7i86vn0x8b850w1p69vplll1bnbkp8s383z7pinyg94cm2z1";
-        version = "1.0.0";
-      };
-
       "elm/virtual-dom" = {
         sha256 = "1brihc087l8bd30vjl5vg1yg4mgxrngh9854qsjs5lrp026h517l";
         version = "1.0.4";
@@ -188,11 +198,6 @@
       "robinheghan/murmur3" = {
         sha256 = "15asmgr2zqh7rkywrg5647rpdqkpzxk02v5qc6ndj60jza3gsmjk";
         version = "1.0.0";
-      };
-
-      "rtfeldman/elm-iso8601-date-strings" = {
-        sha256 = "1ah491kgyicgvy1c9myylqvhzb7ya9kgmn0hcsv23ymvqgaf6b1a";
-        version = "1.1.4";
       };
 
       "tesk9/palette" = {

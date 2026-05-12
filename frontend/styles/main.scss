@@ -173,6 +173,12 @@ body {
   padding-inline: var(--spacing-2xs);
 }
 
+.table-record-mtime {
+  font-family: monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .pending-record-indicator {
   display: inline-flex;
   align-items: center;
