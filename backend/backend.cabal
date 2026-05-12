@@ -33,7 +33,8 @@ executable backend
                    Handlers.StatusStream,
                    Handlers.Upload,
                    Bus,
-                   NixUtils
+                   NixUtils,
+                   EvalError
     build-depends: base ^>=4.19.2.0,
                    stm,
                    async,

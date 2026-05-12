@@ -12,7 +12,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (evaluateJsonToNix)
-import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
+import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead, forkPrimeEvalErrorAtHead)
 import OutPaths (withWriteRepoTransaction)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), throwError)
@@ -36,6 +36,7 @@ patchStepHandler stepId jsonBody = do
             case result of
                 Right _ -> do
                     liftIO $ forkBroadcastStatusForStepProjectsAtHead stepId
+                    liftIO $ forkPrimeEvalErrorAtHead stepId
                     return NoContent
                 Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
@@ -55,12 +56,13 @@ postStepHandler maybeProjectId jsonBody = do
             case maybeProjectId of
                 Just projectId -> "Create step " ++ show stepId ++ " and assign to project " ++ show projectId
                 Nothing -> "Create step " ++ show stepId
-        return output
+        return (stepId, output)
     case result of
-        Right output -> do
+        Right (stepId, output) -> do
             case maybeProjectId of
                 Just projectId -> liftIO $ forkBroadcastProjectStatusAtHead projectId
                 Nothing -> return ()
+            liftIO $ forkPrimeEvalErrorAtHead stepId
             return output
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 

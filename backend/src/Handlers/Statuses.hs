@@ -12,9 +12,11 @@ module Handlers.Statuses (
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
     forkBroadcastStatusForStepProjectsAtHead,
+    forkPrimeEvalErrorAtHead,
 ) where
 
 import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
+import EvalError (getCachedEvalError, kickEvalStepDrv, shortEvalError)
 import Bus (broadcastSnapshot)
 import Control.Concurrent (forkIO)
 import Control.Monad (forM_, void)
@@ -27,7 +29,7 @@ import Data.Aeson (eitherDecode)
 import Data.List (foldl')
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
@@ -37,7 +39,7 @@ import Servant (Handler, throwError)
 import Servant.Server (err500, errBody)
 import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
-import UserRepo (ReadRepoContext (..), runNix, runNixInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNix, runNixInRepo, userRepoPath, withReadRepoTransaction)
 
 {-# NOINLINE dependencyRunningOverrides #-}
 dependencyRunningOverrides :: TVar (Map (Text, Int) Int)
@@ -86,13 +88,41 @@ resolveFailure path fallback = do
 getStatuses :: Text -> Map Int Text -> IO (Map Int (Text, Maybe Text))
 getStatuses targetCommit outPaths = do
     rawStatuses <- Map.fromList <$> mapConcurrently getStatusForStep (Map.toList outPaths)
-    applyDependencyRunningOverrides targetCommit rawStatuses
+    withDeps <- applyDependencyRunningOverrides targetCommit rawStatuses
+    enrichWithEvalErrors targetCommit outPaths withDeps
   where
     getStatusForStep (sid, path) = do
         status_ <-
             checkStatus (unpack path)
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
+
+-- | Attach cached eval-error messages to invalid steps, kicking a
+-- background eval (and re-broadcast on failure) when no entry exists.
+enrichWithEvalErrors :: Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+enrichWithEvalErrors targetCommit outPaths statuses = do
+    repoPath <- userRepoPath
+    let ctx = ReadRepoContext repoPath (unpack targetCommit)
+    Map.fromList <$> mapM (enrich ctx) (Map.toList statuses)
+  where
+    enrich ctx (sid, current@(state, mMsg))
+        | not (eligible sid state mMsg) = pure (sid, current)
+        | otherwise = do
+            mCached <- getCachedEvalError targetCommit sid
+            case mCached of
+                Just (Left err) -> pure (sid, ("failure", shortEvalError err))
+                Just _ -> pure (sid, current)
+                Nothing -> do
+                    kickEvalStepDrv ctx sid (onKicked sid)
+                    pure (sid, current)
+
+    eligible sid state mMsg =
+        Map.findWithDefault "" sid outPaths == "/invalid"
+            && (state == "failure" || state == "not-started")
+            && isNothing mMsg
+
+    onKicked sid (Left _) = broadcastStatusForStepProjects sid targetCommit Nothing
+    onKicked _ _ = pure ()
 
 addDependencyRunningOverrides :: Text -> [Int] -> IO ()
 addDependencyRunningOverrides targetCommit stepIds =
@@ -173,6 +203,21 @@ forkBroadcastStatusForStepProjectsAtHead sid = do
     case eHead of
         Left err -> putStrLn $ "forkBroadcastStatusForStepProjectsAtHead skipped: " ++ err
         Right c -> void $ forkIO $ broadcastStatusForStepProjects sid c Nothing
+
+-- | Schedule a background eval for the step at HEAD; on failure the
+-- callback re-emits a snapshot so SSE consumers pick up the message.
+forkPrimeEvalErrorAtHead :: Int -> IO ()
+forkPrimeEvalErrorAtHead sid = do
+    eHead <- withReadRepoTransaction $ \(ReadRepoContext repoPath hash) ->
+        return (repoPath, pack hash)
+    case eHead of
+        Left err -> putStrLn $ "forkPrimeEvalErrorAtHead skipped: " ++ err
+        Right (repoPath, commitText) ->
+            let ctx = ReadRepoContext repoPath (unpack commitText)
+             in kickEvalStepDrv ctx sid (onPrimedEval commitText)
+  where
+    onPrimedEval c (Left _) = broadcastStatusForStepProjects sid c Nothing
+    onPrimedEval _ (Right _) = pure ()
 
 projectContainsStep :: Int -> ProjectDef -> Bool
 projectContainsStep sid p =

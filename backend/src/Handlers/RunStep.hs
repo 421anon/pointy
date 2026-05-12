@@ -7,6 +7,7 @@ module Handlers.RunStep (
 ) where
 
 import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
+import EvalError (cachedEvalStepDrv, cleanEvalError, getCachedEvalError, shortEvalError)
 import Cache (getOutPathFromCache, memoizeStepOutPaths)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
@@ -79,7 +80,16 @@ stepLogHandler eid commit = do
                     return (repoPath, maybe commitHash T.unpack commit)
 
         let ctx = ReadRepoContext repoPath targetCommit
-        liftIO $ resolveBuildLog (stepInstallable ctx eid)
+        mResolved <- liftIO $ resolveBuildLog (stepInstallable ctx eid)
+        case mResolved of
+            Just rl -> return (Just (renderResolvedLog rl))
+            Nothing -> do
+                mEvalErr <- liftIO $ getCachedEvalError (T.pack targetCommit) eid
+                case mEvalErr of
+                    Just (Left stderrTxt) -> do
+                        mSrc <- liftIO $ readStepSource repoPath targetCommit eid
+                        return (Just (renderEvalError eid mSrc (cleanEvalError stderrTxt)))
+                    _ -> return Nothing
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
@@ -89,7 +99,7 @@ stepLogHandler eid commit = do
                     { errBody =
                         TLE.encodeUtf8 (TL.pack ("No build log available for step " ++ show eid))
                     }
-        Right (Just rl) -> return (renderResolvedLog rl)
+        Right (Just txt) -> return txt
 
 {- | Render a resolved log for the wire. Logs that come from an input
 derivation (rather than the step itself) are prefixed so the user knows
@@ -99,6 +109,29 @@ renderResolvedLog :: ResolvedLog -> T.Text
 renderResolvedLog (ResolvedLog _ logText StepDrv) = T.pack logText
 renderResolvedLog (ResolvedLog drv logText (InputDrv _ _)) =
     T.pack ("Build prerequisite failed: " ++ drv ++ "\n-----\n" ++ logText)
+
+-- | @git show <commit>:steps/<eid>.nix@. 'Nothing' iff the path does
+-- not exist at that revision or git exits non-zero.
+readStepSource :: FilePath -> String -> Int -> IO (Maybe T.Text)
+readStepSource repoPath targetCommit eid = do
+    let spec = targetCommit ++ ":steps/" ++ show eid ++ ".nix"
+    (ec, out, _) <-
+        readProcessWithExitCodeL "git" ["-C", repoPath, "show", spec] ""
+    case ec of
+        ExitSuccess -> return (Just (T.pack out))
+        _ -> return Nothing
+
+-- | Prepend the step's saved configuration (when available) to the
+-- cleaned eval-error trace.
+renderEvalError :: Int -> Maybe T.Text -> T.Text -> T.Text
+renderEvalError _ Nothing err = err
+renderEvalError eid (Just src) err =
+    "Step configuration (steps/"
+        <> T.pack (show eid)
+        <> ".nix):\n"
+        <> src
+        <> "\nError:\n"
+        <> err
 
 stepInstallable :: ReadRepoContext -> Int -> String
 stepInstallable (ReadRepoContext repoPath targetCommit) eid =
@@ -121,26 +154,35 @@ buildStep ctx eid = do
         if built
             then liftIO $ broadcastStatusForStepProjects eid targetCommitText Nothing
             else do
-                let unitName = outPathToUnitName outPath
-                _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["reset-failed", unitName] ""
-                liftIO $ broadcastStatusForStepProjects eid targetCommitText (Just ("running", Nothing))
-                _ <-
-                    liftIO $
-                        readProcessWithExitCodeL
-                            "systemd-run"
-                            ( [ "--uid=backend"
-                              , "--gid=backend"
-                              , "--slice=pointy-builds.slice"
-                              , "--unit=" ++ unitName
-                              , "--collect"
-                              , "--wait"
-                              ]
-                                ++ pathEnvArg
-                                ++ ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx eid]
-                            )
-                            ""
-                _ <- liftIO $ registerGcRootForOutPath outPath
-                liftIO $ broadcastStatusForStepProjects eid targetCommitText Nothing
+                evalResult <- liftIO $ cachedEvalStepDrv ctx eid
+                case evalResult of
+                    Left stderrTxt ->
+                        liftIO $
+                            broadcastStatusForStepProjects
+                                eid
+                                targetCommitText
+                                (Just ("failure", shortEvalError stderrTxt))
+                    Right _ -> do
+                        let unitName = outPathToUnitName outPath
+                        _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["reset-failed", unitName] ""
+                        liftIO $ broadcastStatusForStepProjects eid targetCommitText (Just ("running", Nothing))
+                        _ <-
+                            liftIO $
+                                readProcessWithExitCodeL
+                                    "systemd-run"
+                                    ( [ "--uid=backend"
+                                      , "--gid=backend"
+                                      , "--slice=pointy-builds.slice"
+                                      , "--unit=" ++ unitName
+                                      , "--collect"
+                                      , "--wait"
+                                      ]
+                                        ++ pathEnvArg
+                                        ++ ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx eid]
+                                    )
+                                    ""
+                        _ <- liftIO $ registerGcRootForOutPath outPath
+                        liftIO $ broadcastStatusForStepProjects eid targetCommitText Nothing
 
     case result of
         Left err -> putStrLn $ "buildStep error: " ++ err
