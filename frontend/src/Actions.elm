@@ -1,6 +1,6 @@
 module Actions exposing (..)
 
-import Accessors exposing (An_Optic, all, each, get, has, just, keyI, set, try, values)
+import Accessors exposing (An_Optic, all, each, get, has, just, keyI, over, set, try, values)
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Api.Decode as ApiDecode
@@ -446,8 +446,7 @@ onUrlRequest : Browser.UrlRequest -> Flow Model ()
 onUrlRequest urlRequest =
     case urlRequest of
         Browser.Internal url ->
-            Flow.get
-                |> Flow.andThen (\model -> Flow.lift (Nav.pushUrl (Model.getKey model) (Url.toString url)))
+            Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Url.toString url)))
 
         Browser.External href ->
             Flow.lift (Nav.load href)
@@ -455,12 +454,12 @@ onUrlRequest urlRequest =
 
 goToRoute : Route -> Flow Model ()
 goToRoute route =
-    Flow.get |> Flow.andThen (\model -> Flow.lift (Nav.pushUrl (Model.getKey model) (Route.toString route)))
+    Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Route.toString route)))
 
 
 replaceRoute : Route -> Flow Model ()
 replaceRoute route =
-    Flow.get |> Flow.andThen (\model -> Flow.lift (Nav.replaceUrl (Model.getKey model) (Route.toString route)))
+    Flow.forAll key (\k -> Flow.lift (Nav.replaceUrl k (Route.toString route)))
 
 
 clearStepLog : Int -> Maybe String -> Flow Model ()
@@ -610,21 +609,23 @@ cloneStep spec record =
         |> Flow.return ()
 
 
-shareEntity : Int -> Int -> List String -> Maybe Route.LineRange -> Flow Model ()
-shareEntity projectId entityId pathSegments mRange =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                let
-                    route_ =
-                        Route.Project
-                            { projectId = projectId
-                            , mHighlight = Just { id = entityId, path = pathSegments, range = mRange }
-                            , mCommit = try (commitHash << success) model
-                            }
-                in
-                callJs "copyToClipboard" Encode.string (Decode.succeed ()) (Model.getOrigin model ++ Route.toString route_)
-            )
+shareEntity : Int -> Int -> Route.HighlightTarget -> List String -> Maybe Route.LineRange -> Flow Model ()
+shareEntity projectId entityId target pathSegments mRange =
+    Flow.try (commitHash << success)
+        (\mCommit_ ->
+            Flow.forAll origin
+                (\origin_ ->
+                    let
+                        route_ =
+                            Route.Project
+                                { projectId = projectId
+                                , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
+                                , mCommit = mCommit_
+                                }
+                    in
+                    callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString route_)
+                )
+        )
         |> Flow.seq (addToast True "Share link copied to clipboard")
 
 
@@ -671,12 +672,20 @@ shouldSkipFileContents file_ =
 
 toggleFile : Int -> List String -> Flow Model ()
 toggleFile recordId path =
-    toggleOutputEntry recordId Nothing path |> Flow.return ()
+    toggleOutputEntry recordId Nothing path
+        |> Flow.andThen
+            (\isOpen ->
+                Flow.when (not isOpen) (clearHighlightedFileOnClose Route.Output recordId path)
+            )
 
 
 toggleSrcFile : Int -> List String -> Flow Model ()
 toggleSrcFile recordId path =
-    toggleSrcEntry recordId Nothing path |> Flow.return ()
+    toggleSrcEntry recordId Nothing path
+        |> Flow.andThen
+            (\isOpen ->
+                Flow.when (not isOpen) (clearHighlightedFileOnClose Route.Source recordId path)
+            )
 
 
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()
@@ -805,80 +814,158 @@ runAndClearStepStatusHook stepId =
         ((|>) (Flow.setAll (stepStatusHooks << keyI stepId) Nothing) << Flow.seq)
 
 
-deepOpenEntryOrDefer : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
-deepOpenEntryOrDefer id path mRange =
+openHighlightedEntry : Route.Highlight -> Flow Model ()
+openHighlightedEntry highlight =
+    case highlight.target of
+        Route.Output ->
+            deepOpenOutputEntryOrDefer highlight.id highlight.path highlight.range
+
+        Route.Source ->
+            deepOpenSourceEntry highlight.id highlight.path highlight.range
+
+
+deepOpenOutputEntryOrDefer : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
+deepOpenOutputEntryOrDefer id path mRange =
     Flow.try
         (projects << records << success << each << tables << values << records << success << by .id (Just id) << runState << success << status << success << where_ ((==) StatusSuccess))
         (\mStatus ->
             case mStatus of
                 Just _ ->
-                    deepOpenEntry id path mRange
+                    deepOpenOutputEntry id path mRange
 
                 Nothing ->
-                    registerStepStatusHook id (deepOpenEntry id path mRange)
+                    registerStepStatusHook id (deepOpenOutputEntry id path mRange)
                         |> Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt id) 0 0))
         )
 
 
-deepOpenEntry : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
-deepOpenEntry stepId path mRange =
+deepOpenOutputEntry : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
+deepOpenOutputEntry stepId path mRange =
     Flow.forAll (currentProject << success << tables << values << recordById stepId << runState << success << status << success << where_ ((==) StatusSuccess))
         (\_ ->
-            let
-                fileAnchor =
-                    String.join "/" (String.fromInt stepId :: path)
-
-                scrollToRange =
-                    case mRange of
-                        Just range ->
-                            Flow.attemptTask (Scroll.scrollElementY ("viewer-" ++ fileAnchor) ("line-" ++ fileAnchor ++ "-" ++ String.fromInt range.from) 0.05 0)
-
-                        Nothing ->
-                            Flow.pure ()
-            in
-            List.prefixes path
-                |> List.map
-                    (\pathPart ->
-                        toggleOutputEntry stepId (Just True) pathPart
-                            |> Flow.seq (Flow.attemptTask (Scroll.scrollY (String.join "/" <| String.fromInt stepId :: pathPart) 0 0))
-                    )
-                |> List.foldl Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt stepId) 0 0))
-                |> Flow.seq scrollToRange
+            deepOpenEntryWith Route.Output toggleOutputEntry stepId path mRange
         )
 
 
-startGutterDrag : Int -> List String -> Int -> Flow Model ()
-startGutterDrag recordId path line =
-    Flow.setAll gutterDrag (Just { recordId = recordId, path = path, anchor = line })
-        |> Flow.seq (updateGutterRange recordId path { from = line, to = line })
+deepOpenSourceEntry : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
+deepOpenSourceEntry stepId path mRange =
+    deepOpenEntryWith Route.Source toggleSrcEntry stepId path mRange
 
 
-extendGutterDrag : Int -> List String -> Int -> Flow Model ()
-extendGutterDrag recordId path line =
-    Flow.forAll (gutterDrag << just << where_ (\d -> d.recordId == recordId && d.path == path))
+deepOpenEntryWith : Route.HighlightTarget -> (Int -> Maybe Bool -> List String -> Flow Model Bool) -> Int -> List String -> Maybe Route.LineRange -> Flow Model ()
+deepOpenEntryWith target toggleEntry stepId path mRange =
+    let
+        fileAnchor =
+            Route.highlightAnchor target stepId path
+
+        scrollToRange =
+            case mRange of
+                Just range ->
+                    Flow.attemptTask (Scroll.scrollElementY ("viewer-" ++ fileAnchor) ("line-" ++ fileAnchor ++ "-" ++ String.fromInt range.from) 0.05 0)
+
+                Nothing ->
+                    Flow.pure ()
+    in
+    List.prefixes path
+        |> List.map
+            (\pathPart ->
+                toggleEntry stepId (Just True) pathPart
+                    |> Flow.seq (Flow.attemptTask (Scroll.scrollY (Route.highlightAnchor target stepId pathPart) 0 0))
+            )
+        |> List.foldl Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt stepId) 0 0))
+        |> Flow.seq scrollToRange
+
+
+startGutterDrag : Route.HighlightTarget -> Int -> List String -> Int -> Flow Model ()
+startGutterDrag target recordId path line =
+    Flow.forAll route
+        (\route_ ->
+            let
+                clearOnClick =
+                    try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+                        |> Maybe.andThen .range
+                        |> Maybe.map (\range -> range.from == line && range.to == line)
+                        |> Maybe.withDefault False
+
+                drag =
+                    { target = target
+                    , recordId = recordId
+                    , path = path
+                    , anchor = line
+                    , current = line
+                    , moved = False
+                    , clearOnClick = clearOnClick
+                    }
+            in
+            Flow.setAll gutterDrag (Just drag)
+                |> Flow.seq
+                    (Flow.when (not clearOnClick)
+                        (updateGutterRange target recordId path { from = line, to = line })
+                    )
+        )
+
+
+extendGutterDrag : Route.HighlightTarget -> Int -> List String -> Int -> Flow Model ()
+extendGutterDrag target recordId path line =
+    Flow.forAll (gutterDrag << just << where_ (\d -> d.target == target && d.recordId == recordId && d.path == path))
         (\drag ->
-            updateGutterRange recordId path { from = min drag.anchor line, to = max drag.anchor line }
+            let
+                nextDrag =
+                    { drag | current = line, moved = drag.moved || line /= drag.current }
+            in
+            Flow.setAll gutterDrag (Just nextDrag)
+                |> Flow.seq (updateGutterRange target recordId path { from = min drag.anchor line, to = max drag.anchor line })
         )
 
 
 endGutterDrag : Flow Model ()
 endGutterDrag =
-    Flow.setAll gutterDrag Nothing
+    Flow.forAll (gutterDrag << just)
+        (\drag ->
+            Flow.setAll gutterDrag Nothing
+                |> Flow.seq
+                    (Flow.when (drag.clearOnClick && not drag.moved)
+                        (clearHighlightedRange drag.target drag.recordId drag.path)
+                    )
+        )
 
 
-updateGutterRange : Int -> List String -> Route.LineRange -> Flow Model ()
-updateGutterRange recordId path range =
+clearHighlightedRange : Route.HighlightTarget -> Int -> List String -> Flow Model ()
+clearHighlightedRange target recordId path =
+    overRouteReplace
+        (over
+            (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path))
+            (\highlight -> { highlight | range = Nothing })
+        )
+
+
+clearHighlightedFileOnClose : Route.HighlightTarget -> Int -> List String -> Flow Model ()
+clearHighlightedFileOnClose target recordId path =
     let
-        newHighlight =
-            { id = recordId, path = path, range = Just range }
+        shouldClear highlight =
+            Route.highlightMatches target recordId path highlight && Maybe.isJust highlight.range
     in
-    Flow.forAll (route << Route.project)
-        (\params ->
-            if params.mHighlight == Just newHighlight then
-                Flow.pure ()
+    overRouteReplace
+        (over (Route.project << mHighlight) (Maybe.filter (not << shouldClear)))
 
-            else
-                replaceRoute (Project { params | mHighlight = Just newHighlight })
+
+updateGutterRange : Route.HighlightTarget -> Int -> List String -> Route.LineRange -> Flow Model ()
+updateGutterRange target recordId path range =
+    overRouteReplace
+        (set (Route.project << mHighlight)
+            (Just { id = recordId, target = target, path = path, range = Just range })
+        )
+
+
+overRouteReplace : (Route -> Route) -> Flow Model ()
+overRouteReplace fn =
+    Flow.forAll route
+        (\current ->
+            let
+                next =
+                    fn current
+            in
+            Flow.when (next /= current) (replaceRoute next)
         )
 
 
@@ -983,7 +1070,7 @@ onSelectSearch mProjectId stepId =
                         mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
                 in
                 pickedProjectId
-                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, path = [], range = Nothing }, mCommit = mCommit_ }))
+                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = mCommit_ }))
             )
 
 

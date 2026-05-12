@@ -146,32 +146,39 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
         path =
             directoryPath ++ [ itemName ]
 
-        anchor =
-            String.join "/" <| Maybe.unwrap "" String.fromInt mRecordId :: path
+        mGutter =
+            case ( mRecordId, mDirCtx ) of
+                ( Just recordId, Just (OutputDir _) ) ->
+                    Just { recordId = recordId, target = Route.Output }
 
-        mGutterRecordId =
-            case mDirCtx of
-                Just _ ->
-                    mRecordId
+                ( Just recordId, Just (SrcDir _) ) ->
+                    Just { recordId = recordId, target = Route.Source }
 
-                Nothing ->
+                _ ->
                     Nothing
 
+        anchor =
+            mGutter
+                |> Maybe.map (\{ recordId, target } -> Route.highlightAnchor target recordId path)
+                |> Maybe.withDefault (String.join "/" <| Maybe.unwrap "" String.fromInt mRecordId :: path)
+
         mSelectedRange =
-            mGutterRecordId
+            mGutter
                 |> Maybe.andThen
-                    (\recordId ->
-                        try (route << Route.project << mHighlight << just << where_ (\hi -> hi.id == recordId && hi.path == path)) model
+                    (\{ recordId, target } ->
+                        try (route << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) model
                             |> Maybe.andThen .range
                     )
 
         shareButton =
             let
                 shareAction =
-                    Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId path mSelectedRange)
-                        (try currentProjectId model)
-                        mRecordId
-                        |> Maybe.withDefault Flow.none
+                    case ( try currentProjectId model, mGutter ) of
+                        ( Just projectId, Just { recordId, target } ) ->
+                            Actions.shareEntity projectId recordId target path mSelectedRange
+
+                        _ ->
+                            Flow.none
 
                 shareTooltip =
                     Maybe.unwrap "Share" (\range -> "Share lines " ++ Route.formatLineRange range) mSelectedRange
@@ -247,7 +254,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         ]
                                         [ icon True "open_in_new" ]
                                 )
-                        , Html.viewIf ((file.viewable || isImage) && not (has (just << srcDir) mDirCtx)) shareButton
+                        , Html.viewIf ((file.viewable || isImage) && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
                         , Html.button
                             [ class "dir-item-icon-btn"
                             , Html.Events.onClick
@@ -323,12 +330,12 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                         gutterAttrs =
                                             Maybe.unwrap []
-                                                (\recordId ->
-                                                    [ Html.Events.on "pointerdown" (Decode.succeed (Actions.startGutterDrag recordId path lineNum))
-                                                    , Html.Events.on "pointerenter" (Decode.succeed (Actions.extendGutterDrag recordId path lineNum))
+                                                (\{ recordId, target } ->
+                                                    [ Html.Events.on "pointerdown" (Decode.succeed (Actions.startGutterDrag target recordId path lineNum))
+                                                    , Html.Events.on "pointerenter" (Decode.succeed (Actions.extendGutterDrag target recordId path lineNum))
                                                     ]
                                                 )
-                                                mGutterRecordId
+                                                mGutter
                                     in
                                     Html.div
                                         [ classList
@@ -340,7 +347,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         [ Html.span
                                             (classList
                                                 [ ( "file-line-number", True )
-                                                , ( "is-gutter", Maybe.isJust mGutterRecordId )
+                                                , ( "is-gutter", Maybe.isJust mGutter )
                                                 ]
                                                 :: gutterAttrs
                                             )

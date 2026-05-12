@@ -136,9 +136,13 @@ type Model
 
 
 type alias GutterDrag =
-    { recordId : Int
+    { target : Route.HighlightTarget
+    , recordId : Int
     , path : List String
     , anchor : Int
+    , current : Int
+    , moved : Bool
+    , clearOnClick : Bool
     }
 
 

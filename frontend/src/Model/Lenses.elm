@@ -90,13 +90,13 @@ projects =
 
 
 currentTableOf : String -> Traversal Model (Table StepRecord) x y
-currentTableOf key =
-    currentProject << success << tableInProject key
+currentTableOf key_ =
+    currentProject << success << tableInProject key_
 
 
 tableInProject : String -> Traversal ProjectRecord (Table StepRecord) x y
-tableInProject key =
-    tables << Dict.Accessors.at key << just
+tableInProject key_ =
+    tables << Dict.Accessors.at key_ << just
 
 
 args : Lens ls { a | args : b } b x y
@@ -240,8 +240,8 @@ file =
 
 
 entryAt : String -> Traversal (ApiData (Dict String a)) a x y
-entryAt key =
-    success << Dict.Accessors.at key << just
+entryAt key_ =
+    success << Dict.Accessors.at key_ << just
 
 
 reversePrism : A_Prism pr s a -> Traversal a s x y
@@ -474,3 +474,11 @@ stepStatusHooks =
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y
 gutterDrag =
     lens ".gutterDrag" Model.getGutterDrag (\(Model m) drag -> Model { m | gutterDrag = drag })
+
+
+key =
+    lens ".key" Model.getKey (\(Model m) key_ -> Model { m | key = key_ })
+
+
+origin =
+    lens ".origin" Model.getOrigin (\(Model m) origin_ -> Model { m | origin = origin_ })

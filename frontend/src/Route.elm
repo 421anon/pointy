@@ -1,4 +1,4 @@
-module Route exposing (Highlight, LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, href, parseLineRange, project, toString)
+module Route exposing (Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, parseLineRange, project, toString)
 
 import Accessors exposing (Prism, prism)
 import Html
@@ -21,8 +21,14 @@ type alias ProjectParams =
     }
 
 
+type HighlightTarget
+    = Output
+    | Source
+
+
 type alias Highlight =
     { id : Int
+    , target : HighlightTarget
     , path : List String
     , range : Maybe LineRange
     }
@@ -72,8 +78,11 @@ parser =
 highlightParser : List String -> Maybe Highlight
 highlightParser strs =
     case Maybe.map (String.split "/") <| List.head strs of
+        Just ("src" :: idStr :: rest) ->
+            String.toInt idStr |> Maybe.map (\id -> { id = id, target = Source, path = rest, range = Nothing })
+
         Just (idStr :: rest) ->
-            String.toInt idStr |> Maybe.map (\id -> { id = id, path = rest, range = Nothing })
+            String.toInt idStr |> Maybe.map (\id -> { id = id, target = Output, path = rest, range = Nothing })
 
         _ ->
             Nothing
@@ -108,6 +117,35 @@ formatLineRange { from, to } =
         String.fromInt from ++ "-" ++ String.fromInt to
 
 
+highlightAnchor : HighlightTarget -> Int -> List String -> String
+highlightAnchor target id path =
+    let
+        targetPrefix =
+            case target of
+                Output ->
+                    "out"
+
+                Source ->
+                    "src"
+    in
+    String.join "/" (targetPrefix :: String.fromInt id :: path)
+
+
+highlightMatches : HighlightTarget -> Int -> List String -> Highlight -> Bool
+highlightMatches target recordId path highlight =
+    highlight.target == target && highlight.id == recordId && highlight.path == path
+
+
+navigationTarget : Route -> Route
+navigationTarget route =
+    case route of
+        Project params ->
+            Project { params | mHighlight = Maybe.map (\highlight -> { highlight | range = Nothing }) params.mHighlight }
+
+        other ->
+            other
+
+
 fromUrl : Url -> Route
 fromUrl url =
     case Parser.parse parser url of
@@ -136,15 +174,17 @@ toString route =
 
                 hiStr =
                     Maybe.map
-                        (\{ id, path } ->
-                            "hi="
-                                ++ String.fromInt id
-                                ++ (if List.isEmpty path then
-                                        ""
+                        (\{ id, target, path } ->
+                            let
+                                hiPath =
+                                    case target of
+                                        Output ->
+                                            String.fromInt id :: path
 
-                                    else
-                                        "/" ++ String.join "/" path
-                                   )
+                                        Source ->
+                                            "src" :: String.fromInt id :: path
+                            in
+                            "hi=" ++ String.join "/" hiPath
                         )
                         mHighlight
 

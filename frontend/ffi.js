@@ -53,14 +53,22 @@ function toggleTheme() {
   localStorage.setItem("theme", next);
 }
 
-// Release the implicit pointer capture browsers set on touch pointerdown.
-// Without this, pointerenter/leave do not fire on sibling gutter rows
-// during a touch drag, preventing cross-row selection.
-document.addEventListener("pointerdown", (e) => {
-  if (e.target?.matches?.(".file-line-number.is-gutter")) {
-    e.target.releasePointerCapture(e.pointerId);
-  }
-});
+function installGutterDragListeners(app) {
+  const emitEnd = () => {
+    if (app.ports && app.ports.gutterDragEnd) {
+      app.ports.gutterDragEnd.send(null);
+    }
+  };
+
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target?.matches?.(".file-line-number.is-gutter")) {
+      event.target.releasePointerCapture(event.pointerId);
+    }
+  });
+
+  document.addEventListener("pointerup", emitEnd);
+  document.addEventListener("pointercancel", emitEnd);
+}
 
 export function connectPorts(app) {
   function emitToElm(type, data) {
@@ -117,6 +125,8 @@ export function connectPorts(app) {
     zoomIframe,
     toggleTheme,
   };
+
+  installGutterDragListeners(app);
 
   if (app.ports && app.ports.ffiOut) {
     app.ports.ffiOut.subscribe((req) => {
