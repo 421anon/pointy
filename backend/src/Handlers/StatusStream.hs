@@ -55,38 +55,39 @@ stepStatusStreamHandler projectId commit = do
                     (sseComment "connected")
                     ( S.Yield
                         padding
-                        (S.Effect (prepareInitialSnapshot projectId targetCommit busChan))
+                        (S.Effect (prepareInitialSnapshot projectId commit targetCommit busChan))
                     )
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
 
-prepareInitialSnapshot :: Int -> Text -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
-prepareInitialSnapshot projectId targetCommit busChan = do
-    outPaths <- getProjectOutPaths projectId targetCommit
-    initialStatuses <- getStatuses targetCommit outPaths
-    let snapshotPayload = encodeSnapshot projectId targetCommit initialStatuses outPaths
+prepareInitialSnapshot :: Int -> Maybe Text -> Text -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
+prepareInitialSnapshot projectId pinnedCommit initialCommit busChan = do
+    outPaths <- getProjectOutPaths projectId initialCommit
+    initialStatuses <- getStatuses initialCommit outPaths
+    let snapshotPayload = encodeSnapshot projectId initialCommit initialStatuses outPaths
     pure
         ( S.Yield
             (sseEvent "snapshot" snapshotPayload)
-            (S.Effect (streamLoop projectId targetCommit initialStatuses 0 busChan))
+            (S.Effect (streamLoop projectId pinnedCommit initialStatuses 0 busChan))
         )
-streamLoop :: Int -> Text -> Map Int (Text, Maybe Text) -> Int -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
-streamLoop projectId targetCommit previousStatuses heartbeatTick busChan = do
+streamLoop :: Int -> Maybe Text -> Map Int (Text, Maybe Text) -> Int -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
+streamLoop projectId pinnedCommit previousStatuses heartbeatTick busChan = do
     return $ S.Effect $ do
         threadDelay 500000
         busUpdates <- atomically $ drainTChan busChan
 
-        let mLatestSnapshot = find (\snapshot -> Bus.projectId snapshot == projectId && Bus.commit snapshot == targetCommit) (reverse busUpdates)
+        let mLatestSnapshot = find (\snapshot -> Bus.projectId snapshot == projectId && maybe True (== Bus.commit snapshot) pinnedCommit) (reverse busUpdates)
 
         case mLatestSnapshot of
             Just snapshot -> do
+                let snapshotCommit = Bus.commit snapshot
                 let currentStatuses = Bus.statuses snapshot
                 let currentOutPaths = Bus.outPaths snapshot
-                let snapshotPayload = encodeSnapshot projectId targetCommit currentStatuses currentOutPaths
+                let snapshotPayload = encodeSnapshot projectId snapshotCommit currentStatuses currentOutPaths
                 return $
                     S.Yield
                         (sseEvent "snapshot" snapshotPayload)
-                        (S.Effect (streamLoop projectId targetCommit currentStatuses 0 busChan))
+                        (S.Effect (streamLoop projectId pinnedCommit currentStatuses 0 busChan))
             Nothing -> do
                 let nextHeartbeatTick = heartbeatTick + 1
                 let (heartbeatEvents, finalTick) =
@@ -100,7 +101,7 @@ streamLoop projectId targetCommit previousStatuses heartbeatTick busChan = do
                             then [tickComment]
                             else heartbeatEvents
 
-                return $ yieldAll events (S.Effect (streamLoop projectId targetCommit previousStatuses finalTick busChan))
+                return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit previousStatuses finalTick busChan))
 
 drainTChan :: TChan a -> STM [a]
 drainTChan chan = do
