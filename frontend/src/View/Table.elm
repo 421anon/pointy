@@ -939,6 +939,34 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , mAllowedStepTypes = mAllowedStepTypes
                         }
 
+
+                TEnum values ->
+                    let
+                        currentValue =
+                            try (paramLens << just << tStringValue) model
+                                |> Maybe.withDefault ""
+                    in
+                    Html.div []
+                        [ Html.label [ for fieldId ] [ Html.text fieldLabel ]
+                        , Html.select
+                            ([ id fieldId
+                            , disabled readOnly
+                            , Events.onInput (\v -> Flow.modify (set paramLens (Just (TEnumValue v))))
+                            ]
+                                ++ (if fieldHasChanged then [ class "changed" ] else [])
+                            )
+                            (List.map
+                                (\v ->
+                                    Html.option
+                                        [ value v
+                                        , selected (currentValue == v)
+                                        ]
+                                        [ Html.text v ]
+                                )
+                                values
+                            )
+                        ]
+
                 TString display ->
                     case display of
                         TextField ->

@@ -10,6 +10,7 @@ type StepArgType
     | TStep (Maybe (List String))
     | TUploadHash
     | TList StepArgType
+    | TEnum (List String)
 
 
 type TStringDisplay
@@ -24,6 +25,7 @@ type StepArgValue
     | TStepValue Int
     | TUploadHashValue String
     | TListValue (List StepArgValue)
+    | TEnumValue String
 
 
 tStringValue : Prism ls StepArgValue String x y

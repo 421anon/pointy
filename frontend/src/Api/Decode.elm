@@ -218,6 +218,7 @@ stepArgType : Decoder StepArgType
 stepArgType =
     firstMatching
         [ Decode.field "string" (Decode.succeed TString |> required "display" tStringDisplay)
+        , Decode.field "enum" (Decode.map TEnum (Decode.list Decode.string))
         , Decode.field "step" (Decode.map TStep <| maybe <| Decode.field "allowedTypes" (Decode.list Decode.string))
         , Decode.field "list" (Decode.map TList (Decode.lazy (\() -> stepArgType)))
         ]
@@ -261,6 +262,9 @@ stepArgValue argType_ =
 
         TUploadHash ->
             Decode.field "hash" Decode.string |> Decode.map TUploadHashValue
+
+        TEnum _ ->
+            Decode.string |> Decode.map TEnumValue
 
 
 stepArgs : StepType -> Decoder (Dict String StepArgValue)
