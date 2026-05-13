@@ -337,6 +337,12 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             [ class "record-name-container"
                             ]
                             [ Html.text record.name
+                            , Html.viewMaybe
+                                (\id_ ->
+                                    Html.span [ class "table-record-id", title <| "id: " ++ String.fromInt id_ ]
+                                        [ Html.text (String.fromInt id_) ]
+                                )
+                                record.id
                             , iconCustom True
                                 "edit"
                                 [ class "edit-icon"
@@ -351,6 +357,19 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
 
                         actionsContainerClass =
                             "table-record-actions-container"
+
+                        mtimeBadge =
+                            Html.viewMaybe
+                                (\posix ->
+                                    let iso = Iso8601.fromTime posix in
+                                    Html.node "time"
+                                        [ class "table-record-mtime"
+                                        , attribute "datetime" iso
+                                        , title ("Last modified: " ++ iso)
+                                        ]
+                                        [ Html.text (Time.Distance.inWords posix (Model.getNow model)) ]
+                                )
+                                record.lastModifiedAt
                     in
                     Html.div
                         ([ class "table-record", id itemId ] ++ attrs)
@@ -383,23 +402,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                     viewStatusApiData (TableSpec.getStatus spec record)
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
-                                , Html.viewMaybe
-                                    (\id_ ->
-                                        Html.span [ class "table-record-id", title <| "id: " ++ String.fromInt id_ ]
-                                            [ Html.text (String.fromInt id_) ]
-                                    )
-                                    record.id
-                                , Html.viewMaybe
-                                    (\posix ->
-                                        let iso = Iso8601.fromTime posix in
-                                        Html.node "time"
-                                            [ class "table-record-mtime"
-                                            , attribute "datetime" iso
-                                            , title ("Last modified: " ++ iso)
-                                            ]
-                                            [ Html.text (Time.Distance.inWords posix (Model.getNow model)) ]
-                                    )
-                                    record.lastModifiedAt
+                                , mtimeBadge
                                 , Html.viewIf (record.id == Nothing) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
                                         [ iconCustom True "progress_activity" [ class "pending-record-icon" ]
@@ -439,6 +442,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 , Html.viewIf (not isReadOnly) <|
                                     Html.div (class "table-record-drag-target" :: List.map (map (Actions.dndMsgToIO mProjectId spec)) (mkTargetAttrs itemId))
                                         [ icon True "drag_indicator" ]
+                                , mtimeBadge
                                 ]
                             ]
                         , Html.viewIf (TableSpec.getSrcFilesView spec record |> Maybe.map .expanded |> Maybe.withDefault False) (srcFilesSection record)
