@@ -70,6 +70,20 @@ tListValue =
         )
 
 
+tEnumValue : Prism ls StepArgValue String x y
+tEnumValue =
+    prism ">TEnumValue"
+        TEnumValue
+        (\stepArgVal ->
+            case stepArgVal of
+                TEnumValue val ->
+                    Ok val
+
+                _ ->
+                    Err stepArgVal
+        )
+
+
 type alias ArgType =
     { description : String, type_ : StepArgType, displayName : Maybe String }
 

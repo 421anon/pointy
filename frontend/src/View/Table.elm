@@ -27,7 +27,7 @@ import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tListValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tEnumValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Set
@@ -939,33 +939,38 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , mAllowedStepTypes = mAllowedStepTypes
                         }
 
-
                 TEnum values ->
-                    let
-                        currentValue =
-                            try (paramLens << just << tStringValue) model
-                                |> Maybe.withDefault ""
-                    in
-                    Html.div []
-                        [ Html.label [ for fieldId ] [ Html.text fieldLabel ]
-                        , Html.select
+                    formField
+                        { label = fieldLabel
+                        , mHint = fieldHint
+                        , id = fieldId
+                        }
+                        (Html.select
                             ([ id fieldId
+                            , class "form-input"
+                            , classList [ ( "field-changed", fieldHasChanged ) ]
                             , disabled readOnly
                             , Events.onInput (\v -> Flow.modify (set paramLens (Just (TEnumValue v))))
                             ]
-                                ++ (if fieldHasChanged then [ class "changed" ] else [])
                             )
                             (List.map
                                 (\v ->
                                     Html.option
                                         [ value v
-                                        , selected (currentValue == v)
+                                        , selected
+                                            (case try (paramLens << just << tEnumValue) model of
+                                                Just current ->
+                                                    current == v
+
+                                                Nothing ->
+                                                    False
+                                            )
                                         ]
                                         [ Html.text v ]
                                 )
                                 values
                             )
-                        ]
+                        )
 
                 TString display ->
                     case display of
