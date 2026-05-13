@@ -172,6 +172,10 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             )
                             (Actions.toggleRecordVisibility spec mProjectId Nothing record)
               }
+            , -- Clone button (shareable only)
+              { shouldShow = \record -> not isReadOnly && TableSpec.getShareable spec record
+              , render = \record -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec record)
+              }
             , -- Remove button
               { shouldShow =
                     \record ->
