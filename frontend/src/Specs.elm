@@ -6,11 +6,12 @@ import Api.ApiData as ApiData exposing (ApiData(..))
 import Api.Decode as Decode
 import Api.Encode as Encode
 import Dict
+import Components.Select as Select
 import Extra.Accessors exposing (where_)
 import Flow
-import Model.Core exposing (ProjectRecord, StepRecord, TableTag(..), initialTable)
+import Model.Core as Model exposing (ProjectRecord, StepRecord, TableTag(..))
 import Model.Lenses as Lenses exposing (currentTableOf)
-import Model.Shadow as Shadow exposing (StepConfig, StepConfigEntry, WithSrcFiles(..))
+import Model.Shadow as Shadow exposing (Presets, StepConfig, StepConfigEntry, WithSrcFiles(..))
 import Model.TableSpec exposing (TableSpec(..))
 
 
@@ -59,14 +60,14 @@ steps name entry =
         }
 
 
-projects : StepConfig -> TableSpec ProjectRecord
-projects stepConfig =
+projects : Presets -> StepConfig -> TableSpec ProjectRecord
+projects presets stepConfig =
     TableSpec
         { tag = TagProjects
         , name = "projects"
         , lens = Lenses.projects
         , encodeRecord = Encode.projectRecord
-        , decodeRecord = Decode.projectRecord stepConfig
+        , decodeRecord = Decode.projectRecord presets stepConfig
         , status = always NotAsked
         , directoryView = always Nothing
         , srcFilesView = always Nothing
@@ -76,7 +77,11 @@ projects stepConfig =
             , hidden = False
             , sortKey = Nothing
             , name = ""
-            , tables = Dict.map (always <| always initialTable) stepConfig
+            , tables = Dict.empty
+            , templateSource = Model.defaultTemplateSource presets
+            , orphanedSteps = []
+            , presetSelect = Select.initSelectState
+            , templatesSelect = Select.initSelectState
             , isUpdating = False
             , lastModifiedAt = Nothing
             }

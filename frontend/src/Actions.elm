@@ -22,7 +22,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), dndSystem)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
@@ -171,10 +171,13 @@ createProject : ProjectRecord -> FlowError Http.Error Model ProjectRecord
 createProject record =
     Flow.forAll (stepConfig << success)
         (\stepConfig_ ->
-            optimisticCreate
-                projects
-                record
-                (Api.createProject stepConfig_ record)
+            Flow.forAll (presets << success)
+                (\presets_ ->
+                    optimisticCreate
+                        projects
+                        record
+                        (Api.createProject presets_ stepConfig_ record)
+                )
         )
 
 
@@ -235,15 +238,18 @@ loadProjects : Flow Model ()
 loadProjects =
     Flow.forAll (stepConfig << success)
         (\stepConfig_ ->
-            Flow.get
-                |> Flow.andThen
-                    (\model ->
-                        let
-                            mCommit_ =
-                                try (route << Route.project << mCommit << just) model
-                        in
-                        callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ stepConfig_ |> Flow.map (Result.map sortProjects))
-                    )
+            Flow.forAll (presets << success)
+                (\presets_ ->
+                    Flow.get
+                        |> Flow.andThen
+                            (\model ->
+                                let
+                                    mCommit_ =
+                                        try (route << Route.project << mCommit << just) model
+                                in
+                                callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
+                            )
+                )
         )
         |> Flow.return ()
 
@@ -273,6 +279,58 @@ loadStepConfig =
                         )
             )
         |> Flow.return ()
+
+
+loadPresets : Flow Model ()
+loadPresets =
+    Flow.try (route << Route.project << mCommit << just)
+        (callApi presets << Api.fetchPresets)
+        |> Flow.return ()
+
+
+chooseProjectPreset : String -> Flow Model ()
+chooseProjectPreset =
+    Flow.setAll (projects << edited << just << templateSource) << FromPreset
+
+
+chooseProjectCustom : Flow Model ()
+chooseProjectCustom =
+    Flow.forAll (presets << success)
+        (\presets_ ->
+            Flow.over (projects << edited << just << templateSource)
+                (CustomTemplates << Model.effectiveTemplates presets_)
+        )
+
+
+addProjectTemplate : String -> Flow Model ()
+addProjectTemplate template =
+    Flow.forAll (presets << success)
+        (\presets_ ->
+            Flow.over (projects << edited << just << templateSource)
+                (\source ->
+                    let
+                        current =
+                            Model.effectiveTemplates presets_ source
+                    in
+                    if List.member template current then
+                        source
+
+                    else
+                        CustomTemplates (current ++ [ template ])
+                )
+        )
+
+
+removeProjectTemplate : String -> Flow Model ()
+removeProjectTemplate template =
+    Flow.forAll (presets << success)
+        (\presets_ ->
+            Flow.over (projects << edited << just << templateSource)
+                (CustomTemplates
+                    << List.filter ((/=) template)
+                    << Model.effectiveTemplates presets_
+                )
+        )
 
 
 refetchCommitHash : Flow Model ()
@@ -332,25 +390,28 @@ upsertProject spec =
         lens =
             TableSpec.getLens spec
     in
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
-                    |> Flow.assertJust
-                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddFromOtherProject)
-                    |> Flow.andThen
-                        (\( edited_, addMode_ ) ->
-                            case ( edited_.id, addMode_ ) of
-                                ( Nothing, AddNew ) ->
-                                    createProject edited_ |> Flow.return ()
+    Flow.forAll (presets << success)
+        (\presets_ ->
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
+                            |> Flow.assertJust
+                            |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddFromOtherProject)
+                            |> Flow.andThen
+                                (\( edited_, addMode_ ) ->
+                                    case ( edited_.id, addMode_ ) of
+                                        ( Nothing, AddNew ) ->
+                                            createProject edited_ |> Flow.return ()
 
-                                ( Nothing, AddFromOtherProject ) ->
-                                    Flow.pure ()
+                                        ( Nothing, AddFromOtherProject ) ->
+                                            Flow.pure ()
 
-                                ( Just _, _ ) ->
-                                    saveExistingRecord lens edited_ (always edited_) spec
-                        )
-            )
+                                        ( Just _, _ ) ->
+                                            saveExistingRecord lens edited_ (always (Model.repartitionProjectSteps presets_ edited_)) spec
+                                )
+                    )
+        )
 
 
 upsertStep : StepSpec -> Flow Model ()

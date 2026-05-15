@@ -2,12 +2,13 @@ module Api.Decode exposing (..)
 
 import Api.ApiData exposing (ApiData(..))
 import Dict exposing (Dict)
+import Components.Select as Select
 import Extra.Decode exposing (firstMatching)
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (optional, required)
-import Model.Core exposing (DirectoryItem(..), FileView, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), initialTable)
-import Model.Shadow exposing (ArgType, StepArgType(..), StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), TStringDisplay(..), WithSrcFiles(..))
+import Model.Core as Model exposing (DirectoryItem(..), FileView, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), initialTable)
+import Model.Shadow exposing (ArgType, Preset, Presets, StepArgType(..), StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), TStringDisplay(..), WithSrcFiles(..))
 
 
 stepStatusEvent : Decoder StepStatusEvent
@@ -30,9 +31,9 @@ stepStatusEvent =
             )
 
 
-userRepoInfo : Decoder Model.Core.UserRepoInfo
+userRepoInfo : Decoder Model.UserRepoInfo
 userRepoInfo =
-    Decode.succeed Model.Core.UserRepoInfo
+    Decode.succeed Model.UserRepoInfo
         |> required "url" Decode.string
         |> required "branch" Decode.string
 
@@ -86,25 +87,66 @@ status =
             )
 
 
-projectRecord : StepConfig -> Decoder ProjectRecord
-projectRecord stepConfig_ =
-    Decode.succeed
-        (\id name hidden sortKey lastModifiedAt steps ->
+preset : Decoder Preset
+preset =
+    Decode.succeed Preset
+        |> required "displayName" Decode.string
+        |> optional "description" (maybe Decode.string) Nothing
+        |> optional "sortKey" (maybe Decode.int) Nothing
+        |> required "templates" (Decode.list Decode.string)
+
+
+presets : Decoder Presets
+presets =
+    Decode.dict preset
+
+
+projectRecord : Presets -> StepConfig -> Decoder ProjectRecord
+projectRecord presets_ stepConfig_ =
+    let
+        resolveSource id_ mPreset mTemplates =
+            case ( mPreset, mTemplates ) of
+                ( Just _, Just _ ) ->
+                    Err ("Project `" ++ String.fromInt id_ ++ "` cannot define both `preset` and `templates`.")
+
+                ( Nothing, Nothing ) ->
+                    Err ("Project `" ++ String.fromInt id_ ++ "` must define either `preset` or `templates`.")
+
+                ( Just p, Nothing ) ->
+                    Ok (FromPreset p)
+
+                ( Nothing, Just ts ) ->
+                    Ok (CustomTemplates ts)
+
+        build fields source =
             let
-                stepsByType =
-                    List.foldl
-                        (\step -> Dict.update step.type_ (Just << (::) step << Maybe.withDefault []))
-                        (Dict.map (always <| always []) stepConfig_)
-                        steps
+                ( tablesByType, orphans ) =
+                    Model.partitionStepsByTemplate (Model.effectiveTemplates presets_ source) fields.steps
             in
-            { id = Just id
+            { id = Just fields.id
             , clientId = Nothing
+            , hidden = fields.hidden
+            , sortKey = fields.sortKey
+            , name = fields.name
+            , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) tablesByType
+            , templateSource = source
+            , orphanedSteps = orphans
+            , presetSelect = Select.initSelectState
+            , templatesSelect = Select.initSelectState
+            , isUpdating = False
+            , lastModifiedAt = fields.lastModifiedAt
+            }
+    in
+    Decode.succeed
+        (\id name hidden sortKey lastModifiedAt mPreset mTemplates steps ->
+            { id = id
+            , name = name
             , hidden = hidden
             , sortKey = sortKey
-            , name = name
-            , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) stepsByType
-            , isUpdating = False
             , lastModifiedAt = lastModifiedAt
+            , mPreset = mPreset
+            , mTemplates = mTemplates
+            , steps = steps
             }
         )
         |> required "id" Decode.int
@@ -112,7 +154,18 @@ projectRecord stepConfig_ =
         |> required "hidden" Decode.bool
         |> required "sortKey" (maybe Decode.int)
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
+        |> required "preset" (maybe Decode.string)
+        |> required "templates" (maybe (Decode.list Decode.string))
         |> required "steps" (Decode.list (stepRecord stepConfig_))
+        |> Decode.andThen
+            (\fields ->
+                case resolveSource fields.id fields.mPreset fields.mTemplates of
+                    Ok source ->
+                        Decode.succeed (build fields source)
+
+                    Err msg ->
+                        Decode.fail msg
+            )
 
 
 stepRecord : StepConfig -> Decoder StepRecord

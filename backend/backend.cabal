@@ -29,6 +29,7 @@ executable backend
                    Handlers.Statuses,
                    Handlers.Steps,
                    Handlers.StepConfig,
+                   Handlers.Presets,
                    Handlers.RunStep,
                    Handlers.StatusStream,
                    Handlers.Upload,

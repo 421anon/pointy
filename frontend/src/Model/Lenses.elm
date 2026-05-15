@@ -9,8 +9,8 @@ import Extra.Accessors exposing (by, remkT, where_)
 import Flow exposing (Flow)
 import Http
 import List.Extra as List
-import Model.Core as Model exposing (DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, UploadProgress, UserRepoInfo)
-import Model.Shadow exposing (StepConfig)
+import Model.Core as Model exposing (DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Toast exposing (Toast)
 import Time
@@ -138,6 +138,11 @@ draftAt mId =
 stepConfig : Lens ls Model (ApiData StepConfig) x y
 stepConfig =
     lens ".stepConfig" Model.getStepConfig (\(Model m) stepConfig_ -> Model { m | stepConfig = stepConfig_ })
+
+
+presets : Lens ls Model (ApiData Presets) x y
+presets =
+    lens ".presets" Model.getPresets (\(Model m) presets_ -> Model { m | presets = presets_ })
 
 
 commitHash : Lens ls Model (ApiData String) x y
@@ -488,3 +493,18 @@ origin =
 now : Lens ls Model Time.Posix x y
 now =
     lens ".now" Model.getNow (\(Model m) t -> Model { m | now = t })
+
+
+templateSource : Lens ls { a | templateSource : TemplateSource } TemplateSource x y
+templateSource =
+    lens ".templateSource" .templateSource (\p t -> { p | templateSource = t })
+
+
+presetSelect : Lens ls { a | presetSelect : SelectState } SelectState x y
+presetSelect =
+    lens ".presetSelect" .presetSelect (\p s -> { p | presetSelect = s })
+
+
+templatesSelect : Lens ls { a | templatesSelect : SelectState } SelectState x y
+templatesSelect =
+    lens ".templatesSelect" .templatesSelect (\p s -> { p | templatesSelect = s })

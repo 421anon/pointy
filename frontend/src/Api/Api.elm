@@ -8,6 +8,7 @@ module Api.Api exposing
     , fetchDirectoryContents
     , fetchFileContents
     , fetchProjects
+    , fetchPresets
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchStepConfig
@@ -33,7 +34,7 @@ import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
 import Model.Core exposing (BaseRecord, DirectoryItem, ProjectRecord, StepRecord)
-import Model.Shadow exposing (StepConfig, StepType)
+import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 
 
@@ -114,13 +115,13 @@ stepAction action id commit =
             }
 
 
-createProject : StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
-createProject stepConfig record =
+createProject : Presets -> StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
+createProject presets stepConfig record =
     Flow.lift <|
         Http.post
             { url = "/backend/projects"
             , body = Http.jsonBody <| Encode.projectRecord record
-            , expect = Http.expectJson identity (Decode.projectRecord stepConfig)
+            , expect = Http.expectJson identity (Decode.projectRecord presets stepConfig)
             }
 
 
@@ -168,12 +169,12 @@ uploadFiles stepId files =
             }
 
 
-fetchProjects : Maybe String -> StepConfig -> Flow s (Result Http.Error (Dict String ProjectRecord))
-fetchProjects commit stepConfig =
+fetchProjects : Maybe String -> Presets -> StepConfig -> Flow s (Result Http.Error (Dict String ProjectRecord))
+fetchProjects commit presets stepConfig =
     Flow.lift <|
         Http.get
             { url = appendCommitQuery "/backend/projects" commit
-            , expect = Http.expectJson identity <| Json.Decode.dict <| Decode.projectRecord stepConfig
+            , expect = Http.expectJson identity <| Json.Decode.dict <| Decode.projectRecord presets stepConfig
             }
 
 
@@ -183,6 +184,15 @@ fetchStepConfig commit =
         Http.get
             { url = appendCommitQuery "/backend/step-config" commit
             , expect = Http.expectJson identity Decode.stepConfig
+            }
+
+
+fetchPresets : Maybe String -> Flow s (Result Http.Error Presets)
+fetchPresets commit =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery "/backend/presets" commit
+            , expect = Http.expectJson identity Decode.presets
             }
 
 

@@ -59,19 +59,32 @@ viewProject model proj =
             ]
         , content =
             let
+                orphanWarning =
+                    Html.viewIf (not (List.isEmpty proj.orphanedSteps)) <|
+                        Html.div [ Html.Attributes.class "project-config-warning" ]
+                            [ Html.p [] [ Html.text "This project contains steps whose template is not active in the project configuration:" ]
+                            , Html.ul []
+                                (List.map
+                                    (\s -> Html.li [] [ Html.text ("(" ++ s.type_ ++ ") " ++ s.name) ])
+                                    proj.orphanedSteps
+                                )
+                            ]
+
                 sections =
                     Html.div [ Html.Attributes.class "sections" ]
-                        (proj.tables
-                            |> Dict.toList
-                            |> List.filterMap
-                                (\( sectionName, steps ) ->
-                                    Model.getStepConfig model
-                                        |> ApiData.toMaybe
-                                        |> Maybe.andThen (Dict.get sectionName)
-                                        |> Maybe.map (\entry -> ( sectionName, entry, steps ))
-                                )
-                            |> List.sortBy (\( name, entry, _ ) -> ( entry.sortKey |> Maybe.withDefault 2147483647, name ))
-                            |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry steps)
+                        (orphanWarning
+                            :: (proj.tables
+                                    |> Dict.toList
+                                    |> List.filterMap
+                                        (\( sectionName, steps ) ->
+                                            Model.getStepConfig model
+                                                |> ApiData.toMaybe
+                                                |> Maybe.andThen (Dict.get sectionName)
+                                                |> Maybe.map (\entry -> ( sectionName, entry, steps ))
+                                        )
+                                    |> List.sortBy (\( name, entry, _ ) -> ( entry.sortKey |> Maybe.withDefault 2147483647, name ))
+                                    |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry steps)
+                               )
                         )
             in
             case ( Model.getCommitHash model, get currentProject model ) of

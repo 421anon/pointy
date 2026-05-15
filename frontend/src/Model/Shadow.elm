@@ -122,3 +122,15 @@ type alias StepConfigEntry =
 
 type alias StepConfig =
     Dict String StepConfigEntry
+
+
+type alias Preset =
+    { displayName : String
+    , description : Maybe String
+    , sortKey : Maybe Int
+    , templates : List String
+    }
+
+
+type alias Presets =
+    Dict String Preset

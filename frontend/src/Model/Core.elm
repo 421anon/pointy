@@ -8,7 +8,7 @@ import DnDList
 import Flow exposing (Flow)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Shadow exposing (StepArgValue, StepConfig, StepType)
+import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
 import Toast exposing (Toast)
 import Time
@@ -24,6 +24,11 @@ type Status
 type AddMode
     = AddNew
     | AddFromOtherProject
+
+
+type TemplateSource
+    = FromPreset String
+    | CustomTemplates (List String)
 
 
 type alias BaseRecord a =
@@ -58,6 +63,10 @@ type alias StepRecord =
 type alias ProjectRecord =
     BaseRecord
         { tables : Dict String (Table StepRecord)
+        , templateSource : TemplateSource
+        , orphanedSteps : List StepRecord
+        , presetSelect : SelectState
+        , templatesSelect : SelectState
         }
 
 
@@ -128,6 +137,7 @@ type Model
         , downstreamEntities : Dict Int (List Int)
         , searchBox : SelectState
         , stepConfig : ApiData StepConfig
+        , presets : ApiData Presets
         , commitHash : ApiData String
         , userRepoInfo : ApiData UserRepoInfo
         , uploadProgress : Dict Int UploadProgress
@@ -188,6 +198,67 @@ getStepConfig : Model -> ApiData StepConfig
 getStepConfig (Model model) =
     model.stepConfig
 
+
+getPresets : Model -> ApiData Presets
+getPresets (Model model) =
+    model.presets
+
+
+effectiveTemplates : Presets -> TemplateSource -> List String
+effectiveTemplates presets source =
+    case source of
+        FromPreset name ->
+            Dict.get name presets |> Maybe.unwrap [] .templates
+
+        CustomTemplates templates ->
+            templates
+
+
+defaultTemplateSource : Presets -> TemplateSource
+defaultTemplateSource presets =
+    Dict.toList presets
+        |> List.sortBy (Tuple.second >> .sortKey >> Maybe.withDefault 999999)
+        |> List.head
+        |> Maybe.unwrap (CustomTemplates []) (FromPreset << Tuple.first)
+
+
+partitionStepsByTemplate : List String -> List StepRecord -> ( Dict String (List StepRecord), List StepRecord )
+partitionStepsByTemplate effective steps =
+    let
+        ( recognized, orphans ) =
+            List.partition (\s -> List.member s.type_ effective) steps
+    in
+    ( List.foldl
+        (\step -> Dict.update step.type_ (Maybe.map ((::) step)))
+        (Dict.fromList (List.map (\t -> ( t, [] )) effective))
+        recognized
+    , orphans
+    )
+
+
+repartitionProjectSteps : Presets -> ProjectRecord -> ProjectRecord
+repartitionProjectSteps presets proj =
+    let
+        allSteps =
+            (Dict.values proj.tables |> List.concatMap (ApiData.withDefault [] << .records))
+                ++ proj.orphanedSteps
+
+        ( buckets, orphans ) =
+            partitionStepsByTemplate (effectiveTemplates presets proj.templateSource) allSteps
+
+        newTables =
+            buckets
+                |> Dict.map
+                    (\name_ recs ->
+                        case Dict.get name_ proj.tables of
+                            Just old ->
+                                { old | records = Success recs }
+
+                            Nothing ->
+                                { initialTable | records = Success recs }
+                    )
+    in
+    { proj | tables = newTables, orphanedSteps = orphans }
 
 getCommitHash : Model -> ApiData String
 getCommitHash (Model model) =
@@ -293,6 +364,7 @@ initialModel key route flags =
         , downstreamEntities = Dict.empty
         , searchBox = initSelectState
         , stepConfig = NotAsked
+        , presets = NotAsked
         , commitHash = NotAsked
         , userRepoInfo = NotAsked
         , stepLogs = Dict.empty
