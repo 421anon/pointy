@@ -88,9 +88,9 @@ From there you can:
 
 ![The output files browser open on a script step, showing an expanded output folder with a previewed hello file displaying its Hello World content.](screenshots/light/output-files-browser.png)
 
-For text outputs, select one or more lines in the preview before sharing. Pointy highlights the selected range and shows a **Share lines** action above the file. The copied link keeps the same commit pin as other share links and adds a `lines=` query parameter, so recipients land on the same output file with the selected lines highlighted.
+For text outputs, drag in the line-number gutter to select one or more lines before sharing. Pointy highlights the selected range, updates the URL with a `lines=` query parameter, and the file's **Share** action copies a commit-pinned link to that exact range. Recipients land on the same file with the selected lines highlighted.
 
-![An output file preview with a selected line range and the Share lines action visible above the highlighted text.](screenshots/light/output-file-line-range-share.png)
+![An output file preview with a selected line range highlighted in the text viewer.](screenshots/light/output-file-line-range-share.png)
 
 HTML outputs support both:
 
@@ -110,6 +110,7 @@ That section lets users:
 - browse and download any existing source files
 - see which `srcFiles/<step-id>/` directory belongs to the step
 - see which user-repository URL and branch those files come from
+- share selected lines from a text source-file preview
 
 Source files are configured by instance admins. See [Setting Up the User Repository](user-repo-setup.md#injecting-srcfiles-into-a-build) if you need to enable this for a template.
 
@@ -117,13 +118,13 @@ Source files are configured by instance admins. See [Setting Up the User Reposit
 
 ## Share links and read-only views
 
-Shareable steps and shareable output entries expose a **Share** action.
+Shareable steps, shareable output entries, and selected source-file line ranges expose a **Share** action.
 
 A share link:
 
 - opens the project in a **read-only** view
 - pins the page to a specific Git commit
-- can deep-link to the step itself, to a specific output file or folder inside it, or to selected lines inside a previewed text file
+- can deep-link to the step itself, to a specific output file or folder inside it, or to selected lines inside a previewed output or source text file
 
 This is what makes share links stable: the recipient sees the version of the workflow state that the link was created for, not whatever happens to be current later on.
 

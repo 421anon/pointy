@@ -12,29 +12,6 @@ function copyToClipboard(text) {
   navigator.clipboard.writeText(text);
 }
 
-function getSelectedLineRange(viewerId) {
-  const container = document.getElementById(viewerId);
-  if (!container) return null;
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-  const range = sel.getRangeAt(0);
-  if (!container.contains(range.startContainer) || !container.contains(range.endContainer)) {
-    return null;
-  }
-  const lineOf = (node) => {
-    let el = node.nodeType === 1 ? node : node.parentElement;
-    while (el && el !== container) {
-      if (el.dataset && el.dataset.line) return parseInt(el.dataset.line, 10);
-      el = el.parentElement;
-    }
-    return null;
-  };
-  const a = lineOf(range.startContainer);
-  const b = lineOf(range.endContainer);
-  if (a == null || b == null) return null;
-  return { from: Math.min(a, b), to: Math.max(a, b) };
-}
-
 function zoomIframe({ id, zoom }) {
   const iframe = document.getElementById(id);
   if (!iframe) return;
@@ -74,6 +51,23 @@ function toggleTheme() {
   const next = current === "light" ? "dark" : "light";
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("theme", next);
+}
+
+function installGutterDragListeners(app) {
+  const emitEnd = () => {
+    if (app.ports && app.ports.gutterDragEnd) {
+      app.ports.gutterDragEnd.send(null);
+    }
+  };
+
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target?.matches?.(".file-line-number.is-gutter")) {
+      event.target.releasePointerCapture(event.pointerId);
+    }
+  });
+
+  document.addEventListener("pointerup", emitEnd);
+  document.addEventListener("pointercancel", emitEnd);
 }
 
 export function connectPorts(app) {
@@ -130,8 +124,9 @@ export function connectPorts(app) {
     closeStepStatusStream,
     zoomIframe,
     toggleTheme,
-    getSelectedLineRange,
   };
+
+  installGutterDragListeners(app);
 
   if (app.ports && app.ports.ffiOut) {
     app.ports.ffiOut.subscribe((req) => {

@@ -1,16 +1,19 @@
 module Main exposing (main)
 
-import Accessors exposing (each, just, set, try)
+import Accessors exposing (each, get, has, just, set, try)
 import Actions
 import Api.ApiData exposing (success)
+import Browser.Events
 import Browser.Navigation as Nav
 import Dict
 import Flow exposing (Flow)
 import Time
 import Http
+import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, mCommit, now, projectStepRecords, projects, records, route, runState, stepConfig)
+import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, projectStepRecords, projects, records, route, runState, stepConfig)
+import Ports
 import Route
 import Specs
 import Url exposing (Url)
@@ -24,7 +27,7 @@ main =
         , view = view
         , subscriptions = subscriptions
         , onUrlRequest = Actions.onUrlRequest
-        , onUrlChange = setRouteFromUrl
+        , onUrlChange = applyRouteFromUrl False
         }
 
 
@@ -39,12 +42,12 @@ init flags url key =
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadProjects
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
-        |> Flow.seq (setRouteFromUrl url)
+        |> Flow.seq (applyRouteFromUrl True url)
     )
 
 
-setRouteFromUrl : Url -> Flow Model ()
-setRouteFromUrl url =
+applyRouteFromUrl : Bool -> Url -> Flow Model ()
+applyRouteFromUrl forceRevealHighlight url =
     let
         newRoute =
             Route.fromUrl url
@@ -58,6 +61,14 @@ setRouteFromUrl url =
 
                     mNewCommit =
                         try (Route.project << mCommit << just) newRoute
+
+                    shouldRevealHighlight =
+                        forceRevealHighlight
+                            || Route.navigationTarget (get route model)
+                            /= Route.navigationTarget newRoute
+
+                    isDragging =
+                        has (gutterDrag << just) model
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq
@@ -76,8 +87,12 @@ setRouteFromUrl url =
                                 (Flow.async <| Actions.listenAndProcessStepStatus projectId mCommit)
                                     |> Flow.seq
                                         (case mHighlight of
-                                            Just { id, path, range } ->
-                                                Actions.deepOpenEntryOrDefer id path range
+                                            Just highlight ->
+                                                if isDragging || not shouldRevealHighlight then
+                                                    Flow.pure ()
+
+                                                else
+                                                    Actions.openHighlightedEntry highlight
 
                                             Nothing ->
                                                 Flow.pure ()
@@ -112,8 +127,21 @@ subscriptions model =
     Sub.batch
         [ dndSubscription model
         , uploadProgressSubscription model
+        , gutterDragSubscription model
         , Time.every (60 * 1000) (Flow.setAll now)
         ]
+
+
+gutterDragSubscription : Model -> Sub (Flow Model ())
+gutterDragSubscription model =
+    if has (gutterDrag << just) model then
+        Sub.batch
+            [ Browser.Events.onMouseUp (Decode.succeed Actions.endGutterDrag)
+            , Ports.gutterDragEnd (\_ -> Actions.endGutterDrag)
+            ]
+
+    else
+        Sub.none
 
 
 uploadProgressSubscription : Model -> Sub (Flow Model ())

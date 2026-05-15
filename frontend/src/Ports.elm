@@ -1,4 +1,4 @@
-port module Ports exposing (ffiIn, ffiOut, openStepStatusStream, stepStatusIn)
+port module Ports exposing (ffiIn, ffiOut, gutterDragEnd, openStepStatusStream, stepStatusIn)
 
 import Json.Decode
 import Json.Encode
@@ -14,3 +14,6 @@ port openStepStatusStream : { projectId : Int, commit : Maybe String } -> Cmd ms
 
 
 port stepStatusIn : (Json.Decode.Value -> msg) -> Sub msg
+
+
+port gutterDragEnd : (Json.Decode.Value -> msg) -> Sub msg

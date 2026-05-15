@@ -91,13 +91,13 @@ projects =
 
 
 currentTableOf : String -> Traversal Model (Table StepRecord) x y
-currentTableOf key =
-    currentProject << success << tableInProject key
+currentTableOf key_ =
+    currentProject << success << tableInProject key_
 
 
 tableInProject : String -> Traversal ProjectRecord (Table StepRecord) x y
-tableInProject key =
-    tables << Dict.Accessors.at key << just
+tableInProject key_ =
+    tables << Dict.Accessors.at key_ << just
 
 
 args : Lens ls { a | args : b } b x y
@@ -187,12 +187,6 @@ fileZoom =
         << lens ".zoom" .zoom (\view zoom_ -> { view | zoom = zoom_ })
 
 
-fileSelectedRange : Lens ls { a | view : { b | selectedRange : c } } c x y
-fileSelectedRange =
-    lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
-        << lens ".selectedRange" .selectedRange (\view sr -> { view | selectedRange = sr })
-
-
 children : Lens ls { a | children : b } b x y
 children =
     lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
@@ -247,8 +241,8 @@ file =
 
 
 entryAt : String -> Traversal (ApiData (Dict String a)) a x y
-entryAt key =
-    success << Dict.Accessors.at key << just
+entryAt key_ =
+    success << Dict.Accessors.at key_ << just
 
 
 reversePrism : A_Prism pr s a -> Traversal a s x y
@@ -303,11 +297,6 @@ fileZoomAt recordId_ path =
     directoryItemAtPath recordId_ path << file << fileZoom
 
 
-fileSelectedRangeAt : Int -> List String -> Traversal (Table StepRecord) (Maybe Route.LineRange) x y
-fileSelectedRangeAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileSelectedRange
-
-
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
 folderExpandedAt recordId_ path =
     directoryItemAtPath recordId_ path << folder << folderExpanded
@@ -341,11 +330,6 @@ srcFilesFileIsViewingAt recordId_ path =
 srcFilesFileZoomAt : Int -> List String -> Traversal (Table StepRecord) Float x y
 srcFilesFileZoomAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileZoom
-
-
-srcFilesFileSelectedRangeAt : Int -> List String -> Traversal (Table StepRecord) (Maybe Route.LineRange) x y
-srcFilesFileSelectedRangeAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileSelectedRange
 
 
 srcFilesFolderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -486,6 +470,19 @@ uploadProgress =
 stepStatusHooks : Lens ls Model (Dict Int (Flow Model ())) x y
 stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
+
+
+gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y
+gutterDrag =
+    lens ".gutterDrag" Model.getGutterDrag (\(Model m) drag -> Model { m | gutterDrag = drag })
+
+
+key =
+    lens ".key" Model.getKey (\(Model m) key_ -> Model { m | key = key_ })
+
+
+origin =
+    lens ".origin" Model.getOrigin (\(Model m) origin_ -> Model { m | origin = origin_ })
 
 
 now : Lens ls Model Time.Posix x y

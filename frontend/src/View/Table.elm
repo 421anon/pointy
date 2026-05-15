@@ -146,7 +146,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             "share"
                             True
                             "Share"
-                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId [ "output" ] Nothing)
+                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [ "output" ] Nothing)
                                 mProjectId
                                 record.id
                                 |> Maybe.withDefault Flow.none
@@ -899,7 +899,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                         in
                                         Route.Project
                                             { projectId = projectId
-                                            , mHighlight = Just { id = stepId, path = [], range = Nothing }
+                                            , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
                                             , mCommit = mCommit_
                                             }
                                     )

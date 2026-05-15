@@ -211,7 +211,7 @@ directoryItem fileView =
 
 directoryItemGeneric : Decoder ( String, DirectoryItem )
 directoryItemGeneric =
-    directoryItem { isViewing = False, zoom = 1.0, selectedRange = Nothing }
+    directoryItem { isViewing = False, zoom = 1.0 }
 
 
 stepArgType : Decoder StepArgType
