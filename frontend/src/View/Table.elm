@@ -21,17 +21,19 @@ import Html.Lazy
 import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Keyboard
+import Iso8601
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tListValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tEnumValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Set
 import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewLoading)
+import Time.Distance
 
 
 viewStatusCountBadge : TableSpec (BaseRecord a) -> List (BaseRecord a) -> Html msg
@@ -169,6 +171,10 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 "Hide"
                             )
                             (Actions.toggleRecordVisibility spec mProjectId Nothing record)
+              }
+            , -- Clone button (shareable only)
+              { shouldShow = \record -> not isReadOnly && TableSpec.getShareable spec record
+              , render = \record -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec record)
               }
             , -- Remove button
               { shouldShow =
@@ -331,6 +337,12 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             [ class "record-name-container"
                             ]
                             [ Html.text record.name
+                            , Html.viewMaybe
+                                (\id_ ->
+                                    Html.span [ class "table-record-id", title <| "id: " ++ String.fromInt id_ ]
+                                        [ Html.text (String.fromInt id_) ]
+                                )
+                                record.id
                             , iconCustom True
                                 "edit"
                                 [ class "edit-icon"
@@ -345,6 +357,19 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
 
                         actionsContainerClass =
                             "table-record-actions-container"
+
+                        mtimeBadge =
+                            Html.viewMaybe
+                                (\posix ->
+                                    let iso = Iso8601.fromTime posix in
+                                    Html.node "time"
+                                        [ class "table-record-mtime"
+                                        , attribute "datetime" iso
+                                        , title ("Last modified: " ++ iso)
+                                        ]
+                                        [ Html.text (Time.Distance.inWords posix (Model.getNow model)) ]
+                                )
+                                record.lastModifiedAt
                     in
                     Html.div
                         ([ class "table-record", id itemId ] ++ attrs)
@@ -377,12 +402,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                     viewStatusApiData (TableSpec.getStatus spec record)
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
-                                , Html.viewMaybe
-                                    (\id_ ->
-                                        Html.span [ class "table-record-id", title <| "id: " ++ String.fromInt id_ ]
-                                            [ Html.text (String.fromInt id_) ]
-                                    )
-                                    record.id
+                                , mtimeBadge
                                 , Html.viewIf (record.id == Nothing) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
                                         [ iconCustom True "progress_activity" [ class "pending-record-icon" ]
@@ -422,6 +442,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 , Html.viewIf (not isReadOnly) <|
                                     Html.div (class "table-record-drag-target" :: List.map (map (Actions.dndMsgToIO mProjectId spec)) (mkTargetAttrs itemId))
                                         [ icon True "drag_indicator" ]
+                                , mtimeBadge
                                 ]
                             ]
                         , Html.viewIf (TableSpec.getSrcFilesView spec record |> Maybe.map .expanded |> Maybe.withDefault False) (srcFilesSection record)
@@ -925,6 +946,39 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , onSelectStep = \stepId -> Flow.modify (set paramLens (Just (TStepValue stepId)))
                         , mAllowedStepTypes = mAllowedStepTypes
                         }
+
+                TEnum values ->
+                    formField
+                        { label = fieldLabel
+                        , mHint = fieldHint
+                        , id = fieldId
+                        }
+                        (Html.select
+                            ([ id fieldId
+                            , class "form-input"
+                            , classList [ ( "field-changed", fieldHasChanged ) ]
+                            , disabled readOnly
+                            , Events.onInput (\v -> Flow.modify (set paramLens (Just (TEnumValue v))))
+                            ]
+                            )
+                            (List.map
+                                (\v ->
+                                    Html.option
+                                        [ value v
+                                        , selected
+                                            (case try (paramLens << just << tEnumValue) model of
+                                                Just current ->
+                                                    current == v
+
+                                                Nothing ->
+                                                    False
+                                            )
+                                        ]
+                                        [ Html.text v ]
+                                )
+                                values
+                            )
+                        )
 
                 TString display ->
                     case display of

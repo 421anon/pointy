@@ -139,35 +139,24 @@ viewSection model sectionName entry steps =
                             FileUpload _ ->
                                 []
 
-                    editActions =
+                    uploadActions =
                         if isReadOnly then
                             []
 
                         else
-                            let
-                                cloneActions =
-                                    if TableSpec.getShareable spec r then
-                                        [ viewIconButtonWithTooltip "content_copy" False "Clone" (Actions.cloneStep spec r) ]
-
-                                    else
-                                        []
-
-                                uploadActions =
-                                    case stepType of
-                                        FileUpload types ->
-                                            case r.id |> Maybe.andThen (\id -> Dict.get id (Model.getUploadProgress model) |> Maybe.map (Tuple.pair id)) of
-                                                Just _ ->
-                                                    []
-
-                                                Nothing ->
-                                                    [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id ]
-
-                                        Derivation _ _ ->
+                            case stepType of
+                                FileUpload types ->
+                                    case r.id |> Maybe.andThen (\id -> Dict.get id (Model.getUploadProgress model) |> Maybe.map (Tuple.pair id)) of
+                                        Just _ ->
                                             []
-                            in
-                            cloneActions ++ uploadActions
+
+                                        Nothing ->
+                                            [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id ]
+
+                                Derivation _ _ ->
+                                    []
                 in
-                editActions ++ runActions
+                uploadActions ++ runActions
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
         , onRecordClick =

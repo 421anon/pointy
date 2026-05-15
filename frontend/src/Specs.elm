@@ -7,6 +7,7 @@ import Api.Decode as Decode
 import Api.Encode as Encode
 import Dict
 import Extra.Accessors exposing (where_)
+import Flow
 import Model.Core exposing (ProjectRecord, StepRecord, TableTag(..), initialTable)
 import Model.Lenses as Lenses exposing (currentTableOf)
 import Model.Shadow as Shadow exposing (StepConfig, StepConfigEntry, WithSrcFiles(..))
@@ -44,6 +45,7 @@ steps name entry =
             , args = Dict.empty
             , runState = ApiData.loading Nothing
             , isUpdating = False
+            , lastModifiedAt = Nothing
             , srcFiles =
                 { children = NotAsked
                 , expanded = False
@@ -53,6 +55,7 @@ steps name entry =
         , description = entry.description
         , apiPath = "/step"
         , upsertRecord = Actions.upsertStep
+        , cloneRecord = Actions.cloneStep
         }
 
 
@@ -75,9 +78,11 @@ projects stepConfig =
             , name = ""
             , tables = Dict.map (always <| always initialTable) stepConfig
             , isUpdating = False
+            , lastModifiedAt = Nothing
             }
         , displayName = "Projects"
         , description = Nothing
         , apiPath = "/projects"
         , upsertRecord = Actions.upsertProject
+        , cloneRecord = \_ _ -> Flow.none
         }

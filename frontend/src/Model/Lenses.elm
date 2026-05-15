@@ -13,6 +13,7 @@ import Model.Core as Model exposing (DirectoryFile, DirectoryFolder, DirectoryIt
 import Model.Shadow exposing (StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Toast exposing (Toast)
+import Time
 
 
 blackhole : Prism pr s Never x y
@@ -482,3 +483,8 @@ key =
 
 origin =
     lens ".origin" Model.getOrigin (\(Model m) origin_ -> Model { m | origin = origin_ })
+
+
+now : Lens ls Model Time.Posix x y
+now =
+    lens ".now" Model.getNow (\(Model m) t -> Model { m | now = t })

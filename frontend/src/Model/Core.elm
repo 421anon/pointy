@@ -11,6 +11,7 @@ import Maybe.Extra as Maybe
 import Model.Shadow exposing (StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
 import Toast exposing (Toast)
+import Time
 
 
 type Status
@@ -33,6 +34,7 @@ type alias BaseRecord a =
         , sortKey : Maybe Int
         , name : String
         , isUpdating : Bool
+        , lastModifiedAt : Maybe Time.Posix
     }
 
 
@@ -132,6 +134,7 @@ type Model
         , stepLogs : Dict String (ApiData String)
         , stepStatusHooks : Dict Int (Flow Model ())
         , gutterDrag : Maybe GutterDrag
+        , now : Time.Posix
         }
 
 
@@ -229,6 +232,11 @@ getGutterDrag (Model model) =
     model.gutterDrag
 
 
+getNow : Model -> Time.Posix
+getNow (Model model) =
+    model.now
+
+
 dndSystem : DnDList.System a DnDList.Msg
 dndSystem =
     let
@@ -291,6 +299,7 @@ initialModel key route flags =
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
         , gutterDrag = Nothing
+        , now = Time.millisToPosix 0
         }
 
 

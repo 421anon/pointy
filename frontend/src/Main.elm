@@ -7,11 +7,12 @@ import Browser.Events
 import Browser.Navigation as Nav
 import Dict
 import Flow exposing (Flow)
+import Time
 import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, projectStepRecords, projects, records, route, runState, stepConfig)
+import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, projectStepRecords, projects, records, route, runState, stepConfig)
 import Ports
 import Route
 import Specs
@@ -40,6 +41,7 @@ init flags url key =
     , Actions.loadUserRepoInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadProjects
+        |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
         |> Flow.seq (applyRouteFromUrl True url)
     )
 
@@ -126,6 +128,7 @@ subscriptions model =
         [ dndSubscription model
         , uploadProgressSubscription model
         , gutterDragSubscription model
+        , Time.every (60 * 1000) (Flow.setAll now)
         ]
 
 

@@ -25,6 +25,9 @@ stepArgValue argType arg =
         ( TUploadHash, TUploadHashValue hash ) ->
             Just (Encode.object [ ( "hash", Encode.string hash ) ])
 
+        ( TEnum _, TEnumValue str ) ->
+            Just (Encode.string str)
+
         _ ->
             Nothing
 
