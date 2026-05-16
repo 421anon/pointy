@@ -65,6 +65,7 @@ type alias ProjectRecord =
         { tables : Dict String (Table StepRecord)
         , templateSource : TemplateSource
         , orphanedSteps : List StepRecord
+        , hideOrphans : Bool
         , presetSelect : SelectState
         , templatesSelect : SelectState
         }
@@ -513,6 +514,7 @@ updateProjectRecordList =
                 (\newRecord ->
                     { newRecord
                         | tables = Dict.map (\k -> updateStepRecordTable <| Maybe.withDefault initialTable <| Dict.get k newRecord.tables) oldRecord.tables
+                        , hideOrphans = oldRecord.hideOrphans
                     }
                 )
         )

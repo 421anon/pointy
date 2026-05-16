@@ -508,3 +508,8 @@ presetSelect =
 templatesSelect : Lens ls { a | templatesSelect : SelectState } SelectState x y
 templatesSelect =
     lens ".templatesSelect" .templatesSelect (\p s -> { p | templatesSelect = s })
+
+
+hideOrphans : Lens ls { a | hideOrphans : Bool } Bool x y
+hideOrphans =
+    lens ".hideOrphans" .hideOrphans (\p b -> { p | hideOrphans = b })

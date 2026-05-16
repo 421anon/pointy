@@ -37,6 +37,25 @@ body {
   background: var(--bg-primary);
 }
 
+.project-config-warning {
+  background: var(--state-warning-outline);
+  border: 1px solid var(--state-warning);
+  border-radius: 3px;
+  padding: var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.project-config-warning-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  cursor: pointer;
+  font-weight: 500;
+  font-size: var(--font-size-md);
+}
+
 .table-header {
   height: 40px;
   background: var(--bg-secondary);

@@ -131,6 +131,7 @@ projectRecord presets_ stepConfig_ =
             , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) tablesByType
             , templateSource = source
             , orphanedSteps = orphans
+            , hideOrphans = False
             , presetSelect = Select.initSelectState
             , templatesSelect = Select.initSelectState
             , isUpdating = False

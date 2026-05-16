@@ -7,9 +7,11 @@ import Dict
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
+import Html.Events
 import Html.Extra as Html
+import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses exposing (currentProject, mCommit, route)
+import Model.Lenses as Lenses exposing (currentProject, mCommit, route)
 import Model.Shadow exposing (StepConfigEntry, StepType(..))
 import Model.TableSpec as TableSpec
 import Route
@@ -62,12 +64,29 @@ viewProject model proj =
                 orphanWarning =
                     Html.viewIf (not (List.isEmpty proj.orphanedSteps)) <|
                         Html.div [ Html.Attributes.class "project-config-warning" ]
-                            [ Html.p [] [ Html.text "This project contains steps whose template is not active in the project configuration:" ]
-                            , Html.ul []
-                                (List.map
-                                    (\s -> Html.li [] [ Html.text ("(" ++ s.type_ ++ ") " ++ s.name) ])
-                                    proj.orphanedSteps
-                                )
+                            [ Html.div
+                                [ Html.Attributes.class "project-config-warning-header"
+                                , Html.Events.onClick (Flow.over (currentProject << ApiData.success << Lenses.hideOrphans) not)
+                                ]
+                                [ iconCustom True
+                                    (if proj.hideOrphans then
+                                        "chevron_right"
+
+                                     else
+                                        "expand_more"
+                                    )
+                                    []
+                                , Html.text "This project contains steps whose template is not active in the project configuration:"
+                                ]
+                            , Html.viewIf (not proj.hideOrphans) <|
+                                Html.ul []
+                                    (List.map
+                                        (\s ->
+                                            Html.li []
+                                                [ Html.text (Maybe.unwrap "" (\id -> "[" ++ String.fromInt id ++ "] ") s.id ++ "(" ++ s.type_ ++ ") " ++ s.name) ]
+                                        )
+                                        proj.orphanedSteps
+                                    )
                             ]
 
                 sections =

@@ -80,6 +80,7 @@ projects presets stepConfig =
             , tables = Dict.empty
             , templateSource = Model.defaultTemplateSource presets
             , orphanedSteps = []
+            , hideOrphans = False
             , presetSelect = Select.initSelectState
             , templatesSelect = Select.initSelectState
             , isUpdating = False
