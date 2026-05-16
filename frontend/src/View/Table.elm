@@ -378,7 +378,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                              , classList
                                 [ ( "hidden", record.hidden )
                                 , ( "highlighted", isHighlighted )
-                                , ( "no-status", TableSpec.getTag spec == TagProjects )
+                                , ( "no-status", TableSpec.getTag spec == TagProjects && List.isEmpty (TableSpec.getValidationErrors spec record) )
                                 ]
                              ]
                                 ++ (if record.id /= Nothing && (TableSpec.getTag spec == TagProjects || TableSpec.getStatus spec record == Success StatusSuccess) then
@@ -394,12 +394,21 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         []
                                    )
                             )
-                            [ case TableSpec.getTag spec of
-                                TagProjects ->
-                                    Html.nothing
+                            [ case TableSpec.getValidationErrors spec record of
+                                [] ->
+                                    case TableSpec.getTag spec of
+                                        TagProjects ->
+                                            Html.nothing
 
-                                _ ->
-                                    viewStatusApiData (TableSpec.getStatus spec record)
+                                        _ ->
+                                            viewStatusApiData (TableSpec.getStatus spec record)
+
+                                errors ->
+                                    Html.span
+                                        [ class "project-error-indicator"
+                                        , title (String.join "\n" errors)
+                                        ]
+                                        [ iconCustom True "error" [] ]
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
                                 , mtimeBadge

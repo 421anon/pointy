@@ -392,25 +392,28 @@ upsertProject spec =
     in
     Flow.forAll (presets << success)
         (\presets_ ->
-            Flow.get
-                |> Flow.andThen
-                    (\model ->
-                        Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
-                            |> Flow.assertJust
-                            |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddFromOtherProject)
-                            |> Flow.andThen
-                                (\( edited_, addMode_ ) ->
-                                    case ( edited_.id, addMode_ ) of
-                                        ( Nothing, AddNew ) ->
-                                            createProject edited_ |> Flow.return ()
+            Flow.forAll (stepConfig << success)
+                (\stepConfig_ ->
+                    Flow.get
+                        |> Flow.andThen
+                            (\model ->
+                                Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
+                                    |> Flow.assertJust
+                                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == AddFromOtherProject)
+                                    |> Flow.andThen
+                                        (\( edited_, addMode_ ) ->
+                                            case ( edited_.id, addMode_ ) of
+                                                ( Nothing, AddNew ) ->
+                                                    createProject edited_ |> Flow.return ()
 
-                                        ( Nothing, AddFromOtherProject ) ->
-                                            Flow.pure ()
+                                                ( Nothing, AddFromOtherProject ) ->
+                                                    Flow.pure ()
 
-                                        ( Just _, _ ) ->
-                                            saveExistingRecord lens edited_ (always (Model.repartitionProjectSteps presets_ edited_)) spec
-                                )
-                    )
+                                                ( Just _, _ ) ->
+                                                    saveExistingRecord lens edited_ (always (Model.repartitionProjectSteps presets_ stepConfig_ edited_)) spec
+                                        )
+                            )
+                )
         )
 
 

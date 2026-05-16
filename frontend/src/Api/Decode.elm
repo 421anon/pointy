@@ -120,8 +120,12 @@ projectRecord presets_ stepConfig_ =
 
         build fields source =
             let
+                effective =
+                    Model.effectiveTemplates presets_ source
+                        |> List.filter (\t -> Dict.member t stepConfig_)
+
                 ( tablesByType, orphans ) =
-                    Model.partitionStepsByTemplate (Model.effectiveTemplates presets_ source) fields.steps
+                    Model.partitionStepsByTemplate effective fields.steps
             in
             { id = Just fields.id
             , clientId = Nothing
@@ -131,6 +135,7 @@ projectRecord presets_ stepConfig_ =
             , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) tablesByType
             , templateSource = source
             , orphanedSteps = orphans
+            , validationErrors = fields.validationErrors
             , hideOrphans = False
             , presetSelect = Select.initSelectState
             , templatesSelect = Select.initSelectState
@@ -139,7 +144,7 @@ projectRecord presets_ stepConfig_ =
             }
     in
     Decode.succeed
-        (\id name hidden sortKey lastModifiedAt mPreset mTemplates steps ->
+        (\id name hidden sortKey lastModifiedAt mPreset mTemplates steps validationErrors ->
             { id = id
             , name = name
             , hidden = hidden
@@ -148,6 +153,7 @@ projectRecord presets_ stepConfig_ =
             , mPreset = mPreset
             , mTemplates = mTemplates
             , steps = steps
+            , validationErrors = validationErrors
             }
         )
         |> required "id" Decode.int
@@ -158,6 +164,7 @@ projectRecord presets_ stepConfig_ =
         |> required "preset" (maybe Decode.string)
         |> required "templates" (maybe (Decode.list Decode.string))
         |> required "steps" (Decode.list (stepRecord stepConfig_))
+        |> optional "validationErrors" (Decode.list Decode.string) []
         |> Decode.andThen
             (\fields ->
                 case resolveSource fields.id fields.mPreset fields.mTemplates of

@@ -56,6 +56,22 @@ body {
   font-size: var(--font-size-md);
 }
 
+.project-config-error {
+  background: var(--state-danger-outline);
+  border: 1px solid var(--state-danger);
+  border-radius: 3px;
+  padding: var(--spacing-sm);
+}
+
+.project-error-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--state-danger);
+  cursor: help;
+  font-size: 20px;
+}
+
 .table-header {
   height: 40px;
   background: var(--bg-secondary);

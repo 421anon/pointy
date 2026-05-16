@@ -65,6 +65,7 @@ type alias ProjectRecord =
         { tables : Dict String (Table StepRecord)
         , templateSource : TemplateSource
         , orphanedSteps : List StepRecord
+        , validationErrors : List String
         , hideOrphans : Bool
         , presetSelect : SelectState
         , templatesSelect : SelectState
@@ -223,6 +224,25 @@ defaultTemplateSource presets =
         |> Maybe.unwrap (CustomTemplates []) (FromPreset << Tuple.first)
 
 
+validationErrorsFor : Presets -> StepConfig -> TemplateSource -> List String
+validationErrorsFor presets stepConfig source =
+    case source of
+        FromPreset name ->
+            if Dict.member name presets then
+                []
+
+            else
+                [ "Unknown preset `" ++ name ++ "`. Pick another preset in the edit form." ]
+
+        CustomTemplates templates ->
+            case List.filter (\t -> not (Dict.member t stepConfig)) templates of
+                [] ->
+                    []
+
+                missing ->
+                    [ "Unknown templates: " ++ String.join ", " missing ++ ". Remove them in the edit form." ]
+
+
 partitionStepsByTemplate : List String -> List StepRecord -> ( Dict String (List StepRecord), List StepRecord )
 partitionStepsByTemplate effective steps =
     let
@@ -237,15 +257,19 @@ partitionStepsByTemplate effective steps =
     )
 
 
-repartitionProjectSteps : Presets -> ProjectRecord -> ProjectRecord
-repartitionProjectSteps presets proj =
+repartitionProjectSteps : Presets -> StepConfig -> ProjectRecord -> ProjectRecord
+repartitionProjectSteps presets stepConfig proj =
     let
+        effective =
+            effectiveTemplates presets proj.templateSource
+                |> List.filter (\t -> Dict.member t stepConfig)
+
         allSteps =
             (Dict.values proj.tables |> List.concatMap (ApiData.withDefault [] << .records))
                 ++ proj.orphanedSteps
 
         ( buckets, orphans ) =
-            partitionStepsByTemplate (effectiveTemplates presets proj.templateSource) allSteps
+            partitionStepsByTemplate effective allSteps
 
         newTables =
             buckets
@@ -259,7 +283,11 @@ repartitionProjectSteps presets proj =
                                 { initialTable | records = Success recs }
                     )
     in
-    { proj | tables = newTables, orphanedSteps = orphans }
+    { proj
+        | tables = newTables
+        , orphanedSteps = orphans
+        , validationErrors = validationErrorsFor presets stepConfig proj.templateSource
+    }
 
 getCommitHash : Model -> ApiData String
 getCommitHash (Model model) =

@@ -89,9 +89,17 @@ viewProject model proj =
                                     )
                             ]
 
+                configErrors =
+                    Html.viewIf (not (List.isEmpty proj.validationErrors)) <|
+                        Html.div [ Html.Attributes.class "project-config-error" ]
+                            [ Html.ul []
+                                (List.map (\msg -> Html.li [] [ Html.text msg ]) proj.validationErrors)
+                            ]
+
                 sections =
                     Html.div [ Html.Attributes.class "sections" ]
-                        (orphanWarning
+                        (configErrors
+                            :: orphanWarning
                             :: (proj.tables
                                     |> Dict.toList
                                     |> List.filterMap
