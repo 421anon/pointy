@@ -25,8 +25,8 @@ import Iso8601
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), UploadProgress, dndSystem, getSortKey)
-import Model.Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
+import Model.Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tEnumValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
@@ -378,7 +378,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                              , classList
                                 [ ( "hidden", record.hidden )
                                 , ( "highlighted", isHighlighted )
-                                , ( "no-status", TableSpec.getTag spec == TagProjects )
+                                , ( "no-status", TableSpec.getTag spec == TagProjects && List.isEmpty (TableSpec.getValidationErrors spec record) )
                                 ]
                              ]
                                 ++ (if record.id /= Nothing && (TableSpec.getTag spec == TagProjects || TableSpec.getStatus spec record == Success StatusSuccess) then
@@ -394,12 +394,21 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         []
                                    )
                             )
-                            [ case TableSpec.getTag spec of
-                                TagProjects ->
-                                    Html.nothing
+                            [ case TableSpec.getValidationErrors spec record of
+                                [] ->
+                                    case TableSpec.getTag spec of
+                                        TagProjects ->
+                                            Html.nothing
 
-                                _ ->
-                                    viewStatusApiData (TableSpec.getStatus spec record)
+                                        _ ->
+                                            viewStatusApiData (TableSpec.getStatus spec record)
+
+                                errors ->
+                                    Html.span
+                                        [ class "project-error-indicator"
+                                        , title (String.join "\n" errors)
+                                        ]
+                                        [ iconCustom True "error" [] ]
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
                                 , mtimeBadge
@@ -598,7 +607,7 @@ viewAddOrEditRecordForm model spec table record =
                     [ viewStepExtraFormFields model readOnly key stepDef ]
 
                 TagProjects ->
-                    []
+                    viewProjectExtraFormFields model readOnly
 
         noteInput =
             case TableSpec.getTag spec of
@@ -753,6 +762,178 @@ viewAddOrEditRecordForm model spec table record =
                 ]
             ]
         ]
+
+
+viewProjectExtraFormFields : Model -> Bool -> List (Html (Flow Model ()))
+viewProjectExtraFormFields model readOnly =
+    let
+        mEdited =
+            try (projects << edited << just) model
+
+        mPresets =
+            ApiData.toMaybe (Model.getPresets model)
+
+        mStepConfig =
+            ApiData.toMaybe (Model.getStepConfig model)
+    in
+    case ( mEdited, mPresets, mStepConfig ) of
+        ( Just edited_, Just presets_, Just stepConfig_ ) ->
+            let
+                source =
+                    edited_.templateSource
+
+                effective =
+                    Model.effectiveTemplates presets_ source
+
+                sortedTemplates =
+                    Dict.keys stepConfig_ |> List.sort
+
+                templateIdMap =
+                    sortedTemplates
+                        |> List.indexedMap (\i n -> ( n, i ))
+                        |> Dict.fromList
+
+                templateItem name_ =
+                    { id = Dict.get name_ templateIdMap
+                    , name = name_
+                    , mProjectId = Nothing
+                    }
+
+                templateLabel name_ =
+                    Dict.get name_ stepConfig_
+                        |> Maybe.andThen .displayName
+                        |> Maybe.withDefault name_
+
+                presetLabel name_ =
+                    Dict.get name_ presets_ |> Maybe.unwrap name_ .displayName
+
+                customSentinel =
+                    "__custom__"
+
+                sortedPresetNames =
+                    Dict.toList presets_
+                        |> List.sortBy (Tuple.second >> .sortKey >> Maybe.withDefault 999999)
+                        |> List.map Tuple.first
+
+                presetIdMap =
+                    customSentinel
+                        :: sortedPresetNames
+                        |> List.indexedMap (\i n -> ( n, i ))
+                        |> Dict.fromList
+
+                presetItem name_ =
+                    { id = Dict.get name_ presetIdMap
+                    , name = name_
+                    , mProjectId = Nothing
+                    }
+
+                presetMenuLabel name_ =
+                    if name_ == customSentinel then
+                        "Custom (no preset)"
+
+                    else
+                        presetLabel name_
+
+                availablePresets =
+                    customSentinel
+                        :: sortedPresetNames
+                        |> List.map presetItem
+
+                onPickPreset item =
+                    if item.name == customSentinel then
+                        Actions.chooseProjectCustom
+
+                    else
+                        Actions.chooseProjectPreset item.name
+
+                presetStateLens =
+                    projects << edited << just << presetSelect
+
+                currentPresetLabel =
+                    case source of
+                        FromPreset n ->
+                            presetLabel n
+
+                        CustomTemplates _ ->
+                            "Custom (no preset)"
+
+                rawPresetState =
+                    try presetStateLens model |> Maybe.withDefault Select.initSelectState
+
+                presetDisplayState =
+                    if rawPresetState.active then
+                        rawPresetState
+
+                    else
+                        { rawPresetState | input = currentPresetLabel }
+
+                presetPicker =
+                    Select.view
+                        { optic = presetStateLens
+                        , selectState = presetDisplayState
+                        , selected_ = []
+                        , availableItems = availablePresets
+                        , readOnly = readOnly
+                        , hasChanged = False
+                        , label = "Preset"
+                        , mHint = Nothing
+                        , placeholder = "Pick a preset..."
+                        , inputIcon = Nothing
+                        , toInputItemName = .name >> presetMenuLabel
+                        , toInputItemTooltip = always []
+                        , onInputItemClick = \_ -> Nothing
+                        , toMenuItemName = .name >> presetMenuLabel
+                        , toMenuItemTooltip = always []
+                        , onChange = Flow.pure ()
+                        , onRemove = \_ -> Flow.pure ()
+                        , activeAfterSelect = False
+                        , clearInputAfterSelect = False
+                        , onSelect = onPickPreset
+                        , alignRight = False
+                        , inputItemStyle = \_ -> []
+                        }
+
+                selectedItems =
+                    List.map templateItem effective
+
+                availableItems =
+                    sortedTemplates
+                        |> List.filter (\t -> not (List.member t effective))
+                        |> List.map templateItem
+
+                stateLens =
+                    projects << edited << just << templatesSelect
+
+                templatesSelectView =
+                    Select.view
+                        { optic = stateLens
+                        , selectState = try stateLens model |> Maybe.withDefault Select.initSelectState
+                        , selected_ = selectedItems
+                        , availableItems = availableItems
+                        , readOnly = readOnly
+                        , hasChanged = False
+                        , label = "Templates"
+                        , mHint = Nothing
+                        , placeholder = if List.isEmpty selectedItems then "Pick a template..." else ""
+                        , inputIcon = Nothing
+                        , toInputItemName = .name >> templateLabel
+                        , toInputItemTooltip = always []
+                        , onInputItemClick = \_ -> Nothing
+                        , toMenuItemName = .name >> templateLabel
+                        , toMenuItemTooltip = always []
+                        , onChange = Flow.pure ()
+                        , onRemove = .name >> Actions.removeProjectTemplate
+                        , activeAfterSelect = True
+                        , clearInputAfterSelect = True
+                        , onSelect = .name >> Actions.addProjectTemplate
+                        , alignRight = False
+                        , inputItemStyle = .name >> stringToColor >> style "background-color" >> List.singleton
+                        }
+            in
+            [ presetPicker, templatesSelectView ]
+
+        _ ->
+            [ Html.span [ class "shimmer-text shimmer-text--medium-contrast" ] [ Html.text "Loading presets..." ] ]
 
 
 viewStepExtraFormFields : Model -> Bool -> String -> StepType -> Html (Flow Model ())

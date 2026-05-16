@@ -12,7 +12,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, projectStepRecords, projects, records, route, runState, stepConfig)
+import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig)
 import Ports
 import Route
 import Specs
@@ -40,6 +40,7 @@ init flags url key =
     ( initialModel key initialRoute flags
     , Actions.loadUserRepoInfo
         |> Flow.seq Actions.loadStepConfig
+        |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
         |> Flow.seq (applyRouteFromUrl True url)
@@ -78,6 +79,7 @@ applyRouteFromUrl forceRevealHighlight url =
                             |> Flow.seq (Flow.over (projects << records) Api.ApiData.toLoading)
                             |> Flow.seq (Flow.over commitHash Api.ApiData.toLoading)
                             |> Flow.seq Actions.loadStepConfig
+                            |> Flow.seq Actions.loadPresets
                             |> Flow.seq Actions.loadProjects
                             |> Flow.when (mOldCommit /= mNewCommit)
                         )
@@ -113,10 +115,10 @@ dndSubscription model =
         mProjectId =
             try currentProjectId model
     in
-    try (stepConfig << success) model
+    Maybe.map2 Tuple.pair (try (presets << success) model) (try (stepConfig << success) model)
         |> Maybe.unwrap []
-            (\config ->
-                Actions.dndSub model Nothing (Specs.projects config)
+            (\( presets_, config ) ->
+                Actions.dndSub model Nothing (Specs.projects presets_ config)
                     :: List.map (\( name, entry ) -> Actions.dndSub model mProjectId (Specs.steps name entry)) (Dict.toList config)
             )
         |> Sub.batch

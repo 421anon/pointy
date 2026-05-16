@@ -15,6 +15,7 @@ module Model.TableSpec exposing
     , getStatus
     , getTag
     , getUpsertRecord
+    , getValidationErrors
     )
 
 import Accessors exposing (Traversal)
@@ -32,6 +33,7 @@ type TableSpec a
         , name : String
         , lens : A_Traversal Model (Table a)
         , status : a -> ApiData Status
+        , validationErrors : a -> List String
         , directoryView : a -> Maybe DirectoryFolder
         , srcFilesView : a -> Maybe DirectoryFolder
         , encodeRecord : a -> Json.Encode.Value
@@ -78,6 +80,10 @@ getStatus : TableSpec a -> a -> ApiData Status
 getStatus (TableSpec spec) =
     spec.status
 
+
+getValidationErrors : TableSpec a -> a -> List String
+getValidationErrors (TableSpec spec) =
+    spec.validationErrors
 
 getShareable : TableSpec a -> a -> Bool
 getShareable (TableSpec spec) =

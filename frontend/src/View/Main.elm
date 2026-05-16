@@ -24,13 +24,13 @@ import View.Table exposing (viewTable)
 view : Model -> Browser.Document (Flow Model ())
 view model =
     let
-        viewHome stepConfig =
+        viewHome presets stepConfig =
             viewPage
                 { header = [ viewSearchBox model ]
                 , content =
                     viewTable
                         { model = model
-                        , spec = Specs.projects stepConfig
+                        , spec = Specs.projects presets stepConfig
                         , table = Model.getProjects model
                         , specificRecordActions = \_ -> []
                         , alwaysVisibleRecordActions = \_ -> []
@@ -45,12 +45,10 @@ view model =
         viewCurrentPage =
             case Model.getRoute model of
                 Route.Home ->
-                    ApiData.foldVisible
-                        Html.nothing
-                        (Maybe.map viewHome >> Maybe.withDefault (Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading step config..." ]))
-                        viewHome
-                        (always Html.nothing)
-                        (Model.getStepConfig model)
+                    Maybe.map2 viewHome
+                        (ApiData.toMaybe (Model.getPresets model))
+                        (ApiData.toMaybe (Model.getStepConfig model))
+                        |> Maybe.withDefault (Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading workspace..." ])
 
                 Route.Project _ ->
                     viewCurrentProject model

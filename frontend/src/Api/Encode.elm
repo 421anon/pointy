@@ -1,10 +1,10 @@
 module Api.Encode exposing (..)
 
-import Api.ApiData exposing (ApiData(..))
+import Api.ApiData as ApiData
 import Dict exposing (Dict)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (ProjectRecord, StepRecord)
+import Model.Core exposing (ProjectRecord, StepRecord, TemplateSource(..))
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..))
 
 
@@ -85,20 +85,24 @@ projectRecord : ProjectRecord -> Encode.Value
 projectRecord record =
     let
         extractRecords table =
-            case table.records of
-                Success recs ->
-                    recs
-
-                _ ->
-                    []
+            ApiData.withDefault [] table.records
 
         steps =
-            Dict.values record.tables
-                |> List.concatMap extractRecords
+            (Dict.values record.tables |> List.concatMap extractRecords)
+                ++ record.orphanedSteps
+
+        sourceField =
+            case record.templateSource of
+                FromPreset name ->
+                    ( "preset", Encode.string name )
+
+                CustomTemplates ts ->
+                    ( "templates", Encode.list Encode.string ts )
     in
     Encode.object
         [ ( "name", Encode.string record.name )
         , ( "hidden", Encode.bool record.hidden )
         , ( "sortKey", Maybe.unwrap Encode.null Encode.int record.sortKey )
+        , sourceField
         , ( "steps", Encode.list stepRef steps )
         ]
