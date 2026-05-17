@@ -15,19 +15,22 @@ data CacheState = CacheState
 cache :: TVar CacheState
 cache = unsafePerformIO $ newTVarIO (CacheState Map.empty Map.empty)
 
-memoizeStepOutPaths :: Int -> Text -> IO (Map Int Text) -> IO (Map Int Text)
+memoizeStepOutPaths :: Int -> Text -> IO (Either String (Map Int Text)) -> IO (Either String (Map Int Text))
 memoizeStepOutPaths projectId commitHash action = do
     state <- readTVarIO cache
     case Map.lookup (projectId, commitHash) (projectPaths state) of
-        Just result -> return result
+        Just result -> return (Right result)
         Nothing -> do
             result <- action
-            atomically $ modifyTVar' cache $ \s ->
-                s
-                    { projectPaths = Map.insert (projectId, commitHash) result (projectPaths s)
-                    , stepPaths = Map.union (Map.fromList [((sid, commitHash), path) | (sid, path) <- Map.toList result]) (stepPaths s)
-                    }
-            return result
+            case result of
+                Left err -> return (Left err)
+                Right paths -> do
+                    atomically $ modifyTVar' cache $ \s ->
+                        s
+                            { projectPaths = Map.insert (projectId, commitHash) paths (projectPaths s)
+                            , stepPaths = Map.union (Map.fromList [((sid, commitHash), path) | (sid, path) <- Map.toList paths]) (stepPaths s)
+                            }
+                    return (Right paths)
 
 getOutPathFromCache :: Text -> Int -> IO (Maybe Text)
 getOutPathFromCache commitHash stepId = do

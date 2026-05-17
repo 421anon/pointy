@@ -174,7 +174,7 @@ cacheProjectOutPathsForCommit ctx@(ReadRepoContext _ targetCommit) = do
         mapM_
             ( \(pid, paths) -> do
                 let textPaths = Map.map T.pack paths
-                _ <- memoizeStepOutPaths pid (T.pack targetCommit) (return textPaths)
+                _ <- memoizeStepOutPaths pid (T.pack targetCommit) (return (Right textPaths))
                 return ()
             )
             (Map.toList projectOutPaths)

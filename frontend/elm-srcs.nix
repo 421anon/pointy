@@ -85,6 +85,11 @@
         version = "2.4.0";
       };
 
+      "jinjor/elm-debounce" = {
+        sha256 = "0171z89c5kj5jw1x69zl296x0yzrz6lcbnyhs5srj3qmclqjvnzk";
+        version = "3.0.0";
+      };
+
       "rtfeldman/elm-iso8601-date-strings" = {
         sha256 = "1ah491kgyicgvy1c9myylqvhzb7ya9kgmn0hcsv23ymvqgaf6b1a";
         version = "1.1.4";

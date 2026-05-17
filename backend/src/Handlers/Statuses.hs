@@ -17,10 +17,10 @@ module Handlers.Statuses (
 import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
 import Bus (broadcastSnapshot)
 import Control.Concurrent (forkIO)
-import Control.Monad (forM_, void)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception (SomeException, catch)
+import Control.Monad (forM_, void)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
@@ -48,7 +48,11 @@ getProjectOutPathsHandler pid commit = do
     eitherCommit <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return $ fromMaybe (pack hash) commit
     case eitherCommit of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-        Right targetCommit -> liftIO $ getProjectOutPaths pid targetCommit
+        Right targetCommit -> do
+            result <- liftIO $ getProjectOutPaths pid targetCommit
+            case result of
+                Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+                Right outPaths -> return outPaths
 
 checkStatus :: FilePath -> IO (Text, Maybe Text)
 checkStatus path = do
@@ -134,12 +138,15 @@ applyDependencyRunningOverrides targetCommit statuses = do
 
 broadcastProjectStatus :: Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> IO ()
 broadcastProjectStatus pid targetCommit mStatusOverride = do
-    outPaths <- getProjectOutPaths pid targetCommit
-    stats <- getStatuses targetCommit outPaths
-    let finalStats = case mStatusOverride of
-            Just (sid, st) -> Map.insert sid st stats
-            Nothing -> stats
-    broadcastSnapshot pid targetCommit finalStats outPaths
+    result <- getProjectOutPaths pid targetCommit
+    case result of
+        Left err -> putStrLn $ "broadcastProjectStatus skipped: " ++ err
+        Right outPaths -> do
+            stats <- getStatuses targetCommit outPaths
+            let finalStats = case mStatusOverride of
+                    Just (sid, st) -> Map.insert sid st stats
+                    Nothing -> stats
+            broadcastSnapshot pid targetCommit finalStats outPaths
 
 broadcastStatusForStepProjects :: Int -> Text -> Maybe (Text, Maybe Text) -> IO ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride = do

@@ -1,8 +1,8 @@
 module Api.Decode exposing (..)
 
 import Api.ApiData exposing (ApiData(..))
-import Dict exposing (Dict)
 import Components.Select as Select
+import Dict exposing (Dict)
 import Extra.Decode exposing (firstMatching)
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
@@ -278,10 +278,14 @@ directoryItemGeneric =
 stepArgType : Decoder StepArgType
 stepArgType =
     firstMatching
-        [ Decode.field "string" (Decode.succeed TString |> required "display" tStringDisplay)
-        , Decode.field "enum" (Decode.map TEnum (Decode.list Decode.string))
+        [ Decode.field "string" <|
+            Decode.map2 TString
+                (Decode.field "display" tStringDisplay)
+                (Decode.maybe (Decode.field "autocomplete" Decode.string))
+        , Decode.map2 TEnum (Decode.field "enum" (Decode.list Decode.string)) (Decode.oneOf [ Decode.field "enumDisplayNames" (Decode.dict Decode.string), Decode.succeed Dict.empty ])
         , Decode.field "step" (Decode.map TStep <| maybe <| Decode.field "allowedTypes" (Decode.list Decode.string))
         , Decode.field "list" (Decode.map TList (Decode.lazy (\() -> stepArgType)))
+        , Decode.field "record" (Decode.map TRecord (Decode.field "fields" (Decode.dict (Decode.lazy (\() -> argType)))))
         ]
 
 
@@ -311,7 +315,7 @@ tStringDisplay =
 stepArgValue : StepArgType -> Decoder StepArgValue
 stepArgValue argType_ =
     case argType_ of
-        TString _ ->
+        TString _ _ ->
             Decode.string |> Decode.map TStringValue
 
         TStep _ ->
@@ -324,8 +328,33 @@ stepArgValue argType_ =
         TUploadHash ->
             Decode.field "hash" Decode.string |> Decode.map TUploadHashValue
 
-        TEnum _ ->
+        TEnum _ _ ->
             Decode.string |> Decode.map TEnumValue
+
+        TRecord fieldTypes ->
+            let
+                decodeField fieldName fieldJson =
+                    case Dict.get fieldName fieldTypes of
+                        Nothing ->
+                            Decode.fail ("Unknown record field: " ++ fieldName)
+
+                        Just { type_ } ->
+                            case Decode.decodeValue (Decode.lazy (\() -> stepArgValue type_)) fieldJson of
+                                Ok val ->
+                                    Decode.succeed val
+
+                                Err err ->
+                                    Decode.fail ("Invalid value for field '" ++ fieldName ++ "': " ++ Decode.errorToString err)
+            in
+            Decode.dict Decode.value
+                |> Decode.andThen
+                    (Dict.foldl
+                        (\fieldName fieldJson ->
+                            Decode.map2 (Dict.insert fieldName) (decodeField fieldName fieldJson)
+                        )
+                        (Decode.succeed Dict.empty)
+                    )
+                |> Decode.map TRecordValue
 
 
 stepArgs : StepType -> Decoder (Dict String StepArgValue)

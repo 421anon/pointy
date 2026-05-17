@@ -9,6 +9,7 @@ import Browser.Dom as Dom
 import Browser.Navigation as Nav
 import Channels
 import Components.Select exposing (selected)
+import Debounce
 import Dict
 import DnDList
 import Extra.Accessors exposing (A_Traversal, by, orElseT, remkT, where_)
@@ -536,6 +537,168 @@ replaceRoute route =
 clearStepLog : Int -> Maybe String -> Flow Model ()
 clearStepLog id commit =
     Flow.over stepLogs (Dict.remove (Model.stepLogKey id commit))
+
+
+autocompleteDebounceDelay : Float
+autocompleteDebounceDelay =
+    350
+
+
+autocompleteDebounceConfig : Debounce.Config (Flow Model ())
+autocompleteDebounceConfig =
+    { strategy = Debounce.later autocompleteDebounceDelay
+    , transform = autocompleteDebounceMsg
+    }
+
+
+autocompleteStateWithJob : Model.AutocompleteJob -> Maybe Model.AutocompleteState -> Model.AutocompleteState
+autocompleteStateWithJob job maybeState =
+    if String.isEmpty job.query then
+        Model.initAutocompleteState
+
+    else
+        { query = job.query
+        , suggestions = ApiData.loading (maybeState |> Maybe.andThen (.suggestions >> ApiData.toMaybe))
+        , activeIndex = 0
+        , activeRequest = Just job
+        }
+
+
+clearAutocomplete : String -> Flow Model ()
+clearAutocomplete fieldKey =
+    Flow.over autocomplete (Dict.insert fieldKey Model.initAutocompleteState)
+
+
+fetchAutocomplete : String -> Maybe String -> Api.AutocompleteRequest -> Flow Model ()
+fetchAutocomplete fieldKey commit autocompleteRequest =
+    if String.isEmpty autocompleteRequest.query then
+        clearAutocomplete fieldKey
+
+    else
+        Flow.get
+            |> Flow.andThen
+                (\model ->
+                    let
+                        currentState =
+                            Dict.get fieldKey (Model.getAutocomplete model)
+
+                        job : Model.AutocompleteJob
+                        job =
+                            { fieldKey = fieldKey
+                            , commit = commit
+                            , template = autocompleteRequest.template
+                            , autocomplete = autocompleteRequest.autocomplete
+                            , context = autocompleteRequest.context
+                            , query = autocompleteRequest.query
+                            , limit = autocompleteRequest.limit
+                            }
+
+                        loadingState =
+                            autocompleteStateWithJob job currentState
+
+                        ( newDebounce, debounceCmd ) =
+                            Debounce.push autocompleteDebounceConfig job (Model.getAutocompleteDebounce model)
+                    in
+                    Flow.over autocomplete (Dict.insert fieldKey loadingState)
+                        |> Flow.seq (Flow.over autocompleteDebounce (always newDebounce))
+                        |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+                )
+
+
+autocompleteDebounceMsg : Debounce.Msg -> Flow Model ()
+autocompleteDebounceMsg msg =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    send job =
+                        Task.perform (\_ -> runAutocompleteJob job) (Task.succeed ())
+
+                    ( newDebounce, debounceCmd ) =
+                        Debounce.update autocompleteDebounceConfig (Debounce.takeLast send) msg (Model.getAutocompleteDebounce model)
+                in
+                Flow.over autocompleteDebounce (always newDebounce)
+                    |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+            )
+
+
+autocompleteJobsMatch : Model.AutocompleteJob -> Model.AutocompleteJob -> Bool
+autocompleteJobsMatch expected actual =
+    expected.fieldKey
+        == actual.fieldKey
+        && expected.commit
+        == actual.commit
+        && expected.template
+        == actual.template
+        && expected.autocomplete
+        == actual.autocomplete
+        && expected.context
+        == actual.context
+        && expected.query
+        == actual.query
+        && expected.limit
+        == actual.limit
+
+
+autocompleteStateMatchesJob : Model.AutocompleteJob -> Model.AutocompleteState -> Bool
+autocompleteStateMatchesJob job state =
+    case state.activeRequest of
+        Just activeRequest ->
+            autocompleteJobsMatch job activeRequest
+
+        Nothing ->
+            False
+
+
+runAutocompleteJob : Model.AutocompleteJob -> Flow Model ()
+runAutocompleteJob job =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case Dict.get job.fieldKey (Model.getAutocomplete model) of
+                    Just state ->
+                        if autocompleteStateMatchesJob job state then
+                            Api.fetchAutocomplete
+                                job.commit
+                                { template = job.template
+                                , autocomplete = job.autocomplete
+                                , context = job.context
+                                , query = job.query
+                                , limit = job.limit
+                                }
+                                |> Flow.andThen (applyAutocompleteResult job)
+
+                        else
+                            Flow.pure ()
+
+                    Nothing ->
+                        Flow.pure ()
+            )
+
+
+applyAutocompleteResult : Model.AutocompleteJob -> Result Http.Error (List String) -> Flow Model ()
+applyAutocompleteResult job result =
+    Flow.get
+        |> Flow.andThen
+            (\latestModel ->
+                case Dict.get job.fieldKey (Model.getAutocomplete latestModel) of
+                    Just state ->
+                        if autocompleteStateMatchesJob job state then
+                            Flow.over autocomplete
+                                (Dict.insert job.fieldKey
+                                    { query = job.query
+                                    , suggestions = ApiData.fromResult result
+                                    , activeIndex = 0
+                                    , activeRequest = Just job
+                                    }
+                                )
+
+                        else
+                            Flow.pure ()
+
+                    Nothing ->
+                        Flow.pure ()
+            )
 
 
 loadStepLog : Int -> Flow Model ()
