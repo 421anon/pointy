@@ -8,7 +8,7 @@ A Pointy deployment has four moving parts:
 
 1. **Frontend** — the browser UI where users manage projects, steps, runs, outputs, and share links.
 2. **Backend** — a service that reads and writes the user repository, serves API endpoints, streams live step statuses, accepts uploads, and starts or stops builds.
-3. **User repository** — a Git-backed Nix flake that stores templates, step definitions, project definitions, and source files.
+3. **User repository** — a Git-backed Nix flake that stores templates, optional presets, step definitions, project definitions, and source files.
 4. **Nix / systemd runtime** — builds are executed as `systemd-run` units that call `nix build` against a pinned commit of the user repository.
 
 When a user edits a project or step in the UI, the backend rewrites the corresponding `.nix` file in the user repository, commits the change, and pushes it back to the configured remote.
@@ -41,19 +41,22 @@ At minimum, the user repository needs:
 - `flake.nix`
 - `flake.lock`
 - `templates/`
+- optional `presets/`
 - `steps/`
 - `projects/`
 - `srcFiles/`
 
 Responsibilities are split like this:
 
-- `templates/` and `srcFiles/` are admin-authored
+- `templates/`, optional `presets/`, and `srcFiles/` are admin-authored
 - `steps/` and `projects/` are backend-managed
 - `flake.nix` wires everything together through `pointy-stdlib.lib.mkFlake`
 
 You can keep any additional repo content you want — for example helper Nix files or a `packages/` directory — but that layout is your own convention, not something Pointy discovers automatically.
 
 For the concrete flake setup, see [Setting Up the User Repository](user-repo-setup.md).
+
+Project definitions must choose either a preset or a custom template list. If templates, presets, or step ids disappear from the user repository, Pointy keeps the project loadable where possible and surfaces validation errors in the UI.
 
 ## Repository synchronization behaviour
 
@@ -82,9 +85,11 @@ The frontend listens for live step-status snapshots on:
 
 This is a Server-Sent Events (SSE) endpoint. Pointy sends:
 
-- an initial snapshot
+- an initial snapshot for the requested project
 - periodic heartbeat events
 - replacement snapshots when project status changes
+
+When the stream is opened without `commit`, it follows the live head of the configured user-repository branch. When `commit=<hash>` is present, the stream is pinned to that historical read-only view and only emits snapshots for that commit.
 
 If you place Pointy behind a reverse proxy, make sure this endpoint is allowed to stay open for a long time and that response buffering is disabled.
 

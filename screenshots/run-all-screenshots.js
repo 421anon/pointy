@@ -13,7 +13,9 @@ const screenshotScripts = [
   "project-row-actions.js",
   "project-delete-button.js",
   "project-create-form.js",
+  "project-template-settings-form.js",
   "project-view.js",
+  "project-config-warning.js",
 
   // Steps overview
   "steps-search-box.js",
@@ -22,6 +24,7 @@ const screenshotScripts = [
   "steps-reorder-handle.js",
   "steps-add-from-other-project-form.js",
   "steps-assign-unassign.js",
+  "step-last-modified-badge.js",
 
   // Step types
   "step-file-upload-header.js",
@@ -147,6 +150,25 @@ async function runCapture(scriptPath, session, label) {
   }
 }
 
+async function getCurrentTheme(page) {
+  return page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+}
+
+async function switchTheme(page, targetTheme) {
+  const currentTheme = await getCurrentTheme(page);
+  if (currentTheme === targetTheme) return;
+
+  const switcher = page.locator(".theme-toggle-btn").first();
+  await switcher.waitFor({ state: "visible", timeout: 10000 });
+  await switcher.click();
+  await page.waitForFunction(
+    (theme) => document.documentElement.getAttribute("data-theme") === theme,
+    targetTheme,
+    { timeout: 10000 },
+  );
+  await page.waitForTimeout(150);
+}
+
 async function main() {
   const runStartedAt = Date.now();
   const args = process.argv.slice(2);
@@ -171,35 +193,87 @@ async function main() {
   log("browser shared-started");
 
   try {
-    for (const theme of themes) {
-      const themeOutput = path.join(output, theme);
-      fs.rmSync(themeOutput, { recursive: true, force: true });
-      fs.mkdirSync(themeOutput, { recursive: true });
+    const hasLightAndDark = themes.includes("light") && themes.includes("dark");
 
-      process.env.SCREENSHOT_THEME = theme;
+    if (hasLightAndDark) {
+      const lightOutput = path.join(output, "light");
+      const darkOutput = path.join(output, "dark");
+      fs.rmSync(lightOutput, { recursive: true, force: true });
+      fs.rmSync(darkOutput, { recursive: true, force: true });
+      fs.mkdirSync(lightOutput, { recursive: true });
+      fs.mkdirSync(darkOutput, { recursive: true });
+
+      process.env.SCREENSHOT_THEME = "light";
       const context = await createContextWithStepTracking(browser);
       const page = await context.newPage();
       const session = {
         browser,
         context,
         page,
-        output: themeOutput,
+        output: lightOutput,
         baseUrl,
         location: "unknown",
       };
 
-      log(`theme start ${theme} output=${themeOutput}`);
+      log(`theme start light output=${lightOutput}`);
+      log(`theme start dark output=${darkOutput}`);
 
       try {
         await waitForBackend(page, baseUrl);
+        await switchTheme(page, "light");
 
         for (const scriptName of screenshotScripts) {
           const scriptPath = path.join(scriptsDir, scriptName);
-          await runCapture(scriptPath, session, `${theme}/${scriptName}`);
+
+          session.output = lightOutput;
+          await switchTheme(page, "light");
+          await runCapture(scriptPath, session, `light/${scriptName}`);
           completedCount++;
+
+          session.output = darkOutput;
+          await switchTheme(page, "dark");
+          try {
+            await runCapture(scriptPath, session, `dark/${scriptName}`);
+            completedCount++;
+          } finally {
+            await switchTheme(page, "light");
+          }
         }
       } finally {
         await context.close();
+      }
+    } else {
+      for (const theme of themes) {
+        const themeOutput = path.join(output, theme);
+        fs.rmSync(themeOutput, { recursive: true, force: true });
+        fs.mkdirSync(themeOutput, { recursive: true });
+
+        process.env.SCREENSHOT_THEME = theme;
+        const context = await createContextWithStepTracking(browser);
+        const page = await context.newPage();
+        const session = {
+          browser,
+          context,
+          page,
+          output: themeOutput,
+          baseUrl,
+          location: "unknown",
+        };
+
+        log(`theme start ${theme} output=${themeOutput}`);
+
+        try {
+          await waitForBackend(page, baseUrl);
+          await switchTheme(page, theme);
+
+          for (const scriptName of screenshotScripts) {
+            const scriptPath = path.join(scriptsDir, scriptName);
+            await runCapture(scriptPath, session, `${theme}/${scriptName}`);
+            completedCount++;
+          }
+        } finally {
+          await context.close();
+        }
       }
     }
   } finally {

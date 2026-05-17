@@ -4,7 +4,7 @@ Inside a project, Pointy organizes work as **steps**. Each table in the project 
 
 ![A project view showing steps grouped by type. Derivation steps have Run controls; file upload steps have upload controls.](screenshots/light/project-view.png)
 
-Step types are defined by the instance's templates. If you administer the instance, see [Setting Up the User Repository](user-repo-setup.md) and the [Type Reference](type-reference.md).
+Step types are defined by the current project's active templates. Projects can use an admin-defined preset bundle or a custom template list; see [Managing Projects](projects.md#choosing-project-templates). If you administer the instance, see [Setting Up the User Repository](user-repo-setup.md), the [Type Reference](type-reference.md), and the preset notes in [Project presets](user-repo-setup.md#project-presets).
 
 ## Step types
 
@@ -23,9 +23,11 @@ Derivation steps are runnable build steps. Their forms can contain:
 - plain text fields
 - command-style argument fields
 - multi-line text areas
+- syntax-highlighted code editors
+- enum dropdowns
 - references to other steps
-- repeatable lists of strings or step references
-
+- repeatable lists of strings, step references, or structured records
+- autocomplete-backed string lists inside structured records, for values such as package names
 Step references resolve to the selected upstream step's output during the build.
 
 ![An example derivation step row, showing runnable workflow controls.](screenshots/light/step-derivation-header.png)
@@ -47,26 +49,27 @@ When you create or edit a derivation step, Pointy renders a form from the step t
 
 Depending on the template, you may need to:
 
-- fill in text or command arguments
-- write longer script bodies
-- choose upstream steps from dropdowns
+- fill in text, command, or code arguments
+- choose enum values from dropdowns
+- choose upstream steps from selectors
 - add multiple values to list fields
+- add rows to structured record lists when a template groups several related fields together; record fields can include autocomplete-backed string lists whose suggestions update as you type while still allowing free-text values
 
 ![The step edit form for a derivation step. Step-reference arguments are chosen from selectors in the form.](screenshots/light/step-edit-form.png)
 
-Step-reference selectors choose from steps that are already assigned to the **current project**. If you want to reference a step that currently lives in another project, first add that step to the current project with **Add from other project**.
+Step-reference selectors choose from steps that are already assigned to the **current project**. If you want to reference a step that currently lives in another project, first add that step to the current project with **Add from other project**. Existing saved references that no longer belong to the project are kept visible with a **not in project** label so you can fix them deliberately.
 
 ## Editing, inspecting, and cloning
 
 All steps can be edited. The **Edit** button opens the same form shown in [Configuring step arguments](#configuring-step-arguments).
 
-Once a step is shareable, share links point to the revision they were generated at. Further editing creates a new revision.
+Once a step is shareable, share links point to the revision they were generated at. Further editing creates a new revision. Step rows show a relative **last modified** timestamp when Pointy can read the corresponding `steps/<id>.nix` Git history; hover it for the exact timestamp.
 
 To see the parameters in read-only mode, use the **Inspect Parameters** button.
 
 ![The Inspect Parameters form showing a step's configuration in read-only mode.](screenshots/light/step-inspect-form.png)
 
-If you want to branch from a shareable step instead of changing it in place, use **Clone** to create a new editable copy with the same configuration.
+If you want to branch from a shareable step instead of changing it in place, use **Clone** to create a new editable copy with the same configuration. The Clone action sits next to the row's remove/delete action so copying and removing a step are available in the same action cluster.
 
 ![The Clone button hovered on a step row, with a cloned step visible below it.](screenshots/light/step-clone-button.png)
 
@@ -93,6 +96,10 @@ So adding an existing step to another project means linking to the same step rat
 Removing a step from the current project only unassigns it from that project.
 
 ![The Remove button hovered on a step row header, used to unassign the step from the current project.](screenshots/light/steps-assign-unassign.png)
+
+## Inactive-template warnings
+
+When a project's active preset or custom template list no longer includes a template used by an assigned step, Pointy does not discard that step. The project view shows a collapsible warning listing those orphaned steps by id, type, and name. Re-enable the template, unassign the step from the project, or leave the warning collapsed if the project intentionally no longer uses that template.
 
 ## Organizing steps inside a project
 

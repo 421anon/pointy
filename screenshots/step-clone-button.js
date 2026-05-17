@@ -9,6 +9,7 @@ const {
   screenshotLocator,
   withHoveredLocator,
   findVisibleClonePair,
+  findVisibleStepRowWithButton,
 } = require("./lib/helpers");
 
 async function capture(session) {
@@ -53,7 +54,28 @@ async function capture(session) {
       session.warn,
     );
   } else {
-    session.warn("No visible step row with Clone and visible cloned counterpart was found.");
+    const { stepRow: fallbackStepRow, button: fallbackCloneButton } =
+      await findVisibleStepRowWithButton(page, "Clone");
+
+    if (fallbackStepRow && fallbackCloneButton) {
+      await fallbackStepRow.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(300);
+      await withHoveredLocator(
+        page,
+        fallbackCloneButton,
+        async () => {
+          await screenshotLocator(
+            output,
+            "step-clone-button.png",
+            fallbackStepRow,
+          );
+        },
+        "clone button for a visible step row",
+        session.warn,
+      );
+    } else {
+      session.warn("No visible step row exposed a Clone button.");
+    }
   }
 
 }

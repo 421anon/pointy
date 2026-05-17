@@ -202,11 +202,14 @@ body {
 }
 
 .table-record-id {
+  display: inline-flex;
+  align-items: center;
   font-family: monospace;
   font-size: 10px;
+  line-height: 1;
   border: 1px solid;
   color: var(--color-gray-500);
-  padding-inline: var(--spacing-2xs);
+  padding: 1px var(--spacing-2xs);
   margin-left: var(--spacing-sm);
 }
 

@@ -14,17 +14,20 @@ For how these outputs are created, see [Setting Up the User Repository](user-rep
 
 | <div style="width: 220px">Attribute</div> | What it contains                                                                                                                                                                     |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pointy.stepConfig` | Template schema derived from `templates/`: step kinds, argument names, types, and display hints.                                                                                     |
-| `pointy.stepDefs`   | Evaluated step definitions from `steps/`: type, name, and raw argument values for every step.                                                                                        |
-| `pointy.projects`   | Evaluated project definitions from `projects/`: project metadata plus assigned steps, per-project hidden flags, and sort order.                                                      |
-| `pointy.srcFiles`   | The evaluated source-files path used by builds. Because flakes copy local sources into the store, this is usually a `/nix/store/...-srcFiles` path, not your editable checkout path. |
+| `pointy.stepConfig`   | Template schema derived from `templates/`: step kinds, argument names, types, and display hints.                                                                                     |
+| `pointy.presets`      | Admin-defined preset bundles: display labels, descriptions, sort order, and template lists.                                                                                         |
+| `pointy.stepDefs`     | Evaluated step definitions from `steps/`: type, name, and raw argument values for every step.                                                                                        |
+| `pointy.projects`     | Evaluated project definitions from `projects/`: project metadata, active preset or custom templates, validation errors, assigned steps, per-project hidden flags, and sort order.     |
+| `pointy.srcFiles`     | The evaluated source-files path used by builds. Because flakes copy local sources into the store, this is usually a `/nix/store/...-srcFiles` path, not your editable checkout path. |
+| `pointy.dependencies` | Direct step dependency graph derived from step-reference options.                                                                                                                    |
 
 ### Per-system outputs (`.#pointy.*`)
 
 | <div style="width: 220px">Attribute</div> | What it contains                                                                                                                                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pointy.steps.<id>`      | The fully evaluated derivation for step `<id>`. This is the same flake output the backend builds; the backend simply uses a pinned Git commit and runs it under `systemd-run`. |
-| `pointy.projectOutPaths` | A nested map of `project-id → step-id → store-path`. Steps that cannot be evaluated are reported as `/invalid`.                                                                |
+| `pointy.steps.<id>`                         | The fully evaluated derivation for step `<id>`. This is the same flake output the backend builds; the backend simply uses a pinned Git commit and runs it under `systemd-run`. |
+| `pointy.projectOutPaths`                    | A nested map of `project-id → step-id → store-path`. Steps that cannot be evaluated are reported as `/invalid`.                                                                |
+| `pointy.autocomplete.<template>.<key>`      | Autocomplete function used by the web UI for string-list fields that declare `autocomplete = "<key>"`.                                                                       |
 
 ---
 
@@ -72,6 +75,12 @@ nix eval --json .#pointy.stepConfig | jq .
 
 This returns a JSON object keyed by template name. It is the same schema the frontend reads to decide which widgets to render.
 
+### Show all preset bundles
+
+```sh
+nix eval --json .#pointy.presets | jq .
+```
+
 ### Show all step definitions
 
 ```sh
@@ -106,6 +115,14 @@ nix eval --raw .#pointy.srcFiles
 
 This is useful for seeing what build-time path the flake exposes. If you want to **edit** source files, use your repository checkout, not the `/nix/store/...` path returned by this command.
 
+### Try an autocomplete function
+
+```sh
+nix eval --json --apply 'f: f { query = "py"; limit = 10; }' .#pointy.autocomplete.<template>.<key>
+```
+
+Autocomplete functions may use additional string or enum fields as context. Pass those fields in the attrset when reproducing a UI request from the CLI.
+
 ---
 
 ## Inspecting build behaviour and outputs
@@ -132,7 +149,7 @@ Note that helper scripts created elsewhere in the template may still appear here
 nix eval --json .#pointy.projectOutPaths | jq .
 ```
 
-This returns a nested map of `project-id → step-id → store-path`. Paths for steps that cannot be evaluated are reported as `/invalid`.
+This returns a nested map of `project-id → step-id → store-path`. Paths for steps that cannot be evaluated are reported as `/invalid`. If a project has validation errors, inspect `.#pointy.projects.<project-id>.validationErrors` first; output paths can only be meaningful for steps whose templates still evaluate.
 
 ---
 

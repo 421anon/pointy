@@ -21,7 +21,7 @@ Pointy Notebook is a web interface for building and running step-based workflows
 
 ### Projects
 
-A **project** is the top-level container for a workflow. Projects help you keep analyses separate and give you a place to organize related steps. See [Managing Projects](projects.md).
+A **project** is the top-level container for a workflow. Projects help you keep analyses separate and give you a place to organize related steps. A project can follow an admin-defined template preset or use a custom template list. See [Managing Projects](projects.md).
 
 ### Steps
 
@@ -38,4 +38,4 @@ Running steps and successful steps are **shareable**. In Pointy, this means the 
 
 ### The user repository
 
-Behind the UI, Pointy stores platform state in a Git-backed Nix flake usually called the **user repository**. Most users never need to touch it directly. Instance admins do: it is where templates, steps, projects, and optional source files live. See [Architecture & Configuration](admin.md) and [Setting Up the User Repository](user-repo-setup.md).
+Behind the UI, Pointy stores platform state in a Git-backed Nix flake usually called the **user repository**. Most users never need to touch it directly. Instance admins do: it is where templates, presets, steps, projects, and optional source files live. See [Architecture & Configuration](admin.md) and [Setting Up the User Repository](user-repo-setup.md).
