@@ -1242,13 +1242,16 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , mAllowedStepTypes = mAllowedStepTypes
                         }
 
-                TList (TString _ _) ->
+                TList (TString _ mAutocomplete) ->
                     let
                         listLens =
                             paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
 
-                        tags =
+                        strings =
                             all (listLens << each << tStringValue) model
+
+                        tags =
+                            strings
                                 |> List.map
                                     (\str ->
                                         { body = Html.text str
@@ -1266,7 +1269,58 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 |> Flow.seq (focus fieldId)
                                 |> Flow.when (not <| String.isEmpty trimmed)
                     in
-                    buildListField listLens tags addTag
+                    case mAutocomplete of
+                        Just autocompleteKey ->
+                            let
+                                autocompleteStateKey =
+                                    tableId ++ ":" ++ paramName
+
+                                autocompleteState =
+                                    Dict.get autocompleteStateKey (Model.getAutocomplete model)
+                                        |> Maybe.withDefault Model.initAutocompleteState
+                            in
+                            autocompleteListField
+                                { label = fieldLabel
+                                , mHint = fieldHint
+                                , selectedStrings = strings
+                                , suggestions = autocompleteState.suggestions
+                                , activeIndex = autocompleteState.activeIndex
+                                , onQueryChange =
+                                    \input ->
+                                        Actions.fetchAutocomplete autocompleteStateKey
+                                            currentRouteCommit
+                                            { template = tableId
+                                            , autocomplete = autocompleteKey
+                                            , context = Dict.empty
+                                            , query = input
+                                            , limit = 25
+                                            }
+                                , onSuggestionSelect =
+                                    \suggestion ->
+                                        addTag suggestion
+                                            |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                , onAddItem =
+                                    \val ->
+                                        addTag val
+                                            |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                , onRemoveIndex =
+                                    \i ->
+                                        Flow.modify (over listLens (List.removeAt i))
+                                            |> Flow.seq (focus fieldId)
+                                , onActiveIndexChange =
+                                    \newIndex ->
+                                        Flow.over Lenses.autocomplete
+                                            (Dict.insert autocompleteStateKey
+                                                { autocompleteState | activeIndex = newIndex }
+                                            )
+                                , readOnly = readOnly
+                                , id = fieldId
+                                , hasChanged = fieldHasChanged
+                                , query = autocompleteState.query
+                                }
+
+                        Nothing ->
+                            buildListField listLens tags addTag
 
                 TList (TRecord fieldTypes) ->
                     let
