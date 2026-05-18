@@ -7,7 +7,6 @@ import Browser.Events
 import Browser.Navigation as Nav
 import Dict
 import Flow exposing (Flow)
-import Time
 import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
@@ -16,6 +15,7 @@ import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit,
 import Ports
 import Route
 import Specs
+import Time
 import Url exposing (Url)
 import View.Main exposing (view)
 

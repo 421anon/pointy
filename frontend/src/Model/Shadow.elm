@@ -6,11 +6,12 @@ import Dict exposing (Dict)
 
 
 type StepArgType
-    = TString TStringDisplay
+    = TString TStringDisplay (Maybe String)
     | TStep (Maybe (List String))
     | TUploadHash
     | TList StepArgType
-    | TEnum (List String)
+    | TRecord (Dict String ArgType)
+    | TEnum (List String) (Dict String String)
 
 
 type TStringDisplay
@@ -25,6 +26,7 @@ type StepArgValue
     | TStepValue Int
     | TUploadHashValue String
     | TListValue (List StepArgValue)
+    | TRecordValue (Dict String StepArgValue)
     | TEnumValue String
 
 
@@ -63,6 +65,20 @@ tListValue =
         (\stepArgVal ->
             case stepArgVal of
                 TListValue val ->
+                    Ok val
+
+                _ ->
+                    Err stepArgVal
+        )
+
+
+tRecordValue : Prism ls StepArgValue (Dict String StepArgValue) x y
+tRecordValue =
+    prism ">TRecordValue"
+        TRecordValue
+        (\stepArgVal ->
+            case stepArgVal of
+                TRecordValue val ->
                     Ok val
 
                 _ ->

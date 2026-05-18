@@ -1,14 +1,16 @@
 module Api.Api exposing
-    ( assignRecordToProject
+    ( AutocompleteRequest
+    , assignRecordToProject
     , batchAssignRecordsToProject
     , createProject
     , createStep
     , deleteProject
+    , fetchAutocomplete
     , fetchCommitHash
     , fetchDirectoryContents
     , fetchFileContents
-    , fetchProjects
     , fetchPresets
+    , fetchProjects
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchStepConfig
@@ -36,6 +38,15 @@ import Maybe.Extra as Maybe
 import Model.Core exposing (BaseRecord, DirectoryItem, ProjectRecord, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
+
+
+type alias AutocompleteRequest =
+    { template : String
+    , autocomplete : String
+    , context : Dict String String
+    , query : String
+    , limit : Int
+    }
 
 
 collectionPath : TableSpec a -> String
@@ -193,6 +204,24 @@ fetchPresets commit =
         Http.get
             { url = appendCommitQuery "/backend/presets" commit
             , expect = Http.expectJson identity Decode.presets
+            }
+
+
+fetchAutocomplete : Maybe String -> AutocompleteRequest -> Flow s (Result Http.Error (List String))
+fetchAutocomplete commit autocompleteRequest =
+    Flow.lift <|
+        Http.post
+            { url = appendCommitQuery "/backend/autocomplete" commit
+            , body =
+                Http.jsonBody <|
+                    Json.Encode.object
+                        [ ( "template", Json.Encode.string autocompleteRequest.template )
+                        , ( "autocomplete", Json.Encode.string autocompleteRequest.autocomplete )
+                        , ( "context", Json.Encode.dict identity Json.Encode.string autocompleteRequest.context )
+                        , ( "query", Json.Encode.string autocompleteRequest.query )
+                        , ( "limit", Json.Encode.int autocompleteRequest.limit )
+                        ]
+            , expect = Http.expectJson identity (Json.Decode.list Json.Decode.string)
             }
 
 

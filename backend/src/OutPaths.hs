@@ -65,7 +65,7 @@ prefixedFieldOptions prefix =
 
 -- OutPath evaluation
 
-getProjectOutPaths :: Int -> Text -> IO (Map Int Text)
+getProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
 getProjectOutPaths pid targetCommit =
     memoizeStepOutPaths pid targetCommit $ do
         repoPath <- userRepoPath
@@ -75,12 +75,12 @@ getProjectOutPaths pid targetCommit =
                     (ReadRepoContext repoPath (unpack targetCommit))
                     ["eval", "--json"]
                     ("#pointy.projectOutPaths." ++ show pid)
-        case result of
-            Left _ -> return Map.empty
+        return $ case result of
+            Left err -> Left $ "Failed to evaluate #pointy.projectOutPaths." ++ show pid ++ ": " ++ err
             Right output ->
-                return $
-                    fromMaybe Map.empty $
-                        decode (TLE.encodeUtf8 (TL.pack output))
+                case decode (TLE.encodeUtf8 (TL.pack output)) of
+                    Nothing -> Left $ "Failed to parse #pointy.projectOutPaths." ++ show pid
+                    Just paths -> Right paths
 
 -- Cache warming
 

@@ -73,7 +73,7 @@ in
 
   virtualisation = {
     # Smaller footprint than the interactive dev-vm.
-    memorySize = lib.mkForce 4096;
+    memorySize = lib.mkForce 8192;
     diskSize = lib.mkForce 10240;
     # No host port forwarding needed; we access the app from inside the VM.
     forwardPorts = lib.mkForce [ ];

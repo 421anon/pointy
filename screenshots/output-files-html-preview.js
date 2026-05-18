@@ -4,103 +4,64 @@
 const { chromium } = require("playwright-core");
 const {
   runStandalone,
-  prepareProjectPage,
   screenshotLocator,
-  clickFirstVisible,
-  withHoveredLocator,
+  waitForApp,
   waitForNoLoading,
-  waitForDirectoryContents,
 } = require("./lib/helpers");
 
 async function capture(session) {
-  const { page, output } = session;
-  await prepareProjectPage(session);
+  const { page, output, baseUrl } = session;
+  const projectId = 1;
+  const stepId = 105;
+  const htmlFileName = "chim_R1_fastqc.html";
 
-  const outputStepRow = page
-    .locator('.table-record')
+  session.location = "project";
+  await page.goto(
+    `${baseUrl}/project/${projectId}?hi=${stepId}/${htmlFileName}`,
+    { waitUntil: "load" },
+  );
+  await waitForApp(page);
+
+  const outputStepRow = page.locator(`.table-record[id="${stepId}"]`).first();
+  await outputStepRow.waitFor({ state: "visible", timeout: 30000 });
+  await waitForNoLoading(outputStepRow);
+
+  const htmlFileRow = outputStepRow
+    .locator(".directory-file-container")
     .filter({
-      has: page.locator(".table-record-id", { hasText: /^105$/ }),
-    })
-    .filter({
-      has: page.locator('button.icon-btn[title="Browse output files"]'),
+      has: page.locator(".file-name", { hasText: new RegExp(`^${htmlFileName}$`) }),
     })
     .first();
-  const browseBtn = outputStepRow
-    .locator('button.icon-btn[title="Browse output files"]')
+  await htmlFileRow.waitFor({ state: "visible", timeout: 30000 });
+
+  const fileViewer = htmlFileRow.locator(".file-content-viewer").first();
+  await fileViewer.waitFor({ state: "visible", timeout: 30000 });
+  await waitForNoLoading(fileViewer);
+
+  const previewButton = htmlFileRow
+    .locator("button.dir-item-icon-btn")
+    .filter({
+      has: page.locator(".material-symbols-outlined", {
+        hasText: /^visibility(_off)?$/,
+      }),
+    })
     .first();
 
-  if (await outputStepRow.isVisible().catch(() => false)) {
-    const outputSection = outputStepRow.locator(".output-files-section").first();
-
-    if (!(await outputSection.isVisible().catch(() => false))) {
-      await clickFirstVisible(browseBtn);
-    }
-
-    await waitForNoLoading(outputStepRow);
-    await outputSection.waitFor({ state: "visible", timeout: 30000 });
-    await waitForDirectoryContents(outputSection);
-
-    const chimR1Row = outputSection
-      .locator(".directory-file-container")
-      .filter({
-        has: page.locator(".file-name", { hasText: /^chim_R1_fastqc\.html$/ }),
-      })
-      .first();
-
-    await chimR1Row.waitFor({ state: "visible", timeout: 10000 });
-
-    const previewBtn = chimR1Row
-      .locator("button.dir-item-icon-btn")
-      .filter({
-        has: page.locator(".material-symbols-outlined", {
-          hasText: /^visibility(_off)?$/ ,
-        }),
-      })
-      .first();
-
-    await previewBtn.waitFor({ state: "visible", timeout: 10000 });
-
-    const fileViewer = chimR1Row.locator(".file-content-viewer").first();
-    if (!(await fileViewer.isVisible().catch(() => false))) {
-      await previewBtn.click();
-      await waitForNoLoading(chimR1Row);
-      await fileViewer.waitFor({ state: "visible", timeout: 10000 });
-      await waitForNoLoading(fileViewer);
-
-      const zoomOutBtn = chimR1Row.locator("button.iframe-zoom-btn.zoom-out").first();
-      const zoomOutVisible = await zoomOutBtn
-        .waitFor({ state: "visible", timeout: 5000 })
-        .then(() => true)
-        .catch(() => false);
-
-      if (zoomOutVisible) {
-        await zoomOutBtn.click();
-        await page.waitForTimeout(200);
-        await zoomOutBtn.click();
-        await page.waitForTimeout(200);
-        await zoomOutBtn.click();
-        await page.waitForTimeout(300);
-      }
-    }
-
-    await outputStepRow.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(300);
-
-    await withHoveredLocator(
-      page,
-      previewBtn,
-      async (hoveredBtn) => {
-        await hoveredBtn.hover();
-        await page.waitForTimeout(100);
-        await screenshotLocator(output, "output-files-html-preview.png", outputStepRow);
-      },
-      "preview button",
-      session.warn,
-    );
-  } else {
-    session.warn("Step 105 did not expose a visible Browse output files button.");
+  const zoomOutBtn = htmlFileRow.locator("button.iframe-zoom-btn.zoom-out").first();
+  if (await zoomOutBtn.isVisible().catch(() => false)) {
+    await zoomOutBtn.click();
+    await page.waitForTimeout(200);
+    await zoomOutBtn.click();
+    await page.waitForTimeout(200);
+    await zoomOutBtn.click();
   }
 
+  await outputStepRow.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+
+  await previewButton.hover();
+  await page.waitForTimeout(100);
+  await screenshotLocator(output, "output-files-html-preview.png", outputStepRow);
 }
 
 module.exports = { capture };

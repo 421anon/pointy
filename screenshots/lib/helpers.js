@@ -409,28 +409,46 @@ async function waitForNoLoading(locator) {
  */
 async function waitForDirectoryContents(locator) {
   await waitForNoLoading(locator);
-  await locator.page().waitForFunction(
-    (el) => {
-      if (!el) return false;
-      if (el.querySelector(".loading-overlay")) return false;
+  const elementHandle = await locator.elementHandle();
+  try {
+    await locator.page().waitForFunction(
+      (el) => {
+        if (!el) return false;
+        if (el.querySelector(".loading-overlay")) return false;
 
+        const directoryRoot = el.querySelector(".directory-view") || el;
+
+        return Boolean(
+          directoryRoot.querySelector(".directory-file-container") ||
+            directoryRoot.querySelector(".directory-folder") ||
+            Array.from(directoryRoot.querySelectorAll("div, span")).some((node) => {
+            const text = (node.textContent || "").trim();
+            return (
+              text === "Directory is empty" ||
+              text === "Failed to load"
+            );
+          }),
+        );
+      },
+      elementHandle,
+      { timeout: 30000 },
+    );
+  } catch (err) {
+    const snapshot = await locator.page().evaluate((el) => {
+      if (!el) return { error: "element is null" };
       const directoryRoot = el.querySelector(".directory-view") || el;
-
-      return Boolean(
-        directoryRoot.querySelector(".directory-file-container") ||
-          directoryRoot.querySelector(".directory-folder") ||
-          Array.from(directoryRoot.querySelectorAll("div, span")).some((node) => {
-          const text = (node.textContent || "").trim();
-          return (
-            text === "Directory is empty" ||
-            text === "Failed to load"
-          );
-        }),
-      );
-    },
-    await locator.elementHandle(),
-    { timeout: 30000 },
-  );
+      return {
+        url: location.href,
+        hasLoadingOverlay: !!el.querySelector(".loading-overlay"),
+        hasDirectoryView: !!el.querySelector(".directory-view"),
+        fileContainerCount: directoryRoot.querySelectorAll(".directory-file-container").length,
+        folderCount: directoryRoot.querySelectorAll(".directory-folder").length,
+        innerText: (el.innerText || "").slice(0, 500),
+      };
+    }, elementHandle).catch((snapshotErr) => ({ error: snapshotErr.message }));
+    console.log(`[debug] waitForDirectoryContents snapshot: ${JSON.stringify(snapshot)}`);
+    throw err;
+  }
 }
 
 /**

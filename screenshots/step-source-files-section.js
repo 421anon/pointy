@@ -39,6 +39,7 @@ async function capture(session) {
       await waitForNoLoading(srcFilesStepRow);
       await srcSection.waitFor({ state: "visible", timeout: 30000 });
 
+
       await waitForDirectoryContents(srcSection);
       await expandAllVisibleFolders(srcSection);
       await waitForDirectoryContents(srcSection);

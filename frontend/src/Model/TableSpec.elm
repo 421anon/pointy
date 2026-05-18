@@ -85,6 +85,7 @@ getValidationErrors : TableSpec a -> a -> List String
 getValidationErrors (TableSpec spec) =
     spec.validationErrors
 
+
 getShareable : TableSpec a -> a -> Bool
 getShareable (TableSpec spec) =
     spec.status

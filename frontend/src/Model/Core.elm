@@ -3,6 +3,7 @@ module Model.Core exposing (..)
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Browser.Navigation
 import Components.Select exposing (SelectState, initSelectState)
+import Debounce
 import Dict exposing (Dict)
 import DnDList
 import Flow exposing (Flow)
@@ -10,8 +11,8 @@ import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
-import Toast exposing (Toast)
 import Time
+import Toast exposing (Toast)
 
 
 type Status
@@ -126,6 +127,30 @@ type alias UserRepoInfo =
     }
 
 
+type alias AutocompleteJob =
+    { fieldKey : String
+    , commit : Maybe String
+    , template : String
+    , autocomplete : String
+    , context : Dict String String
+    , query : String
+    , limit : Int
+    }
+
+
+type alias AutocompleteState =
+    { query : String
+    , suggestions : ApiData (List String)
+    , activeIndex : Int
+    , activeRequest : Maybe AutocompleteJob
+    }
+
+
+initAutocompleteState : AutocompleteState
+initAutocompleteState =
+    { query = "", suggestions = NotAsked, activeIndex = 0, activeRequest = Nothing }
+
+
 type Model
     = Model
         { projects : Table ProjectRecord
@@ -145,6 +170,8 @@ type Model
         , uploadProgress : Dict Int UploadProgress
         , stepLogs : Dict String (ApiData String)
         , stepStatusHooks : Dict Int (Flow Model ())
+        , autocomplete : Dict String AutocompleteState
+        , autocompleteDebounce : Debounce.Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
         , now : Time.Posix
         }
@@ -289,6 +316,7 @@ repartitionProjectSteps presets stepConfig proj =
         , validationErrors = validationErrorsFor presets stepConfig proj.templateSource
     }
 
+
 getCommitHash : Model -> ApiData String
 getCommitHash (Model model) =
     model.commitHash
@@ -325,6 +353,16 @@ getUploadProgress (Model model) =
 getStepStatusHooks : Model -> Dict Int (Flow Model ())
 getStepStatusHooks (Model model) =
     model.stepStatusHooks
+
+
+getAutocomplete : Model -> Dict String AutocompleteState
+getAutocomplete (Model model) =
+    model.autocomplete
+
+
+getAutocompleteDebounce : Model -> Debounce.Debounce AutocompleteJob
+getAutocompleteDebounce (Model model) =
+    model.autocompleteDebounce
 
 
 getGutterDrag : Model -> Maybe GutterDrag
@@ -399,6 +437,8 @@ initialModel key route flags =
         , stepLogs = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
+        , autocomplete = Dict.empty
+        , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
         , now = Time.millisToPosix 0
         }

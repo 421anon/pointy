@@ -28,6 +28,7 @@ executable backend
                    Handlers.ProjectEntities,
                    Handlers.Statuses,
                    Handlers.Steps,
+                   Handlers.Autocomplete,
                    Handlers.StepConfig,
                    Handlers.Presets,
                    Handlers.RunStep,

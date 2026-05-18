@@ -5,8 +5,8 @@ import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Api.Decode as Decode
 import Api.Encode as Encode
-import Dict
 import Components.Select as Select
+import Dict
 import Extra.Accessors exposing (where_)
 import Flow
 import Model.Core as Model exposing (ProjectRecord, StepRecord, TableTag(..))

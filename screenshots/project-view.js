@@ -14,22 +14,6 @@ async function capture(session) {
   const { page, output } = session;
   await prepareProjectPage(session);
 
-  // Scroll to bottom to ensure all steps are visible (including script 1)
-  const lastStepRow = page
-    .locator('.table-record')
-    .filter({ hasText: "script 1" })
-    .first();
-
-  const lastStepVisible = await lastStepRow
-    .waitFor({ state: "visible", timeout: 10000 })
-    .then(() => true)
-    .catch(() => false);
-
-  if (lastStepVisible) {
-    await lastStepRow.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(300);
-  }
-
   // Move mouse away from content to avoid accidental hover highlights
   const viewport = page.viewportSize() || { width: 1280, height: 800 };
   await page.mouse.move(viewport.width - 1, viewport.height - 1);

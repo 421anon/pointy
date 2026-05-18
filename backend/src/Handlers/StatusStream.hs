@@ -46,30 +46,29 @@ stepStatusStreamHandler projectId commit = do
             Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
             Right c -> pure c
 
+    outPathsResult <- liftIO $ getProjectOutPaths projectId targetCommit
+    outPaths <-
+        case outPathsResult of
+            Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+            Right paths -> pure paths
+    initialStatuses <- liftIO $ getStatuses targetCommit outPaths
     busChan <- liftIO subscribe
 
     let padding = sseComment $ "padding " <> pack (replicate 4096 ' ')
+    let snapshotPayload = encodeSnapshot projectId targetCommit initialStatuses outPaths
     let source =
             S.fromStepT
                 ( S.Yield
                     (sseComment "connected")
                     ( S.Yield
                         padding
-                        (S.Effect (prepareInitialSnapshot projectId commit targetCommit busChan))
+                        ( S.Yield
+                            (sseEvent "snapshot" snapshotPayload)
+                            (S.Effect (streamLoop projectId commit initialStatuses 0 busChan))
+                        )
                     )
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
-
-prepareInitialSnapshot :: Int -> Maybe Text -> Text -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
-prepareInitialSnapshot projectId pinnedCommit initialCommit busChan = do
-    outPaths <- getProjectOutPaths projectId initialCommit
-    initialStatuses <- getStatuses initialCommit outPaths
-    let snapshotPayload = encodeSnapshot projectId initialCommit initialStatuses outPaths
-    pure
-        ( S.Yield
-            (sseEvent "snapshot" snapshotPayload)
-            (S.Effect (streamLoop projectId pinnedCommit initialStatuses 0 busChan))
-        )
 streamLoop :: Int -> Maybe Text -> Map Int (Text, Maybe Text) -> Int -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
 streamLoop projectId pinnedCommit previousStatuses heartbeatTick busChan = do
     return $ S.Effect $ do

@@ -80,11 +80,46 @@ lib.mkOption {
 
 By default this renders a plain text input. The optional `display` attribute changes the widget:
 
-| `display` value                 | Widget rendered                  |
-| ------------------------------- | -------------------------------- |
-| _(omitted)_                     | Plain single-line text input     |
-| `display.command = "tool-name"` | Command-prefixed argument box    |
-| `display.textarea = { }`        | Auto-growing multi-line textarea |
+| `display` value                         | Widget rendered                     |
+| --------------------------------------- | ----------------------------------- |
+| _(omitted)_                             | Plain single-line text input        |
+| `display.command = "tool-name"`         | Command-prefixed argument box       |
+| `display.textarea = { }`                | Auto-growing multi-line textarea    |
+| `display.code.language = "python"`      | Syntax-highlighted code editor      |
+
+A string type can also expose an `autocomplete` key. The current UI uses that key for autocomplete-backed string lists inside `pointy.record` fields:
+
+```nix
+packages = lib.mkOption {
+  type = pointy.listOf (pointy.string {
+    displayName = "nixpkgs packages";
+    description = "Packages to install before running the script.";
+    autocomplete = "packages";
+  });
+  default = [];
+};
+```
+
+The frontend sends the key in `autocomplete` to `.#pointy.autocomplete.<template>.<key>`. The autocomplete function receives an attribute set containing `query`, `limit`, and any simple string or enum values from the surrounding record as context. It must return a JSON-serializable list of strings. Users can still enter free-text values when the suggestion list does not contain what they need.
+
+### `pointy.enum`
+
+```nix
+lib.mkOption {
+  type = pointy.enum {
+    values = [ "singleEnd" "pairedEnd" ];
+    displayName = "Read layout";
+    description = "How the reads are organized.";
+    valueDisplayNames = {
+      singleEnd = "Single-end";
+      pairedEnd = "Paired-end";
+    };
+  };
+  default = "pairedEnd";
+}
+```
+
+This renders a dropdown. The stored value is the raw string from `values`; `valueDisplayNames` only changes the label shown in the UI.
 
 ### `pointy.step`
 
@@ -100,7 +135,7 @@ lib.mkOption {
 
 This renders a step selector filtered by `allowedTypes`. If `allowedTypes` is omitted, any step type is allowed.
 
-Important frontend behaviour: the selector offers steps that are already assigned to the **current project**. If you need to reference a step from another project, first add it to the current project with **Add from other project**. See [Building Workflows (Steps)](steps.md#creating-steps).
+Important frontend behaviour: the selector offers steps that are already assigned to the **current project**. If you need to reference a step from another project, first add it to the current project with **Add from other project**. See [Building Workflows (Steps)](steps.md#creating-steps). Existing saved references outside the current project remain visible as **not in project** values so authors can repair them intentionally.
 
 At build time the selected value resolves to the Nix store path of the chosen step's output, so it can be used directly in `installPhase`.
 
@@ -114,6 +149,7 @@ lib.mkOption {
   });
   default = [];
 }
+
 # or a list of strings:
 lib.mkOption {
   type = pointy.listOf (pointy.string {
@@ -125,6 +161,33 @@ lib.mkOption {
 ```
 
 This wraps another Pointy type to make it repeatable. The UI renders an add/remove list, and the final value becomes a Nix list of the resolved inner values. The inner type's `displayName` and `description` apply to the whole list field.
+
+### `pointy.record`
+
+```nix
+lib.mkOption {
+  type = pointy.listOf (pointy.record {
+    displayName = "Samples";
+    fields = {
+      sample = pointy.string {
+        displayName = "Sample";
+        description = "Sample identifier.";
+      };
+      condition = pointy.enum {
+        values = [ "control" "treated" ];
+        description = "Experimental condition.";
+      };
+      packages = pointy.listOf (pointy.string {
+        description = "Packages used for this sample.";
+        autocomplete = "packages";
+      });
+    };
+  });
+  default = [];
+}
+```
+
+This renders a repeatable set of grouped fields. Records are useful when one logical argument needs several related values. In record fields, autocomplete requests include the record's simple string and enum fields as context, so a suggestion function can tailor results to the row being edited.
 
 ---
 

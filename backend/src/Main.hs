@@ -13,6 +13,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map (Map)
 import Data.Text (Text)
+import Handlers.Autocomplete (AutocompleteRequest, autocompleteHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
@@ -57,6 +58,7 @@ type API =
         :<|> "step-status-stream" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam "commit" Text :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
         :<|> "step-config" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
         :<|> "presets" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
+        :<|> "autocomplete" :> QueryParam "commit" Text :> ReqBody '[JSON] AutocompleteRequest :> Post '[JSON] [Text]
         :<|> "step" :> QueryParam' '[Required, Strict] "id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Patch '[JSON] NoContent
         :<|> "step" :> QueryParam "project_id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Post '[RawJSON] LBS.ByteString
         :<|> "run-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
@@ -85,6 +87,7 @@ server =
         :<|> stepStatusStreamHandler
         :<|> getStepConfigHandler
         :<|> getPresetsHandler
+        :<|> autocompleteHandler
         :<|> patchStepHandler
         :<|> postStepHandler
         :<|> runStepHandler
@@ -190,6 +193,13 @@ corsPolicy req = case pathInfo req of
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
                 , corsMethods = ["GET", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["autocomplete"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["POST", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     ("step" : _) ->

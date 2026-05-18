@@ -3,6 +3,7 @@ module Model.Lenses exposing (..)
 import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData, success)
 import Components.Select exposing (SelectState)
+import Debounce
 import Dict exposing (Dict)
 import Dict.Accessors
 import Extra.Accessors exposing (by, remkT, where_)
@@ -12,8 +13,8 @@ import List.Extra as List
 import Model.Core as Model exposing (DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (ProjectParams, Route(..))
-import Toast exposing (Toast)
 import Time
+import Toast exposing (Toast)
 
 
 blackhole : Prism pr s Never x y
@@ -158,6 +159,16 @@ userRepoInfo =
 stepLogs : Lens ls Model (Dict String (ApiData String)) x y
 stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
+
+
+autocomplete : Lens ls Model (Dict String Model.AutocompleteState) x y
+autocomplete =
+    lens ".autocomplete" Model.getAutocomplete (\(Model m) autocomplete_ -> Model { m | autocomplete = autocomplete_ })
+
+
+autocompleteDebounce : Lens ls Model (Debounce.Debounce Model.AutocompleteJob) x y
+autocompleteDebounce =
+    lens ".autocompleteDebounce" Model.getAutocompleteDebounce (\(Model m) autocompleteDebounce_ -> Model { m | autocompleteDebounce = autocompleteDebounce_ })
 
 
 isOpen : Lens ls { a | isOpen : b } b x y

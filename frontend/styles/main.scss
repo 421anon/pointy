@@ -202,11 +202,14 @@ body {
 }
 
 .table-record-id {
+  display: inline-flex;
+  align-items: center;
   font-family: monospace;
   font-size: 10px;
+  line-height: 1;
   border: 1px solid;
   color: var(--color-gray-500);
-  padding-inline: var(--spacing-2xs);
+  padding: 1px var(--spacing-2xs);
   margin-left: var(--spacing-sm);
 }
 
@@ -1420,6 +1423,115 @@ select.field-changed,
 
 .tag-wrapper:has(.list-field-input):not(:has(.tag)) {
   padding-block: 0;
+}
+
+.list-field-autocomplete {
+  position: relative;
+}
+.list-field-suggestions {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-color);
+  border-radius: 3px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.25);
+}
+.list-field-suggestion {
+  all: unset;
+  box-sizing: border-box;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.list-field-suggestion.active,
+.list-field-suggestion:hover,
+.list-field-suggestion:focus {
+  background: var(--bg-hover);
+}
+.list-field-suggestion-meta {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.record-item {
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 0.25rem;
+  padding: 0.75rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.record-item-fields {
+  display: flex;
+  flex-direction: row;
+  gap: 0.75rem;
+  align-items: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+
+.record-item-fields .form-field {
+  min-width: 0;
+}
+
+.record-item-fields .form-field:first-child {
+  flex: 0 0 8rem;
+  max-width: 8rem;
+}
+
+.record-item-fields .form-field:not(:first-child) {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+.remove-record-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-color-muted, #888);
+  padding: 0 0.25rem;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
+  align-self: start;
+  margin-top: calc(1.5em + var(--spacing-xs));
+  &:hover {
+    color: var(--danger-color, #e53e3e);
+  }
+}
+
+.add-record-btn {
+  align-self: flex-start;
+  background: none;
+  border: 1px dashed var(--border-color, #ccc);
+  border-radius: 0.25rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  color: var(--text-color-muted, #888);
+  &:hover {
+    border-color: var(--primary-color, #3182ce);
+    color: var(--primary-color, #3182ce);
+  }
 }
 
 .loading-wrapper {

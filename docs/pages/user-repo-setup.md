@@ -3,8 +3,9 @@
 The user repository is a Git repository and Nix flake that Pointy treats as the source of truth for:
 
 - step templates
+- optional template presets
 - step instances
-- project membership and ordering
+- project membership, ordering, and active template selection
 - optional per-step source files
 
 Pointy expects this repository to be wired through `pointy-stdlib.lib.mkFlake`, which generates the flake outputs the backend and frontend read. See [Architecture & Configuration](admin.md) for the runtime overview.
@@ -19,10 +20,11 @@ Create these items at the root of the repository:
 - `steps/`
 - `projects/`
 - `srcFiles/`
+- optionally `presets/`, if you prefer to keep preset definitions in separate files
 
 Directory ownership is split like this:
 
-- `templates/` and `srcFiles/` are admin-authored
+- `templates/`, `presets/`, and `srcFiles/` are admin-authored
 - `steps/` and `projects/` are backend-managed
 
 The `srcFiles/` directory must exist even if it is empty.
@@ -48,6 +50,7 @@ At the repository root, create a `flake.nix` like this:
         stepDefs = pointy-stdlib.lib.loadDir ./steps;
         templates = pointy-stdlib.lib.loadDir ./templates;
         projects = pointy-stdlib.lib.loadDir ./projects;
+        presets = { }; # or pointy-stdlib.lib.loadDir ./presets
         srcFiles = ./srcFiles;
       };
     };
@@ -57,12 +60,38 @@ At the repository root, create a `flake.nix` like this:
 This is enough to expose the flake outputs that Pointy needs, including:
 
 - `.#pointy.stepConfig`
+- `.#pointy.presets`
 - `.#pointy.stepDefs`
 - `.#pointy.projects`
 - `.#pointy.srcFiles`
-- per-system `.#pointy.steps.<id>` and `.#pointy.projectOutPaths`
+- `.#pointy.dependencies`
+- per-system `.#pointy.steps.<id>`, `.#pointy.projectOutPaths`, and `.#pointy.autocomplete`
 
 See the [CLI Reference](cli-reference.md) for concrete commands against those outputs.
+
+## Project presets
+
+Presets are named bundles of templates. They let admins offer a short menu such as "RNA-seq", "Variant calling", or "Custom QC" instead of asking every user to pick individual template ids for every project.
+
+A preset definition has this shape:
+
+```nix
+{
+  displayName = "RNA-seq";
+  description = "Standard read-processing templates."; # optional
+  sortKey = 10; # optional
+  templates = [ "dataSource" "fastqc" "script" ];
+}
+```
+
+Then expose the presets through the `pointy.presets` flake input, for example with `pointy-stdlib.lib.loadDir ./presets`. Pointy validates preset definitions when evaluating `.#pointy.presets`; a preset that names an unknown template fails evaluation so the admin can fix it before users see it.
+
+Each project must define exactly one of:
+
+- `preset = "<preset-name>";` to follow a preset bundle
+- `templates = [ "templateA" "templateB" ];` for a custom template list
+
+Changing a project's active preset or custom template list does not delete assigned steps. Steps whose template is no longer active are surfaced in the web UI as orphaned steps until a user re-enables the template or unassigns the step.
 
 ## Making extra packages available to templates
 

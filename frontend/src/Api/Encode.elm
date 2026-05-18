@@ -11,7 +11,7 @@ import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..))
 stepArgValue : StepArgType -> StepArgValue -> Maybe Encode.Value
 stepArgValue argType arg =
     case ( argType, arg ) of
-        ( TString _, TStringValue str ) ->
+        ( TString _ _, TStringValue str ) ->
             Just (Encode.string str)
 
         ( TStep _, TStepValue id ) ->
@@ -25,8 +25,19 @@ stepArgValue argType arg =
         ( TUploadHash, TUploadHashValue hash ) ->
             Just (Encode.object [ ( "hash", Encode.string hash ) ])
 
-        ( TEnum _, TEnumValue str ) ->
+        ( TEnum _ _, TEnumValue str ) ->
             Just (Encode.string str)
+
+        ( TRecord fieldTypes, TRecordValue fieldValues ) ->
+            Dict.toList fieldValues
+                |> List.filterMap
+                    (\( fieldName, fieldVal ) ->
+                        Dict.get fieldName fieldTypes
+                            |> Maybe.andThen (\{ type_ } -> stepArgValue type_ fieldVal)
+                            |> Maybe.map (Tuple.pair fieldName)
+                    )
+                |> Encode.object
+                |> Just
 
         _ ->
             Nothing
