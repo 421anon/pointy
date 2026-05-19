@@ -11,22 +11,24 @@ module UserRepo (
     runNixEvalImpureJsonExpr,
     runGit,
     runGitIn,
+    runGitWithSshKey,
     ReadRepoContext (..),
     WriteRepoContext (..),
     withReadRepoTransaction,
     withWriteRepoTransactionRaw,
+    withUserRepoExclusive,
     commitAndPushChanges,
     fetchRepo,
+    fetchRepoStrict,
 ) where
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
-import Control.Monad (forM_, when)
+import Control.Monad (when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isInfixOf)
-import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval)
@@ -114,6 +116,11 @@ withFileLock lockPath access action = do
             ReadWrite -> Exclusive
     System.FileLock.withFileLock lockPath mode $ const action
 
+
+withUserRepoExclusive :: ExceptT String IO a -> IO (Either String a)
+withUserRepoExclusive action = do
+    lockPath <- userRepoLockPath
+    withFileLock lockPath ReadWrite $ runExceptT action
 data RepoAccess = ReadOnly | ReadWrite deriving (Eq, Show)
 
 runGit :: [String] -> IO (ExitCode, String, String)
@@ -166,25 +173,11 @@ ensureUserRepo cfg = do
 
 cleanWorktrees :: FilePath -> IO ()
 cleanWorktrees repoPath = do
-    putStrLn "Cleaning up non-main worktrees..."
-    (exitCode, stdout, stderr) <- runGitIn repoPath ["worktree", "list"]
+    putStrLn "Pruning stale git worktree metadata..."
+    (exitCode, _, stderr) <- runGitIn repoPath ["worktree", "prune"]
     case exitCode of
-        ExitSuccess -> do
-            let worktreeLines = drop 1 (lines stdout)
-                worktreePaths = mapMaybe (listToMaybe . words) worktreeLines
-            forM_ worktreePaths $ \worktreePath -> do
-                (removeCode, _, removeErr) <- runGitIn repoPath ["worktree", "remove", worktreePath]
-                case removeCode of
-                    ExitSuccess -> return ()
-                    ExitFailure code ->
-                        putStrLn $
-                            "Warning: git worktree remove failed for "
-                                ++ worktreePath
-                                ++ " (exit "
-                                ++ show code
-                                ++ "): "
-                                ++ removeErr
-        ExitFailure code -> putStrLn $ "Warning: git worktree list failed (exit " ++ show code ++ "): " ++ stderr
+        ExitSuccess -> return ()
+        ExitFailure code -> putStrLn $ "Warning: git worktree prune failed (exit " ++ show code ++ "): " ++ stderr
 
 replaceAndClone :: FilePath -> UserRepoConfig -> IO ()
 replaceAndClone backupPath cfg = do
@@ -249,6 +242,26 @@ fetchRepo = ExceptT $ do
                         ExitFailure code2 -> return $ Left $ "git fetch failed with exit code " ++ show code2 ++ ": " ++ fetchErr2
                 ExitFailure code -> return $ Left $ "git fetch failed with exit code " ++ show code ++ ": " ++ fetchErr
     retry 3 action
+
+fetchRepoStrict :: ExceptT String IO ()
+fetchRepoStrict = ExceptT $ do
+    cfg <- resolveConfigPath >>= loadConfig
+    let userRepo = configUserRepo cfg
+        keyfile = userRepoKeyfile userRepo
+        branch = T.unpack $ userRepoBranch userRepo
+
+    repoPath <- userRepoPath
+    let refspec = "+" ++ branch ++ ":" ++ branch
+        action = do
+            (fetchCode, fetchOut, fetchErr) <- runGitWithSshKey keyfile repoPath ["fetch", "origin", refspec]
+            case fetchCode of
+                ExitSuccess -> return $ Right ()
+                ExitFailure code -> return $ Left $ "git fetch failed with exit code " ++ show code ++ formatGitOutput fetchOut fetchErr
+    retry 3 action
+  where
+    formatGitOutput stdout stderr =
+        (if null stdout then "" else "\nstdout:\n" ++ stdout)
+            ++ (if null stderr then "" else "\nstderr:\n" ++ stderr)
 
 retry :: Int -> IO (Either String a) -> IO (Either String a)
 retry 0 action = action

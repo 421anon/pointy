@@ -93,8 +93,20 @@ in
       echo "error: /shared/dev-config/dev-config.toml is missing — launch the VM via `nix run .#dev-vm` so backend/dev-config.toml is shared into the guest" >&2
       exit 1
     fi
-    cp /shared/dev-config/dev-config.toml /home/backend/config.toml
-    chmod u+w /home/backend/config.toml
+    install -m 0600 -o backend -g backend /shared/dev-config/dev-config.toml /home/backend/config.toml
+
+    # Optional agent secrets (e.g. DEEPSEEK_API_KEY=...) sourced as systemd EnvironmentFile.
+    if [ -f /shared/dev-config/agent-env ]; then
+      install -m 0600 -o backend -g backend /shared/dev-config/agent-env /home/backend/agent-env
+    fi
+
+    # Optional pi-mono config directory (models.json etc.) made visible to the runner sandbox.
+    if [ -d /shared/dev-config/pi ]; then
+      rm -rf /home/backend/.pi
+      cp -r /shared/dev-config/pi /home/backend/.pi
+      chown -R backend:backend /home/backend/.pi
+      chmod -R u=rwX,go= /home/backend/.pi
+    fi
   '';
 
   # Simple nginx configuration for dev

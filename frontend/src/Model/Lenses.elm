@@ -11,7 +11,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Time
@@ -592,6 +592,11 @@ key =
 
 origin =
     lens ".origin" Model.getOrigin (\(Model m) origin_ -> Model { m | origin = origin_ })
+
+
+agent : Lens ls Model AgentState x y
+agent =
+    lens ".agent" Model.getAgent (\(Model m) agent_ -> Model { m | agent = agent_ })
 
 
 now : Lens ls Model Time.Posix x y

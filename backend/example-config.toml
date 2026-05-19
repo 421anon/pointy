@@ -11,3 +11,28 @@ time-limit = ""
 extra = []
 # "scheduler" passes --mem and --cpus-per-task; "metadata-only" records requirements but does not enforce them.
 enforcement = "scheduler"
+
+[agent]
+# The backend invokes runner-command through sbox-command from the session worktree.
+# Argument templates expand the following placeholders:
+#   {worktree}    absolute path to the session worktree (the sandbox CWD)
+#   {home}        per-session HOME directory ({worktree}/../home), pre-created and bind-mounted into the sandbox
+#   {sessionRoot} {worktree}/.., useful for binding turn logs etc.
+#   {sessionId}   short opaque session id
+#   {prompt}      the user-supplied prompt (only for runner-args)
+#
+# Defaults assume pi-mono (https://api-docs.deepseek.com/quick_start/agent_integrations/pi_mono).
+# To wire DeepSeek: export DEEPSEEK_API_KEY in the backend service environment
+# (the runner inherits a whitelist that includes provider API keys), then make
+# the host pi config visible inside the sandbox, e.g.:
+#   sbox-args = ["--bind", "{home}", "{home}", "--ro-bind", "/home/backend/.pi", "{home}/.pi"]
+sbox-command = "sbox"
+sbox-args = ["--bind", "{home}", "{home}"]
+runner-command = "pi"
+# -c continues the most recent pi conversation rooted at this worktree (HOME is
+# per agent session), so consecutive turns share context. Drop -c if you want
+# every turn to start cold; never combine -c with --no-session.
+runner-args = ["-p", "-c", "{prompt}"]
+timeout-seconds = 1800
+output-limit-bytes = 1048576
+session-retention-days = 7

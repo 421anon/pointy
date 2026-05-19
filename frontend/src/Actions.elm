@@ -2,6 +2,7 @@ module Actions exposing (..)
 
 import Accessors exposing (An_Optic, all, each, get, has, just, keyI, over, set, try, values)
 import Api.Api as Api
+import Api.Agent as AgentApi
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Api.Decode as ApiDecode
 import Browser
@@ -1738,6 +1739,571 @@ saveProject projectId =
 closeStepStatusStream : Flow Model ()
 closeStepStatusStream =
     callJs "closeStepStatusStream" (\_ -> Encode.null) (Decode.succeed ()) ()
+
+
+closeAgentTurnStream : Flow Model ()
+closeAgentTurnStream =
+    callJs "closeAgentTurnStream" (\_ -> Encode.null) (Decode.succeed ()) ()
+
+
+updateAgentState : (Model.AgentState -> Model.AgentState) -> Flow Model ()
+updateAgentState fn =
+    Flow.modify (\(Model.Model m) -> Model.Model { m | agent = fn m.agent })
+
+
+setAgentSessions : ApiData (List Model.AgentSessionView) -> Flow Model ()
+setAgentSessions data =
+    updateAgentState (\agentState -> { agentState | sessions = data })
+
+
+setAgentSessionsLoading : Flow Model ()
+setAgentSessionsLoading =
+    Flow.get
+        |> Flow.map (Model.getAgent >> .sessions >> ApiData.toMaybe)
+        |> Flow.andThen (\previous -> setAgentSessions (Loading previous))
+
+
+mergeSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
+mergeSessionView view agentState =
+    let
+        currentList =
+            ApiData.withDefault [] agentState.sessions
+
+        merged =
+            if List.any (\v -> v.session.sessionId == view.session.sessionId) currentList then
+                List.map
+                    (\v ->
+                        if v.session.sessionId == view.session.sessionId then
+                            view
+                        else
+                            v
+                    )
+                    currentList
+
+            else
+                view :: currentList
+    in
+    { agentState | sessions = Success merged }
+
+
+handleAgentSessionResult :
+    Bool
+    -> Result Http.Error Model.AgentSessionView
+    -> Flow Model ()
+handleAgentSessionResult selectOnSuccess result =
+    case result of
+        Ok view ->
+            updateAgentState (mergeSessionView view)
+                |> Flow.seq
+                    (Flow.when selectOnSuccess
+                        (updateAgentState
+                            (\s ->
+                                { s
+                                    | selectedSessionId = Just view.session.sessionId
+                                    , turnLog = ""
+                                }
+                            )
+                        )
+                    )
+
+        Err err ->
+            addToast False (Http.errorMessage err)
+
+
+loadAgentSessions : Flow Model ()
+loadAgentSessions =
+    setAgentSessionsLoading
+        |> Flow.seq AgentApi.listSessions
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok views ->
+                        setAgentSessions (Success views)
+                            |> Flow.seq
+                                (Flow.get
+                                    |> Flow.andThen
+                                        (\model ->
+                                            let
+                                                agentState =
+                                                    Model.getAgent model
+                                            in
+                                            case agentState.selectedSessionId of
+                                                Just _ ->
+                                                    Flow.pure ()
+
+                                                Nothing ->
+                                                    case List.head views of
+                                                        Just first ->
+                                                            updateAgentState
+                                                                (\s -> { s | selectedSessionId = Just first.session.sessionId })
+
+                                                        Nothing ->
+                                                            Flow.pure ()
+                                        )
+                                )
+
+                    Err err ->
+                        setAgentSessions (Error err)
+                            |> Flow.seq (addToast False (Http.errorMessage err))
+            )
+
+
+selectAgentSession : String -> Flow Model ()
+selectAgentSession sessionId =
+    updateAgentState
+        (\s ->
+            { s
+                | selectedSessionId = Just sessionId
+                , turnLog = ""
+                , chatTurns = []
+                , chunkBuffer = ""
+                , showRawLog = False
+            }
+        )
+        |> Flow.seq (loadAgentSession sessionId)
+        |> Flow.seq
+            (Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        case Model.selectedSessionView (Model.getAgent model) of
+                            Just view ->
+                                case view.session.activeTurnId of
+                                    Just turnId ->
+                                        updateAgentState (\s -> { s | activeTurnStream = Just turnId })
+                                            |> Flow.seq (Flow.async (listenAndProcessAgentTurn turnId))
+                                            |> Flow.return ()
+
+                                    Nothing ->
+                                        Flow.pure ()
+
+                            Nothing ->
+                                Flow.pure ()
+                    )
+            )
+
+
+toggleAgentPanel : Flow Model ()
+toggleAgentPanel =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    nextOpen =
+                        not (Model.getAgent model).isPanelOpen
+                in
+                updateAgentState (\s -> { s | isPanelOpen = nextOpen })
+                    |> Flow.seq (Flow.when nextOpen loadAgentSessions)
+            )
+
+
+archiveAgentSession : String -> Flow Model ()
+archiveAgentSession sessionId =
+    AgentApi.archive sessionId
+        |> Flow.andThen (handleAgentSessionResult False)
+        |> Flow.seq
+            (Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        if (Model.getAgent model).selectedSessionId == Just sessionId then
+                            updateAgentState
+                                (\s ->
+                                    { s
+                                        | selectedSessionId = Nothing
+                                        , chatTurns = []
+                                        , chunkBuffer = ""
+                                        , turnLog = ""
+                                    }
+                                )
+                        else
+                            Flow.pure ()
+                    )
+            )
+
+
+deleteAgentSession : String -> Flow Model ()
+deleteAgentSession sessionId =
+    AgentApi.delete_ sessionId
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok () ->
+                        updateAgentState
+                            (\s ->
+                                let
+                                    remaining =
+                                        ApiData.withDefault [] s.sessions
+                                            |> List.filter (\v -> v.session.sessionId /= sessionId)
+
+                                    cleared =
+                                        s.selectedSessionId == Just sessionId
+                                in
+                                { s
+                                    | sessions = Success remaining
+                                    , selectedSessionId =
+                                        if cleared then
+                                            Nothing
+
+                                        else
+                                            s.selectedSessionId
+                                    , chatTurns =
+                                        if cleared then
+                                            []
+
+                                        else
+                                            s.chatTurns
+                                    , chunkBuffer =
+                                        if cleared then
+                                            ""
+
+                                        else
+                                            s.chunkBuffer
+                                    , turnLog =
+                                        if cleared then
+                                            ""
+
+                                        else
+                                            s.turnLog
+                                }
+                            )
+
+                    Err err ->
+                        addToast False (Http.errorMessage err)
+            )
+
+
+confirmDeleteAgentSession : String -> Flow Model ()
+confirmDeleteAgentSession sessionId =
+    let
+        cfg =
+            { id = "modal-confirm"
+            , title = "Delete agent session"
+            , subtitle = Just ("Session " ++ String.left 12 sessionId)
+            , bodyLines =
+                [ "This permanently removes the session metadata, runner logs, worktree, and agent branch."
+                , "This cannot be undone."
+                ]
+            , onConfirm = deleteAgentSession sessionId
+            }
+    in
+    Flow.modify (\(Model.Model m) -> Model.Model { m | modalConfirm = cfg })
+        |> Flow.seq (openDialog "modal-confirm")
+
+
+toggleAgentArchived : Flow Model ()
+toggleAgentArchived =
+    updateAgentState (\s -> { s | showArchived = not s.showArchived })
+
+
+
+toggleAgentLog : Flow Model ()
+toggleAgentLog =
+    updateAgentState (\agentState -> { agentState | showRawLog = not agentState.showRawLog })
+
+
+
+updateAgentPrompt : String -> Flow Model ()
+updateAgentPrompt prompt =
+    updateAgentState (\agentState -> { agentState | prompt = prompt })
+
+
+
+
+createAgentSession : Flow Model ()
+createAgentSession =
+    AgentApi.createSession
+        |> Flow.andThen (handleAgentSessionResult True)
+
+
+loadAgentSession : String -> Flow Model ()
+loadAgentSession sessionId =
+    AgentApi.fetchSession sessionId
+        |> Flow.andThen (handleAgentSessionResult False)
+
+
+withSelectedAgentSession : (Model.AgentSessionView -> Flow Model ()) -> Flow Model ()
+withSelectedAgentSession fn =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case Model.selectedSessionView (Model.getAgent model) of
+                    Just view ->
+                        fn view
+
+                    Nothing ->
+                        addToast False "Select or create an agent session first."
+            )
+
+
+submitAgentPrompt : Flow Model ()
+submitAgentPrompt =
+    withSelectedAgentSession
+        (\view ->
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        let
+                            prompt =
+                                String.trim (Model.getAgent model).prompt
+                        in
+                        if String.isEmpty prompt then
+                            addToast False "Enter an agent prompt first."
+
+                        else
+                            AgentApi.sendTurn view.session.sessionId prompt
+                                |> Flow.andThen
+                                    (\result ->
+                                        case result of
+                                            Ok turn ->
+                                                updateAgentState
+                                                    (\agentState ->
+                                                        { agentState
+                                                            | prompt = ""
+                                                            , activeTurnStream = Just turn.turnId
+                                                            , turnLog = ""
+                                                            , chunkBuffer = ""
+                                                            , chatTurns =
+                                                                agentState.chatTurns
+                                                                    ++ [ { prompt = prompt, assistant = "", status = Model.ChatPending } ]
+                                                        }
+                                                    )
+                                                    |> Flow.seq (Flow.async (listenAndProcessAgentTurn turn.turnId))
+                                                    |> Flow.seq (loadAgentSession view.session.sessionId)
+
+                                            Err err ->
+                                                addToast False (Http.errorMessage err)
+                                    )
+                    )
+        )
+
+
+
+
+prepareAgentApply : Flow Model ()
+prepareAgentApply =
+    withSelectedAgentSession
+        (\view ->
+            AgentApi.prepareApply view.session.sessionId
+                |> Flow.andThen (handleAgentSessionResult False)
+        )
+
+
+confirmAgentApply : Flow Model ()
+confirmAgentApply =
+    withSelectedAgentSession
+        (\view ->
+            case view.session.preparedApply of
+                Just candidate ->
+                    AgentApi.confirmApply view.session.sessionId candidate.targetHead candidate.candidateHead
+                        |> Flow.andThen
+                            (\result ->
+                                case result of
+                                    Ok appliedView ->
+                                        handleAgentSessionResult False (Ok appliedView)
+                                            |> Flow.seq
+                                                (updateAgentState
+                                                    (\s ->
+                                                        { s
+                                                            | selectedSessionId = Nothing
+                                                            , chatTurns = []
+                                                            , chunkBuffer = ""
+                                                            , turnLog = ""
+                                                        }
+                                                    )
+                                                )
+                                            |> Flow.seq loadAgentSessions
+
+                                    Err err ->
+                                        addToast False (Http.errorMessage err)
+                            )
+
+                Nothing ->
+                    addToast False "Prepare an apply candidate first."
+        )
+
+
+discardAgentSession : Flow Model ()
+discardAgentSession =
+    withSelectedAgentSession
+        (\view ->
+            AgentApi.discardSession view.session.sessionId
+                |> Flow.andThen (handleAgentSessionResult False)
+                |> Flow.seq
+                    (updateAgentState
+                        (\s ->
+                            { s | selectedSessionId = Nothing, turnLog = "" }
+                        )
+                    )
+                |> Flow.seq loadAgentSessions
+        )
+
+
+listenAndProcessAgentTurn : String -> Flow Model Decode.Value
+listenAndProcessAgentTurn turnId =
+    Flow.subscribe onAgentTurnIn (Channels.agentTurn turnId)
+
+
+onAgentTurnIn : Decode.Value -> Flow Model ()
+onAgentTurnIn value =
+    case Decode.decodeValue AgentApi.turnEvent value of
+        Ok (Model.AgentTurnChunk { chunk }) ->
+            updateAgentState (ingestAgentChunk chunk)
+
+        Ok (Model.AgentTurnDone _) ->
+            updateAgentState (finalizeChatTurn Nothing)
+                |> Flow.seq
+                    (updateAgentState (\agentState -> { agentState | activeTurnStream = Nothing }))
+                |> Flow.seq
+                    (Flow.get
+                        |> Flow.andThen
+                            (\model ->
+                                case Model.selectedSessionView (Model.getAgent model) of
+                                    Just view ->
+                                        loadAgentSession view.session.sessionId
+
+                                    Nothing ->
+                                        Flow.pure ()
+                            )
+                    )
+
+        Ok Model.AgentTurnHeartbeat ->
+            Flow.pure ()
+
+        Ok (Model.AgentTurnError err) ->
+            updateAgentState (finalizeChatTurn (Just err))
+                |> Flow.seq (addToast False err)
+
+        Err err ->
+            addToast False ("Agent stream decode error: " ++ Decode.errorToString err)
+
+
+ingestAgentChunk : String -> Model.AgentState -> Model.AgentState
+ingestAgentChunk chunk agentState =
+    let
+        combined =
+            agentState.chunkBuffer ++ chunk
+
+        ( completeBlock, remainder ) =
+            splitOnLastNewline combined
+
+        rawLines =
+            if String.isEmpty completeBlock then
+                []
+
+            else
+                String.split "\n" completeBlock
+
+        keptLines =
+            List.filter (not << String.isEmpty) rawLines
+
+        nextChatTurns =
+            List.foldl appendChatLine agentState.chatTurns keptLines
+    in
+    { agentState
+        | chunkBuffer = remainder
+        , turnLog = agentState.turnLog ++ chunk
+        , chatTurns = nextChatTurns
+    }
+
+
+splitOnLastNewline : String -> ( String, String )
+splitOnLastNewline text =
+    case String.indexes "\n" text |> List.reverse |> List.head of
+        Just idx ->
+            ( String.left idx text, String.dropLeft (idx + 1) text )
+
+        Nothing ->
+            ( "", text )
+
+
+appendChatLine : String -> List Model.ChatTurn -> List Model.ChatTurn
+appendChatLine rawLine turns =
+    let
+        ( prefix, body ) =
+            splitLogPrefix rawLine
+    in
+    case prefix of
+        "stdout" ->
+            appendToCurrentAssistant body turns
+
+        "stderr" ->
+            appendToCurrentAssistant body turns
+
+        "runner" ->
+            turns
+
+        _ ->
+            turns
+
+
+splitLogPrefix : String -> ( String, String )
+splitLogPrefix line =
+    if String.startsWith "[stdout] " line then
+        ( "stdout", String.dropLeft 9 line )
+
+    else if String.startsWith "[stderr] " line then
+        ( "stderr", String.dropLeft 9 line )
+
+    else if String.startsWith "[runner] " line then
+        ( "runner", String.dropLeft 9 line )
+
+
+    else if String.startsWith "[system] " line then
+        ( "system", String.dropLeft 9 line )
+
+    else
+        ( "unknown", line )
+
+
+appendToCurrentAssistant : String -> List Model.ChatTurn -> List Model.ChatTurn
+appendToCurrentAssistant body turns =
+    case List.reverse turns of
+        last :: rest ->
+            let
+                separator =
+                    if String.isEmpty last.assistant then
+                        ""
+
+                    else
+                        "\n"
+
+                updated =
+                    { last | assistant = last.assistant ++ separator ++ body }
+            in
+            List.reverse (updated :: rest)
+
+        [] ->
+            -- Output before any prompt was submitted (e.g. resumed turn); drop it.
+            turns
+
+
+finalizeChatTurn : Maybe String -> Model.AgentState -> Model.AgentState
+finalizeChatTurn mError agentState =
+    let
+        flushed =
+            if String.isEmpty agentState.chunkBuffer then
+                agentState
+
+            else
+                ingestAgentChunk "\n" agentState
+    in
+    case List.reverse flushed.chatTurns of
+        last :: rest ->
+            let
+                status =
+                    case mError of
+                        Just err ->
+                            Model.ChatFailed err
+
+                        Nothing ->
+                            Model.ChatDone
+
+                updated =
+                    { last | status = status }
+            in
+            { flushed | chatTurns = List.reverse (updated :: rest) }
+
+        [] ->
+            flushed
 
 
 listenAndProcessStepStatus : Int -> Maybe String -> Flow Model Decode.Value

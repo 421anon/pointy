@@ -22,6 +22,9 @@ executable backend
                    UserRepo,
                    NixRepl,
                    OutPaths,
+                   Agent.Session,
+                   Agent.Git,
+                   Agent.Runner,
                    Handlers.Store,
                    Handlers.SrcFiles,
                    Handlers.CommitHash,
@@ -34,6 +37,7 @@ executable backend
                    Handlers.Presets,
                    Handlers.RunStep,
                    Handlers.StatusStream,
+                   Handlers.Agent,
                    Handlers.Upload,
                    Bus,
                    NixUtils

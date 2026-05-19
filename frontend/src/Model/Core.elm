@@ -140,6 +140,106 @@ type alias UserRepoInfo =
     , branch : String
     }
 
+type alias AgentPreparedApply =
+    { targetHead : String
+    , agentHead : String
+    , candidateHead : String
+    , candidateWorktree : String
+    }
+
+
+type alias AgentSession =
+    { sessionId : String
+    , targetBranch : String
+    , agentBranch : String
+    , baseCommit : String
+    , worktreePath : String
+    , status : String
+    , preparedApply : Maybe AgentPreparedApply
+    , activeTurnId : Maybe String
+    , lastError : Maybe String
+    }
+
+
+type alias AgentGitState =
+    { headCommit : String
+    , commitLog : String
+    , branchDiff : String
+    , hasAgentCommits : Bool
+    }
+
+
+type alias AgentTurn =
+    { turnId : String
+    , turnSessionId : String
+    , turnStatus : String
+    , turnExitCode : Maybe Int
+    , turnLogPath : String
+    }
+
+
+type alias AgentSessionView =
+    { session : AgentSession
+    , gitState : AgentGitState
+    , turns : List AgentTurn
+    }
+
+
+type ChatTurnStatus
+    = ChatPending
+    | ChatDone
+    | ChatFailed String
+
+
+type alias ChatTurn =
+    { prompt : String
+    , assistant : String
+    , status : ChatTurnStatus
+    }
+
+
+type alias AgentState =
+    { sessions : ApiData (List AgentSessionView)
+    , selectedSessionId : Maybe String
+    , prompt : String
+    , isPanelOpen : Bool
+    , activeTurnStream : Maybe String
+    , chatTurns : List ChatTurn
+    , chunkBuffer : String
+    , turnLog : String
+    , showRawLog : Bool
+    , showArchived : Bool
+    }
+
+
+initAgentState : AgentState
+initAgentState =
+    { sessions = NotAsked
+    , selectedSessionId = Nothing
+    , prompt = ""
+    , isPanelOpen = False
+    , activeTurnStream = Nothing
+    , chatTurns = []
+    , chunkBuffer = ""
+    , turnLog = ""
+    , showRawLog = False
+    , showArchived = False
+    }
+
+
+selectedSessionView : AgentState -> Maybe AgentSessionView
+selectedSessionView agentState =
+    agentState.selectedSessionId
+        |> Maybe.andThen
+            (\sid ->
+                agentState.sessions
+                    |> ApiData.toMaybe
+                    |> Maybe.andThen (List.head << List.filter (\view -> view.session.sessionId == sid))
+            )
+
+
+
+
 
 type alias AutocompleteJob =
     { fieldKey : String
@@ -191,6 +291,7 @@ type Model
         , gutterDrag : Maybe GutterDrag
         , compareState : CompareState
         , now : Time.Posix
+        , agent : AgentState
         }
 
 
@@ -473,6 +574,11 @@ getCompareState (Model model) =
     model.compareState
 
 
+getAgent : Model -> AgentState
+getAgent (Model model) =
+    model.agent
+
+
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
@@ -520,6 +626,13 @@ type StepStatusEvent
     | SSEError String
 
 
+type AgentTurnEvent
+    = AgentTurnChunk { turnId : String, chunk : String }
+    | AgentTurnDone String
+    | AgentTurnHeartbeat
+    | AgentTurnError String
+
+
 initialModel : Browser.Navigation.Key -> Route -> Flags -> Model
 initialModel key route flags =
     Model
@@ -547,6 +660,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
+        , agent = initAgentState
         }
 
 
