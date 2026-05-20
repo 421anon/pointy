@@ -105,6 +105,11 @@
         version = "3.0.0";
       };
 
+      "pablohirafuji/elm-markdown" = {
+        sha256 = "1p7rvc8hy15drr2gvqla5b0qbbfan7mpppdpfj6spgkhqns4yild";
+        version = "2.0.5";
+      };
+
       "rtfeldman/elm-iso8601-date-strings" = {
         sha256 = "1ah491kgyicgvy1c9myylqvhzb7ya9kgmn0hcsv23ymvqgaf6b1a";
         version = "1.1.4";

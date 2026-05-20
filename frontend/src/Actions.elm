@@ -1786,6 +1786,132 @@ mergeSessionView view agentState =
     { agentState | sessions = Success merged }
 
 
+applyPersistedTranscript : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
+applyPersistedTranscript view agentState =
+    let
+        ( chatTurns, turnLog ) =
+            persistedTranscript view
+    in
+    { agentState | chatTurns = chatTurns, turnLog = turnLog, chunkBuffer = "" }
+
+
+shouldKeepLiveTranscript : Model.AgentSessionView -> Model.AgentState -> Bool
+shouldKeepLiveTranscript view agentState =
+    view.session.activeTurnId /= Nothing && agentState.activeTurnStream == view.session.activeTurnId
+
+
+persistedTranscript : Model.AgentSessionView -> ( List Model.ChatTurn, String )
+persistedTranscript view =
+    let
+        turnForTranscript turn =
+            if Just turn.turnId == view.session.activeTurnId then
+                { turn | turnLog = "" }
+
+            else
+                turn
+
+        turns =
+            List.map turnForTranscript view.turns
+    in
+    ( List.foldl appendPersistedTurn [] turns
+    , String.concat (List.map .turnLog turns)
+    )
+
+
+appendPersistedTurn : Model.AgentTurn -> List Model.ChatTurn -> List Model.ChatTurn
+appendPersistedTurn turn turns =
+    let
+        prompt =
+            if String.isEmpty (String.trim turn.turnPrompt) then
+                "Prompt unavailable"
+
+            else
+                turn.turnPrompt
+
+        seeded =
+            turns ++ [ { prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+
+        logLines =
+            turn.turnLog
+                |> String.split "\n"
+                |> List.filter (not << String.isEmpty)
+    in
+    List.foldl appendChatLine seeded logLines
+
+
+chatStatusFromTurn : Model.AgentTurn -> Model.ChatTurnStatus
+chatStatusFromTurn turn =
+    case turn.turnStatus of
+        "running" ->
+            Model.ChatPending
+
+        "failed" ->
+            Model.ChatFailed (turnFailureMessage turn)
+
+        _ ->
+            Model.ChatDone
+
+
+turnFailureMessage : Model.AgentTurn -> String
+turnFailureMessage turn =
+    case turn.turnExitCode of
+        Just code ->
+            "exit code " ++ String.fromInt code
+
+        Nothing ->
+            "agent failed"
+
+
+hydrateSelectedAgentSession : Flow Model ()
+hydrateSelectedAgentSession =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case Model.selectedSessionView (Model.getAgent model) of
+                    Just view ->
+                        updateAgentState
+                            (\s ->
+                                if shouldKeepLiveTranscript view s then
+                                    s
+
+                                else
+                                    applyPersistedTranscript view s
+                            )
+
+                    Nothing ->
+                        Flow.pure ()
+            )
+
+
+resumeSelectedAgentTurn : Flow Model ()
+resumeSelectedAgentTurn =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    agentState =
+                        Model.getAgent model
+                in
+                case Model.selectedSessionView agentState of
+                    Just view ->
+                        case view.session.activeTurnId of
+                            Just turnId ->
+                                if agentState.activeTurnStream == Just turnId then
+                                    Flow.pure ()
+
+                                else
+                                    updateAgentState (\s -> { s | activeTurnStream = Just turnId })
+                                        |> Flow.seq (Flow.async (listenAndProcessAgentTurn turnId))
+                                        |> Flow.return ()
+
+                            Nothing ->
+                                Flow.pure ()
+
+                    Nothing ->
+                        Flow.pure ()
+            )
+
+
 handleAgentSessionResult :
     Bool
     -> Result Http.Error Model.AgentSessionView
@@ -1793,18 +1919,25 @@ handleAgentSessionResult :
 handleAgentSessionResult selectOnSuccess result =
     case result of
         Ok view ->
-            updateAgentState (mergeSessionView view)
-                |> Flow.seq
-                    (Flow.when selectOnSuccess
-                        (updateAgentState
-                            (\s ->
-                                { s
-                                    | selectedSessionId = Just view.session.sessionId
-                                    , turnLog = ""
-                                }
-                            )
-                        )
-                    )
+            updateAgentState
+                (\agentState ->
+                    let
+                        withView =
+                            mergeSessionView view agentState
+
+                        selectedState =
+                            if selectOnSuccess then
+                                { withView | selectedSessionId = Just view.session.sessionId }
+
+                            else
+                                withView
+                    in
+                    if selectedState.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
+                        applyPersistedTranscript view selectedState
+
+                    else
+                        selectedState
+                )
 
         Err err ->
             addToast False (Http.errorMessage err)
@@ -1841,6 +1974,8 @@ loadAgentSessions =
                                                             Flow.pure ()
                                         )
                                 )
+                            |> Flow.seq hydrateSelectedAgentSession
+                            |> Flow.seq resumeSelectedAgentTurn
 
                     Err err ->
                         setAgentSessions (Error err)
@@ -1854,6 +1989,7 @@ selectAgentSession sessionId =
         (\s ->
             { s
                 | selectedSessionId = Just sessionId
+                , activeTurnStream = Nothing
                 , turnLog = ""
                 , chatTurns = []
                 , chunkBuffer = ""
@@ -1861,25 +1997,7 @@ selectAgentSession sessionId =
             }
         )
         |> Flow.seq (loadAgentSession sessionId)
-        |> Flow.seq
-            (Flow.get
-                |> Flow.andThen
-                    (\model ->
-                        case Model.selectedSessionView (Model.getAgent model) of
-                            Just view ->
-                                case view.session.activeTurnId of
-                                    Just turnId ->
-                                        updateAgentState (\s -> { s | activeTurnStream = Just turnId })
-                                            |> Flow.seq (Flow.async (listenAndProcessAgentTurn turnId))
-                                            |> Flow.return ()
-
-                                    Nothing ->
-                                        Flow.pure ()
-
-                            Nothing ->
-                                Flow.pure ()
-                    )
-            )
+        |> Flow.seq resumeSelectedAgentTurn
 
 
 toggleAgentPanel : Flow Model ()
@@ -2078,48 +2196,52 @@ submitAgentPrompt =
 
 
 
-prepareAgentApply : Flow Model ()
-prepareAgentApply =
+applyAgentChanges : Flow Model ()
+applyAgentChanges =
     withSelectedAgentSession
         (\view ->
             AgentApi.prepareApply view.session.sessionId
-                |> Flow.andThen (handleAgentSessionResult False)
-        )
+                |> Flow.andThen
+                    (\prepareResult ->
+                        case prepareResult of
+                            Ok preparedView ->
+                                case preparedView.session.preparedApply of
+                                    Just candidate ->
+                                        AgentApi.confirmApply
+                                            preparedView.session.sessionId
+                                            candidate.targetHead
+                                            candidate.candidateHead
+                                            |> Flow.andThen
+                                                (\confirmResult ->
+                                                    case confirmResult of
+                                                        Ok appliedView ->
+                                                            handleAgentSessionResult False (Ok appliedView)
+                                                                |> Flow.seq
+                                                                    (updateAgentState
+                                                                        (\s ->
+                                                                            { s
+                                                                                | selectedSessionId = Nothing
+                                                                                , chatTurns = []
+                                                                                , chunkBuffer = ""
+                                                                                , turnLog = ""
+                                                                            }
+                                                                        )
+                                                                    )
+                                                                |> Flow.seq loadAgentSessions
 
-
-confirmAgentApply : Flow Model ()
-confirmAgentApply =
-    withSelectedAgentSession
-        (\view ->
-            case view.session.preparedApply of
-                Just candidate ->
-                    AgentApi.confirmApply view.session.sessionId candidate.targetHead candidate.candidateHead
-                        |> Flow.andThen
-                            (\result ->
-                                case result of
-                                    Ok appliedView ->
-                                        handleAgentSessionResult False (Ok appliedView)
-                                            |> Flow.seq
-                                                (updateAgentState
-                                                    (\s ->
-                                                        { s
-                                                            | selectedSessionId = Nothing
-                                                            , chatTurns = []
-                                                            , chunkBuffer = ""
-                                                            , turnLog = ""
-                                                        }
-                                                    )
+                                                        Err err ->
+                                                            addToast False (Http.errorMessage err)
                                                 )
-                                            |> Flow.seq loadAgentSessions
 
-                                    Err err ->
-                                        addToast False (Http.errorMessage err)
-                            )
+                                    Nothing ->
+                                        -- prepare_conflict: conflict details are in session.lastError,
+                                        -- already shown by viewError.
+                                        handleAgentSessionResult False (Ok preparedView)
 
-                Nothing ->
-                    addToast False "Prepare an apply candidate first."
+                            Err err ->
+                                addToast False (Http.errorMessage err)
+                    )
         )
-
 
 discardAgentSession : Flow Model ()
 discardAgentSession =
@@ -2142,28 +2264,43 @@ listenAndProcessAgentTurn turnId =
     Flow.subscribe onAgentTurnIn (Channels.agentTurn turnId)
 
 
+withActiveAgentTurn : String -> Flow Model () -> Flow Model ()
+withActiveAgentTurn turnId action =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if (Model.getAgent model).activeTurnStream == Just turnId then
+                    action
+
+                else
+                    Flow.pure ()
+            )
+
+
 onAgentTurnIn : Decode.Value -> Flow Model ()
 onAgentTurnIn value =
     case Decode.decodeValue AgentApi.turnEvent value of
-        Ok (Model.AgentTurnChunk { chunk }) ->
-            updateAgentState (ingestAgentChunk chunk)
+        Ok (Model.AgentTurnChunk { turnId, chunk }) ->
+            withActiveAgentTurn turnId (updateAgentState (ingestAgentChunk chunk))
 
-        Ok (Model.AgentTurnDone _) ->
-            updateAgentState (finalizeChatTurn Nothing)
-                |> Flow.seq
-                    (updateAgentState (\agentState -> { agentState | activeTurnStream = Nothing }))
-                |> Flow.seq
-                    (Flow.get
-                        |> Flow.andThen
-                            (\model ->
-                                case Model.selectedSessionView (Model.getAgent model) of
-                                    Just view ->
-                                        loadAgentSession view.session.sessionId
+        Ok (Model.AgentTurnDone turnId) ->
+            withActiveAgentTurn turnId
+                (updateAgentState (finalizeChatTurn Nothing)
+                    |> Flow.seq
+                        (updateAgentState (\agentState -> { agentState | activeTurnStream = Nothing }))
+                    |> Flow.seq
+                        (Flow.get
+                            |> Flow.andThen
+                                (\model ->
+                                    case Model.selectedSessionView (Model.getAgent model) of
+                                        Just view ->
+                                            loadAgentSession view.session.sessionId
 
-                                    Nothing ->
-                                        Flow.pure ()
-                            )
-                    )
+                                        Nothing ->
+                                            Flow.pure ()
+                                )
+                        )
+                )
 
         Ok Model.AgentTurnHeartbeat ->
             Flow.pure ()

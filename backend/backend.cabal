@@ -25,6 +25,7 @@ executable backend
                    Agent.Session,
                    Agent.Git,
                    Agent.Runner,
+                   Agent.WarmSession,
                    Handlers.Store,
                    Handlers.SrcFiles,
                    Handlers.CommitHash,

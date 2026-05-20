@@ -33,6 +33,10 @@ runner-command = "pi"
 # per agent session), so consecutive turns share context. Drop -c if you want
 # every turn to start cold; never combine -c with --no-session.
 runner-args = ["-p", "-c", "{prompt}"]
+# Pre-warm a Pi session by running this prompt once against a fresh checkout.
+# On first turn of each new draft, the backend forks that session so the agent
+# already has project context and vocabulary. Set to empty string to disable.
+# bootstrap-prompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
 timeout-seconds = 1800
 output-limit-bytes = 1048576
 session-retention-days = 7

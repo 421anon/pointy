@@ -21,16 +21,18 @@ module Agent.Session (
     saveTurn,
     loadTurn,
     listTurns,
+    listTurnsWithLogs,
     findTurn,
     touchSession,
 ) where
 
 import Control.Monad (filterM)
-import Data.Aeson (FromJSON, ToJSON, eitherDecode, encode)
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.:), (.:?), (.!=), (.=))
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Generics (Generic)
@@ -67,13 +69,44 @@ data AgentSession = AgentSession
 data AgentTurn = AgentTurn
     { turnId :: Text
     , turnSessionId :: Text
+    , turnPrompt :: Text
     , turnStatus :: Text
     , turnExitCode :: Maybe Int
     , turnStartedAt :: UTCTime
     , turnFinishedAt :: Maybe UTCTime
     , turnLogPath :: FilePath
+    , turnLog :: Text
     }
-    deriving (Show, Eq, Generic, ToJSON, FromJSON)
+    deriving (Show, Eq, Generic)
+
+
+instance ToJSON AgentTurn where
+    toJSON turn =
+        object
+            [ "turnId" .= turnId turn
+            , "turnSessionId" .= turnSessionId turn
+            , "turnPrompt" .= turnPrompt turn
+            , "turnStatus" .= turnStatus turn
+            , "turnExitCode" .= turnExitCode turn
+            , "turnStartedAt" .= turnStartedAt turn
+            , "turnFinishedAt" .= turnFinishedAt turn
+            , "turnLogPath" .= turnLogPath turn
+            , "turnLog" .= turnLog turn
+            ]
+
+
+instance FromJSON AgentTurn where
+    parseJSON = withObject "AgentTurn" $ \obj ->
+        AgentTurn
+            <$> obj .: "turnId"
+            <*> obj .: "turnSessionId"
+            <*> obj .:? "turnPrompt" .!= ""
+            <*> obj .: "turnStatus"
+            <*> obj .:? "turnExitCode"
+            <*> obj .: "turnStartedAt"
+            <*> obj .:? "turnFinishedAt"
+            <*> obj .: "turnLogPath"
+            <*> obj .:? "turnLog" .!= ""
 
 
 agentSessionsRoot :: IO FilePath
@@ -165,7 +198,7 @@ saveTurn :: AgentTurn -> IO ()
 saveTurn turn = do
     path <- turnMetadataPath (turnSessionId turn) (turnId turn)
     createDirectoryIfMissing True (takeDirectory path)
-    LBS.writeFile path (encode turn)
+    LBS.writeFile path (encode turn{turnLog = ""})
 
 
 loadTurn :: FilePath -> IO (Either String AgentTurn)
@@ -174,6 +207,28 @@ loadTurn path = do
     if not exists
         then return $ Left $ "turn metadata not found: " ++ path
         else eitherDecode <$> LBS.readFile path
+
+
+loadTurnWithLog :: FilePath -> IO (Either String AgentTurn)
+loadTurnWithLog path = do
+    loaded <- loadTurn path
+    case loaded of
+        Left err -> return (Left err)
+        Right turn -> Right <$> hydrateTurnLog turn
+
+
+hydrateTurnLog :: AgentTurn -> IO AgentTurn
+hydrateTurnLog turn = do
+    logText <- readTurnLog turn
+    return turn{turnLog = logText}
+
+
+readTurnLog :: AgentTurn -> IO Text
+readTurnLog turn = do
+    exists <- doesFileExist (turnLogPath turn)
+    if exists
+        then TIO.readFile (turnLogPath turn)
+        else return (turnLog turn)
 
 
 listTurns :: Text -> IO [AgentTurn]
@@ -186,6 +241,19 @@ listTurns sid = do
             names <- listDirectory dir
             let jsonFiles = filter (T.isSuffixOf ".json" . T.pack) names
             parsed <- mapM (loadTurn . (dir </>)) jsonFiles
+            return $ catMaybes $ map eitherToMaybe parsed
+
+
+listTurnsWithLogs :: Text -> IO [AgentTurn]
+listTurnsWithLogs sid = do
+    dir <- turnsDir sid
+    exists <- doesDirectoryExist dir
+    if not exists
+        then return []
+        else do
+            names <- listDirectory dir
+            let jsonFiles = filter (T.isSuffixOf ".json" . T.pack) names
+            parsed <- mapM (loadTurnWithLog . (dir </>)) jsonFiles
             return $ catMaybes $ map eitherToMaybe parsed
 
 

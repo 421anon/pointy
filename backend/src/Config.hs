@@ -42,6 +42,7 @@ data AgentConfig = AgentConfig
     , agentTimeoutSeconds :: Int
     , agentOutputLimitBytes :: Int
     , agentSessionRetentionDays :: Int
+    , agentBootstrapPrompt :: Text
     }
     deriving (Show)
 
@@ -55,6 +56,7 @@ defaultAgentConfig =
         , agentTimeoutSeconds = 1800
         , agentOutputLimitBytes = 1048576
         , agentSessionRetentionDays = 7
+        , agentBootstrapPrompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
         }
 
 data Config where
@@ -97,8 +99,9 @@ agentCodec =
         <*> Toml.dioptional (Toml.int "timeout-seconds") .= (Just . agentTimeoutSeconds)
         <*> Toml.dioptional (Toml.int "output-limit-bytes") .= (Just . agentOutputLimitBytes)
         <*> Toml.dioptional (Toml.int "session-retention-days") .= (Just . agentSessionRetentionDays)
+        <*> Toml.dioptional (Toml.text "bootstrap-prompt") .= (Just . agentBootstrapPrompt)
   where
-    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention =
+    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention mbootstrap =
         AgentConfig
             { agentSboxCommand = fromMaybe (agentSboxCommand defaultAgentConfig) msbox
             , agentSboxArgs = fromMaybe (agentSboxArgs defaultAgentConfig) msboxArgs
@@ -107,6 +110,7 @@ agentCodec =
             , agentTimeoutSeconds = fromMaybe (agentTimeoutSeconds defaultAgentConfig) mtimeout
             , agentOutputLimitBytes = fromMaybe (agentOutputLimitBytes defaultAgentConfig) mlimit
             , agentSessionRetentionDays = fromMaybe (agentSessionRetentionDays defaultAgentConfig) mretention
+            , agentBootstrapPrompt = fromMaybe (agentBootstrapPrompt defaultAgentConfig) mbootstrap
             }
 
 

@@ -9,6 +9,7 @@ import Html.Attributes exposing (attribute, class, classList, disabled, placehol
 import Html.Events as Events
 import Json.Decode as Decode
 import Model.Core as Model exposing (Model)
+import Markdown
 import View.Icons
 
 
@@ -472,7 +473,8 @@ viewAgentMessage turn =
                 , ( "is-failed", failedMessage /= Nothing )
                 ]
             ]
-            [ Html.text body
+            [ Html.div [ class "agent-panel__chat-content" ]
+                (Markdown.toHtml Nothing body)
             , if turn.status == Model.ChatPending then
                 Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "\u{2588}" ]
 
@@ -507,40 +509,27 @@ diffBlock label content =
 viewCandidate : Model.AgentSessionView -> Bool -> Html (Flow Model ())
 viewCandidate sessionView runnerActive =
     let
-        session =
-            sessionView.session
-
         hasAgentCommits =
             sessionView.gitState.hasAgentCommits
     in
-    case session.preparedApply of
-        Nothing ->
-            Html.div [ class "agent-panel__section" ]
-                [ Html.h3 [] [ Html.text "Apply" ]
-                , Html.p []
-                    [ Html.text
-                        (if hasAgentCommits then
-                            "Prepare the changes when you are ready to review them."
+    Html.div [ class "agent-panel__section" ]
+        [ Html.h3 [] [ Html.text "Apply" ]
+        , Html.p []
+            [ Html.text
+                (if hasAgentCommits then
+                    "When you're ready, apply the changes to the target branch."
 
-                         else
-                            "No changes yet."
-                        )
-                    ]
-                , Html.button
-                    [ class "primary-btn"
-                    , disabled (runnerActive || not hasAgentCommits)
-                    , Events.onClick Actions.prepareAgentApply
-                    ]
-                    [ Html.text "Prepare changes" ]
-                ]
-
-        Just _ ->
-            Html.div [ class "agent-panel__section" ]
-                [ Html.h3 [] [ Html.text "Ready to apply" ]
-                , Html.p [] [ Html.text "Review the changes, then apply them when ready." ]
-                , Html.button [ class "primary-btn", disabled runnerActive, Events.onClick Actions.confirmAgentApply ] [ Html.text "Apply changes" ]
-                ]
-
+                 else
+                    "No changes yet."
+                )
+            ]
+        , Html.button
+            [ class "primary-btn"
+            , disabled (runnerActive || not hasAgentCommits)
+            , Events.onClick Actions.applyAgentChanges
+            ]
+            [ Html.text "Apply changes" ]
+        ]
 
 shortSha : String -> String
 shortSha sha =

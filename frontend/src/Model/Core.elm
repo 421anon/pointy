@@ -172,9 +172,11 @@ type alias AgentGitState =
 type alias AgentTurn =
     { turnId : String
     , turnSessionId : String
+    , turnPrompt : String
     , turnStatus : String
     , turnExitCode : Maybe Int
     , turnLogPath : String
+    , turnLog : String
     }
 
 

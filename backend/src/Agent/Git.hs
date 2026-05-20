@@ -26,8 +26,10 @@ import Agent.Session (
     freshSessionLayout,
     listSessions,
     listTurns,
+    listTurnsWithLogs,
     loadSessionById,
     newSessionId,
+    saveTurn,
     saveSession,
     sessionDir,
     touchSession,
@@ -122,7 +124,7 @@ loadAgentSessionView :: Text -> ExceptT String IO AgentSessionView
 loadAgentSessionView sid = do
     session_ <- loadSessionOrThrow sid
     state <- collectGitState session_
-    turns_ <- liftIO $ sortOn turnStartedAtCompat <$> listTurns sid
+    turns_ <- liftIO $ sortOn turnStartedAtCompat <$> listTurnsWithLogs sid
     return $ AgentSessionView session_ state turns_
 
 
@@ -416,19 +418,31 @@ sweepStaleRunningSessions = do
     sessions <- listSessions
     mapM_ resetIfRunning sessions
   where
-    resetIfRunning session_
-        | status session_ == "running" = do
-            now <- getCurrentTime
-            saveSession
+    resetIfRunning session_ = do
+        -- Fix stuck turns first so the frontend doesn't show stale ChatPending.
+        turns_ <- listTurns (sessionId session_)
+        now <- getCurrentTime
+        let stuckTurns = filter ((== "running") . turnStatus) turns_
+        mapM_
+            ( \t ->
+                saveTurn
+                    t
+                        { turnStatus = "failed"
+                        , turnExitCode = Just (-1)
+                        , turnFinishedAt = Just now
+                        }
+            )
+            stuckTurns
+        -- Fix the session itself.
+        if status session_ == "running"
+            then saveSession
                 session_
                     { status = "open"
                     , activeTurnId = Nothing
                     , lastError = Just "runner exited while backend was offline"
                     , updatedAt = now
                     }
-        | otherwise =
-            case activeTurnId session_ of
-                Just _ -> do
-                    now <- getCurrentTime
+            else case activeTurnId session_ of
+                Just _ ->
                     saveSession session_{activeTurnId = Nothing, updatedAt = now}
                 Nothing -> return ()

@@ -11,6 +11,7 @@ import Agent.Git (commitAgentTurnOutputs)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
+    listTurns,
     loadSessionById,
     saveSession,
     saveTurn,
@@ -18,10 +19,11 @@ import Agent.Session (
     turnLogFilePath,
     findTurn,
  )
+import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait)
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, SomeException, try)
 import Control.Monad (unless, void, when)
 import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
@@ -45,7 +47,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsEOF, hPutStr, hSetBuffering)
 import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
-import UserRepo (withUserRepoExclusive)
+import UserRepo (userRepoPath, withUserRepoExclusive)
 
 
 startAgentTurn :: Text -> Text -> ExceptT String IO AgentTurn
@@ -63,19 +65,23 @@ startAgentTurn sid prompt = do
             AgentTurn
                 { turnId = tid
                 , turnSessionId = sid
+                , turnPrompt = prompt
                 , turnStatus = "running"
                 , turnExitCode = Nothing
                 , turnStartedAt = now
                 , turnFinishedAt = Nothing
                 , turnLogPath = logPath
+                , turnLog = ""
                 }
     liftIO $ do
         createDirectoryIfMissing True (takeDirectory logPath)
         TIO.writeFile logPath ""
+        existingTurns <- listTurns sid
+        let isFirstTurn = null existingTurns
         saveTurn turn
         touched <- touchSession session_{status = "running", activeTurnId = Just tid, preparedApply = Nothing, lastError = Nothing}
         saveSession touched
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
     return turn
 
 
@@ -95,10 +101,23 @@ turnLogStreamHandler tid = do
     pure $ addHeader "no-transform" $ addHeader "no" source
 
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> IO ()
-runTurnProcess cfg session_ turn prompt = do
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> IO ()
+runTurnProcess cfg session_ turn prompt isFirstTurn = do
     appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> turnId turn)
-    result <- try (runConfiguredProcess cfg session_ turn prompt) :: IO (Either IOException ExitCode)
+    mWarmResult <-
+        if isFirstTurn
+            then do
+                appendLogLine cfg (turnLogPath turn) "system" "Warming up agent context..."
+                getOrBuildWarmSession cfg (baseCommit session_)
+            else return Nothing
+    case mWarmResult of
+        Just (Left err) ->
+            appendLogLine cfg (turnLogPath turn) "system" ("Warm session unavailable, starting cold: " <> T.pack err)
+        _ -> return ()
+    let mWarmFile = case mWarmResult of
+            Just (Right meta) -> Just (warmSessionFile meta)
+            _ -> Nothing
+    result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either IOException ExitCode)
     exitCode <- case result of
         Left err -> do
             appendLogLine cfg (turnLogPath turn) "system" ("Runner failed to start: " <> T.pack (show err))
@@ -107,9 +126,10 @@ runTurnProcess cfg session_ turn prompt = do
     finishTurn cfg session_ turn exitCode
 
 
-runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> IO ExitCode
-runConfiguredProcess cfg session_ turn promptText = do
+runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> IO ExitCode
+runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     baseEnv <- getEnvironment
+    repoPath <- userRepoPath
     let pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
         sessionRoot = takeDirectory (worktreePath session_)
         runnerHome = sessionRoot </> "home"
@@ -149,12 +169,37 @@ runConfiguredProcess cfg session_ turn promptText = do
             , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
             ]
                 ++ passthrough
+        -- Strip any session-management flags the config may contain; we manage them here.
+        sessionManagedFlags = ["-c", "--continue", "--fork", "--session", "--no-session"]
+        expandedRunnerArgs = map (expandArg session_ promptText) (agentRunnerArgs cfg)
+        strippedRunnerArgs = filter (`notElem` sessionManagedFlags) expandedRunnerArgs
+        -- Inject the right session flag for this turn
+        sessionFlag = case (isFirstTurn, mWarmFile) of
+            (True, Just warmFile) -> ["--fork", warmFile]
+            (True, Nothing)       -> []
+            (False, _)            -> ["-c"]
         runnerArgs =
-            agentRunnerCommand cfg : map (expandArg session_ promptText) (agentRunnerArgs cfg)
+            agentRunnerCommand cfg : sessionFlag ++ strippedRunnerArgs
         wrapperScript =
             "set -e; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
+        -- When forking a warm session, bind its file read-only into the sandbox.
+        -- The warm template path is outside the draft home so sbox won't include it otherwise.
+        warmBindArgs = case mWarmFile of
+            Just warmFile -> ["--ro-bind", warmFile, warmFile]
+            Nothing       -> []
+        -- Bind the main git repo and nix daemon so nix flake evaluation works.
+        -- Without the git repo bind the worktree's .git file can't resolve.
+        -- Without the daemon socket nix eval fails with 'cannot connect to socket'.
+        gitDirBind = ["--ro-bind", repoPath, repoPath]
+        -- nix is built with store = unix:///var/run/nix-daemon-socket, but sbox doesn't
+        -- preserve the host's /var/run -> /run symlink, so we bind the socket directly
+        -- at /var/run/nix-daemon-socket where nix expects it.
+        nixBind = ["--bind", "/run/nix-daemon-socket", "/var/run/nix-daemon-socket"]
         args =
             map (expandArg session_ promptText) (agentSboxArgs cfg)
+                ++ warmBindArgs
+                ++ gitDirBind
+                ++ nixBind
                 ++ ["--", "bash", "-lc", wrapperScript, "pointy-agent-runner"]
                 ++ runnerArgs
         process =
@@ -216,7 +261,7 @@ finishTurn cfg _session turn exitCode = do
             ExitFailure code -> code
         finalStatus = if exitCode == ExitSuccess then "succeeded" else "failed"
     appendLogLine cfg (turnLogPath turn) "system" ("Agent turn finished with exit code " <> T.pack (show exitCodeInt))
-    finishResult <- withUserRepoExclusive $ do
+    finishResult <- (try (withUserRepoExclusive $ do
         loaded <- ExceptT $ loadSessionById (turnSessionId turn)
         autoCommitResult <- liftIO $ Except.runExceptT $ commitAgentTurnOutputs loaded turn
         autoCommitError <- case autoCommitResult of
@@ -244,12 +289,15 @@ finishTurn cfg _session turn exitCode = do
                     then loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
                     else loaded{lastError = nextError}
         touched <- liftIO $ touchSession updated
-        liftIO $ saveSession touched
+        liftIO $ saveSession touched) :: IO (Either SomeException (Either String ())))
     case finishResult of
-        Left err -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
-        Right _ -> return ()
+        Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
+        Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
+        Right (Right _) -> return ()
+    -- saveTurn is always called; forkIO swallows exceptions so an uncaught throw above
+    -- would leave the turn stuck as "running" forever.
     now <- getCurrentTime
-    saveTurn turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}
+    void $ (try (saveTurn turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}) :: IO (Either SomeException ()))
     return ()
 
 

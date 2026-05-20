@@ -150,9 +150,11 @@ turnDecoder =
     Decode.succeed Model.AgentTurn
         |> required "turnId" Decode.string
         |> required "turnSessionId" Decode.string
+        |> optional "turnPrompt" Decode.string ""
         |> required "turnStatus" Decode.string
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
         |> required "turnLogPath" Decode.string
+        |> optional "turnLog" Decode.string ""
 
 
 
