@@ -20,7 +20,7 @@ import Servant.Server (err400, errBody)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (takeBaseName, (</>))
 import Text.Read (readMaybe)
-import UserRepo (WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixInRepo)
+import UserRepo (WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonInRepo)
 
 patchStepHandler :: Int -> LBS.ByteString -> Handler NoContent
 patchStepHandler stepId jsonBody = do
@@ -47,7 +47,7 @@ postStepHandler maybeProjectId jsonBody = do
         case maybeProjectId of
             Just projectId -> assignRecordToProject ctx projectId stepId
             Nothing -> return ()
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixInRepo ctx ["eval", "--json"] ("#pointy.stepDefs." ++ show stepId)) $ \err -> do
+        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)) $ \err -> do
             let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
             _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err

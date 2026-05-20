@@ -22,7 +22,7 @@ import System.Directory (createDirectoryIfMissing, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNix)
+import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNix, runNixEvalImpureJsonExpr)
 
 import Handlers.Projects (evaluateJsonToNix)
 
@@ -76,6 +76,6 @@ updateStepNixFile (WriteRepoContext worktreePath) stepId hash = ExceptT $ do
         nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in orig // { args = orig.args // { uploaded = (orig.args.uploaded or {}) // { hash = \"" <> hash <> "\"; }; }; }"
 
     runExceptT $ do
-        output <- runNix ["eval", "--impure", "--json", "--expr", T.unpack nixExpr]
+        output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
         nixResult <- ExceptT $ evaluateJsonToNix (T.pack output)
         liftIO $ TIO.writeFile nixFilePath nixResult

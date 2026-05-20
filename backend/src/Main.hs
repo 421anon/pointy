@@ -29,7 +29,7 @@ import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
 import Network.Wai.Handler.Warp (run)
 import Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
-import OutPaths (cacheProjectOutPaths)
+import OutPaths (warmProjectOutPaths)
 import Servant hiding (runHandler)
 import Servant.Multipart
 import Servant.Types.SourceT (SourceT)
@@ -279,9 +279,9 @@ main = do
         Left err -> putStrLn $ "Warning: Failed to fetch repository: " ++ err
         Right () -> putStrLn "Repository fetched successfully."
 
-    putStrLn "Caching project out paths..."
-    cacheProjectOutPaths
-    putStrLn "Caching complete."
+    putStrLn "Warming project out paths..."
+    warmProjectOutPaths
+    putStrLn "Project out paths warmed."
 
     putStrLn "Starting server on port 8081..."
     application <- app

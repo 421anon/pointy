@@ -44,9 +44,7 @@ in
   systemd.services.backend = {
     description = "Pointy Notebook Backend Service";
     wantedBy = [ "multi-user.target" ];
-    after = [
-      "network.target"
-    ];
+    after = [ "network.target" ];
     path = with pkgs; [
       file
       nix

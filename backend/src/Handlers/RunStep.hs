@@ -7,27 +7,25 @@ module Handlers.RunStep (
 ) where
 
 import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
-import Cache (getOutPathFromCache, memoizeStepOutPaths)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Exception (bracket_)
 
-import Control.Monad (when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
-import qualified Data.Map as Map
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.Statuses (addDependencyRunningOverrides, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
+import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), err404, err500, errBody)
 import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
-import UserRepo (ReadRepoContext (..), runNixInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
 runStepHandler :: Int -> Maybe T.Text -> Handler NoContent
 runStepHandler eid commit = do
@@ -53,7 +51,7 @@ runStepSync eid commit = do
         let targetCommitText = T.pack targetCommit
         liftIO $ putStrLn $ "runStep " ++ show eid ++ " dependencies: " ++ show depIds
 
-        ensureOutPathsCached ctx stepIds
+        warmProjectOutPathsForCommit ctx
         liftIO $
             bracket_
                 (addDependencyRunningOverrides targetCommitText stepIds)
@@ -114,7 +112,7 @@ buildStep ctx eid = do
 
         let pathEnvArg = ["--setenv=PATH=" ++ takeDirectory gitExe]
 
-        outPathText <- requireOutPathFromCache ctx eid
+        outPathText <- getStepOutPath ctx eid
         let outPath = T.unpack outPathText
         let targetCommitText = T.pack (readCommitHash ctx)
         built <- liftIO $ isBuilt outPath
@@ -146,42 +144,14 @@ buildStep ctx eid = do
         Left err -> putStrLn $ "buildStep error: " ++ err
         Right _ -> return ()
 
-ensureOutPathsCached :: ReadRepoContext -> [Int] -> ExceptT String IO ()
-ensureOutPathsCached ctx@(ReadRepoContext _ targetCommit) stepIds = do
-    let targetCommitText = T.pack targetCommit
-    cachedOutPaths <- liftIO $ mapM (getOutPathFromCache targetCommitText) stepIds
-    when (any isNothing cachedOutPaths) $ cacheProjectOutPathsForCommit ctx
-
-requireOutPathFromCache :: ReadRepoContext -> Int -> ExceptT String IO T.Text
-requireOutPathFromCache (ReadRepoContext _ targetCommit) eid = do
-    let targetCommitText = T.pack targetCommit
-    mOutPath <- liftIO $ getOutPathFromCache targetCommitText eid
-    case mOutPath of
-        Just outPathText -> return outPathText
-        Nothing -> throwError $ "outPath not found in cache for step " ++ show eid
-
-cacheProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
-cacheProjectOutPathsForCommit ctx@(ReadRepoContext _ targetCommit) = do
-    output <- runNixInRepo ctx ["eval", "--json"] "#pointy.projectOutPaths"
-    projectOutPaths <-
-        ExceptT $ do
-            return $
-                case eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map.Map Int (Map.Map Int FilePath)) of
-                    Left err -> Left $ "Failed to parse #pointy.projectOutPaths: " ++ err
-                    Right paths -> Right paths
-
-    liftIO $
-        mapM_
-            ( \(pid, paths) -> do
-                let textPaths = Map.map T.pack paths
-                _ <- memoizeStepOutPaths pid (T.pack targetCommit) (return (Right textPaths))
-                return ()
-            )
-            (Map.toList projectOutPaths)
+getStepOutPath :: ReadRepoContext -> Int -> ExceptT String IO T.Text
+getStepOutPath ctx eid = do
+    output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
+    return $ T.pack output
 
 getDependencies :: ReadRepoContext -> Int -> ExceptT String IO [Int]
 getDependencies ctx stepId = do
-    result <- liftIO $ runExceptT $ runNixInRepo ctx ["eval", "--json"] ("#pointy.dependencies." ++ show stepId)
+    result <- liftIO $ runExceptT $ runNixEvalJsonInRepo ctx ("#pointy.dependencies." ++ show stepId)
     case result of
         Left _ -> return []
         Right stdout ->
@@ -206,19 +176,17 @@ registerGcRootForOutPath outPath = do
 stopStepSync :: Int -> Maybe T.Text -> IO ()
 stopStepSync eid commit = do
     result <- runExceptT $ do
-        targetCommit <-
+        (repoPath, targetCommit) <-
             ExceptT $
-                withReadRepoTransaction $ \(ReadRepoContext _ commitHash) ->
-                    return (fromMaybe (T.pack commitHash) commit)
+                withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) ->
+                    let targetCommit = fromMaybe (T.pack commitHash) commit
+                     in return (repoPath, targetCommit)
 
-        mOutPath <- liftIO $ getOutPathFromCache targetCommit eid
-        case mOutPath of
-            Nothing -> throwError "outPath not found in cache"
-            Just outPathText -> do
-                let unitName = outPathToUnitName $ T.unpack outPathText
-                _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["stop", unitName] ""
-                liftIO $ removeDependencyRunningOverrides targetCommit [eid]
-                liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing
+        outPathText <- getStepOutPath (ReadRepoContext repoPath (T.unpack targetCommit)) eid
+        let unitName = outPathToUnitName $ T.unpack outPathText
+        _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["stop", unitName] ""
+        liftIO $ removeDependencyRunningOverrides targetCommit [eid]
+        liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of
         Left err -> putStrLn $ "stopStep error: " ++ err

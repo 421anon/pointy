@@ -17,7 +17,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import Servant (Handler, throwError)
 import Servant.Server (err400, err500, errBody)
-import UserRepo (ReadRepoContext (..), fetchRepo, runNixInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), fetchRepo, runNixEvalJsonApplyInRepo, withReadRepoTransaction)
 
 data AutocompleteRequest = AutocompleteRequest
     { template :: Text
@@ -38,12 +38,12 @@ autocompleteHandler mCommit req = do
         applyExpr = buildApplyExpr req clampedLimit
     result <- liftIO $ case mCommit of
         Just commit -> withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
-            output <- runNixInRepo (ReadRepoContext repoPath $ unpack commit) ["eval", "--json", "--apply", applyExpr] attr
+            output <- runNixEvalJsonApplyInRepo (ReadRepoContext repoPath $ unpack commit) applyExpr attr
             decodeOutput output
         Nothing -> runExceptT $ do
             fetchRepo
             ExceptT $ withReadRepoTransaction $ \ctx -> do
-                output <- runNixInRepo ctx ["eval", "--json", "--apply", applyExpr] attr
+                output <- runNixEvalJsonApplyInRepo ctx applyExpr attr
                 decodeOutput output
     case result of
         Right values -> return values

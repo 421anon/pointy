@@ -37,7 +37,7 @@ import Servant (Handler, throwError)
 import Servant.Server (err500, errBody)
 import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
-import UserRepo (ReadRepoContext (..), runNix, runNixInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNix, runNixEvalJsonInRepo, withReadRepoTransaction)
 
 {-# NOINLINE dependencyRunningOverrides #-}
 dependencyRunningOverrides :: TVar (Map (Text, Int) Int)
@@ -152,7 +152,7 @@ broadcastStatusForStepProjects :: Int -> Text -> Maybe (Text, Maybe Text) -> IO 
 broadcastStatusForStepProjects sid targetCommit mStatusOverride = do
     result <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
         let ctx = ReadRepoContext repoPath (unpack targetCommit)
-        output <- runNixInRepo ctx ["eval", "--json"] "#pointy.projects"
+        output <- runNixEvalJsonInRepo ctx "#pointy.projects"
         let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
         case decodeResult of
             Left err -> do

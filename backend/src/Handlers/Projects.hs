@@ -26,7 +26,7 @@ import System.Directory (doesDirectoryExist, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeBaseName, (</>))
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonInRepo, withReadRepoTransaction)
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -49,7 +49,7 @@ getProjectsHandler :: Maybe T.Text -> Handler LB.ByteString
 getProjectsHandler commit = do
     result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
         let targetCommit = maybe commitHash T.unpack commit
-        output <- runNixInRepo (ReadRepoContext repoPath targetCommit) ["eval", "--json"] "#pointy.projects"
+        output <- runNixEvalJsonInRepo (ReadRepoContext repoPath targetCommit) "#pointy.projects"
         mtimes <- liftIO $ readRecordMtimes repoPath targetCommit
         case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of
             Left err -> ExceptT $ return $ Left $ "decoding #pointy.projects failed: " ++ err
@@ -105,7 +105,7 @@ postProjectHandler jsonBody = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         projectId <- saveProject ctx Nothing jsonBody
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixInRepo ctx ["eval", "--json"] ("#pointy.projects." ++ show projectId)) $ \err -> do
+        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx ("#pointy.projects." ++ show projectId)) $ \err -> do
             let outputPath = worktreePath </> "projects" </> show projectId ++ ".nix"
             _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err

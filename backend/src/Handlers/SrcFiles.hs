@@ -19,7 +19,7 @@ import Servant (Handler, Header, Headers, ServerError (..), err500, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
-import UserRepo (runNixInRepo, withReadRepoTransaction)
+import UserRepo (runNixEvalRawInRepo, withReadRepoTransaction)
 
 data UserRepoInfo = UserRepoInfo
     { url :: Text
@@ -36,7 +36,7 @@ getUserRepoInfoHandler = do
 getSrcFilesBasePath :: Handler Text
 getSrcFilesBasePath = do
     result <- liftIO $ withReadRepoTransaction $ \ctx -> do
-        output <- runNixInRepo ctx ["eval", "--raw"] "#pointy.srcFiles"
+        output <- runNixEvalRawInRepo ctx "#pointy.srcFiles"
         return $ T.strip (T.pack output)
     case result of
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}

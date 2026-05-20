@@ -4,12 +4,13 @@ This guide is for instance admins. If you are looking for everyday workflow task
 
 ## Runtime architecture
 
-A Pointy deployment has four moving parts:
+A Pointy deployment has five moving parts:
 
 1. **Frontend** — the browser UI where users manage projects, steps, runs, outputs, and share links.
 2. **Backend** — a service that reads and writes the user repository, serves API endpoints, streams live step statuses, accepts uploads, and starts or stops builds.
-3. **User repository** — a Git-backed Nix flake that stores templates, optional presets, step definitions, project definitions, and source files.
-4. **Nix / systemd runtime** — builds are executed as `systemd-run` units that call `nix build` against a pinned commit of the user repository.
+3. **Backend-owned Nix REPL child** — the backend keeps a persistent `nix repl` child process for `nix eval` requests, reuses loaded flake bindings across requests, and restarts the child if it crashes.
+4. **User repository** — a Git-backed Nix flake that stores templates, optional presets, step definitions, project definitions, and source files.
+5. **Nix / systemd runtime** — builds are executed as `systemd-run` units that call `nix build` against a pinned commit of the user repository.
 
 When a user edits a project or step in the UI, the backend rewrites the corresponding `.nix` file in the user repository, commits the change, and pushes it back to the configured remote.
 
@@ -93,11 +94,11 @@ When the stream is opened without `commit`, it follows the live head of the conf
 
 If you place Pointy behind a reverse proxy, make sure this endpoint is allowed to stay open for a long time and that response buffering is disabled.
 
-## External process limit
+## External process limit and Nix evaluation child
 
-The backend runs external commands through a global semaphore of **20 concurrent processes**.
-
-That limit applies to subprocess work in general — including `nix`, `git`, `systemctl`, and file-type probing — so in practice it also caps how many builds can be active at once.
+The backend runs non-evaluation external commands through a global semaphore of **40 concurrent processes**.
+That limit applies to subprocess work such as `git`, `systemctl`, `nix path-info`, `nix log`, and file-type probing. Backend `nix eval` calls go through a backend-owned persistent `nix repl` child instead of this process launcher.
+The REPL child keeps loaded flake bindings warm across requests. If the child exits or stops responding, the backend discards it, starts a fresh child, and retries the request once.
 
 ## Build execution and GC roots
 

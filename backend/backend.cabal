@@ -19,7 +19,7 @@ executable backend
                    BuildLog,
                    ProcessLimiter,
                    UserRepo,
-                   Cache,
+                   NixReplPool,
                    OutPaths,
                    Handlers.Store,
                    Handlers.SrcFiles,

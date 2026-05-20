@@ -5,7 +5,10 @@ module UserRepo (
     userRepoPath,
     ensureUserRepo,
     runNix,
-    runNixInRepo,
+    runNixEvalJsonInRepo,
+    runNixEvalRawInRepo,
+    runNixEvalJsonApplyInRepo,
+    runNixEvalImpureJsonExpr,
     runGit,
     runGitIn,
     ReadRepoContext (..),
@@ -26,6 +29,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import NixReplPool (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval)
 import ProcessLimiter (readCreateProcessWithExitCodeL, readProcessWithExitCodeL)
 import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
@@ -49,27 +53,44 @@ newtype WriteRepoContext = WriteRepoContext
     }
 
 class RepoContext ctx where
-    nixArgs :: ctx -> String -> String
+    nixInstallable :: ctx -> String
 
 instance RepoContext ReadRepoContext where
-    nixArgs (ReadRepoContext repoPath commitHash) attr =
-        let url = "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true" ++ attr
-         in url
+    nixInstallable (ReadRepoContext repoPath commitHash) =
+        "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
 
 instance RepoContext WriteRepoContext where
-    nixArgs (WriteRepoContext worktreePath) attr =
-        worktreePath ++ attr
+    nixInstallable (WriteRepoContext worktreePath) = worktreePath
 
 runNix :: [String] -> ExceptT String IO String
-runNix args = ExceptT $ do
-    (exitCode, stdout, stderr) <- readProcessWithExitCodeL "nix" args ""
-    return $ case exitCode of
-        ExitSuccess -> Right stdout
-        ExitFailure _ -> Left stderr
+runNix args = ExceptT $ runNixProcess args
 
-runNixInRepo :: (RepoContext ctx) => ctx -> [String] -> String -> ExceptT String IO String
-runNixInRepo ctx args attr = ExceptT $ do
-    (exitCode, stdout, stderr) <- readProcessWithExitCodeL "nix" (args ++ [nixArgs ctx attr]) ""
+runNixEvalJsonInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
+runNixEvalJsonInRepo ctx = runNixEvalInRepo ctx EvalJson Nothing
+
+runNixEvalRawInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
+runNixEvalRawInRepo ctx = runNixEvalInRepo ctx EvalRaw Nothing
+
+runNixEvalJsonApplyInRepo :: (RepoContext ctx) => ctx -> String -> String -> ExceptT String IO String
+runNixEvalJsonApplyInRepo ctx applyExpr = runNixEvalInRepo ctx EvalJson (Just applyExpr)
+
+runNixEvalImpureJsonExpr :: String -> ExceptT String IO String
+runNixEvalImpureJsonExpr expr =
+    ExceptT $ runNixEval $ NixEvalRequest True EvalJson Nothing (EvalExpr expr)
+
+runNixEvalInRepo :: (RepoContext ctx) => ctx -> NixEvalOutput -> Maybe String -> String -> ExceptT String IO String
+runNixEvalInRepo ctx output applyExpr attr =
+    ExceptT $
+        runNixEval $
+            NixEvalRequest
+                False
+                output
+                applyExpr
+                (EvalInstallable (nixInstallable ctx) attr)
+
+runNixProcess :: [String] -> IO (Either String String)
+runNixProcess args = do
+    (exitCode, stdout, stderr) <- readProcessWithExitCodeL "nix" args ""
     return $ case exitCode of
         ExitSuccess -> Right stdout
         ExitFailure _ -> Left stderr

@@ -10,7 +10,7 @@ import Handlers.Statuses (forkBroadcastProjectStatusAtHead)
 import OutPaths (withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), err500, errBody, throwError)
 import System.FilePath ((</>))
-import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNix)
+import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNixEvalImpureJsonExpr)
 
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
@@ -72,6 +72,6 @@ updateProjectNixFile (WriteRepoContext worktreePath) projectId transformation = 
         nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in " <> transformation
 
     runExceptT $ do
-        output <- runNix ["eval", "--impure", "--json", "--expr", T.unpack nixExpr]
+        output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
         nixResult <- ExceptT $ evaluateJsonToNix (T.pack output)
         liftIO $ TIO.writeFile nixFilePath (nixResult <> "\n")
