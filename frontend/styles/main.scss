@@ -932,11 +932,6 @@ code-editor.code-input {
     min-height: 200px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   }
-
-  &.field-changed .cm-editor {
-    border-color: var(--state-warning);
-  }
-
   &.disabled .cm-editor {
     @include mixins.readonly-disabled;
   }
