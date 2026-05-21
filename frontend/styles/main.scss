@@ -826,7 +826,6 @@ code-editor.code-input {
   .cm-panel.cm-search {
     padding: var(--spacing-xs) var(--spacing-sm);
     background-color: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
     color: var(--text-primary);
     gap: var(--spacing-xs);
 
@@ -932,6 +931,10 @@ code-editor.code-input {
     min-height: 200px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   }
+  &.field-changed .cm-editor {
+    border-color: var(--state-warning);
+  }
+
   &.disabled .cm-editor {
     @include mixins.readonly-disabled;
   }
