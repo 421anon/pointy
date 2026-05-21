@@ -89,13 +89,13 @@ stepFileQuery stepId commit =
 
 stepFileDownloadUrl : Int -> Maybe String -> List String -> String
 stepFileDownloadUrl stepId commit filePath =
-    UrlBuilder.relative [ "backend", "step-files", "download" ]
+    UrlBuilder.absolute [ "backend", "step-files", "download" ]
         (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
 
 
 stepFileRawUrl : Int -> Maybe String -> List String -> String
 stepFileRawUrl stepId commit filePath =
-    UrlBuilder.relative ([ "backend", "step-files", "raw" ] ++ filePath) (stepFileQuery stepId commit)
+    UrlBuilder.absolute ([ "backend", "step-files", "raw" ] ++ filePath) (stepFileQuery stepId commit)
 
 
 srcFileDownloadUrl : Int -> List String -> String
@@ -314,7 +314,7 @@ fetchDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int ->
 fetchDirectoryContents itemDecoder stepId commit folderPath =
     Flow.lift <|
         Http.get
-            { url = UrlBuilder.relative [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
+            { url = UrlBuilder.absolute [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
             }
 
