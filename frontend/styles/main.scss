@@ -853,14 +853,21 @@ code-editor.code-input {
       border-radius: var(--radius-xs);
       padding: 2px var(--spacing-xs);
       font: inherit;
+      font-size: 90%;
 
       &:hover {
-        background-color: var(--bg-hover);
         color: var(--text-primary);
+        outline: 1px solid var(--text-primary);
+        outline-offset: -1px;
+      }
+
+      &:focus-visible {
+        outline: 1px solid var(--text-primary);
+        outline-offset: -1px;
       }
 
       &[name=close] {
-        font-size: 120%;
+        font-size: 110%;
         line-height: 1;
         margin-left: auto;
       }
@@ -868,6 +875,11 @@ code-editor.code-input {
       &.cm-button {
         background-color: var(--bg-primary);
         border: 1px solid var(--border-color);
+
+        &:hover {
+          border-color: var(--text-primary);
+          outline: none;
+        }
       }
     }
 
