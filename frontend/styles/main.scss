@@ -1120,7 +1120,7 @@ select.field-changed,
   input,
   textarea,
   select {
-    border-color: var(--state-warning) !important;
+    border-color: var(--state-warning);
   }
 }
 
