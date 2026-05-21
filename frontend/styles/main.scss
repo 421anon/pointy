@@ -814,17 +814,89 @@ code-editor.code-input {
 
   .cm-editor {
     width: 100%;
-    overflow: hidden;
     color: var(--text-primary);
     background-color: var(--bg-primary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
   }
-
   .cm-editor.cm-focused {
     outline: none;
     border-color: var(--text-primary);
   }
+  .cm-panel.cm-search {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    gap: var(--spacing-xs);
+
+    input.cm-textfield {
+      width: 200px;
+      max-width: 100%;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-xs);
+      padding: 1px var(--spacing-xs);
+      font: inherit;
+      height: 24px;
+
+      &:focus {
+        outline: none;
+        border-color: var(--text-primary);
+      }
+    }
+
+    button {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: var(--radius-xs);
+      padding: 2px var(--spacing-xs);
+      font: inherit;
+
+      &:hover {
+        background-color: var(--bg-hover);
+        color: var(--text-primary);
+      }
+
+      &[name=close] {
+        font-size: 120%;
+        line-height: 1;
+        margin-left: auto;
+      }
+
+      &.cm-button {
+        background-color: var(--bg-primary);
+        border: 1px solid var(--border-color);
+      }
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--spacing-2xs);
+      color: var(--text-muted);
+      font-size: 80%;
+      cursor: pointer;
+
+      input[type="checkbox"] {
+        accent-color: var(--state-info);
+        cursor: pointer;
+        margin: 0;
+      }
+    }
+  }
+
+  .cm-editor .cm-searchMatch {
+    background-color: var(--code-selection-bg);
+  }
+
+  .cm-editor .cm-searchMatch-selected {
+    background-color: var(--state-info-outline);
+  }
+
 
   .cm-content {
     padding: var(--spacing-sm);
@@ -839,7 +911,7 @@ code-editor.code-input {
   .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
   .cm-editor > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
   .cm-content ::selection {
-    background-color: var(--code-selection-bg) !important;
+    background-color: var(--code-selection-bg);
   }
 
   .cm-gutters {
@@ -862,7 +934,7 @@ code-editor.code-input {
   }
 
   &.field-changed .cm-editor {
-    border-color: var(--state-warning) !important;
+    border-color: var(--state-warning);
   }
 
   &.disabled .cm-editor {
