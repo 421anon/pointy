@@ -16,7 +16,8 @@ module Api.Api exposing
     , fetchStepConfig
     , fetchStepLog
     , fetchUserRepoInfo
-    , fileDownloadUrl
+    , stepFileDownloadUrl
+    , stepFileRawUrl
     , runStep
     , saveProject
     , saveRecord
@@ -35,6 +36,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
+import Url.Builder as UrlBuilder
 import Model.Core exposing (BaseRecord, DirectoryItem, ProjectRecord, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
@@ -73,9 +75,25 @@ appendCommitQuery url commit =
             url
 
 
-fileDownloadUrl : String -> List String -> String
-fileDownloadUrl outPath filePath =
-    "/backend/store/download?outPath=" ++ outPath ++ "&path=" ++ String.join "/" filePath
+stepFileQuery : Int -> Maybe String -> List UrlBuilder.QueryParameter
+stepFileQuery stepId commit =
+    UrlBuilder.int "id" stepId
+        :: (case commit of
+                Just c ->
+                    [ UrlBuilder.string "commit" c ]
+
+                Nothing ->
+                    []
+           )
+
+stepFileDownloadUrl : Int -> Maybe String -> List String -> String
+stepFileDownloadUrl stepId commit filePath =
+    UrlBuilder.relative [ "backend", "step-files", "download" ]
+        (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
+
+stepFileRawUrl : Int -> Maybe String -> List String -> String
+stepFileRawUrl stepId commit filePath =
+    UrlBuilder.relative ([ "backend", "step-files", "raw" ] ++ filePath) (stepFileQuery stepId commit)
 
 
 srcFileDownloadUrl : Int -> List String -> String
@@ -290,20 +308,19 @@ fetchStepLog id commit =
             }
 
 
-fetchDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> String -> List String -> Flow s (Result Http.Error (Dict String DirectoryItem))
-fetchDirectoryContents itemDecoder outPath folderPath =
+fetchDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int -> Maybe String -> List String -> Flow s (Result Http.Error (Dict String DirectoryItem))
+fetchDirectoryContents itemDecoder stepId commit folderPath =
     Flow.lift <|
         Http.get
-            { url = "/backend/store?outPath=" ++ outPath ++ "&path=" ++ String.join "/" folderPath
+            { url = UrlBuilder.relative [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
             }
 
-
-fetchFileContents : String -> List String -> Flow s (Result Http.Error String)
-fetchFileContents outPath filePath =
+fetchFileContents : Int -> Maybe String -> List String -> Flow s (Result Http.Error String)
+fetchFileContents stepId commit filePath =
     Flow.lift <|
         Http.get
-            { url = fileDownloadUrl outPath filePath
+            { url = stepFileDownloadUrl stepId commit filePath
             , expect = Http.expectString identity
             }
 

@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, DirEntry (..)) where
+module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepRawHandler, DirEntry (..)) where
 
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Monad (unless)
@@ -13,12 +13,17 @@ import Data.Aeson (ToJSON)
 import qualified Data.ByteString as BS
 import Data.List (intercalate, isPrefixOf)
 import Data.Maybe (fromMaybe)
-import Data.Text (Text)
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
+import Control.Monad.Except (runExceptT)
+import Servant.Server (err500, errBody)
+
+import Data.Text (Text, pack, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import GHC.Generics (Generic)
 import Network.HTTP.Types (mkStatus, status200)
-import Network.Wai (Application, responseFile, responseLBS)
+import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (
     Handler,
@@ -36,6 +41,10 @@ import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitPath, takeExtension, takeFileName, (</>))
+import UserRepo (ReadRepoContext (..), runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
+import Data.Text (unpack)
+import Data.Maybe (fromMaybe)
+
 import System.IO (IOMode (..), withBinaryFile)
 
 data DirEntry = DirEntry
@@ -46,6 +55,61 @@ data DirEntry = DirEntry
     , mimeType :: Maybe Text
     }
     deriving (Generic, Show, ToJSON)
+-- | Resolve a step id + optional commit to a store output path.
+resolveStepOutPath :: Int -> Maybe Text -> Handler Text
+resolveStepOutPath stepId mCommit = do
+    repoPath <- liftIO userRepoPath
+    commitHash <- case mCommit of
+        Just c -> return (unpack c)
+        Nothing -> do
+            result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return hash
+            case result of
+                Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveStepOutPath: " ++ err))}
+                Right h -> return h
+    let ctx = ReadRepoContext repoPath commitHash
+    result <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
+    case result of
+        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
+        Right path -> return (T.pack path)
+
+stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler [DirEntry]
+stepListHandler stepId mCommit mRel = do
+    outPath <- resolveStepOutPath stepId mCommit
+    listHandler outPath mRel
+
+stepDownloadHandler :: Int -> Maybe Text -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
+stepDownloadHandler stepId mCommit rel = do
+    outPath <- resolveStepOutPath stepId mCommit
+    downloadHandler outPath rel
+
+stepRawHandler :: Int -> Maybe Text -> [String] -> Tagged Handler Application
+stepRawHandler stepId mCommit segments = Tagged $ \_ respond -> do
+    result <- runHandler $ resolveStepOutPath stepId mCommit
+    case result of
+        Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
+        Right outPathText -> do
+            let outPathSegments = drop 1 (splitPath (T.unpack outPathText))
+                allSegments = outPathSegments ++ segments
+            storeFilesHandler' allSegments respond
+
+storeFilesHandler' :: [String] -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+storeFilesHandler' segments respond = do
+    result <- runHandler $ do
+        unless (length segments >= 3) $
+            throwError err400{errBody = "Invalid store path"}
+        let absPath = normalise $ "/" ++ intercalate "/" segments
+            basePath = normalise $ "/" ++ intercalate "/" (take 3 segments)
+        assertNixStorePath absPath
+        assertInside absPath basePath
+        exists <- liftIO $ doesFileExist absPath
+        unless exists $ throwError err404
+        mime <- liftIO $ resolvedMimeType absPath
+        pure (absPath, mime)
+    case result of
+        Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
+        Right (path, mime) -> do
+            let headers = [("Content-Type", TE.encodeUtf8 mime)]
+            respond $ responseFile status200 headers path Nothing
 
 listHandler :: Text -> Maybe FilePath -> Handler [DirEntry]
 listHandler outPathText mRel = do

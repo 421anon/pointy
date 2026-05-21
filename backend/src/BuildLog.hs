@@ -16,6 +16,8 @@ module BuildLog (
 ) where
 
 import Control.Monad.Except (runExceptT)
+import System.Directory (doesPathExist)
+
 import Data.List (isSuffixOf)
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -175,7 +177,5 @@ spuriously recurse into nodes whose outputs we can't enumerate.
 anyOutputValid :: [FilePath] -> IO Bool
 anyOutputValid [] = return True
 anyOutputValid (p : ps) = do
-    (code, _, _) <- readProcessWithExitCodeL "nix" ["--offline", "path-info", p] ""
-    case code of
-        ExitSuccess -> return True
-        _ -> anyOutputValid ps
+    exists <- doesPathExist p
+    if exists then return True else anyOutputValid ps

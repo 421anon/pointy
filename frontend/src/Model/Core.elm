@@ -45,7 +45,7 @@ type alias BaseRecord a =
 
 
 type alias StepRunState =
-    { outPath : String
+    { commit : String
     , status : ApiData Status
     , directoryView : DirectoryFolder
     }
@@ -412,7 +412,7 @@ type alias Flags =
 
 
 type StepStatusEvent
-    = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, outPath : String } }
+    = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status } }
     | SSEHeartbeat
     | SSEError String
 

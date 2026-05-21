@@ -38,21 +38,19 @@ userRepoInfo =
         |> required "branch" Decode.string
 
 
-snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, outPath : String } }
+snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status } }
 snapshot =
     Decode.succeed (\pid c s -> { projectId = pid, commit = c, steps = s })
         |> required "projectId" Decode.int
         |> required "commit" Decode.string
         |> required "steps"
             (Decode.list
-                (Decode.succeed (\sid st op mErr -> { stepId = sid, status = applyError st mErr, outPath = op })
+                (Decode.succeed (\sid st mErr -> { stepId = sid, status = applyError st mErr })
                     |> required "stepId" Decode.int
                     |> required "status" status
-                    |> required "outPath" Decode.string
                     |> optional "error" (Decode.map Just Decode.string) Nothing
                 )
             )
-
 
 applyError : Status -> Maybe String -> Status
 applyError st mErr =

@@ -383,9 +383,9 @@ note =
     lens "note" .note (\t note_ -> { t | note = note_ })
 
 
-outPath : Lens ls { a | outPath : b } b x y
-outPath =
-    lens "outPath" .outPath (\t outPath_ -> { t | outPath = outPath_ })
+commit : Lens ls { a | commit : b } b x y
+commit =
+    lens "commit" .commit (\t commit_ -> { t | commit = commit_ })
 
 
 status : Lens ls { a | status : b } b x y

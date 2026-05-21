@@ -888,9 +888,9 @@ callApiMerge merge lens apiCall =
             )
 
 
-downloadFile : String -> List String -> Flow Model ()
-downloadFile outPath filePath =
-    Flow.lift (Nav.load (Api.fileDownloadUrl outPath filePath))
+downloadFile : Int -> String -> List String -> Flow Model ()
+downloadFile stepId commit filePath =
+    Flow.lift (Nav.load (Api.stepFileDownloadUrl stepId (Just commit) filePath))
 
 
 downloadSrcFile : Int -> List String -> Flow Model ()
@@ -952,32 +952,28 @@ toggleOutputEntry recordId mOpen path =
         isExpanded =
             (allStepTables << folderExpandedAt recordId path) |> orElseT (allStepTables << fileIsViewingAt recordId path)
 
-        stepOutPath =
-            allStepTables << recordById recordId << runState << success << outPath
+        stepCommit =
+            allStepTables << recordById recordId << runState << success << commit
 
         folderAction =
-            Flow.forAll stepOutPath
-                (\outPath_ ->
-                    Flow.forAll (allStepTables << directoryItemAtPath recordId path << folder)
-                        (\_ ->
-                            callApi (allStepTables << childrenAt recordId path)
-                                (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric outPath_ path)
-                                |> Flow.return ()
-                        )
-                )
+            Flow.forAll stepCommit <| \commit_ ->
+                Flow.forAll (allStepTables << directoryItemAtPath recordId path << folder)
+                    (\_ ->
+                        callApi (allStepTables << childrenAt recordId path)
+                            (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric recordId (Just commit_) path)
+                            |> Flow.return ()
+                    )
 
         fileAction =
-            Flow.forAll stepOutPath
-                (\outPath_ ->
-                    Flow.forAll (allStepTables << directoryItemAtPath recordId path << file)
-                        (\file_ ->
-                            Flow.when (not (shouldSkipFileContents file_))
-                                (callApi (allStepTables << fileContentAt recordId path)
-                                    (Api.fetchFileContents outPath_ path)
-                                    |> Flow.return ()
-                                )
-                        )
-                )
+            Flow.forAll stepCommit <| \commit_ ->
+                Flow.forAll (allStepTables << directoryItemAtPath recordId path << file)
+                    (\file_ ->
+                        Flow.when (not (shouldSkipFileContents file_))
+                            (callApi (allStepTables << fileContentAt recordId path)
+                                (Api.fetchFileContents recordId (Just commit_) path)
+                                |> Flow.return ()
+                            )
+                    )
     in
     Flow.forAll isExpanded
         (\wasExpanded ->
@@ -1387,8 +1383,8 @@ listenAndProcessStepStatus projectId commit =
 onStepStatusIn : Decode.Value -> Flow Model ()
 onStepStatusIn value =
     case Decode.decodeValue ApiDecode.stepStatusEvent value of
-        Ok (SSESnapshot { steps }) ->
-            Flow.batchM (List.map (\s -> updateStepStatus s.stepId s.status s.outPath) steps)
+        Ok (SSESnapshot { commit, steps }) ->
+            Flow.batchM (List.map (\s -> updateStepStatus commit s.stepId s.status) steps)
 
         Ok SSEHeartbeat ->
             Flow.pure ()
@@ -1400,14 +1396,13 @@ onStepStatusIn value =
             addToast False ("SSE Decode Error: " ++ Decode.errorToString err)
 
 
-updateStepStatus : Int -> Status -> String -> Flow Model ()
-updateStepStatus stepId newStatus outPath =
+updateStepStatus : String -> Int -> Status -> Flow Model ()
+updateStepStatus snapshotCommit stepId newStatus =
     let
         stepRunState =
             projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState
-
         defaultRunState =
-            { outPath = outPath, status = NotAsked, directoryView = { children = NotAsked, expanded = False } }
+            { commit = snapshotCommit, status = NotAsked, directoryView = { children = NotAsked, expanded = False } }
     in
     Flow.over stepRunState
         (\rs ->
@@ -1415,6 +1410,6 @@ updateStepStatus stepId newStatus outPath =
                 current =
                     ApiData.withDefault defaultRunState rs
             in
-            Success { current | status = Success newStatus, outPath = outPath }
+            Success { current | commit = snapshotCommit, status = Success newStatus }
         )
         |> Flow.seq (Flow.when (newStatus == StatusSuccess) (runAndClearStepStatusHook stepId))

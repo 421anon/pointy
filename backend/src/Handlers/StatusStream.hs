@@ -7,8 +7,10 @@ module Handlers.StatusStream (EventStream, stepStatusStreamHandler) where
 
 import Bus (ProjectSnapshot, subscribe)
 import qualified Bus
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM (STM, TChan, atomically, tryReadTChan)
+import Control.Monad (void, when)
+
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as BS
@@ -17,13 +19,13 @@ import Data.List (find)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
-import Data.Text (Text, pack)
+import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (getStatuses)
+import Handlers.Statuses (getStatuses, resolveFailureLogs)
 import Network.HTTP.Media ((//))
-import OutPaths (getProjectOutPaths)
+
 import Servant (Handler, Header, Headers, addHeader, throwError)
 import Servant.API.ContentTypes (Accept (..), MimeRender (..))
 import Servant.Server (err500, errBody)
@@ -40,22 +42,28 @@ instance MimeRender EventStream BS.ByteString where
 
 stepStatusStreamHandler :: Int -> Maybe Text -> Handler (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (S.SourceT IO BS.ByteString))
 stepStatusStreamHandler projectId commit = do
-    eitherCommit <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return $ fromMaybe (pack hash) commit
-    targetCommit <-
-        case eitherCommit of
+    eitherCtx <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath hash) ->
+        let targetCommit = fromMaybe (pack hash) commit
+         in return (ReadRepoContext repoPath (unpack targetCommit))
+    ctx <-
+        case eitherCtx of
             Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
             Right c -> pure c
-
-    outPathsResult <- liftIO $ getProjectOutPaths projectId targetCommit
-    outPaths <-
-        case outPathsResult of
+    let targetCommit = pack (readCommitHash ctx)
+    statusesResult <- liftIO $ getStatuses projectId targetCommit
+    initialStatuses <-
+        case statusesResult of
             Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-            Right paths -> pure paths
-    initialStatuses <- liftIO $ getStatuses targetCommit outPaths
+            Right statuses -> pure statuses
+    liftIO $ void $ forkIO $ do
+        updatedStatuses <- resolveFailureLogs ctx initialStatuses
+        shouldBroadcast <- statusStreamCommitStillCurrent commit targetCommit
+        when shouldBroadcast $ Bus.broadcastSnapshot projectId targetCommit updatedStatuses
+
     busChan <- liftIO subscribe
 
     let padding = sseComment $ "padding " <> pack (replicate 4096 ' ')
-    let snapshotPayload = encodeSnapshot projectId targetCommit initialStatuses outPaths
+    let snapshotPayload = encodeSnapshot projectId targetCommit initialStatuses
     let source =
             S.fromStepT
                 ( S.Yield
@@ -69,6 +77,15 @@ stepStatusStreamHandler projectId commit = do
                     )
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
+statusStreamCommitStillCurrent :: Maybe Text -> Text -> IO Bool
+statusStreamCommitStillCurrent pinnedCommit targetCommit =
+    case pinnedCommit of
+        Just _ -> return True
+        Nothing -> do
+            latest <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
+            return $ latest == Right targetCommit
+
+
 streamLoop :: Int -> Maybe Text -> Map Int (Text, Maybe Text) -> Int -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
 streamLoop projectId pinnedCommit previousStatuses heartbeatTick busChan = do
     return $ S.Effect $ do
@@ -81,8 +98,7 @@ streamLoop projectId pinnedCommit previousStatuses heartbeatTick busChan = do
             Just snapshot -> do
                 let snapshotCommit = Bus.commit snapshot
                 let currentStatuses = Bus.statuses snapshot
-                let currentOutPaths = Bus.outPaths snapshot
-                let snapshotPayload = encodeSnapshot projectId snapshotCommit currentStatuses currentOutPaths
+                let snapshotPayload = encodeSnapshot projectId snapshotCommit currentStatuses
                 return $
                     S.Yield
                         (sseEvent "snapshot" snapshotPayload)
@@ -108,25 +124,23 @@ drainTChan chan = do
     case mItem of
         Nothing -> return []
         Just item -> (item :) <$> drainTChan chan
-
-encodeSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> Map Int Text -> LBS.ByteString
-encodeSnapshot projectId targetCommit statuses outPaths =
-    let combined = Map.intersectionWith (,) statuses outPaths
-     in encode
-            ( object
-                [ "projectId" .= projectId
-                , "commit" .= targetCommit
-                , "steps"
-                    .= map
-                        ( \(sid, ((st, mErr), op)) ->
-                            object
-                                ( ["stepId" .= sid, "status" .= st, "outPath" .= op]
-                                    ++ maybe [] (\e -> ["error" .= e]) mErr
-                                )
-                        )
-                        (Map.toList combined)
-                ]
-            )
+encodeSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> LBS.ByteString
+encodeSnapshot projectId targetCommit statuses =
+    encode
+        ( object
+            [ "projectId" .= projectId
+            , "commit" .= targetCommit
+            , "steps"
+                .= map
+                    ( \(sid, (st, mErr)) ->
+                        object
+                            ( ["stepId" .= sid, "status" .= st]
+                                ++ maybe [] (\e -> ["error" .= e]) mErr
+                            )
+                    )
+                    (Map.toList statuses)
+            ]
+        )
 
 sseEvent :: Text -> LBS.ByteString -> BS.ByteString
 sseEvent eventName payload =

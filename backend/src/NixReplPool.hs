@@ -15,10 +15,11 @@ import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writ
 import Control.Exception (SomeException, catch, try)
 import Control.Monad (void)
 import Data.Aeson (Value (..), eitherDecode)
-import qualified Data.ByteString.Lazy.Char8 as LBS8
+import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isAlphaNum, isSpace)
 import Data.List (isInfixOf)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsClosed, hPutStrLn, hSetBuffering)
 import System.IO.Error (isEOFError)
 import System.IO.Unsafe (unsafePerformIO)
@@ -196,7 +197,11 @@ parseBody req body =
         _ -> ReplFailed $ "nix repl returned multiple JSON values:\n" ++ stripTrailingNewlines (formatEvents body)
   where
     stdoutLines = [line | ReplLine ReplStdout line <- body, not (all isSpace line)]
-    validJsonLines = [(line, value) | line <- stdoutLines, Right value <- [eitherDecode (LBS8.pack line)]]
+    validJsonLines =
+        [ (line, value)
+        | line <- stdoutLines
+        , Right value <- [eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack line)))]
+        ]
 
     renderOutput value line = case evalOutput req of
         EvalJson -> ReplSucceeded (line ++ "\n")

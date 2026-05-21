@@ -2,6 +2,8 @@ module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 
 import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
+import Api.Api as Api
+
 import Api.ApiData as ApiData exposing (ApiData, success)
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
@@ -24,7 +26,7 @@ import View.Lib exposing (viewLoading)
 
 
 type DirContext
-    = OutputDir String
+    = OutputDir Int String
     | SrcDir Int
 
 
@@ -69,26 +71,25 @@ renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssC
 
 viewDirectorySection : Model -> StepSpec -> StepRecord -> Html (Flow Model ())
 viewDirectorySection model spec step =
-    ApiData.toMaybe step.runState
-        |> Html.viewMaybe
-            (\rs ->
-                Html.div [ class "output-files-section" ]
-                    [ Html.h3 [] [ Html.text "Output Files" ]
-                    , renderDirectoryContents model
-                        spec
-                        step.id
-                        (if String.isEmpty rs.outPath then
-                            Nothing
-
-                         else
-                            Just (OutputDir rs.outPath)
-                        )
-                        (rs.status == ApiData.Success StatusSuccess)
-                        []
-                        "directory-view"
-                        rs.directoryView.children
-                    ]
-            )
+    case step.id of
+        Nothing ->
+            Html.nothing
+        Just stepId ->
+            ApiData.toMaybe step.runState
+                |> Html.viewMaybe
+                    (\rs ->
+                        Html.div [ class "output-files-section" ]
+                            [ Html.h3 [] [ Html.text "Output Files" ]
+                            , renderDirectoryContents model
+                                spec
+                                (Just stepId)
+                                (Just (OutputDir stepId rs.commit))
+                                (rs.status == ApiData.Success StatusSuccess)
+                                []
+                                "directory-view"
+                                rs.directoryView.children
+                            ]
+                    )
 
 
 viewSrcFilesSection : Model -> StepType -> StepSpec -> StepRecord -> Html (Flow Model ())
@@ -148,7 +149,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
         mGutter =
             case ( mRecordId, mDirCtx ) of
-                ( Just recordId, Just (OutputDir _) ) ->
+                ( Just recordId, Just (OutputDir _ _) ) ->
                     Just { recordId = recordId, target = Route.Output }
 
                 ( Just recordId, Just (SrcDir _) ) ->
@@ -202,8 +203,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 externalHtmlUrl =
                     if isHtml then
                         case mDirCtx of
-                            Just (OutputDir outPath_) ->
-                                Just ("/backend/store-files" ++ outPath_ ++ "/" ++ String.join "/" path)
+                            Just (OutputDir stepId_ commit_) ->
+                                Just (Api.stepFileRawUrl stepId_ (Just commit_) path)
 
                             _ ->
                                 Nothing
@@ -232,7 +233,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 [ class "dir-item-icon-btn"
                                 , Html.Events.onClick
                                     (case mDirCtx of
-                                        Just (OutputDir _) ->
+                                        Just (OutputDir _ _) ->
                                             Maybe.unwrap (Flow.pure ()) (flip Actions.toggleFile path) mRecordId
 
                                         Just (SrcDir _) ->
@@ -259,8 +260,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                             [ class "dir-item-icon-btn"
                             , Html.Events.onClick
                                 (case mDirCtx of
-                                    Just (OutputDir op) ->
-                                        Actions.downloadFile op path
+                                    Just (OutputDir stepId_ commit_) ->
+                                        Actions.downloadFile stepId_ commit_ path
 
                                     Just (SrcDir id) ->
                                         Actions.downloadSrcFile id path
@@ -276,9 +277,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     Html.div [ class "file-content-viewer" ]
                         [ if isImage then
                             case mDirCtx of
-                                Just (OutputDir outPath_) ->
+                                Just (OutputDir stepId_ commit_) ->
                                     Html.img
-                                        [ src ("/backend/store-files" ++ outPath_ ++ "/" ++ String.join "/" path)
+                                        [ src (Api.stepFileRawUrl stepId_ (Just commit_) path)
                                         , class "file-image-viewer"
                                         ]
                                         []
@@ -288,7 +289,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                           else if isHtml then
                             case mDirCtx of
-                                Just (OutputDir outPath_) ->
+                                Just (OutputDir stepId_ commit_) ->
                                     let
                                         iframeId =
                                             "iframe-" ++ anchor
@@ -300,7 +301,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     in
                                     Html.div [ class "iframe-zoom-wrapper" ]
                                         [ Html.node "iframe"
-                                            [ src ("/backend/store-files" ++ outPath_ ++ "/" ++ String.join "/" path)
+                                            [ src (Api.stepFileRawUrl stepId_ (Just commit_) path)
                                             , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
                                             , class "file-html-viewer"
                                             , id iframeId
@@ -395,7 +396,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     |> Maybe.unwrap (Flow.pure ())
                                         (\recordId ->
                                             case mDirCtx of
-                                                Just (OutputDir _) ->
+                                                Just (OutputDir _ _) ->
                                                     Actions.toggleOutputEntry recordId Nothing (directoryPath ++ [ itemName ])
                                                         |> Flow.return ()
 

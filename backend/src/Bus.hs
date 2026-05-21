@@ -9,7 +9,6 @@ data ProjectSnapshot = ProjectSnapshot
     { projectId :: Int
     , commit :: Text
     , statuses :: Map Int (Text, Maybe Text)
-    , outPaths :: Map Int Text
     }
     deriving (Show)
 
@@ -17,8 +16,8 @@ data ProjectSnapshot = ProjectSnapshot
 statusBus :: TChan ProjectSnapshot
 statusBus = unsafePerformIO newBroadcastTChanIO
 
-broadcastSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> Map Int Text -> IO ()
-broadcastSnapshot pid c stats paths = atomically $ writeTChan statusBus (ProjectSnapshot pid c stats paths)
+broadcastSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
+broadcastSnapshot pid c stats = atomically $ writeTChan statusBus (ProjectSnapshot pid c stats)
 
 subscribe :: IO (TChan ProjectSnapshot)
 subscribe = atomically $ dupTChan statusBus

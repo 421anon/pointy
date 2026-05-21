@@ -21,10 +21,10 @@ import Handlers.Projects (RawJSON, deleteProjectHandler, getProjectsHandler, pat
 import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.SrcFiles (UserRepoInfo, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler)
 import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
-import Handlers.Statuses (getProjectOutPathsHandler)
+
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (patchStepHandler, postStepHandler)
-import Handlers.Store (DirEntry, downloadHandler, listHandler, storeFilesHandler)
+import Handlers.Store (DirEntry, downloadHandler, listHandler, stepDownloadHandler, stepListHandler, stepRawHandler, storeFilesHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
 import Network.Wai.Handler.Warp (run)
@@ -42,9 +42,9 @@ type API =
     "hello" :> Get '[PlainText] Text
         :<|> "commit-hash" :> Get '[PlainText] Text
         :<|> "user-repo-info" :> Get '[JSON] UserRepoInfo
-        :<|> "store" :> QueryParam' '[Required] "outPath" Text :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
-        :<|> "store" :> "download" :> QueryParam' '[Required] "outPath" Text :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
-        :<|> "store-files" :> CaptureAll "segments" String :> Raw
+        :<|> "step-files" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
+        :<|> "step-files" :> "download" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
+        :<|> "step-files" :> "raw" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> CaptureAll "segments" String :> Raw
         :<|> "src-files" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
         :<|> "src-files" :> "download" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
         :<|> "projects" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
@@ -54,7 +54,6 @@ type API =
         :<|> "project-entities" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam' '[Required, Strict] "entity_id" Int :> Post '[JSON] NoContent
         :<|> "project-entities" :> "batch" :> QueryParam' '[Required, Strict] "project_id" Int :> ReqBody '[JSON] [Int] :> Post '[JSON] NoContent
         :<|> "project-entities" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam' '[Required, Strict] "entity_id" Int :> Delete '[JSON] NoContent
-        :<|> "project-out-paths" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[JSON] (Map Int Text)
         :<|> "step-status-stream" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam "commit" Text :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
         :<|> "step-config" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
         :<|> "presets" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
@@ -71,9 +70,9 @@ server =
     return "Hello, World!"
         :<|> getCommitHashHandler
         :<|> getUserRepoInfoHandler
-        :<|> listHandler
-        :<|> downloadHandler
-        :<|> storeFilesHandler
+        :<|> stepListHandler
+        :<|> stepDownloadHandler
+        :<|> stepRawHandler
         :<|> listSrcFilesHandler
         :<|> downloadSrcFilesHandler
         :<|> getProjectsHandler
@@ -83,7 +82,6 @@ server =
         :<|> assignRecordHandler
         :<|> batchAssignRecordsHandler
         :<|> unassignRecordHandler
-        :<|> getProjectOutPathsHandler
         :<|> stepStatusStreamHandler
         :<|> getStepConfigHandler
         :<|> getPresetsHandler
@@ -125,28 +123,21 @@ corsPolicy req = case pathInfo req of
                 , corsMethods = ["GET", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
-    ["store"] ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "DELETE", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
-    ["store", "download"] ->
+    ["step-files"] ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
                 , corsMethods = ["GET", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
-    ("store-files" : _) ->
+    ["step-files", "download"] ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
                 , corsMethods = ["GET", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
-    ["store", "readcount"] ->
+    ("step-files" : _) ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
@@ -165,13 +156,6 @@ corsPolicy req = case pathInfo req of
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
                 , corsMethods = ["POST", "DELETE", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
-    ["project-out-paths"] ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     ["commit-hash"] ->

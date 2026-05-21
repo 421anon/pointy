@@ -22,8 +22,7 @@ import Handlers.Statuses (addDependencyRunningOverrides, broadcastStatusForStepP
 import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), err404, err500, errBody)
-import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory)
-import System.Exit (ExitCode (..))
+import System.Directory (createDirectoryIfMissing, doesPathExist, findExecutable, getHomeDirectory)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
@@ -160,9 +159,7 @@ getDependencies ctx stepId = do
                 Right ids -> return $ map read ids
 
 isBuilt :: FilePath -> IO Bool
-isBuilt path = do
-    (exitCode, _, _) <- readProcessWithExitCodeL "nix" ["path-info", path] ""
-    return $ exitCode == ExitSuccess
+isBuilt = doesPathExist
 
 registerGcRootForOutPath :: FilePath -> IO ()
 registerGcRootForOutPath outPath = do

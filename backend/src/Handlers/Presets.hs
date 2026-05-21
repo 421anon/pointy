@@ -7,7 +7,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Servant (Handler, throwError)
 import Servant.Server (err500, errBody)
-import UserRepo (ReadRepoContext (..), fetchRepo, runNixEvalJsonInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, withReadRepoTransaction)
 
 getPresetsHandler :: Maybe Text -> Handler LBS.ByteString
 getPresetsHandler mCommit = do
@@ -15,8 +15,8 @@ getPresetsHandler mCommit = do
         Just commit -> withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
             output <- runNixEvalJsonInRepo (ReadRepoContext repoPath $ unpack commit) "#pointy.presets"
             return (TLE.encodeUtf8 (TL.pack output))
+
         Nothing -> withReadRepoTransaction $ \ctx -> do
-            fetchRepo
             output <- runNixEvalJsonInRepo ctx "#pointy.presets"
             return (TLE.encodeUtf8 (TL.pack output))
     case result of
