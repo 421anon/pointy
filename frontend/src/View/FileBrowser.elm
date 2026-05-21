@@ -3,7 +3,6 @@ module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.Api as Api
-
 import Api.ApiData as ApiData exposing (ApiData, success)
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
@@ -74,6 +73,7 @@ viewDirectorySection model spec step =
     case step.id of
         Nothing ->
             Html.nothing
+
         Just stepId ->
             ApiData.toMaybe step.runState
                 |> Html.viewMaybe

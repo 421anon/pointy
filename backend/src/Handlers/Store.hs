@@ -8,6 +8,7 @@ module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepList
 
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Monad (unless)
+import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import qualified Data.ByteString as BS
@@ -15,9 +16,9 @@ import Data.List (intercalate, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Control.Monad.Except (runExceptT)
 import Servant.Server (err500, errBody)
 
+import Data.Maybe (fromMaybe)
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -42,8 +43,6 @@ import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDir
 import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitPath, takeExtension, takeFileName, (</>))
 import UserRepo (ReadRepoContext (..), runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
-import Data.Text (unpack)
-import Data.Maybe (fromMaybe)
 
 import System.IO (IOMode (..), withBinaryFile)
 
@@ -55,6 +54,7 @@ data DirEntry = DirEntry
     , mimeType :: Maybe Text
     }
     deriving (Generic, Show, ToJSON)
+
 -- | Resolve a step id + optional commit to a store output path.
 resolveStepOutPath :: Int -> Maybe Text -> Handler Text
 resolveStepOutPath stepId mCommit = do

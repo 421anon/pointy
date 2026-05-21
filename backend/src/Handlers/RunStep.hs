@@ -19,10 +19,11 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.Statuses (addDependencyRunningOverrides, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
+import NixUtils (isValidStorePath)
 import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), err404, err500, errBody)
-import System.Directory (createDirectoryIfMissing, doesPathExist, findExecutable, getHomeDirectory)
+import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
@@ -159,7 +160,7 @@ getDependencies ctx stepId = do
                 Right ids -> return $ map read ids
 
 isBuilt :: FilePath -> IO Bool
-isBuilt = doesPathExist
+isBuilt = isValidStorePath
 
 registerGcRootForOutPath :: FilePath -> IO ()
 registerGcRootForOutPath outPath = do

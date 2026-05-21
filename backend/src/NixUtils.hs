@@ -1,12 +1,30 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module NixUtils (sortAttrSet) where
+module NixUtils (isValidStorePath, sortAttrSet) where
 
 import Data.Fix (Fix (..))
 import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Text as T
 import Nix.Expr.Types (Binding (..), NExpr, NExprF (..), NKeyName (..), VarName (..))
+import ProcessLimiter (readProcessWithExitCodeL)
+import System.Directory (doesPathExist)
+import System.Exit (ExitCode (..))
+
+{- | True iff the path is registered as a valid local Nix store path.
+Failed builds can leave partial output directories behind, so filesystem
+existence alone is not evidence of a successful build.
+-}
+isValidStorePath :: FilePath -> IO Bool
+isValidStorePath path = do
+    exists <- doesPathExist path
+    if not exists
+        then return False
+        else do
+            (code, _, _) <- readProcessWithExitCodeL "nix" ["--offline", "path-info", path] ""
+            return $ case code of
+                ExitSuccess -> True
+                ExitFailure _ -> False
 
 sortAttrSet :: NExpr -> NExpr
 sortAttrSet (Fix expr) = Fix $ case expr of

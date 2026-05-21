@@ -52,6 +52,7 @@ snapshot =
                 )
             )
 
+
 applyError : Status -> Maybe String -> Status
 applyError st mErr =
     case st of

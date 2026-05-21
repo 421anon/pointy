@@ -15,7 +15,6 @@ getPresetsHandler mCommit = do
         Just commit -> withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
             output <- runNixEvalJsonInRepo (ReadRepoContext repoPath $ unpack commit) "#pointy.presets"
             return (TLE.encodeUtf8 (TL.pack output))
-
         Nothing -> withReadRepoTransaction $ \ctx -> do
             output <- runNixEvalJsonInRepo ctx "#pointy.presets"
             return (TLE.encodeUtf8 (TL.pack output))

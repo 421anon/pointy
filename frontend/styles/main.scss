@@ -173,6 +173,7 @@ body {
 
   > :nth-child(1) {
     justify-self: center;
+    display: inline flex;
   }
 
   &.no-status {

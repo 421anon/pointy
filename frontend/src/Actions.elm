@@ -956,24 +956,26 @@ toggleOutputEntry recordId mOpen path =
             allStepTables << recordById recordId << runState << success << commit
 
         folderAction =
-            Flow.forAll stepCommit <| \commit_ ->
-                Flow.forAll (allStepTables << directoryItemAtPath recordId path << folder)
-                    (\_ ->
-                        callApi (allStepTables << childrenAt recordId path)
-                            (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric recordId (Just commit_) path)
-                            |> Flow.return ()
-                    )
+            Flow.forAll stepCommit <|
+                \commit_ ->
+                    Flow.forAll (allStepTables << directoryItemAtPath recordId path << folder)
+                        (\_ ->
+                            callApi (allStepTables << childrenAt recordId path)
+                                (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric recordId (Just commit_) path)
+                                |> Flow.return ()
+                        )
 
         fileAction =
-            Flow.forAll stepCommit <| \commit_ ->
-                Flow.forAll (allStepTables << directoryItemAtPath recordId path << file)
-                    (\file_ ->
-                        Flow.when (not (shouldSkipFileContents file_))
-                            (callApi (allStepTables << fileContentAt recordId path)
-                                (Api.fetchFileContents recordId (Just commit_) path)
-                                |> Flow.return ()
-                            )
-                    )
+            Flow.forAll stepCommit <|
+                \commit_ ->
+                    Flow.forAll (allStepTables << directoryItemAtPath recordId path << file)
+                        (\file_ ->
+                            Flow.when (not (shouldSkipFileContents file_))
+                                (callApi (allStepTables << fileContentAt recordId path)
+                                    (Api.fetchFileContents recordId (Just commit_) path)
+                                    |> Flow.return ()
+                                )
+                        )
     in
     Flow.forAll isExpanded
         (\wasExpanded ->
@@ -1401,6 +1403,7 @@ updateStepStatus snapshotCommit stepId newStatus =
     let
         stepRunState =
             projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState
+
         defaultRunState =
             { commit = snapshotCommit, status = NotAsked, directoryView = { children = NotAsked, expanded = False } }
     in

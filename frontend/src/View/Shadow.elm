@@ -164,12 +164,29 @@ viewSection model sectionName entry steps =
                                 case r.id of
                                     Just id ->
                                         let
-                                            isRunning =
+                                            status =
                                                 TableSpec.getStatus spec r
+
+                                            isRunning =
+                                                status
                                                     |> ApiData.toMaybe
                                                     |> (==) (Just Model.StatusRunning)
+
+                                            canRun =
+                                                case status of
+                                                    ApiData.Loading _ ->
+                                                        False
+
+                                                    ApiData.Success Model.StatusSuccess ->
+                                                        False
+
+                                                    ApiData.Success Model.StatusRunning ->
+                                                        False
+
+                                                    _ ->
+                                                        True
                                         in
-                                        [ viewRunButton "Run" (Actions.runStep spec id)
+                                        [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
                                         , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
                                         ]
 

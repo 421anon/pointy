@@ -8,14 +8,14 @@ module Handlers.StatusStream (EventStream, stepStatusStreamHandler) where
 import Bus (ProjectSnapshot, subscribe)
 import qualified Bus
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.STM (STM, TChan, atomically, tryReadTChan)
+import Control.Concurrent.Async (mapConcurrently_)
+import Control.Concurrent.STM (STM, TChan, atomically, newTChanIO, tryReadTChan, writeTChan)
 import Control.Monad (void, when)
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.List (find)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
@@ -23,7 +23,7 @@ import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (getStatuses, resolveFailureLogs)
+import Handlers.Statuses (getRawStatuses, partitionImmediateStatuses, resolveStepStatus)
 import Network.HTTP.Media ((//))
 
 import Servant (Handler, Header, Headers, addHeader, throwError)
@@ -50,17 +50,21 @@ stepStatusStreamHandler projectId commit = do
             Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
             Right c -> pure c
     let targetCommit = pack (readCommitHash ctx)
-    statusesResult <- liftIO $ getStatuses projectId targetCommit
-    initialStatuses <-
+    statusesResult <- liftIO $ getRawStatuses projectId targetCommit
+    rawStatuses <-
         case statusesResult of
             Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
             Right statuses -> pure statuses
-    liftIO $ void $ forkIO $ do
-        updatedStatuses <- resolveFailureLogs ctx initialStatuses
-        shouldBroadcast <- statusStreamCommitStillCurrent commit targetCommit
-        when shouldBroadcast $ Bus.broadcastSnapshot projectId targetCommit updatedStatuses
 
+    let (initialStatuses, pendingStatuses) = partitionImmediateStatuses rawStatuses
+
+    localChan <- liftIO newTChanIO
     busChan <- liftIO subscribe
+    when (not (Map.null pendingStatuses)) $
+        liftIO $
+            void $
+                forkIO $
+                    publishResolvedStatuses localChan commit projectId ctx pendingStatuses
 
     let padding = sseComment $ "padding " <> pack (replicate 4096 ' ')
     let snapshotPayload = encodeSnapshot projectId targetCommit initialStatuses
@@ -72,11 +76,25 @@ stepStatusStreamHandler projectId commit = do
                         padding
                         ( S.Yield
                             (sseEvent "snapshot" snapshotPayload)
-                            (S.Effect (streamLoop projectId commit initialStatuses 0 busChan))
+                            (S.Effect (streamLoop projectId commit 0 localChan busChan))
                         )
                     )
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
+
+publishResolvedStatuses :: TChan ProjectSnapshot -> Maybe Text -> Int -> ReadRepoContext -> Map Int (Text, Maybe Text) -> IO ()
+publishResolvedStatuses updatesChan pinnedCommit projectId ctx statuses =
+    mapConcurrently_ publishOne (Map.toList statuses)
+  where
+    targetCommit = pack (readCommitHash ctx)
+
+    publishOne entry = do
+        (sid, status_) <- resolveStepStatus ctx entry
+        shouldPublish <- statusStreamCommitStillCurrent pinnedCommit targetCommit
+        when shouldPublish $
+            atomically $
+                writeTChan updatesChan (Bus.ProjectSnapshot projectId targetCommit (Map.singleton sid status_))
+
 statusStreamCommitStillCurrent :: Maybe Text -> Text -> IO Bool
 statusStreamCommitStillCurrent pinnedCommit targetCommit =
     case pinnedCommit of
@@ -85,25 +103,17 @@ statusStreamCommitStillCurrent pinnedCommit targetCommit =
             latest <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
             return $ latest == Right targetCommit
 
-
-streamLoop :: Int -> Maybe Text -> Map Int (Text, Maybe Text) -> Int -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
-streamLoop projectId pinnedCommit previousStatuses heartbeatTick busChan = do
+streamLoop :: Int -> Maybe Text -> Int -> TChan ProjectSnapshot -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
+streamLoop projectId pinnedCommit heartbeatTick localChan busChan = do
     return $ S.Effect $ do
         threadDelay 500000
+        localUpdates <- atomically $ drainTChan localChan
         busUpdates <- atomically $ drainTChan busChan
 
-        let mLatestSnapshot = find (\snapshot -> Bus.projectId snapshot == projectId && maybe True (== Bus.commit snapshot) pinnedCommit) (reverse busUpdates)
+        let matchingSnapshots = filter matchesSnapshot (localUpdates ++ busUpdates)
 
-        case mLatestSnapshot of
-            Just snapshot -> do
-                let snapshotCommit = Bus.commit snapshot
-                let currentStatuses = Bus.statuses snapshot
-                let snapshotPayload = encodeSnapshot projectId snapshotCommit currentStatuses
-                return $
-                    S.Yield
-                        (sseEvent "snapshot" snapshotPayload)
-                        (S.Effect (streamLoop projectId pinnedCommit currentStatuses 0 busChan))
-            Nothing -> do
+        case matchingSnapshots of
+            [] -> do
                 let nextHeartbeatTick = heartbeatTick + 1
                 let (heartbeatEvents, finalTick) =
                         if nextHeartbeatTick >= 10
@@ -116,7 +126,16 @@ streamLoop projectId pinnedCommit previousStatuses heartbeatTick busChan = do
                             then [tickComment]
                             else heartbeatEvents
 
-                return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit previousStatuses finalTick busChan))
+                return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit finalTick localChan busChan))
+            snapshots -> do
+                let events = map snapshotEvent snapshots
+                return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit 0 localChan busChan))
+  where
+    matchesSnapshot snapshot =
+        Bus.projectId snapshot == projectId && maybe True (== Bus.commit snapshot) pinnedCommit
+
+    snapshotEvent snapshot =
+        sseEvent "snapshot" (encodeSnapshot (Bus.projectId snapshot) (Bus.commit snapshot) (Bus.statuses snapshot))
 
 drainTChan :: TChan a -> STM [a]
 drainTChan chan = do

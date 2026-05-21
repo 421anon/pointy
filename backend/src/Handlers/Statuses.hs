@@ -3,25 +3,26 @@
 {-# LANGUAGE TupleSections #-}
 
 module Handlers.Statuses (
-    
     checkStatus,
+    getRawStatuses,
     getStatuses,
+    partitionImmediateStatuses,
+    resolveStepStatus,
     addDependencyRunningOverrides,
     removeDependencyRunningOverrides,
     broadcastProjectStatus,
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
     forkBroadcastStatusForStepProjectsAtHead,
-    resolveFailureLogs,
 ) where
 
 import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
 import Bus (broadcastSnapshot)
 import Control.Concurrent (forkIO)
-import Control.Concurrent.Async (mapConcurrently)
+import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception (SomeException, catch)
-import Control.Monad (forM, forM_, void)
+import Control.Monad (forM_, void, when)
 import Control.Monad.Except (runExceptT)
 
 import Control.Monad.IO.Class (liftIO)
@@ -32,10 +33,9 @@ import qualified Data.Map as Map
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import NixUtils (isValidStorePath)
 import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), getProjectOutPaths)
 import ProcessLimiter (readProcessWithExitCodeL)
-import System.Directory (doesPathExist)
-
 import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
@@ -46,8 +46,8 @@ dependencyRunningOverrides = unsafePerformIO $ newTVarIO Map.empty
 
 checkStatus :: FilePath -> IO (Text, Maybe Text)
 checkStatus path = do
-    exists <- doesPathExist path
-    if exists
+    valid <- isValidStorePath path
+    if valid
         then return ("success", Nothing)
         else do
             let sanitizedPath = map (\c -> if c == '/' then '-' else c) (dropWhile (== '/') path)
@@ -61,32 +61,44 @@ checkStatus path = do
                         then return ("failure", Nothing)
                         else return ("not-started", Nothing)
 
-{- | Resolve build logs for all steps with @"failure"@ status, returning
-updated statuses with log summaries. Called asynchronously after the
-initial SSE snapshot so log resolution doesn't block the first message.
+isImmediateStatus :: (Text, Maybe Text) -> Bool
+isImmediateStatus (state, _) = state == "success" || state == "running"
+
+partitionImmediateStatuses :: Map Int (Text, Maybe Text) -> (Map Int (Text, Maybe Text), Map Int (Text, Maybe Text))
+partitionImmediateStatuses = Map.partition isImmediateStatus
+
+{- | Resolve build logs only for statuses whose durable Nix log can refine them.
+Successful and running steps are already authoritative, so they return without
+derivation traversal. A @"not-started"@ step is upgraded to @"failure"@ only
+when the resolver finds a recorded failed build; this covers @systemd-run
+--collect@ units that have already disappeared.
 -}
-resolveFailureLogs :: ReadRepoContext -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
-resolveFailureLogs ctx statuses = do
-    let failed = [(sid, st) | (sid, st) <- Map.toList statuses, fst st == "failure"]
-    updates <- forM failed $ \(sid, _) -> do
+resolveStatuses :: ReadRepoContext -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+resolveStatuses ctx statuses =
+    Map.fromList <$> mapConcurrently (resolveStepStatus ctx) (Map.toList statuses)
+
+resolveStepStatus :: ReadRepoContext -> (Int, (Text, Maybe Text)) -> IO (Int, (Text, Maybe Text))
+resolveStepStatus _ entry@(_, status_)
+    | isImmediateStatus status_ = return entry
+resolveStepStatus ctx entry@(sid, (state, _))
+    | state == "failure" || state == "not-started" = do
         result <- runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show sid ++ ".outPath")
         case result of
-            Left _ -> return (sid, ("failure", Nothing))
+            Left _ -> return entry
             Right outPath -> do
                 mResolved <- resolveBuildLog outPath
-                let mMsg = case mResolved of
-                        Just rl -> lastMeaningfulLine (resolvedLog rl)
-                        Nothing -> Nothing
-                return (sid, ("failure", mMsg))
-    return $ foldl' (\acc (sid, st) -> Map.insert sid st acc) statuses updates
+                return $ case mResolved of
+                    Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
+                    Nothing -> entry
+    | otherwise = return entry
 
-resolveFailureLogsAtCommit :: Text -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
-resolveFailureLogsAtCommit targetCommit statuses = do
+resolveStatusesAtCommit :: Text -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+resolveStatusesAtCommit targetCommit statuses = do
     repoPath <- userRepoPath
-    resolveFailureLogs (ReadRepoContext repoPath (unpack targetCommit)) statuses
+    resolveStatuses (ReadRepoContext repoPath (unpack targetCommit)) statuses
 
-getStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
-getStatuses pid targetCommit = do
+getRawStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
+getRawStatuses pid targetCommit = do
     result <- getProjectOutPaths pid targetCommit
     case result of
         Left err -> return $ Left err
@@ -99,6 +111,13 @@ getStatuses pid targetCommit = do
             checkStatus (unpack path)
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
+
+getStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
+getStatuses pid targetCommit = do
+    rawResult <- getRawStatuses pid targetCommit
+    case rawResult of
+        Left err -> return $ Left err
+        Right statuses -> Right <$> resolveStatusesAtCommit targetCommit statuses
 
 addDependencyRunningOverrides :: Text -> [Int] -> IO ()
 addDependencyRunningOverrides targetCommit stepIds =
@@ -138,19 +157,31 @@ applyDependencyRunningOverrides targetCommit statuses = do
             sid
             acc
 
+broadcastResolvedStatusesAtCommit :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
+broadcastResolvedStatusesAtCommit pid targetCommit statuses = do
+    repoPath <- userRepoPath
+    let ctx = ReadRepoContext repoPath (unpack targetCommit)
+    mapConcurrently_ (broadcastResolvedStatus ctx) (Map.toList statuses)
+  where
+    broadcastResolvedStatus ctx entry = do
+        (sid, status_) <- resolveStepStatus ctx entry
+        broadcastSnapshot pid targetCommit (Map.singleton sid status_)
+
 broadcastProjectStatus :: Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> IO ()
 broadcastProjectStatus pid targetCommit mStatusOverride = do
-    statusesResult <- getStatuses pid targetCommit
+    statusesResult <- getRawStatuses pid targetCommit
     case statusesResult of
         Left err -> putStrLn $ "broadcastProjectStatus skipped: " ++ err
         Right stats -> do
             let finalStats = case mStatusOverride of
                     Just (sid, st) -> Map.insert sid st stats
                     Nothing -> stats
-            broadcastSnapshot pid targetCommit finalStats
-            void $ forkIO $ do
-                updatedStatuses <- resolveFailureLogsAtCommit targetCommit finalStats
-                broadcastSnapshot pid targetCommit updatedStatuses
+            let (immediate, pending) = partitionImmediateStatuses finalStats
+            broadcastSnapshot pid targetCommit immediate
+            when (not (Map.null pending)) $
+                void $
+                    forkIO $
+                        broadcastResolvedStatusesAtCommit pid targetCommit pending
 
 broadcastStatusForStepProjects :: Int -> Text -> Maybe (Text, Maybe Text) -> IO ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride = do
