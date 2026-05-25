@@ -8,23 +8,21 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Text as T
 import Nix.Expr.Types (Binding (..), NExpr, NExprF (..), NKeyName (..), VarName (..))
 import ProcessLimiter (readProcessWithExitCodeL)
-import System.Directory (doesPathExist)
 import System.Exit (ExitCode (..))
 
-{- | True iff the path is registered as a valid local Nix store path.
-Failed builds can leave partial output directories behind, so filesystem
-existence alone is not evidence of a successful build.
+{- | True iff Nix considers the path a valid store path.
+
+Do not stat the filesystem first: in dev-vm, Nix talks to the host
+daemon while /nix/store is an overlay over a 9p-mounted host store.
+A pre-build negative lookup for a future output can stay cached in the
+overlay and hide the path even after the host daemon creates it.
 -}
 isValidStorePath :: FilePath -> IO Bool
 isValidStorePath path = do
-    exists <- doesPathExist path
-    if not exists
-        then return False
-        else do
-            (code, _, _) <- readProcessWithExitCodeL "nix" ["--offline", "path-info", path] ""
-            return $ case code of
-                ExitSuccess -> True
-                ExitFailure _ -> False
+    (code, _, _) <- readProcessWithExitCodeL "nix" ["--offline", "path-info", path] ""
+    return $ case code of
+        ExitSuccess -> True
+        ExitFailure _ -> False
 
 sortAttrSet :: NExpr -> NExpr
 sortAttrSet (Fix expr) = Fix $ case expr of
