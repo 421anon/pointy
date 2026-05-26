@@ -578,15 +578,18 @@ body {
 
 .file-html-viewer {
   width: 100%;
-  height: 500px;
-  border: 1px solid var(--border-color);
+  height: 100%;
+  border: none;
   background: white;
-  resize: vertical;
-  overflow: auto;
+  display: block;
 }
 
 .iframe-zoom-wrapper {
   position: relative;
+  overflow: hidden;
+  height: 500px;
+  border: 1px solid var(--border-color);
+  resize: vertical;
 }
 
 .iframe-zoom-btn {
