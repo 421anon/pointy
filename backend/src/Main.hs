@@ -8,10 +8,10 @@
 module Main where
 
 import Config (loadConfig, resolveConfigPath)
+import Control.Concurrent (forkIO)
 import Control.Monad.Except (runExceptT)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Autocomplete (AutocompleteRequest, autocompleteHandler)
 import Handlers.CommitHash (getCommitHashHandler)
@@ -24,10 +24,10 @@ import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
 
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (patchStepHandler, postStepHandler)
-import Handlers.Store (DirEntry, downloadHandler, listHandler, stepDownloadHandler, stepListHandler, stepRawHandler, storeFilesHandler)
+import Handlers.Store (DirEntry, stepDownloadHandler, stepListHandler, stepRawHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
-import Network.Wai.Handler.Warp (run)
+import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
 import Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 import OutPaths (warmProjectOutPaths)
 import Servant hiding (runHandler)
@@ -263,10 +263,13 @@ main = do
         Left err -> putStrLn $ "Warning: Failed to fetch repository: " ++ err
         Right () -> putStrLn "Repository fetched successfully."
 
-    putStrLn "Warming project out paths..."
-    warmProjectOutPaths
-    putStrLn "Project out paths warmed."
-
     putStrLn "Starting server on port 8081..."
     application <- app
-    run 8081 application
+    let warmAfterServerStart = do
+            putStrLn "Server listening on port 8081."
+            _ <- forkIO $ do
+                putStrLn "Warming project out paths..."
+                warmProjectOutPaths
+                putStrLn "Project out paths warmed."
+            return ()
+    runSettings (setPort 8081 $ setBeforeMainLoop warmAfterServerStart defaultSettings) application

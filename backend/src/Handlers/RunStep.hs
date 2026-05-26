@@ -49,7 +49,6 @@ runStepSync eid commit = do
         depIds <- getDependencies ctx eid
         let stepIds = depIds ++ [eid]
         let targetCommitText = T.pack targetCommit
-        liftIO $ putStrLn $ "runStep " ++ show eid ++ " dependencies: " ++ show depIds
 
         warmProjectOutPathsForCommit ctx
         liftIO $

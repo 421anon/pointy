@@ -13,13 +13,11 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import qualified Data.ByteString as BS
 import Data.List (intercalate, isPrefixOf)
-import Data.Maybe (fromMaybe)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Servant.Server (err500, errBody)
 
 import Data.Maybe (fromMaybe)
-import Data.Text (Text, pack, unpack)
+import Data.Text (Text, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import GHC.Generics (Generic)
@@ -35,6 +33,7 @@ import Servant (
     addHeader,
     err400,
     err404,
+    err500,
     runHandler,
     throwError,
  )

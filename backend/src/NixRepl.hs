@@ -2,22 +2,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module NixReplPool (
+module NixRepl (
     NixEvalOutput (..),
     NixEvalRequest (..),
     NixEvalTarget (..),
     runNixEval,
+    restartNixReplSessions,
 ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
-import Control.Exception (SomeException, catch, try)
+import Control.Exception (SomeException, catch, evaluate, try)
 import Control.Monad (void)
 import Data.Aeson (Value (..), eitherDecode)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isAlphaNum, isSpace)
-import Data.List (isInfixOf)
+import Data.List (intercalate, isInfixOf)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsClosed, hPutStrLn, hSetBuffering)
@@ -87,6 +88,18 @@ runNixEval req = do
             ImpureRepl -> impureSessionRef
     runWithSession True kind ref req
 
+restartNixReplSessions :: IO ()
+restartNixReplSessions = do
+    putStrLn "Restarting nix REPL sessions"
+    restartSession pureSessionRef
+    restartSession impureSessionRef
+
+restartSession :: MVar (Maybe ReplSession) -> IO ()
+restartSession ref =
+    modifyMVar_ ref $ \mSession -> do
+        mapM_ closeSession mSession
+        return Nothing
+
 runWithSession :: Bool -> ReplKind -> MVar (Maybe ReplSession) -> NixEvalRequest -> IO (Either String String)
 runWithSession mayRetry kind ref req = do
     outcome <- modifyMVar ref $ \mSession -> do
@@ -96,7 +109,11 @@ runWithSession mayRetry kind ref req = do
         case eSession of
             Left (err :: SomeException) -> return (Nothing, ReplDied $ "failed to start " ++ show kind ++ " nix repl: " ++ show err)
             Right session -> do
-                outcome <- runRequest session req `catch` \(err :: SomeException) -> return (ReplDied $ replName session ++ " failed: " ++ show err)
+                outcome <-
+                    runRequest session req
+                        `catch` \(err :: SomeException) -> do
+                            logReplInteraction session ("eval exception " ++ describeRequest req ++ ": " ++ show err)
+                            return (ReplDied $ replName session ++ " failed: " ++ show err)
                 case outcome of
                     ReplDied _ -> closeSession session >> return (Nothing, outcome)
                     _ -> return (Just session, outcome)
@@ -142,6 +159,7 @@ initializeSession session = do
     marker <- nextMarker session "ready"
     sendCommands session [":p " ++ nixString marker]
     result <- collectUntilMarker session marker
+    logReplInteraction session "initialize"
     case result of
         ReplDied err -> fail err
         _ -> return ()
@@ -149,7 +167,7 @@ initializeSession session = do
 runRequest :: ReplSession -> NixEvalRequest -> IO ReplOutcome
 runRequest session req = do
     eExpr <- renderRequestExpression session req
-    case eExpr of
+    outcome <- case eExpr of
         Left outcome -> return outcome
         Right expr -> do
             begin <- nextMarker session "begin"
@@ -164,6 +182,75 @@ runRequest session req = do
                 ReplSucceeded _ -> return $ ReplDied "internal protocol error: collectUntilMarker returned success before parsing"
                 ReplDied err -> return $ ReplDied err
                 ReplFailed raw -> parseReplOutput begin req raw
+    logReplInteraction session ("eval " ++ describeRequest req)
+    return outcome
+
+logReplInteraction :: ReplSession -> String -> IO ()
+logReplInteraction session interaction = do
+    memoryUsage <- readProcessMemoryUsage
+    putStrLn $
+        "nix repl interaction: session="
+            ++ show (replName session)
+            ++ " interaction="
+            ++ show interaction
+            ++ " memory="
+            ++ memoryUsage
+
+readProcessMemoryUsage :: IO String
+readProcessMemoryUsage = do
+    eStatus <- readProcStatus
+    return $ case eStatus of
+        Left err -> "unavailable (" ++ show err ++ ")"
+        Right status ->
+            let fields = memoryStatusFields status
+             in if null fields
+                    then "unavailable (no memory fields in /proc/self/status)"
+                    else intercalate ", " fields
+  where
+    readProcStatus :: IO (Either SomeException String)
+    readProcStatus =
+        try $ do
+            status <- readFile "/proc/self/status"
+            _ <- evaluate (length status)
+            return status
+
+memoryStatusFields :: String -> [String]
+memoryStatusFields status =
+    [ key ++ "=" ++ dropWhile isSpace rawValue
+    | key <- ["VmRSS", "VmHWM", "VmSize"]
+    , line <- lines status
+    , Just rawValue <- [stripPrefix (key ++ ":") line]
+    ]
+
+describeRequest :: NixEvalRequest -> String
+describeRequest req =
+    "impure="
+        ++ show (evalImpure req)
+        ++ " output="
+        ++ show (evalOutput req)
+        ++ " target="
+        ++ describeTarget (evalTarget req)
+        ++ " apply="
+        ++ maybe "none" abbreviate (evalApply req)
+
+describeTarget :: NixEvalTarget -> String
+describeTarget (EvalExpr expr) = "expr:" ++ abbreviate expr
+describeTarget (EvalInstallable installable attr) =
+    "installable:" ++ abbreviate installable ++ " attr:" ++ attr
+
+abbreviate :: String -> String
+abbreviate value =
+    let oneLine = singleLine value
+     in if length oneLine <= 240
+            then oneLine
+            else take 237 oneLine ++ "..."
+
+singleLine :: String -> String
+singleLine = map $ \case
+    '\n' -> ' '
+    '\r' -> ' '
+    '\t' -> ' '
+    c -> c
 
 collectUntilMarker :: ReplSession -> String -> IO ReplOutcome
 collectUntilMarker session marker = go []
@@ -236,7 +323,9 @@ ensureFlakeBinding session installable =
                     [ varName ++ " = builtins.getFlake " ++ nixString installable
                     , ":p " ++ nixString marker
                     ]
-                collectUntilMarker session marker >>= \case
+                outcome <- collectUntilMarker session marker
+                logReplInteraction session ("bind flake " ++ abbreviate installable)
+                case outcome of
                     ReplSucceeded _ -> return (bindings, Left $ ReplDied "internal protocol error while binding flake")
                     ReplDied err -> return (bindings, Left $ ReplDied err)
                     ReplFailed raw ->

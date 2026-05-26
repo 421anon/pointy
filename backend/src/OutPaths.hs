@@ -12,6 +12,7 @@ module OutPaths (
 ) where
 
 import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar)
 import Control.Monad (void)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, genericParseJSON)
@@ -23,6 +24,8 @@ import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
+import NixRepl (restartNixReplSessions)
+import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), WriteRepoContext, runNixEvalJsonInRepo, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
 
 -- Types
@@ -80,6 +83,20 @@ getProjectOutPaths pid targetCommit = do
 
 -- REPL warming
 
+{-# NOINLINE lastWarmedHeadCommitRef #-}
+lastWarmedHeadCommitRef :: MVar (Maybe String)
+lastWarmedHeadCommitRef = unsafePerformIO (newMVar Nothing)
+
+restartReplIfHeadChanged :: String -> IO ()
+restartReplIfHeadChanged targetCommit =
+    modifyMVar_ lastWarmedHeadCommitRef $ \previous -> do
+        case previous of
+            Just oldCommit | oldCommit /= targetCommit -> do
+                putStrLn $ "User repo HEAD changed from " ++ oldCommit ++ " to " ++ targetCommit ++ "; restarting nix REPL sessions before warming project out paths."
+                restartNixReplSessions
+            _ -> return ()
+        return (Just targetCommit)
+
 warmProjectOutPaths :: IO ()
 warmProjectOutPaths = do
     repoPath <- userRepoPath
@@ -88,7 +105,9 @@ warmProjectOutPaths = do
     case mTargetCommit of
         Left err -> putStrLn $ "Project outPath warm skipped: " ++ err
         Right targetCommit -> do
-            result <- runExceptT $ warmProjectOutPathsForCommit (ReadRepoContext repoPath (unpack targetCommit))
+            let targetCommitString = unpack targetCommit
+            restartReplIfHeadChanged targetCommitString
+            result <- runExceptT $ warmProjectOutPathsForCommit (ReadRepoContext repoPath targetCommitString)
             case result of
                 Left err -> putStrLn $ "Project outPath warm failed: " ++ err
                 Right () -> return ()

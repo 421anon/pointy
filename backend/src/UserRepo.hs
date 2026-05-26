@@ -29,7 +29,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import NixReplPool (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval)
+import NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval)
 import ProcessLimiter (readCreateProcessWithExitCodeL, readProcessWithExitCodeL)
 import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
