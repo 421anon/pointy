@@ -49,6 +49,11 @@ class CodeEditorElement extends HTMLElement {
       }),
     });
 
+    this.view.dom.addEventListener("input", (e) => {
+      if (e.target.closest(".cm-panel")) e.stopPropagation();
+    });
+
+
     this.configureLanguage(this.language);
   }
 
