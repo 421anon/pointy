@@ -222,6 +222,7 @@ view config =
                                             , type_ "button"
                                             , class "list-field-suggestion"
                                             , classList [ ( "active", i == clampedIndex ) ]
+                                            , Html.Attributes.tabindex -1
                                             , Events.preventDefaultOn "mousedown"
                                                 (Decode.succeed ( config.onSelect item, True ))
                                             ]
