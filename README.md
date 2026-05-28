@@ -35,7 +35,9 @@ Useful commands inside the VM:
 
 - `systemctl status` - check services
 - `journalctl -u backend -f` - follow backend logs
-- `journalctl _SYSTEMD_SLICE=pointy-builds.slice -f` - follow step build logs
+- `squeue` - list Slurm step build jobs
+- `scontrol show job <job-id>` - inspect a Slurm build job
+- `journalctl -u slurmctld -u slurmd -f` - follow Slurm controller/worker logs
 
 Press `C-a x` to shut the VM down. Delete `nixos.qcow2` to reset its persistent state. Restart the VM to pick up backend changes.
 

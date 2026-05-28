@@ -16,6 +16,7 @@ executable backend
     -- never finish its work and release the lock, resulting in a permanent freeze.
     ghc-options: -threaded
     other-modules: Config,
+                   BuildRunner,
                    BuildLog,
                    ProcessLimiter,
                    UserRepo,

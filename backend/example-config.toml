@@ -2,3 +2,12 @@
 url = "git@example.com:your-org/user-repo.git"
 keyfile = "/home/backend/.ssh/id_ed25519_deploy"
 branch = "main"
+
+[slurm]
+# Optional. Omit or leave empty to use Slurm's default partition/account/time policy.
+partition = ""
+account = ""
+time-limit = ""
+extra = []
+# "scheduler" passes --mem and --cpus-per-task; "metadata-only" records requirements but does not enforce them.
+enforcement = "scheduler"

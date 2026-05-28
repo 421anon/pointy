@@ -148,7 +148,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             "share"
                             True
                             "Share"
-                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [ "output" ] Nothing)
+                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [] Nothing)
                                 mProjectId
                                 record.id
                                 |> Maybe.withDefault Flow.none

@@ -10,7 +10,7 @@ A Pointy deployment has five moving parts:
 2. **Backend** — a service that reads and writes the user repository, serves API endpoints, streams live step statuses, accepts uploads, and starts or stops builds.
 3. **Backend-owned Nix REPL child** — the backend keeps a persistent `nix repl` child process for `nix eval` requests, reuses loaded flake bindings across requests, and restarts the child if it crashes.
 4. **User repository** — a Git-backed Nix flake that stores templates, optional presets, step definitions, project definitions, and source files.
-5. **Nix / systemd runtime** — builds are executed as `systemd-run` units that call `nix build` against a pinned commit of the user repository.
+5. **Nix / Slurm runtime** — builds are submitted as Slurm batch jobs that call `nix build` against a pinned commit of the user repository.
 
 When a user edits a project or step in the UI, the backend rewrites the corresponding `.nix` file in the user repository, commits the change, and pushes it back to the configured remote.
 
@@ -27,6 +27,13 @@ The current configuration format is:
 url = "git@example.com:org/user-repo.git"
 keyfile = "/path/to/deploy-key"
 branch = "main"
+
+[slurm]
+# Optional. Empty fields defer to Slurm defaults.
+partition = ""
+account = ""
+time-limit = ""
+extra = []
 ```
 
 These settings tell the backend:
@@ -34,6 +41,8 @@ These settings tell the backend:
 - which Git remote to use for the user repository
 - which SSH key to use for Git operations
 - which branch contains the live Pointy state
+
+The optional `[slurm]` section controls how the backend submits build jobs. `partition` selects a Slurm partition when non-empty; `account` and `time-limit` become `sbatch --account` and `--time` flags when non-empty; `extra` appends raw `sbatch` flags for site-specific policy. Leave these fields empty to use the local Slurm defaults.
 
 ## What the user repository must contain
 
@@ -97,12 +106,12 @@ If you place Pointy behind a reverse proxy, make sure this endpoint is allowed t
 ## External process limit and Nix evaluation child
 
 The backend runs non-evaluation external commands through a global semaphore of **40 concurrent processes**.
-That limit applies to subprocess work such as `git`, `systemctl`, `nix path-info`, `nix log`, and file-type probing. Backend `nix eval` calls go through a backend-owned persistent `nix repl` child instead of this process launcher.
+That limit applies to subprocess work such as `git`, Slurm commands (`sbatch`, `squeue`, `scancel`), `nix path-info`, `nix log`, and file-type probing. Backend `nix eval` calls go through a backend-owned persistent `nix repl` child instead of this process launcher.
 The REPL child keeps loaded flake bindings warm across requests. If the child exits or stops responding, the backend discards it, starts a fresh child, and retries the request once.
 
 ## Build execution and GC roots
 
-Each build runs as a `systemd-run` unit whose name is derived from the step output path.
+Each build runs as a Slurm batch job whose job name is derived from the step output path. The default NixOS module configures a single-node Slurm runtime; production admins can override Slurm settings for remote workers, provided those workers have access to the same Nix store and user repository.
 
 When a build succeeds, the backend registers a GC root under the backend user's home directory, for example:
 

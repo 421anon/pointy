@@ -11,12 +11,15 @@ module Handlers.Statuses (
     addDependencyRunningOverrides,
     removeDependencyRunningOverrides,
     broadcastProjectStatus,
+    broadcastSingleStepForProjects,
+    broadcastKnownStepStatus,
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
     forkBroadcastStatusForStepProjectsAtHead,
 ) where
 
 import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
+import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
 import Bus (broadcastSnapshot)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
@@ -35,8 +38,6 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import NixUtils (isValidStorePath)
 import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), getProjectOutPaths)
-import ProcessLimiter (readProcessWithExitCodeL)
-import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
 
@@ -50,16 +51,12 @@ checkStatus path = do
     if valid
         then return ("success", Nothing)
         else do
-            let sanitizedPath = map (\c -> if c == '/' then '-' else c) (dropWhile (== '/') path)
-            let unitName = "nix-build-" ++ sanitizedPath
-            (exitCode, _, _) <- readProcessWithExitCodeL "systemctl" ["is-active", unitName] ""
-            if exitCode == ExitSuccess
-                then return ("running", Nothing)
-                else do
-                    (failedCode, _, _) <- readProcessWithExitCodeL "systemctl" ["is-failed", unitName] ""
-                    if failedCode == ExitSuccess
-                        then return ("failure", Nothing)
-                        else return ("not-started", Nothing)
+            state <- queryState $ buildKeyForOutPath path
+            return $ case state of
+                BRunning -> ("running", Nothing)
+                BAbsent -> ("not-started", Nothing)
+                BSucceeded -> ("success", Nothing)
+                BFailed -> ("failure", Nothing)
 
 isImmediateStatus :: (Text, Maybe Text) -> Bool
 isImmediateStatus (state, _) = state == "success" || state == "running"
@@ -70,8 +67,8 @@ partitionImmediateStatuses = Map.partition isImmediateStatus
 {- | Resolve build logs only for statuses whose durable Nix log can refine them.
 Successful and running steps are already authoritative, so they return without
 derivation traversal. A @"not-started"@ step is upgraded to @"failure"@ only
-when the resolver finds a recorded failed build; this covers @systemd-run
---collect@ units that have already disappeared.
+when the resolver finds a recorded failed build after the scheduler job has
+disappeared.
 -}
 resolveStatuses :: ReadRepoContext -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
 resolveStatuses ctx statuses =
@@ -183,24 +180,44 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
                     forkIO $
                         broadcastResolvedStatusesAtCommit pid targetCommit pending
 
-broadcastStatusForStepProjects :: Int -> Text -> Maybe (Text, Maybe Text) -> IO ()
-broadcastStatusForStepProjects sid targetCommit mStatusOverride = do
+withStepProjects :: Int -> Text -> (Int -> ReadRepoContext -> IO ()) -> IO ()
+withStepProjects sid targetCommit action = do
     result <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
         let ctx = ReadRepoContext repoPath (unpack targetCommit)
         output <- runNixEvalJsonInRepo ctx "#pointy.projects"
         let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
         case decodeResult of
-            Left err -> do
-                liftIO $ putStrLn $ "Error parsing json in broadcastStatusForStepProjects for #pointy.projects: " ++ err
-                return ()
+            Left err -> liftIO $ putStrLn $ "Error parsing #pointy.projects for step " ++ show sid ++ ": " ++ err
             Right projects -> do
                 let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
-                liftIO $ forM_ targetProjects $ \p ->
-                    forkIO $ broadcastProjectStatus (projectDefId p) targetCommit (fmap (sid,) mStatusOverride)
-                return ()
+                liftIO $ forM_ targetProjects $ \p -> forkIO $ action (projectDefId p) ctx
     case result of
-        Left err -> putStrLn $ "Error broadcasting statuses for step " ++ show sid ++ ": " ++ err
+        Left err -> putStrLn $ "Error in withStepProjects for step " ++ show sid ++ ": " ++ err
         Right _ -> return ()
+
+broadcastStatusForStepProjects :: Int -> Text -> Maybe (Text, Maybe Text) -> IO ()
+broadcastStatusForStepProjects sid targetCommit mStatusOverride =
+    withStepProjects sid targetCommit $ \pid _ ->
+        broadcastProjectStatus pid targetCommit (fmap (sid,) mStatusOverride)
+
+-- | Uses the already-known out-path rather than re-evaluating each project's step list.
+broadcastSingleStepForProjects :: Int -> Text -> FilePath -> IO ()
+broadcastSingleStepForProjects sid targetCommit outPath = do
+    rawStatus <- checkStatus outPath `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
+    overrides <- readTVarIO dependencyRunningOverrides
+    let count = Map.findWithDefault 0 (targetCommit, sid) overrides
+        status =
+            if count > 0 && fst rawStatus == "not-started"
+                then ("running", Nothing)
+                else rawStatus
+    withStepProjects sid targetCommit $ \pid ctx -> do
+        (_, resolvedStatus) <- resolveStepStatus ctx (sid, status)
+        broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+
+broadcastKnownStepStatus :: Int -> Text -> (Text, Maybe Text) -> IO ()
+broadcastKnownStepStatus sid targetCommit status =
+    withStepProjects sid targetCommit $ \pid _ ->
+        broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
 forkBroadcastProjectStatusAtHead :: Int -> IO ()
 forkBroadcastProjectStatusAtHead pid = do

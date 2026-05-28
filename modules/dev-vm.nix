@@ -2,8 +2,13 @@
   self,
   pkgs,
   modulesPath,
+  config,
+  lib,
   ...
 }:
+let
+  slurmRealMemory = toString ((config.virtualisation.memorySize or 1536) - 512);
+in
 {
   imports = [
     "${modulesPath}/virtualisation/qemu-vm.nix"
@@ -47,6 +52,17 @@
   };
 
   systemd.services.backend.environment.NIX_CACHE_HOME = "/var/cache/nix";
+  # Keep the dev scheduler permissive but low-concurrency: the backend's dev
+  # config records requirements as metadata-only, so one advertised CPU is enough
+  # to serialize jobs without rejecting large template CPU requirements.
+  services.slurm.nodeName = lib.mkForce [
+    "${config.networking.hostName} CPUs=1 RealMemory=${slurmRealMemory} State=UNKNOWN"
+  ];
+
+  # Automatically return DOWN nodes to service after unexpected reboots.
+  # Value 2: resume as soon as slurmd re-registers, regardless of reason.
+  services.slurm.extraConfig = "ReturnToService=2";
+
 
   nix.settings.store = "unix:///var/run/nix-daemon-socket";
 

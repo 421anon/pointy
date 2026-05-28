@@ -25,7 +25,7 @@ For how these outputs are created, see [Setting Up the User Repository](user-rep
 
 | <div style="width: 220px">Attribute</div> | What it contains                                                                                                                                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pointy.steps.<id>`                         | The fully evaluated derivation for step `<id>`. This is the same flake output the backend builds; the backend simply uses a pinned Git commit and runs it under `systemd-run`. |
+| `pointy.steps.<id>`                         | The fully evaluated derivation for step `<id>`. This is the same flake output the backend builds; the backend simply uses a pinned Git commit and submits it through Slurm. |
 | `pointy.projectOutPaths`                    | A nested map of `project-id → step-id → store-path`. Steps that cannot be evaluated are reported as `/invalid`.                                                                |
 | `pointy.autocomplete.<template>.<key>`      | Autocomplete function used by the web UI for string-list fields that declare `autocomplete = "<key>"`.                                                                       |
 

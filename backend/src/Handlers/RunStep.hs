@@ -7,6 +7,7 @@ module Handlers.RunStep (
 ) where
 
 import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
+import BuildRunner (StepRequirements (..), buildKeyForOutPath, cancel, submitAndWait)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Exception (bracket_)
@@ -18,13 +19,14 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (addDependencyRunningOverrides, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
+import Handlers.Statuses (addDependencyRunningOverrides, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
 import NixUtils (isValidStorePath)
 import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), err404, err500, errBody)
-import System.Directory (createDirectoryIfMissing, findExecutable, getHomeDirectory)
-import System.FilePath (takeDirectory, takeFileName, (</>))
+import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Exit (ExitCode (..))
+import System.FilePath (takeFileName, (</>))
 import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
 runStepHandler :: Int -> Maybe T.Text -> Handler NoContent
@@ -54,12 +56,9 @@ runStepSync eid commit = do
         liftIO $
             bracket_
                 (addDependencyRunningOverrides targetCommitText stepIds)
+                (removeDependencyRunningOverrides targetCommitText stepIds)
                 ( do
-                    removeDependencyRunningOverrides targetCommitText stepIds
-                    mapM_ (\sid -> broadcastStatusForStepProjects sid targetCommitText Nothing) stepIds
-                )
-                ( do
-                    mapM_ (\sid -> broadcastStatusForStepProjects sid targetCommitText Nothing) stepIds
+                    mapM_ (\sid -> broadcastKnownStepStatus sid targetCommitText ("running", Nothing)) stepIds
                     mapConcurrently_ (buildStep ctx) stepIds
                 )
 
@@ -103,50 +102,62 @@ stepInstallable (ReadRepoContext repoPath targetCommit) eid =
 
 buildStep :: ReadRepoContext -> Int -> IO ()
 buildStep ctx eid = do
+    let targetCommitText = T.pack (readCommitHash ctx)
     result <- runExceptT $ do
-        mGitExe <- liftIO $ findExecutable "git"
-        gitExe <- case mGitExe of
-            Nothing -> throwError "git executable not found"
-            Just exe -> return exe
-
-        let pathEnvArg = ["--setenv=PATH=" ++ takeDirectory gitExe]
-
         outPathText <- getStepOutPath ctx eid
         let outPath = T.unpack outPathText
-        let targetCommitText = T.pack (readCommitHash ctx)
         built <- liftIO $ isBuilt outPath
         if built
-            then liftIO $ broadcastStatusForStepProjects eid targetCommitText Nothing
+            then liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
             else do
-                let unitName = outPathToUnitName outPath
-                _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["reset-failed", unitName] ""
-                liftIO $ broadcastStatusForStepProjects eid targetCommitText (Just ("running", Nothing))
-                _ <-
+                let buildKey = buildKeyForOutPath outPath
+                requirements <- getStepRequirements ctx eid
+                exitCode <-
                     liftIO $
-                        readProcessWithExitCodeL
-                            "systemd-run"
-                            ( [ "--uid=backend"
-                              , "--gid=backend"
-                              , "--slice=pointy-builds.slice"
-                              , "--unit=" ++ unitName
-                              , "--collect"
-                              , "--wait"
-                              ]
-                                ++ pathEnvArg
-                                ++ ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx eid]
-                            )
-                            ""
-                _ <- liftIO $ registerGcRootForOutPath outPath
-                liftIO $ broadcastStatusForStepProjects eid targetCommitText Nothing
-
+                        submitAndWait
+                            requirements
+                            buildKey
+                            ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx eid]
+                case exitCode of
+                    ExitSuccess -> do
+                        nowBuilt <- liftIO $ isBuilt outPath
+                        if nowBuilt
+                            then liftIO $ registerGcRootForOutPath outPath
+                            else return ()
+                    ExitFailure _ -> return ()
+                liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
     case result of
-        Left err -> putStrLn $ "buildStep error: " ++ err
+        Left err -> do
+            putStrLn $ "buildStep error: " ++ err
+            broadcastKnownStepStatus eid targetCommitText ("failure", Just (T.pack err))
         Right _ -> return ()
 
 getStepOutPath :: ReadRepoContext -> Int -> ExceptT String IO T.Text
 getStepOutPath ctx eid = do
     output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
     return $ T.pack output
+
+getStepRequirements :: ReadRepoContext -> Int -> ExceptT String IO StepRequirements
+getStepRequirements ctx eid = do
+    let attr = "#pointy.steps." ++ show eid ++ ".requirements"
+    output <- runNixEvalJsonInRepo ctx attr
+    requirements <-
+        case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
+            Left err -> throwError $ "Failed to decode " ++ attr ++ ": " ++ err
+            Right decoded -> return decoded
+    case validateStepRequirements requirements of
+        Left err -> throwError $ "Invalid " ++ attr ++ ": " ++ err
+        Right () -> return requirements
+
+validateStepRequirements :: StepRequirements -> Either String ()
+validateStepRequirements requirements
+    | cpu requirements <= 0 = Left $ "cpu must be positive, got " ++ show (cpu requirements)
+    | hasExportDelimiter (ior requirements) = Left "ior must not contain comma, newline, or NUL"
+    | hasExportDelimiter (iow requirements) = Left "iow must not contain comma, newline, or NUL"
+    | hasExportDelimiter (ram requirements) = Left "ram must not contain comma, newline, or NUL"
+    | otherwise = Right ()
+  where
+    hasExportDelimiter = T.any (\c -> c == ',' || c == '\n' || c == '\r' || c == '\0')
 
 getDependencies :: ReadRepoContext -> Int -> ExceptT String IO [Int]
 getDependencies ctx stepId = do
@@ -180,16 +191,10 @@ stopStepSync eid commit = do
                      in return (repoPath, targetCommit)
 
         outPathText <- getStepOutPath (ReadRepoContext repoPath (T.unpack targetCommit)) eid
-        let unitName = outPathToUnitName $ T.unpack outPathText
-        _ <- liftIO $ readProcessWithExitCodeL "systemctl" ["stop", unitName] ""
+        liftIO $ cancel $ buildKeyForOutPath $ T.unpack outPathText
         liftIO $ removeDependencyRunningOverrides targetCommit [eid]
         liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of
         Left err -> putStrLn $ "stopStep error: " ++ err
         Right _ -> return ()
-
-outPathToUnitName :: String -> String
-outPathToUnitName outPath =
-    let sanitizedPath = map (\c -> if c == '/' then '-' else c) (dropWhile (== '/') outPath)
-     in "nix-build-" ++ sanitizedPath
