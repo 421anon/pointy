@@ -10,11 +10,12 @@ import Extra.Accessors exposing (by, remkT, where_)
 import Flow exposing (Flow)
 import Http
 import List.Extra as List
-import Model.Core as Model exposing (DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Time
 import Toast exposing (Toast)
+import Json.Decode exposing (Value)
 
 
 blackhole : Prism pr s Never x y
@@ -208,6 +209,20 @@ children =
     lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
 
 
+
+folderExtras : Lens ls { a | extras : b } b x y
+folderExtras =
+    lens ".extras" .extras (\folder_ extras_ -> { folder_ | extras = extras_ })
+
+
+fileDelimitedGrid : Lens ls { a | delimitedGrid : b } b x y
+fileDelimitedGrid =
+    lens ".delimitedGrid" .delimitedGrid (\file_ delimitedGrid_ -> { file_ | delimitedGrid = delimitedGrid_ })
+
+
+delimitedGridModel : Lens ls { a | gridModel : b } b x y
+delimitedGridModel =
+    lens ".gridModel" .gridModel (\grid_ gridModel_ -> { grid_ | gridModel = gridModel_ })
 recordId : Lens ls { a | id : b } b x y
 recordId =
     lens ".id" .id (\record id_ -> { record | id = id_ })
@@ -322,6 +337,20 @@ childrenAt : Int -> List String -> Traversal (Table StepRecord) (ApiData (Dict S
 childrenAt recordId_ path =
     directoryItemAtPath recordId_ path << folder << children
 
+
+extrasAt : Int -> List String -> Traversal (Table StepRecord) (ApiData (Dict String Value)) x y
+extrasAt recordId_ path =
+    directoryItemAtPath recordId_ path << folder << folderExtras
+
+
+fileDelimitedGridAt : Int -> List String -> Traversal (Table StepRecord) (Maybe Model.DelimitedGrid) x y
+fileDelimitedGridAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileDelimitedGrid
+
+
+rootExtrasAt : Int -> Traversal (Table StepRecord) (ApiData (Dict String Value)) x y
+rootExtrasAt recordId_ =
+    recordById recordId_ << runState << success << directoryView << folderExtras
 
 recordSrcFiles : Int -> Traversal (Table StepRecord) DirectoryFolder x y
 recordSrcFiles recordId_ =

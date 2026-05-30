@@ -221,6 +221,7 @@ stepValueOnly stepType_ =
             , srcFiles =
                 { children = NotAsked
                 , expanded = False
+                , extras = NotAsked
                 }
             }
         )
@@ -244,6 +245,7 @@ directoryItem fileView =
                             , Folder
                                 { children = NotAsked
                                 , expanded = False
+                                , extras = NotAsked
                                 }
                             )
                         )
@@ -259,6 +261,7 @@ directoryItem fileView =
                                 , viewable = viewable
                                 , mimeType = mimeType
                                 , view = fileView
+                                , delimitedGrid = Nothing
                                 }
                             )
                         )

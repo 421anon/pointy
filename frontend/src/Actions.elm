@@ -23,6 +23,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
+import Grid
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
@@ -904,6 +905,33 @@ shouldSkipFileContents file_ =
         || has (mimeType << just << where_ (String.startsWith "text/html")) file_
 
 
+
+decodeTableMeta : Decode.Value -> Maybe Model.TableMeta
+decodeTableMeta jsonValue =
+    let
+        colMetaDecoder =
+            Decode.map2
+                (\t n ->
+                    { columnType =
+                        case t of
+                            "int" -> Model.ColumnInt
+                            "float" -> Model.ColumnFloat
+                            _ -> Model.ColumnString
+                    , nullable = n
+                    }
+                )
+                (Decode.field "type" Decode.string)
+                (Decode.field "nullable" Decode.bool)
+
+        tableMetaDecoder =
+            Decode.map Model.TableMeta
+                (Decode.field "columns" (Decode.list colMetaDecoder))
+    in
+    Decode.decodeValue tableMetaDecoder jsonValue
+        |> Result.toMaybe
+
+
+
 toggleFile : Int -> List String -> Flow Model ()
 toggleFile recordId path =
     toggleOutputEntry recordId Nothing path
@@ -920,6 +948,31 @@ toggleSrcFile recordId path =
             (\isOpen ->
                 Flow.when (not isOpen) (clearHighlightedFileOnClose Route.Source recordId path)
             )
+
+
+updateOutputFileGrid : Int -> List String -> Grid.Msg Model.DelimitedRow -> Flow Model ()
+updateOutputFileGrid recordId path =
+    updateFileGrid (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << delimitedGridModel)
+
+
+updateFileGrid : An_Optic pr ls Model (Grid.Model Model.DelimitedRow) -> Grid.Msg Model.DelimitedRow -> Flow Model ()
+updateFileGrid gridLens gridMsg =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case try gridLens model of
+                    Just gridModel ->
+                        let
+                            ( updatedGridModel, gridCmd ) =
+                                Grid.update gridMsg gridModel
+                        in
+                        Flow.setAll gridLens updatedGridModel
+                            |> Flow.seq (Flow.lift gridCmd |> Flow.andThen (updateFileGrid gridLens))
+
+                    Nothing ->
+                        Flow.none
+            )
+
 
 
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()
@@ -960,8 +1013,20 @@ toggleOutputEntry recordId mOpen path =
                 \commit_ ->
                     Flow.forAll (allStepTables << directoryItemAtPath recordId path << folder)
                         (\_ ->
+                            let
+                                extrasLens =
+                                    if List.isEmpty path then
+                                        allStepTables << rootExtrasAt recordId
+
+                                    else
+                                        allStepTables << extrasAt recordId path
+                            in
                             callApi (allStepTables << childrenAt recordId path)
                                 (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric recordId (Just commit_) path)
+                                |> Flow.seq
+                                    (callApi extrasLens
+                                        (Api.fetchExtras recordId (Just commit_) path)
+                                    )
                                 |> Flow.return ()
                         )
 
@@ -970,10 +1035,43 @@ toggleOutputEntry recordId mOpen path =
                 \commit_ ->
                     Flow.forAll (allStepTables << directoryItemAtPath recordId path << file)
                         (\file_ ->
+                            let
+                                parentPath =
+                                    List.take (List.length path - 1) path
+
+                                parentExtrasLens =
+                                    if List.isEmpty parentPath then
+                                        allStepTables << rootExtrasAt recordId
+
+                                    else
+                                        allStepTables << extrasAt recordId parentPath
+                            in
                             Flow.when (not (shouldSkipFileContents file_))
-                                (callApi (allStepTables << fileContentAt recordId path)
-                                    (Api.fetchFileContents recordId (Just commit_) path)
-                                    |> Flow.return ()
+                                (Flow.forAll parentExtrasLens
+                                    (\extrasData ->
+                                        callApi (allStepTables << fileContentAt recordId path)
+                                            (Api.fetchFileContents recordId (Just commit_) path)
+                                            |> FlowError.andThen
+                                                (\content ->
+                                                    let
+                                                        mTableMeta =
+                                                            ApiData.toMaybe extrasData
+                                                                |> Maybe.andThen
+                                                                    (\extrasDict ->
+                                                                        List.last path
+                                                                            |> Maybe.andThen (\fileName -> Dict.get fileName extrasDict)
+                                                                            |> Maybe.andThen decodeTableMeta
+                                                                    )
+
+                                                        mGrid =
+                                                            Model.delimitedGridFromFile path file_.mimeType content mTableMeta
+                                                    in
+                                                    Flow.setAll
+                                                        (allStepTables << fileDelimitedGridAt recordId path)
+                                                        mGrid
+                                                )
+                                            |> Flow.return ()
+                                    )
                                 )
                         )
     in
@@ -1405,7 +1503,7 @@ updateStepStatus snapshotCommit stepId newStatus =
             projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState
 
         defaultRunState =
-            { commit = snapshotCommit, status = NotAsked, directoryView = { children = NotAsked, expanded = False } }
+            { commit = snapshotCommit, status = NotAsked, directoryView = { children = NotAsked, expanded = False, extras = NotAsked } }
     in
     Flow.over stepRunState
         (\rs ->

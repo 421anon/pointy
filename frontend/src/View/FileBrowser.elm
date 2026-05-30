@@ -1,6 +1,7 @@
 module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 
 import Accessors exposing (Prism, has, just, prism, snd, try)
+import Grid
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData, success)
@@ -16,7 +17,7 @@ import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
+import Model.Core exposing (DelimitedGrid, DelimitedRow, DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
 import Model.Lenses exposing (currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -358,7 +359,15 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         , Html.span [ class "file-line-content" ] [ Html.text line ]
                                         ]
 
-                                viewContent text =
+                                gridAction =
+                                    case ( mRecordId, mDirCtx ) of
+                                        ( Just recordId, Just (OutputDir _ _) ) ->
+                                            Just (Actions.updateOutputFileGrid recordId path)
+
+                                        _ ->
+                                            Nothing
+
+                                viewPlainContent text =
                                     let
                                         lines =
                                             String.split "\n" text
@@ -369,6 +378,14 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         , style "max-height" (calculateViewerHeight (List.length lines))
                                         ]
                                         (List.indexedMap renderLine lines)
+
+                                viewContent text =
+                                    case ( file.delimitedGrid, gridAction, mSelectedRange ) of
+                                        ( Just delimitedGrid, Just updateGrid, Nothing ) ->
+                                            viewDelimitedGrid updateGrid delimitedGrid
+
+                                        _ ->
+                                            viewPlainContent text
                             in
                             Html.div [ class "file-viewer" ]
                                 [ ApiData.foldVisible
@@ -457,3 +474,17 @@ calculateViewerHeight lineCount =
             max cappedHeight 100
     in
     String.fromInt finalHeight ++ "px"
+
+
+
+viewDelimitedGrid : (Grid.Msg DelimitedRow -> Flow Model ()) -> DelimitedGrid -> Html (Flow Model ())
+viewDelimitedGrid toFlow delimitedGrid =
+    let
+        hasMetadata =
+            not (List.isEmpty delimitedGrid.columnMetas)
+    in
+    Html.div [ class "delimited-grid-viewer" ]
+        [ Html.viewIf (not hasMetadata) <|
+            Html.span [ class "delimited-meta-unavailable" ] [ Html.text "Column metadata unavailable" ]
+        , Html.map toFlow (Grid.view delimitedGrid.gridModel)
+        ]

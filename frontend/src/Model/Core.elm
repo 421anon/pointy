@@ -13,6 +13,10 @@ import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
 import Time
 import Toast exposing (Toast)
+import Array exposing (Array)
+import Csv.Parser
+import Grid
+import Json.Decode exposing (Value)
 
 
 type Status
@@ -456,12 +460,14 @@ type alias DirectoryFile =
     , viewable : Bool
     , mimeType : Maybe String
     , view : FileView
+    , delimitedGrid : Maybe DelimitedGrid
     }
 
 
 type alias DirectoryFolder =
     { children : ApiData (Dict String DirectoryItem)
     , expanded : Bool
+    , extras : ApiData (Dict String Value)
     }
 
 
@@ -480,6 +486,7 @@ extractDirectoryItemBase item =
                 , viewable = file.viewable
                 , mimeType = file.mimeType
                 , view = { isViewing = file.view.isViewing, zoom = file.view.zoom }
+                , delimitedGrid = file.delimitedGrid
                 }
 
         Folder folder ->
@@ -496,6 +503,7 @@ updateDirectoryItemBase item baseItem =
                     , size = base.size
                     , viewable = base.viewable
                     , mimeType = base.mimeType
+                    , delimitedGrid = file.delimitedGrid
                     , view =
                         let
                             view =
@@ -517,6 +525,7 @@ extractDirectoryFolderBase : DirectoryFolder -> DirectoryFolder
 extractDirectoryFolderBase folder =
     { children = ApiData.map (Dict.map (\_ -> extractDirectoryItemBase)) folder.children
     , expanded = folder.expanded
+    , extras = folder.extras
     }
 
 
@@ -535,7 +544,375 @@ updateDirectoryFolderBase folder base =
     { folder
         | children = ApiData.update mergeDirectoryItems folder.children base.children
         , expanded = base.expanded
+        , extras = base.extras
     }
+
+
+type ColumnType
+    = ColumnInt
+    | ColumnFloat
+    | ColumnString
+
+
+type alias ColumnMeta =
+    { columnType : ColumnType
+    , nullable : Bool
+    }
+
+
+type alias TableMeta =
+    { columns : List ColumnMeta
+    }
+
+
+type alias DelimitedRow =
+    { cells : Array String
+    }
+
+
+type alias DelimitedGrid =
+    { columnMetas : List ColumnMeta
+    , gridModel : Grid.Model DelimitedRow
+    }
+
+
+type DelimitedFileKind
+    = CsvFile
+    | TsvFile
+
+
+delimitedGridFromFile : List String -> Maybe String -> String -> Maybe TableMeta -> Maybe DelimitedGrid
+delimitedGridFromFile path mimeType content mTableMeta =
+    detectDelimitedFile path mimeType
+        |> Maybe.andThen
+            (\fileKind ->
+                let
+                    sep =
+                        delimitedSeparator fileKind
+                in
+                case Csv.Parser.parse { fieldSeparator = sep } content of
+                    Err _ ->
+                        Nothing
+
+                    Ok [] ->
+                        Nothing
+
+                    Ok (header :: rows) ->
+                        Just (buildDelimitedGrid header rows mTableMeta)
+            )
+
+
+detectDelimitedFile : List String -> Maybe String -> Maybe DelimitedFileKind
+detectDelimitedFile path mimeType =
+    let
+        fileName =
+            path
+                |> List.reverse
+                |> List.head
+                |> Maybe.withDefault ""
+                |> String.toLower
+
+        normalizedMimeType =
+            mimeType
+                |> Maybe.withDefault ""
+                |> String.toLower
+    in
+    if String.endsWith ".tsv" fileName || String.startsWith "text/tab-separated-values" normalizedMimeType then
+        Just TsvFile
+
+    else if String.endsWith ".csv" fileName || String.startsWith "text/csv" normalizedMimeType || String.startsWith "application/csv" normalizedMimeType then
+        Just CsvFile
+
+    else
+        Nothing
+
+
+delimitedSeparator : DelimitedFileKind -> Char
+delimitedSeparator fileKind =
+    case fileKind of
+        CsvFile ->
+            ','
+
+        TsvFile ->
+            '\t'
+
+
+buildDelimitedGrid : List String -> List (List String) -> Maybe TableMeta -> DelimitedGrid
+buildDelimitedGrid header rows mTableMeta =
+    let
+        columnCount =
+            (header :: rows)
+                |> List.map List.length
+                |> List.foldl max 0
+
+        normalizedHeader =
+            padDelimitedCells columnCount header
+
+        normalizedRows =
+            List.map (padDelimitedCells columnCount) rows
+
+        colMetas =
+            case mTableMeta of
+                Just meta ->
+                    let
+                        provided =
+                            List.length meta.columns
+
+                        backfill =
+                            List.repeat (max 0 (columnCount - provided)) { columnType = ColumnString, nullable = True }
+                    in
+                    meta.columns ++ backfill
+
+                Nothing ->
+                    inferDelimitedColumnMetas columnCount normalizedRows
+
+        sampleRows =
+            List.take 100 normalizedRows
+
+        columns =
+            List.indexedMap
+                (\index title ->
+                    let
+                        colMeta =
+                            List.getAt index colMetas
+                                |> Maybe.withDefault { columnType = ColumnString, nullable = True }
+                    in
+                    delimitedColumnConfig
+                        index
+                        title
+                        colMeta
+                        (List.map (listCell index) sampleRows)
+                )
+                normalizedHeader
+
+        gridRows =
+            List.map (\cells -> { cells = Array.fromList cells }) normalizedRows
+
+        config =
+            { canSelectRows = False
+            , columns = columns
+            , containerHeight = delimitedGridHeight (List.length normalizedRows)
+            , containerWidth = delimitedGridWidth columns
+            , hasFilters = True
+            , headerHeight = 60
+            , lineHeight = 25
+            , rowClass = always "delimited-grid-row"
+            }
+    in
+    { columnMetas = colMetas
+    , gridModel = Grid.init config gridRows
+    }
+
+
+padDelimitedCells : Int -> List String -> List String
+padDelimitedCells targetLength cells =
+    if List.length cells >= targetLength then
+        cells
+
+    else
+        cells ++ List.repeat (targetLength - List.length cells) ""
+
+
+listCell : Int -> List String -> String
+listCell index cells =
+    List.getAt index cells |> Maybe.withDefault ""
+
+
+delimitedCell : Int -> DelimitedRow -> String
+delimitedCell index row =
+    Array.get index row.cells |> Maybe.withDefault ""
+
+
+inferDelimitedColumnMetas : Int -> List (List String) -> List ColumnMeta
+inferDelimitedColumnMetas columnCount rows =
+    if List.isEmpty rows then
+        List.repeat columnCount { columnType = ColumnString, nullable = False }
+
+    else
+        List.foldl
+            (\cells metas -> List.map2 updateColumnMeta cells metas)
+            (List.repeat columnCount { columnType = ColumnInt, nullable = False })
+            rows
+
+
+updateColumnMeta : String -> ColumnMeta -> ColumnMeta
+updateColumnMeta value meta =
+    let
+        trimmed =
+            String.trim value
+    in
+    if String.isEmpty trimmed then
+        { meta | nullable = True }
+
+    else
+        case meta.columnType of
+            ColumnString ->
+                meta
+
+            ColumnInt ->
+                if Maybe.isJust (String.toInt trimmed) then
+                    meta
+
+                else if Maybe.isJust (String.toFloat trimmed) then
+                    { meta | columnType = ColumnFloat }
+
+                else
+                    { meta | columnType = ColumnString }
+
+            ColumnFloat ->
+                if Maybe.isJust (String.toFloat trimmed) then
+                    meta
+
+                else
+                    { meta | columnType = ColumnString }
+
+
+delimitedColumnConfig : Int -> String -> ColumnMeta -> List String -> Grid.ColumnConfig DelimitedRow
+delimitedColumnConfig index rawTitle colMeta values =
+    let
+        title =
+            if String.isEmpty (String.trim rawTitle) then
+                "Column " ++ String.fromInt (index + 1)
+
+            else
+                rawTitle
+
+        width =
+            delimitedColumnWidth title values
+
+        rawGetter =
+            delimitedCell index
+
+        stringRenderer =
+            Grid.viewString (.data >> rawGetter)
+
+        withRawTextRenderer config =
+            { config
+                | renderer = stringRenderer
+                , toString = .data >> rawGetter
+            }
+
+        properties getter =
+            { id = "column-" ++ String.fromInt index
+            , title = title
+            , tooltip =
+                "Column type: "
+                    ++ columnTypeLabel colMeta.columnType
+                    ++ (if colMeta.nullable then
+                            " (nullable)"
+
+                        else
+                            ""
+                       )
+            , width = width
+            , getter = getter
+            , localize = identity
+            }
+    in
+    case ( colMeta.columnType, colMeta.nullable ) of
+        ( ColumnInt, False ) ->
+            Grid.intColumnConfig (properties (rawGetter >> String.trim >> String.toInt >> Maybe.withDefault 0))
+                |> withRawTextRenderer
+
+        ( ColumnInt, True ) ->
+            Grid.stringColumnConfig (properties rawGetter)
+                |> (\cfg ->
+                        { cfg
+                            | comparator =
+                                \a b ->
+                                    let
+                                        va =
+                                            String.trim (.data a |> rawGetter)
+
+                                        vb =
+                                            String.trim (.data b |> rawGetter)
+                                    in
+                                    case ( String.toInt va, String.toInt vb ) of
+                                        ( Just ia, Just ib ) ->
+                                            compare ia ib
+
+                                        ( Just _, Nothing ) ->
+                                            LT
+
+                                        ( Nothing, Just _ ) ->
+                                            GT
+
+                                        ( Nothing, Nothing ) ->
+                                            compare va vb
+                        }
+                   )
+
+        ( ColumnFloat, False ) ->
+            Grid.floatColumnConfig (properties (rawGetter >> String.trim >> String.toFloat >> Maybe.withDefault 0))
+                |> withRawTextRenderer
+
+        ( ColumnFloat, True ) ->
+            Grid.stringColumnConfig (properties rawGetter)
+                |> (\cfg ->
+                        { cfg
+                            | comparator =
+                                \a b ->
+                                    let
+                                        va =
+                                            String.trim (.data a |> rawGetter)
+
+                                        vb =
+                                            String.trim (.data b |> rawGetter)
+                                    in
+                                    case ( String.toFloat va, String.toFloat vb ) of
+                                        ( Just fa, Just fb ) ->
+                                            compare fa fb
+
+                                        ( Just _, Nothing ) ->
+                                            LT
+
+                                        ( Nothing, Just _ ) ->
+                                            GT
+
+                                        ( Nothing, Nothing ) ->
+                                            compare va vb
+                        }
+                   )
+
+        ( ColumnString, _ ) ->
+            Grid.stringColumnConfig (properties rawGetter)
+
+
+columnTypeLabel : ColumnType -> String
+columnTypeLabel columnType =
+    case columnType of
+        ColumnInt ->
+            "int"
+
+        ColumnFloat ->
+            "float"
+
+        ColumnString ->
+            "string"
+
+
+delimitedColumnWidth : String -> List String -> Int
+delimitedColumnWidth title values =
+    let
+        maxChars =
+            values
+                |> List.map String.length
+                |> List.foldl max (String.length title)
+    in
+    clamp 80 320 ((maxChars + 2) * 9)
+
+
+delimitedGridHeight : Int -> Int
+delimitedGridHeight rowCount =
+    clamp 120 600 (rowCount * 25 + 62)
+
+
+delimitedGridWidth : List (Grid.ColumnConfig DelimitedRow) -> Int
+delimitedGridWidth columns =
+    columns
+        |> List.map (\column -> column.properties.width)
+        |> List.foldl (+) 0
+        |> clamp 320 1200
 
 
 updateStepRecordTable : Table StepRecord -> Table StepRecord -> Table StepRecord
