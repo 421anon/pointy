@@ -875,7 +875,7 @@ delimitedGridLineHeight =
 
 delimitedGridHeight : Int -> Int
 delimitedGridHeight rowCount =
-    clamp delimitedGridLineHeight 520 (rowCount * delimitedGridLineHeight)
+    clamp (delimitedGridLineHeight * 10) 520 (rowCount * delimitedGridLineHeight)
 
 
 delimitedGridContainerWidth : List (Grid.ColumnConfig DelimitedRow) -> Int
