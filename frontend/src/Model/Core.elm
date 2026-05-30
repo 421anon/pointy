@@ -651,7 +651,12 @@ buildDelimitedGrid header rows mTableMeta =
         normalizedRows =
             List.map (padDelimitedCells columnCount) rows
 
-        colMetas =
+        metadataColMetas =
+            mTableMeta
+                |> Maybe.map .columns
+                |> Maybe.withDefault []
+
+        effectiveColMetas =
             case mTableMeta of
                 Just meta ->
                     let
@@ -664,7 +669,7 @@ buildDelimitedGrid header rows mTableMeta =
                     meta.columns ++ backfill
 
                 Nothing ->
-                    inferDelimitedColumnMetas columnCount normalizedRows
+                    List.repeat columnCount { columnType = ColumnString, nullable = False }
 
         sampleRows =
             List.take 100 normalizedRows
@@ -674,7 +679,7 @@ buildDelimitedGrid header rows mTableMeta =
                 (\index title ->
                     let
                         colMeta =
-                            List.getAt index colMetas
+                            List.getAt index effectiveColMetas
                                 |> Maybe.withDefault { columnType = ColumnString, nullable = True }
                     in
                     delimitedColumnConfig
@@ -692,14 +697,14 @@ buildDelimitedGrid header rows mTableMeta =
             { canSelectRows = False
             , columns = columns
             , containerHeight = delimitedGridHeight (List.length normalizedRows)
-            , containerWidth = delimitedGridWidth columns
+            , containerWidth = delimitedGridContainerWidth columns
             , hasFilters = True
-            , headerHeight = 60
-            , lineHeight = 25
+            , headerHeight = delimitedGridHeaderHeight
+            , lineHeight = delimitedGridLineHeight
             , rowClass = always "delimited-grid-row"
             }
     in
-    { columnMetas = colMetas
+    { columnMetas = metadataColMetas
     , gridModel = Grid.init config gridRows
     }
 
@@ -721,50 +726,6 @@ listCell index cells =
 delimitedCell : Int -> DelimitedRow -> String
 delimitedCell index row =
     Array.get index row.cells |> Maybe.withDefault ""
-
-
-inferDelimitedColumnMetas : Int -> List (List String) -> List ColumnMeta
-inferDelimitedColumnMetas columnCount rows =
-    if List.isEmpty rows then
-        List.repeat columnCount { columnType = ColumnString, nullable = False }
-
-    else
-        List.foldl
-            (\cells metas -> List.map2 updateColumnMeta cells metas)
-            (List.repeat columnCount { columnType = ColumnInt, nullable = False })
-            rows
-
-
-updateColumnMeta : String -> ColumnMeta -> ColumnMeta
-updateColumnMeta value meta =
-    let
-        trimmed =
-            String.trim value
-    in
-    if String.isEmpty trimmed then
-        { meta | nullable = True }
-
-    else
-        case meta.columnType of
-            ColumnString ->
-                meta
-
-            ColumnInt ->
-                if Maybe.isJust (String.toInt trimmed) then
-                    meta
-
-                else if Maybe.isJust (String.toFloat trimmed) then
-                    { meta | columnType = ColumnFloat }
-
-                else
-                    { meta | columnType = ColumnString }
-
-            ColumnFloat ->
-                if Maybe.isJust (String.toFloat trimmed) then
-                    meta
-
-                else
-                    { meta | columnType = ColumnString }
 
 
 delimitedColumnConfig : Int -> String -> ColumnMeta -> List String -> Grid.ColumnConfig DelimitedRow
@@ -899,20 +860,34 @@ delimitedColumnWidth title values =
                 |> List.map String.length
                 |> List.foldl max (String.length title)
     in
-    clamp 80 320 ((maxChars + 2) * 9)
+    clamp 88 320 ((maxChars + 2) * 9)
+
+
+delimitedGridHeaderHeight : Int
+delimitedGridHeaderHeight =
+    56
+
+
+delimitedGridLineHeight : Int
+delimitedGridLineHeight =
+    28
 
 
 delimitedGridHeight : Int -> Int
 delimitedGridHeight rowCount =
-    clamp 120 600 (rowCount * 25 + 62)
+    clamp delimitedGridLineHeight 520 (rowCount * delimitedGridLineHeight)
 
 
-delimitedGridWidth : List (Grid.ColumnConfig DelimitedRow) -> Int
-delimitedGridWidth columns =
-    columns
-        |> List.map (\column -> column.properties.width)
-        |> List.foldl (+) 0
-        |> clamp 320 1200
+delimitedGridContainerWidth : List (Grid.ColumnConfig DelimitedRow) -> Int
+delimitedGridContainerWidth columns =
+    let
+        contentWidth =
+            columns
+                |> List.map (\column -> column.properties.width)
+                |> List.foldl (+) 0
+    in
+    max 0 (contentWidth - Grid.cumulatedBorderWidth)
+        |> min 1200
 
 
 updateStepRecordTable : Table StepRecord -> Table StepRecord -> Table StepRecord

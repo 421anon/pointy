@@ -512,6 +512,192 @@ body {
   padding-left: var(--spacing-lg);
 }
 
+.delimited-grid-viewer {
+  --delimited-grid-header-height: 56px;
+  --delimited-grid-body-height: 56px;
+  --delimited-grid-row-height: 28px;
+
+  max-width: 100%;
+  overflow-x: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  color: var(--text-primary);
+
+  > div {
+    margin: 0;
+    height: calc(var(--delimited-grid-header-height) + var(--delimited-grid-body-height));
+    min-height: calc(var(--delimited-grid-header-height) + var(--delimited-grid-row-height));
+    max-height: 70vh;
+    resize: vertical;
+    overflow: hidden !important;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-subtle);
+  }
+
+  > div > div:first-child {
+    border-inline: 0;
+    background: var(--bg-secondary);
+  }
+
+  #_header_-_container_ {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  #_header_-_container_ > [data-testid^="header-column-"]:last-child {
+    border-right-color: transparent;
+  }
+
+  [data-testid^="header-column-"] {
+    background: var(--bg-secondary);
+    background-image: none;
+    border-color: transparent var(--border-color) transparent transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    position: relative;
+
+    > div {
+      height: 100%;
+    }
+
+    > div > div:first-child > div:first-child {
+      align-items: center;
+      min-height: 22px;
+    }
+
+    span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding-inline: var(--spacing-xs);
+      color: var(--text-primary);
+      font-style: normal;
+    }
+
+    span + div {
+      align-self: center;
+      flex: 0 0 auto;
+      margin: 0 0 0 var(--spacing-xs);
+      transform: scale(0.85);
+      transform-origin: center;
+      opacity: 0.55;
+      border-top-color: var(--text-muted);
+      border-bottom-color: var(--text-muted);
+    }
+
+    &:hover {
+      background: var(--bg-hover);
+    }
+
+    &:hover > div > div:last-child,
+    &:focus-within > div > div:last-child {
+      opacity: 0.65;
+    }
+  }
+
+  [data-testid^="dragHandle-"] {
+    display: none;
+  }
+
+  [data-testid^="header-column-"] > div > div:last-child {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 5px;
+    cursor: col-resize;
+    opacity: 0;
+    position: relative;
+    transition: opacity 0.15s ease;
+
+    > div {
+      display: none;
+    }
+
+    &::before {
+      content: "";
+      width: 1px;
+      height: calc(100% - var(--spacing-lg));
+      min-height: 20px;
+      border-radius: 999px;
+      background: var(--border-color);
+    }
+  }
+
+  [data-testid^="filter-column-"] {
+    box-sizing: border-box;
+    width: calc(100% - var(--spacing-md));
+    height: 22px;
+    margin: 0 6px var(--spacing-xs);
+    padding: 0 var(--spacing-sm);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    outline: none;
+    box-shadow: none;
+    caret-color: var(--text-primary);
+
+    &:focus {
+      border-color: var(--state-info);
+      box-shadow: 0 0 0 1px var(--focus-ring);
+    }
+  }
+
+  > div > div:has(#_grid_) {
+    height: calc(100% - var(--delimited-grid-header-height));
+    min-height: var(--delimited-grid-row-height);
+  }
+
+  #_grid_ {
+    border: 0;
+    height: 100% !important;
+    min-height: var(--delimited-grid-row-height);
+    background: var(--bg-elevated);
+    scrollbar-width: none;
+    overscroll-behavior: contain;
+
+    &::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+  }
+
+  [data-testid="row"] {
+    background: var(--bg-elevated);
+  }
+
+  [data-testid^="column-"] {
+    border-color: transparent var(--border-color) var(--border-color) transparent;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-size: 13px;
+    padding-left: var(--spacing-xs);
+    padding-right: 0;
+  }
+
+  [data-testid="row"] [data-testid^="column-"]:last-child {
+    border-right-color: transparent;
+  }
+
+  #_grid_ [data-testid="row"]:last-child [data-testid^="column-"] {
+    border-bottom-color: transparent;
+  }
+
+  [data-testid="row"]:hover [data-testid^="column-"] {
+    background: var(--bg-secondary);
+  }
+}
+
+.delimited-meta-unavailable {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .file-content {
   width: 100%;
   font-family: "Courier New", monospace;

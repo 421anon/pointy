@@ -482,8 +482,19 @@ viewDelimitedGrid toFlow delimitedGrid =
     let
         hasMetadata =
             not (List.isEmpty delimitedGrid.columnMetas)
+
+        gridConfig =
+            delimitedGrid.gridModel.config
+
+        px value =
+            String.fromInt value ++ "px"
     in
-    Html.div [ class "delimited-grid-viewer" ]
+    Html.div
+        [ class "delimited-grid-viewer"
+        , style "--delimited-grid-header-height" (px gridConfig.headerHeight)
+        , style "--delimited-grid-body-height" (px gridConfig.containerHeight)
+        , style "--delimited-grid-row-height" (px gridConfig.lineHeight)
+        ]
         [ Html.viewIf (not hasMetadata) <|
             Html.span [ class "delimited-meta-unavailable" ] [ Html.text "Column metadata unavailable" ]
         , Html.map toFlow (Grid.view delimitedGrid.gridModel)
