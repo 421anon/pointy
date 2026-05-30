@@ -480,9 +480,6 @@ calculateViewerHeight lineCount =
 viewDelimitedGrid : (Grid.Msg DelimitedRow -> Flow Model ()) -> DelimitedGrid -> Html (Flow Model ())
 viewDelimitedGrid toFlow delimitedGrid =
     let
-        hasMetadata =
-            not (List.isEmpty delimitedGrid.columnMetas)
-
         gridConfig =
             delimitedGrid.gridModel.config
 
@@ -495,7 +492,5 @@ viewDelimitedGrid toFlow delimitedGrid =
         , style "--delimited-grid-body-height" (px gridConfig.containerHeight)
         , style "--delimited-grid-row-height" (px gridConfig.lineHeight)
         ]
-        [ Html.viewIf (not hasMetadata) <|
-            Html.span [ class "delimited-meta-unavailable" ] [ Html.text "Column metadata unavailable" ]
-        , Html.map toFlow (Grid.view delimitedGrid.gridModel)
+        [ Html.map toFlow (Grid.view delimitedGrid.gridModel)
         ]
