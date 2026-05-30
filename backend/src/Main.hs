@@ -24,7 +24,7 @@ import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
 
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (patchStepHandler, postStepHandler)
-import Handlers.Store (DirEntry, stepDownloadHandler, stepListHandler, stepRawHandler)
+import Handlers.Store (DirEntry, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
@@ -45,6 +45,7 @@ type API =
         :<|> "step-files" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
         :<|> "step-files" :> "download" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
         :<|> "step-files" :> "raw" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> CaptureAll "segments" String :> Raw
+        :<|> "step-files" :> "extras" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam "path" FilePath :> Get '[RawJSON] LBS.ByteString
         :<|> "src-files" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
         :<|> "src-files" :> "download" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
         :<|> "projects" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
@@ -73,6 +74,7 @@ server =
         :<|> stepListHandler
         :<|> stepDownloadHandler
         :<|> stepRawHandler
+        :<|> stepExtrasHandler
         :<|> listSrcFilesHandler
         :<|> downloadSrcFilesHandler
         :<|> getProjectsHandler

@@ -4,14 +4,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepRawHandler, DirEntry (..)) where
+module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepRawHandler, stepExtrasHandler, DirEntry (..)) where
 
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (ToJSON)
+import Data.Aeson (ToJSON, eitherDecode, Value (Object))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Data.List (intercalate, isPrefixOf)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
@@ -174,6 +175,8 @@ mimeTypeByExtension path = case takeExtension path of
     ".xml" -> Just "application/xml"
     ".html" -> Just "text/html"
     ".htm" -> Just "text/html"
+    ".csv" -> Just "text/csv"
+    ".tsv" -> Just "text/tab-separated-values"
     _ -> Nothing
 
 resolvedMimeType :: FilePath -> IO Text
@@ -233,3 +236,48 @@ assertInside :: FilePath -> FilePath -> Handler ()
 assertInside path base =
     unless (joinPath (splitPath (normalise base)) `isPrefixOf` joinPath (splitPath (normalise path))) $
         throwError err400{errBody = "Path traversal not allowed"}
+
+
+-- | GET /step-files/extras?id=<stepId>&commit=<commit>&path=<dirPath>
+-- Returns the meta.json for the given directory from the extras derivation.
+-- Returns {} when no extras attr exists or when meta.json is absent.
+-- Returns 500 when meta.json exists but is not a JSON object.
+stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler LBS.ByteString
+stepExtrasHandler stepId mCommit mDirPath = do
+    repoPath <- liftIO userRepoPath
+    commitHash <- resolveCommitHash mCommit repoPath
+    let ctx = ReadRepoContext repoPath commitHash
+        extrasAttr = "#pointy.steps." ++ show stepId ++ ".meta.pointy.extras.outPath"
+    extrasResult <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx extrasAttr
+    case extrasResult of
+        Left _ -> return "{}"
+        Right extrasPath -> do
+            assertNixStorePath extrasPath
+            let dirPath = fromMaybe "" mDirPath
+                metaPath = normalise (extrasPath </> dirPath </> "meta.json")
+            assertInside metaPath extrasPath
+            exists <- liftIO $ doesFileExist metaPath
+            if not exists
+                then return "{}"
+                else do
+                    sz <- liftIO $ getFileSize metaPath
+                    when (sz > maxExtrasJsonBytes) $
+                        throwError err400{errBody = "extras meta.json exceeds 10 MiB size limit"}
+                    content <- liftIO $ LBS.readFile metaPath
+                    case eitherDecode content of
+                        Left err ->
+                            throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("extras meta.json parse error: " ++ err))}
+                        Right (Object _) -> return content
+                        Right _ ->
+                            throwError err500{errBody = "extras meta.json is not a JSON object"}
+  where
+    maxExtrasJsonBytes = 10 * 1024 * 1024  -- 10 MiB
+
+resolveCommitHash :: Maybe Text -> FilePath -> Handler String
+resolveCommitHash mCommit repoPath = case mCommit of
+    Just c -> return (unpack c)
+    Nothing -> do
+        result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ h) -> return h
+        case result of
+            Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveCommitHash: " ++ err))}
+            Right h -> return h
