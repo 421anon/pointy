@@ -173,6 +173,7 @@ type Model
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce.Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
+        , compareState : CompareState
         , now : Time.Posix
         }
 
@@ -186,6 +187,42 @@ type alias GutterDrag =
     , moved : Bool
     , clearOnClick : Bool
     }
+
+
+type CompareState
+    = CompareIdle
+    | CompareSelecting CompareSelection
+    | CompareActive CompareActiveData
+
+
+type alias CompareActiveData =
+    { left : CompareSelection
+    , right : CompareSelection
+    , contents : ApiData LeftRight
+    }
+
+
+type alias LeftRight =
+    { left : String, right : String }
+
+
+type alias CompareSelection =
+    { recordId : Int
+    , path : List String
+    , fileName : String
+    , mimeType : Maybe String
+    , source : CompareSource
+    }
+
+
+type CompareSource
+    = FromOutput String
+    | FromSrc
+
+
+compareSelectionIsImage : CompareSelection -> Bool
+compareSelectionIsImage =
+    .mimeType >> Maybe.unwrap False (String.startsWith "image/")
 
 
 getProjects : Model -> Table ProjectRecord
@@ -370,6 +407,11 @@ getGutterDrag (Model model) =
     model.gutterDrag
 
 
+getCompareState : Model -> CompareState
+getCompareState (Model model) =
+    model.compareState
+
+
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
@@ -440,6 +482,7 @@ initialModel key route flags =
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
+        , compareState = CompareIdle
         , now = Time.millisToPosix 0
         }
 

@@ -23,7 +23,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareSelection, CompareSource(..), CompareState(..), LeftRight, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
@@ -896,6 +896,82 @@ downloadFile stepId commit filePath =
 downloadSrcFile : Int -> List String -> Flow Model ()
 downloadSrcFile id filePath =
     Flow.lift (Nav.load (Api.srcFileDownloadUrl id filePath))
+
+
+startCompare : CompareSelection -> Flow Model ()
+startCompare sel =
+    Flow.setAll compareState (CompareSelecting sel)
+
+
+cancelCompare : Flow Model ()
+cancelCompare =
+    Flow.setAll compareState CompareIdle
+
+
+compareClick : Model -> CompareSelection -> Flow Model ()
+compareClick model =
+    if has (compareState << compareSelecting) model then
+        selectCompareFile
+
+    else
+        startCompare
+
+
+selectCompareFile : CompareSelection -> Flow Model ()
+selectCompareFile right =
+    Flow.forAll (compareState << compareSelecting) <|
+        \left ->
+            let
+                activate contents =
+                    Flow.setAll compareState
+                        (CompareActive { left = left, right = right, contents = contents })
+            in
+            case ( Model.compareSelectionIsImage left, Model.compareSelectionIsImage right ) of
+                ( True, True ) ->
+                    activate (Success { left = "", right = "" })
+
+                ( False, False ) ->
+                    activate NotAsked
+                        |> Flow.seq
+                            (loadComparePair left right
+                                |> Flow.andThen (mergeCompareContents left right)
+                            )
+
+                _ ->
+                    addToast False "Compare requires two image files or two text files."
+
+
+loadComparePair : CompareSelection -> CompareSelection -> FlowError Http.Error Model LeftRight
+loadComparePair left right =
+    fetchCompareContent left
+        |> Flow.map (Result.map2 (\l r -> { left = l, right = r }))
+        |> Flow.flap (fetchCompareContent right)
+
+
+mergeCompareContents : CompareSelection -> CompareSelection -> Result Http.Error LeftRight -> Flow Model ()
+mergeCompareContents left right result =
+    Flow.forAll
+        (compareState << compareActive << where_ (\d -> d.left == left && d.right == right))
+        (\_ ->
+            case result of
+                Ok lr ->
+                    Flow.setAll (compareState << compareActive << compareContents) (Success lr)
+
+                Err e ->
+                    addToast False (Http.errorMessage e)
+                        |> Flow.seq
+                            (Flow.setAll (compareState << compareActive << compareContents) (Error e))
+        )
+
+
+fetchCompareContent : CompareSelection -> FlowError Http.Error Model String
+fetchCompareContent sel =
+    case sel.source of
+        FromOutput commit_ ->
+            Api.fetchFileContents sel.recordId (Just commit_) sel.path
+
+        FromSrc ->
+            Api.fetchSrcFileContents sel.recordId sel.path
 
 
 shouldSkipFileContents : { r | mimeType : Maybe String } -> Bool
