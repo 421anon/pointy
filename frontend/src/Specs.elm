@@ -51,6 +51,7 @@ steps name entry =
             , srcFiles =
                 { children = NotAsked
                 , expanded = False
+                , extras = NotAsked
                 }
             }
         , displayName = Maybe.withDefault name entry.displayName

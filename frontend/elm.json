@@ -7,6 +7,7 @@
     "dependencies": {
         "direct": {
             "421anon/elm-flow": "3.1.0",
+            "BrianHicks/elm-csv": "4.0.1",
             "NoRedInk/elm-json-decode-pipeline": "1.0.1",
             "annaghi/dnd-list": "6.0.1",
             "basti1302/elm-human-readable-filesize": "1.2.0",

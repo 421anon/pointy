@@ -9,6 +9,7 @@ import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
 import Filesize
 import Flow exposing (Flow)
+import Grid
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, href, id, rel, src, style, target)
 import Html.Attributes.Extra exposing (attributeIf)
@@ -358,7 +359,15 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         , Html.span [ class "file-line-content" ] [ Html.text line ]
                                         ]
 
-                                viewContent text =
+                                gridAction =
+                                    case ( mRecordId, mDirCtx ) of
+                                        ( Just recordId, Just (OutputDir _ _) ) ->
+                                            Just (Actions.wrapDelimitedGridFlow recordId path)
+
+                                        _ ->
+                                            Nothing
+
+                                viewPlainContent text =
                                     let
                                         lines =
                                             String.split "\n" text
@@ -369,6 +378,14 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         , style "max-height" (calculateViewerHeight (List.length lines))
                                         ]
                                         (List.indexedMap renderLine lines)
+
+                                viewContent text =
+                                    case ( file.delimitedGrid, gridAction, mSelectedRange ) of
+                                        ( Just delimitedGrid, Just updateGrid, Nothing ) ->
+                                            Grid.view delimitedGrid.grid |> Html.map updateGrid
+
+                                        _ ->
+                                            viewPlainContent text
                             in
                             Html.div [ class "file-viewer" ]
                                 [ ApiData.foldVisible

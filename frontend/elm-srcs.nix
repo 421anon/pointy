@@ -5,6 +5,11 @@
         version = "3.1.0";
       };
 
+      "BrianHicks/elm-csv" = {
+        sha256 = "1y9gqkn4daa0j4cv8rh0dkssvi01jqnzf38lq9cn9fk29kdhk1l3";
+        version = "4.0.1";
+      };
+
       "NoRedInk/elm-json-decode-pipeline" = {
         sha256 = "1k241pjz1wj5rqv95f1j86msa0s0p6w4v8n0jn26aw6cbadw363b";
         version = "1.0.1";
