@@ -252,11 +252,11 @@ stepExtrasHandler stepId mCommit mDirPath = do
     commitHash <- resolveCommitHash mCommit
     let ctx = ReadRepoContext repoPath commitHash
         stepAttr = "#pointy.steps." ++ show stepId
-        -- attrByPath returns null when any segment of the path is missing,
-        -- so absent extras yields a JSON null without producing a Nix error.
-        -- Genuine evaluation failures (bad commit, unknown step id, broken
-        -- step expression) still surface as a Left from runNixEval...
-        applyExpr = "(s: builtins.attrByPath [\"meta\" \"pointy\" \"extras\" \"outPath\"] null s)"
+        -- The `?` dotted path checks each segment safely and short-circuits,
+        -- so a missing meta.pointy.extras.outPath yields JSON null without a
+        -- Nix error.  Genuine eval failures (bad commit, unknown step id,
+        -- broken step expression) still surface as a Left from runNixEval...
+        applyExpr = "(s: if s ? meta.pointy.extras.outPath then s.meta.pointy.extras.outPath else null)"
     extrasResult <- liftIO $ runExceptT $ runNixEvalJsonApplyInRepo ctx applyExpr stepAttr
     extrasPath <- case extrasResult of
         Left err ->
