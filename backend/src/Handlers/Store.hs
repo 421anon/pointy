@@ -6,8 +6,9 @@
 
 module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepRawHandler, stepExtrasHandler, DirEntry (..)) where
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Monad (unless, when)
+import Control.Monad (unless, void, when)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON, Value (Object), eitherDecode)
@@ -22,6 +23,7 @@ import Data.Text (Text, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import GHC.Generics (Generic)
+import Handlers.RunStep (buildExtras)
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
 import ProcessLimiter (readProcessWithExitCodeL)
@@ -276,7 +278,16 @@ stepExtrasHandler stepId mCommit mDirPath = do
             assertInside metaPath extrasPath_
             exists <- liftIO $ doesFileExist metaPath
             if not exists
-                then return "{}"
+                then do
+                    -- meta.json is absent for one of two reasons:
+                    --   (a) the extras derivation has not been realised yet, or
+                    --   (b) it was realised but emits no metadata for this dir.
+                    -- Enqueue a build in the background so subsequent requests
+                    -- can pick up the metadata; buildExtras short-circuits to a
+                    -- GC-root refresh when the derivation is already built, so
+                    -- case (b) costs only one Nix eval and one squeue check.
+                    liftIO $ void $ forkIO $ buildExtras ctx stepId
+                    return "{}"
                 else do
                     sz <- liftIO $ getFileSize metaPath
                     when (sz > maxExtrasJsonBytes) $

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Handlers.RunStep (
+    buildExtras,
     runStepHandler,
     stepLogHandler,
     stopStepHandler,
