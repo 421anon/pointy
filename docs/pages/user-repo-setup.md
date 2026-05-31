@@ -307,6 +307,72 @@ In the web UI, such step types also show a **Source Files** section. See [Execut
 
 The sample `script` template uses this pattern.
 
+## Injecting typed column metadata via `extras`
+
+If a derivation type emits CSV or TSV output files, you can publish typed column schemas so that Pointy's [grid viewer](execution.md#csv-and-tsv-grid-preview) treats numeric columns as numbers for filtering and sorting instead of strings. Schemas are produced by a sibling derivation referenced as `passthru.meta.pointy.extras`.
+
+```nix
+passthru.meta.pointy = {
+  type = "myStep";
+  inherit (cfg) id;
+
+  extras = pkgs.runCommand "myStep-extras" { } ''
+    mkdir -p $out
+    cat > $out/meta.json <<'JSON'
+    {
+      "results.csv": {
+        "columns": [
+          { "type": "int",    "nullable": false },
+          { "type": "float",  "nullable": true  },
+          { "type": "string", "nullable": false }
+        ]
+      }
+    }
+    JSON
+  '';
+};
+```
+
+The extras derivation must produce an output tree mirroring the step's output directory layout. For each directory that contains CSV/TSV files, write a `meta.json` at `$out/<dir>/meta.json` keyed by file name. Pointy fetches each `meta.json` lazily, only for directories the user actually opens.
+
+Each per-directory `meta.json` has this shape:
+
+```json
+{
+  "<file-name>": {
+    "columns": [
+      { "type": "int" | "float" | "string", "nullable": true | false }
+    ]
+  }
+}
+```
+
+Notes:
+
+- Columns are matched positionally against the file's header row. Extra trailing columns in the file (beyond the schema) default to nullable strings.
+- Unrecognized values for `type` fall back to `string`.
+- The extras derivation is built alongside the main step, and is also built lazily the first time the UI requests metadata for a step whose extras have not been realised. Failures are non-fatal: the file still renders, just without typed columns. Errors are visible in the backend log.
+- Each per-directory `meta.json` is capped at 10 MiB.
+
+### Optional: resource requirements for the extras build
+
+By default the extras derivation builds with conservative slurm resources (`cpu = 1`, `ram = "1G"`, `ior = "0"`, `iow = "0"`). For larger metadata jobs, attach a `passthru.requirements` to the extras derivation:
+
+```nix
+extras = pkgs.runCommand "myStep-extras" {
+  passthru.requirements = {
+    cpu = 2;
+    ram = "4G";
+    ior = "0";
+    iow = "0";
+  };
+} ''
+  ...
+'';
+```
+
+Pointy reads `meta.pointy.extras.requirements` when scheduling the extras build. The shape matches a regular step's `requirements`.
+
 ## After you commit template changes
 
 Once template changes are committed and pushed to the user repository, the backend can evaluate them immediately. Frontend users will see the new or updated step types the next time the UI reloads its step configuration, such as on a page refresh.
