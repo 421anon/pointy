@@ -15,11 +15,6 @@
         version = "1.0.1";
       };
 
-      "Orange-OpenSource/elm-advanced-grid" = {
-        sha256 = "04yjzasgzksm5nwhlkdgmsai05b34azlkj4x2vj1qazh22l35djc";
-        version = "1.0.1";
-      };
-
       "annaghi/dnd-list" = {
         sha256 = "0pmnyiz1b0si8yip6wmixlybgxa8gnh3zwdpbxgq2zqwp7jx52xs";
         version = "6.0.1";
@@ -120,11 +115,6 @@
         version = "2.1.3";
       };
 
-      "FabienHenon/elm-infinite-list-view" = {
-        sha256 = "07vgp9qmiqlbqvnckpp9yskj79126g60hhkk9pirm4zwbfj8an9h";
-        version = "3.3.1";
-      };
-
       "MartinSStewart/elm-serialize" = {
         sha256 = "0zmlha3fjq2d4gbpchmsyndg8d27ywsx00vnw4vsz58ylc0k7zvy";
         version = "1.3.1";
@@ -210,11 +200,6 @@
         version = "4.1.0";
       };
 
-      "mpizenberg/elm-pointer-events" = {
-        sha256 = "16s14sh01g6ssabwkf2k1xdxnahnkn0s7603cg87wd0h4myg15da";
-        version = "4.0.2";
-      };
-
       "myrho/elm-round" = {
         sha256 = "0zv0a60wzkx4xib7h07ijcg72mcyb3vb914hk5pjp6rf4k2lv9kj";
         version = "1.0.5";
@@ -222,16 +207,6 @@
 
       "robinheghan/murmur3" = {
         sha256 = "15asmgr2zqh7rkywrg5647rpdqkpzxk02v5qc6ndj60jza3gsmjk";
-        version = "1.0.0";
-      };
-
-      "rtfeldman/elm-css" = {
-        sha256 = "189pf91bdpyz4qyilbzjh2mj3x46j7abb9asnkiv1chzvhcamrn5";
-        version = "16.1.1";
-      };
-
-      "rtfeldman/elm-hex" = {
-        sha256 = "1y0aa16asvwdqmgbskh5iba6psp43lkcjjw9mgzj3gsrg33lp00d";
         version = "1.0.0";
       };
 
