@@ -18,12 +18,12 @@ import Extra.Http as Http
 import Extra.List as List
 import File.Select as Select
 import Flow exposing (Flow)
+import Grid
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Grid
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
@@ -905,7 +905,6 @@ shouldSkipFileContents file_ =
         || has (mimeType << just << where_ (String.startsWith "text/html")) file_
 
 
-
 decodeTableMeta : Decode.Value -> Maybe Model.TableMeta
 decodeTableMeta jsonValue =
     let
@@ -914,9 +913,14 @@ decodeTableMeta jsonValue =
                 (\t n ->
                     { columnType =
                         case t of
-                            "int" -> Model.ColumnInt
-                            "float" -> Model.ColumnFloat
-                            _ -> Model.ColumnString
+                            "int" ->
+                                Model.ColumnInt
+
+                            "float" ->
+                                Model.ColumnFloat
+
+                            _ ->
+                                Model.ColumnString
                     , nullable = n
                     }
                 )
@@ -929,7 +933,6 @@ decodeTableMeta jsonValue =
     in
     Decode.decodeValue tableMetaDecoder jsonValue
         |> Result.toMaybe
-
 
 
 toggleFile : Int -> List String -> Flow Model ()
@@ -953,6 +956,8 @@ toggleSrcFile recordId path =
 wrapDelimitedGridFlow : Int -> List String -> Flow Grid.State () -> Flow Model ()
 wrapDelimitedGridFlow recordId path =
     Flow.via (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << gridState)
+
+
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()
 zoomHtmlFileBy tableZoomLens iframeId factor =
     let
@@ -1023,33 +1028,64 @@ toggleOutputEntry recordId mOpen path =
 
                                     else
                                         allStepTables << extrasAt recordId parentPath
+
+                                -- Ensure extras has fully resolved before deciding column
+                                -- metadata. The folder action fires fetchExtras after the
+                                -- directory listing, so a fast click on a file races against
+                                -- that response; reading the lens at click-time would snapshot
+                                -- Loading and bake `Nothing` metadata into the grid.
+                                ensureExtras =
+                                    Flow.forAll parentExtrasLens
+                                        (\extras ->
+                                            case extras of
+                                                ApiData.Success _ ->
+                                                    Flow.pure (Ok ())
+
+                                                ApiData.Error _ ->
+                                                    -- Respect a prior failure rather than retrying
+                                                    -- on every file click; the grid degrades to
+                                                    -- string-typed columns.
+                                                    Flow.pure (Ok ())
+
+                                                _ ->
+                                                    callApi parentExtrasLens
+                                                        (Api.fetchExtras recordId (Just commit_) parentPath)
+                                                        |> Flow.map (Result.map (always ()))
+                                        )
+
+                                materializeGrid content =
+                                    Flow.forAll parentExtrasLens
+                                        (\extrasData ->
+                                            let
+                                                mTableMeta =
+                                                    ApiData.toMaybe extrasData
+                                                        |> Maybe.andThen
+                                                            (\extrasDict ->
+                                                                List.last path
+                                                                    |> Maybe.andThen (\fileName -> Dict.get fileName extrasDict)
+                                                                    |> Maybe.andThen decodeTableMeta
+                                                            )
+
+                                                mGrid =
+                                                    Model.delimitedGridFromFile path file_.mimeType content mTableMeta
+                                            in
+                                            Flow.setAll
+                                                (allStepTables << fileDelimitedGridAt recordId path)
+                                                mGrid
+                                        )
                             in
                             Flow.when (not (shouldSkipFileContents file_))
-                                (Flow.forAll parentExtrasLens
-                                    (\extrasData ->
-                                        callApi (allStepTables << fileContentAt recordId path)
-                                            (Api.fetchFileContents recordId (Just commit_) path)
-                                            |> FlowError.andThen
-                                                (\content ->
-                                                    let
-                                                        mTableMeta =
-                                                            ApiData.toMaybe extrasData
-                                                                |> Maybe.andThen
-                                                                    (\extrasDict ->
-                                                                        List.last path
-                                                                            |> Maybe.andThen (\fileName -> Dict.get fileName extrasDict)
-                                                                            |> Maybe.andThen decodeTableMeta
-                                                                    )
-
-                                                        mGrid =
-                                                            Model.delimitedGridFromFile path file_.mimeType content mTableMeta
-                                                    in
-                                                    Flow.setAll
-                                                        (allStepTables << fileDelimitedGridAt recordId path)
-                                                        mGrid
-                                                )
-                                            |> Flow.return ()
-                                    )
+                                (ensureExtras
+                                    |> Flow.andThen
+                                        (\_ ->
+                                            -- Extras errors are non-blocking; the grid simply
+                                            -- falls back to string-typed columns. Always proceed
+                                            -- to fetch the file content.
+                                            callApi (allStepTables << fileContentAt recordId path)
+                                                (Api.fetchFileContents recordId (Just commit_) path)
+                                        )
+                                    |> FlowError.andThen materializeGrid
+                                    |> Flow.return ()
                                 )
                         )
     in

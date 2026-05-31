@@ -1,22 +1,22 @@
 module Model.Core exposing (..)
 
 import Api.ApiData as ApiData exposing (ApiData(..))
+import Array exposing (Array)
 import Browser.Navigation
 import Components.Select exposing (SelectState, initSelectState)
+import Csv.Parser
 import Debounce
 import Dict exposing (Dict)
 import DnDList
 import Flow exposing (Flow)
+import Grid
+import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
 import Time
 import Toast exposing (Toast)
-import Array exposing (Array)
-import Csv.Parser
-import Grid
-import Json.Decode exposing (Value)
 
 
 type Status
@@ -740,7 +740,6 @@ listCell index cells =
 delimitedCell : Int -> DelimitedRow -> String
 delimitedCell index row =
     Array.get index row.cells |> Maybe.withDefault ""
-
 
 
 columnTypeLabel : ColumnType -> String

@@ -10,7 +10,7 @@ import Control.Concurrent.Async (mapConcurrently)
 import Control.Monad (unless, when)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (ToJSON, eitherDecode, Value (Object))
+import Data.Aeson (ToJSON, Value (Object), eitherDecode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (intercalate, isPrefixOf)
@@ -42,7 +42,7 @@ import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitPath, takeExtension, takeFileName, (</>))
-import UserRepo (ReadRepoContext (..), runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
 
 import System.IO (IOMode (..), withBinaryFile)
 
@@ -237,25 +237,43 @@ assertInside path base =
     unless (joinPath (splitPath (normalise base)) `isPrefixOf` joinPath (splitPath (normalise path))) $
         throwError err400{errBody = "Path traversal not allowed"}
 
-
--- | GET /step-files/extras?id=<stepId>&commit=<commit>&path=<dirPath>
--- Returns the meta.json for the given directory from the extras derivation.
--- Returns {} when no extras attr exists or when meta.json is absent.
--- Returns 500 when meta.json exists but is not a JSON object.
+{- | GET /step-files/extras?id=<stepId>&commit=<commit>&path=<dirPath>
+Returns the meta.json for the given directory from the extras derivation.
+Returns {} when no extras attr exists or when meta.json is absent.
+Returns 500 when meta.json exists but is not a JSON object, or when the
+Nix evaluation itself fails for any reason other than the extras
+attribute being absent.
+-}
 stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler LBS.ByteString
 stepExtrasHandler stepId mCommit mDirPath = do
     repoPath <- liftIO userRepoPath
     commitHash <- resolveCommitHash mCommit repoPath
     let ctx = ReadRepoContext repoPath commitHash
-        extrasAttr = "#pointy.steps." ++ show stepId ++ ".meta.pointy.extras.outPath"
-    extrasResult <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx extrasAttr
-    case extrasResult of
-        Left _ -> return "{}"
-        Right extrasPath -> do
-            assertNixStorePath extrasPath
+        stepAttr = "#pointy.steps." ++ show stepId
+        -- attrByPath returns null when any segment of the path is missing,
+        -- so absent extras yields a JSON null without producing a Nix error.
+        -- Genuine evaluation failures (bad commit, unknown step id, broken
+        -- step expression) still surface as a Left from runNixEval...
+        applyExpr = "(s: builtins.attrByPath [\"meta\" \"pointy\" \"extras\" \"outPath\"] null s)"
+    extrasResult <- liftIO $ runExceptT $ runNixEvalJsonApplyInRepo ctx applyExpr stepAttr
+    extrasPath <- case extrasResult of
+        Left err ->
+            throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate extras outPath: " ++ err))}
+        Right output ->
+            case eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Maybe FilePath) of
+                Left err ->
+                    throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to decode extras outPath: " ++ err))}
+                Right Nothing ->
+                    return Nothing
+                Right (Just path) ->
+                    return (Just path)
+    case extrasPath of
+        Nothing -> return "{}"
+        Just extrasPath_ -> do
+            assertNixStorePath extrasPath_
             let dirPath = fromMaybe "" mDirPath
-                metaPath = normalise (extrasPath </> dirPath </> "meta.json")
-            assertInside metaPath extrasPath
+                metaPath = normalise (extrasPath_ </> dirPath </> "meta.json")
+            assertInside metaPath extrasPath_
             exists <- liftIO $ doesFileExist metaPath
             if not exists
                 then return "{}"
@@ -271,7 +289,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
                         Right _ ->
                             throwError err500{errBody = "extras meta.json is not a JSON object"}
   where
-    maxExtrasJsonBytes = 10 * 1024 * 1024  -- 10 MiB
+    maxExtrasJsonBytes = 10 * 1024 * 1024 -- 10 MiB
 
 resolveCommitHash :: Maybe Text -> FilePath -> Handler String
 resolveCommitHash mCommit repoPath = case mCommit of

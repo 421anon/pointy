@@ -1,7 +1,6 @@
 module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 
 import Accessors exposing (Prism, has, just, prism, snd, try)
-import Grid
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData, success)
@@ -10,6 +9,7 @@ import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
 import Filesize
 import Flow exposing (Flow)
+import Grid
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, href, id, rel, src, style, target)
 import Html.Attributes.Extra exposing (attributeIf)
@@ -382,7 +382,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 viewContent text =
                                     case ( file.delimitedGrid, gridAction, mSelectedRange ) of
                                         ( Just delimitedGrid, Just updateGrid, Nothing ) ->
-                                            Grid.view updateGrid delimitedGrid.grid
+                                            Grid.view delimitedGrid.grid |> Html.map updateGrid
 
                                         _ ->
                                             viewPlainContent text
@@ -474,4 +474,3 @@ calculateViewerHeight lineCount =
             max cappedHeight 100
     in
     String.fromInt finalHeight ++ "px"
-

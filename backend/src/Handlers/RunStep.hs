@@ -140,8 +140,9 @@ buildStep ctx eid = do
             broadcastKnownStepStatus eid targetCommitText ("failure", Just (T.pack err))
         Right _ -> return ()
 
--- | Attempt to build the extras derivation for a step.  Errors are non-fatal
--- (logged only) because extras are supplementary metadata.
+{- | Attempt to build the extras derivation for a step.  Errors are non-fatal
+(logged only) because extras are supplementary metadata.
+-}
 buildExtras :: ReadRepoContext -> Int -> IO ()
 buildExtras ctx eid = do
     result <- runExceptT $ do
@@ -175,12 +176,15 @@ getStepOutPath ctx eid = do
     output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
     return $ T.pack output
 
--- | Resolve the extras outPath.  Returns Nothing when the step has no extras
--- attribute (i.e. the eval result is not a valid store path).
+{- | Resolve the extras outPath.  Returns Nothing when the step has no extras
+attribute (i.e. the eval result is not a valid store path).
+-}
 getExtrasOutPath :: ReadRepoContext -> Int -> ExceptT String IO (Maybe FilePath)
 getExtrasOutPath ctx eid = do
-    result <- liftIO $ runExceptT $
-        runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".meta.pointy.extras.outPath")
+    result <-
+        liftIO $
+            runExceptT $
+                runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".meta.pointy.extras.outPath")
     case result of
         Left _ -> return Nothing
         Right path ->
@@ -197,14 +201,21 @@ getExtrasRequirements ctx eid = do
             -- No extras.requirements: use conservative defaults.
             return StepRequirements{cpu = 1, ram = "1G", ior = "0", iow = "0"}
         Right output ->
-            case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
-                Left err -> throwError $ "Failed to decode " ++ attr ++ ": " ++ err
-                Right req -> return req
+            decodeAndValidateRequirements attr output
 
 getStepRequirements :: ReadRepoContext -> Int -> ExceptT String IO StepRequirements
 getStepRequirements ctx eid = do
     let attr = "#pointy.steps." ++ show eid ++ ".requirements"
     output <- runNixEvalJsonInRepo ctx attr
+    decodeAndValidateRequirements attr output
+
+{- | Decode a JSON-encoded `StepRequirements` payload and reject values that
+would produce malformed slurm arguments (negative cpu, delimiters in
+ram/ior/iow). Used by both the main step and extras paths so they share
+the same validation contract.
+-}
+decodeAndValidateRequirements :: String -> String -> ExceptT String IO StepRequirements
+decodeAndValidateRequirements attr output = do
     requirements <-
         case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
             Left err -> throwError $ "Failed to decode " ++ attr ++ ": " ++ err

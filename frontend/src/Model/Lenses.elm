@@ -9,13 +9,13 @@ import Dict.Accessors
 import Extra.Accessors exposing (by, remkT, where_)
 import Flow exposing (Flow)
 import Http
+import Json.Decode exposing (Value)
 import List.Extra as List
 import Model.Core as Model exposing (DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Time
 import Toast exposing (Toast)
-import Json.Decode exposing (Value)
 
 
 blackhole : Prism pr s Never x y
@@ -209,7 +209,6 @@ children =
     lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
 
 
-
 folderExtras : Lens ls { a | extras : b } b x y
 folderExtras =
     lens ".extras" .extras (\folder_ extras_ -> { folder_ | extras = extras_ })
@@ -223,6 +222,7 @@ fileDelimitedGrid =
 gridState : Lens ls { a | grid : b } b x y
 gridState =
     lens ".grid" .grid (\rec grid_ -> { rec | grid = grid_ })
+
 
 recordId : Lens ls { a | id : b } b x y
 recordId =
@@ -352,6 +352,7 @@ fileDelimitedGridAt recordId_ path =
 rootExtrasAt : Int -> Traversal (Table StepRecord) (ApiData (Dict String Value)) x y
 rootExtrasAt recordId_ =
     recordById recordId_ << runState << success << directoryView << folderExtras
+
 
 recordSrcFiles : Int -> Traversal (Table StepRecord) DirectoryFolder x y
 recordSrcFiles recordId_ =

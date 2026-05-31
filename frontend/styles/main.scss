@@ -549,6 +549,7 @@ $delimited-grid-row-height: 28px;
 // Resize handle: thin vertical line, hidden until column hover
 
 .delimited-grid-resize-handle {
+  touch-action: none;
   opacity: 0;
   transition: opacity 0.15s ease;
   position: relative;

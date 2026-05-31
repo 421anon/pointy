@@ -1,14 +1,18 @@
 module Grid exposing
-    ( Column, ColumnType(..), SortDir(..)
-    , State, Row
-    , init, view
+    ( Column
+    , ColumnType(..)
+    , Row
+    , SortDir(..)
+    , State
+    , init
+    , view
     )
 
 {-| A resizable, sortable, filterable data table for delimited text files.
 
-Embed in a parent application via `Flow.via`:
+Render via `Grid.view state`. The parent embeds the result with `Html.map`:
 
-    Grid.view (Flow.via gridLens) gridState
+    Grid.view state |> Html.map (Flow.via gridLens)
 
 
 ## Column Types
@@ -27,6 +31,7 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Json.Decode as Decode
+
 
 
 -- TYPES
@@ -75,6 +80,7 @@ type alias State =
     }
 
 
+
 -- INIT
 
 
@@ -88,6 +94,7 @@ init columns rows =
     , filters = Dict.empty
     , resizing = Nothing
     }
+
 
 
 -- VISIBLE ROWS (filter + sort)
@@ -210,6 +217,7 @@ reverseOrder order =
             LT
 
 
+
 -- FILTER PARSING
 
 
@@ -330,6 +338,7 @@ parseIntFilter filterValue =
                     False
 
 
+
 -- STATE TRANSITIONS
 
 
@@ -371,17 +380,16 @@ setFilter colIndex value model =
     { model | filters = newFilters }
 
 
+
 -- VIEW
 
 
-{-| Render the table.
-
-The callback `embed : Flow State () -> Flow parent ()` should be
-`Flow.via lens` where `lens` targets the `State` in the parent model.
-
+{-| Render the table. The returned Html emits `Flow State ()` updates; lift
+into a parent model with `Html.map (Flow.via lens)` (or any other
+`Flow State () -> Flow parent ()` function).
 -}
-view : (Flow State () -> Flow parent ()) -> State -> Html (Flow parent ())
-view embed model =
+view : State -> Html (Flow State ())
+view model =
     let
         activeRows =
             visibleRows model
@@ -437,7 +445,7 @@ view embed model =
                         "normal"
                     )
                 , Html.Attributes.style "background-image" "linear-gradient(var(--bg-secondary), var(--bg-elevated))"
-                , Html.Events.onClick (embed (Flow.modify (toggleSort index)))
+                , Html.Events.onClick (Flow.modify (toggleSort index))
                 , Html.Attributes.title col.tooltip
                 ]
                 [ Html.div
@@ -463,8 +471,8 @@ view embed model =
                         , Html.Attributes.class "delimited-grid-filter-input"
                         , Html.Attributes.type_ "text"
                         , Html.Attributes.value currentFilter
-                        , Html.Events.onInput (\v -> embed (Flow.modify (setFilter index v)))
-                        , Html.Events.stopPropagationOn "click" (Decode.succeed ( embed Flow.none, True ))
+                        , Html.Events.onInput (\v -> Flow.modify (setFilter index v))
+                        , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
                         , Html.Attributes.placeholder ""
                         ]
                         []
