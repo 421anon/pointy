@@ -122,6 +122,8 @@ When the step's template publishes typed column metadata, columns are treated as
 
 Metadata is fetched lazily, per folder, when you expand it. The first time you open a folder of a step whose extras have not been built yet, Pointy enqueues the extras build in the background; subsequent visits pick up the typed columns once the build finishes. The grid stays usable in the meantime — just with string-typed columns.
 
+![A samples.csv output rendered as a delimited grid inside a step's Output Files section, with column headers carrying filter inputs above multiple data rows.](screenshots/light/output-files-csv-grid.png)
+
 ## Source files
 
 Some derivation step types enable **Source Files**. For those step types, Pointy shows a Source Files section in the step view even when the directory is still empty.
