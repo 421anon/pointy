@@ -344,7 +344,7 @@ extrasAt recordId_ path =
     directoryItemAtPath recordId_ path << folder << folderExtras
 
 
-fileDelimitedGridAt : Int -> List String -> Traversal (Table StepRecord) (Maybe Model.DelimitedGrid) x y
+fileDelimitedGridAt : Int -> List String -> Traversal (Table StepRecord) (Maybe DelimitedGrid) x y
 fileDelimitedGridAt recordId_ path =
     directoryItemAtPath recordId_ path << file << fileDelimitedGrid
 

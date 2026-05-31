@@ -70,9 +70,6 @@ function installGutterDragListeners(app) {
   document.addEventListener("pointercancel", emitEnd);
 }
 
-
-
-
 export function connectPorts(app) {
   function emitToElm(type, data) {
     if (app.ports && app.ports.stepStatusIn) {

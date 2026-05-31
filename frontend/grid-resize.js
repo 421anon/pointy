@@ -89,11 +89,9 @@
     active.table.style.minWidth = newTableWidth + "px";
   });
 
-  document.addEventListener("pointerup", () => {
+  const releasePointer = () => {
     active = null;
-  });
-
-  document.addEventListener("pointercancel", () => {
-    active = null;
-  });
+  };
+  document.addEventListener("pointerup", releasePointer);
+  document.addEventListener("pointercancel", releasePointer);
 })();

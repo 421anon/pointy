@@ -50,4 +50,3 @@ new MutationObserver(() => {
       setupTextarea(textarea);
     });
 }).observe(document.body, { childList: true, subtree: true });
-

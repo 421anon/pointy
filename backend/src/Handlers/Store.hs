@@ -247,7 +247,7 @@ attribute being absent.
 stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler LBS.ByteString
 stepExtrasHandler stepId mCommit mDirPath = do
     repoPath <- liftIO userRepoPath
-    commitHash <- resolveCommitHash mCommit repoPath
+    commitHash <- resolveCommitHash mCommit
     let ctx = ReadRepoContext repoPath commitHash
         stepAttr = "#pointy.steps." ++ show stepId
         -- attrByPath returns null when any segment of the path is missing,
@@ -291,8 +291,8 @@ stepExtrasHandler stepId mCommit mDirPath = do
   where
     maxExtrasJsonBytes = 10 * 1024 * 1024 -- 10 MiB
 
-resolveCommitHash :: Maybe Text -> FilePath -> Handler String
-resolveCommitHash mCommit repoPath = case mCommit of
+resolveCommitHash :: Maybe Text -> Handler String
+resolveCommitHash mCommit = case mCommit of
     Just c -> return (unpack c)
     Nothing -> do
         result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ h) -> return h

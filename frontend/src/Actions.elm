@@ -908,31 +908,33 @@ shouldSkipFileContents file_ =
 decodeTableMeta : Decode.Value -> Maybe Model.TableMeta
 decodeTableMeta jsonValue =
     let
-        colMetaDecoder =
-            Decode.map2
-                (\t n ->
-                    { columnType =
+        colType =
+            Decode.string
+                |> Decode.map
+                    (\t ->
                         case t of
                             "int" ->
-                                Model.ColumnInt
+                                Grid.Int
 
                             "float" ->
-                                Model.ColumnFloat
+                                Grid.Float
 
                             _ ->
-                                Model.ColumnString
-                    , nullable = n
-                    }
-                )
-                (Decode.field "type" Decode.string)
-                (Decode.field "nullable" Decode.bool)
+                                Grid.Text
+                    )
 
-        tableMetaDecoder =
+        decoder =
             Decode.map Model.TableMeta
-                (Decode.field "columns" (Decode.list colMetaDecoder))
+                (Decode.field "columns"
+                    (Decode.list
+                        (Decode.map2 Model.ColumnMeta
+                            (Decode.field "type" colType)
+                            (Decode.field "nullable" Decode.bool)
+                        )
+                    )
+                )
     in
-    Decode.decodeValue tableMetaDecoder jsonValue
-        |> Result.toMaybe
+    Decode.decodeValue decoder jsonValue |> Result.toMaybe
 
 
 toggleFile : Int -> List String -> Flow Model ()
@@ -991,23 +993,22 @@ toggleOutputEntry recordId mOpen path =
         stepCommit =
             allStepTables << recordById recordId << runState << success << commit
 
+        extrasLensFor p =
+            if List.isEmpty p then
+                allStepTables << rootExtrasAt recordId
+
+            else
+                allStepTables << extrasAt recordId p
+
         folderAction =
             Flow.forAll stepCommit <|
                 \commit_ ->
                     Flow.forAll (allStepTables << directoryItemAtPath recordId path << folder)
                         (\_ ->
-                            let
-                                extrasLens =
-                                    if List.isEmpty path then
-                                        allStepTables << rootExtrasAt recordId
-
-                                    else
-                                        allStepTables << extrasAt recordId path
-                            in
                             callApi (allStepTables << childrenAt recordId path)
                                 (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric recordId (Just commit_) path)
                                 |> Flow.seq
-                                    (callApi extrasLens
+                                    (callApi (extrasLensFor path)
                                         (Api.fetchExtras recordId (Just commit_) path)
                                     )
                                 |> Flow.return ()
@@ -1023,11 +1024,7 @@ toggleOutputEntry recordId mOpen path =
                                     List.take (List.length path - 1) path
 
                                 parentExtrasLens =
-                                    if List.isEmpty parentPath then
-                                        allStepTables << rootExtrasAt recordId
-
-                                    else
-                                        allStepTables << extrasAt recordId parentPath
+                                    extrasLensFor parentPath
 
                                 -- Ensure extras has fully resolved before deciding column
                                 -- metadata. The folder action fires fetchExtras after the

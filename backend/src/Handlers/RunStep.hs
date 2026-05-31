@@ -101,8 +101,8 @@ stepInstallable (ReadRepoContext repoPath targetCommit) eid =
     "git+file://" ++ repoPath ++ "?rev=" ++ targetCommit ++ "&allRefs=true#pointy.steps." ++ show eid
 
 extrasInstallable :: ReadRepoContext -> Int -> String
-extrasInstallable (ReadRepoContext repoPath targetCommit) eid =
-    "git+file://" ++ repoPath ++ "?rev=" ++ targetCommit ++ "&allRefs=true#pointy.steps." ++ show eid ++ ".meta.pointy.extras"
+extrasInstallable ctx eid =
+    stepInstallable ctx eid ++ ".meta.pointy.extras"
 
 buildStep :: ReadRepoContext -> Int -> IO ()
 buildStep ctx eid = do

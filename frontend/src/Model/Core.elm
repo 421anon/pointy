@@ -1,7 +1,7 @@
 module Model.Core exposing (..)
 
 import Api.ApiData as ApiData exposing (ApiData(..))
-import Array exposing (Array)
+import Array
 import Browser.Navigation
 import Components.Select exposing (SelectState, initSelectState)
 import Csv.Parser
@@ -503,7 +503,6 @@ updateDirectoryItemBase item baseItem =
                     , size = base.size
                     , viewable = base.viewable
                     , mimeType = base.mimeType
-                    , delimitedGrid = file.delimitedGrid
                     , view =
                         let
                             view =
@@ -548,14 +547,8 @@ updateDirectoryFolderBase folder base =
     }
 
 
-type ColumnType
-    = ColumnInt
-    | ColumnFloat
-    | ColumnString
-
-
 type alias ColumnMeta =
-    { columnType : ColumnType
+    { columnType : Grid.ColumnType
     , nullable : Bool
     }
 
@@ -565,14 +558,8 @@ type alias TableMeta =
     }
 
 
-type alias DelimitedRow =
-    { cells : Array String
-    }
-
-
 type alias DelimitedGrid =
     { grid : Grid.State
-    , columnMetas : List ColumnMeta
     }
 
 
@@ -586,19 +573,12 @@ delimitedGridFromFile path mimeType content mTableMeta =
     detectDelimitedFile path mimeType
         |> Maybe.andThen
             (\fileKind ->
-                let
-                    sep =
-                        delimitedSeparator fileKind
-                in
-                case Csv.Parser.parse { fieldSeparator = sep } content of
-                    Err _ ->
-                        Nothing
-
-                    Ok [] ->
-                        Nothing
-
+                case Csv.Parser.parse { fieldSeparator = delimitedSeparator fileKind } content of
                     Ok (header :: rows) ->
                         Just (buildDelimitedGrid header rows mTableMeta)
+
+                    _ ->
+                        Nothing
             )
 
 
@@ -651,25 +631,14 @@ buildDelimitedGrid header rows mTableMeta =
         normalizedRows =
             List.map (padDelimitedCells columnCount) rows
 
-        metadataColMetas =
-            mTableMeta
-                |> Maybe.map .columns
-                |> Maybe.withDefault []
-
         effectiveColMetas =
             case mTableMeta of
                 Just meta ->
-                    let
-                        provided =
-                            List.length meta.columns
-
-                        backfill =
-                            List.repeat (max 0 (columnCount - provided)) { columnType = ColumnString, nullable = True }
-                    in
-                    meta.columns ++ backfill
+                    meta.columns
+                        ++ List.repeat (max 0 (columnCount - List.length meta.columns)) { columnType = Grid.Text, nullable = True }
 
                 Nothing ->
-                    List.repeat columnCount { columnType = ColumnString, nullable = False }
+                    List.repeat columnCount { columnType = Grid.Text, nullable = False }
 
         sampleRows =
             List.take 100 normalizedRows
@@ -680,17 +649,7 @@ buildDelimitedGrid header rows mTableMeta =
                     let
                         colMeta =
                             List.getAt index effectiveColMetas
-                                |> Maybe.withDefault { columnType = ColumnString, nullable = True }
-
-                        tooltip =
-                            "Column type: "
-                                ++ columnTypeLabel colMeta.columnType
-                                ++ (if colMeta.nullable then
-                                        " (nullable)"
-
-                                    else
-                                        ""
-                                   )
+                                |> Maybe.withDefault { columnType = Grid.Text, nullable = True }
                     in
                     { id = "column-" ++ String.fromInt index
                     , title =
@@ -699,27 +658,22 @@ buildDelimitedGrid header rows mTableMeta =
 
                         else
                             title
-                    , tooltip = tooltip
+                    , tooltip =
+                        "Column type: "
+                            ++ Grid.columnTypeLabel colMeta.columnType
+                            ++ (if colMeta.nullable then
+                                    " (nullable)"
+
+                                else
+                                    ""
+                               )
                     , width = delimitedColumnWidth title (List.map (listCell index) sampleRows)
-                    , type_ =
-                        case colMeta.columnType of
-                            ColumnInt ->
-                                Grid.Int
-
-                            ColumnFloat ->
-                                Grid.Float
-
-                            ColumnString ->
-                                Grid.Text
+                    , type_ = colMeta.columnType
                     }
                 )
                 normalizedHeader
-
-        gridRows =
-            List.map (\cells -> Array.fromList cells) normalizedRows
     in
-    { grid = Grid.init delimitedColumns gridRows
-    , columnMetas = metadataColMetas
+    { grid = Grid.init delimitedColumns (List.map Array.fromList normalizedRows)
     }
 
 
@@ -735,24 +689,6 @@ padDelimitedCells targetLength cells =
 listCell : Int -> List String -> String
 listCell index cells =
     List.getAt index cells |> Maybe.withDefault ""
-
-
-delimitedCell : Int -> DelimitedRow -> String
-delimitedCell index row =
-    Array.get index row.cells |> Maybe.withDefault ""
-
-
-columnTypeLabel : ColumnType -> String
-columnTypeLabel columnType =
-    case columnType of
-        ColumnInt ->
-            "int"
-
-        ColumnFloat ->
-            "float"
-
-        ColumnString ->
-            "string"
 
 
 delimitedColumnWidth : String -> List String -> Int

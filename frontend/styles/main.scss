@@ -347,10 +347,6 @@ body {
     justify-content: center;
     border-radius: 50%;
   }
-
-  .page {
-    padding-bottom: calc(50vh + 32px + var(--spacing-xl) + var(--spacing-md));
-  }
 }
 
 .record-name-container {
@@ -512,71 +508,73 @@ body {
   padding-left: var(--spacing-lg);
 }
 
+/* ── Delimited grid viewer ── */
 
-
-/* ── Delimited grid viewer (custom, no elm-advanced-grid) ── */
-
-// Constants (must match Elm)
 $delimited-grid-row-height: 28px;
 
-// Outer container: single scrollable area for both axes. The table uses
-// fixed layout so grid-resize.js can adjust <colgroup> widths deterministically.
+.delimited-grid-viewer {
+  max-width: 100%;
+  overflow: auto;
+  resize: vertical;
+  max-height: 70vh;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
 
-// The <thead> rows are sticky:
-//   - 1st row (header):  top: 0
-//   - 2nd row (filters): top: $row-height
+.delimited-grid-table {
+  table-layout: fixed;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
 
+.delimited-grid-header th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  height: 56px;
+  padding: 0;
+  vertical-align: top;
+  overflow: visible;
+  cursor: pointer;
+  font-weight: normal;
+  font-style: normal;
+  border-right: 1px solid var(--border-color);
+  background-image: linear-gradient(var(--bg-secondary), var(--bg-elevated));
 
-// ── Header row ──
-
-.delimited-grid-header {
-  th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    box-sizing: border-box;
-    height: 56px;
-    padding: 0;
-    vertical-align: top;
-    border-right: 1px solid var(--border-color);
+  &.sorted {
+    font-style: italic;
   }
 
-  th:last-child {
+  &:last-child {
     border-right: none;
   }
 }
 
-// Resize handle: thin vertical line, hidden until column hover
-
-.delimited-grid-resize-handle {
-  touch-action: none;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  position: relative;
+.delimited-grid-header-cell {
   display: flex;
-  align-items: center;
-  justify-content: center;
-
-  &::before {
-    content: "";
-    width: 1px;
-    height: calc(100% - var(--spacing-lg));
-    min-height: 20px;
-    border-radius: 999px;
-    background: var(--border-color);
-  }
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
 }
 
-th:hover .delimited-grid-resize-handle,
-th:focus-within .delimited-grid-resize-handle {
-  opacity: 0.65;
+.delimited-grid-header-title {
+  flex: 0 0 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: $delimited-grid-row-height;
+  padding: 0 2px;
 }
-
-
-// ── Filter input ──
 
 .delimited-grid-filter-input {
   box-sizing: border-box;
+  width: calc(100% - 12px);
+  height: 22px;
+  flex: 0 0 auto;
+  margin: 0 6px 2px;
+  padding: 0 6px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
@@ -592,14 +590,34 @@ th:focus-within .delimited-grid-resize-handle {
   }
 }
 
+.delimited-grid-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
 
-// ── Body rows ──
+  &::before {
+    content: "";
+    width: 1px;
+    height: calc(100% - var(--spacing-lg));
+    min-height: 20px;
+    border-radius: 999px;
+    background: var(--border-color);
+  }
+}
 
-
-
-// ── Body rows ──
-
-
+th:hover .delimited-grid-resize-handle,
+th:focus-within .delimited-grid-resize-handle {
+  opacity: 0.65;
+}
 
 .delimited-grid-body-row {
   content-visibility: auto;
@@ -620,13 +638,9 @@ th:focus-within .delimited-grid-resize-handle {
   }
 }
 
-// Hover highlights entire row
-
 .delimited-grid-body-row:hover td {
   background: var(--bg-secondary);
 }
-
-// Sort arrows (CSS border triangles, matching elm-advanced-grid)
 
 .sort-arrow {
   display: inline-block;
