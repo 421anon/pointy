@@ -519,10 +519,8 @@ body {
 // Constants (must match Elm)
 $delimited-grid-row-height: 28px;
 
-// Outer container: single scrollable area for both axes
-
-// Table layout so that CSS `resize: horizontal` on <th> resizes
-// the whole column via <colgroup> + `table-layout: fixed`.
+// Outer container: single scrollable area for both axes. The table uses
+// fixed layout so grid-resize.js can adjust <colgroup> widths deterministically.
 
 // The <thead> rows are sticky:
 //   - 1st row (header):  top: 0
