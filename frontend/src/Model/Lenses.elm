@@ -220,9 +220,10 @@ fileDelimitedGrid =
     lens ".delimitedGrid" .delimitedGrid (\file_ delimitedGrid_ -> { file_ | delimitedGrid = delimitedGrid_ })
 
 
-delimitedGridModel : Lens ls { a | gridModel : b } b x y
-delimitedGridModel =
-    lens ".gridModel" .gridModel (\grid_ gridModel_ -> { grid_ | gridModel = gridModel_ })
+gridState : Lens ls { a | grid : b } b x y
+gridState =
+    lens ".grid" .grid (\rec grid_ -> { rec | grid = grid_ })
+
 recordId : Lens ls { a | id : b } b x y
 recordId =
     lens ".id" .id (\record id_ -> { record | id = id_ })

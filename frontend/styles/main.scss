@@ -512,195 +512,138 @@ body {
   padding-left: var(--spacing-lg);
 }
 
-.delimited-grid-viewer {
-  --delimited-grid-header-height: 56px;
-  --delimited-grid-body-height: 56px;
-  --delimited-grid-row-height: 28px;
 
-  height: calc(var(--delimited-grid-header-height) + max(var(--delimited-grid-body-height), var(--delimited-grid-row-height) * 10));
-  min-height: calc(var(--delimited-grid-header-height) + var(--delimited-grid-row-height) * 10);
-  max-height: 70vh;
-  max-width: 100%;
-  resize: vertical;
-  overflow-x: auto;
-  overflow-y: hidden;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-sm);
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-subtle);
 
-  > div {
-    margin: 0;
-    width: max-content;
-    min-width: 100%;
-    height: 100%;
-    min-height: 0;
-  }
+/* ── Delimited grid viewer (custom, no elm-advanced-grid) ── */
 
-  > div > div:first-child {
-    border-inline: 0;
-    background: var(--bg-secondary);
-  }
+// Constants (must match Elm)
+$delimited-grid-row-height: 28px;
 
-  #_header_-_container_ {
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
-  }
+// Outer container: single scrollable area for both axes
 
-  #_header_-_container_ > [data-testid^="header-column-"]:last-child {
-    border-right-color: transparent;
-  }
+// Table layout so that CSS `resize: horizontal` on <th> resizes
+// the whole column via <colgroup> + `table-layout: fixed`.
 
-  [data-testid^="header-column-"] {
-    background: var(--bg-secondary);
-    background-image: none;
-    border-color: transparent var(--border-color) transparent transparent;
-    color: var(--text-primary);
-    cursor: pointer;
-    position: relative;
+// The <thead> rows are sticky:
+//   - 1st row (header):  top: 0
+//   - 2nd row (filters): top: $row-height
 
-    > div {
-      height: 100%;
-    }
 
-    > div > div:first-child > div:first-child {
-      align-items: center;
-      min-height: 22px;
-    }
+// ── Header row ──
 
-    span {
-      display: inline-flex;
-      align-items: center;
-      min-height: 22px;
-      padding-inline: var(--spacing-xs);
-      color: var(--text-primary);
-      font-style: normal;
-    }
-
-    span + div {
-      align-self: center;
-      flex: 0 0 auto;
-      margin: 0 0 0 var(--spacing-xs);
-      transform: scale(0.85);
-      transform-origin: center;
-      opacity: 0.55;
-      border-top-color: var(--text-muted);
-      border-bottom-color: var(--text-muted);
-    }
-
-    &:hover {
-      background: var(--bg-hover);
-    }
-
-    &:hover > div > div:last-child,
-    &:focus-within > div > div:last-child {
-      opacity: 0.65;
-    }
-  }
-
-  [data-testid^="dragHandle-"] {
-    display: none;
-  }
-
-  [data-testid^="header-column-"] > div > div:last-child {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 5px;
-    cursor: col-resize;
-    opacity: 0;
-    position: relative;
-    transition: opacity 0.15s ease;
-
-    > div {
-      display: none;
-    }
-
-    &::before {
-      content: "";
-      width: 1px;
-      height: calc(100% - var(--spacing-lg));
-      min-height: 20px;
-      border-radius: 999px;
-      background: var(--border-color);
-    }
-  }
-
-  [data-testid^="filter-column-"] {
+.delimited-grid-header {
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
     box-sizing: border-box;
-    width: calc(100% - var(--spacing-md));
-    height: 22px;
-    margin: 0 6px var(--spacing-xs);
-    padding: 0 var(--spacing-sm);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font: inherit;
-    outline: none;
-    box-shadow: none;
-    caret-color: var(--text-primary);
-
-    &:focus {
-      border-color: var(--state-info);
-      box-shadow: 0 0 0 1px var(--focus-ring);
-    }
+    height: 56px;
+    padding: 0;
+    vertical-align: top;
+    border-right: 1px solid var(--border-color);
   }
 
-  > div > div:has(#_grid_) {
-    height: calc(100% - var(--delimited-grid-header-height));
-    min-height: var(--delimited-grid-row-height);
-  }
-
-  #_grid_ {
-    border: 0;
-    height: 100% !important;
-    min-height: var(--delimited-grid-row-height);
-    background: var(--bg-elevated);
-    scrollbar-width: none;
-    overscroll-behavior-x: auto;
-    overscroll-behavior-y: contain;
-
-    &::-webkit-scrollbar {
-      width: 0;
-      height: 0;
-    }
-  }
-
-  [data-testid="row"] {
-    background: var(--bg-elevated);
-  }
-
-  [data-testid^="column-"] {
-    border-color: transparent var(--border-color) var(--border-color) transparent;
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    font-size: 13px;
-    padding-left: var(--spacing-xs);
-    padding-right: 0;
-  }
-
-  [data-testid="row"] [data-testid^="column-"]:last-child {
-    border-right-color: transparent;
-  }
-
-  #_grid_ [data-testid="row"]:last-child [data-testid^="column-"] {
-    border-bottom-color: transparent;
-  }
-
-  [data-testid="row"]:hover [data-testid^="column-"] {
-    background: var(--bg-secondary);
+  th:last-child {
+    border-right: none;
   }
 }
 
-.delimited-meta-unavailable {
-  color: var(--text-muted);
-  font-size: var(--font-size-sm);
+// Resize handle: thin vertical line, hidden until column hover
+
+.delimited-grid-resize-handle {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &::before {
+    content: "";
+    width: 1px;
+    height: calc(100% - var(--spacing-lg));
+    min-height: 20px;
+    border-radius: 999px;
+    background: var(--border-color);
+  }
+}
+
+th:hover .delimited-grid-resize-handle,
+th:focus-within .delimited-grid-resize-handle {
+  opacity: 0.65;
+}
+
+
+// ── Filter input ──
+
+.delimited-grid-filter-input {
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  outline: none;
+  box-shadow: none;
+  caret-color: var(--text-primary);
+
+  &:focus {
+    border-color: var(--state-info);
+    box-shadow: 0 0 0 1px var(--focus-ring);
+  }
+}
+
+
+// ── Body rows ──
+
+
+
+// ── Body rows ──
+
+
+
+.delimited-grid-body-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto $delimited-grid-row-height;
+
+  td {
+    height: $delimited-grid-row-height;
+    box-sizing: border-box;
+    border-right: 1px solid var(--border-color);
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: 13px;
+    padding: 0 2px;
+  }
+
+  td:last-child {
+    border-right: none;
+  }
+}
+
+// Hover highlights entire row
+
+.delimited-grid-body-row:hover td {
+  background: var(--bg-secondary);
+}
+
+// Sort arrows (CSS border triangles, matching elm-advanced-grid)
+
+.sort-arrow {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  margin: 5px;
+
+  &.asc {
+    border-bottom: 5px solid var(--text-muted);
+  }
+
+  &.desc {
+    border-top: 5px solid var(--text-muted);
+  }
 }
 
 .file-content {

@@ -571,8 +571,8 @@ type alias DelimitedRow =
 
 
 type alias DelimitedGrid =
-    { columnMetas : List ColumnMeta
-    , gridModel : Grid.Model DelimitedRow
+    { grid : Grid.State
+    , columnMetas : List ColumnMeta
     }
 
 
@@ -674,38 +674,52 @@ buildDelimitedGrid header rows mTableMeta =
         sampleRows =
             List.take 100 normalizedRows
 
-        columns =
+        delimitedColumns =
             List.indexedMap
                 (\index title ->
                     let
                         colMeta =
                             List.getAt index effectiveColMetas
                                 |> Maybe.withDefault { columnType = ColumnString, nullable = True }
+
+                        tooltip =
+                            "Column type: "
+                                ++ columnTypeLabel colMeta.columnType
+                                ++ (if colMeta.nullable then
+                                        " (nullable)"
+
+                                    else
+                                        ""
+                                   )
                     in
-                    delimitedColumnConfig
-                        index
-                        title
-                        colMeta
-                        (List.map (listCell index) sampleRows)
+                    { id = "column-" ++ String.fromInt index
+                    , title =
+                        if String.isEmpty (String.trim title) then
+                            "Column " ++ String.fromInt (index + 1)
+
+                        else
+                            title
+                    , tooltip = tooltip
+                    , width = delimitedColumnWidth title (List.map (listCell index) sampleRows)
+                    , type_ =
+                        case colMeta.columnType of
+                            ColumnInt ->
+                                Grid.Int
+
+                            ColumnFloat ->
+                                Grid.Float
+
+                            ColumnString ->
+                                Grid.Text
+                    }
                 )
                 normalizedHeader
 
         gridRows =
-            List.map (\cells -> { cells = Array.fromList cells }) normalizedRows
-
-        config =
-            { canSelectRows = False
-            , columns = columns
-            , containerHeight = delimitedGridHeight (List.length normalizedRows)
-            , containerWidth = delimitedGridContainerWidth columns
-            , hasFilters = True
-            , headerHeight = delimitedGridHeaderHeight
-            , lineHeight = delimitedGridLineHeight
-            , rowClass = always "delimited-grid-row"
-            }
+            List.map (\cells -> Array.fromList cells) normalizedRows
     in
-    { columnMetas = metadataColMetas
-    , gridModel = Grid.init config gridRows
+    { grid = Grid.init delimitedColumns gridRows
+    , columnMetas = metadataColMetas
     }
 
 
@@ -727,116 +741,6 @@ delimitedCell : Int -> DelimitedRow -> String
 delimitedCell index row =
     Array.get index row.cells |> Maybe.withDefault ""
 
-
-delimitedColumnConfig : Int -> String -> ColumnMeta -> List String -> Grid.ColumnConfig DelimitedRow
-delimitedColumnConfig index rawTitle colMeta values =
-    let
-        title =
-            if String.isEmpty (String.trim rawTitle) then
-                "Column " ++ String.fromInt (index + 1)
-
-            else
-                rawTitle
-
-        width =
-            delimitedColumnWidth title values
-
-        rawGetter =
-            delimitedCell index
-
-        stringRenderer =
-            Grid.viewString (.data >> rawGetter)
-
-        withRawTextRenderer config =
-            { config
-                | renderer = stringRenderer
-                , toString = .data >> rawGetter
-            }
-
-        properties getter =
-            { id = "column-" ++ String.fromInt index
-            , title = title
-            , tooltip =
-                "Column type: "
-                    ++ columnTypeLabel colMeta.columnType
-                    ++ (if colMeta.nullable then
-                            " (nullable)"
-
-                        else
-                            ""
-                       )
-            , width = width
-            , getter = getter
-            , localize = identity
-            }
-    in
-    case ( colMeta.columnType, colMeta.nullable ) of
-        ( ColumnInt, False ) ->
-            Grid.intColumnConfig (properties (rawGetter >> String.trim >> String.toInt >> Maybe.withDefault 0))
-                |> withRawTextRenderer
-
-        ( ColumnInt, True ) ->
-            Grid.stringColumnConfig (properties rawGetter)
-                |> (\cfg ->
-                        { cfg
-                            | comparator =
-                                \a b ->
-                                    let
-                                        va =
-                                            String.trim (.data a |> rawGetter)
-
-                                        vb =
-                                            String.trim (.data b |> rawGetter)
-                                    in
-                                    case ( String.toInt va, String.toInt vb ) of
-                                        ( Just ia, Just ib ) ->
-                                            compare ia ib
-
-                                        ( Just _, Nothing ) ->
-                                            LT
-
-                                        ( Nothing, Just _ ) ->
-                                            GT
-
-                                        ( Nothing, Nothing ) ->
-                                            compare va vb
-                        }
-                   )
-
-        ( ColumnFloat, False ) ->
-            Grid.floatColumnConfig (properties (rawGetter >> String.trim >> String.toFloat >> Maybe.withDefault 0))
-                |> withRawTextRenderer
-
-        ( ColumnFloat, True ) ->
-            Grid.stringColumnConfig (properties rawGetter)
-                |> (\cfg ->
-                        { cfg
-                            | comparator =
-                                \a b ->
-                                    let
-                                        va =
-                                            String.trim (.data a |> rawGetter)
-
-                                        vb =
-                                            String.trim (.data b |> rawGetter)
-                                    in
-                                    case ( String.toFloat va, String.toFloat vb ) of
-                                        ( Just fa, Just fb ) ->
-                                            compare fa fb
-
-                                        ( Just _, Nothing ) ->
-                                            LT
-
-                                        ( Nothing, Just _ ) ->
-                                            GT
-
-                                        ( Nothing, Nothing ) ->
-                                            compare va vb
-                        }
-                   )
-
-        ( ColumnString, _ ) ->
-            Grid.stringColumnConfig (properties rawGetter)
 
 
 columnTypeLabel : ColumnType -> String
@@ -861,33 +765,6 @@ delimitedColumnWidth title values =
                 |> List.foldl max (String.length title)
     in
     clamp 88 320 ((maxChars + 2) * 9)
-
-
-delimitedGridHeaderHeight : Int
-delimitedGridHeaderHeight =
-    56
-
-
-delimitedGridLineHeight : Int
-delimitedGridLineHeight =
-    28
-
-
-delimitedGridHeight : Int -> Int
-delimitedGridHeight rowCount =
-    clamp (delimitedGridLineHeight * 10) 520 (rowCount * delimitedGridLineHeight)
-
-
-delimitedGridContainerWidth : List (Grid.ColumnConfig DelimitedRow) -> Int
-delimitedGridContainerWidth columns =
-    let
-        contentWidth =
-            columns
-                |> List.map (\column -> column.properties.width)
-                |> List.foldl (+) 0
-    in
-    max 0 (contentWidth - Grid.cumulatedBorderWidth)
-        |> min 1200
 
 
 updateStepRecordTable : Table StepRecord -> Table StepRecord -> Table StepRecord

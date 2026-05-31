@@ -17,7 +17,7 @@ import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (DelimitedGrid, DelimitedRow, DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
+import Model.Core as Model exposing (DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
 import Model.Lenses exposing (currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -362,7 +362,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 gridAction =
                                     case ( mRecordId, mDirCtx ) of
                                         ( Just recordId, Just (OutputDir _ _) ) ->
-                                            Just (Actions.updateOutputFileGrid recordId path)
+                                            Just (Actions.wrapDelimitedGridFlow recordId path)
 
                                         _ ->
                                             Nothing
@@ -382,7 +382,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 viewContent text =
                                     case ( file.delimitedGrid, gridAction, mSelectedRange ) of
                                         ( Just delimitedGrid, Just updateGrid, Nothing ) ->
-                                            viewDelimitedGrid updateGrid delimitedGrid
+                                            Grid.view updateGrid delimitedGrid.grid
 
                                         _ ->
                                             viewPlainContent text
@@ -475,22 +475,3 @@ calculateViewerHeight lineCount =
     in
     String.fromInt finalHeight ++ "px"
 
-
-
-viewDelimitedGrid : (Grid.Msg DelimitedRow -> Flow Model ()) -> DelimitedGrid -> Html (Flow Model ())
-viewDelimitedGrid toFlow delimitedGrid =
-    let
-        gridConfig =
-            delimitedGrid.gridModel.config
-
-        px value =
-            String.fromInt value ++ "px"
-    in
-    Html.div
-        [ class "delimited-grid-viewer"
-        , style "--delimited-grid-header-height" (px gridConfig.headerHeight)
-        , style "--delimited-grid-body-height" (px gridConfig.containerHeight)
-        , style "--delimited-grid-row-height" (px gridConfig.lineHeight)
-        ]
-        [ Html.map toFlow (Grid.view delimitedGrid.gridModel)
-        ]

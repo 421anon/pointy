@@ -70,47 +70,8 @@ function installGutterDragListeners(app) {
   document.addEventListener("pointercancel", emitEnd);
 }
 
-const delimitedGridResizeHandleSelector =
-  '.delimited-grid-viewer [data-testid^="header-column-"] > div > div:last-child';
 
-function resizeHandleFromEvent(event) {
-  const target = event.target;
-  if (!(target instanceof Element)) return null;
-  return target.closest(delimitedGridResizeHandleSelector);
-}
 
-function installDelimitedGridResizePointerCapture() {
-  const capturedPointers = new Map();
-
-  document.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-
-    const resizeHandle = resizeHandleFromEvent(event);
-    if (!resizeHandle?.setPointerCapture) return;
-
-    try {
-      resizeHandle.setPointerCapture(event.pointerId);
-      capturedPointers.set(event.pointerId, resizeHandle);
-    } catch (_) {}
-  });
-
-  const releaseCapture = (event) => {
-    const resizeHandle = capturedPointers.get(event.pointerId);
-    if (!resizeHandle) return;
-
-    capturedPointers.delete(event.pointerId);
-
-    try {
-      if (resizeHandle.hasPointerCapture?.(event.pointerId)) {
-        resizeHandle.releasePointerCapture(event.pointerId);
-      }
-    } catch (_) {}
-  };
-
-  document.addEventListener("pointerup", releaseCapture);
-  document.addEventListener("pointercancel", releaseCapture);
-  document.addEventListener("lostpointercapture", releaseCapture);
-}
 
 export function connectPorts(app) {
   function emitToElm(type, data) {
@@ -169,7 +130,6 @@ export function connectPorts(app) {
   };
 
   installGutterDragListeners(app);
-  installDelimitedGridResizePointerCapture();
 
   if (app.ports && app.ports.ffiOut) {
     app.ports.ffiOut.subscribe((req) => {

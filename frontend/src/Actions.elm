@@ -950,51 +950,9 @@ toggleSrcFile recordId path =
             )
 
 
-updateOutputFileGrid : Int -> List String -> Grid.Msg Model.DelimitedRow -> Flow Model ()
-updateOutputFileGrid recordId path =
-    updateFileGrid (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << delimitedGridModel)
-
-
-updateFileGrid : An_Optic pr ls Model (Grid.Model Model.DelimitedRow) -> Grid.Msg Model.DelimitedRow -> Flow Model ()
-updateFileGrid gridLens gridMsg =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case try gridLens model of
-                    Just gridModel ->
-                        let
-                            ( updatedGridModel, gridCmd ) =
-                                Grid.update gridMsg gridModel
-
-                            widthSyncedGridModel =
-                                syncDelimitedGridContainerWidth updatedGridModel
-                        in
-                        Flow.setAll gridLens widthSyncedGridModel
-                            |> Flow.seq (Flow.lift gridCmd |> Flow.andThen (updateFileGrid gridLens))
-
-                    Nothing ->
-                        Flow.none
-            )
-
-
-
-syncDelimitedGridContainerWidth : Grid.Model Model.DelimitedRow -> Grid.Model Model.DelimitedRow
-syncDelimitedGridContainerWidth gridModel =
-    let
-        config =
-            gridModel.config
-    in
-    { gridModel
-        | config =
-            { config
-                | containerWidth =
-                    gridModel
-                        |> Grid.visibleColumns
-                        |> Model.delimitedGridContainerWidth
-            }
-    }
-
-
+wrapDelimitedGridFlow : Int -> List String -> Flow Grid.State () -> Flow Model ()
+wrapDelimitedGridFlow recordId path =
+    Flow.via (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << gridState)
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()
 zoomHtmlFileBy tableZoomLens iframeId factor =
     let

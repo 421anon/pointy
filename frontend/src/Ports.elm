@@ -1,4 +1,4 @@
-port module Ports exposing (ffiIn, ffiOut, gutterDragEnd, openStepStatusStream, stepStatusIn)
+port module Ports exposing (delimitedColumnResized, ffiIn, ffiOut, gutterDragEnd, openStepStatusStream, stepStatusIn)
 
 import Json.Decode
 import Json.Encode
@@ -17,3 +17,6 @@ port stepStatusIn : (Json.Decode.Value -> msg) -> Sub msg
 
 
 port gutterDragEnd : (Json.Decode.Value -> msg) -> Sub msg
+
+
+port delimitedColumnResized : (Json.Decode.Value -> msg) -> Sub msg
