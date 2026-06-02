@@ -14,6 +14,7 @@ import Model.Lenses exposing (currentProject, name)
 import Route exposing (Route(..))
 import Specs
 import Toast
+import View.Compare as Compare
 import View.Dialog as Dialog
 import View.Icons
 import View.Lib exposing (viewPage, viewSearchBox)
@@ -58,10 +59,12 @@ view model =
     in
     { title = try (currentProject << success << name) model |> Maybe.map (\n -> n ++ " • " ++ "Pointy Notebook") |> Maybe.withDefault "Pointy Notebook"
     , body =
-        [ Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
+        [ Compare.viewCompareBanner model
+        , Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
         , Html.div [ Html.Attributes.class "toast-container" ] <|
             List.map Toast.view (Model.getToasts model)
         , Dialog.viewConfirm (Model.getModalConfirm model)
+        , Compare.viewCompareDialog model
         , Html.a
             [ Html.Attributes.href "/docs/"
             , Html.Attributes.target "_blank"

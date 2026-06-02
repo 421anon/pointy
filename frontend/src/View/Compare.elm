@@ -1,4 +1,4 @@
-module View.Compare exposing (viewComparePanel)
+module View.Compare exposing (viewCompareBanner, viewCompareDialog)
 
 import Accessors exposing (try)
 import Actions
@@ -8,26 +8,42 @@ import Array exposing (Array)
 import Extra.Accessors exposing (by)
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (class, classList, src)
+import Html.Attributes exposing (class, classList, id, src)
 import Html.Events
 import Html.Extra as Html
+import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model)
 import Model.Lenses exposing (projects, records)
+import Route exposing (Route)
 import View.Icons exposing (icon)
 
 
-viewComparePanel : Model -> Html (Flow Model ())
-viewComparePanel model =
+viewCompareBanner : Model -> Html (Flow Model ())
+viewCompareBanner model =
     case Model.getCompareState model of
-        CompareIdle ->
-            Html.nothing
-
         CompareSelecting left ->
             viewBanner (selectionLabel model left)
 
-        CompareActive d ->
-            viewPanel (selectionLabel model d.left) (selectionLabel model d.right) d
+        _ ->
+            Html.nothing
+
+
+viewCompareDialog : Model -> Html (Flow Model ())
+viewCompareDialog model =
+    Html.node "dialog"
+        [ id "compare-dialog"
+        , class "dialog compare-dialog"
+        , Html.Events.on "close" (Decode.succeed Actions.cancelCompare)
+        , Html.Events.onClick (Actions.closeDialog "compare-dialog")
+        ]
+        [ case Model.getCompareState model of
+            CompareActive d ->
+                viewDialogContent model d
+
+            _ ->
+                Html.nothing
+        ]
 
 
 selectionLabel : Model -> CompareSelection -> String
@@ -43,7 +59,8 @@ selectionLabel model sel =
 viewBanner : String -> Html (Flow Model ())
 viewBanner leftLabel =
     Html.div [ class "compare-banner" ]
-        [ Html.text ("Comparing: " ++ leftLabel ++ " — click another file, or ")
+        [ Html.span [ class "compare-banner-text" ]
+            [ Html.text ("Comparing " ++ leftLabel ++ ". Pick another file to compare, or ") ]
         , Html.button
             [ class "compare-banner-cancel"
             , Html.Events.onClick Actions.cancelCompare
@@ -52,32 +69,36 @@ viewBanner leftLabel =
         ]
 
 
-viewPanel : String -> String -> CompareActiveData -> Html (Flow Model ())
-viewPanel leftLabel rightLabel d =
-    Html.div [ class "compare-panel" ]
-        [ Html.div [ class "compare-panel-header" ]
-            [ Html.span [ class "compare-panel-title" ]
-                [ Html.text ("Comparing: " ++ leftLabel ++ " ↔ " ++ rightLabel) ]
+viewDialogContent : Model -> CompareActiveData -> Html (Flow Model ())
+viewDialogContent model d =
+    Html.div
+        [ class "dialog-content compare-dialog-content"
+        , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+        ]
+        [ Html.div [ class "compare-dialog-header" ]
+            [ Html.span [ class "compare-dialog-title" ]
+                [ Html.text ("Comparing " ++ selectionLabel model d.left ++ " ↔ " ++ selectionLabel model d.right) ]
             , Html.button
-                [ class "compare-panel-close"
-                , Html.Events.onClick Actions.cancelCompare
+                [ class "icon-btn compare-dialog-close"
+                , Html.Attributes.title "Close comparison"
+                , Html.Events.onClick (Actions.closeDialog "compare-dialog")
                 ]
                 [ icon True "close" ]
             ]
-        , Html.div [ class "compare-panel-body" ] [ viewBody d ]
+        , Html.div [ class "compare-dialog-body" ] [ viewBody model d ]
         ]
 
 
-viewBody : CompareActiveData -> Html msg
-viewBody d =
+viewBody : Model -> CompareActiveData -> Html (Flow Model ())
+viewBody model d =
     case bothTextSuccess d of
         Just ( leftStr, rightStr ) ->
-            viewTextDiff d.left d.right leftStr rightStr
+            viewTextDiff model d.left d.right leftStr rightStr
 
         Nothing ->
             Html.div [ class "compare-panes" ]
-                [ viewPane d.left d.leftContent
-                , viewPane d.right d.rightContent
+                [ viewPane model d.left d.leftContent
+                , viewPane model d.right d.rightContent
                 ]
 
 
@@ -91,15 +112,63 @@ bothTextSuccess d =
             Nothing
 
 
-viewPane : CompareSelection -> ApiData String -> Html msg
-viewPane sel content =
+viewPane : Model -> CompareSelection -> ApiData String -> Html (Flow Model ())
+viewPane model sel content =
     Html.div [ class "compare-pane" ]
-        [ Html.div [ class "compare-pane-label" ] [ Html.text sel.fileName ]
-        , viewPaneBody sel content
+        [ viewPaneHeader model sel
+        , Html.div [ class "compare-pane-body" ] [ viewPaneBody sel content ]
         ]
 
 
-viewPaneBody : CompareSelection -> ApiData String -> Html msg
+viewPaneHeader : Model -> CompareSelection -> Html (Flow Model ())
+viewPaneHeader model sel =
+    Html.div [ class "compare-pane-header" ]
+        [ Html.div [ class "compare-pane-label" ] [ Html.text (selectionLabel model sel) ]
+        , Html.button
+            [ class "dir-item-icon-btn compare-pane-source-btn"
+            , Html.Attributes.title "Open source in project"
+            , Html.Events.onClick (openSource sel)
+            ]
+            [ icon True "arrow_outward" ]
+        ]
+
+
+openSource : CompareSelection -> Flow Model ()
+openSource sel =
+    Actions.cancelCompare
+        |> Flow.seq (Actions.closeDialog "compare-dialog")
+        |> Flow.seq (Actions.goToRoute (sourceRoute sel))
+        |> Flow.seq (Actions.addToast True "Opened source")
+
+
+sourceRoute : CompareSelection -> Route
+sourceRoute sel =
+    Route.Project
+        { projectId = sel.projectId
+        , mHighlight =
+            Just
+                { id = sel.recordId
+                , target =
+                    case sel.source of
+                        FromOutput _ ->
+                            Route.Output
+
+                        FromSrc ->
+                            Route.Source
+                , path = sel.path
+                , range = Nothing
+                }
+        , mCommit =
+            case sel.source of
+                FromOutput commit_ ->
+                    Just commit_
+
+                FromSrc ->
+                    Nothing
+        }
+
+
+viewPaneBody : CompareSelection -> ApiData String -> Html (Flow Model ())
 viewPaneBody sel content =
     case Model.compareSelectionMode sel of
         CompareImage ->
@@ -117,7 +186,7 @@ viewPaneBody sel content =
             viewTextContent content
 
 
-viewTextContent : ApiData String -> Html msg
+viewTextContent : ApiData String -> Html (Flow Model ())
 viewTextContent content =
     case content of
         Success s ->
@@ -141,8 +210,8 @@ rawUrl sel =
             Api.srcFileDownloadUrl sel.recordId sel.path
 
 
-viewTextDiff : CompareSelection -> CompareSelection -> String -> String -> Html msg
-viewTextDiff left right leftStr rightStr =
+viewTextDiff : Model -> CompareSelection -> CompareSelection -> String -> String -> Html (Flow Model ())
+viewTextDiff model left right leftStr rightStr =
     let
         leftLines =
             String.lines leftStr
@@ -157,9 +226,10 @@ viewTextDiff left right leftStr rightStr =
             else
                 alignByPosition leftLines rightLines
 
-        viewDiffPane pick =
+        viewDiffPane sel pick =
             Html.div [ class "compare-diff-pane" ]
-                [ Html.div [ class "compare-diff-lines" ]
+                [ viewPaneHeader model sel
+                , Html.div [ class "compare-diff-lines" ]
                     (List.map
                         (\( l, r ) ->
                             Html.div
@@ -170,7 +240,7 @@ viewTextDiff left right leftStr rightStr =
                     )
                 ]
     in
-    Html.div [ class "compare-diff" ] [ viewDiffPane Tuple.first, viewDiffPane Tuple.second ]
+    Html.div [ class "compare-diff" ] [ viewDiffPane left Tuple.first, viewDiffPane right Tuple.second ]
 
 
 textKind : CompareSelection -> String

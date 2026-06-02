@@ -16,7 +16,6 @@ import Model.Shadow exposing (StepConfigEntry, StepType(..))
 import Model.TableSpec as TableSpec
 import Route
 import Specs
-import View.Compare
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewLoading, viewPage, viewSearchBox)
@@ -99,8 +98,7 @@ viewProject model proj =
 
                 sections =
                     Html.div [ Html.Attributes.class "sections" ]
-                        (View.Compare.viewComparePanel model
-                            :: configErrors
+                        (configErrors
                             :: orphanWarning
                             :: (proj.tables
                                     |> Dict.toList

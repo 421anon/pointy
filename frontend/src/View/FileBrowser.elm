@@ -60,30 +60,53 @@ viewCompareButton model =
     Maybe.unwrap Html.nothing <|
         \sel ->
             let
-                isSelecting =
+                isPicking =
                     has (compareState << compareSelecting) model
+
+                isPicked =
+                    has (compareState << compareSelecting << where_ ((==) sel)) model
+
+                pickedLabel =
+                    try (compareState << compareSelecting) model
+                        |> Maybe.unwrap "selected file" .fileName
+
+                tooltip =
+                    if isPicked then
+                        "Already picked"
+
+                    else if isPicking then
+                        "Pick to compare with " ++ pickedLabel
+
+                    else
+                        "Compare"
+
+                action =
+                    if isPicked then
+                        Flow.none
+
+                    else if isPicking then
+                        Actions.selectCompareFile sel
+
+                    else
+                        Actions.startCompare sel
             in
             Html.button
                 [ classList
                     [ ( "dir-item-icon-btn", True )
-                    , ( "compare-btn-active", isSelecting )
+                    , ( "compare-btn-picked", isPicked )
+                    , ( "compare-btn-ready", isPicking && not isPicked )
                     ]
-                , Html.Attributes.title
-                    (if isSelecting then
-                        "Select to compare"
+                , Html.Attributes.title tooltip
+                , Html.Events.onClick action
+                ]
+                [ icon True
+                    (if isPicked then
+                        "check_circle"
 
                      else
-                        "Compare"
-                    )
-                , Html.Events.onClick
-                    (if isSelecting then
-                        Actions.selectCompareFile sel
-
-                     else
-                        Actions.startCompare sel
+                        "compare_arrows"
                     )
                 ]
-                [ icon True "compare_arrows" ]
 
 
 renderDirectoryContents : Model -> StepSpec -> Maybe Int -> Maybe DirContext -> Bool -> List String -> String -> ApiData (Dict String DirectoryItem) -> Html (Flow Model ())

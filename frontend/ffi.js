@@ -1,7 +1,13 @@
 function openDialog(id) {
   const dialog = document.getElementById(id);
-  if (!dialog) return;
+  if (!dialog || dialog.open) return;
   dialog.showModal();
+}
+
+function closeDialog(id) {
+  const dialog = document.getElementById(id);
+  if (!dialog || !dialog.open) return;
+  dialog.close();
 }
 
 function hidePopover(id) {
@@ -119,6 +125,7 @@ export function connectPorts(app) {
 
   const ffiFns = {
     openDialog,
+    closeDialog,
     hidePopover,
     copyToClipboard,
     closeStepStatusStream,

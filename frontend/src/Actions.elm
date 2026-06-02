@@ -921,6 +921,7 @@ selectCompareFile right =
                     , rightContent = NotAsked
                     }
                 )
+                |> Flow.seq (openDialog "compare-dialog")
                 |> Flow.seq (fetchCompareSide .left compareLeftContent left)
                 |> Flow.seq (fetchCompareSide .right compareRightContent right)
 
@@ -949,7 +950,7 @@ fetchCompareSide sideOf contentLens sel =
                     )
 
         _ ->
-            Flow.none
+            Flow.pure ()
 
 
 fetchCompareContent : CompareSelection -> FlowError Http.Error Model String
@@ -1520,6 +1521,11 @@ hidePopover popoverId =
 openDialog : String -> Flow Model ()
 openDialog id =
     callJs "openDialog" Encode.string (Decode.succeed ()) id
+
+
+closeDialog : String -> Flow Model ()
+closeDialog id =
+    callJs "closeDialog" Encode.string (Decode.succeed ()) id
 
 
 toggleTheme : Flow Model ()
