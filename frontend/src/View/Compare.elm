@@ -62,7 +62,7 @@ viewBody left right contents =
             viewImagePair left right
 
         ( False, False, Success pair ) ->
-            viewTextDiff pair.left pair.right
+            viewTextDiff left right pair.left pair.right
 
         ( False, False, Error _ ) ->
             Html.div [ class "compare-error" ] [ Html.text "Failed to load files for comparison." ]
@@ -97,24 +97,55 @@ rawUrl sel =
             Api.srcFileDownloadUrl sel.recordId sel.path
 
 
-viewTextDiff : String -> String -> Html msg
-viewTextDiff leftStr rightStr =
+viewTextDiff : CompareSelection -> CompareSelection -> String -> String -> Html msg
+viewTextDiff left right leftStr rightStr =
     let
+        leftLines =
+            String.lines leftStr
+
+        rightLines =
+            String.lines rightStr
+
         rows =
-            alignLines (String.lines leftStr) (String.lines rightStr)
+            if textKind left == textKind right then
+                alignLines leftLines rightLines
+
+            else
+                alignByPosition leftLines rightLines
 
         viewPane pick =
             Html.div [ class "compare-diff-pane" ]
-                (List.map
-                    (\( l, r ) ->
-                        Html.div
-                            [ classList [ ( "diff-line", True ), ( "diff-line-diff", l /= r ) ] ]
-                            [ Html.text (Maybe.unwrap "\u{00A0}" identity (pick ( l, r ))) ]
+                [ Html.div [ class "compare-diff-lines" ]
+                    (List.map
+                        (\( l, r ) ->
+                            Html.div
+                                [ classList [ ( "diff-line", True ), ( "diff-line-diff", l /= r ) ] ]
+                                [ Html.text (Maybe.unwrap "\u{00A0}" identity (pick ( l, r ))) ]
+                        )
+                        rows
                     )
-                    rows
-                )
+                ]
     in
     Html.div [ class "compare-diff" ] [ viewPane Tuple.first, viewPane Tuple.second ]
+
+
+textKind : CompareSelection -> String
+textKind sel =
+    let
+        mime =
+            Maybe.withDefault "" sel.mimeType
+
+        parts =
+            String.split "." (String.toLower sel.fileName)
+    in
+    case parts of
+        [ _ ] ->
+            mime
+
+        _ ->
+            List.reverse parts
+                |> List.head
+                |> Maybe.withDefault mime
 
 
 alignLines : List String -> List String -> List ( Maybe String, Maybe String )
@@ -175,3 +206,23 @@ alignLines aList bList =
                 backtrack (i - 1) j (( Array.get (i - 1) a, Nothing ) :: acc)
     in
     backtrack m n []
+
+
+alignByPosition : List String -> List String -> List ( Maybe String, Maybe String )
+alignByPosition left right =
+    let
+        go a b acc =
+            case ( a, b ) of
+                ( [], [] ) ->
+                    List.reverse acc
+
+                ( l :: ls, r :: rs ) ->
+                    go ls rs (( Just l, Just r ) :: acc)
+
+                ( l :: ls, [] ) ->
+                    go ls [] (( Just l, Nothing ) :: acc)
+
+                ( [], r :: rs ) ->
+                    go [] rs (( Nothing, Just r ) :: acc)
+    in
+    go left right []

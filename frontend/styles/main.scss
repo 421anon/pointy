@@ -1911,11 +1911,20 @@ select.field-changed,
   border-right: 1px solid var(--border-color);
   min-width: 0;
 }
+
+.compare-diff-lines {
+  display: grid;
+  align-content: start;
+  min-width: 100%;
+  width: max-content;
+}
 .compare-diff-pane:last-child { border-right: none; }
 .diff-line {
   white-space: pre;
   padding: 0 var(--spacing-sm);
   min-height: 1.5em;
+  box-sizing: border-box;
+  min-width: 100%;
 }
 .diff-line-diff { background: var(--state-danger-outline); }
 
