@@ -1,12 +1,16 @@
 module Model.Core exposing (..)
 
 import Api.ApiData as ApiData exposing (ApiData(..))
+import Array
 import Browser.Navigation
 import Components.Select exposing (SelectState, initSelectState)
+import Csv.Parser
 import Debounce
 import Dict exposing (Dict)
 import DnDList
 import Flow exposing (Flow)
+import Grid
+import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
@@ -499,12 +503,14 @@ type alias DirectoryFile =
     , viewable : Bool
     , mimeType : Maybe String
     , view : FileView
+    , delimitedGrid : Maybe DelimitedGrid
     }
 
 
 type alias DirectoryFolder =
     { children : ApiData (Dict String DirectoryItem)
     , expanded : Bool
+    , extras : ApiData (Dict String Value)
     }
 
 
@@ -523,6 +529,7 @@ extractDirectoryItemBase item =
                 , viewable = file.viewable
                 , mimeType = file.mimeType
                 , view = { isViewing = file.view.isViewing, zoom = file.view.zoom }
+                , delimitedGrid = file.delimitedGrid
                 }
 
         Folder folder ->
@@ -560,6 +567,7 @@ extractDirectoryFolderBase : DirectoryFolder -> DirectoryFolder
 extractDirectoryFolderBase folder =
     { children = ApiData.map (Dict.map (\_ -> extractDirectoryItemBase)) folder.children
     , expanded = folder.expanded
+    , extras = folder.extras
     }
 
 
@@ -578,7 +586,163 @@ updateDirectoryFolderBase folder base =
     { folder
         | children = ApiData.update mergeDirectoryItems folder.children base.children
         , expanded = base.expanded
+        , extras = base.extras
     }
+
+
+type alias ColumnMeta =
+    { columnType : Grid.ColumnType
+    , nullable : Bool
+    }
+
+
+type alias TableMeta =
+    { columns : List ColumnMeta
+    }
+
+
+type alias DelimitedGrid =
+    { grid : Grid.State
+    }
+
+
+type DelimitedFileKind
+    = CsvFile
+    | TsvFile
+
+
+delimitedGridFromFile : List String -> Maybe String -> String -> Maybe TableMeta -> Maybe DelimitedGrid
+delimitedGridFromFile path mimeType content mTableMeta =
+    detectDelimitedFile path mimeType
+        |> Maybe.andThen
+            (\fileKind ->
+                case Csv.Parser.parse { fieldSeparator = delimitedSeparator fileKind } content of
+                    Ok (header :: rows) ->
+                        Just (buildDelimitedGrid header rows mTableMeta)
+
+                    _ ->
+                        Nothing
+            )
+
+
+detectDelimitedFile : List String -> Maybe String -> Maybe DelimitedFileKind
+detectDelimitedFile path mimeType =
+    let
+        fileName =
+            path
+                |> List.reverse
+                |> List.head
+                |> Maybe.withDefault ""
+                |> String.toLower
+
+        normalizedMimeType =
+            mimeType
+                |> Maybe.withDefault ""
+                |> String.toLower
+    in
+    if String.endsWith ".tsv" fileName || String.startsWith "text/tab-separated-values" normalizedMimeType then
+        Just TsvFile
+
+    else if String.endsWith ".csv" fileName || String.startsWith "text/csv" normalizedMimeType || String.startsWith "application/csv" normalizedMimeType then
+        Just CsvFile
+
+    else
+        Nothing
+
+
+delimitedSeparator : DelimitedFileKind -> Char
+delimitedSeparator fileKind =
+    case fileKind of
+        CsvFile ->
+            ','
+
+        TsvFile ->
+            '\t'
+
+
+buildDelimitedGrid : List String -> List (List String) -> Maybe TableMeta -> DelimitedGrid
+buildDelimitedGrid header rows mTableMeta =
+    let
+        columnCount =
+            (header :: rows)
+                |> List.map List.length
+                |> List.foldl max 0
+
+        normalizedHeader =
+            padDelimitedCells columnCount header
+
+        normalizedRows =
+            List.map (padDelimitedCells columnCount) rows
+
+        effectiveColMetas =
+            case mTableMeta of
+                Just meta ->
+                    meta.columns
+                        ++ List.repeat (max 0 (columnCount - List.length meta.columns)) { columnType = Grid.Text, nullable = True }
+
+                Nothing ->
+                    List.repeat columnCount { columnType = Grid.Text, nullable = False }
+
+        sampleRows =
+            List.take 100 normalizedRows
+
+        delimitedColumns =
+            List.indexedMap
+                (\index title ->
+                    let
+                        colMeta =
+                            List.getAt index effectiveColMetas
+                                |> Maybe.withDefault { columnType = Grid.Text, nullable = True }
+                    in
+                    { id = "column-" ++ String.fromInt index
+                    , title =
+                        if String.isEmpty (String.trim title) then
+                            "Column " ++ String.fromInt (index + 1)
+
+                        else
+                            title
+                    , tooltip =
+                        "Column type: "
+                            ++ Grid.columnTypeLabel colMeta.columnType
+                            ++ (if colMeta.nullable then
+                                    " (nullable)"
+
+                                else
+                                    ""
+                               )
+                    , width = delimitedColumnWidth title (List.map (listCell index) sampleRows)
+                    , type_ = colMeta.columnType
+                    }
+                )
+                normalizedHeader
+    in
+    { grid = Grid.init delimitedColumns (List.map Array.fromList normalizedRows)
+    }
+
+
+padDelimitedCells : Int -> List String -> List String
+padDelimitedCells targetLength cells =
+    if List.length cells >= targetLength then
+        cells
+
+    else
+        cells ++ List.repeat (targetLength - List.length cells) ""
+
+
+listCell : Int -> List String -> String
+listCell index cells =
+    List.getAt index cells |> Maybe.withDefault ""
+
+
+delimitedColumnWidth : String -> List String -> Int
+delimitedColumnWidth title values =
+    let
+        maxChars =
+            values
+                |> List.map String.length
+                |> List.foldl max (String.length title)
+    in
+    clamp 88 320 ((maxChars + 2) * 9)
 
 
 updateStepRecordTable : Table StepRecord -> Table StepRecord -> Table StepRecord

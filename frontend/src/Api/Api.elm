@@ -8,6 +8,7 @@ module Api.Api exposing
     , fetchAutocomplete
     , fetchCommitHash
     , fetchDirectoryContents
+    , fetchExtras
     , fetchFileContents
     , fetchPresets
     , fetchProjects
@@ -316,6 +317,19 @@ fetchDirectoryContents itemDecoder stepId commit folderPath =
         Http.get
             { url = UrlBuilder.absolute [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
+            }
+
+
+fetchExtras : Int -> Maybe String -> List String -> Flow s (Result Http.Error (Dict String Json.Decode.Value))
+fetchExtras stepId commit folderPath =
+    Flow.lift <|
+        Http.get
+            { url =
+                UrlBuilder.absolute [ "backend", "step-files", "extras" ]
+                    (stepFileQuery stepId commit
+                        ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ]
+                    )
+            , expect = Http.expectJson identity (Json.Decode.dict Json.Decode.value)
             }
 
 

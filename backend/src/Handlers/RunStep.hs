@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Handlers.RunStep (
+    buildExtras,
     runStepHandler,
     stepLogHandler,
     stopStepHandler,
@@ -100,6 +101,10 @@ stepInstallable :: ReadRepoContext -> Int -> String
 stepInstallable (ReadRepoContext repoPath targetCommit) eid =
     "git+file://" ++ repoPath ++ "?rev=" ++ targetCommit ++ "&allRefs=true#pointy.steps." ++ show eid
 
+extrasInstallable :: ReadRepoContext -> Int -> String
+extrasInstallable ctx eid =
+    stepInstallable ctx eid ++ ".meta.pointy.extras"
+
 buildStep :: ReadRepoContext -> Int -> IO ()
 buildStep ctx eid = do
     let targetCommitText = T.pack (readCommitHash ctx)
@@ -126,10 +131,45 @@ buildStep ctx eid = do
                             else return ()
                     ExitFailure _ -> return ()
                 liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
+
+        -- Build extras derivation if present, independently of main step status.
+        liftIO $ buildExtras ctx eid
+
     case result of
         Left err -> do
             putStrLn $ "buildStep error: " ++ err
             broadcastKnownStepStatus eid targetCommitText ("failure", Just (T.pack err))
+        Right _ -> return ()
+
+{- | Attempt to build the extras derivation for a step.  Errors are non-fatal
+(logged only) because extras are supplementary metadata.
+-}
+buildExtras :: ReadRepoContext -> Int -> IO ()
+buildExtras ctx eid = do
+    result <- runExceptT $ do
+        mExtrasPath <- getExtrasOutPath ctx eid
+        case mExtrasPath of
+            Nothing -> return ()
+            Just extrasPath -> do
+                built <- liftIO $ isBuilt extrasPath
+                if built
+                    then liftIO $ registerGcRootForOutPath extrasPath
+                    else do
+                        requirements <- getExtrasRequirements ctx eid
+                        let buildKey = buildKeyForOutPath extrasPath
+                        exitCode <-
+                            liftIO $
+                                submitAndWait
+                                    requirements
+                                    buildKey
+                                    ["nix", "build", "--no-link", "--no-eval-cache", extrasInstallable ctx eid]
+                        case exitCode of
+                            ExitSuccess -> do
+                                nowBuilt <- liftIO $ isBuilt extrasPath
+                                if nowBuilt then liftIO $ registerGcRootForOutPath extrasPath else return ()
+                            ExitFailure _ -> return ()
+    case result of
+        Left err -> putStrLn $ "buildExtras error for step " ++ show eid ++ ": " ++ err
         Right _ -> return ()
 
 getStepOutPath :: ReadRepoContext -> Int -> ExceptT String IO T.Text
@@ -137,10 +177,46 @@ getStepOutPath ctx eid = do
     output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
     return $ T.pack output
 
+{- | Resolve the extras outPath.  Returns Nothing when the step has no extras
+attribute (i.e. the eval result is not a valid store path).
+-}
+getExtrasOutPath :: ReadRepoContext -> Int -> ExceptT String IO (Maybe FilePath)
+getExtrasOutPath ctx eid = do
+    result <-
+        liftIO $
+            runExceptT $
+                runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".meta.pointy.extras.outPath")
+    case result of
+        Left _ -> return Nothing
+        Right path ->
+            if null path
+                then return Nothing
+                else return (Just path)
+
+getExtrasRequirements :: ReadRepoContext -> Int -> ExceptT String IO StepRequirements
+getExtrasRequirements ctx eid = do
+    let attr = "#pointy.steps." ++ show eid ++ ".meta.pointy.extras.requirements"
+    result <- liftIO $ runExceptT $ runNixEvalJsonInRepo ctx attr
+    case result of
+        Left _ ->
+            -- No extras.requirements: use conservative defaults.
+            return StepRequirements{cpu = 1, ram = "1G", ior = "0", iow = "0"}
+        Right output ->
+            decodeAndValidateRequirements attr output
+
 getStepRequirements :: ReadRepoContext -> Int -> ExceptT String IO StepRequirements
 getStepRequirements ctx eid = do
     let attr = "#pointy.steps." ++ show eid ++ ".requirements"
     output <- runNixEvalJsonInRepo ctx attr
+    decodeAndValidateRequirements attr output
+
+{- | Decode a JSON-encoded `StepRequirements` payload and reject values that
+would produce malformed slurm arguments (negative cpu, delimiters in
+ram/ior/iow). Used by both the main step and extras paths so they share
+the same validation contract.
+-}
+decodeAndValidateRequirements :: String -> String -> ExceptT String IO StepRequirements
+decodeAndValidateRequirements attr output = do
     requirements <-
         case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
             Left err -> throwError $ "Failed to decode " ++ attr ++ ": " ++ err
@@ -190,7 +266,16 @@ stopStepSync eid commit = do
                     let targetCommit = fromMaybe (T.pack commitHash) commit
                      in return (repoPath, targetCommit)
 
-        outPathText <- getStepOutPath (ReadRepoContext repoPath (T.unpack targetCommit)) eid
+        let ctx = ReadRepoContext repoPath (T.unpack targetCommit)
+
+        -- Cancel extras first: if we cancelled main only, Nix dependency
+        -- resolution in the extras build could restart the main build.
+        mExtrasPath <- getExtrasOutPath ctx eid
+        liftIO $ case mExtrasPath of
+            Just extrasPath -> cancel (buildKeyForOutPath extrasPath)
+            Nothing -> return ()
+
+        outPathText <- getStepOutPath ctx eid
         liftIO $ cancel $ buildKeyForOutPath $ T.unpack outPathText
         liftIO $ removeDependencyRunningOverrides targetCommit [eid]
         liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing

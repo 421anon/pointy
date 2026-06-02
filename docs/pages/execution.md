@@ -101,6 +101,29 @@ Inline HTML preview also exposes **Zoom In** and **Zoom Out** controls.
 
 ![The output files browser open on a fastqc step, showing chim_R1_fastqc.html previewed inline with its FastQC Report content visible alongside the other output files.](screenshots/light/output-files-html-preview.png)
 
+## CSV and TSV grid preview
+
+Files ending in `.csv` or `.tsv` (and files served with the matching MIME types) render as a sortable, filterable data grid instead of the plain text preview.
+
+Each column has:
+
+- a header you can click to cycle ascending → descending → unsorted
+- a filter input below the header
+- a draggable right-edge handle for resizing
+
+The filter input recognises four modes per column:
+
+- `foo` — case-insensitive substring match
+- `=foo` — exact match (case-insensitive)
+- `<5.3` / `>5.3` — numeric comparison; columns that fail to parse as numbers fall back to lexical comparison
+- an empty filter shows all rows
+
+When the step's template publishes typed column metadata, columns are treated as `Int`, `Float`, or `String` for filtering and sorting, and the header tooltip shows the declared type and nullability. Without that metadata every column is treated as a string column. See [Injecting typed column metadata via `extras`](user-repo-setup.md#injecting-typed-column-metadata-via-extras) for the template-author side.
+
+Metadata is fetched lazily, per folder, when you expand it. The first time you open a folder of a step whose extras have not been built yet, Pointy enqueues the extras build in the background; subsequent visits pick up the typed columns once the build finishes. The grid stays usable in the meantime — just with string-typed columns.
+
+![A samples.csv output rendered as a delimited grid inside a step's Output Files section, with column headers carrying filter inputs above multiple data rows.](screenshots/light/output-files-csv-grid.png)
+
 ## Source files
 
 Some derivation step types enable **Source Files**. For those step types, Pointy shows a Source Files section in the step view even when the directory is still empty.

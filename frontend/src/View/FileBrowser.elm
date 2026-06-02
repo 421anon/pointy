@@ -9,14 +9,16 @@ import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
 import Filesize
 import Flow exposing (Flow)
+import Grid
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, href, id, rel, src, style, target)
+import Html.Attributes.Extra exposing (attributeIf)
 import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
-import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, mHighlight, mimeType, route)
+import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -379,7 +381,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             Maybe.unwrap []
                                                 (\{ recordId, target } ->
                                                     [ Html.Events.on "pointerdown" (Decode.succeed (Actions.startGutterDrag target recordId path lineNum))
-                                                    , Html.Events.on "pointerenter" (Decode.succeed (Actions.extendGutterDrag target recordId path lineNum))
+                                                    , attributeIf (has (gutterDrag << just) model) <|
+                                                        Html.Events.on "pointerenter" (Decode.succeed (Actions.extendGutterDrag target recordId path lineNum))
                                                     ]
                                                 )
                                                 mGutter
@@ -402,7 +405,15 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         , Html.span [ class "file-line-content" ] [ Html.text line ]
                                         ]
 
-                                viewContent text =
+                                gridAction =
+                                    case ( mRecordId, mDirCtx ) of
+                                        ( Just recordId, Just (OutputDir _ _) ) ->
+                                            Just (Actions.wrapDelimitedGridFlow recordId path)
+
+                                        _ ->
+                                            Nothing
+
+                                viewPlainContent text =
                                     let
                                         lines =
                                             String.split "\n" text
@@ -413,6 +424,14 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         , style "max-height" (calculateViewerHeight (List.length lines))
                                         ]
                                         (List.indexedMap renderLine lines)
+
+                                viewContent text =
+                                    case ( file.delimitedGrid, gridAction, mSelectedRange ) of
+                                        ( Just delimitedGrid, Just updateGrid, Nothing ) ->
+                                            Grid.view delimitedGrid.grid |> Html.map updateGrid
+
+                                        _ ->
+                                            viewPlainContent text
                             in
                             Html.div [ class "file-viewer" ]
                                 [ ApiData.foldVisible

@@ -4,14 +4,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepRawHandler, DirEntry (..)) where
+module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepRawHandler, stepExtrasHandler, DirEntry (..)) where
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Monad (unless)
+import Control.Monad (unless, void, when)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (ToJSON)
+import Data.Aeson (ToJSON, Value (Object), eitherDecode)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Data.List (intercalate, isPrefixOf)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
@@ -21,6 +23,7 @@ import Data.Text (Text, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import GHC.Generics (Generic)
+import Handlers.RunStep (buildExtras)
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
 import ProcessLimiter (readProcessWithExitCodeL)
@@ -41,7 +44,7 @@ import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitPath, takeExtension, takeFileName, (</>))
-import UserRepo (ReadRepoContext (..), runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
 
 import System.IO (IOMode (..), withBinaryFile)
 
@@ -174,6 +177,8 @@ mimeTypeByExtension path = case takeExtension path of
     ".xml" -> Just "application/xml"
     ".html" -> Just "text/html"
     ".htm" -> Just "text/html"
+    ".csv" -> Just "text/csv"
+    ".tsv" -> Just "text/tab-separated-values"
     _ -> Nothing
 
 resolvedMimeType :: FilePath -> IO Text
@@ -233,3 +238,75 @@ assertInside :: FilePath -> FilePath -> Handler ()
 assertInside path base =
     unless (joinPath (splitPath (normalise base)) `isPrefixOf` joinPath (splitPath (normalise path))) $
         throwError err400{errBody = "Path traversal not allowed"}
+
+{- | GET /step-files/extras?id=<stepId>&commit=<commit>&path=<dirPath>
+Returns the meta.json for the given directory from the extras derivation.
+Returns {} when no extras attr exists or when meta.json is absent.
+Returns 500 when meta.json exists but is not a JSON object, or when the
+Nix evaluation itself fails for any reason other than the extras
+attribute being absent.
+-}
+stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler LBS.ByteString
+stepExtrasHandler stepId mCommit mDirPath = do
+    repoPath <- liftIO userRepoPath
+    commitHash <- resolveCommitHash mCommit
+    let ctx = ReadRepoContext repoPath commitHash
+        stepAttr = "#pointy.steps." ++ show stepId
+        -- The `?` dotted path checks each segment safely and short-circuits,
+        -- so a missing meta.pointy.extras.outPath yields JSON null without a
+        -- Nix error.  Genuine eval failures (bad commit, unknown step id,
+        -- broken step expression) still surface as a Left from runNixEval...
+        applyExpr = "(s: if s ? meta.pointy.extras.outPath then s.meta.pointy.extras.outPath else null)"
+    extrasResult <- liftIO $ runExceptT $ runNixEvalJsonApplyInRepo ctx applyExpr stepAttr
+    extrasPath <- case extrasResult of
+        Left err ->
+            throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate extras outPath: " ++ err))}
+        Right output ->
+            case eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Maybe FilePath) of
+                Left err ->
+                    throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to decode extras outPath: " ++ err))}
+                Right Nothing ->
+                    return Nothing
+                Right (Just path) ->
+                    return (Just path)
+    case extrasPath of
+        Nothing -> return "{}"
+        Just extrasPath_ -> do
+            assertNixStorePath extrasPath_
+            let dirPath = fromMaybe "" mDirPath
+                metaPath = normalise (extrasPath_ </> dirPath </> "meta.json")
+            assertInside metaPath extrasPath_
+            exists <- liftIO $ doesFileExist metaPath
+            if not exists
+                then do
+                    -- meta.json is absent for one of two reasons:
+                    --   (a) the extras derivation has not been realised yet, or
+                    --   (b) it was realised but emits no metadata for this dir.
+                    -- Enqueue a build in the background so subsequent requests
+                    -- can pick up the metadata; buildExtras short-circuits to a
+                    -- GC-root refresh when the derivation is already built, so
+                    -- case (b) costs only one Nix eval and one squeue check.
+                    liftIO $ void $ forkIO $ buildExtras ctx stepId
+                    return "{}"
+                else do
+                    sz <- liftIO $ getFileSize metaPath
+                    when (sz > maxExtrasJsonBytes) $
+                        throwError err400{errBody = "extras meta.json exceeds 10 MiB size limit"}
+                    content <- liftIO $ LBS.readFile metaPath
+                    case eitherDecode content of
+                        Left err ->
+                            throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("extras meta.json parse error: " ++ err))}
+                        Right (Object _) -> return content
+                        Right _ ->
+                            throwError err500{errBody = "extras meta.json is not a JSON object"}
+  where
+    maxExtrasJsonBytes = 10 * 1024 * 1024 -- 10 MiB
+
+resolveCommitHash :: Maybe Text -> Handler String
+resolveCommitHash mCommit = case mCommit of
+    Just c -> return (unpack c)
+    Nothing -> do
+        result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ h) -> return h
+        case result of
+            Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveCommitHash: " ++ err))}
+            Right h -> return h
