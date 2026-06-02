@@ -1958,3 +1958,23 @@ select.field-changed,
     background-position: -200% 0;
   }
 }
+
+@media (max-width: 600px) {
+  body {
+    padding: 0;
+  }
+
+  .page {
+    padding-inline: var(--spacing-xs);
+  }
+
+  .src-files-section,
+  .output-files-section {
+    padding-inline: var(--spacing-xs);
+  }
+
+  .table-records-loading,
+  .table-form-wrapper {
+    padding-inline: var(--spacing-xs);
+  }
+}
