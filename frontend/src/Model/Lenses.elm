@@ -11,7 +11,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (CompareActiveData, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), LeftRight, Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (CompareActiveData, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Time
@@ -557,9 +557,14 @@ compareSelecting =
         )
 
 
-compareContents : Lens ls CompareActiveData (ApiData LeftRight) x y
-compareContents =
-    lens ".contents" .contents (\d v -> { d | contents = v })
+compareLeftContent : Lens ls CompareActiveData (ApiData String) x y
+compareLeftContent =
+    lens ".leftContent" .leftContent (\d v -> { d | leftContent = v })
+
+
+compareRightContent : Lens ls CompareActiveData (ApiData String) x y
+compareRightContent =
+    lens ".rightContent" .rightContent (\d v -> { d | rightContent = v })
 
 
 key =

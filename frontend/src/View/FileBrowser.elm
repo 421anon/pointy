@@ -45,14 +45,14 @@ srcDir =
         )
 
 
-compareSelectionFor : String -> Maybe String -> List String -> DirContext -> CompareSelection
-compareSelectionFor fileName mime path ctx =
+compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
+compareSelectionFor projectId fileName mime path ctx =
     case ctx of
         OutputDir recordId commit_ ->
-            { recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
+            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
 
         SrcDir recordId ->
-            { recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc }
+            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc }
 
 
 viewCompareButton : Model -> Maybe CompareSelection -> Html (Flow Model ())
@@ -75,7 +75,13 @@ viewCompareButton model =
                      else
                         "Compare"
                     )
-                , Html.Events.onClick (Actions.compareClick model sel)
+                , Html.Events.onClick
+                    (if isSelecting then
+                        Actions.selectCompareFile sel
+
+                     else
+                        Actions.startCompare sel
+                    )
                 ]
                 [ icon True "compare_arrows" ]
 
@@ -242,7 +248,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 mCompareSelection =
                     if canView then
-                        Maybe.map (compareSelectionFor itemName file.mimeType path) mDirCtx
+                        Maybe.map2 (\pid ctx -> compareSelectionFor pid itemName file.mimeType path ctx)
+                            (try currentProjectId model)
+                            mDirCtx
 
                     else
                         Nothing

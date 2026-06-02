@@ -1,16 +1,19 @@
 module View.Compare exposing (viewComparePanel)
 
+import Accessors exposing (try)
 import Actions
 import Api.Api as Api
-import Api.ApiData exposing (ApiData(..))
+import Api.ApiData as ApiData exposing (ApiData(..))
 import Array exposing (Array)
+import Extra.Accessors exposing (by)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, src)
 import Html.Events
 import Html.Extra as Html
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (CompareSelection, CompareSource(..), CompareState(..), LeftRight, Model)
+import Model.Core as Model exposing (CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model)
+import Model.Lenses exposing (projects, records)
 import View.Icons exposing (icon)
 
 
@@ -21,16 +24,26 @@ viewComparePanel model =
             Html.nothing
 
         CompareSelecting left ->
-            viewBanner left
+            viewBanner (selectionLabel model left)
 
-        CompareActive { left, right, contents } ->
-            viewPanel left right contents
+        CompareActive d ->
+            viewPanel (selectionLabel model d.left) (selectionLabel model d.right) d
 
 
-viewBanner : CompareSelection -> Html (Flow Model ())
-viewBanner left =
+selectionLabel : Model -> CompareSelection -> String
+selectionLabel model sel =
+    case try (projects << records << ApiData.success << by .id (Just sel.projectId)) model of
+        Just project ->
+            project.name ++ " / " ++ sel.fileName
+
+        Nothing ->
+            sel.fileName
+
+
+viewBanner : String -> Html (Flow Model ())
+viewBanner leftLabel =
     Html.div [ class "compare-banner" ]
-        [ Html.text ("Comparing: " ++ left.fileName ++ " — click another file, or ")
+        [ Html.text ("Comparing: " ++ leftLabel ++ " — click another file, or ")
         , Html.button
             [ class "compare-banner-cancel"
             , Html.Events.onClick Actions.cancelCompare
@@ -39,52 +52,83 @@ viewBanner left =
         ]
 
 
-viewPanel : CompareSelection -> CompareSelection -> ApiData LeftRight -> Html (Flow Model ())
-viewPanel left right contents =
+viewPanel : String -> String -> CompareActiveData -> Html (Flow Model ())
+viewPanel leftLabel rightLabel d =
     Html.div [ class "compare-panel" ]
         [ Html.div [ class "compare-panel-header" ]
             [ Html.span [ class "compare-panel-title" ]
-                [ Html.text ("Comparing: " ++ left.fileName ++ " ↔ " ++ right.fileName) ]
+                [ Html.text ("Comparing: " ++ leftLabel ++ " ↔ " ++ rightLabel) ]
             , Html.button
                 [ class "compare-panel-close"
                 , Html.Events.onClick Actions.cancelCompare
                 ]
                 [ icon True "close" ]
             ]
-        , Html.div [ class "compare-panel-body" ] [ viewBody left right contents ]
+        , Html.div [ class "compare-panel-body" ] [ viewBody d ]
         ]
 
 
-viewBody : CompareSelection -> CompareSelection -> ApiData LeftRight -> Html msg
-viewBody left right contents =
-    case ( Model.compareSelectionIsImage left, Model.compareSelectionIsImage right, contents ) of
-        ( True, True, _ ) ->
-            viewImagePair left right
+viewBody : CompareActiveData -> Html msg
+viewBody d =
+    case bothTextSuccess d of
+        Just ( leftStr, rightStr ) ->
+            viewTextDiff d.left d.right leftStr rightStr
 
-        ( False, False, Success pair ) ->
-            viewTextDiff left right pair.left pair.right
+        Nothing ->
+            Html.div [ class "compare-panes" ]
+                [ viewPane d.left d.leftContent
+                , viewPane d.right d.rightContent
+                ]
 
-        ( False, False, Error _ ) ->
-            Html.div [ class "compare-error" ] [ Html.text "Failed to load files for comparison." ]
 
-        ( False, False, _ ) ->
-            Html.div [ class "compare-loading" ] [ Html.text "Loading…" ]
+bothTextSuccess : CompareActiveData -> Maybe ( String, String )
+bothTextSuccess d =
+    case ( Model.compareSelectionMode d.left, Model.compareSelectionMode d.right, ( d.leftContent, d.rightContent ) ) of
+        ( CompareText, CompareText, ( Success l, Success r ) ) ->
+            Just ( l, r )
 
         _ ->
-            Html.div [ class "compare-error" ] [ Html.text "Compare requires two image files or two text files." ]
+            Nothing
 
 
-viewImagePair : CompareSelection -> CompareSelection -> Html msg
-viewImagePair left right =
-    Html.div [ class "compare-images" ] (List.map viewImagePane [ left, right ])
-
-
-viewImagePane : CompareSelection -> Html msg
-viewImagePane sel =
-    Html.div [ class "compare-image-pane" ]
-        [ Html.div [ class "compare-image-label" ] [ Html.text sel.fileName ]
-        , Html.img [ src (rawUrl sel), class "compare-image" ] []
+viewPane : CompareSelection -> ApiData String -> Html msg
+viewPane sel content =
+    Html.div [ class "compare-pane" ]
+        [ Html.div [ class "compare-pane-label" ] [ Html.text sel.fileName ]
+        , viewPaneBody sel content
         ]
+
+
+viewPaneBody : CompareSelection -> ApiData String -> Html msg
+viewPaneBody sel content =
+    case Model.compareSelectionMode sel of
+        CompareImage ->
+            Html.img [ src (rawUrl sel), class "compare-image" ] []
+
+        CompareHtml ->
+            Html.node "iframe"
+                [ src (rawUrl sel)
+                , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
+                , class "compare-iframe"
+                ]
+                []
+
+        CompareText ->
+            viewTextContent content
+
+
+viewTextContent : ApiData String -> Html msg
+viewTextContent content =
+    case content of
+        Success s ->
+            Html.div [ class "compare-pane-text" ]
+                (List.map (\line -> Html.div [ class "diff-line" ] [ Html.text line ]) (String.lines s))
+
+        Error _ ->
+            Html.div [ class "compare-error" ] [ Html.text "Failed to load file." ]
+
+        _ ->
+            Html.div [ class "compare-loading" ] [ Html.text "Loading…" ]
 
 
 rawUrl : CompareSelection -> String
@@ -113,7 +157,7 @@ viewTextDiff left right leftStr rightStr =
             else
                 alignByPosition leftLines rightLines
 
-        viewPane pick =
+        viewDiffPane pick =
             Html.div [ class "compare-diff-pane" ]
                 [ Html.div [ class "compare-diff-lines" ]
                     (List.map
@@ -126,7 +170,7 @@ viewTextDiff left right leftStr rightStr =
                     )
                 ]
     in
-    Html.div [ class "compare-diff" ] [ viewPane Tuple.first, viewPane Tuple.second ]
+    Html.div [ class "compare-diff" ] [ viewDiffPane Tuple.first, viewDiffPane Tuple.second ]
 
 
 textKind : CompareSelection -> String
@@ -134,18 +178,12 @@ textKind sel =
     let
         mime =
             Maybe.withDefault "" sel.mimeType
-
-        parts =
-            String.split "." (String.toLower sel.fileName)
     in
-    case parts of
-        [ _ ] ->
-            mime
-
-        _ ->
-            List.reverse parts
-                |> List.head
-                |> Maybe.withDefault mime
+    String.toLower sel.fileName
+        |> String.split "."
+        |> List.reverse
+        |> List.head
+        |> Maybe.unwrap mime identity
 
 
 alignLines : List String -> List String -> List ( Maybe String, Maybe String )

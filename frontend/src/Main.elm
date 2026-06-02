@@ -10,8 +10,8 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareState(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, compareState, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig)
+import Model.Core exposing (Flags, Model, initialModel)
+import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig)
 import Ports
 import Route
 import Specs
@@ -72,7 +72,6 @@ applyRouteFromUrl forceRevealHighlight url =
                         has (gutterDrag << just) model
                 in
                 Flow.modify (set route newRoute)
-                    |> Flow.seq (Flow.setAll compareState CompareIdle)
                     |> Flow.seq
                         (Flow.setAll
                             (projects << records << success << each << projectStepRecords << runState)

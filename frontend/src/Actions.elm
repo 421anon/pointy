@@ -24,7 +24,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareSelection, CompareSource(..), CompareState(..), LeftRight, Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
@@ -909,60 +909,47 @@ cancelCompare =
     Flow.setAll compareState CompareIdle
 
 
-compareClick : Model -> CompareSelection -> Flow Model ()
-compareClick model =
-    if has (compareState << compareSelecting) model then
-        selectCompareFile
-
-    else
-        startCompare
-
-
 selectCompareFile : CompareSelection -> Flow Model ()
 selectCompareFile right =
     Flow.forAll (compareState << compareSelecting) <|
         \left ->
+            Flow.setAll compareState
+                (CompareActive
+                    { left = left
+                    , right = right
+                    , leftContent = NotAsked
+                    , rightContent = NotAsked
+                    }
+                )
+                |> Flow.seq (fetchCompareSide .left compareLeftContent left)
+                |> Flow.seq (fetchCompareSide .right compareRightContent right)
+
+
+fetchCompareSide : (CompareActiveData -> CompareSelection) -> An_Optic pr ls CompareActiveData (ApiData String) -> CompareSelection -> Flow Model ()
+fetchCompareSide sideOf contentLens sel =
+    case Model.compareSelectionMode sel of
+        CompareText ->
             let
-                activate contents =
-                    Flow.setAll compareState
-                        (CompareActive { left = left, right = right, contents = contents })
+                sideLens =
+                    compareState << compareActive << where_ (\d -> sideOf d == sel) << remkT contentLens
             in
-            case ( Model.compareSelectionIsImage left, Model.compareSelectionIsImage right ) of
-                ( True, True ) ->
-                    activate (Success { left = "", right = "" })
+            Flow.over sideLens ApiData.toLoading
+                |> Flow.seq
+                    (fetchCompareContent sel
+                        |> Flow.andThen
+                            (\result ->
+                                case result of
+                                    Ok s ->
+                                        Flow.over sideLens (always (Success s))
 
-                ( False, False ) ->
-                    activate NotAsked
-                        |> Flow.seq
-                            (loadComparePair left right
-                                |> Flow.andThen (mergeCompareContents left right)
+                                    Err e ->
+                                        addToast False (Http.errorMessage e)
+                                            |> Flow.seq (Flow.over sideLens (always (Error e)))
                             )
+                    )
 
-                _ ->
-                    addToast False "Compare requires two image files or two text files."
-
-
-loadComparePair : CompareSelection -> CompareSelection -> FlowError Http.Error Model LeftRight
-loadComparePair left right =
-    fetchCompareContent left
-        |> Flow.map (Result.map2 (\l r -> { left = l, right = r }))
-        |> Flow.flap (fetchCompareContent right)
-
-
-mergeCompareContents : CompareSelection -> CompareSelection -> Result Http.Error LeftRight -> Flow Model ()
-mergeCompareContents left right result =
-    Flow.forAll
-        (compareState << compareActive << where_ (\d -> d.left == left && d.right == right))
-        (\_ ->
-            case result of
-                Ok lr ->
-                    Flow.setAll (compareState << compareActive << compareContents) (Success lr)
-
-                Err e ->
-                    addToast False (Http.errorMessage e)
-                        |> Flow.seq
-                            (Flow.setAll (compareState << compareActive << compareContents) (Error e))
-        )
+        _ ->
+            Flow.none
 
 
 fetchCompareContent : CompareSelection -> FlowError Http.Error Model String

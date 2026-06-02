@@ -202,16 +202,14 @@ type CompareState
 type alias CompareActiveData =
     { left : CompareSelection
     , right : CompareSelection
-    , contents : ApiData LeftRight
+    , leftContent : ApiData String
+    , rightContent : ApiData String
     }
 
 
-type alias LeftRight =
-    { left : String, right : String }
-
-
 type alias CompareSelection =
-    { recordId : Int
+    { projectId : Int
+    , recordId : Int
     , path : List String
     , fileName : String
     , mimeType : Maybe String
@@ -224,9 +222,41 @@ type CompareSource
     | FromSrc
 
 
-compareSelectionIsImage : CompareSelection -> Bool
-compareSelectionIsImage =
-    .mimeType >> Maybe.unwrap False (String.startsWith "image/")
+type CompareMode
+    = CompareImage
+    | CompareHtml
+    | CompareText
+
+
+compareSelectionMode : CompareSelection -> CompareMode
+compareSelectionMode sel =
+    let
+        mime =
+            Maybe.withDefault "" sel.mimeType
+
+        extension =
+            String.toLower sel.fileName
+                |> String.split "."
+                |> List.reverse
+                |> List.head
+                |> Maybe.withDefault ""
+
+        previewableHtml =
+            case sel.source of
+                FromOutput _ ->
+                    True
+
+                FromSrc ->
+                    False
+    in
+    if String.startsWith "image/" mime then
+        CompareImage
+
+    else if previewableHtml && (mime == "text/html" || extension == "html" || extension == "htm") then
+        CompareHtml
+
+    else
+        CompareText
 
 
 getProjects : Model -> Table ProjectRecord
