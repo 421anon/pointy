@@ -105,7 +105,7 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
         |> Flow.map (try (TableSpec.getLens spec << edited << just))
         |> Flow.andThen
             (\mEdited ->
-                Flow.when (Maybe.isJust mEdited) (Flow.batchM [ scrollAction, focusAction ])
+                Flow.when (Maybe.isJust mEdited) (scrollAction |> Flow.seq focusAction)
                     |> Flow.seq
                         (case ( TableSpec.getTag spec, mEdited |> Maybe.andThen .id ) of
                             ( TagSteps _ _, Just stepId ) ->
