@@ -26,6 +26,7 @@ import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
+import Markdown
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tEnumValue, tListValue, tRecordValue, tStepId, tStringValue)
@@ -1006,32 +1007,22 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 |> Maybe.andThen (\key -> Dict.get key (Model.getNotices model))
                 |> Maybe.andThen ApiData.toMaybe
                 |> Maybe.withDefault []
-                |> List.filter (\notice -> notice.field == Just paramName && notice.severity == "info")
+                |> List.filter (\notice -> notice.field == Just paramName && notice.severity == Model.Info)
 
         viewField ( paramName, { type_, description, displayName } ) =
             let
                 fieldLabel =
                     Maybe.withDefault paramName displayName
 
-                fieldNoticeMessages =
-                    noticesForField paramName |> List.map (\notice -> "Info: " ++ notice.message)
-
-                fieldHintParts =
-                    (if String.isEmpty description then
-                        []
-
-                     else
-                        [ description ]
-                    )
-                        ++ fieldNoticeMessages
+                fieldNotices =
+                    noticesForField paramName
 
                 fieldHint =
-                    case fieldHintParts of
-                        [] ->
-                            Nothing
+                    if String.isEmpty description then
+                        Nothing
 
-                        parts ->
-                            Just (String.join "\n" parts)
+                    else
+                        Just description
 
                 paramLens =
                     argsLens << key paramName
@@ -1150,8 +1141,26 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , alignRight = False
                         , inputItemStyle = \item -> getStep item.id |> Maybe.map (.type_ >> stringToColor >> style "background-color") |> Maybe.toList
                         }
+                viewFieldNotice notice =
+                    Html.div [ class "field-notice", class "field-notice-info" ]
+                        [ iconCustom True "info" [ class "field-notice-icon" ]
+                        , Markdown.toHtml [ class "field-notice-markdown" ] notice.message
+                        ]
+
+                withFieldNotices field =
+                    case fieldNotices of
+                        [] ->
+                            field
+
+                        _ ->
+                            Html.div [ class "field-with-notices" ]
+                                [ field
+                                , Html.div [ class "field-notices" ] (List.map viewFieldNotice fieldNotices)
+                                ]
+
+
             in
-            case type_ of
+            withFieldNotices <| case type_ of
                 TStep mAllowedStepTypes ->
                     buildStepSelect
                         { selectedStepIds =

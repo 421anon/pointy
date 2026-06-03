@@ -936,7 +936,39 @@ $form-vertical-gap: var(--spacing-md);
   font-size: var(--font-size-sm);
   font-weight: 400;
   line-height: 1.3;
-  white-space: pre-line;
+}
+
+.field-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.field-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.35;
+}
+
+.field-notice-info .field-notice-icon {
+  color: var(--state-info);
+}
+
+.field-notice-icon {
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+.field-notice-markdown {
+  p {
+    margin: 0;
+  }
 }
 
 .form-intro {

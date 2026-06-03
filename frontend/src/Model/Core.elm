@@ -65,9 +65,13 @@ type alias StepRecord =
         }
 
 
+type NoticeSeverity
+    = Info
+
+
 type alias Notice =
     { field : Maybe String
-    , severity : String
+    , severity : NoticeSeverity
     , message : String
     }
 

@@ -233,6 +233,20 @@ stepValueOnly stepType_ =
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
+noticeSeverity : Decoder Model.NoticeSeverity
+noticeSeverity =
+    Decode.string
+        |> Decode.andThen
+            (\severity ->
+                case severity of
+                    "info" ->
+                        Decode.succeed Model.Info
+
+                    _ ->
+                        Decode.fail ("Unknown notice severity: " ++ severity)
+            )
+
+
 notice : Decoder Model.Notice
 notice =
     Decode.succeed
@@ -243,7 +257,7 @@ notice =
             }
         )
         |> optional "field" (maybe Decode.string) Nothing
-        |> required "severity" Decode.string
+        |> required "severity" noticeSeverity
         |> required "message" Decode.string
 
 
