@@ -23,7 +23,7 @@ import Handlers.SrcFiles (UserRepoInfo, downloadSrcFilesHandler, getUserRepoInfo
 import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
 
 import Handlers.StepConfig (getStepConfigHandler)
-import Handlers.Steps (patchStepHandler, postStepHandler)
+import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (DirEntry, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
@@ -61,6 +61,7 @@ type API =
         :<|> "autocomplete" :> QueryParam "commit" Text :> ReqBody '[JSON] AutocompleteRequest :> Post '[JSON] [Text]
         :<|> "step" :> QueryParam' '[Required, Strict] "id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Patch '[JSON] NoContent
         :<|> "step" :> QueryParam "project_id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Post '[RawJSON] LBS.ByteString
+        :<|> "notices" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
         :<|> "run-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
         :<|> "stop-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
         :<|> "step-log" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[PlainText] Text
@@ -90,6 +91,7 @@ server =
         :<|> autocompleteHandler
         :<|> patchStepHandler
         :<|> postStepHandler
+        :<|> noticesHandler
         :<|> runStepHandler
         :<|> stopStepHandler
         :<|> stepLogHandler

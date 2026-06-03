@@ -1000,17 +1000,38 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 _ ->
                     Nothing
 
+        noticesForField paramName =
+            mEditedId
+                |> Maybe.map (\stepId -> Model.stepLogKey stepId currentRouteCommit)
+                |> Maybe.andThen (\key -> Dict.get key (Model.getNotices model))
+                |> Maybe.andThen ApiData.toMaybe
+                |> Maybe.withDefault []
+                |> List.filter (\notice -> notice.field == Just paramName && notice.severity == "info")
+
         viewField ( paramName, { type_, description, displayName } ) =
             let
                 fieldLabel =
                     Maybe.withDefault paramName displayName
 
-                fieldHint =
-                    if String.isEmpty description then
-                        Nothing
+                fieldNoticeMessages =
+                    noticesForField paramName |> List.map .message
 
-                    else
-                        Just description
+                fieldHintParts =
+                    (if String.isEmpty description then
+                        []
+
+                     else
+                        [ description ]
+                    )
+                        ++ fieldNoticeMessages
+
+                fieldHint =
+                    case fieldHintParts of
+                        [] ->
+                            Nothing
+
+                        parts ->
+                            Just (String.join " " parts)
 
                 paramLens =
                     argsLens << key paramName

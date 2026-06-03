@@ -65,6 +65,12 @@ type alias StepRecord =
         }
 
 
+type alias Notice =
+    { field : Maybe String
+    , severity : String
+    , message : String
+    }
+
 type alias ProjectRecord =
     BaseRecord
         { tables : Dict String (Table StepRecord)
@@ -173,6 +179,7 @@ type Model
         , userRepoInfo : ApiData UserRepoInfo
         , uploadProgress : Dict Int UploadProgress
         , stepLogs : Dict String (ApiData String)
+        , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce.Debounce AutocompleteJob
@@ -335,6 +342,10 @@ getStepLogs : Model -> Dict String (ApiData String)
 getStepLogs (Model model) =
     model.stepLogs
 
+getNotices : Model -> Dict String (ApiData (List Notice))
+getNotices (Model model) =
+    model.notices
+
 
 stepLogKey : Int -> Maybe String -> String
 stepLogKey id commit =
@@ -439,6 +450,7 @@ initialModel key route flags =
         , commitHash = NotAsked
         , userRepoInfo = NotAsked
         , stepLogs = Dict.empty
+        , notices = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
         , autocomplete = Dict.empty

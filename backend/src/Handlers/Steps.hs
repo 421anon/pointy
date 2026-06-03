@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.Steps (patchStepHandler, postStepHandler) where
+module Handlers.Steps (patchStepHandler, postStepHandler, noticesHandler) where
 
 import Control.Monad.Except (ExceptT (..), catchError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (mapMaybe)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
@@ -16,11 +17,11 @@ import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusF
 import OutPaths (withWriteRepoTransaction)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), throwError)
-import Servant.Server (err400, errBody)
+import Servant.Server (err400, err500, errBody)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (takeBaseName, (</>))
 import Text.Read (readMaybe)
-import UserRepo (WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonInRepo)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction)
 
 patchStepHandler :: Int -> LBS.ByteString -> Handler NoContent
 patchStepHandler stepId jsonBody = do
@@ -63,6 +64,18 @@ postStepHandler maybeProjectId jsonBody = do
                 Nothing -> return ()
             return output
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
+
+noticesHandler :: Int -> Maybe T.Text -> Handler LBS.ByteString
+noticesHandler stepId mCommit = do
+    result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath headCommit) -> do
+        let targetCommit = maybe headCommit T.unpack mCommit
+            ctx = ReadRepoContext repoPath targetCommit
+            attr = "#pointy.steps." ++ show stepId
+            applyExpr = "s: if s ? meta && s.meta ? pointy && s.meta.pointy ? notices then s.meta.pointy.notices else []"
+        TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonApplyInRepo ctx applyExpr attr
+    case result of
+        Right output -> return output
+        Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 saveStep :: WriteRepoContext -> Maybe Int -> LBS.ByteString -> ExceptT String IO Int
 saveStep (WriteRepoContext worktreePath) maybeId jsonBody = ExceptT $ do

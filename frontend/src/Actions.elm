@@ -103,7 +103,18 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
     Flow.over (TableSpec.getLens spec) updateTable
         |> Flow.seq Flow.get
         |> Flow.map (try (TableSpec.getLens spec << edited << just))
-        |> Flow.andThen (\mEdited -> Flow.when (Maybe.isJust mEdited) (Flow.batchM [ scrollAction, focusAction ]))
+        |> Flow.andThen
+            (\mEdited ->
+                Flow.when (Maybe.isJust mEdited) (Flow.batchM [ scrollAction, focusAction ])
+                    |> Flow.seq
+                        (case ( TableSpec.getTag spec, mEdited |> Maybe.andThen .id ) of
+                            ( TagSteps _ _, Just stepId ) ->
+                                loadNotices stepId
+
+                            _ ->
+                                Flow.pure ()
+                        )
+            )
 
 
 startInlineRecordNameEdit : TableSpec a -> a -> Flow Model ()
@@ -699,6 +710,37 @@ applyAutocompleteResult job result =
 
                     Nothing ->
                         Flow.pure ()
+            )
+
+
+loadNotices : Int -> Flow Model ()
+loadNotices id =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    mCommit_ =
+                        try (route << Route.project << mCommit << just) model
+
+                    key =
+                        Model.stepLogKey id mCommit_
+                in
+                Flow.over notices (Dict.insert key (ApiData.loading Nothing))
+                    |> Flow.seq
+                        (Api.fetchNotices id mCommit_
+                            |> Flow.andThen
+                                (\result ->
+                                    Flow.over notices (Dict.insert key (ApiData.fromResult result))
+                                        |> Flow.seq
+                                            (case result of
+                                                Ok _ ->
+                                                    Flow.pure ()
+
+                                                Err error ->
+                                                    addToast False (Http.errorMessage error)
+                                            )
+                                )
+                        )
             )
 
 

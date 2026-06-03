@@ -276,6 +276,22 @@ Notes:
 
 For the available option types, see the [Type Reference](type-reference.md).
 
+## Optional step notices
+
+Templates can publish non-blocking, field-scoped notices through `passthru.meta.pointy.notices`:
+
+```nix
+passthru.meta.pointy.notices = [
+  {
+    field = "nixDeps";
+    severity = "info";
+    message = "This step uses a package with special license terms.";
+  }
+];
+```
+
+Pointy fetches these notices when a user opens the step parameters form. Notices are informational only; they do not prevent saving, evaluating, or building the step.
+
 ## The hidden `id` option
 
 Every template should define an `id` option like this:
