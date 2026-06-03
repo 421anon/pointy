@@ -938,11 +938,16 @@ $form-vertical-gap: var(--spacing-md);
   line-height: 1.3;
 }
 
+.field-with-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .field-notices {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: 6px;
 }
 
 .field-notice {
@@ -962,7 +967,8 @@ $form-vertical-gap: var(--spacing-md);
   flex: 0 0 auto;
   font-size: 18px;
   line-height: 1;
-  margin-top: 1px;
+  top: -2px;
+  position: relative;
 }
 
 .field-notice-markdown {

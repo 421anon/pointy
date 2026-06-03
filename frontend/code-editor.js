@@ -1,12 +1,42 @@
 import { basicSetup } from "codemirror";
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { LanguageDescription } from "@codemirror/language";
+import { LanguageDescription, LanguageSupport, StreamLanguage } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
 
 
 function readOnlyExtensions(readOnly) {
   return [EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)];
+}
+
+const SHELL_LANGUAGE_NAMES = new Set(["bash", "sh", "shell", "zsh"]);
+const SHELL_TOKEN_STYLES = {
+  attribute: "atom",
+  builtin: "keyword",
+  operator: "keyword",
+  quote: "string",
+};
+
+function shellLanguageSupport() {
+  return new LanguageSupport(
+    StreamLanguage.define({
+      ...shell,
+      token(stream, state) {
+        const style = shell.token(stream, state);
+        return SHELL_TOKEN_STYLES[style] || style;
+      },
+    })
+  );
+}
+
+async function loadLanguageSupport(language) {
+  if (SHELL_LANGUAGE_NAMES.has(language.toLowerCase())) {
+    return shellLanguageSupport();
+  }
+
+  const description = LanguageDescription.matchLanguageName(languages, language, true);
+  return description ? await description.load() : null;
 }
 
 class CodeEditorElement extends HTMLElement {
@@ -141,12 +171,11 @@ class CodeEditorElement extends HTMLElement {
   async configureLanguage(language) {
     const request = ++this.languageLoadRequest;
     const normalizedLanguage = language.trim();
-    const description = normalizedLanguage
-      ? LanguageDescription.matchLanguageName(languages, normalizedLanguage, true)
-      : null;
 
     try {
-      const languageSupport = description ? await description.load() : null;
+      const languageSupport = normalizedLanguage
+        ? await loadLanguageSupport(normalizedLanguage)
+        : null;
 
       if (request !== this.languageLoadRequest || !this.view) return;
 
