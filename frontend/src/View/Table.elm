@@ -1014,7 +1014,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                     Maybe.withDefault paramName displayName
 
                 fieldNoticeMessages =
-                    noticesForField paramName |> List.map .message
+                    noticesForField paramName |> List.map (\notice -> "Info: " ++ notice.message)
 
                 fieldHintParts =
                     (if String.isEmpty description then
@@ -1031,7 +1031,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                             Nothing
 
                         parts ->
-                            Just (String.join " " parts)
+                            Just (String.join "\n" parts)
 
                 paramLens =
                     argsLens << key paramName
