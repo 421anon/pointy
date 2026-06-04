@@ -14,9 +14,10 @@ import Html.Attributes exposing (class, classList, id, src)
 import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
+import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, StepRecord)
-import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareState, fileDelimitedGrid, gridState, projectStep, projects, records)
+import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), Model, StepRecord)
+import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, fileDelimitedGrid, gridState, projectStep, projects, records)
 import Model.Shadow as Shadow exposing (ArgType, StepArgType(..), StepArgValue(..), TStringDisplay(..))
 import Route exposing (Route)
 import View.Icons exposing (icon)
@@ -24,12 +25,8 @@ import View.Icons exposing (icon)
 
 viewCompareBanner : Model -> Html (Flow Model ())
 viewCompareBanner model =
-    case Model.getCompareState model of
-        CompareSelecting left ->
-            viewBanner (selectionLabel model left)
-
-        _ ->
-            Html.nothing
+    try (compareState << compareSelecting) model
+        |> Html.viewMaybe (selectionLabel model >> viewBanner)
 
 
 viewCompareDialog : Model -> Html (Flow Model ())
@@ -40,23 +37,15 @@ viewCompareDialog model =
         , Html.Events.on "close" (Decode.succeed Actions.cancelCompare)
         , Html.Events.onClick (Actions.closeDialog "compare-dialog")
         ]
-        [ case Model.getCompareState model of
-            CompareActive d ->
-                viewDialogContent model d
-
-            _ ->
-                Html.nothing
+        [ try (compareState << compareActive) model
+            |> Html.viewMaybe (viewDialogContent model)
         ]
 
 
 selectionLabel : Model -> CompareSelection -> String
 selectionLabel model sel =
-    case try (projects << records << ApiData.success << by .id (Just sel.projectId)) model of
-        Just project ->
-            project.name ++ " / " ++ sel.fileName
-
-        Nothing ->
-            sel.fileName
+    try (projects << records << success << by .id (Just sel.projectId)) model
+        |> Maybe.unwrap sel.fileName (\p -> p.name ++ " / " ++ sel.fileName)
 
 
 viewBanner : String -> Html (Flow Model ())
@@ -94,37 +83,39 @@ viewDialogContent model d =
 
 viewBody : Model -> CompareActiveData -> Html (Flow Model ())
 viewBody model d =
-    case bothTextSuccess d of
-        Just ( leftStr, rightStr ) ->
-            viewTextDiff model d leftStr rightStr
+    let
+        mTextPair =
+            case ( Model.compareSelectionMode d.left, Model.compareSelectionMode d.right, ( d.leftContent, d.rightContent ) ) of
+                ( CompareText, CompareText, ( Success l, Success r ) ) ->
+                    if Maybe.isNothing l.delimitedGrid && Maybe.isNothing r.delimitedGrid then
+                        Just ( l.text, r.text )
 
-        Nothing ->
+                    else
+                        Nothing
+
+                _ ->
+                    Nothing
+
+        panes =
             Html.div [ class "compare-panes" ]
                 [ viewPane model d.left d.leftContent (gridUpdate compareLeftContent) d.leftInspect (toggleInspect compareLeftInspect)
                 , viewPane model d.right d.rightContent (gridUpdate compareRightContent) d.rightInspect (toggleInspect compareRightInspect)
                 ]
-
-
-bothTextSuccess : CompareActiveData -> Maybe ( String, String )
-bothTextSuccess d =
-    case ( Model.compareSelectionMode d.left, Model.compareSelectionMode d.right, ( d.leftContent, d.rightContent ) ) of
-        ( CompareText, CompareText, ( Success l, Success r ) ) ->
-            if Maybe.isNothing l.delimitedGrid && Maybe.isNothing r.delimitedGrid then
-                Just ( l.text, r.text )
-
-            else
-                Nothing
-
-        _ ->
-            Nothing
+    in
+    mTextPair
+        |> Maybe.unwrap panes (\( l, r ) -> viewTextDiff model d l r)
 
 
 viewPane : Model -> CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Bool -> Flow Model () -> Html (Flow Model ())
 viewPane model sel content gridFlow inspectOpen toggle =
+    let
+        mParams =
+            derivationParamsFor model sel
+    in
     Html.div [ class "compare-pane" ]
-        [ viewPaneHeader model sel inspectOpen toggle
+        [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
         , Html.div [ class "compare-pane-body" ] [ viewPaneBody sel content gridFlow ]
-        , viewInlineParams model inspectOpen sel
+        , viewInlineParams model sel inspectOpen mParams
         ]
 
 
@@ -138,12 +129,12 @@ toggleInspect inspectLens =
     Flow.over (compareState << compareActive << remkT inspectLens) not
 
 
-viewPaneHeader : Model -> CompareSelection -> Bool -> Flow Model () -> Html (Flow Model ())
-viewPaneHeader model sel inspectOpen toggle =
+viewPaneHeader : Model -> CompareSelection -> Bool -> Bool -> Flow Model () -> Html (Flow Model ())
+viewPaneHeader model sel hasParams inspectOpen toggle =
     Html.div [ class "compare-pane-header" ]
         [ Html.div [ class "compare-pane-label" ] [ Html.text (selectionLabel model sel) ]
         , Html.div [ class "compare-pane-actions" ]
-            [ viewInspectButton model sel inspectOpen toggle
+            [ viewInspectButton hasParams inspectOpen toggle
             , Html.button
                 [ class "dir-item-icon-btn compare-pane-source-btn"
                 , Html.Attributes.title "Open source in project"
@@ -154,9 +145,9 @@ viewPaneHeader model sel inspectOpen toggle =
         ]
 
 
-viewInspectButton : Model -> CompareSelection -> Bool -> Flow Model () -> Html (Flow Model ())
-viewInspectButton model sel inspectOpen toggle =
-    if Maybe.isJust (derivationParamsFor model sel) then
+viewInspectButton : Bool -> Bool -> Flow Model () -> Html (Flow Model ())
+viewInspectButton hasParams inspectOpen toggle =
+    Html.viewIf hasParams <|
         Html.button
             [ classList
                 [ ( "dir-item-icon-btn", True )
@@ -173,9 +164,6 @@ viewInspectButton model sel inspectOpen toggle =
             , Html.Events.onClick toggle
             ]
             [ icon True "data_info_alert" ]
-
-    else
-        Html.nothing
 
 
 {-| The producing step's parameters, available only for derivation steps. Read
@@ -195,24 +183,27 @@ derivationParamsFor model sel =
             )
 
 
-viewInlineParams : Model -> Bool -> CompareSelection -> Html (Flow Model ())
-viewInlineParams model inspectOpen sel =
-    case ( inspectOpen, derivationParamsFor model sel ) of
-        ( True, Just ( step, argTypes ) ) ->
-            Html.div [ class "compare-params" ]
-                [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
-                , Html.div [ class "compare-params-form" ]
-                    (Dict.toList argTypes
-                        |> List.map
-                            (\( paramName, argType ) ->
-                                viewParamRow (Maybe.withDefault paramName argType.displayName)
-                                    (viewArgValue model sel.projectId argType.type_ (Dict.get paramName step.args))
-                            )
-                    )
-                ]
+viewInlineParams : Model -> CompareSelection -> Bool -> Maybe ( StepRecord, Dict String ArgType ) -> Html (Flow Model ())
+viewInlineParams model sel inspectOpen mParams =
+    Html.viewIf inspectOpen <|
+        Html.viewMaybe
+            (\( step, argTypes ) ->
+                Html.div [ class "compare-params" ]
+                    [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
+                    , Html.div [ class "compare-params-form" ] (viewNamedArgs model sel.projectId step.args argTypes)
+                    ]
+            )
+            mParams
 
-        _ ->
-            Html.nothing
+
+viewNamedArgs : Model -> Int -> Dict String StepArgValue -> Dict String ArgType -> List (Html (Flow Model ()))
+viewNamedArgs model projectId values fields =
+    Dict.toList fields
+        |> List.map
+            (\( name, field ) ->
+                viewParamRow (Maybe.unwrap name identity field.displayName)
+                    (viewArgValue model projectId field.type_ (Dict.get name values))
+            )
 
 
 viewParamRow : String -> Html (Flow Model ()) -> Html (Flow Model ())
@@ -227,22 +218,22 @@ viewArgValue : Model -> Int -> StepArgType -> Maybe StepArgValue -> Html (Flow M
 viewArgValue model projectId argType mValue =
     case ( argType, mValue ) of
         ( TString (Code _) _, Just (TStringValue s) ) ->
-            nonEmpty s (Html.pre [ class "compare-param-code" ] [ Html.text s ])
+            orEmptyValue s (Html.pre [ class "compare-param-code" ] [ Html.text s ])
 
         ( TString (Command prefix) _, Just (TStringValue s) ) ->
-            nonEmpty s (Html.code [ class "compare-param-code" ] [ Html.text (String.trim (prefix ++ " " ++ s)) ])
+            orEmptyValue s (Html.code [ class "compare-param-code" ] [ Html.text (String.trim (prefix ++ " " ++ s)) ])
 
         ( TString _ _, Just (TStringValue s) ) ->
-            nonEmpty s (Html.text s)
+            orEmptyValue s (Html.text s)
 
         ( TStep _, Just (TStepValue stepId) ) ->
             Html.text (stepNameOf model projectId stepId)
 
         ( TUploadHash, Just (TUploadHashValue h) ) ->
-            nonEmpty h (Html.text h)
+            orEmptyValue h (Html.text h)
 
         ( TEnum _ labels, Just (TEnumValue v) ) ->
-            Html.text (Dict.get v labels |> Maybe.withDefault v)
+            Html.text (Maybe.unwrap v identity (Dict.get v labels))
 
         ( TList inner, Just (TListValue vs) ) ->
             if List.isEmpty vs then
@@ -253,21 +244,14 @@ viewArgValue model projectId argType mValue =
                     (List.map (\v -> Html.li [] [ viewArgValue model projectId inner (Just v) ]) vs)
 
         ( TRecord fields, Just (TRecordValue dict) ) ->
-            Html.div [ class "compare-param-record" ]
-                (Dict.toList fields
-                    |> List.map
-                        (\( fieldName, fieldType ) ->
-                            viewParamRow (Maybe.withDefault fieldName fieldType.displayName)
-                                (viewArgValue model projectId fieldType.type_ (Dict.get fieldName dict))
-                        )
-                )
+            Html.div [ class "compare-param-record" ] (viewNamedArgs model projectId dict fields)
 
         _ ->
             emptyValue
 
 
-nonEmpty : String -> Html (Flow Model ()) -> Html (Flow Model ())
-nonEmpty s html =
+orEmptyValue : String -> Html (Flow Model ()) -> Html (Flow Model ())
+orEmptyValue s html =
     if String.isEmpty (String.trim s) then
         emptyValue
 
@@ -377,19 +361,29 @@ viewTextDiff model d leftStr rightStr =
         rightLines =
             String.lines rightStr
 
-        maxAlignmentCells =
+        maxAlignCells =
             1000000
 
+        textKind sel =
+            String.toLower sel.fileName
+                |> String.split "."
+                |> List.last
+                |> Maybe.unwrap (Maybe.unwrap "" identity sel.mimeType) identity
+
         rows =
-            if textKind d.left == textKind d.right && List.length leftLines * List.length rightLines <= maxAlignmentCells then
+            if textKind d.left == textKind d.right && List.length leftLines * List.length rightLines <= maxAlignCells then
                 alignLines leftLines rightLines
 
             else
                 alignByPosition leftLines rightLines
 
         viewDiffPane sel inspectOpen toggle pick =
+            let
+                mParams =
+                    derivationParamsFor model sel
+            in
             Html.div [ class "compare-diff-pane" ]
-                [ viewPaneHeader model sel inspectOpen toggle
+                [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
                 , Html.div [ class "compare-diff-lines" ]
                     (List.map
                         (\( l, r ) ->
@@ -399,26 +393,13 @@ viewTextDiff model d leftStr rightStr =
                         )
                         rows
                     )
-                , viewInlineParams model inspectOpen sel
+                , viewInlineParams model sel inspectOpen mParams
                 ]
     in
     Html.div [ class "compare-diff" ]
         [ viewDiffPane d.left d.leftInspect (toggleInspect compareLeftInspect) Tuple.first
         , viewDiffPane d.right d.rightInspect (toggleInspect compareRightInspect) Tuple.second
         ]
-
-
-textKind : CompareSelection -> String
-textKind sel =
-    let
-        mime =
-            Maybe.withDefault "" sel.mimeType
-    in
-    String.toLower sel.fileName
-        |> String.split "."
-        |> List.reverse
-        |> List.head
-        |> Maybe.unwrap mime identity
 
 
 alignLines : List String -> List String -> List ( Maybe String, Maybe String )

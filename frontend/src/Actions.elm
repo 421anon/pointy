@@ -914,7 +914,7 @@ selectCompareFile right =
     Flow.forAll (compareState << compareSelecting) <|
         \left ->
             let
-                isSession d =
+                matchesActiveCompare d =
                     d.left == left && d.right == right
             in
             Flow.setAll compareState
@@ -928,17 +928,17 @@ selectCompareFile right =
                     }
                 )
                 |> Flow.seq (openDialog "compare-dialog")
-                |> Flow.seq (fetchCompareSide isSession compareLeftContent left)
-                |> Flow.seq (fetchCompareSide isSession compareRightContent right)
+                |> Flow.seq (fetchCompareSide matchesActiveCompare compareLeftContent left)
+                |> Flow.seq (fetchCompareSide matchesActiveCompare compareRightContent right)
 
 
 fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData CompareFile) -> CompareSelection -> Flow Model ()
-fetchCompareSide isSession contentLens sel =
+fetchCompareSide matchesActiveCompare contentLens sel =
     case Model.compareSelectionMode sel of
         CompareText ->
             let
                 sideLens =
-                    compareState << compareActive << where_ isSession << remkT contentLens
+                    compareState << compareActive << where_ matchesActiveCompare << remkT contentLens
             in
             Flow.over sideLens ApiData.toLoading
                 |> Flow.seq

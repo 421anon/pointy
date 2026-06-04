@@ -70,25 +70,15 @@ viewCompareButton model =
                     try (compareState << compareSelecting) model
                         |> Maybe.unwrap "selected file" .fileName
 
-                tooltip =
+                ( tooltip, action, iconName ) =
                     if isPicked then
-                        "Already picked"
+                        ( "Already picked", Flow.none, "check_circle" )
 
                     else if isPicking then
-                        "Pick to compare with " ++ pickedLabel
+                        ( "Pick to compare with " ++ pickedLabel, Actions.selectCompareFile sel, "compare_arrows" )
 
                     else
-                        "Compare"
-
-                action =
-                    if isPicked then
-                        Flow.none
-
-                    else if isPicking then
-                        Actions.selectCompareFile sel
-
-                    else
-                        Actions.startCompare sel
+                        ( "Compare", Actions.startCompare sel, "compare_arrows" )
             in
             Html.button
                 [ classList
@@ -99,14 +89,7 @@ viewCompareButton model =
                 , Html.Attributes.title tooltip
                 , Html.Events.onClick action
                 ]
-                [ icon True
-                    (if isPicked then
-                        "check_circle"
-
-                     else
-                        "compare_arrows"
-                    )
-                ]
+                [ icon True iconName ]
 
 
 renderDirectoryContents : Model -> StepSpec -> Maybe Int -> Maybe DirContext -> Bool -> List String -> String -> ApiData (Dict String DirectoryItem) -> Html (Flow Model ())

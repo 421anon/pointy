@@ -245,8 +245,7 @@ compareSelectionMode sel =
         extension =
             String.toLower sel.fileName
                 |> String.split "."
-                |> List.reverse
-                |> List.head
+                |> List.last
                 |> Maybe.withDefault ""
 
         previewableHtml =
