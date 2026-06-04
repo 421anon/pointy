@@ -1,20 +1,21 @@
 module View.Compare exposing (viewCompareBanner, viewCompareDialog)
 
-import Accessors exposing (try)
+import Accessors exposing (An_Optic, just, try)
 import Actions
 import Api.Api as Api
-import Api.ApiData as ApiData exposing (ApiData(..))
+import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Array exposing (Array)
-import Extra.Accessors exposing (by)
+import Extra.Accessors exposing (by, remkT)
 import Flow exposing (Flow)
+import Grid
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, id, src)
 import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model)
-import Model.Lenses exposing (projects, records)
+import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model)
+import Model.Lenses exposing (compareActive, compareLeftContent, compareRightContent, compareState, fileDelimitedGrid, gridState, projects, records)
 import Route exposing (Route)
 import View.Icons exposing (icon)
 
@@ -97,8 +98,8 @@ viewBody model d =
 
         Nothing ->
             Html.div [ class "compare-panes" ]
-                [ viewPane model d.left d.leftContent
-                , viewPane model d.right d.rightContent
+                [ viewPane model d.left d.leftContent (gridUpdate compareLeftContent)
+                , viewPane model d.right d.rightContent (gridUpdate compareRightContent)
                 ]
 
 
@@ -106,18 +107,27 @@ bothTextSuccess : CompareActiveData -> Maybe ( String, String )
 bothTextSuccess d =
     case ( Model.compareSelectionMode d.left, Model.compareSelectionMode d.right, ( d.leftContent, d.rightContent ) ) of
         ( CompareText, CompareText, ( Success l, Success r ) ) ->
-            Just ( l, r )
+            if Maybe.isNothing l.delimitedGrid && Maybe.isNothing r.delimitedGrid then
+                Just ( l.text, r.text )
+
+            else
+                Nothing
 
         _ ->
             Nothing
 
 
-viewPane : Model -> CompareSelection -> ApiData String -> Html (Flow Model ())
-viewPane model sel content =
+viewPane : Model -> CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Html (Flow Model ())
+viewPane model sel content gridFlow =
     Html.div [ class "compare-pane" ]
         [ viewPaneHeader model sel
-        , Html.div [ class "compare-pane-body" ] [ viewPaneBody sel content ]
+        , Html.div [ class "compare-pane-body" ] [ viewPaneBody sel content gridFlow ]
         ]
+
+
+gridUpdate : An_Optic pr ls CompareActiveData (ApiData CompareFile) -> Flow Grid.State () -> Flow Model ()
+gridUpdate contentLens =
+    Flow.via (compareState << compareActive << remkT contentLens << success << fileDelimitedGrid << just << gridState)
 
 
 viewPaneHeader : Model -> CompareSelection -> Html (Flow Model ())
@@ -168,8 +178,8 @@ sourceRoute sel =
         }
 
 
-viewPaneBody : CompareSelection -> ApiData String -> Html (Flow Model ())
-viewPaneBody sel content =
+viewPaneBody : CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Html (Flow Model ())
+viewPaneBody sel content gridFlow =
     case Model.compareSelectionMode sel of
         CompareImage ->
             Html.img [ src (rawUrl sel), class "compare-image" ] []
@@ -183,15 +193,20 @@ viewPaneBody sel content =
                 []
 
         CompareText ->
-            viewTextContent content
+            viewTextContent gridFlow content
 
 
-viewTextContent : ApiData String -> Html (Flow Model ())
-viewTextContent content =
+viewTextContent : (Flow Grid.State () -> Flow Model ()) -> ApiData CompareFile -> Html (Flow Model ())
+viewTextContent gridFlow content =
     case content of
-        Success s ->
-            Html.div [ class "compare-pane-text" ]
-                (List.map (\line -> Html.div [ class "diff-line" ] [ Html.text line ]) (String.lines s))
+        Success file ->
+            case file.delimitedGrid of
+                Just grid ->
+                    Grid.view grid.grid |> Html.map gridFlow
+
+                Nothing ->
+                    Html.div [ class "compare-pane-text" ]
+                        (List.map (\line -> Html.div [ class "diff-line" ] [ Html.text line ]) (String.lines file.text))
 
         Error _ ->
             Html.div [ class "compare-error" ] [ Html.text "Failed to load file." ]
@@ -219,8 +234,11 @@ viewTextDiff model left right leftStr rightStr =
         rightLines =
             String.lines rightStr
 
+        maxAlignmentCells =
+            1000000
+
         rows =
-            if textKind left == textKind right then
+            if textKind left == textKind right && List.length leftLines * List.length rightLines <= maxAlignmentCells then
                 alignLines leftLines rightLines
 
             else

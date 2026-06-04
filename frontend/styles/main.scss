@@ -1978,13 +1978,6 @@ select.field-changed,
   box-shadow: var(--shadow-elevated);
 }
 
-.compare-banner-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .compare-banner-cancel {
   flex: 0 0 auto;
   background: none;
@@ -1996,6 +1989,26 @@ select.field-changed,
   padding: 0 var(--spacing-xs);
 }
 .compare-banner-cancel:hover { opacity: 0.8; }
+
+.compare-banner-text,
+.compare-dialog-title,
+.compare-pane-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-dialog-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.compare-pane-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
 
 .dialog.compare-dialog {
   width: min(1200px, calc(100vw - var(--spacing-xl) - var(--spacing-xl)));
@@ -2020,15 +2033,6 @@ select.field-changed,
   min-width: 0;
 }
 
-.compare-dialog-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 1.1rem;
-  font-weight: 600;
-}
-
 .compare-dialog-close,
 .compare-pane-source-btn {
   flex: 0 0 auto;
@@ -2051,7 +2055,8 @@ select.field-changed,
 }
 .compare-error { color: var(--state-danger); }
 
-.compare-panes {
+.compare-panes,
+.compare-diff {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--spacing-sm);
@@ -2059,12 +2064,16 @@ select.field-changed,
   min-height: 0;
 }
 
-.compare-pane {
+.compare-pane,
+.compare-diff-pane {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   gap: var(--spacing-sm);
+}
+.compare-diff-pane {
+  overflow: hidden;
 }
 
 .compare-pane-header {
@@ -2080,16 +2089,6 @@ select.field-changed,
   background: var(--bg-secondary);
 }
 
-.compare-pane-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
 .compare-pane-body {
   display: flex;
   flex: 1 1 auto;
@@ -2097,22 +2096,27 @@ select.field-changed,
   overflow: auto;
 }
 
-.compare-pane-text {
-  flex: 1 1 auto;
-  width: 100%;
+.compare-pane-text,
+.compare-diff {
   font-family: "Courier New", monospace;
   font-size: var(--font-size-sm);
   line-height: 1.5;
+}
+.compare-pane-text {
+  flex: 1 1 auto;
+  width: 100%;
   overflow: auto;
   border: 1px solid var(--border-color);
   padding: var(--spacing-xs) 0;
+}
+.compare-diff {
+  overflow: hidden;
 }
 
 .compare-image {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  align-self: center;
   margin: auto;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -2125,26 +2129,6 @@ select.field-changed,
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: white;
-}
-
-.compare-diff {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--spacing-sm);
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  font-family: "Courier New", monospace;
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
-}
-.compare-diff-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  gap: var(--spacing-sm);
 }
 
 .compare-diff-lines {

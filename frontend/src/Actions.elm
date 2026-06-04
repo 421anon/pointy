@@ -24,7 +24,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
@@ -913,6 +913,10 @@ selectCompareFile : CompareSelection -> Flow Model ()
 selectCompareFile right =
     Flow.forAll (compareState << compareSelecting) <|
         \left ->
+            let
+                isSession d =
+                    d.left == left && d.right == right
+            in
             Flow.setAll compareState
                 (CompareActive
                     { left = left
@@ -922,17 +926,17 @@ selectCompareFile right =
                     }
                 )
                 |> Flow.seq (openDialog "compare-dialog")
-                |> Flow.seq (fetchCompareSide .left compareLeftContent left)
-                |> Flow.seq (fetchCompareSide .right compareRightContent right)
+                |> Flow.seq (fetchCompareSide isSession compareLeftContent left)
+                |> Flow.seq (fetchCompareSide isSession compareRightContent right)
 
 
-fetchCompareSide : (CompareActiveData -> CompareSelection) -> An_Optic pr ls CompareActiveData (ApiData String) -> CompareSelection -> Flow Model ()
-fetchCompareSide sideOf contentLens sel =
+fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData CompareFile) -> CompareSelection -> Flow Model ()
+fetchCompareSide isSession contentLens sel =
     case Model.compareSelectionMode sel of
         CompareText ->
             let
                 sideLens =
-                    compareState << compareActive << where_ (\d -> sideOf d == sel) << remkT contentLens
+                    compareState << compareActive << where_ isSession << remkT contentLens
             in
             Flow.over sideLens ApiData.toLoading
                 |> Flow.seq
@@ -941,7 +945,14 @@ fetchCompareSide sideOf contentLens sel =
                             (\result ->
                                 case result of
                                     Ok s ->
-                                        Flow.over sideLens (always (Success s))
+                                        Flow.over sideLens
+                                            (always
+                                                (Success
+                                                    { text = s
+                                                    , delimitedGrid = Model.delimitedGridFromFile sel.path sel.mimeType s Nothing
+                                                    }
+                                                )
+                                            )
 
                                     Err e ->
                                         addToast False (Http.errorMessage e)

@@ -202,8 +202,14 @@ type CompareState
 type alias CompareActiveData =
     { left : CompareSelection
     , right : CompareSelection
-    , leftContent : ApiData String
-    , rightContent : ApiData String
+    , leftContent : ApiData CompareFile
+    , rightContent : ApiData CompareFile
+    }
+
+
+type alias CompareFile =
+    { text : String
+    , delimitedGrid : Maybe DelimitedGrid
     }
 
 
