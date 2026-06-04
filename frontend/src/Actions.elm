@@ -936,31 +936,11 @@ fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveDa
 fetchCompareSide matchesActiveCompare contentLens sel =
     case Model.compareSelectionMode sel of
         CompareText ->
-            let
-                sideLens =
-                    compareState << compareActive << where_ matchesActiveCompare << remkT contentLens
-            in
-            Flow.over sideLens ApiData.toLoading
-                |> Flow.seq
-                    (fetchCompareContent sel
-                        |> Flow.andThen
-                            (\result ->
-                                case result of
-                                    Ok s ->
-                                        Flow.over sideLens
-                                            (always
-                                                (Success
-                                                    { text = s
-                                                    , delimitedGrid = Model.delimitedGridFromFile sel.path sel.mimeType s Nothing
-                                                    }
-                                                )
-                                            )
-
-                                    Err e ->
-                                        addToast False (Http.errorMessage e)
-                                            |> Flow.seq (Flow.over sideLens (always (Error e)))
-                            )
-                    )
+            callApi (compareState << compareActive << where_ matchesActiveCompare << remkT contentLens)
+                (fetchCompareContent sel
+                    |> Flow.map (Result.map (\s -> CompareFile s (Model.delimitedGridFromFile sel.path sel.mimeType s Nothing)))
+                )
+                |> Flow.return ()
 
         _ ->
             Flow.pure ()

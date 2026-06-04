@@ -4,7 +4,6 @@ import Accessors exposing (An_Optic, just, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
-import Array exposing (Array)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (by, remkT)
 import Flow exposing (Flow)
@@ -166,10 +165,6 @@ viewInspectButton hasParams inspectOpen toggle =
             [ icon True "data_info_alert" ]
 
 
-{-| The producing step's parameters, available only for derivation steps. Read
-straight from the step record in the model, so this works for any project and
-never mutates table state.
--}
 derivationParamsFor : Model -> CompareSelection -> Maybe ( StepRecord, Dict String ArgType )
 derivationParamsFor model sel =
     try (projectStep (Just sel.projectId) (Just sel.recordId)) model
@@ -280,28 +275,19 @@ openSource sel =
 
 sourceRoute : CompareSelection -> Route
 sourceRoute sel =
-    Route.Project
-        { projectId = sel.projectId
-        , mHighlight =
-            Just
-                { id = sel.recordId
-                , target =
-                    case sel.source of
-                        FromOutput _ ->
-                            Route.Output
-
-                        FromSrc ->
-                            Route.Source
-                , path = sel.path
-                , range = Nothing
-                }
-        , mCommit =
+    let
+        ( target, mCommit ) =
             case sel.source of
                 FromOutput commit_ ->
-                    Just commit_
+                    ( Route.Output, Just commit_ )
 
                 FromSrc ->
-                    Nothing
+                    ( Route.Source, Nothing )
+    in
+    Route.Project
+        { projectId = sel.projectId
+        , mHighlight = Just { id = sel.recordId, target = target, path = sel.path, range = Nothing }
+        , mCommit = mCommit
         }
 
 
@@ -339,7 +325,8 @@ viewTextContent gridFlow content =
             Html.div [ class "compare-error" ] [ Html.text "Failed to load file." ]
 
         _ ->
-            Html.div [ class "compare-loading" ] [ Html.text "Loading…" ]
+            Html.div [ class "compare-loading" ]
+                [ Html.span [ class "shimmer-text shimmer-text--low-contrast" ] [ Html.text "Loading file…" ] ]
 
 
 rawUrl : CompareSelection -> String
@@ -355,27 +342,8 @@ rawUrl sel =
 viewTextDiff : Model -> CompareActiveData -> String -> String -> Html (Flow Model ())
 viewTextDiff model d leftStr rightStr =
     let
-        leftLines =
-            String.lines leftStr
-
-        rightLines =
-            String.lines rightStr
-
-        maxAlignCells =
-            1000000
-
-        textKind sel =
-            String.toLower sel.fileName
-                |> String.split "."
-                |> List.last
-                |> Maybe.unwrap (Maybe.unwrap "" identity sel.mimeType) identity
-
         rows =
-            if textKind d.left == textKind d.right && List.length leftLines * List.length rightLines <= maxAlignCells then
-                alignLines leftLines rightLines
-
-            else
-                alignByPosition leftLines rightLines
+            alignLines (String.lines leftStr) (String.lines rightStr)
 
         viewDiffPane sel inspectOpen toggle pick =
             let
@@ -403,80 +371,46 @@ viewTextDiff model d leftStr rightStr =
 
 
 alignLines : List String -> List String -> List ( Maybe String, Maybe String )
-alignLines aList bList =
+alignLines left right =
     let
-        a =
-            Array.fromList aList
+        commonRun a b =
+            List.map2 Tuple.pair a b
+                |> List.takeWhile (\( x, y ) -> x == y)
+                |> List.length
 
-        b =
-            Array.fromList bList
+        prefix =
+            commonRun left right
 
-        m =
-            Array.length a
+        leftRest =
+            List.drop prefix left
 
-        n =
-            Array.length b
+        rightRest =
+            List.drop prefix right
 
-        cols =
-            n + 1
+        suffix =
+            commonRun (List.reverse leftRest) (List.reverse rightRest)
 
-        dpAt i j arr =
-            Array.get (i * cols + j) arr |> Maybe.withDefault 0
+        equalPairs =
+            List.map (\l -> ( Just l, Just l ))
 
-        lineMatches i j =
-            Array.get (i - 1) a == Array.get (j - 1) b
+        dropSuffix lines =
+            List.take (List.length lines - suffix) lines
 
-        dp =
-            List.foldl
-                (\i acc ->
-                    List.foldl
-                        (\j r ->
-                            Array.set (i * cols + j)
-                                (if lineMatches i j then
-                                    dpAt (i - 1) (j - 1) r + 1
-
-                                 else
-                                    max (dpAt (i - 1) j r) (dpAt i (j - 1) r)
-                                )
-                                r
-                        )
-                        acc
-                        (List.range 1 n)
-                )
-                (Array.repeat ((m + 1) * cols) 0)
-                (List.range 1 m)
-
-        backtrack i j acc =
-            if i == 0 && j == 0 then
-                acc
-
-            else if i > 0 && j > 0 && lineMatches i j then
-                backtrack (i - 1) (j - 1) (( Array.get (i - 1) a, Array.get (j - 1) b ) :: acc)
-
-            else if i == 0 || (j > 0 && dpAt i (j - 1) dp > dpAt (i - 1) j dp) then
-                backtrack i (j - 1) (( Nothing, Array.get (j - 1) b ) :: acc)
-
-            else
-                backtrack (i - 1) j (( Array.get (i - 1) a, Nothing ) :: acc)
+        keepSuffix lines =
+            List.drop (List.length lines - suffix) lines
     in
-    backtrack m n []
+    equalPairs (List.take prefix left)
+        ++ alignByPosition (dropSuffix leftRest) (dropSuffix rightRest)
+        ++ equalPairs (keepSuffix leftRest)
 
 
 alignByPosition : List String -> List String -> List ( Maybe String, Maybe String )
 alignByPosition left right =
     let
-        go a b acc =
-            case ( a, b ) of
-                ( [], [] ) ->
-                    List.reverse acc
+        n =
+            max (List.length left) (List.length right)
 
-                ( l :: ls, r :: rs ) ->
-                    go ls rs (( Just l, Just r ) :: acc)
-
-                ( l :: ls, [] ) ->
-                    go ls [] (( Just l, Nothing ) :: acc)
-
-                ( [], r :: rs ) ->
-                    go [] rs (( Nothing, Just r ) :: acc)
+        pad lines =
+            List.map Just lines ++ List.repeat (n - List.length lines) Nothing
     in
-    go left right []
+    List.map2 Tuple.pair (pad left) (pad right)

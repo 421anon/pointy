@@ -2009,7 +2009,9 @@ body:has(dialog[open]) {
   font-weight: 600;
 }
 
-.compare-pane-label {
+.compare-pane-label,
+.compare-params-label,
+.compare-param-label {
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--text-muted);
@@ -2070,12 +2072,6 @@ body:has(dialog[open]) {
   border-top: 1px solid var(--border-color);
 }
 
-.compare-params-label {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
 .compare-params-form {
   display: flex;
   flex-direction: column;
@@ -2091,12 +2087,6 @@ body:has(dialog[open]) {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-}
-
-.compare-param-label {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--text-muted);
 }
 
 .compare-param-value {
