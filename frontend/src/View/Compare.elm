@@ -1,10 +1,11 @@
 module View.Compare exposing (viewCompareBanner, viewCompareDialog)
 
-import Accessors exposing (An_Optic, just, try)
+import Accessors exposing (An_Optic, has, just, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Array exposing (Array)
+import Dict
 import Extra.Accessors exposing (by, remkT)
 import Flow exposing (Flow)
 import Grid
@@ -13,11 +14,15 @@ import Html.Attributes exposing (class, classList, id, src)
 import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
+import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model)
-import Model.Lenses exposing (compareActive, compareLeftContent, compareRightContent, compareState, fileDelimitedGrid, gridState, projects, records)
+import Model.Lenses exposing (compareActive, compareLeftContent, compareRightContent, compareState, currentTableOf, fileDelimitedGrid, gridState, projectId, projectRoute, projectStep, projects, records, route)
+import Model.Shadow as Shadow
 import Route exposing (Route)
+import Specs
 import View.Icons exposing (icon)
+import View.Table as Table
 
 
 viewCompareBanner : Model -> Html (Flow Model ())
@@ -87,6 +92,7 @@ viewDialogContent model d =
                 [ icon True "close" ]
             ]
         , Html.div [ class "compare-dialog-body" ] [ viewBody model d ]
+        , viewParamsSection model d
         ]
 
 
@@ -134,13 +140,109 @@ viewPaneHeader : Model -> CompareSelection -> Html (Flow Model ())
 viewPaneHeader model sel =
     Html.div [ class "compare-pane-header" ]
         [ Html.div [ class "compare-pane-label" ] [ Html.text (selectionLabel model sel) ]
-        , Html.button
-            [ class "dir-item-icon-btn compare-pane-source-btn"
-            , Html.Attributes.title "Open source in project"
-            , Html.Events.onClick (openSource sel)
+        , Html.div [ class "compare-pane-actions" ]
+            [ viewInspectButton model sel
+            , Html.button
+                [ class "dir-item-icon-btn compare-pane-source-btn"
+                , Html.Attributes.title "Open source in project"
+                , Html.Events.onClick (openSource sel)
+                ]
+                [ icon True "arrow_outward" ]
             ]
-            [ icon True "arrow_outward" ]
         ]
+
+
+viewInspectButton : Model -> CompareSelection -> Html (Flow Model ())
+viewInspectButton model sel =
+    case stepInfoFor model sel of
+        Just ( type_, entry ) ->
+            let
+                active =
+                    isInspecting model type_ sel.recordId
+            in
+            Html.button
+                [ classList
+                    [ ( "dir-item-icon-btn", True )
+                    , ( "compare-pane-inspect-btn", True )
+                    , ( "active", active )
+                    ]
+                , Html.Attributes.title
+                    (if active then
+                        "Hide parameters"
+
+                     else
+                        "Inspect parameters"
+                    )
+                , Html.Events.onClick (Actions.toggleAddOrEditRecordForm True (Specs.steps type_ entry) (Just sel.recordId))
+                ]
+                [ icon True "data_info_alert" ]
+
+        Nothing ->
+            Html.nothing
+
+
+{-| Parameters are inspectable only for derivation steps in the currently-viewed
+project; the inspect form reads from that project's table state.
+-}
+stepInfoFor : Model -> CompareSelection -> Maybe ( String, Shadow.StepConfigEntry )
+stepInfoFor model sel =
+    if try (route << projectRoute << projectId) model == Just sel.projectId then
+        try (projectStep (Just sel.projectId) (Just sel.recordId)) model
+            |> Maybe.andThen
+                (\step ->
+                    Model.getStepConfig model
+                        |> ApiData.toMaybe
+                        |> Maybe.andThen (Dict.get step.type_)
+                        |> Maybe.filter (\entry -> has Shadow.derivation entry.stepType)
+                        |> Maybe.map (\entry -> ( step.type_, entry ))
+                )
+
+    else
+        Nothing
+
+
+isInspecting : Model -> String -> Int -> Bool
+isInspecting model type_ recordId =
+    try (currentTableOf type_) model
+        |> Maybe.unwrap False (\t -> t.inspected && (t.edited |> Maybe.andThen .id) == Just recordId)
+
+
+viewParamsSection : Model -> CompareActiveData -> Html (Flow Model ())
+viewParamsSection model d =
+    case inspectedForms model d of
+        [] ->
+            Html.nothing
+
+        forms ->
+            Html.div [ class "compare-params" ] forms
+
+
+inspectedForms : Model -> CompareActiveData -> List (Html (Flow Model ()))
+inspectedForms model d =
+    [ d.left, d.right ]
+        |> List.uniqueBy (\s -> ( s.projectId, s.recordId ))
+        |> List.filterMap (inspectedFormFor model)
+
+
+inspectedFormFor : Model -> CompareSelection -> Maybe (Html (Flow Model ()))
+inspectedFormFor model sel =
+    stepInfoFor model sel
+        |> Maybe.andThen
+            (\( type_, entry ) ->
+                try (currentTableOf type_) model
+                    |> Maybe.andThen
+                        (\t ->
+                            t.edited
+                                |> Maybe.filter (\rec -> t.inspected && rec.id == Just sel.recordId)
+                                |> Maybe.map
+                                    (\rec ->
+                                        Html.div [ class "compare-params-pane" ]
+                                            [ Html.div [ class "compare-params-label" ] [ Html.text (selectionLabel model sel) ]
+                                            , Table.viewAddOrEditRecordForm model (Specs.steps type_ entry) t rec
+                                            ]
+                                    )
+                        )
+            )
 
 
 openSource : CompareSelection -> Flow Model ()

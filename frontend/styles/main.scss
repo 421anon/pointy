@@ -2034,8 +2034,47 @@ select.field-changed,
 }
 
 .compare-dialog-close,
-.compare-pane-source-btn {
+.compare-pane-source-btn,
+.compare-pane-inspect-btn {
   flex: 0 0 auto;
+}
+
+.compare-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex: 0 0 auto;
+}
+
+.compare-pane-inspect-btn.active,
+.compare-pane-inspect-btn.active:hover {
+  color: white;
+  background: var(--state-info);
+}
+
+.compare-params {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: var(--spacing-md);
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--border-color);
+}
+
+.compare-params-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.compare-params-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .compare-dialog-body {
