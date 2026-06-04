@@ -1515,6 +1515,7 @@ select.field-changed,
 .dialog {
   border: none;
   border-radius: var(--radius-sm);
+  overscroll-behavior: contain;
   padding: 0;
   max-width: 500px;
   width: 90%;
@@ -1535,6 +1536,10 @@ select.field-changed,
       background: var(--state-danger);
     }
   }
+}
+
+body:has(dialog[open]) {
+  overflow: hidden;
 }
 
 .dialog-content {
@@ -2014,6 +2019,7 @@ select.field-changed,
   width: min(1200px, calc(100vw - var(--spacing-xl) - var(--spacing-xl)));
   max-width: 90vw;
   max-height: 90vh;
+  border: 1px solid var(--state-info);
   overflow: hidden;
 }
 
