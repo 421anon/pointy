@@ -2262,9 +2262,14 @@ body:has(dialog[open]) {
     min-height: 0;
   }
 
+  .compare-dialog-body {
+    overflow-y: auto;
+  }
+
   .compare-panes,
   .compare-diff {
     grid-template-columns: 1fr;
-    grid-template-rows: 1fr 1fr;
+    grid-template-rows: none;
+    grid-auto-rows: 80vh;
   }
 }
