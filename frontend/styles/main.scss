@@ -1966,17 +1966,16 @@ body:has(dialog[open]) {
 
 .compare-banner {
   position: fixed;
-  top: var(--spacing-md);
+  bottom: var(--spacing-xl);
   left: 50%;
   z-index: 950;
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: var(--spacing-xs);
-  width: min(900px, calc(100% - 32px));
-  padding: var(--spacing-sm) var(--spacing-md);
+  max-width: calc(100% - var(--spacing-xl) - var(--spacing-xl));
+  padding: var(--spacing-xs) var(--spacing-md);
   transform: translateX(-50%);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: var(--state-info);
   color: white;
   font-size: var(--font-size-sm);
@@ -2245,7 +2244,7 @@ body:has(dialog[open]) {
 
 .compare-btn-ready {
   color: var(--state-info);
-  box-shadow: inset 0 0 0 1px var(--state-info);
+  background: var(--state-info-outline);
 }
 .compare-btn-ready:hover {
   color: white;
@@ -2266,5 +2265,6 @@ body:has(dialog[open]) {
   .compare-panes,
   .compare-diff {
     grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
   }
 }

@@ -185,10 +185,19 @@ viewInlineParams model sel inspectOpen mParams =
             (\( step, argTypes ) ->
                 Html.div [ class "compare-params" ]
                     [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
-                    , Html.div [ class "compare-params-form" ] (viewNamedArgs model sel.projectId step.args argTypes)
+                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model sel.projectId step.args argTypes)
                     ]
             )
             mParams
+
+
+viewNote : String -> List (Html (Flow Model ()))
+viewNote note =
+    if String.isEmpty (String.trim note) then
+        []
+
+    else
+        [ viewParamRow "Note" (Html.text note) ]
 
 
 viewNamedArgs : Model -> Int -> Dict String StepArgValue -> Dict String ArgType -> List (Html (Flow Model ()))
