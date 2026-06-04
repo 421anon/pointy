@@ -23,6 +23,7 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Html.Extra as Html
+import Html.Keyed
 import Json.Decode as Decode
 
 
@@ -94,18 +95,20 @@ columnAt index columns =
 -- VISIBLE ROWS (filter + sort)
 
 
-visibleRows : State -> List Row
+visibleRows : State -> List ( Int, Row )
 visibleRows model =
     let
         filtered =
-            List.filter (rowPassesFilters model) model.rows
+            model.rows
+                |> List.indexedMap Tuple.pair
+                |> List.filter (\( _, row ) -> rowPassesFilters model row)
     in
     case model.sortColumn of
         Just ( colIndex, Asc ) ->
-            List.sortWith (compareRowsByColumn colIndex model.columns) filtered
+            List.sortWith (\( _, a ) ( _, b ) -> compareRowsByColumn colIndex model.columns a b) filtered
 
         Just ( colIndex, Desc ) ->
-            List.sortWith (\a b -> reverseOrder (compareRowsByColumn colIndex model.columns a b)) filtered
+            List.sortWith (\( _, a ) ( _, b ) -> reverseOrder (compareRowsByColumn colIndex model.columns a b)) filtered
 
         Nothing ->
             filtered
@@ -327,8 +330,9 @@ view model =
                 [ Html.tr [ Html.Attributes.class "delimited-grid-header" ]
                     (List.indexedMap (viewHeaderCell model) model.columns)
                 ]
-            , Html.tbody []
-                (List.map (viewRow model.columns) (visibleRows model))
+            , Html.Keyed.node "tbody"
+                []
+                (List.map (viewKeyedRow model.columns) (visibleRows model))
             ]
         ]
 
@@ -398,6 +402,11 @@ viewHeaderCell model index col =
             ]
             []
         ]
+
+
+viewKeyedRow : List Column -> ( Int, Row ) -> ( String, Html msg )
+viewKeyedRow columns ( rowIndex, row ) =
+    ( String.fromInt rowIndex, viewRow columns row )
 
 
 viewRow : List Column -> Row -> Html msg

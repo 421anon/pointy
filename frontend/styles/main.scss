@@ -2251,7 +2251,7 @@ body:has(dialog[open]) {
   background: var(--state-info);
 }
 
-@media (max-width: 800px) {
+@media (max-width: 600px) {
   .dialog.compare-dialog {
     width: calc(100vw - var(--spacing-md) - var(--spacing-md));
     max-width: none;
@@ -2271,5 +2271,23 @@ body:has(dialog[open]) {
     grid-template-columns: 1fr;
     grid-template-rows: none;
     grid-auto-rows: 80vh;
+  }
+
+  body {
+    padding: 0;
+  }
+
+  .page {
+    padding-inline: var(--spacing-xs);
+  }
+
+  .src-files-section,
+  .output-files-section {
+    padding-inline: var(--spacing-xs);
+  }
+
+  .table-records-loading,
+  .table-form-wrapper {
+    padding-inline: var(--spacing-xs);
   }
 }
