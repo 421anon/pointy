@@ -567,6 +567,16 @@ compareRightContent =
     lens ".rightContent" .rightContent (\d v -> { d | rightContent = v })
 
 
+compareLeftInspect : Lens ls CompareActiveData Bool x y
+compareLeftInspect =
+    lens ".leftInspect" .leftInspect (\d v -> { d | leftInspect = v })
+
+
+compareRightInspect : Lens ls CompareActiveData Bool x y
+compareRightInspect =
+    lens ".rightInspect" .rightInspect (\d v -> { d | rightInspect = v })
+
+
 key =
     lens ".key" Model.getKey (\(Model m) key_ -> Model { m | key = key_ })
 

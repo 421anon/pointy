@@ -923,6 +923,8 @@ selectCompareFile right =
                     , right = right
                     , leftContent = NotAsked
                     , rightContent = NotAsked
+                    , leftInspect = False
+                    , rightInspect = False
                     }
                 )
                 |> Flow.seq (openDialog "compare-dialog")

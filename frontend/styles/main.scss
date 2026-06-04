@@ -2053,27 +2053,78 @@ select.field-changed,
 }
 
 .compare-params {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: var(--spacing-md);
-  align-content: start;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding-top: var(--spacing-md);
-  border-top: 1px solid var(--border-color);
-}
-
-.compare-params-pane {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
-  min-width: 0;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 50%;
+  overflow: auto;
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--border-color);
 }
 
 .compare-params-label {
   font-size: var(--font-size-sm);
   font-weight: 600;
+  color: var(--text-muted);
+}
+
+.compare-params-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.compare-param {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.compare-param-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.compare-param-value {
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.compare-param-code {
+  margin: 0;
+  padding: var(--spacing-xs);
+  font-family: "Courier New", monospace;
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.compare-param-list {
+  margin: 0;
+  padding-left: var(--spacing-md);
+}
+
+.compare-param-record {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding-left: var(--spacing-sm);
+  border-left: 2px solid var(--border-color);
+}
+
+.compare-param-empty {
   color: var(--text-muted);
 }
 
@@ -2098,6 +2149,7 @@ select.field-changed,
 .compare-diff {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--spacing-sm);
   flex: 1 1 auto;
   min-height: 0;

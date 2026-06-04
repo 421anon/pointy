@@ -204,6 +204,8 @@ type alias CompareActiveData =
     , right : CompareSelection
     , leftContent : ApiData CompareFile
     , rightContent : ApiData CompareFile
+    , leftInspect : Bool
+    , rightInspect : Bool
     }
 
 
