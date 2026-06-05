@@ -2007,6 +2007,11 @@ body:has(dialog[open]) {
   font-size: 1.1rem;
   font-weight: 600;
 }
+.compare-dialog-title .material-symbols-outlined {
+  margin: 0 var(--spacing-xs);
+  vertical-align: middle;
+  color: var(--state-info);
+}
 
 .compare-pane-label,
 .compare-params-label,

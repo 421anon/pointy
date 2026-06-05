@@ -43,8 +43,18 @@ viewCompareDialog model =
 
 selectionLabel : Model -> CompareSelection -> String
 selectionLabel model sel =
-    try (projects << records << success << by .id (Just sel.projectId)) model
-        |> Maybe.unwrap sel.fileName (\p -> p.name ++ " / " ++ sel.fileName)
+    let
+        projectName =
+            try (projects << records << success << by .id (Just sel.projectId)) model
+                |> Maybe.unwrap "" .name
+
+        stepName =
+            try (projectStep (Just sel.projectId) (Just sel.recordId)) model
+                |> Maybe.unwrap "" .name
+    in
+    ([ projectName, stepName ] ++ sel.path)
+        |> List.filter ((/=) "")
+        |> String.join " / "
 
 
 viewBanner : String -> Html (Flow Model ())
@@ -68,7 +78,10 @@ viewDialogContent model d =
         ]
         [ Html.div [ class "compare-dialog-header" ]
             [ Html.span [ class "compare-dialog-title" ]
-                [ Html.text ("Comparing " ++ selectionLabel model d.left ++ " ↔ " ++ selectionLabel model d.right) ]
+                [ Html.text ("Comparing " ++ selectionLabel model d.left)
+                , icon True "compare_arrows"
+                , Html.text (selectionLabel model d.right)
+                ]
             , Html.button
                 [ class "icon-btn compare-dialog-close"
                 , Html.Attributes.title "Close comparison"
