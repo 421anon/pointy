@@ -16,6 +16,7 @@ module Api.Api exposing
     , fetchSrcFileContents
     , fetchStepConfig
     , fetchStepLog
+    , fetchNotices
     , fetchUserRepoInfo
     , runStep
     , saveProject
@@ -37,7 +38,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, ProjectRecord, StepRecord)
+import Model.Core exposing (BaseRecord, DirectoryItem, Notice, ProjectRecord, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -310,6 +311,14 @@ fetchStepLog id commit =
             , expect = Http.expectStringResponse identity (stringResponse identity)
             }
 
+
+fetchNotices : Int -> Maybe String -> Flow s (Result Http.Error (List Notice))
+fetchNotices id commit =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery ("/backend/notices?id=" ++ String.fromInt id) commit
+            , expect = Http.expectJson identity (Json.Decode.list Decode.notice)
+            }
 
 fetchDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int -> Maybe String -> List String -> Flow s (Result Http.Error (Dict String DirectoryItem))
 fetchDirectoryContents itemDecoder stepId commit folderPath =

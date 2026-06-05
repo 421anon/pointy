@@ -233,6 +233,34 @@ stepValueOnly stepType_ =
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
+noticeSeverity : Decoder Model.NoticeSeverity
+noticeSeverity =
+    Decode.string
+        |> Decode.andThen
+            (\severity ->
+                case severity of
+                    "info" ->
+                        Decode.succeed Model.Info
+
+                    _ ->
+                        Decode.fail ("Unknown notice severity: " ++ severity)
+            )
+
+
+notice : Decoder Model.Notice
+notice =
+    Decode.succeed
+        (\field severity message ->
+            { field = field
+            , severity = severity
+            , message = message
+            }
+        )
+        |> optional "field" (maybe Decode.string) Nothing
+        |> required "severity" noticeSeverity
+        |> required "message" Decode.string
+
+
 directoryItem : FileView -> Decoder ( String, DirectoryItem )
 directoryItem fileView =
     Decode.field "isDir" Decode.bool

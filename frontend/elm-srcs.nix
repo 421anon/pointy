@@ -35,6 +35,11 @@
         version = "4.3.0";
       };
 
+      "elm-explorations/markdown" = {
+        sha256 = "0k3110ixa4wwf3vkkdplagwah9ypr965qxr1y147rnsc1xsxmr6y";
+        version = "1.0.0";
+      };
+
       "elm/browser" = {
         sha256 = "0nagb9ajacxbbg985r4k9h0jadqpp0gp84nm94kcgbr5sf8i9x13";
         version = "1.0.2";

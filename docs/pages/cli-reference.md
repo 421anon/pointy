@@ -105,7 +105,7 @@ nix eval --json .#pointy.projects | jq .
 nix eval --json .#pointy.steps.42.meta.pointy
 ```
 
-This shows the `type` and `id` exported through `passthru.meta.pointy`.
+This shows the metadata exported through `passthru.meta.pointy`, including `type`, `id`, and any optional `notices`.
 
 ### Show the evaluated `srcFiles` path
 
