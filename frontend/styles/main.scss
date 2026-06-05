@@ -2217,14 +2217,18 @@ body:has(dialog[open]) {
   background: white;
 }
 
+.compare-diff-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+}
+
 .compare-diff-lines {
   display: grid;
   align-content: start;
-  flex: 1 1 auto;
   min-width: 100%;
   width: max-content;
-  overflow: auto;
-  border: 1px solid var(--border-color);
 }
 
 .diff-line {

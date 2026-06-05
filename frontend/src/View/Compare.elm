@@ -361,15 +361,17 @@ viewTextDiff model d leftStr rightStr =
             in
             Html.div [ class "compare-diff-pane" ]
                 [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
-                , Html.div [ class "compare-diff-lines" ]
-                    (List.map
-                        (\( l, r ) ->
-                            Html.div
-                                [ classList [ ( "diff-line", True ), ( "diff-line-diff", l /= r ) ] ]
-                                [ Html.text (Maybe.unwrap "\u{00A0}" identity (pick ( l, r ))) ]
+                , Html.div [ class "compare-diff-scroll" ]
+                    [ Html.div [ class "compare-diff-lines" ]
+                        (List.map
+                            (\( l, r ) ->
+                                Html.div
+                                    [ classList [ ( "diff-line", True ), ( "diff-line-diff", l /= r ) ] ]
+                                    [ Html.text (Maybe.unwrap "\u{00A0}" identity (pick ( l, r ))) ]
+                            )
+                            rows
                         )
-                        rows
-                    )
+                    ]
                 , viewInlineParams model sel inspectOpen mParams
                 ]
     in
