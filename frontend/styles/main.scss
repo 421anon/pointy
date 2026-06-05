@@ -1969,7 +1969,8 @@ body:has(dialog[open]) {
   bottom: var(--spacing-xl);
   left: 50%;
   z-index: 950;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, auto) auto;
   align-items: center;
   gap: var(--spacing-xs);
   max-width: calc(100% - var(--spacing-xl) - var(--spacing-xl));
@@ -1983,7 +1984,6 @@ body:has(dialog[open]) {
 }
 
 .compare-banner-cancel {
-  flex: 0 0 auto;
   background: none;
   border: none;
   color: inherit;
@@ -2030,6 +2030,8 @@ body:has(dialog[open]) {
 }
 
 .compare-dialog-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   height: min(820px, calc(100vh - var(--spacing-xl) - var(--spacing-xl)));
   max-height: 90vh;
   min-height: min(620px, 90vh);
@@ -2038,24 +2040,18 @@ body:has(dialog[open]) {
 }
 
 .compare-dialog-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: var(--spacing-md);
   min-width: 0;
 }
 
-.compare-dialog-close,
-.compare-pane-source-btn,
-.compare-pane-inspect-btn {
-  flex: 0 0 auto;
-}
-
 .compare-pane-actions {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
   align-items: center;
   gap: var(--spacing-xs);
-  flex: 0 0 auto;
 }
 
 .compare-pane-inspect-btn.active,
@@ -2065,20 +2061,17 @@ body:has(dialog[open]) {
 }
 
 .compare-params {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  align-content: start;
   gap: var(--spacing-sm);
-  flex: 0 0 auto;
   min-height: 0;
-  max-height: 40%;
   overflow: auto;
   padding-top: var(--spacing-sm);
   border-top: 1px solid var(--border-color);
 }
 
 .compare-params-form {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: var(--spacing-sm);
   padding: var(--spacing-sm);
   border: 1px solid var(--border-color);
@@ -2087,8 +2080,7 @@ body:has(dialog[open]) {
 }
 
 .compare-param {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 2px;
   min-width: 0;
 }
@@ -2117,8 +2109,7 @@ body:has(dialog[open]) {
 }
 
 .compare-param-record {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: var(--spacing-xs);
   padding-left: var(--spacing-sm);
   border-left: 2px solid var(--border-color);
@@ -2129,9 +2120,8 @@ body:has(dialog[open]) {
 }
 
 .compare-dialog-body {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
@@ -2151,14 +2141,14 @@ body:has(dialog[open]) {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: var(--spacing-sm);
-  flex: 1 1 auto;
   min-height: 0;
 }
 
 .compare-pane,
 .compare-diff-pane {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-auto-rows: fit-content(40%);
   min-width: 0;
   min-height: 0;
   gap: var(--spacing-sm);
@@ -2168,11 +2158,10 @@ body:has(dialog[open]) {
 }
 
 .compare-pane-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: var(--spacing-sm);
-  flex: 0 0 auto;
   min-width: 0;
   padding: var(--spacing-xs) var(--spacing-sm);
   border: 1px solid var(--border-color);
@@ -2181,8 +2170,8 @@ body:has(dialog[open]) {
 }
 
 .compare-pane-body {
-  display: flex;
-  flex: 1 1 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
   overflow: auto;
 }
@@ -2194,7 +2183,6 @@ body:has(dialog[open]) {
   line-height: 1.5;
 }
 .compare-pane-text {
-  flex: 1 1 auto;
   width: 100%;
   overflow: auto;
   border: 1px solid var(--border-color);
@@ -2223,7 +2211,6 @@ body:has(dialog[open]) {
 }
 
 .compare-diff-scroll {
-  flex: 1 1 0;
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--border-color);
