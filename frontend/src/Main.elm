@@ -99,12 +99,14 @@ applyRouteFromUrl forceRevealHighlight url =
                                             Nothing ->
                                                 Flow.pure ()
                                         )
+                                    |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
                             Route.Home ->
                                 Actions.closeStepStatusStream
+                                    |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
                             Route.NotFound ->
-                                Flow.pure ()
+                                Actions.syncCompareFromRoute newRoute
                         )
             )
 

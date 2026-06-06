@@ -856,6 +856,7 @@ shareEntity projectId entityId target pathSegments mRange =
                                 { projectId = projectId
                                 , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
                                 , mCommit = mCommit_
+                                , mCompare = Nothing
                                 }
                     in
                     callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString route_)
@@ -907,29 +908,153 @@ startCompare sel =
 cancelCompare : Flow Model ()
 cancelCompare =
     Flow.setAll compareState CompareIdle
+        |> Flow.seq clearCompareRoute
+
+
+clearCompareRoute : Flow Model ()
+clearCompareRoute =
+    overRouteReplace <|
+        \currentRoute ->
+            case currentRoute of
+                Project params ->
+                    Project { params | mCompare = Nothing }
+
+                other ->
+                    other
 
 
 selectCompareFile : CompareSelection -> Flow Model ()
 selectCompareFile right =
     Flow.forAll (compareState << compareSelecting) <|
         \left ->
-            let
-                matchesActiveCompare d =
-                    d.left == left && d.right == right
-            in
-            Flow.setAll compareState
-                (CompareActive
-                    { left = left
-                    , right = right
-                    , leftContent = NotAsked
-                    , rightContent = NotAsked
-                    , leftInspect = False
-                    , rightInspect = False
-                    }
-                )
-                |> Flow.seq (openDialog "compare-dialog")
-                |> Flow.seq (fetchCompareSide matchesActiveCompare compareLeftContent left)
-                |> Flow.seq (fetchCompareSide matchesActiveCompare compareRightContent right)
+            Flow.forAll route <|
+                \currentRoute ->
+                    let
+                        comparison =
+                            { left = compareSelectionToTarget left
+                            , right = compareSelectionToTarget right
+                            }
+
+                        nextRoute =
+                            case currentRoute of
+                                Project params ->
+                                    Project { params | projectId = left.projectId, mCompare = Just comparison }
+
+                                _ ->
+                                    Project
+                                        { projectId = left.projectId
+                                        , mHighlight = Nothing
+                                        , mCommit = Nothing
+                                        , mCompare = Just comparison
+                                        }
+                    in
+                    goToRoute nextRoute
+
+
+syncCompareFromRoute : Route -> Flow Model ()
+syncCompareFromRoute route_ =
+    case route_ of
+        Project { projectId, mCompare } ->
+            case Maybe.andThen (compareSelectionsFromRoute projectId) mCompare of
+                Just ( left, right ) ->
+                    activateCompare left right
+
+                Nothing ->
+                    clearActiveCompareIfNeeded
+
+        _ ->
+            clearActiveCompareIfNeeded
+
+
+compareSelectionsFromRoute : Int -> Route.Comparison -> Maybe ( CompareSelection, CompareSelection )
+compareSelectionsFromRoute projectId comparison =
+    Maybe.map2 Tuple.pair
+        (compareSelectionFromTarget projectId comparison.left)
+        (compareSelectionFromTarget projectId comparison.right)
+
+
+compareSelectionFromTarget : Int -> Route.CompareTarget -> Maybe CompareSelection
+compareSelectionFromTarget projectId target =
+    let
+        base =
+            { projectId = projectId
+            , recordId = target.id
+            , path = target.path
+            , fileName = List.last target.path |> Maybe.withDefault ""
+            , mimeType = target.mimeType
+            , source = FromSrc
+            }
+    in
+    case target.target of
+        Route.Output ->
+            target.commit
+                |> Maybe.map (\commit_ -> { base | source = FromOutput commit_ })
+
+        Route.Source ->
+            Just base
+
+
+compareSelectionToTarget : CompareSelection -> Route.CompareTarget
+compareSelectionToTarget sel =
+    case sel.source of
+        FromOutput commit_ ->
+            { id = sel.recordId
+            , target = Route.Output
+            , path = sel.path
+            , commit = Just commit_
+            , mimeType = sel.mimeType
+            }
+
+        FromSrc ->
+            { id = sel.recordId
+            , target = Route.Source
+            , path = sel.path
+            , commit = Nothing
+            , mimeType = sel.mimeType
+            }
+
+
+clearActiveCompareIfNeeded : Flow Model ()
+clearActiveCompareIfNeeded =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if has (compareState << compareActive) model then
+                    Flow.setAll compareState CompareIdle
+                        |> Flow.seq (closeDialog "compare-dialog")
+
+                else
+                    Flow.pure ()
+            )
+
+
+activateCompare : CompareSelection -> CompareSelection -> Flow Model ()
+activateCompare left right =
+    let
+        matchesActiveCompare d =
+            d.left == left && d.right == right
+    in
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if has (compareState << compareActive << where_ matchesActiveCompare) model then
+                    Flow.pure ()
+
+                else
+                    Flow.setAll compareState
+                        (CompareActive
+                            { left = left
+                            , right = right
+                            , leftContent = NotAsked
+                            , rightContent = NotAsked
+                            , leftInspect = False
+                            , rightInspect = False
+                            }
+                        )
+                        |> Flow.seq (openDialog "compare-dialog")
+                        |> Flow.seq (fetchCompareSide matchesActiveCompare compareLeftContent left)
+                        |> Flow.seq (fetchCompareSide matchesActiveCompare compareRightContent right)
+            )
 
 
 fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData CompareFile) -> CompareSelection -> Flow Model ()
@@ -1468,7 +1593,7 @@ onSelectSearch mProjectId stepId =
                         mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
                 in
                 pickedProjectId
-                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = mCommit_ }))
+                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = mCommit_, mCompare = Nothing }))
             )
 
 

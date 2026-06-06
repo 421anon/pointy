@@ -37,7 +37,7 @@ view model =
                         , alwaysVisibleRecordActions = \_ -> []
                         , directorySection = \_ -> Html.nothing
                         , srcFilesSection = \_ -> Html.nothing
-                        , onRecordClick = .id >> Maybe.map (\id -> Actions.goToRoute (Project { projectId = id, mHighlight = Nothing, mCommit = Nothing }))
+                        , onRecordClick = .id >> Maybe.map (\id -> Actions.goToRoute (Project { projectId = id, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing }))
                         , isOpen = always False
                         , isSrcOpen = always False
                         }

@@ -310,6 +310,7 @@ sourceRoute sel =
         { projectId = sel.projectId
         , mHighlight = Just { id = sel.recordId, target = target, path = sel.path, range = Nothing }
         , mCommit = mCommit
+        , mCompare = Nothing
         }
 
 
