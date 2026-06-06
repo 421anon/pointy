@@ -53,7 +53,7 @@ async function capture(session) {
         .first();
 
       const logFinalRowVisible = await logFinalRow
-        .waitFor({ state: "visible", timeout: 10000 })
+        .waitFor({ state: "visible", timeout: 1000 })
         .then(() => true)
         .catch(() => false);
 

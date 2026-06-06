@@ -56,6 +56,17 @@ nix build .#docs           # mkdocs site
 nix run .#take-screenshots # take screenshots for the mkdocs site
 ```
 
+## Documentation screenshot generators
+
+Screenshot generators live in [`screenshots/`](screenshots/) and are run by `screenshots/run-all-screenshots.js`. The compare-file docs use:
+
+- `screenshots/output-file-compare-selection.js` for the first-file selection banner
+- `screenshots/output-file-compare-dialog.js` for the completed comparison dialog
+
+Use `nix run .#take-screenshots` when you intentionally want to refresh the checked-in documentation images. The app runs inside the screenshots VM, writes light and dark images under `docs/pages/screenshots/`, and reads its fixture repository from `POINTY_USER_REPO` (default: `../pointy-welker`). Set `SCREENSHOTS_OUT` to write to a different output directory.
+
+When adding a generator, create a `screenshots/<name>.js` file that exports `capture(session)`, add it to the ordered `screenshotScripts` list in `screenshots/run-all-screenshots.js`, and reference the light image from Markdown as `screenshots/light/<name>.png`. The docs theme script swaps that path to the matching dark image automatically.
+
 ## License
 
 Pointy Notebook is distributed under the GNU Affero General Public License, version 3 or later. See [LICENSE](LICENSE) for the full text.
