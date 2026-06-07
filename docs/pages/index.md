@@ -8,7 +8,7 @@ Pointy Notebook is a web interface for building and running step-based workflows
 
 - [Managing Projects](projects.md) — create, open, hide, reorder, and delete projects.
 - [Building Workflows (Steps)](steps.md) — add steps, connect them, reuse them across projects, and organize them.
-- [Execution and Data Management](execution.md) — run steps, upload files, inspect outputs, work with source files, and create share links.
+- [Execution and Data Management](execution.md) — run steps, upload files, inspect outputs, compare files, work with source files, and create share links.
 
 ### If you administer a Pointy instance
 

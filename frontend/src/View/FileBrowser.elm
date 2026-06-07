@@ -17,8 +17,8 @@ import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
-import Model.Lenses exposing (currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
+import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -43,6 +43,53 @@ srcDir =
                 other ->
                     Err other
         )
+
+
+compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
+compareSelectionFor projectId fileName mime path ctx =
+    case ctx of
+        OutputDir recordId commit_ ->
+            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
+
+        SrcDir recordId ->
+            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc }
+
+
+viewCompareButton : Model -> Maybe CompareSelection -> Html (Flow Model ())
+viewCompareButton model =
+    Maybe.unwrap Html.nothing <|
+        \sel ->
+            let
+                isPicking =
+                    has (compareState << compareSelecting) model
+
+                isPicked =
+                    has (compareState << compareSelecting << where_ ((==) sel)) model
+
+                pickedLabel =
+                    try (compareState << compareSelecting) model
+                        |> Maybe.unwrap "selected file" .fileName
+
+                ( tooltip, action, iconName ) =
+                    if isPicked then
+                        ( "Already picked", Flow.none, "check_circle" )
+
+                    else if isPicking then
+                        ( "Pick to compare with " ++ pickedLabel, Actions.selectCompareFile sel, "compare_arrows" )
+
+                    else
+                        ( "Compare", Actions.startCompare sel, "compare_arrows" )
+            in
+            Html.button
+                [ classList
+                    [ ( "dir-item-icon-btn", True )
+                    , ( "compare-btn-picked", isPicked )
+                    , ( "compare-btn-ready", isPicking && not isPicked )
+                    ]
+                , Html.Attributes.title tooltip
+                , Html.Events.onClick action
+                ]
+                [ icon True iconName ]
 
 
 renderDirectoryContents : Model -> StepSpec -> Maybe Int -> Maybe DirContext -> Bool -> List String -> String -> ApiData (Dict String DirectoryItem) -> Html (Flow Model ())
@@ -199,8 +246,20 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 isImage =
                     has (mimeType << just << where_ (String.startsWith "image/")) file
 
+                canView =
+                    file.viewable || isImage
+
                 isHtml =
                     has (mimeType << just << where_ (String.startsWith "text/html")) file
+
+                mCompareSelection =
+                    if canView then
+                        Maybe.map2 (\pid ctx -> compareSelectionFor pid itemName file.mimeType path ctx)
+                            (try currentProjectId model)
+                            mDirCtx
+
+                    else
+                        Nothing
 
                 externalHtmlUrl =
                     if isHtml then
@@ -230,7 +289,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         , Html.span [ class "directory-item-meta" ] [ Html.text (Filesize.formatBase2 file.size) ]
                         ]
                     , Html.div [ class "file-actions" ]
-                        [ Html.viewIf (file.viewable || isImage) <|
+                        [ Html.viewIf canView <|
                             Html.button
                                 [ class "dir-item-icon-btn"
                                 , Html.Events.onClick
@@ -257,7 +316,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         ]
                                         [ icon True "open_in_new" ]
                                 )
-                        , Html.viewIf ((file.viewable || isImage) && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
+                        , Html.viewIf (canView && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
                         , Html.button
                             [ class "dir-item-icon-btn"
                             , Html.Events.onClick
@@ -273,6 +332,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 )
                             ]
                             [ icon True "download" ]
+                        , viewCompareButton model mCompareSelection
                         ]
                     ]
                 , Html.viewIf file.view.isViewing <|

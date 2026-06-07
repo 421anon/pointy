@@ -43,6 +43,8 @@ const screenshotScripts = [
   "output-files-html-preview.js",
   "output-files-csv-grid.js",
   "output-file-line-range-share.js",
+  "output-file-compare-selection.js",
+  "output-file-compare-dialog.js",
 ];
 
 function resolveScriptsDir() {

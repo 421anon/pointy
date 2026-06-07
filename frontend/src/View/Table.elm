@@ -1112,6 +1112,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                             { projectId = projectId
                                             , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
                                             , mCommit = mCommit_
+                                            , mCompare = Nothing
                                             }
                                     )
                     in

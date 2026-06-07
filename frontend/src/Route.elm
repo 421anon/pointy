@@ -1,4 +1,4 @@
-module Route exposing (Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, parseLineRange, project, toString)
+module Route exposing (CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, parseLineRange, project, toString)
 
 import Accessors exposing (Prism, prism)
 import Html
@@ -18,6 +18,7 @@ type alias ProjectParams =
     { projectId : Int
     , mHighlight : Maybe Highlight
     , mCommit : Maybe String
+    , mCompare : Maybe Comparison
     }
 
 
@@ -40,6 +41,28 @@ type alias LineRange =
     }
 
 
+type alias Comparison =
+    { left : CompareTarget
+    , right : CompareTarget
+    }
+
+
+type alias CompareTarget =
+    { id : Int
+    , target : HighlightTarget
+    , path : List String
+    , commit : Maybe String
+    , mimeType : Maybe String
+    }
+
+
+type alias CompareTargetRef =
+    { id : Int
+    , target : HighlightTarget
+    , path : List String
+    }
+
+
 project : Prism ls Route ProjectParams x y
 project =
     prism ">Project"
@@ -59,11 +82,16 @@ parser =
     Parser.oneOf
         [ Parser.map Home Parser.top
         , Parser.map
-            (\id basicHi mCommit mLines ->
+            (\id basicHi mCommit mLines leftRef leftCommit leftMime rightRef rightCommit rightMime ->
                 Project
                     { projectId = id
                     , mHighlight = Maybe.map (\hi -> { hi | range = mLines }) basicHi
                     , mCommit = mCommit
+                    , mCompare =
+                        Maybe.map2
+                            (\left right -> { left = left, right = right })
+                            (compareTargetFromQuery leftRef leftCommit leftMime)
+                            (compareTargetFromQuery rightRef rightCommit rightMime)
                     }
             )
             (Parser.s "project"
@@ -71,6 +99,12 @@ parser =
                 <?> Query.custom "hi" highlightParser
                 <?> Query.string "commit"
                 <?> Query.custom "lines" lineRangeParser
+                <?> Query.custom "compareLeft" compareTargetParser
+                <?> Query.string "compareLeftCommit"
+                <?> Query.string "compareLeftMime"
+                <?> Query.custom "compareRight" compareTargetParser
+                <?> Query.string "compareRightCommit"
+                <?> Query.string "compareRightMime"
             )
         ]
 
@@ -91,6 +125,47 @@ highlightParser strs =
 lineRangeParser : List String -> Maybe LineRange
 lineRangeParser strs =
     List.head strs |> Maybe.andThen parseLineRange
+
+
+compareTargetParser : List String -> Maybe CompareTargetRef
+compareTargetParser strs =
+    case Maybe.map (String.split "/") <| List.head strs of
+        Just ("out" :: idStr :: rest) ->
+            String.toInt idStr |> Maybe.map (\id -> { id = id, target = Output, path = rest })
+
+        Just ("src" :: idStr :: rest) ->
+            String.toInt idStr |> Maybe.map (\id -> { id = id, target = Source, path = rest })
+
+        _ ->
+            Nothing
+
+
+compareTargetFromQuery : Maybe CompareTargetRef -> Maybe String -> Maybe String -> Maybe CompareTarget
+compareTargetFromQuery mRef mCommit mMimeType =
+    let
+        nonEmpty value =
+            if String.isEmpty value then
+                Nothing
+
+            else
+                Just value
+
+        mimeType =
+            Maybe.andThen nonEmpty mMimeType
+    in
+    case mRef of
+        Just ref ->
+            case ref.target of
+                Output ->
+                    mCommit
+                        |> Maybe.andThen nonEmpty
+                        |> Maybe.map (\commit -> { id = ref.id, target = ref.target, path = ref.path, commit = Just commit, mimeType = mimeType })
+
+                Source ->
+                    Just { id = ref.id, target = ref.target, path = ref.path, commit = Nothing, mimeType = mimeType }
+
+        Nothing ->
+            Nothing
 
 
 parseLineRange : String -> Maybe LineRange
@@ -140,7 +215,7 @@ navigationTarget : Route -> Route
 navigationTarget route =
     case route of
         Project params ->
-            Project { params | mHighlight = Maybe.map (\highlight -> { highlight | range = Nothing }) params.mHighlight }
+            Project { params | mHighlight = Maybe.map (\highlight -> { highlight | range = Nothing }) params.mHighlight, mCompare = Nothing }
 
         other ->
             other
@@ -161,13 +236,35 @@ href targetRoute =
     Attr.href (toString targetRoute)
 
 
+compareTargetRef : CompareTarget -> String
+compareTargetRef compareTarget =
+    let
+        targetPrefix =
+            case compareTarget.target of
+                Output ->
+                    "out"
+
+                Source ->
+                    "src"
+    in
+    String.join "/" (targetPrefix :: String.fromInt compareTarget.id :: compareTarget.path)
+
+
+compareTargetQueryParts : String -> CompareTarget -> List (Maybe String)
+compareTargetQueryParts prefix compareTarget =
+    [ Just (prefix ++ "=" ++ compareTargetRef compareTarget)
+    , Maybe.map (\commit -> prefix ++ "Commit=" ++ commit) compareTarget.commit
+    , Maybe.map (\mimeType -> prefix ++ "Mime=" ++ mimeType) compareTarget.mimeType
+    ]
+
+
 toString : Route -> String
 toString route =
     case route of
         Home ->
             "/"
 
-        Project { projectId, mHighlight, mCommit } ->
+        Project { projectId, mHighlight, mCommit, mCompare } ->
             let
                 baseUrl =
                     "/project/" ++ String.fromInt projectId
@@ -196,8 +293,17 @@ toString route =
                         |> Maybe.andThen .range
                         |> Maybe.map (\r -> "lines=" ++ formatLineRange r)
 
+                compareStrs =
+                    case mCompare of
+                        Just compare_ ->
+                            compareTargetQueryParts "compareLeft" compare_.left
+                                ++ compareTargetQueryParts "compareRight" compare_.right
+
+                        Nothing ->
+                            []
+
                 queryParts =
-                    List.filterMap identity [ hiStr, commitStr, linesStr ]
+                    List.filterMap identity ([ hiStr, commitStr, linesStr ] ++ compareStrs)
             in
             if List.isEmpty queryParts then
                 baseUrl

@@ -11,7 +11,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (ProjectParams, Route(..))
 import Time
@@ -526,6 +526,59 @@ stepStatusHooks =
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y
 gutterDrag =
     lens ".gutterDrag" Model.getGutterDrag (\(Model m) drag -> Model { m | gutterDrag = drag })
+
+
+compareState : Lens ls Model CompareState x y
+compareState =
+    lens ".compareState" Model.getCompareState (\(Model m) s -> Model { m | compareState = s })
+
+
+compareActive : Prism pr CompareState CompareActiveData x y
+compareActive =
+    prism ">CompareActive"
+        CompareActive
+        (\s ->
+            case s of
+                CompareActive d ->
+                    Ok d
+
+                other ->
+                    Err other
+        )
+
+
+compareSelecting : Prism pr CompareState CompareSelection x y
+compareSelecting =
+    prism ">CompareSelecting"
+        CompareSelecting
+        (\s ->
+            case s of
+                CompareSelecting selection ->
+                    Ok selection
+
+                other ->
+                    Err other
+        )
+
+
+compareLeftContent : Lens ls CompareActiveData (ApiData CompareFile) x y
+compareLeftContent =
+    lens ".leftContent" .leftContent (\d v -> { d | leftContent = v })
+
+
+compareRightContent : Lens ls CompareActiveData (ApiData CompareFile) x y
+compareRightContent =
+    lens ".rightContent" .rightContent (\d v -> { d | rightContent = v })
+
+
+compareLeftInspect : Lens ls CompareActiveData Bool x y
+compareLeftInspect =
+    lens ".leftInspect" .leftInspect (\d v -> { d | leftInspect = v })
+
+
+compareRightInspect : Lens ls CompareActiveData Bool x y
+compareRightInspect =
+    lens ".rightInspect" .rightInspect (\d v -> { d | rightInspect = v })
 
 
 key =

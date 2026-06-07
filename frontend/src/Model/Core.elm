@@ -188,6 +188,7 @@ type Model
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce.Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
+        , compareState : CompareState
         , now : Time.Posix
         }
 
@@ -201,6 +202,79 @@ type alias GutterDrag =
     , moved : Bool
     , clearOnClick : Bool
     }
+
+
+type CompareState
+    = CompareIdle
+    | CompareSelecting CompareSelection
+    | CompareActive CompareActiveData
+
+
+type alias CompareActiveData =
+    { left : CompareSelection
+    , right : CompareSelection
+    , leftContent : ApiData CompareFile
+    , rightContent : ApiData CompareFile
+    , leftInspect : Bool
+    , rightInspect : Bool
+    }
+
+
+type alias CompareFile =
+    { text : String
+    , delimitedGrid : Maybe DelimitedGrid
+    }
+
+
+type alias CompareSelection =
+    { projectId : Int
+    , recordId : Int
+    , path : List String
+    , fileName : String
+    , mimeType : Maybe String
+    , source : CompareSource
+    }
+
+
+type CompareSource
+    = FromOutput String
+    | FromSrc
+
+
+type CompareMode
+    = CompareImage
+    | CompareHtml
+    | CompareText
+
+
+compareSelectionMode : CompareSelection -> CompareMode
+compareSelectionMode sel =
+    let
+        mime =
+            Maybe.withDefault "" sel.mimeType
+
+        extension =
+            String.toLower sel.fileName
+                |> String.split "."
+                |> List.last
+                |> Maybe.withDefault ""
+
+        previewableHtml =
+            case sel.source of
+                FromOutput _ ->
+                    True
+
+                FromSrc ->
+                    False
+    in
+    if String.startsWith "image/" mime then
+        CompareImage
+
+    else if previewableHtml && (mime == "text/html" || extension == "html" || extension == "htm") then
+        CompareHtml
+
+    else
+        CompareText
 
 
 getProjects : Model -> Table ProjectRecord
@@ -389,6 +463,11 @@ getGutterDrag (Model model) =
     model.gutterDrag
 
 
+getCompareState : Model -> CompareState
+getCompareState (Model model) =
+    model.compareState
+
+
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
@@ -460,6 +539,7 @@ initialModel key route flags =
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
+        , compareState = CompareIdle
         , now = Time.millisToPosix 0
         }
 

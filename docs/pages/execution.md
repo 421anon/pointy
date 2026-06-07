@@ -1,6 +1,6 @@
 # Execution and Data Management
 
-This page covers running steps, uploading files, browsing results, using source files, and creating share links.
+This page covers running steps, uploading files, browsing results, using source files, comparing files, and creating share links.
 
 ## Running derivation steps
 
@@ -138,6 +138,25 @@ That section lets users:
 Source files are configured by instance admins. See [Setting Up the User Repository](user-repo-setup.md#injecting-srcfiles-into-a-build) if you need to enable this for a template.
 
 ![A step showing the Source Files section with an expanded directory view of the srcFiles directory from the user repository.](screenshots/light/step-source-files-section.png)
+
+## Comparing files
+
+Files that Pointy can preview in **Output Files** or **Source Files** also expose a **Compare** action. Click **Compare** on the first file, then pick a second previewable file from the same browser or another output/source browser. While Pointy is waiting for the second file, a comparison banner stays visible; use **Cancel** there if you picked the wrong first file.
+
+![The compare selection banner shown after choosing the first output file.](screenshots/light/output-file-compare-selection.png)
+
+After the second file is picked, Pointy opens a comparison dialog and records the comparison in the browser URL. Copy that URL if you want to reopen the same comparison later. Output-file entries include their output commit in the URL; source-file entries point at the current source-file browser entry.
+
+The comparison dialog adapts to the file type:
+
+- text files are shown side by side, with differing lines highlighted
+- CSV and TSV files use the same sortable, filterable grid preview as the normal file browser
+- images render as image panes
+- HTML output files render in sandboxed preview panes
+
+For derivation-step outputs, each side can also show the step parameters that produced that file, and the **Open source in project** action jumps back to the original file in context.
+
+![The compare dialog showing two output files side by side.](screenshots/light/output-file-compare-dialog.png)
 
 ## Share links and read-only views
 
