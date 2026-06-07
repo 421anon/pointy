@@ -4,7 +4,6 @@ module Grid exposing
     , Row
     , SortDir(..)
     , State
-    , columnTypeLabel
     , init
     , view
     )
@@ -23,7 +22,7 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Html.Extra as Html
-import Html.Keyed
+import InfiniteList
 import Json.Decode as Decode
 
 
@@ -41,7 +40,6 @@ type SortDir
 type alias Column =
     { id : String
     , title : String
-    , tooltip : String
     , width : Int
     , type_ : ColumnType
     }
@@ -56,16 +54,21 @@ type alias State =
     , rows : List Row
     , sortColumn : Maybe ( Int, SortDir )
     , filters : Dict Int String
+    , infiniteList : InfiniteList.Model
+    , visible : Array ( Int, Row )
     }
 
 
 init : List Column -> List Row -> State
 init columns rows =
-    { columns = columns
-    , rows = rows
-    , sortColumn = Nothing
-    , filters = Dict.empty
-    }
+    refreshVisible
+        { columns = columns
+        , rows = rows
+        , sortColumn = Nothing
+        , filters = Dict.empty
+        , infiniteList = InfiniteList.init
+        , visible = Array.empty
+        }
 
 
 columnTypeLabel : ColumnType -> String
@@ -81,9 +84,19 @@ columnTypeLabel colType =
             "string"
 
 
+filterHint : ColumnType -> String
+filterHint colType =
+    case colType of
+        Text ->
+            "Filter by substring"
+
+        _ ->
+            "Filter by substring or >, <, ="
+
+
 defaultColumn : Column
 defaultColumn =
-    { id = "", title = "", tooltip = "", width = 88, type_ = Text }
+    { id = "", title = "", width = 88, type_ = Text }
 
 
 columnAt : Int -> List Column -> Column
@@ -112,6 +125,15 @@ visibleRows model =
 
         Nothing ->
             filtered
+
+
+{-| Recompute cached filtered/sorted rows after changes to columns, rows,
+filters, or sort. Scroll updates only `infiniteList` and must not run this
+O(n) path.
+-}
+refreshVisible : State -> State
+refreshVisible state =
+    { state | visible = Array.fromList (visibleRows state) }
 
 
 rowPassesFilters : State -> Row -> Bool
@@ -294,7 +316,7 @@ toggleSort colIndex model =
                 Nothing ->
                     Just ( colIndex, Asc )
     in
-    { model | sortColumn = newSort }
+    refreshVisible { model | sortColumn = newSort }
 
 
 setFilter : Int -> String -> State -> State
@@ -307,7 +329,7 @@ setFilter colIndex value model =
             else
                 Dict.insert colIndex value model.filters
     in
-    { model | filters = newFilters }
+    refreshVisible { model | filters = newFilters }
 
 
 
@@ -320,28 +342,57 @@ view model =
         totalWidth =
             List.foldl (\col acc -> acc + col.width) 0 model.columns
     in
-    Html.div [ Html.Attributes.class "delimited-grid-viewer" ]
-        [ Html.table
-            [ Html.Attributes.class "delimited-grid-table"
+    Html.div
+        [ Html.Attributes.class "delimited-grid-viewer"
+        , InfiniteList.onScroll (\listModel -> Flow.modify (setInfiniteList listModel))
+        ]
+        [ Html.div
+            [ Html.Attributes.class "delimited-grid"
             , Html.Attributes.style "width" (String.fromInt totalWidth ++ "px")
             ]
-            [ Html.colgroup [] (List.map viewCol model.columns)
-            , Html.thead []
-                [ Html.tr [ Html.Attributes.class "delimited-grid-header" ]
-                    (List.indexedMap (viewHeaderCell model) model.columns)
-                ]
-            , Html.Keyed.node "tbody"
-                []
-                (List.map (viewKeyedRow model.columns) (visibleRows model))
+            [ Html.div [ Html.Attributes.class "delimited-grid-header" ]
+                (List.indexedMap (viewHeaderCell model) model.columns)
+            , InfiniteList.viewArray (listConfig model.columns) model.infiniteList model.visible
             ]
         ]
 
 
-viewCol : Column -> Html msg
-viewCol col =
-    Html.col
-        [ Html.Attributes.style "width" (String.fromInt col.width ++ "px") ]
-        []
+{-| Fixed body-row height in pixels. Must stay in sync with
+`$delimited-grid-row-height` in the stylesheet, since the virtual list
+positions rows using this constant.
+-}
+rowHeight : Int
+rowHeight =
+    28
+
+
+viewportEstimate : Int
+viewportEstimate =
+    1000
+
+
+listConfig : List Column -> InfiniteList.Config ( Int, Row ) (Flow State ())
+listConfig columns =
+    InfiniteList.config
+        { itemView = \_ _ ( _, row ) -> viewRow columns row
+        , itemHeight = InfiniteList.withConstantHeight rowHeight
+        , containerHeight = viewportEstimate
+        }
+        |> InfiniteList.withOffset viewportEstimate
+
+
+setInfiniteList : InfiniteList.Model -> State -> State
+setInfiniteList listModel state =
+    { state | infiniteList = listModel }
+
+
+{-| Cell width uses JS-updated `--dg-col-N`, falling back to the model width
+before resize.
+-}
+columnWidthStyle : Int -> Column -> Html.Attribute msg
+columnWidthStyle index col =
+    Html.Attributes.style "width"
+        ("var(--dg-col-" ++ String.fromInt index ++ ", " ++ String.fromInt col.width ++ "px)")
 
 
 viewHeaderCell : State -> Int -> Column -> Html (Flow State ())
@@ -377,11 +428,12 @@ viewHeaderCell model index col =
         currentFilter =
             Dict.get index model.filters |> Maybe.withDefault ""
     in
-    Html.th
-        [ Html.Attributes.style "width" (String.fromInt col.width ++ "px")
+    Html.div
+        [ Html.Attributes.class "delimited-grid-th"
+        , columnWidthStyle index col
         , Html.Attributes.classList [ ( "sorted", sorted ) ]
         , Html.Events.onClick (Flow.modify (toggleSort index))
-        , Html.Attributes.title col.tooltip
+        , Html.Attributes.title (filterHint col.type_)
         ]
         [ Html.div [ Html.Attributes.class "delimited-grid-header-cell" ]
             [ Html.span [ Html.Attributes.class "delimited-grid-header-title" ]
@@ -404,18 +456,16 @@ viewHeaderCell model index col =
         ]
 
 
-viewKeyedRow : List Column -> ( Int, Row ) -> ( String, Html msg )
-viewKeyedRow columns ( rowIndex, row ) =
-    ( String.fromInt rowIndex, viewRow columns row )
-
-
 viewRow : List Column -> Row -> Html msg
 viewRow columns row =
-    Html.tr [ Html.Attributes.class "delimited-grid-body-row" ]
-        (List.indexedMap (\i _ -> viewCell i row) columns)
+    Html.div [ Html.Attributes.class "delimited-grid-body-row" ]
+        (List.indexedMap (\i column -> viewCell i column row) columns)
 
 
-viewCell : Int -> Row -> Html msg
-viewCell index row =
-    Html.td []
+viewCell : Int -> Column -> Row -> Html msg
+viewCell index column row =
+    Html.div
+        [ Html.Attributes.class "delimited-grid-td"
+        , columnWidthStyle index column
+        ]
         [ Html.text (Array.get index row |> Maybe.withDefault "") ]

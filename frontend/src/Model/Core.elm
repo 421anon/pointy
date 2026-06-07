@@ -754,15 +754,6 @@ buildDelimitedGrid header rows mTableMeta =
 
                         else
                             title
-                    , tooltip =
-                        "Column type: "
-                            ++ Grid.columnTypeLabel colMeta.columnType
-                            ++ (if colMeta.nullable then
-                                    " (nullable)"
-
-                                else
-                                    ""
-                               )
                     , width = delimitedColumnWidth title (List.map (listCell index) sampleRows)
                     , type_ = colMeta.columnType
                     }

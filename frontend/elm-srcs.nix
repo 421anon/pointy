@@ -10,6 +10,11 @@
         version = "4.0.1";
       };
 
+      "FabienHenon/elm-infinite-list-view" = {
+        sha256 = "07vgp9qmiqlbqvnckpp9yskj79126g60hhkk9pirm4zwbfj8an9h";
+        version = "3.3.1";
+      };
+
       "NoRedInk/elm-json-decode-pipeline" = {
         sha256 = "1k241pjz1wj5rqv95f1j86msa0s0p6w4v8n0jn26aw6cbadw363b";
         version = "1.0.1";

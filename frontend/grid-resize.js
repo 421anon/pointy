@@ -1,5 +1,7 @@
 // Column resize for delimited grid viewer.
 // Standalone DOM listeners — not in ffi.js because this is not called from Elm.
+// Virtual rows are created/destroyed as you scroll, so column widths live on
+// `.delimited-grid` CSS variables instead of rendered row cells.
 (function () {
   const MIN_COLUMN_WIDTH = 40;
   const MAX_COLUMN_WIDTH = 800;
@@ -8,34 +10,6 @@
 
   function clamp(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
-  }
-
-  function getGridElements(colIndex, handle) {
-    const viewer = handle.closest(".delimited-grid-viewer");
-    if (!viewer) return null;
-    const table = viewer.querySelector(".delimited-grid-table");
-    if (!table) return null;
-
-    const cols = Array.from(table.querySelectorAll("colgroup col"));
-    const col = cols[colIndex] || null;
-    if (!col) return null;
-
-    return { table, cols, col };
-  }
-
-  function freezeRenderedLayout(table, cols) {
-    const colWidths = cols.map((col) => col.getBoundingClientRect().width);
-    const tableWidth = table.getBoundingClientRect().width;
-
-    // The table may be stretched by min-width: 100%; freeze rendered pixels
-    // before resizing one <col> so the browser does not redistribute columns.
-    table.style.width = tableWidth + "px";
-    table.style.minWidth = tableWidth + "px";
-    cols.forEach((col, index) => {
-      col.style.width = colWidths[index] + "px";
-    });
-
-    return { colWidths, tableWidth };
   }
 
   // Suppress click events on resize handles to avoid triggering sort.
@@ -56,17 +30,23 @@
     if (event.button !== 0) return;
 
     const colIndex = Number.parseInt(handle.dataset.colIndex, 10);
-    const grid = getGridElements(colIndex, handle);
-    if (!grid) return;
+    if (Number.isNaN(colIndex)) return;
 
-    const { colWidths, tableWidth } = freezeRenderedLayout(grid.table, grid.cols);
+    const grid = handle.closest(".delimited-grid");
+    const cell = handle.closest(".delimited-grid-th");
+    if (!grid || !cell) return;
+
+    // Prefer the inline width so repeated resizes accumulate from the last drag.
+    const startWidth = cell.getBoundingClientRect().width;
+    const startGridWidth =
+      Number.parseFloat(grid.style.width) || grid.getBoundingClientRect().width;
 
     active = {
-      col: grid.col,
-      table: grid.table,
+      grid,
+      colIndex,
       startX: event.clientX,
-      startWidth: colWidths[colIndex],
-      startTableWidth: tableWidth,
+      startWidth,
+      startGridWidth,
     };
 
     handle.setPointerCapture(event.pointerId);
@@ -82,11 +62,9 @@
       MAX_COLUMN_WIDTH
     );
     const widthDelta = newWidth - active.startWidth;
-    const newTableWidth = active.startTableWidth + widthDelta;
 
-    active.col.style.width = newWidth + "px";
-    active.table.style.width = newTableWidth + "px";
-    active.table.style.minWidth = newTableWidth + "px";
+    active.grid.style.setProperty("--dg-col-" + active.colIndex, newWidth + "px");
+    active.grid.style.width = active.startGridWidth + widthDelta + "px";
   });
 
   const releasePointer = () => {
