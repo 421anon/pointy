@@ -2186,13 +2186,10 @@ body:has(dialog[open]) {
 .compare-pane,
 .compare-diff-pane {
   display: grid;
-  grid-template-rows: max-content max-content;
+  grid-template-rows: max-content minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   gap: var(--spacing-sm);
-}
-.compare-diff-pane {
-  overflow: hidden;
 }
 
 .compare-pane-header {

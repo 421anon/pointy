@@ -385,8 +385,8 @@ viewTextDiff model d leftStr rightStr =
                             )
                             rows
                         )
+                    , viewInlineParams model sel inspectOpen mParams
                     ]
-                , viewInlineParams model sel inspectOpen mParams
                 ]
     in
     Html.div [ class "compare-diff" ]
