@@ -126,8 +126,10 @@ viewPane model sel content gridFlow inspectOpen toggle =
     in
     Html.div [ class "compare-pane" ]
         [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
-        , Html.div [ class "compare-pane-body" ] [ viewPaneBody sel content gridFlow ]
-        , viewInlineParams model sel inspectOpen mParams
+        , Html.div [ class "compare-pane-body" ]
+            [ viewPaneBody sel content gridFlow
+            , viewInlineParams model sel inspectOpen mParams
+            ]
         ]
 
 

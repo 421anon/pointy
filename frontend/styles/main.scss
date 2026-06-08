@@ -2104,7 +2104,6 @@ body:has(dialog[open]) {
   align-content: start;
   gap: var(--spacing-sm);
   min-height: 0;
-  overflow: auto;
   padding-top: var(--spacing-sm);
   border-top: 1px solid var(--border-color);
 }
