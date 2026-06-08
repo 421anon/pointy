@@ -194,8 +194,8 @@ createProject record =
         )
 
 
-createStep : StepSpec -> StepRecord -> FlowError Http.Error Model StepRecord
-createStep spec record =
+createStep : Maybe Int -> StepSpec -> StepRecord -> FlowError Http.Error Model StepRecord
+createStep mSourceId spec record =
     Flow.forAll currentProjectId
         (\projectId ->
             case getTag spec of
@@ -207,7 +207,7 @@ createStep spec record =
                     optimisticCreate
                         tableLens
                         record
-                        (Api.createStep (Just projectId) stepType record)
+                        (Api.createStep (Just projectId) mSourceId stepType record)
 
                 _ ->
                     FlowError.throwError (Http.BadBody "Invalid step table specification")
@@ -448,7 +448,7 @@ upsertStep spec =
                                 (\projectId ->
                                     case ( edited_.id, addMode_ ) of
                                         ( Nothing, AddNew ) ->
-                                            createStep spec edited_ |> Flow.return ()
+                                            createStep Nothing spec edited_ |> Flow.return ()
 
                                         ( Nothing, AddFromOtherProject ) ->
                                             Flow.setting (TableSpec.getLens spec << isUpdating)
@@ -876,7 +876,7 @@ cloneStep spec record =
     in
     Flow.getAll (TableSpec.getLens spec << records << success << each << name)
         (\existingNames ->
-            createStep spec (set name (generateUniqueCloneName record.name existingNames) record)
+            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) record)
                 |> FlowError.andThen
                     (\newRecord ->
                         Flow.assertJust (Flow.pure newRecord.id)

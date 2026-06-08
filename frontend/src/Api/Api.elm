@@ -158,13 +158,16 @@ createProject presets stepConfig record =
             }
 
 
-createStep : Maybe Int -> StepType -> StepRecord -> Flow s (Result Http.Error StepRecord)
-createStep mProjectId stepType record =
+createStep : Maybe Int -> Maybe Int -> StepType -> StepRecord -> Flow s (Result Http.Error StepRecord)
+createStep mProjectId mSourceId stepType record =
     let
         url =
-            Maybe.unwrap "/backend/step"
-                (\projectId -> "/backend/step?project_id=" ++ String.fromInt projectId)
-                mProjectId
+            UrlBuilder.absolute [ "backend", "step" ]
+                (List.filterMap identity
+                    [ Maybe.map (UrlBuilder.int "project_id") mProjectId
+                    , Maybe.map (UrlBuilder.int "source_id") mSourceId
+                    ]
+                )
     in
     Flow.lift <|
         Http.post

@@ -60,7 +60,7 @@ type API =
         :<|> "presets" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
         :<|> "autocomplete" :> QueryParam "commit" Text :> ReqBody '[JSON] AutocompleteRequest :> Post '[JSON] [Text]
         :<|> "step" :> QueryParam' '[Required, Strict] "id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Patch '[JSON] NoContent
-        :<|> "step" :> QueryParam "project_id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Post '[RawJSON] LBS.ByteString
+        :<|> "step" :> QueryParam "project_id" Int :> QueryParam "source_id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Post '[RawJSON] LBS.ByteString
         :<|> "notices" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
         :<|> "run-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
         :<|> "stop-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent

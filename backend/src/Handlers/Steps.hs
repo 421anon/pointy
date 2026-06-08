@@ -2,6 +2,7 @@
 
 module Handlers.Steps (patchStepHandler, postStepHandler, noticesHandler) where
 
+import Control.Monad (forM_, when)
 import Control.Monad.Except (ExceptT (..), catchError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString.Lazy as LBS
@@ -18,7 +19,7 @@ import OutPaths (withWriteRepoTransaction)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), throwError)
 import Servant.Server (err400, err500, errBody)
-import System.Directory (doesDirectoryExist, listDirectory)
+import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.FilePath (takeBaseName, (</>))
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction)
@@ -40,10 +41,11 @@ patchStepHandler stepId jsonBody = do
                     return NoContent
                 Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-postStepHandler :: Maybe Int -> LBS.ByteString -> Handler LBS.ByteString
-postStepHandler maybeProjectId jsonBody = do
+postStepHandler :: Maybe Int -> Maybe Int -> LBS.ByteString -> Handler LBS.ByteString
+postStepHandler maybeProjectId maybeSourceId jsonBody = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         stepId <- saveStep ctx Nothing jsonBody
+        liftIO $ copyClonedSrcFiles worktreePath maybeSourceId stepId
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
         case maybeProjectId of
             Just projectId -> assignRecordToProject ctx projectId stepId
@@ -52,10 +54,11 @@ postStepHandler maybeProjectId jsonBody = do
             let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
             _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err
+        let cloneNote = maybe "" (\srcId -> " (clone of " ++ show srcId ++ ")") maybeSourceId
         commitAndPushChanges ctx $
             case maybeProjectId of
-                Just projectId -> "Create step " ++ show stepId ++ " and assign to project " ++ show projectId
-                Nothing -> "Create step " ++ show stepId
+                Just projectId -> "Create step " ++ show stepId ++ cloneNote ++ " and assign to project " ++ show projectId
+                Nothing -> "Create step " ++ show stepId ++ cloneNote
         return output
     case result of
         Right output -> do
@@ -101,3 +104,25 @@ getNextStepId stepsDir = do
             files <- listDirectory stepsDir
             let ids = mapMaybe (readMaybe . takeBaseName) files :: [Int]
             return $ if null ids then 1 else maximum ids + 1
+
+-- | When a step is cloned, duplicate its source files so the new step starts
+-- with its own editable copy under @srcFiles/<newStepId>@.
+copyClonedSrcFiles :: FilePath -> Maybe Int -> Int -> IO ()
+copyClonedSrcFiles _ Nothing _ = return ()
+copyClonedSrcFiles worktreePath (Just sourceId) newStepId = do
+    let sourceDir = worktreePath </> "srcFiles" </> show sourceId
+        destDir = worktreePath </> "srcFiles" </> show newStepId
+    sourceExists <- doesDirectoryExist sourceDir
+    when sourceExists $ copyDirectoryRecursive sourceDir destDir
+
+copyDirectoryRecursive :: FilePath -> FilePath -> IO ()
+copyDirectoryRecursive sourceDir destDir = do
+    createDirectoryIfMissing True destDir
+    entries <- listDirectory sourceDir
+    forM_ entries $ \entry -> do
+        let sourcePath = sourceDir </> entry
+            destPath = destDir </> entry
+        isDir <- doesDirectoryExist sourcePath
+        if isDir
+            then copyDirectoryRecursive sourcePath destPath
+            else copyFile sourcePath destPath
