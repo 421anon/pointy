@@ -27,6 +27,7 @@ import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (DirEntry, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
+import Network.Wai.Parse (setMaxRequestNumFiles)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
 import Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 import OutPaths (warmProjectOutPaths)
@@ -243,7 +244,8 @@ customMultipartOptions = do
                 , filenamePat = "upload_*.tmp"
                 }
         opts = defaultMultipartOptions (Proxy :: Proxy Tmp)
-    return $ opts{backendOptions = tmpBackendOpts}
+        parserOpts = setMaxRequestNumFiles 100 (generalOptions opts)
+    return $ opts{generalOptions = parserOpts, backendOptions = tmpBackendOpts}
 
 ensureStoreDirectories :: IO ()
 ensureStoreDirectories = do

@@ -69,7 +69,7 @@ While a step is running, a **Stop** button appears in the same control area as *
 
 File upload steps use **Upload files** instead of **Run**.
 
-Templates decide which file extensions are accepted. You can upload one or more files, watch transfer progress in the UI, and cancel an in-progress upload if needed.
+Templates decide which file extensions are accepted. You can upload one or more files, watch transfer progress in the UI, and cancel an in-progress upload if needed. A single upload accepts up to 100 files; for larger file sets, package the files as a zip archive or split them across multiple file-upload steps.
 
 After the upload finishes, Pointy immediately builds the file-upload step, so it then moves through the same Running / Success / Failure lifecycle as other steps.
 

@@ -48,6 +48,7 @@ executable backend
                    wai-cors,
                    text,
                    wai,
+                   wai-extra,
                    directory,
                    filepath,
                    bytestring,
