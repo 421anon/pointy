@@ -45,6 +45,24 @@ initSelectState =
     }
 
 
+matchesOrderedTokens : String -> String -> Bool
+matchesOrderedTokens query haystack =
+    let
+        findTokens tokens remaining =
+            case tokens of
+                [] ->
+                    True
+
+                token :: rest ->
+                    case String.indexes token remaining of
+                        pos :: _ ->
+                            findTokens rest (String.dropLeft (pos + String.length token) remaining)
+
+                        [] ->
+                            False
+    in
+    findTokens (String.words (String.toLower query)) (String.toLower haystack)
+
 type ChipAction
     = ChipClick
     | ChipRemove
@@ -128,7 +146,7 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
             remkT optic
 
         filteredAvailableItems =
-            availableItems |> List.filter (\item -> String.contains (String.toLower selectState.input) (String.toLower (toMenuItemName item)))
+            availableItems |> List.filter (\item -> matchesOrderedTokens selectState.input (toMenuItemName item))
 
         keyedSelectedChips =
             selected_
