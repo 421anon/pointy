@@ -3,7 +3,7 @@ module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.Api as Api
-import Api.ApiData as ApiData exposing (ApiData, success)
+import Api.ApiData as ApiData exposing (ApiData(..))
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
@@ -155,15 +155,18 @@ viewSrcFilesSection model stepType spec step =
                         let
                             dirName =
                                 "srcFiles/" ++ (step.id |> Maybe.map String.fromInt |> Maybe.withDefault "unknown")
-
-                            msg =
-                                if has success step.srcFiles.children then
-                                    "Edit the files in the user repository (" ++ info.url ++ ") on branch: " ++ info.branch ++ " in " ++ dirName
-
-                                else
-                                    "Create the directory " ++ dirName ++ " in the user repository (" ++ info.url ++ ") on branch: " ++ info.branch
                         in
-                        Html.div [ class "src-files-repo-note" ] [ Html.text msg ]
+                        case step.srcFiles.children of
+                            Success _ ->
+                                Html.div [ class "src-files-repo-note" ]
+                                    [ Html.text ("Edit the files in the user repository (" ++ info.url ++ ") on branch: " ++ info.branch ++ " in " ++ dirName) ]
+
+                            Error _ ->
+                                Html.div [ class "src-files-repo-note" ]
+                                    [ Html.text ("Create the directory " ++ dirName ++ " in the user repository (" ++ info.url ++ ") on branch: " ++ info.branch) ]
+
+                            _ ->
+                                Html.nothing
                     )
     in
     Html.viewIf hasSrcFiles <|
