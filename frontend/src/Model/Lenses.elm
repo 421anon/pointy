@@ -523,6 +523,11 @@ stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
 
 
+stepStatusBuffer : Lens ls Model (Dict Int ( String, Model.Status )) x y
+stepStatusBuffer =
+    lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
+
+
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y
 gutterDrag =
     lens ".gutterDrag" Model.getGutterDrag (\(Model m) drag -> Model { m | gutterDrag = drag })

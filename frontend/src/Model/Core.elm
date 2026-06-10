@@ -185,6 +185,7 @@ type Model
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
+        , stepStatusBuffer : Dict Int ( String, Status )
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce.Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
@@ -448,6 +449,10 @@ getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
 
+getStepStatusBuffer : Model -> Dict Int ( String, Status )
+getStepStatusBuffer (Model model) =
+    model.stepStatusBuffer
+
 getAutocomplete : Model -> Dict String AutocompleteState
 getAutocomplete (Model model) =
     model.autocomplete
@@ -536,6 +541,7 @@ initialModel key route flags =
         , notices = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
+        , stepStatusBuffer = Dict.empty
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
