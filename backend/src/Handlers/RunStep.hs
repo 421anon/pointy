@@ -130,11 +130,7 @@ buildStep ctx eid = do
                             then liftIO $ registerGcRootForOutPath outPath
                             else return ()
                         liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
-                    -- The scheduler job is already gone when the status is
-                    -- re-checked, so checkStatus would report "not-started"
-                    -- and the dependency-running override (still held by
-                    -- runStepSync) would mask the failure as "running".
-                    -- The exit code is authoritative: broadcast the failure.
+                    ExitFailure _ ->
                         liftIO $ broadcastFailedStepForProjects eid targetCommitText
 
         -- Build extras derivation if present, independently of main step status.
