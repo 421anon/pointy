@@ -12,6 +12,7 @@ module Handlers.Statuses (
     removeDependencyRunningOverrides,
     broadcastProjectStatus,
     broadcastSingleStepForProjects,
+    broadcastFailedStepForProjects,
     broadcastKnownStepStatus,
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
@@ -200,19 +201,33 @@ broadcastStatusForStepProjects sid targetCommit mStatusOverride =
     withStepProjects sid targetCommit $ \pid _ ->
         broadcastProjectStatus pid targetCommit (fmap (sid,) mStatusOverride)
 
--- | Uses the already-known out-path rather than re-evaluating each project's step list.
+{- | Uses the already-known out-path rather than re-evaluating each project's step list.
+The raw status is refined via the build log *before* the dependency-running
+override is applied: a failed build whose scheduler job has already vanished
+reports @"not-started"@, and overriding that to @"running"@ first would mask
+the failure for good (the override removal never rebroadcasts).
+-}
 broadcastSingleStepForProjects :: Int -> Text -> FilePath -> IO ()
 broadcastSingleStepForProjects sid targetCommit outPath = do
     rawStatus <- checkStatus outPath `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
-    overrides <- readTVarIO dependencyRunningOverrides
-    let count = Map.findWithDefault 0 (targetCommit, sid) overrides
-        status =
-            if count > 0 && fst rawStatus == "not-started"
-                then ("running", Nothing)
-                else rawStatus
     withStepProjects sid targetCommit $ \pid ctx -> do
-        (_, resolvedStatus) <- resolveStepStatus ctx (sid, status)
-        broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+        (_, resolvedStatus) <- resolveStepStatus ctx (sid, rawStatus)
+        overrides <- readTVarIO dependencyRunningOverrides
+        let count = Map.findWithDefault 0 (targetCommit, sid) overrides
+            status =
+                if count > 0 && fst resolvedStatus == "not-started"
+                    then ("running", Nothing)
+                    else resolvedStatus
+        broadcastSnapshot pid targetCommit (Map.singleton sid status)
+
+{- | Broadcast a known build failure for a step, refining the error message
+from the recorded build log when one is available.
+-}
+broadcastFailedStepForProjects :: Int -> Text -> IO ()
+broadcastFailedStepForProjects sid targetCommit =
+    withStepProjects sid targetCommit $ \pid ctx -> do
+        (_, status) <- resolveStepStatus ctx (sid, ("failure", Nothing))
+        broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
 broadcastKnownStepStatus :: Int -> Text -> (Text, Maybe Text) -> IO ()
 broadcastKnownStepStatus sid targetCommit status =

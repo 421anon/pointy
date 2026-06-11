@@ -20,7 +20,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (addDependencyRunningOverrides, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
+import Handlers.Statuses (addDependencyRunningOverrides, broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
 import NixUtils (isValidStorePath)
 import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
@@ -129,8 +129,14 @@ buildStep ctx eid = do
                         if nowBuilt
                             then liftIO $ registerGcRootForOutPath outPath
                             else return ()
-                    ExitFailure _ -> return ()
-                liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
+                        liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
+                    -- The scheduler job is already gone when the status is
+                    -- re-checked, so checkStatus would report "not-started"
+                    -- and the dependency-running override (still held by
+                    -- runStepSync) would mask the failure as "running".
+                    -- The exit code is authoritative: broadcast the failure.
+                    ExitFailure _ ->
+                        liftIO $ broadcastFailedStepForProjects eid targetCommitText
 
         -- Build extras derivation if present, independently of main step status.
         liftIO $ buildExtras ctx eid
