@@ -152,6 +152,7 @@ type alias AgentPreparedApply =
 
 type alias AgentSession =
     { sessionId : String
+    , sessionName : Maybe String
     , targetBranch : String
     , agentBranch : String
     , baseCommit : String
@@ -201,18 +202,57 @@ type alias ChatTurn =
     , status : ChatTurnStatus
     }
 
+type ChatChangesetState
+    = ChatChangesetProposed
+    | ChatChangesetNeedsReview String
+    | ChatChangesetApplied
+    | ChatChangesetDiscarded
+
+
+type alias ChatChangeset =
+    { state : ChatChangesetState
+    , description : String
+    , diff : String
+    }
+
+
+type ChatEntry
+    = ChatTurnEntry ChatTurn
+    | ChatChangesetEntry ChatChangeset
+
+type ChangesetOperationKind
+    = ApplyingChangeset
+    | DiscardingChangeset
+
+
+type alias ChangesetOperation =
+    { sessionId : String
+    , kind : ChangesetOperationKind
+    }
+
+type alias AgentSessionNameEdit =
+    { sessionId : String
+    , value : String
+    , saving : Bool
+    }
+
+
+
 
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
     , selectedSessionId : Maybe String
     , prompt : String
     , isPanelOpen : Bool
+    , isSidebarOpen : Bool
     , activeTurnStream : Maybe String
-    , chatTurns : List ChatTurn
+    , chatEntries : List ChatEntry
     , chunkBuffer : String
     , turnLog : String
     , showRawLog : Bool
     , showArchived : Bool
+    , changesetOperation : Maybe ChangesetOperation
+    , sessionNameEdit : Maybe AgentSessionNameEdit
     }
 
 
@@ -222,12 +262,15 @@ initAgentState =
     , selectedSessionId = Nothing
     , prompt = ""
     , isPanelOpen = False
+    , isSidebarOpen = False
     , activeTurnStream = Nothing
-    , chatTurns = []
+    , chatEntries = []
     , chunkBuffer = ""
     , turnLog = ""
     , showRawLog = False
     , showArchived = False
+    , changesetOperation = Nothing
+    , sessionNameEdit = Nothing
     }
 
 

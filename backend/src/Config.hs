@@ -113,7 +113,6 @@ agentCodec =
             , agentBootstrapPrompt = fromMaybe (agentBootstrapPrompt defaultAgentConfig) mbootstrap
             }
 
-
 configCodec :: TomlCodec Config
 configCodec =
     mkConfig

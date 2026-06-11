@@ -7,6 +7,7 @@ module Api.Agent exposing
     , fetchSession
     , listSessions
     , prepareApply
+    , renameSession
     , sendTurn
     , turnEvent
     )
@@ -87,6 +88,16 @@ discardSession : String -> Flow s (Result Http.Error Model.AgentSessionView)
 discardSession sessionId =
     postSessionView "/discard" (sessionIdBody sessionId)
 
+renameSession : String -> String -> Flow s (Result Http.Error Model.AgentSessionView)
+renameSession sessionId name =
+    postSessionView "/rename"
+        (Encode.object
+            [ ( "sessionId", Encode.string sessionId )
+            , ( "name", Encode.string name )
+            ]
+        )
+
+
 
 postSessionView : String -> Encode.Value -> Flow s (Result Http.Error Model.AgentSessionView)
 postSessionView path body =
@@ -115,6 +126,7 @@ sessionDecoder : Decoder Model.AgentSession
 sessionDecoder =
     Decode.succeed Model.AgentSession
         |> required "sessionId" Decode.string
+        |> optional "sessionName" (Decode.maybe Decode.string) Nothing
         |> required "targetBranch" Decode.string
         |> required "agentBranch" Decode.string
         |> required "baseCommit" Decode.string

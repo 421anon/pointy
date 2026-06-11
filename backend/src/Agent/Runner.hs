@@ -11,13 +11,15 @@ import Agent.Git (commitAgentTurnOutputs)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
+    findTurn,
     listTurns,
     loadSessionById,
+    normalizeSessionName,
+    newTurnId,
     saveSession,
     saveTurn,
     touchSession,
     turnLogFilePath,
-    findTurn,
  )
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
@@ -37,7 +39,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize)
@@ -49,14 +50,13 @@ import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, 
 import System.Timeout (timeout)
 import UserRepo (userRepoPath, withUserRepoExclusive)
 
-
 startAgentTurn :: Text -> Text -> ExceptT String IO AgentTurn
 startAgentTurn sid prompt = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
-    when (activeTurnId session_ /= Nothing) $ Except.throwError "runner_active"
+    when (status session_ == "running" || activeTurnId session_ /= Nothing) $ Except.throwError "runner_active"
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     tid <- liftIO newTurnId
     logPath <- liftIO $ turnLogFilePath sid tid
@@ -78,12 +78,20 @@ startAgentTurn sid prompt = do
         TIO.writeFile logPath ""
         existingTurns <- listTurns sid
         let isFirstTurn = null existingTurns
+            shouldAutoName = isFirstTurn && maybe True (T.null . T.strip) (sessionName session_)
+            namedSession =
+                if shouldAutoName then
+                    case normalizeSessionName prompt of
+                        Just name -> session_{sessionName = Just name}
+                        Nothing -> session_
+
+                else
+                    session_
         saveTurn turn
-        touched <- touchSession session_{status = "running", activeTurnId = Just tid, preparedApply = Nothing, lastError = Nothing}
+        touched <- touchSession namedSession{status = "running", activeTurnId = Just tid, preparedApply = Nothing, lastError = Nothing}
         saveSession touched
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
     return turn
-
 
 turnLogStreamHandler :: Text -> Handler (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (S.SourceT IO BS.ByteString))
 turnLogStreamHandler tid = do
@@ -99,7 +107,6 @@ turnLogStreamHandler tid = do
                     (S.Yield padding (S.Effect (streamLoop turn 0 0)))
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
-
 
 runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> IO ()
 runTurnProcess cfg session_ turn prompt isFirstTurn = do
@@ -124,7 +131,6 @@ runTurnProcess cfg session_ turn prompt isFirstTurn = do
             return $ ExitFailure 127
         Right code -> return code
     finishTurn cfg session_ turn exitCode
-
 
 runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> IO ExitCode
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
@@ -158,7 +164,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             , "GEMINI_API_KEY"
             ]
         passthrough =
-            [ (k, v) | (k, v) <- baseEnv, k `elem` passthroughKeys ]
+            [(k, v) | (k, v) <- baseEnv, k `elem` passthroughKeys]
         outputMarker =
             "__POINTY_AGENT_OUTPUT_BEGIN__" <> T.unpack (turnId turn) <> "__"
         runnerEnv =
@@ -176,8 +182,8 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
         -- Inject the right session flag for this turn
         sessionFlag = case (isFirstTurn, mWarmFile) of
             (True, Just warmFile) -> ["--fork", warmFile]
-            (True, Nothing)       -> []
-            (False, _)            -> ["-c"]
+            (True, Nothing) -> []
+            (False, _) -> ["-c"]
         runnerArgs =
             agentRunnerCommand cfg : sessionFlag ++ strippedRunnerArgs
         wrapperScript =
@@ -186,7 +192,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
         -- The warm template path is outside the draft home so sbox won't include it otherwise.
         warmBindArgs = case mWarmFile of
             Just warmFile -> ["--ro-bind", warmFile, warmFile]
-            Nothing       -> []
+            Nothing -> []
         -- Bind the main git repo and nix daemon so nix flake evaluation works.
         -- Without the git repo bind the worktree's .git file can't resolve.
         -- Without the daemon socket nix eval fails with 'cannot connect to socket'.
@@ -232,7 +238,6 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     _ <- wait errReader
     return exitCode
 
-
 streamHandle :: AgentConfig -> FilePath -> Text -> Text -> Handle -> IO ()
 streamHandle cfg logPath outputMarker visibleLabel handle = do
     hSetBuffering handle LineBuffering
@@ -244,15 +249,14 @@ streamHandle cfg logPath outputMarker visibleLabel handle = do
                     Left _ -> return ()
                     Right line -> do
                         let textLine = T.pack line
-                        if textLine == outputMarker then
-                            loop True
-
-                        else do
-                            let label = if outputReady then visibleLabel else "runner"
-                            appendLogLine cfg logPath label textLine
-                            loop outputReady
+                        if textLine == outputMarker
+                            then
+                                loop True
+                            else do
+                                let label = if outputReady then visibleLabel else "runner"
+                                appendLogLine cfg logPath label textLine
+                                loop outputReady
     loop False
-
 
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
 finishTurn cfg _session turn exitCode = do
@@ -261,35 +265,42 @@ finishTurn cfg _session turn exitCode = do
             ExitFailure code -> code
         finalStatus = if exitCode == ExitSuccess then "succeeded" else "failed"
     appendLogLine cfg (turnLogPath turn) "system" ("Agent turn finished with exit code " <> T.pack (show exitCodeInt))
-    finishResult <- (try (withUserRepoExclusive $ do
-        loaded <- ExceptT $ loadSessionById (turnSessionId turn)
-        autoCommitResult <- liftIO $ Except.runExceptT $ commitAgentTurnOutputs loaded turn
-        autoCommitError <- case autoCommitResult of
-            Left err -> do
-                liftIO $ appendLogLine cfg (turnLogPath turn) "system" ("Agent output auto-commit failed: " <> T.pack err)
-                return $ Just ("auto_commit_failed: " <> T.pack err)
-            Right (mCommit, skippedPaths) -> do
-                liftIO $ case mCommit of
-                    Just commitSha -> appendLogLine cfg (turnLogPath turn) "system" ("Committed agent outputs " <> T.take 12 commitSha)
-                    Nothing -> appendLogLine cfg (turnLogPath turn) "system" "No agent output changes to commit"
-                let skippedError =
-                        if null skippedPaths
-                            then Nothing
-                            else Just ("ignored non-output changes: " <> summarizePaths skippedPaths)
-                case skippedError of
-                    Just msg -> liftIO $ appendLogLine cfg (turnLogPath turn) "system" msg
-                    Nothing -> return ()
-                return skippedError
-        let clearActive = activeTurnId loaded == Just (turnId turn)
-            nextStatus = if status loaded == "running" && clearActive then "open" else status loaded
-            runnerError = if exitCode == ExitSuccess then Nothing else Just "runner_failed"
-            nextError = combineErrorMessages [runnerError, autoCommitError]
-            updated =
-                if clearActive
-                    then loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
-                    else loaded{lastError = nextError}
-        touched <- liftIO $ touchSession updated
-        liftIO $ saveSession touched) :: IO (Either SomeException (Either String ())))
+    finishResult <-
+        ( try
+                ( withUserRepoExclusive $ do
+                    loaded <- ExceptT $ loadSessionById (turnSessionId turn)
+                    let clearActive = activeTurnId loaded == Just (turnId turn)
+                    if not clearActive
+                        then
+                            liftIO $
+                                appendLogLine cfg (turnLogPath turn) "system" "Skipping session finalization; turn is no longer active"
+                        else do
+                            autoCommitResult <- liftIO $ Except.runExceptT $ commitAgentTurnOutputs loaded turn
+                            autoCommitError <- case autoCommitResult of
+                                Left err -> do
+                                    liftIO $ appendLogLine cfg (turnLogPath turn) "system" ("Agent output auto-commit failed: " <> T.pack err)
+                                    return $ Just ("auto_commit_failed: " <> T.pack err)
+                                Right (mCommit, skippedPaths) -> do
+                                    liftIO $ case mCommit of
+                                        Just commitSha -> appendLogLine cfg (turnLogPath turn) "system" ("Committed agent outputs " <> T.take 12 commitSha)
+                                        Nothing -> appendLogLine cfg (turnLogPath turn) "system" "No agent output changes to commit"
+                                    let skippedError =
+                                            if null skippedPaths
+                                                then Nothing
+                                                else Just ("ignored non-output changes: " <> summarizePaths skippedPaths)
+                                    case skippedError of
+                                        Just msg -> liftIO $ appendLogLine cfg (turnLogPath turn) "system" msg
+                                        Nothing -> return ()
+                                    return skippedError
+                            let nextStatus = if status loaded == "running" then "open" else status loaded
+                                runnerError = if exitCode == ExitSuccess then Nothing else Just "runner_failed"
+                                nextError = combineErrorMessages [runnerError, autoCommitError]
+                                updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
+                            touched <- liftIO $ touchSession updated
+                            liftIO $ saveSession touched
+                ) ::
+                IO (Either SomeException (Either String ()))
+            )
     case finishResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
         Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
@@ -300,13 +311,11 @@ finishTurn cfg _session turn exitCode = do
     void $ (try (saveTurn turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}) :: IO (Either SomeException ()))
     return ()
 
-
 combineErrorMessages :: [Maybe Text] -> Maybe Text
 combineErrorMessages messages =
     case [msg | Just msg <- messages] of
         [] -> Nothing
         present -> Just (T.intercalate "; " present)
-
 
 summarizePaths :: [Text] -> Text
 summarizePaths paths =
@@ -316,8 +325,7 @@ summarizePaths paths =
             if remaining > 0
                 then " (+" <> T.pack (show remaining) <> " more)"
                 else ""
-    in T.intercalate ", " shown <> suffix
-
+     in T.intercalate ", " shown <> suffix
 
 appendLogLine :: AgentConfig -> FilePath -> Text -> Text -> IO ()
 appendLogLine cfg path label line = do
@@ -326,7 +334,6 @@ appendLogLine cfg path label line = do
         let rendered = "[" <> label <> "] " <> line <> "\n"
         TIO.appendFile path rendered
 
-
 safeFileSize :: FilePath -> IO Integer
 safeFileSize path = do
     result <- try (getFileSize path) :: IO (Either IOException Integer)
@@ -334,23 +341,16 @@ safeFileSize path = do
         Left _ -> return 0
         Right size -> return size
 
-
 expandArg :: AgentSession -> Text -> Text -> String
 expandArg session_ promptText arg =
     let sessionRoot = T.pack (takeDirectory (worktreePath session_))
         runnerHome = sessionRoot <> "/home"
-    in T.unpack $
-        T.replace "{prompt}" promptText $
-            T.replace "{worktree}" (T.pack (worktreePath session_)) $
-                T.replace "{home}" runnerHome $
-                    T.replace "{sessionRoot}" sessionRoot $
-                        T.replace "{sessionId}" (sessionId session_) arg
-
-
-newTurnId :: IO Text
-newTurnId = do
-    stamp <- floor . (* 1000000) <$> getPOSIXTime :: IO Integer
-    return $ T.pack ("turn-" ++ show stamp)
+     in T.unpack $
+            T.replace "{prompt}" promptText $
+                T.replace "{worktree}" (T.pack (worktreePath session_)) $
+                    T.replace "{home}" runnerHome $
+                        T.replace "{sessionRoot}" sessionRoot $
+                            T.replace "{sessionId}" (sessionId session_) arg
 
 
 streamLoop :: AgentTurn -> Int -> Int -> IO (S.StepT IO BS.ByteString)
@@ -386,14 +386,12 @@ streamLoop turn offset heartbeatTick = do
                                     (S.Effect (streamLoop turn newOffset 0))
                         else return $ S.Yield (sseComment ("tick-" <> T.pack (show nextTick))) (S.Effect (streamLoop turn newOffset nextTick))
 
-
 sseEvent :: Text -> LBS.ByteString -> BS.ByteString
 sseEvent eventName payload =
     TE.encodeUtf8 ("event: " <> eventName <> "\n")
         <> "data: "
         <> LBS.toStrict payload
         <> "\n\n"
-
 
 sseComment :: Text -> BS.ByteString
 sseComment text_ =

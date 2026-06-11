@@ -5,9 +5,10 @@ import Api.ApiData as ApiData exposing (ApiData(..))
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, class, classList, disabled, placeholder, rows, title, value)
+import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, rows, title, type_, value)
 import Html.Events as Events
 import Json.Decode as Decode
+import Keyboard
 import Markdown
 import Model.Core as Model exposing (Model)
 import View.Icons
@@ -63,11 +64,40 @@ viewSessionBody agent =
 
 viewSessionSidebar : Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
 viewSessionSidebar agent loaded =
+    Html.div
+        [ classList
+            [ ( "agent-panel__sidebar", True )
+            , ( "is-open", agent.isSidebarOpen )
+            ]
+        ]
+        [ Html.button
+            [ class "agent-panel__sidebar-toggle"
+            , Events.onClick Actions.toggleAgentSidebar
+            , attribute "aria-controls" "agent-panel-sidebar-content"
+            , attribute "aria-expanded"
+                (if agent.isSidebarOpen then
+                    "true"
+
+                 else
+                    "false"
+                )
+            ]
+            [ Html.span [] [ Html.text "Chats" ] ]
+        , Html.div
+            [ class "agent-panel__sidebar-content"
+            , id "agent-panel-sidebar-content"
+            ]
+            (viewSessionSidebarContent agent loaded)
+        ]
+
+
+viewSessionSidebarContent : Model.AgentState -> List Model.AgentSessionView -> List (Html (Flow Model ()))
+viewSessionSidebarContent agent loaded =
     let
         listingStatus =
             case agent.sessions of
                 Loading _ ->
-                    Just "Loading drafts..."
+                    Just "Loading chats..."
 
                 Error err ->
                     Just (Http.errorMessage err)
@@ -85,48 +115,86 @@ viewSessionSidebar agent loaded =
             else
                 []
     in
-    Html.div [ class "agent-panel__sidebar" ]
-        [ Html.div [ class "agent-panel__sidebar-header" ]
-            [ Html.h3 [] [ Html.text "Drafts" ]
-            , Html.button [ class "primary-btn", Events.onClick Actions.createAgentSession ] [ Html.text "New draft" ]
-            ]
-        , case listingStatus of
-            Just msg ->
-                Html.p [ class "agent-panel__loading" ] [ Html.text msg ]
-
-            Nothing ->
-                Html.text ""
-        , Html.ul [ class "agent-panel__session-list" ]
-            (List.map (viewSessionRow agent.selectedSessionId) active)
-        , if List.isEmpty active && listingStatus == Nothing then
-            Html.p [ class "agent-panel__empty-hint" ] [ Html.text "No drafts yet." ]
-
-          else
-            Html.text ""
-        , if List.isEmpty archived then
-            Html.text ""
-
-          else
-            Html.div [ class "agent-panel__archive-section" ]
-                [ Html.button
-                    [ class "link-btn agent-panel__archive-toggle"
-                    , Events.onClick Actions.toggleAgentArchived
-                    ]
-                    [ Html.text
-                        ((if agent.showArchived then
-                            "Hide archived ("
-
-                          else
-                            "Show archived ("
-                         )
-                            ++ String.fromInt (List.length archived)
-                            ++ ")"
-                        )
-                    ]
-                , Html.ul [ class "agent-panel__session-list" ]
-                    (List.map (viewSessionRow agent.selectedSessionId) archivedToShow)
-                ]
+    [ Html.div [ class "agent-panel__sidebar-header" ]
+        [ Html.h3 [] [ Html.text "Chats" ]
+        , Html.button [ class "primary-btn", Events.onClick Actions.createAgentSession ] [ Html.text "New chat" ]
         ]
+    , case listingStatus of
+        Just msg ->
+            Html.p [ class "agent-panel__loading" ] [ Html.text msg ]
+
+        Nothing ->
+            Html.text ""
+    , Html.ul [ class "agent-panel__session-list" ]
+        (List.map (viewSessionRow agent.selectedSessionId) active)
+    , if List.isEmpty active && listingStatus == Nothing then
+        Html.p [ class "agent-panel__empty-hint" ] [ Html.text "No chats yet." ]
+
+      else
+        Html.text ""
+    , if List.isEmpty archived then
+        Html.text ""
+
+      else
+        Html.div [ class "agent-panel__archive-section" ]
+            [ Html.button
+                [ class "link-btn agent-panel__archive-toggle"
+                , Events.onClick Actions.toggleAgentArchived
+                ]
+                [ Html.text
+                    ((if agent.showArchived then
+                        "Hide archived ("
+
+                      else
+                        "Show archived ("
+                     )
+                        ++ String.fromInt (List.length archived)
+                        ++ ")"
+                    )
+                ]
+            , Html.ul [ class "agent-panel__session-list" ]
+                (List.map (viewSessionRow agent.selectedSessionId) archivedToShow)
+            ]
+    ]
+
+
+sessionDisplayName : Model.AgentSessionView -> String
+sessionDisplayName sessionView =
+    case sessionView.session.sessionName |> Maybe.andThen nonBlankName of
+        Just name ->
+            name
+
+        Nothing ->
+            sessionView.turns
+                |> List.filterMap (.turnPrompt >> chatNameFromText)
+                |> List.head
+                |> Maybe.withDefault "New chat"
+
+
+chatNameFromText : String -> Maybe String
+chatNameFromText raw =
+    nonBlankName raw
+        |> Maybe.map (String.left chatNameMaxLength)
+
+
+nonBlankName : String -> Maybe String
+nonBlankName raw =
+    let
+        normalized =
+            raw
+                |> String.words
+                |> String.join " "
+    in
+    if String.isEmpty normalized then
+        Nothing
+
+    else
+        Just normalized
+
+
+chatNameMaxLength : Int
+chatNameMaxLength =
+    80
 
 
 isArchivedStatus : String -> Bool
@@ -146,6 +214,9 @@ viewSessionRow selectedId sessionView =
         isArchived =
             isArchivedStatus session.status
 
+        displayName =
+            sessionDisplayName sessionView
+
         rowMainAttrs =
             if isArchived then
                 [ class "agent-panel__session-row-main" ]
@@ -164,9 +235,9 @@ viewSessionRow selectedId sessionView =
         ]
         [ Html.div
             rowMainAttrs
-            [ Html.div [ class "agent-panel__session-id" ] [ Html.text ("Draft " ++ shortSha session.sessionId) ]
+            [ Html.div [ class "agent-panel__session-name", title session.sessionId ] [ Html.text displayName ]
             , Html.div [ class "agent-panel__session-meta" ]
-                [ Html.text (draftStatusLabel session.status) ]
+                [ Html.text (chatStatusLabel session.status) ]
             , if sessionView.gitState.hasAgentCommits then
                 Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ]
 
@@ -207,13 +278,13 @@ viewSessionDetail agent loaded =
                 [ Html.p []
                     [ Html.text
                         (if List.isEmpty loaded then
-                            "No draft is open."
+                            "No chat is open."
 
                          else
-                            "Pick a draft on the left or start a new one."
+                            "Pick a chat on the left or start a new one."
                         )
                     ]
-                , Html.button [ class "primary-btn", Events.onClick Actions.createAgentSession ] [ Html.text "New draft" ]
+                , Html.button [ class "primary-btn", Events.onClick Actions.createAgentSession ] [ Html.text "New chat" ]
                 ]
 
 
@@ -223,46 +294,161 @@ viewSession agent sessionView =
         session =
             sessionView.session
 
-        gitState =
-            sessionView.gitState
-
         runnerActive =
             session.activeTurnId /= Nothing || session.status == "running"
 
-        closedDraft =
+        closedChat =
             isArchivedStatus session.status
+
+        hasChangesetBox =
+            pendingChangeset sessionView /= Nothing || hasChangesetLifecycleTurn sessionView.turns
+
+        activeOperation =
+            activeChangesetOperation agent session.sessionId
+
+        actionRunning =
+            activeOperation /= Nothing
+
+        discardChatLabel =
+            if activeOperation == Just Model.DiscardingChangeset then
+                "Discarding chat..."
+
+            else
+                "Discard chat"
     in
     Html.div [ class "agent-panel__body" ]
-        [ viewError session
-        , viewChat agent runnerActive
-        , if closedDraft then
-            viewClosedDraft session.status
+        [ viewSessionTitle agent sessionView
+        , viewError session
+        , viewChat agent sessionView runnerActive
+        , if closedChat then
+            viewClosedChat session.status
 
           else
             viewPrompt agent runnerActive
-        , viewDiffs gitState
-        , if closedDraft then
-            Html.text ""
-
-          else
-            viewCandidate sessionView runnerActive
         , Html.div [ class "agent-panel__footer" ]
-            [ Html.button [ class "secondary-btn", Events.onClick (Actions.loadAgentSession session.sessionId) ] [ Html.text "Refresh" ]
-            , Html.button [ class "danger-btn", Events.onClick Actions.discardAgentSession ] [ Html.text "Discard draft" ]
+            ([ Html.button [ class "secondary-btn", Events.onClick (Actions.loadAgentSession session.sessionId) ] [ Html.text "Refresh" ] ]
+                ++ (if closedChat || hasChangesetBox then
+                        []
+
+                    else
+                        [ Html.button
+                            [ class "danger-btn"
+                            , disabled (runnerActive || actionRunning)
+                            , Events.onClick Actions.discardAgentSession
+                            ]
+                            [ Html.text discardChatLabel ]
+                        ]
+                   )
+            )
+        ]
+
+
+viewSessionTitle : Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
+viewSessionTitle agent sessionView =
+    let
+        session =
+            sessionView.session
+
+        displayName =
+            sessionDisplayName sessionView
+
+        editing =
+            case agent.sessionNameEdit of
+                Just edit ->
+                    if edit.sessionId == session.sessionId then
+                        Just edit
+
+                    else
+                        Nothing
+
+                Nothing ->
+                    Nothing
+    in
+    Html.div [ class "agent-panel__session-title-card" ]
+        [ case editing of
+            Just edit ->
+                viewSessionTitleEditor edit
+
+            Nothing ->
+                Html.div [ class "agent-panel__session-title-row" ]
+                    [ Html.div []
+                        [ Html.h3 [ class "agent-panel__session-title" ] [ Html.text displayName ]
+                        , Html.div [ class "agent-panel__session-title-meta" ]
+                            [ Html.span [] [ Html.text (chatStatusLabel session.status) ]
+                            , Html.span [ title session.sessionId ] [ Html.text ("#" ++ shortSha session.sessionId) ]
+                            , if sessionView.gitState.hasAgentCommits then
+                                Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ]
+
+                              else
+                                Html.text ""
+                            ]
+                        ]
+                    , Html.button
+                        [ class "icon-btn"
+                        , title "Rename chat"
+                        , Events.onClick (Actions.startAgentSessionNameEdit session.sessionId displayName)
+                        ]
+                        [ View.Icons.icon False "edit" ]
+                    ]
+        ]
+
+
+viewSessionTitleEditor : Model.AgentSessionNameEdit -> Html (Flow Model ())
+viewSessionTitleEditor edit =
+    let
+        trimmed =
+            String.trim edit.value
+    in
+    Html.div [ class "agent-panel__session-title-editor" ]
+        [ Html.input
+            [ class "agent-panel__session-name-input"
+            , type_ "text"
+            , value edit.value
+            , disabled edit.saving
+            , attribute "maxlength" (String.fromInt chatNameMaxLength)
+            , attribute "aria-label" "Chat name"
+            , Events.onInput Actions.updateAgentSessionNameEdit
+            , Events.on "keydown" <|
+                Keyboard.decodeCombinations
+                    [ ( Keyboard.enter, Decode.succeed Actions.saveAgentSessionName )
+                    , ( Keyboard.escape, Decode.succeed Actions.cancelAgentSessionNameEdit )
+                    ]
+            ]
+            []
+        , Html.div [ class "agent-panel__session-title-actions" ]
+            [ Html.button
+                [ class "primary-btn"
+                , disabled (edit.saving || String.isEmpty trimmed)
+                , Events.onClick Actions.saveAgentSessionName
+                ]
+                [ Html.text
+                    (if edit.saving then
+                        "Saving..."
+
+                     else
+                        "Save"
+                    )
+                ]
+            , Html.button
+                [ class "secondary-btn"
+                , disabled edit.saving
+                , Events.onClick Actions.cancelAgentSessionNameEdit
+                ]
+                [ Html.text "Cancel" ]
             ]
         ]
 
 
-viewClosedDraft : String -> Html msg
-viewClosedDraft status =
+viewClosedChat : String -> Html msg
+viewClosedChat status =
     Html.div [ class "agent-panel__section" ]
-        [ Html.h3 [] [ Html.text (draftStatusLabel status) ]
-        , Html.p [] [ Html.text "This draft is closed." ]
+        [ Html.h3 [] [ Html.text (chatStatusLabel status) ]
+        , Html.p [] [ Html.text "This chat is closed." ]
         ]
 
 
-draftStatusLabel : String -> String
-draftStatusLabel status =
+chatStatusLabel : String -> String
+chatStatusLabel status =
     case status of
         "running" ->
             "Working"
@@ -356,8 +542,8 @@ submitShortcut runnerActive =
     Events.preventDefaultOn "keydown" decoder
 
 
-viewChat : Model.AgentState -> Bool -> Html (Flow Model ())
-viewChat agent runnerActive =
+viewChat : Model.AgentState -> Model.AgentSessionView -> Bool -> Html (Flow Model ())
+viewChat agent sessionView runnerActive =
     Html.div [ class "agent-panel__section agent-panel__conversation" ]
         [ Html.div [ class "agent-panel__section-header agent-panel__conversation-header" ]
             [ Html.h3 [] [ Html.text "Messages" ]
@@ -382,15 +568,45 @@ viewChat agent runnerActive =
                 [ Html.text (emptyAs "No details yet." agent.turnLog) ]
 
           else
-            viewChatTurns agent runnerActive
+            viewChatTurns agent sessionView runnerActive
         ]
 
 
-viewChatTurns : Model.AgentState -> Bool -> Html (Flow Model ())
-viewChatTurns agent runnerActive =
-    if List.isEmpty agent.chatTurns then
-        Html.div [ class "agent-panel__chat agent-panel__chat--empty" ]
-            [ Html.div [ class "agent-panel__empty-state" ]
+activeChangesetOperation : Model.AgentState -> String -> Maybe Model.ChangesetOperationKind
+activeChangesetOperation agent sessionId =
+    case agent.changesetOperation of
+        Just operation ->
+            if operation.sessionId == sessionId then
+                Just operation.kind
+
+            else
+                Nothing
+
+        Nothing ->
+            Nothing
+
+
+viewChatTurns : Model.AgentState -> Model.AgentSessionView -> Bool -> Html (Flow Model ())
+viewChatTurns agent sessionView runnerActive =
+    let
+        activeOperation =
+            activeChangesetOperation agent sessionView.session.sessionId
+
+        pendingChangesetNodes =
+            case pendingChangeset sessionView of
+                Just changeset ->
+                    [ viewChangesetBox runnerActive activeOperation changeset ]
+
+                Nothing ->
+                    []
+
+        content =
+            List.map (viewChatEntry runnerActive) agent.chatEntries ++ pendingChangesetNodes
+    in
+    if List.isEmpty content then
+        Html.div [ class "agent-panel__chat agent-panel__chat--empty", id Actions.agentChatId ]
+            [ Html.div [ id Actions.agentChatEndId ] []
+            , Html.div [ class "agent-panel__empty-state" ]
                 [ Html.strong []
                     [ Html.text
                         (if runnerActive then
@@ -413,8 +629,18 @@ viewChatTurns agent runnerActive =
             ]
 
     else
-        Html.div [ class "agent-panel__chat" ]
-            (List.map viewChatTurn agent.chatTurns)
+        Html.div [ class "agent-panel__chat", id Actions.agentChatId ]
+            (content ++ [ Html.div [ id Actions.agentChatEndId ] [] ])
+
+
+viewChatEntry : Bool -> Model.ChatEntry -> Html (Flow Model ())
+viewChatEntry runnerActive entry =
+    case entry of
+        Model.ChatTurnEntry turn ->
+            viewChatTurn turn
+
+        Model.ChatChangesetEntry changeset ->
+            viewChangesetBox runnerActive Nothing changeset
 
 
 viewChatTurn : Model.ChatTurn -> Html msg
@@ -504,45 +730,218 @@ viewAgentMessage turn =
         ]
 
 
-viewDiffs : Model.AgentGitState -> Html msg
-viewDiffs gitState =
-    Html.div [ class "agent-panel__section agent-panel__diffs" ]
-        [ Html.h3 [] [ Html.text "Changes" ]
-        , diffBlock "Proposed changes" gitState.branchDiff
-        ]
-
-
-diffBlock : String -> String -> Html msg
-diffBlock label content =
-    Html.div [ class "agent-panel__diff-block" ]
-        [ Html.div [ class "agent-panel__diff-label" ] [ Html.text label ]
-        , Html.pre [] [ Html.text (emptyAs "No changes yet." content) ]
-        ]
-
-
-viewCandidate : Model.AgentSessionView -> Bool -> Html (Flow Model ())
-viewCandidate sessionView runnerActive =
+pendingChangeset : Model.AgentSessionView -> Maybe Model.ChatChangeset
+pendingChangeset sessionView =
     let
-        hasAgentCommits =
-            sessionView.gitState.hasAgentCommits
-    in
-    Html.div [ class "agent-panel__section" ]
-        [ Html.h3 [] [ Html.text "Apply" ]
-        , Html.p []
-            [ Html.text
-                (if hasAgentCommits then
-                    "When you're ready, apply the changes to the target branch."
+        session =
+            sessionView.session
 
-                 else
-                    "No changes yet."
-                )
+        diff =
+            String.trim sessionView.gitState.branchDiff
+    in
+    if sessionView.gitState.hasAgentCommits then
+        if session.status == "prepare_conflict" then
+            let
+                err =
+                    case session.lastError of
+                        Just message ->
+                            message
+
+                        Nothing ->
+                            "The changeset could not be prepared cleanly."
+
+                state =
+                    Model.ChatChangesetNeedsReview err
+            in
+            Just { state = state, description = defaultChangesetDescription state, diff = diff }
+
+        else
+            Just { state = Model.ChatChangesetProposed, description = defaultChangesetDescription Model.ChatChangesetProposed, diff = diff }
+
+    else
+        Nothing
+
+
+hasChangesetLifecycleTurn : List Model.AgentTurn -> Bool
+hasChangesetLifecycleTurn turns =
+    hasLifecycleTurn "Apply proposed changeset" turns || hasLifecycleTurn "Discard proposed changeset" turns
+
+
+hasLifecycleTurn : String -> List Model.AgentTurn -> Bool
+hasLifecycleTurn prompt turns =
+    List.any (\turn -> turn.turnPrompt == prompt) turns
+
+
+defaultChangesetDescription : Model.ChatChangesetState -> String
+defaultChangesetDescription state =
+    case state of
+        Model.ChatChangesetProposed ->
+            "Review this changeset, then apply it to the target branch or discard the chat."
+
+        Model.ChatChangesetNeedsReview _ ->
+            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the chat."
+
+        Model.ChatChangesetApplied ->
+            "This changeset was applied. You can continue the conversation from the applied state."
+
+        Model.ChatChangesetDiscarded ->
+            "This changeset was discarded. No changes were applied."
+
+
+viewChangesetBox : Bool -> Maybe Model.ChangesetOperationKind -> Model.ChatChangeset -> Html (Flow Model ())
+viewChangesetBox runnerActive activeOperation changeset =
+    let
+        state =
+            changeset.state
+
+        diff =
+            String.trim changeset.diff
+
+        isApplying =
+            activeOperation == Just Model.ApplyingChangeset
+
+        isDiscarding =
+            activeOperation == Just Model.DiscardingChangeset
+
+        isBusy =
+            isApplying || isDiscarding
+
+        statusLabel =
+            if isApplying then
+                "Applying"
+
+            else if isDiscarding then
+                "Discarding"
+
+            else
+                case state of
+                    Model.ChatChangesetProposed ->
+                        "Proposed"
+
+                    Model.ChatChangesetNeedsReview _ ->
+                        "Needs review"
+
+                    Model.ChatChangesetApplied ->
+                        "Applied"
+
+                    Model.ChatChangesetDiscarded ->
+                        "Discarded"
+
+        description =
+            if String.isEmpty (String.trim changeset.description) then
+                defaultChangesetDescription state
+
+            else
+                changeset.description
+
+        canApply =
+            case state of
+                Model.ChatChangesetProposed ->
+                    not runnerActive && not isBusy
+
+                _ ->
+                    False
+
+        canDiscard =
+            case state of
+                Model.ChatChangesetProposed ->
+                    not runnerActive && not isBusy
+
+                Model.ChatChangesetNeedsReview _ ->
+                    not runnerActive && not isBusy
+
+                _ ->
+                    False
+
+        isProposed =
+            case state of
+                Model.ChatChangesetProposed ->
+                    True
+
+                _ ->
+                    False
+
+        isNeedsReview =
+            case state of
+                Model.ChatChangesetNeedsReview _ ->
+                    True
+
+                _ ->
+                    False
+
+        isApplied =
+            case state of
+                Model.ChatChangesetApplied ->
+                    True
+
+                _ ->
+                    False
+
+        isDiscarded =
+            case state of
+                Model.ChatChangesetDiscarded ->
+                    True
+
+                _ ->
+                    False
+
+        errorNode =
+            case state of
+                Model.ChatChangesetNeedsReview err ->
+                    Html.pre [ class "agent-panel__changeset-error" ] [ Html.text err ]
+
+                _ ->
+                    Html.text ""
+
+        applyLabel =
+            if isApplying then
+                "Applying..."
+
+            else
+                "Apply changes"
+
+        discardLabel =
+            if isDiscarding then
+                "Discarding..."
+
+            else
+                "Discard changeset"
+    in
+    Html.div
+        [ classList
+            [ ( "agent-panel__changeset", True )
+            , ( "is-proposed", isProposed )
+            , ( "is-needs-review", isNeedsReview )
+            , ( "is-applied", isApplied )
+            , ( "is-discarded", isDiscarded )
+            , ( "is-loading", isBusy )
             ]
-        , Html.button
-            [ class "primary-btn"
-            , disabled (runnerActive || not hasAgentCommits)
-            , Events.onClick Actions.applyAgentChanges
+        ]
+        [ Html.div [ class "agent-panel__changeset-header" ]
+            [ Html.h4 [] [ Html.text "Changeset" ]
+            , Html.span [ class "agent-panel__changeset-status" ] [ Html.text statusLabel ]
             ]
-            [ Html.text "Apply changes" ]
+        , Html.p [ class "agent-panel__changeset-description" ] [ Html.text description ]
+        , if String.isEmpty diff then
+            Html.text ""
+
+          else
+            Html.pre [ class "agent-panel__changeset-diff" ] [ Html.text diff ]
+        , errorNode
+        , Html.div [ class "agent-panel__changeset-actions" ]
+            [ Html.button
+                [ class "primary-btn"
+                , disabled (not canApply)
+                , Events.onClick Actions.applyAgentChanges
+                ]
+                [ Html.text applyLabel ]
+            , Html.button
+                [ class "danger-btn"
+                , disabled (not canDiscard)
+                , Events.onClick Actions.discardAgentSession
+                ]
+                [ Html.text discardLabel ]
+            ]
         ]
 
 

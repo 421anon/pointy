@@ -131,10 +131,6 @@ in
           auth_basic off;
         '';
       };
-      locations."/" = {
-        root = "${self.packages.${pkgs.stdenv.hostPlatform.system}.frontend}";
-        tryFiles = "$uri $uri/ /index.html";
-      };
     };
   };
 

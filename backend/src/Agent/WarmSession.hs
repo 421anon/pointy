@@ -21,29 +21,28 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
-import System.Directory
-    ( createDirectoryIfMissing
-    , doesDirectoryExist
-    , doesFileExist
-    , getFileSize
-    , getHomeDirectory
-    , getModificationTime
-    , listDirectory
-    , removePathForcibly
-    )
+import System.Directory (
+    createDirectoryIfMissing,
+    doesDirectoryExist,
+    doesFileExist,
+    getFileSize,
+    getHomeDirectory,
+    getModificationTime,
+    listDirectory,
+    removePathForcibly,
+ )
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (Handle, hClose)
-import System.Process
-    ( CreateProcess (..)
-    , StdStream (..)
-    , createProcess
-    , proc
-    , waitForProcess
-    )
+import System.Process (
+    CreateProcess (..),
+    StdStream (..),
+    createProcess,
+    proc,
+    waitForProcess,
+ )
 import UserRepo (runGitIn, userRepoPath)
-
 
 data WarmSessionMeta = WarmSessionMeta
     { warmBaseCommit :: Text
@@ -53,18 +52,15 @@ data WarmSessionMeta = WarmSessionMeta
     }
     deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
-
 warmTemplateDir :: IO FilePath
 warmTemplateDir = do
     root <- agentSessionsRoot
     return $ root </> "warm-template"
 
-
 warmMetaPath :: IO FilePath
 warmMetaPath = do
     dir <- warmTemplateDir
     return $ dir </> "meta.json"
-
 
 loadWarmMeta :: IO (Maybe WarmSessionMeta)
 loadWarmMeta = do
@@ -78,17 +74,16 @@ loadWarmMeta = do
                 Left _ -> Nothing
                 Right meta -> Just meta
 
-
 saveWarmMeta :: WarmSessionMeta -> IO ()
 saveWarmMeta meta = do
     path <- warmMetaPath
     createDirectoryIfMissing True (takeDirectory path)
     LBS.writeFile path (encode meta)
 
-
--- | Returns Nothing when bootstrap is disabled (empty prompt).
--- Returns Just (Right meta) when a valid warm session is ready.
--- Returns Just (Left err) when the build failed.
+{- | Returns Nothing when bootstrap is disabled (empty prompt).
+Returns Just (Right meta) when a valid warm session is ready.
+Returns Just (Left err) when the build failed.
+-}
 getOrBuildWarmSession :: AgentConfig -> Text -> IO (Maybe (Either String WarmSessionMeta))
 getOrBuildWarmSession cfg baseCommit = do
     let bootstrapPrompt = agentBootstrapPrompt cfg
@@ -104,15 +99,12 @@ getOrBuildWarmSession cfg baseCommit = do
                         else Just <$> buildWarmSession cfg baseCommit
                 _ -> Just <$> buildWarmSession cfg baseCommit
 
-
 isValidSessionFile :: FilePath -> IO Bool
 isValidSessionFile path = do
     exists <- doesFileExist path
     if not exists
         then return False
         else (> 0) <$> getFileSize path
-
-
 
 buildWarmSession :: AgentConfig -> Text -> IO (Either String WarmSessionMeta)
 buildWarmSession cfg baseCommit = do
@@ -157,7 +149,6 @@ buildWarmSession cfg baseCommit = do
                                     saveWarmMeta meta
                                     return $ Right meta
 
-
 createBootstrapWorktree :: FilePath -> FilePath -> Text -> IO (Either String ())
 createBootstrapWorktree repoPath worktreeDir baseCommit = do
     createDirectoryIfMissing True (takeDirectory worktreeDir)
@@ -168,7 +159,6 @@ createBootstrapWorktree repoPath worktreeDir baseCommit = do
         ExitFailure code ->
             Left $ "git worktree add failed (" ++ show code ++ "): " ++ stderr
 
-
 runBootstrapProcess :: AgentConfig -> FilePath -> FilePath -> FilePath -> IO ExitCode
 runBootstrapProcess cfg worktreeDir home piSessionDir = do
     baseEnv <- getEnvironment
@@ -177,19 +167,33 @@ runBootstrapProcess cfg worktreeDir home piSessionDir = do
     let realPiAgentDir = realHome </> ".pi" </> "agent"
         pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
         passthroughKeys =
-            [ "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL", "TZ"
-            , "XDG_RUNTIME_DIR", "XDG_DATA_DIRS"
-            , "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"
-            , "GROQ_API_KEY", "CEREBRAS_API_KEY", "XAI_API_KEY"
-            , "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"
+            [ "USER"
+            , "LOGNAME"
+            , "SHELL"
+            , "TERM"
+            , "LANG"
+            , "LC_ALL"
+            , "TZ"
+            , "XDG_RUNTIME_DIR"
+            , "XDG_DATA_DIRS"
+            , "DEEPSEEK_API_KEY"
+            , "ANTHROPIC_API_KEY"
+            , "OPENAI_API_KEY"
+            , "GROQ_API_KEY"
+            , "CEREBRAS_API_KEY"
+            , "XAI_API_KEY"
+            , "OPENROUTER_API_KEY"
+            , "MISTRAL_API_KEY"
+            , "GOOGLE_API_KEY"
+            , "GEMINI_API_KEY"
             ]
         passthrough = [(k, v) | (k, v) <- baseEnv, k `elem` passthroughKeys]
         runnerEnv =
             [ ("PATH", pathValue)
             , ("HOME", home)
-            -- Use the real Pi agent config (models.json, extensions, etc.) from the backend home.
-            -- PI_CODING_AGENT_SESSION_DIR keeps bootstrap sessions isolated from normal sessions.
-            , ("PI_CODING_AGENT_DIR", realPiAgentDir)
+            , -- Use the real Pi agent config (models.json, extensions, etc.) from the backend home.
+              -- PI_CODING_AGENT_SESSION_DIR keeps bootstrap sessions isolated from normal sessions.
+              ("PI_CODING_AGENT_DIR", realPiAgentDir)
             , ("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
             ]
                 ++ passthrough
@@ -227,13 +231,11 @@ runBootstrapProcess cfg worktreeDir home piSessionDir = do
     _ <- wait errDrainer
     waitForProcess ph
 
-
 drainHandle :: Maybe Handle -> IO ()
 drainHandle Nothing = return ()
 drainHandle (Just h) = do
     _ <- BS.hGetContents h
     return ()
-
 
 expandBootstrapArg :: FilePath -> FilePath -> Text -> String
 expandBootstrapArg worktreeDir home arg =
@@ -241,7 +243,6 @@ expandBootstrapArg worktreeDir home arg =
         T.replace "{worktree}" (T.pack worktreeDir) $
             T.replace "{home}" (T.pack home) $
                 T.replace "{sessionRoot}" (T.pack (takeDirectory worktreeDir)) arg
-
 
 findSessionFile :: FilePath -> IO (Maybe FilePath)
 findSessionFile piSessionDir = do
@@ -262,7 +263,6 @@ findSessionFile piSessionDir = do
                             allFiles
                     let sorted = sortOn (Down . fst) withTimes
                     return $ fmap snd (listToMaybe sorted)
-
 
 -- | Recursively collect all .jsonl files under a directory.
 findJsonlFiles :: FilePath -> IO [FilePath]

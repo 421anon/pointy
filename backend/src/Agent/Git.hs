@@ -10,6 +10,7 @@ module Agent.Git (
     listAgentSessions,
     archiveAgentSession,
     purgeAgentSession,
+    renameAgentSession,
     loadAgentSessionView,
     commitAgentTurnOutputs,
     prepareApplyCandidate,
@@ -29,9 +30,12 @@ import Agent.Session (
     listTurnsWithLogs,
     loadSessionById,
     newSessionId,
-    saveTurn,
+    normalizeSessionName,
+    newTurnId,
     saveSession,
+    saveTurn,
     sessionDir,
+    turnLogFilePath,
     touchSession,
  )
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
@@ -44,13 +48,13 @@ import Data.List (nub, sortOn)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
 import GHC.Generics (Generic)
-import System.Directory (doesDirectoryExist, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, removePathForcibly)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import UserRepo (fetchRepoStrict, runGitIn, runGitWithSshKey, userRepoPath)
-
 
 data AgentGitState = AgentGitState
     { headCommit :: Text
@@ -60,14 +64,12 @@ data AgentGitState = AgentGitState
     }
     deriving (Show, Eq, Generic, ToJSON)
 
-
 data AgentSessionView = AgentSessionView
     { session :: AgentSession
     , gitState :: AgentGitState
     , turns :: [AgentTurn]
     }
     deriving (Show, Eq, Generic, ToJSON)
-
 
 data AgentUsage = AgentUsage
     { totalSessions :: Int
@@ -77,7 +79,6 @@ data AgentUsage = AgentUsage
     , discardedSessions :: Int
     }
     deriving (Show, Eq, Generic, ToJSON)
-
 
 createAgentSession :: ExceptT String IO AgentSessionView
 createAgentSession = do
@@ -98,6 +99,7 @@ createAgentSession = do
     let session_ =
             AgentSession
                 { sessionId = sid
+                , sessionName = Nothing
                 , targetBranch = target
                 , agentBranch = T.pack agentBranchName
                 , baseCommit = base
@@ -112,13 +114,11 @@ createAgentSession = do
     liftIO $ saveSession session_
     loadAgentSessionView sid
 
-
 listAgentSessions :: ExceptT String IO [AgentSessionView]
 listAgentSessions = do
     sessions <- liftIO listSessions
     let ordered = sortOn (Down . createdAt) sessions
     mapM (loadAgentSessionView . sessionId) ordered
-
 
 loadAgentSessionView :: Text -> ExceptT String IO AgentSessionView
 loadAgentSessionView sid = do
@@ -127,6 +127,14 @@ loadAgentSessionView sid = do
     turns_ <- liftIO $ sortOn turnStartedAtCompat <$> listTurnsWithLogs sid
     return $ AgentSessionView session_ state turns_
 
+renameAgentSession :: Text -> Text -> ExceptT String IO AgentSessionView
+renameAgentSession sid rawName = do
+    session_ <- loadSessionOrThrow sid
+    case normalizeSessionName rawName of
+        Nothing -> throwError "empty_session_name"
+        Just name -> do
+            saveSessionUpdate session_{sessionName = Just name}
+            loadAgentSessionView sid
 
 commitAgentTurnOutputs :: AgentSession -> AgentTurn -> ExceptT String IO (Maybe Text, [Text])
 commitAgentTurnOutputs session_ turn = do
@@ -146,11 +154,10 @@ commitAgentTurnOutputs session_ turn = do
                     head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
                     return (Just head_, skippedPaths)
 
-
 prepareApplyCandidate :: Text -> ExceptT String IO AgentSessionView
 prepareApplyCandidate sid = do
     session_ <- requireEditableSession sid
-    when (activeTurnId session_ /= Nothing) $ throwError "runner_active"
+    when (sessionHasActiveRunner session_) $ throwError "runner_active"
     state <- collectGitState session_
     unless (hasAgentCommits state) $ throwError "no_agent_commits"
 
@@ -191,7 +198,6 @@ prepareApplyCandidate sid = do
             saveSessionUpdate session_{status = "prepare_conflict", preparedApply = Nothing, lastError = Just conflictSummary}
             loadAgentSessionView sid
 
-
 confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO AgentSessionView
 confirmApplyCandidate sid requestedTarget requestedCandidate = do
     session_ <- requireEditableSession sid
@@ -211,41 +217,86 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
 
     worktreeHead <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
     when (worktreeHead /= candidateHead candidate) $ throwError "candidate_mismatch"
+    changesetDiff <- runGitChecked (candidateWorktree candidate) ["diff", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
     pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile userRepo) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
     case pushResult of
         (ExitSuccess, _, _) -> do
             _ <- runGitChecked repoPath ["update-ref", "refs/heads/" ++ branchName, candidateSha]
+            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+            _ <- runGitChecked (worktreePath session_) ["reset", "--hard", candidateSha]
+            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
             liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
-            saveSessionUpdate session_{status = "applied", preparedApply = Nothing, lastError = Nothing}
+            appendLifecycleTurn
+                sid
+                "Apply proposed changeset"
+                ("Applied changes to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ". You can continue from the applied state in this chat.")
+                changesetDiff
+            saveSessionUpdate
+                session_
+                    { status = "open"
+                    , baseCommit = candidateHead candidate
+                    , preparedApply = Nothing
+                    , lastError = Nothing
+                    }
             loadAgentSessionView sid
         (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
-
 
 discardAgentSession :: Text -> ExceptT String IO AgentSessionView
 discardAgentSession sid = do
     session_ <- loadSessionOrThrow sid
+    when (sessionHasActiveRunner session_) $ throwError "runner_active"
+    changesetDiff <- branchDiff <$> collectGitState session_
     repoPath <- liftIO userRepoPath
     liftIO $ removeWorktreeIfExists repoPath (worktreePath session_)
     case preparedApply session_ of
         Nothing -> return ()
         Just candidate -> liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
     _ <- liftIO $ runGitIn repoPath ["branch", "-D", T.unpack (agentBranch session_)]
-    saveSessionUpdate session_{status = "discarded", activeTurnId = Nothing, preparedApply = Nothing}
+    appendLifecycleTurn
+        sid
+        "Discard proposed changeset"
+        ("Discarded this draft. No changes were applied to `" <> targetBranch session_ <> "`.")
+        changesetDiff
+    saveSessionUpdate session_{status = "discarded", activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
     loadAgentSessionView sid
 
+
+appendLifecycleTurn :: Text -> Text -> Text -> Text -> ExceptT String IO ()
+appendLifecycleTurn sid prompt body changesetDiff = do
+    tid <- liftIO newTurnId
+    logPath <- liftIO $ turnLogFilePath sid tid
+    now <- liftIO getCurrentTime
+    let turn =
+            AgentTurn
+                { turnId = tid
+                , turnSessionId = sid
+                , turnPrompt = prompt
+                , turnStatus = "succeeded"
+                , turnExitCode = Just 0
+                , turnStartedAt = now
+                , turnFinishedAt = Just now
+                , turnLogPath = logPath
+                , turnLog = ""
+                }
+    liftIO $ createDirectoryIfMissing True (takeDirectory logPath)
+    liftIO $ TIO.writeFile logPath (renderLifecycleLog body changesetDiff)
+    liftIO $ saveTurn turn
+
+renderLifecycleLog :: Text -> Text -> Text
+renderLifecycleLog body changesetDiff =
+    T.unlines $ ["[stdout] " <> body, "[system] changeset-diff"] ++ T.lines changesetDiff
 
 archiveAgentSession :: Text -> ExceptT String IO AgentSessionView
 archiveAgentSession sid = do
     session_ <- loadSessionOrThrow sid
-    when (status session_ == "running") $ throwError "runner_active"
+    when (sessionHasActiveRunner session_) $ throwError "runner_active"
     saveSessionUpdate session_{status = "archived", activeTurnId = Nothing}
     loadAgentSessionView sid
-
 
 purgeAgentSession :: Text -> ExceptT String IO ()
 purgeAgentSession sid = do
     session_ <- loadSessionOrThrow sid
-    when (status session_ == "running") $ throwError "runner_active"
+    when (sessionHasActiveRunner session_) $ throwError "runner_active"
     repoPath <- liftIO userRepoPath
     liftIO $ removeWorktreeIfExists repoPath (worktreePath session_)
     case preparedApply session_ of
@@ -254,7 +305,6 @@ purgeAgentSession sid = do
     _ <- liftIO $ runGitIn repoPath ["branch", "-D", T.unpack (agentBranch session_)]
     sessionRoot <- liftIO $ sessionDir sid
     liftIO $ removePathForcibly sessionRoot
-
 
 getAgentUsage :: IO AgentUsage
 getAgentUsage = do
@@ -268,7 +318,6 @@ getAgentUsage = do
             , appliedSessions = countStatus "applied"
             , discardedSessions = countStatus "discarded"
             }
-
 
 collectGitState :: AgentSession -> ExceptT String IO AgentGitState
 collectGitState session_ = do
@@ -285,17 +334,18 @@ collectGitState session_ = do
         else do
             head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
             baseReachable <- baseCommitReachable (worktreePath session_) (baseCommit session_)
-            ( log_, diff_, hasCommits ) <-
-                if baseReachable then do
-                    l <- runGitChecked (worktreePath session_) ["log", "--oneline", T.unpack (baseCommit session_) ++ "..HEAD"]
-                    d <- runGitChecked (worktreePath session_) ["diff", T.unpack (baseCommit session_) ++ "..HEAD"]
-                    return (l, d, not (T.null (T.strip l)))
-                else
-                    return
-                        ( "(base commit " <> baseCommit session_ <> " is no longer reachable; cannot compute branch diff)"
-                        , ""
-                        , head_ /= baseCommit session_
-                        )
+            (log_, diff_, hasCommits) <-
+                if baseReachable
+                    then do
+                        l <- runGitChecked (worktreePath session_) ["log", "--oneline", T.unpack (baseCommit session_) ++ "..HEAD"]
+                        d <- runGitChecked (worktreePath session_) ["diff", T.unpack (baseCommit session_) ++ "..HEAD"]
+                        return (l, d, not (T.null (T.strip l)))
+                    else
+                        return
+                            ( "(base commit " <> baseCommit session_ <> " is no longer reachable; cannot compute branch diff)"
+                            , ""
+                            , head_ /= baseCommit session_
+                            )
             return
                 AgentGitState
                     { headCommit = head_
@@ -304,7 +354,6 @@ collectGitState session_ = do
                     , hasAgentCommits = hasCommits
                     }
 
-
 baseCommitReachable :: FilePath -> Text -> ExceptT String IO Bool
 baseCommitReachable worktree base = ExceptT $ do
     (code, _, _) <- runGitIn worktree ["cat-file", "-e", T.unpack base <> "^{commit}"]
@@ -312,14 +361,10 @@ baseCommitReachable worktree base = ExceptT $ do
         ExitSuccess -> Right True
         ExitFailure _ -> Right False
 
-
-
-
 changedWorktreePaths :: FilePath -> ExceptT String IO [Text]
 changedWorktreePaths worktree = do
     output <- runGitChecked worktree ["ls-files", "--modified", "--deleted", "--others", "--exclude-standard", "-z"]
     return $ nub $ filter (not . T.null) $ T.splitOn "\0" output
-
 
 hasStagedChanges :: FilePath -> ExceptT String IO Bool
 hasStagedChanges worktree = ExceptT $ do
@@ -329,7 +374,6 @@ hasStagedChanges worktree = ExceptT $ do
         ExitFailure 1 -> Right True
         ExitFailure code -> Left $ "git diff --cached --quiet --exit-code failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
-
 isAgentOutputPath :: Text -> Bool
 isAgentOutputPath path =
     case T.splitOn "/" path of
@@ -338,17 +382,18 @@ isAgentOutputPath path =
         "srcFiles" : stepId : rest -> isDigits stepId && not (null rest)
         _ -> False
 
-
 isNumberedNix :: Text -> Bool
 isNumberedNix file =
     case T.stripSuffix ".nix" file of
         Just stem -> isDigits stem
         Nothing -> False
 
-
 isDigits :: Text -> Bool
 isDigits text_ = not (T.null text_) && T.all isDigit text_
 
+sessionHasActiveRunner :: AgentSession -> Bool
+sessionHasActiveRunner session_ =
+    status session_ == "running" || activeTurnId session_ /= Nothing
 
 requireEditableSession :: Text -> ExceptT String IO AgentSession
 requireEditableSession sid = do
@@ -358,24 +403,18 @@ requireEditableSession sid = do
     when (status session_ == "archived") $ throwError "session_archived"
     return session_
 
-
 loadSessionOrThrow :: Text -> ExceptT String IO AgentSession
 loadSessionOrThrow sid = ExceptT $ loadSessionById sid
-
-
-
 
 saveSessionUpdate :: AgentSession -> ExceptT String IO ()
 saveSessionUpdate session_ = do
     touched <- liftIO $ touchSession session_
     liftIO $ saveSession touched
 
-
 collectConflictSummary :: FilePath -> String -> String -> ExceptT String IO Text
 collectConflictSummary worktree mergeOut mergeErr = do
     statusOut <- runGitChecked worktree ["status", "--porcelain"]
     return $ T.pack mergeErr <> T.pack mergeOut <> "\n" <> statusOut
-
 
 runGitChecked :: FilePath -> [String] -> ExceptT String IO Text
 runGitChecked path args = ExceptT $ do
@@ -384,16 +423,16 @@ runGitChecked path args = ExceptT $ do
         ExitSuccess -> Right $ T.pack stdout
         ExitFailure code -> Left $ "git " ++ unwords args ++ " failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
-
 stripOutput :: Text -> Text
 stripOutput = T.strip
 
+shortCommit :: Text -> Text
+shortCommit = T.take 12
 
 formatGitOutput :: String -> String -> String
 formatGitOutput stdout stderr =
     (if null stdout then "" else "\nstdout:\n" ++ stdout)
         ++ (if null stderr then "" else "\nstderr:\n" ++ stderr)
-
 
 removeWorktreeIfExists :: FilePath -> FilePath -> IO ()
 removeWorktreeIfExists repoPath path = do
@@ -403,11 +442,8 @@ removeWorktreeIfExists repoPath path = do
         stillExists <- doesDirectoryExist path
         when stillExists $ removePathForcibly path
 
-
 turnStartedAtCompat :: AgentTurn -> String
 turnStartedAtCompat = show . turnStartedAt
-
-
 
 {- | Reset sessions left mid-run when the backend exited. Called once at startup;
 the new process has no live runner attached, so the only honest status is "open"
@@ -435,13 +471,14 @@ sweepStaleRunningSessions = do
             stuckTurns
         -- Fix the session itself.
         if status session_ == "running"
-            then saveSession
-                session_
-                    { status = "open"
-                    , activeTurnId = Nothing
-                    , lastError = Just "runner exited while backend was offline"
-                    , updatedAt = now
-                    }
+            then
+                saveSession
+                    session_
+                        { status = "open"
+                        , activeTurnId = Nothing
+                        , lastError = Just "runner exited while backend was offline"
+                        , updatedAt = now
+                        }
             else case activeTurnId session_ of
                 Just _ ->
                     saveSession session_{activeTurnId = Nothing, updatedAt = now}

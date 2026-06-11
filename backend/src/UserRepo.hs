@@ -116,7 +116,6 @@ withFileLock lockPath access action = do
             ReadWrite -> Exclusive
     System.FileLock.withFileLock lockPath mode $ const action
 
-
 withUserRepoExclusive :: ExceptT String IO a -> IO (Either String a)
 withUserRepoExclusive action = do
     lockPath <- userRepoLockPath

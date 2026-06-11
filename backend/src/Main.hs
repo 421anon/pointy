@@ -7,6 +7,8 @@
 
 module Main where
 
+import Agent.Git (AgentSessionView, AgentUsage, sweepStaleRunningSessions)
+import Agent.Session (AgentTurn)
 import Config (loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Monad.Except (runExceptT)
@@ -15,6 +17,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import Handlers.Agent (
     ConfirmApplyRequest,
+    RenameSessionRequest,
     SessionRequest,
     TurnRequest,
     archiveSessionHandler,
@@ -26,11 +29,10 @@ import Handlers.Agent (
     postTurnHandler,
     prepareApplyHandler,
     purgeSessionHandler,
+    renameSessionHandler,
     turnLogStreamHandler,
     usageHandler,
  )
-import Agent.Git (AgentSessionView, AgentUsage, sweepStaleRunningSessions)
-import Agent.Session (AgentTurn)
 import Handlers.Autocomplete (AutocompleteRequest, autocompleteHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
@@ -45,9 +47,9 @@ import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (DirEntry, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
-import Network.Wai.Parse (setMaxRequestNumFiles)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
 import Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
+import Network.Wai.Parse (setMaxRequestNumFiles)
 import OutPaths (warmProjectOutPaths)
 import Servant hiding (runHandler)
 import Servant.Multipart
@@ -94,6 +96,7 @@ type API =
         :<|> "agent" :> "confirm-apply" :> ReqBody '[JSON] ConfirmApplyRequest :> Post '[JSON] AgentSessionView
         :<|> "agent" :> "discard" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
         :<|> "agent" :> "archive" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
+        :<|> "agent" :> "rename" :> ReqBody '[JSON] RenameSessionRequest :> Post '[JSON] AgentSessionView
         :<|> "agent" :> "delete" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] NoContent
         :<|> "agent" :> "usage" :> Get '[JSON] AgentUsage
 
@@ -135,6 +138,7 @@ server =
         :<|> confirmApplyHandler
         :<|> discardSessionHandler
         :<|> archiveSessionHandler
+        :<|> renameSessionHandler
         :<|> purgeSessionHandler
         :<|> usageHandler
 

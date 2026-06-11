@@ -12,7 +12,9 @@ module Agent.Session (
     turnsDir,
     turnMetadataPath,
     turnLogFilePath,
+    newTurnId,
     newSessionId,
+    normalizeSessionName,
     freshSessionLayout,
     loadSession,
     saveSession,
@@ -27,7 +29,7 @@ module Agent.Session (
 ) where
 
 import Control.Monad (filterM)
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.:), (.:?), (.!=), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
@@ -40,7 +42,6 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileE
 import System.FilePath (takeDirectory, (</>))
 import System.Posix.Process (getProcessID)
 
-
 data PreparedApply = PreparedApply
     { targetHead :: Text
     , agentHead :: Text
@@ -49,9 +50,9 @@ data PreparedApply = PreparedApply
     }
     deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
-
 data AgentSession = AgentSession
     { sessionId :: Text
+    , sessionName :: Maybe Text
     , targetBranch :: Text
     , agentBranch :: Text
     , baseCommit :: Text
@@ -63,8 +64,23 @@ data AgentSession = AgentSession
     , createdAt :: UTCTime
     , updatedAt :: UTCTime
     }
-    deriving (Show, Eq, Generic, ToJSON, FromJSON)
+    deriving (Show, Eq, Generic, ToJSON)
 
+instance FromJSON AgentSession where
+    parseJSON = withObject "AgentSession" $ \obj ->
+        AgentSession
+            <$> obj .: "sessionId"
+            <*> obj .:? "sessionName" .!= Nothing
+            <*> obj .: "targetBranch"
+            <*> obj .: "agentBranch"
+            <*> obj .: "baseCommit"
+            <*> obj .: "worktreePath"
+            <*> obj .: "status"
+            <*> obj .:? "preparedApply"
+            <*> obj .:? "activeTurnId"
+            <*> obj .:? "lastError"
+            <*> obj .: "createdAt"
+            <*> obj .: "updatedAt"
 
 data AgentTurn = AgentTurn
     { turnId :: Text
@@ -78,7 +94,6 @@ data AgentTurn = AgentTurn
     , turnLog :: Text
     }
     deriving (Show, Eq, Generic)
-
 
 instance ToJSON AgentTurn where
     toJSON turn =
@@ -94,7 +109,6 @@ instance ToJSON AgentTurn where
             , "turnLog" .= turnLog turn
             ]
 
-
 instance FromJSON AgentTurn where
     parseJSON = withObject "AgentTurn" $ \obj ->
         AgentTurn
@@ -108,42 +122,35 @@ instance FromJSON AgentTurn where
             <*> obj .: "turnLogPath"
             <*> obj .:? "turnLog" .!= ""
 
-
 agentSessionsRoot :: IO FilePath
 agentSessionsRoot = do
     home <- getHomeDirectory
     return $ home </> "agent-sessions"
-
 
 sessionDir :: Text -> IO FilePath
 sessionDir sid = do
     root <- agentSessionsRoot
     return $ root </> T.unpack sid
 
-
 sessionMetadataPath :: Text -> IO FilePath
 sessionMetadataPath sid = do
     dir <- sessionDir sid
     return $ dir </> "session.json"
-
 
 turnsDir :: Text -> IO FilePath
 turnsDir sid = do
     dir <- sessionDir sid
     return $ dir </> "turns"
 
-
 turnMetadataPath :: Text -> Text -> IO FilePath
 turnMetadataPath sid tid = do
     dir <- turnsDir sid
     return $ dir </> (T.unpack tid ++ ".json")
 
-
 turnLogFilePath :: Text -> Text -> IO FilePath
 turnLogFilePath sid tid = do
     dir <- turnsDir sid
     return $ dir </> (T.unpack tid ++ ".log")
-
 
 newSessionId :: IO Text
 newSessionId = do
@@ -151,6 +158,21 @@ newSessionId = do
     pid <- getProcessID
     return $ T.pack (show stamp ++ "-" ++ show pid)
 
+newTurnId :: IO Text
+newTurnId = do
+    stamp <- floor . (* 1000000) <$> getPOSIXTime :: IO Integer
+    return $ T.pack ("turn-" ++ show stamp)
+
+normalizeSessionName :: Text -> Maybe Text
+normalizeSessionName rawName =
+    let normalized = T.unwords (T.words rawName)
+        capped = T.take sessionNameMaxLength normalized
+     in if T.null capped
+            then Nothing
+            else Just capped
+
+sessionNameMaxLength :: Int
+sessionNameMaxLength = 80
 
 freshSessionLayout :: Text -> IO (FilePath, FilePath, FilePath)
 freshSessionLayout sid = do
@@ -161,7 +183,6 @@ freshSessionLayout sid = do
     createDirectoryIfMissing True home
     return (dir, worktree, home)
 
-
 loadSession :: FilePath -> IO (Either String AgentSession)
 loadSession path = do
     exists <- doesFileExist path
@@ -169,17 +190,14 @@ loadSession path = do
         then return $ Left $ "session metadata not found: " ++ path
         else eitherDecode <$> LBS.readFile path
 
-
 loadSessionById :: Text -> IO (Either String AgentSession)
 loadSessionById sid = sessionMetadataPath sid >>= loadSession
-
 
 saveSession :: AgentSession -> IO ()
 saveSession session = do
     path <- sessionMetadataPath (sessionId session)
     createDirectoryIfMissing True (takeDirectory path)
     LBS.writeFile path (encode session)
-
 
 listSessions :: IO [AgentSession]
 listSessions = do
@@ -193,13 +211,11 @@ listSessions = do
             parsed <- mapM (loadSession . (</> "session.json") . (root </>)) dirs
             return $ catMaybes $ map eitherToMaybe parsed
 
-
 saveTurn :: AgentTurn -> IO ()
 saveTurn turn = do
     path <- turnMetadataPath (turnSessionId turn) (turnId turn)
     createDirectoryIfMissing True (takeDirectory path)
     LBS.writeFile path (encode turn{turnLog = ""})
-
 
 loadTurn :: FilePath -> IO (Either String AgentTurn)
 loadTurn path = do
@@ -208,7 +224,6 @@ loadTurn path = do
         then return $ Left $ "turn metadata not found: " ++ path
         else eitherDecode <$> LBS.readFile path
 
-
 loadTurnWithLog :: FilePath -> IO (Either String AgentTurn)
 loadTurnWithLog path = do
     loaded <- loadTurn path
@@ -216,12 +231,10 @@ loadTurnWithLog path = do
         Left err -> return (Left err)
         Right turn -> Right <$> hydrateTurnLog turn
 
-
 hydrateTurnLog :: AgentTurn -> IO AgentTurn
 hydrateTurnLog turn = do
     logText <- readTurnLog turn
     return turn{turnLog = logText}
-
 
 readTurnLog :: AgentTurn -> IO Text
 readTurnLog turn = do
@@ -229,7 +242,6 @@ readTurnLog turn = do
     if exists
         then TIO.readFile (turnLogPath turn)
         else return (turnLog turn)
-
 
 listTurns :: Text -> IO [AgentTurn]
 listTurns sid = do
@@ -243,7 +255,6 @@ listTurns sid = do
             parsed <- mapM (loadTurn . (dir </>)) jsonFiles
             return $ catMaybes $ map eitherToMaybe parsed
 
-
 listTurnsWithLogs :: Text -> IO [AgentTurn]
 listTurnsWithLogs sid = do
     dir <- turnsDir sid
@@ -256,29 +267,23 @@ listTurnsWithLogs sid = do
             parsed <- mapM (loadTurnWithLog . (dir </>)) jsonFiles
             return $ catMaybes $ map eitherToMaybe parsed
 
-
 findTurn :: Text -> IO (Maybe AgentTurn)
 findTurn tid = do
     sessions <- listSessions
     turns <- concat <$> mapM (listTurns . sessionId) sessions
     return $ findByTurnId tid turns
 
-
 touchSession :: AgentSession -> IO AgentSession
 touchSession session = do
     now <- getCurrentTime
     return session{updatedAt = now}
 
-
 eitherToMaybe :: Either a b -> Maybe b
 eitherToMaybe (Right b) = Just b
 eitherToMaybe (Left _) = Nothing
-
 
 findByTurnId :: Text -> [AgentTurn] -> Maybe AgentTurn
 findByTurnId _ [] = Nothing
 findByTurnId tid (turn : rest)
     | turnId turn == tid = Just turn
     | otherwise = findByTurnId tid rest
-
-
