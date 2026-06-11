@@ -8,8 +8,6 @@ module Handlers.Statuses (
     getStatuses,
     partitionImmediateStatuses,
     resolveStepStatus,
-    addDependencyRunningOverrides,
-    removeDependencyRunningOverrides,
     broadcastProjectStatus,
     broadcastSingleStepForProjects,
     broadcastFailedStepForProjects,
@@ -24,14 +22,12 @@ import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
 import Bus (broadcastSnapshot)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
-import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, void, when)
 import Control.Monad.Except (runExceptT)
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
-import Data.List (foldl')
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Text (Text, pack, unpack)
@@ -39,12 +35,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import NixUtils (isValidStorePath)
 import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), getProjectOutPaths)
-import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
-
-{-# NOINLINE dependencyRunningOverrides #-}
-dependencyRunningOverrides :: TVar (Map (Text, Int) Int)
-dependencyRunningOverrides = unsafePerformIO $ newTVarIO Map.empty
 
 checkStatus :: FilePath -> IO (Text, Maybe Text)
 checkStatus path = do
@@ -102,7 +93,7 @@ getRawStatuses pid targetCommit = do
         Left err -> return $ Left err
         Right outPaths -> do
             rawStatuses <- Map.fromList <$> mapConcurrently getStatusForStep (Map.toList outPaths)
-            Right <$> applyDependencyRunningOverrides targetCommit rawStatuses
+            return $ Right rawStatuses
   where
     getStatusForStep (sid, path) = do
         status_ <-
@@ -116,44 +107,6 @@ getStatuses pid targetCommit = do
     case rawResult of
         Left err -> return $ Left err
         Right statuses -> Right <$> resolveStatusesAtCommit targetCommit statuses
-
-addDependencyRunningOverrides :: Text -> [Int] -> IO ()
-addDependencyRunningOverrides targetCommit stepIds =
-    atomically $
-        modifyTVar' dependencyRunningOverrides $
-            \overrides ->
-                foldl' (\acc sid -> Map.insertWith (+) (targetCommit, sid) 1 acc) overrides stepIds
-
-removeDependencyRunningOverrides :: Text -> [Int] -> IO ()
-removeDependencyRunningOverrides targetCommit stepIds =
-    atomically $
-        modifyTVar' dependencyRunningOverrides $
-            \overrides ->
-                foldl'
-                    (\acc sid -> Map.update decrement (targetCommit, sid) acc)
-                    overrides
-                    stepIds
-  where
-    decrement count
-        | count <= 1 = Nothing
-        | otherwise = Just (count - 1)
-
-applyDependencyRunningOverrides :: Text -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
-applyDependencyRunningOverrides targetCommit statuses = do
-    overrides <- readTVarIO dependencyRunningOverrides
-    let blockedStepIds =
-            [ sid
-            | ((commitHash, sid), count) <- Map.toList overrides
-            , commitHash == targetCommit
-            , count > 0
-            ]
-    return $ foldl' applyBlockedRunning statuses blockedStepIds
-  where
-    applyBlockedRunning acc sid =
-        Map.adjust
-            (\status_@(state, _) -> if state == "not-started" then ("running", Nothing) else status_)
-            sid
-            acc
 
 broadcastResolvedStatusesAtCommit :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
 broadcastResolvedStatusesAtCommit pid targetCommit statuses = do
@@ -206,13 +159,7 @@ broadcastSingleStepForProjects sid targetCommit outPath = do
     rawStatus <- checkStatus outPath `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
     withStepProjects sid targetCommit $ \pid ctx -> do
         (_, resolvedStatus) <- resolveStepStatus ctx (sid, rawStatus)
-        overrides <- readTVarIO dependencyRunningOverrides
-        let count = Map.findWithDefault 0 (targetCommit, sid) overrides
-            status =
-                if count > 0 && fst resolvedStatus == "not-started"
-                    then ("running", Nothing)
-                    else resolvedStatus
-        broadcastSnapshot pid targetCommit (Map.singleton sid status)
+        broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
 
 broadcastFailedStepForProjects :: Int -> Text -> IO ()
 broadcastFailedStepForProjects sid targetCommit =

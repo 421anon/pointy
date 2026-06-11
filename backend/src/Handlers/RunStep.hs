@@ -11,7 +11,6 @@ import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
 import BuildRunner (BuildKey, JobId, StepRequirements (..), buildKeyForOutPath, cancel, queryJobIds, submitAndWait, submitJob, waitForCompletion)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
-import Control.Exception (bracket_)
 import Control.Monad (foldM)
 
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
@@ -24,7 +23,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (addDependencyRunningOverrides, broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
+import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects)
 import NixUtils (isValidStorePath)
 import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
@@ -55,18 +54,11 @@ runStepSync eid commit = do
         let ctx = ReadRepoContext repoPath targetCommit
         graph <- getDependencyGraph ctx eid
         stepIds <- liftEither $ topoOrder graph
-        let targetCommitText = T.pack targetCommit
 
         warmProjectOutPathsForCommit ctx
-        liftIO $
-            bracket_
-                (addDependencyRunningOverrides targetCommitText stepIds)
-                (removeDependencyRunningOverrides targetCommitText stepIds)
-                ( do
-                    mapM_ (\sid -> broadcastKnownStepStatus sid targetCommitText ("running", Nothing)) stepIds
-                    outcomes <- submitGraph ctx graph stepIds
-                    mapConcurrently_ (finishStep ctx) (Map.toList outcomes)
-                )
+        liftIO $ do
+            outcomes <- submitGraph ctx graph stepIds
+            mapConcurrently_ (finishStep ctx) (Map.toList outcomes)
 
     case result of
         Left err -> putStrLn $ "runStepAsync error: " ++ err
@@ -177,6 +169,7 @@ finishStep ctx (sid, outcome) = case outcome of
         broadcastSingleStepForProjects sid targetCommitText outPath
         buildExtras ctx sid
     Enqueued outPath buildKey _ -> do
+        broadcastSingleStepForProjects sid targetCommitText outPath
         waitForCompletion buildKey
         nowBuilt <- isBuilt outPath
         if nowBuilt
@@ -356,7 +349,6 @@ stopStepSync eid commit = do
 
         outPathText <- getStepOutPath ctx eid
         liftIO $ cancel $ buildKeyForOutPath $ T.unpack outPathText
-        liftIO $ removeDependencyRunningOverrides targetCommit [eid]
         liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of
