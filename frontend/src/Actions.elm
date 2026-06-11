@@ -261,7 +261,7 @@ loadProjects =
                                         try (route << Route.project << mCommit << just) model
                                 in
                                 callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
-                                    |> FlowError.foldResult (\_ -> replayStepStatusBuffer) (\_ -> Flow.pure ())
+                                    |> FlowError.foldResult (\_ -> Flow.async replayStepStatusBuffer) (\_ -> Flow.pure ())
                             )
                 )
         )
