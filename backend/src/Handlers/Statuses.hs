@@ -12,6 +12,7 @@ module Handlers.Statuses (
     removeDependencyRunningOverrides,
     broadcastProjectStatus,
     broadcastSingleStepForProjects,
+    broadcastFailedStepForProjects,
     broadcastKnownStepStatus,
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
@@ -200,19 +201,24 @@ broadcastStatusForStepProjects sid targetCommit mStatusOverride =
     withStepProjects sid targetCommit $ \pid _ ->
         broadcastProjectStatus pid targetCommit (fmap (sid,) mStatusOverride)
 
--- | Uses the already-known out-path rather than re-evaluating each project's step list.
 broadcastSingleStepForProjects :: Int -> Text -> FilePath -> IO ()
 broadcastSingleStepForProjects sid targetCommit outPath = do
     rawStatus <- checkStatus outPath `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
-    overrides <- readTVarIO dependencyRunningOverrides
-    let count = Map.findWithDefault 0 (targetCommit, sid) overrides
-        status =
-            if count > 0 && fst rawStatus == "not-started"
-                then ("running", Nothing)
-                else rawStatus
     withStepProjects sid targetCommit $ \pid ctx -> do
-        (_, resolvedStatus) <- resolveStepStatus ctx (sid, status)
-        broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+        (_, resolvedStatus) <- resolveStepStatus ctx (sid, rawStatus)
+        overrides <- readTVarIO dependencyRunningOverrides
+        let count = Map.findWithDefault 0 (targetCommit, sid) overrides
+            status =
+                if count > 0 && fst resolvedStatus == "not-started"
+                    then ("running", Nothing)
+                    else resolvedStatus
+        broadcastSnapshot pid targetCommit (Map.singleton sid status)
+
+broadcastFailedStepForProjects :: Int -> Text -> IO ()
+broadcastFailedStepForProjects sid targetCommit =
+    withStepProjects sid targetCommit $ \pid ctx -> do
+        (_, status) <- resolveStepStatus ctx (sid, ("failure", Nothing))
+        broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
 broadcastKnownStepStatus :: Int -> Text -> (Text, Maybe Text) -> IO ()
 broadcastKnownStepStatus sid targetCommit status =

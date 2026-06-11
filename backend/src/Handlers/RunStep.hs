@@ -20,7 +20,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (addDependencyRunningOverrides, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
+import Handlers.Statuses (addDependencyRunningOverrides, broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
 import NixUtils (isValidStorePath)
 import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
@@ -129,8 +129,9 @@ buildStep ctx eid = do
                         if nowBuilt
                             then liftIO $ registerGcRootForOutPath outPath
                             else return ()
-                    ExitFailure _ -> return ()
-                liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
+                        liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
+                    ExitFailure _ ->
+                        liftIO $ broadcastFailedStepForProjects eid targetCommitText
 
         -- Build extras derivation if present, independently of main step status.
         liftIO $ buildExtras ctx eid
