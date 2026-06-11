@@ -4,9 +4,13 @@ module BuildRunner (
     BuildState (..),
     StepRequirements (..),
     BuildKey (..),
+    JobId (..),
     buildKeyForOutPath,
     submitAndWait,
+    submitJob,
+    queryJobIds,
     queryState,
+    waitForCompletion,
     cancel,
 ) where
 
@@ -15,7 +19,7 @@ import Control.Concurrent (threadDelay)
 import Data.Aeson (FromJSON (..), withObject, (.:))
 import Data.Bits (xor)
 import Data.Char (isAlphaNum)
-import Data.List (foldl')
+import Data.List (foldl', intercalate)
 import qualified Data.Text as T
 import Data.Word (Word64)
 import Numeric (showHex)
@@ -41,6 +45,9 @@ instance FromJSON StepRequirements where
 data BuildState = BRunning | BSucceeded | BFailed | BAbsent deriving (Eq, Show)
 
 newtype BuildKey = BuildKey {unBuildKey :: String} deriving (Eq, Show)
+
+-- | A slurm job id, as printed by @sbatch --parsable@ and @squeue -o %i@.
+newtype JobId = JobId {unJobId :: String} deriving (Eq, Show)
 
 buildKeyForOutPath :: FilePath -> BuildKey
 buildKeyForOutPath outPath =
@@ -77,7 +84,7 @@ submitAndWait :: StepRequirements -> BuildKey -> [String] -> IO ExitCode
 submitAndWait requirements key command = do
     state <- queryState key
     case state of
-        BRunning -> waitForExistingJob key
+        BRunning -> ExitSuccess <$ waitForCompletion key
         BSucceeded -> pure ExitSuccess
         BFailed -> pure $ ExitFailure 1
         BAbsent -> submitNewJob requirements key command
@@ -91,6 +98,14 @@ queryState (BuildKey key) = do
             | null (lines stdout) -> BAbsent
             | otherwise -> BRunning
         ExitFailure _ -> BAbsent
+
+-- | Job ids of every queued or running job with the given name.
+queryJobIds :: BuildKey -> IO [JobId]
+queryJobIds (BuildKey key) = do
+    (exitCode, stdout, _) <- readProcessWithExitCodeL "squeue" ["-h", "-n", key, "-o", "%i"] ""
+    pure $ case exitCode of
+        ExitSuccess -> map JobId (filter (not . null) (lines stdout))
+        ExitFailure _ -> []
 
 cancel :: BuildKey -> IO ()
 cancel (BuildKey key) = do
@@ -116,16 +131,60 @@ submitNewJob requirements (BuildKey key) command = do
             ""
     pure exitCode
 
-waitForExistingJob :: BuildKey -> IO ExitCode
-waitForExistingJob key = do
+{- | Submit a job without waiting for completion. Non-empty @depJobIds@
+become @afterok@ dependency edges; the job is killed if any of them fails.
+-}
+submitJob :: StepRequirements -> BuildKey -> [JobId] -> [String] -> IO (Either String JobId)
+submitJob requirements (BuildKey key) depJobIds command = do
+    slurm <- configSlurm <$> (resolveConfigPath >>= loadConfig)
+    (exitCode, stdout, stderr) <-
+        readProcessWithExitCodeL
+            "sbatch"
+            ( [ "--parsable"
+              , "--job-name=" ++ key
+              , "--output=/dev/null"
+              , "--error=/dev/null"
+              ]
+                ++ dependencyArgs depJobIds
+                ++ requirementSlurmArgs slurm requirements
+                ++ slurmArgs slurm
+                ++ ["--wrap=" ++ shellCommand command]
+            )
+            ""
+    pure $ case exitCode of
+        ExitSuccess ->
+            case parseJobId stdout of
+                Just jobId -> Right jobId
+                Nothing -> Left ("sbatch produced no job id: " ++ show stdout)
+        ExitFailure code -> Left ("sbatch failed (exit " ++ show code ++ "): " ++ stderr)
+
+dependencyArgs :: [JobId] -> [String]
+dependencyArgs [] = []
+dependencyArgs jobIds =
+    [ "--dependency=afterok:" ++ intercalate ":" (map unJobId jobIds)
+    , "--kill-on-invalid-dep=yes"
+    ]
+
+-- | @--parsable@ prints @jobid@ or @jobid;cluster@ on the first line.
+parseJobId :: String -> Maybe JobId
+parseJobId out =
+    case lines out of
+        (first : _) ->
+            let jobId = takeWhile (/= ';') first
+             in if null jobId then Nothing else Just (JobId jobId)
+        [] -> Nothing
+
+{- | Poll until no queued or running job with this name remains. Completion
+does not imply success; callers must check the expected store path.
+-}
+waitForCompletion :: BuildKey -> IO ()
+waitForCompletion key = do
     state <- queryState key
     case state of
         BRunning -> do
             threadDelay pollDelayMicros
-            waitForExistingJob key
-        BSucceeded -> pure ExitSuccess
-        BFailed -> pure $ ExitFailure 1
-        BAbsent -> pure ExitSuccess
+            waitForCompletion key
+        _ -> pure ()
 
 pollDelayMicros :: Int
 pollDelayMicros = 1000000

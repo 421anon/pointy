@@ -105,8 +105,9 @@ getNextStepId stepsDir = do
             let ids = mapMaybe (readMaybe . takeBaseName) files :: [Int]
             return $ if null ids then 1 else maximum ids + 1
 
--- | When a step is cloned, duplicate its source files so the new step starts
--- with its own editable copy under @srcFiles/<newStepId>@.
+{- | When a step is cloned, duplicate its source files so the new step starts
+with its own editable copy under @srcFiles/<newStepId>@.
+-}
 copyClonedSrcFiles :: FilePath -> Maybe Int -> Int -> IO ()
 copyClonedSrcFiles _ Nothing _ = return ()
 copyClonedSrcFiles worktreePath (Just sourceId) newStepId = do
