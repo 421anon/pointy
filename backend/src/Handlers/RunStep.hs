@@ -135,7 +135,6 @@ buildStep ctx eid = do
                     -- and the dependency-running override (still held by
                     -- runStepSync) would mask the failure as "running".
                     -- The exit code is authoritative: broadcast the failure.
-                    ExitFailure _ ->
                         liftIO $ broadcastFailedStepForProjects eid targetCommitText
 
         -- Build extras derivation if present, independently of main step status.

@@ -201,12 +201,6 @@ broadcastStatusForStepProjects sid targetCommit mStatusOverride =
     withStepProjects sid targetCommit $ \pid _ ->
         broadcastProjectStatus pid targetCommit (fmap (sid,) mStatusOverride)
 
-{- | Uses the already-known out-path rather than re-evaluating each project's step list.
-The raw status is refined via the build log *before* the dependency-running
-override is applied: a failed build whose scheduler job has already vanished
-reports @"not-started"@, and overriding that to @"running"@ first would mask
-the failure for good (the override removal never rebroadcasts).
--}
 broadcastSingleStepForProjects :: Int -> Text -> FilePath -> IO ()
 broadcastSingleStepForProjects sid targetCommit outPath = do
     rawStatus <- checkStatus outPath `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
@@ -220,9 +214,6 @@ broadcastSingleStepForProjects sid targetCommit outPath = do
                     else resolvedStatus
         broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
-{- | Broadcast a known build failure for a step, refining the error message
-from the recorded build log when one is available.
--}
 broadcastFailedStepForProjects :: Int -> Text -> IO ()
 broadcastFailedStepForProjects sid targetCommit =
     withStepProjects sid targetCommit $ \pid ctx -> do
