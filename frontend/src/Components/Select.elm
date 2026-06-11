@@ -63,6 +63,7 @@ matchesOrderedTokens query haystack =
     in
     findTokens (String.words (String.toLower query)) (String.toLower haystack)
 
+
 type ChipAction
     = ChipClick
     | ChipRemove

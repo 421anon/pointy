@@ -161,6 +161,7 @@ stepLogs : Lens ls Model (Dict String (ApiData String)) x y
 stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
 
+
 notices : Lens ls Model (Dict String (ApiData (List Model.Notice))) x y
 notices =
     lens ".notices" Model.getNotices (\(Model m) notices_ -> Model { m | notices = notices_ })

@@ -8,8 +8,8 @@ import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, disabled, placeholder, rows, title, value)
 import Html.Events as Events
 import Json.Decode as Decode
-import Model.Core as Model exposing (Model)
 import Markdown
+import Model.Core as Model exposing (Model)
 import View.Icons
 
 
@@ -438,10 +438,24 @@ viewAgentMessage turn =
         ( statusLabel, body, failedMessage ) =
             case turn.status of
                 Model.ChatPending ->
-                    ( "Running", if isEmptyAssistant then "Waiting..." else turn.assistant, Nothing )
+                    ( "Running"
+                    , if isEmptyAssistant then
+                        "Waiting..."
+
+                      else
+                        turn.assistant
+                    , Nothing
+                    )
 
                 Model.ChatDone ->
-                    ( "Done", if isEmptyAssistant then "No reply." else turn.assistant, Nothing )
+                    ( "Done"
+                    , if isEmptyAssistant then
+                        "No reply."
+
+                      else
+                        turn.assistant
+                    , Nothing
+                    )
 
                 Model.ChatFailed err ->
                     ( "Failed"
@@ -476,7 +490,7 @@ viewAgentMessage turn =
             [ Html.div [ class "agent-panel__chat-content" ]
                 (Markdown.toHtml Nothing body)
             , if turn.status == Model.ChatPending then
-                Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "\u{2588}" ]
+                Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "█" ]
 
               else
                 Html.text ""
@@ -530,6 +544,7 @@ viewCandidate sessionView runnerActive =
             ]
             [ Html.text "Apply changes" ]
         ]
+
 
 shortSha : String -> String
 shortSha sha =

@@ -1,8 +1,8 @@
 module Actions exposing (..)
 
 import Accessors exposing (An_Optic, all, each, get, has, just, keyI, over, set, try, values)
-import Api.Api as Api
 import Api.Agent as AgentApi
+import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Api.Decode as ApiDecode
 import Browser
@@ -292,6 +292,7 @@ replayStepStatusBuffer =
                     |> Flow.batchM
                     |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
             )
+
 
 loadUserRepoInfo : Flow Model ()
 loadUserRepoInfo =
@@ -1775,6 +1776,7 @@ mergeSessionView view agentState =
                     (\v ->
                         if v.session.sessionId == view.session.sessionId then
                             view
+
                         else
                             v
                     )
@@ -2032,6 +2034,7 @@ archiveAgentSession sessionId =
                                         , turnLog = ""
                                     }
                                 )
+
                         else
                             Flow.pure ()
                     )
@@ -2112,18 +2115,14 @@ toggleAgentArchived =
     updateAgentState (\s -> { s | showArchived = not s.showArchived })
 
 
-
 toggleAgentLog : Flow Model ()
 toggleAgentLog =
     updateAgentState (\agentState -> { agentState | showRawLog = not agentState.showRawLog })
 
 
-
 updateAgentPrompt : String -> Flow Model ()
 updateAgentPrompt prompt =
     updateAgentState (\agentState -> { agentState | prompt = prompt })
-
-
 
 
 createAgentSession : Flow Model ()
@@ -2194,8 +2193,6 @@ submitAgentPrompt =
         )
 
 
-
-
 applyAgentChanges : Flow Model ()
 applyAgentChanges =
     withSelectedAgentSession
@@ -2242,6 +2239,7 @@ applyAgentChanges =
                                 addToast False (Http.errorMessage err)
                     )
         )
+
 
 discardAgentSession : Flow Model ()
 discardAgentSession =
@@ -2382,7 +2380,6 @@ splitLogPrefix line =
 
     else if String.startsWith "[runner] " line then
         ( "runner", String.dropLeft 9 line )
-
 
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )

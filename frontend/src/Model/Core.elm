@@ -75,6 +75,7 @@ type alias Notice =
     , message : String
     }
 
+
 type alias ProjectRecord =
     BaseRecord
         { tables : Dict String (Table StepRecord)
@@ -139,6 +140,7 @@ type alias UserRepoInfo =
     { url : String
     , branch : String
     }
+
 
 type alias AgentPreparedApply =
     { targetHead : String
@@ -238,9 +240,6 @@ selectedSessionView agentState =
                     |> ApiData.toMaybe
                     |> Maybe.andThen (List.head << List.filter (\view -> view.session.sessionId == sid))
             )
-
-
-
 
 
 type alias AutocompleteJob =
@@ -524,6 +523,7 @@ getStepLogs : Model -> Dict String (ApiData String)
 getStepLogs (Model model) =
     model.stepLogs
 
+
 getNotices : Model -> Dict String (ApiData (List Notice))
 getNotices (Model model) =
     model.notices
@@ -555,6 +555,7 @@ getStepStatusHooks (Model model) =
 getStepStatusBuffer : Model -> Dict Int ( String, Status )
 getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
+
 
 getAutocomplete : Model -> Dict String AutocompleteState
 getAutocomplete (Model model) =

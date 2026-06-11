@@ -10,7 +10,6 @@ stepStatus projectId commit =
     Channel.connect Ports.stepStatusIn (\_ -> Ports.openStepStatusStream { projectId = projectId, commit = commit })
 
 
-
 agentTurn : String -> Channel s Json.Decode.Value
 agentTurn turnId =
     Channel.connect Ports.agentTurnIn (\_ -> Ports.openAgentTurnStream { turnId = turnId })

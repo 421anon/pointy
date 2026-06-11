@@ -67,8 +67,6 @@ sendTurn sessionId prompt =
             }
 
 
-
-
 prepareApply : String -> Flow s (Result Http.Error Model.AgentSessionView)
 prepareApply sessionId =
     postSessionView "/prepare-apply" (sessionIdBody sessionId)
@@ -155,7 +153,6 @@ turnDecoder =
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
         |> required "turnLogPath" Decode.string
         |> optional "turnLog" Decode.string ""
-
 
 
 turnEvent : Decoder Model.AgentTurnEvent

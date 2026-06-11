@@ -3,8 +3,8 @@ module View.Main exposing (view)
 import Accessors exposing (try)
 import Actions
 import Api.ApiData as ApiData exposing (success)
-import Components.AgentPanel as AgentPanel
 import Browser
+import Components.AgentPanel as AgentPanel
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes

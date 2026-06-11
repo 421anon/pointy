@@ -25,8 +25,8 @@ import Json.Decode.Extra as Decode
 import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
-import Maybe.Extra as Maybe
 import Markdown
+import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tEnumValue, tListValue, tRecordValue, tStepId, tStringValue)
@@ -1142,10 +1142,11 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , alignRight = False
                         , inputItemStyle = \item -> getStep item.id |> Maybe.map (.type_ >> stringToColor >> style "background-color") |> Maybe.toList
                         }
+
                 viewFieldNotice notice =
                     Html.div [ class "field-notice", class "field-notice-info" ]
                         [ iconCustom True "info" [ class "field-notice-icon" ]
-                        , Markdown.toHtml [ class "field-notice-markdown" ] notice.message
+                        , Html.div [ class "field-notice-markdown" ] <| Markdown.toHtml Nothing notice.message
                         ]
 
                 withFieldNotices field =
@@ -1158,532 +1159,531 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 [ field
                                 , Html.div [ class "field-notices" ] (List.map viewFieldNotice fieldNotices)
                                 ]
-
-
             in
-            withFieldNotices <| case type_ of
-                TStep mAllowedStepTypes ->
-                    buildStepSelect
-                        { selectedStepIds =
-                            case try (paramLens << just << tStepId) model of
-                                Just stepId ->
-                                    [ stepId ]
+            withFieldNotices <|
+                case type_ of
+                    TStep mAllowedStepTypes ->
+                        buildStepSelect
+                            { selectedStepIds =
+                                case try (paramLens << just << tStepId) model of
+                                    Just stepId ->
+                                        [ stepId ]
 
-                                Nothing ->
-                                    []
-                        , onRemoveStep = \_ -> Flow.modify (set paramLens Nothing)
-                        , activeAfterSelect = False
-                        , onSelectStep = \stepId -> Flow.modify (set paramLens (Just (TStepValue stepId)))
-                        , mAllowedStepTypes = mAllowedStepTypes
-                        }
+                                    Nothing ->
+                                        []
+                            , onRemoveStep = \_ -> Flow.modify (set paramLens Nothing)
+                            , activeAfterSelect = False
+                            , onSelectStep = \stepId -> Flow.modify (set paramLens (Just (TStepValue stepId)))
+                            , mAllowedStepTypes = mAllowedStepTypes
+                            }
 
-                TEnum values enumDisplayNames ->
-                    formField
-                        { label = fieldLabel
-                        , mHint = fieldHint
-                        , id = fieldId
-                        }
-                        (Html.select
-                            [ id fieldId
-                            , class "form-input"
-                            , classList [ ( "field-changed", fieldHasChanged ) ]
-                            , disabled readOnly
-                            , Events.onInput (\v -> Flow.modify (set paramLens (Just (TEnumValue v))))
-                            ]
-                            (List.map
-                                (\v ->
-                                    Html.option
-                                        [ value v
-                                        , selected
-                                            (case try (paramLens << just << tEnumValue) model of
-                                                Just current ->
-                                                    current == v
+                    TEnum values enumDisplayNames ->
+                        formField
+                            { label = fieldLabel
+                            , mHint = fieldHint
+                            , id = fieldId
+                            }
+                            (Html.select
+                                [ id fieldId
+                                , class "form-input"
+                                , classList [ ( "field-changed", fieldHasChanged ) ]
+                                , disabled readOnly
+                                , Events.onInput (\v -> Flow.modify (set paramLens (Just (TEnumValue v))))
+                                ]
+                                (List.map
+                                    (\v ->
+                                        Html.option
+                                            [ value v
+                                            , selected
+                                                (case try (paramLens << just << tEnumValue) model of
+                                                    Just current ->
+                                                        current == v
 
-                                                Nothing ->
-                                                    False
-                                            )
-                                        ]
-                                        [ Html.text (Dict.get v enumDisplayNames |> Maybe.withDefault v) ]
-                                )
-                                values
-                            )
-                        )
-
-                TString display _ ->
-                    case display of
-                        TextField ->
-                            textField
-                                { label = fieldLabel
-                                , mHint = fieldHint
-                                , placeholder = fieldLabel
-                                , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
-                                , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldHasChanged
-                                , readOnly = readOnly
-                                , id = paramName ++ "-input"
-                                }
-
-                        TextArea ->
-                            textArea
-                                { label = fieldLabel
-                                , mHint = fieldHint
-                                , placeholder = ""
-                                , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
-                                , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldHasChanged
-                                , readOnly = readOnly
-                                , id = paramName ++ "-input"
-                                }
-
-                        Command cmdPrefix ->
-                            commandField
-                                { label = fieldLabel
-                                , mHint = fieldHint
-                                , placeholder = fieldLabel
-                                , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
-                                , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldHasChanged
-                                , readOnly = readOnly
-                                , id = paramName ++ "-input"
-                                , commandPrefix = cmdPrefix
-                                }
-
-                        Code language ->
-                            codeField
-                                { label = fieldLabel
-                                , mHint = fieldHint
-                                , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
-                                , onInput = Flow.modify << set paramLens << Just << TStringValue
-                                , hasChanged = fieldHasChanged
-                                , readOnly = readOnly
-                                , id = paramName ++ "-input"
-                                , language = language
-                                }
-
-                TList (TStep mAllowedStepTypes) ->
-                    let
-                        listLens =
-                            paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
-                    in
-                    buildStepSelect
-                        { selectedStepIds = all (listLens << each) model |> List.filterMap (try tStepId)
-                        , onRemoveStep = \stepId -> Flow.modify (over listLens (List.filter (\val -> try tStepId val /= Just stepId)))
-                        , activeAfterSelect = True
-                        , onSelectStep = \stepId -> Flow.modify (over listLens (flip (++) [ TStepValue stepId ]))
-                        , mAllowedStepTypes = mAllowedStepTypes
-                        }
-
-                TList (TString _ mAutocomplete) ->
-                    let
-                        listLens =
-                            paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
-
-                        strings =
-                            all (listLens << each << tStringValue) model
-
-                        tags =
-                            strings
-                                |> List.map
-                                    (\str ->
-                                        { body = Html.text str
-                                        , route = Nothing
-                                        , backgroundColor = Nothing
-                                        }
-                                    )
-
-                        addTag val =
-                            let
-                                trimmed =
-                                    String.trim val
-                            in
-                            Flow.modify (over listLens (flip (++) [ TStringValue trimmed ]))
-                                |> Flow.seq (focus fieldId)
-                                |> Flow.when (not <| String.isEmpty trimmed)
-                    in
-                    case mAutocomplete of
-                        Just autocompleteKey ->
-                            let
-                                autocompleteStateKey =
-                                    tableId ++ ":" ++ paramName
-
-                                autocompleteState =
-                                    Dict.get autocompleteStateKey (Model.getAutocomplete model)
-                                        |> Maybe.withDefault Model.initAutocompleteState
-                            in
-                            autocompleteListField
-                                { label = fieldLabel
-                                , mHint = fieldHint
-                                , selectedStrings = strings
-                                , suggestions = autocompleteState.suggestions
-                                , activeIndex = autocompleteState.activeIndex
-                                , onQueryChange =
-                                    \input ->
-                                        Actions.fetchAutocomplete autocompleteStateKey
-                                            currentRouteCommit
-                                            { template = tableId
-                                            , autocomplete = autocompleteKey
-                                            , context = Dict.empty
-                                            , query = input
-                                            , limit = 25
-                                            }
-                                , onSuggestionSelect =
-                                    \suggestion ->
-                                        addTag suggestion
-                                            |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
-                                , onAddItem =
-                                    \val ->
-                                        addTag val
-                                            |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
-                                , onRemoveIndex =
-                                    \i ->
-                                        Flow.modify (over listLens (List.removeAt i))
-                                            |> Flow.seq (focus fieldId)
-                                , onActiveIndexChange =
-                                    \newIndex ->
-                                        Flow.over Lenses.autocomplete
-                                            (Dict.insert autocompleteStateKey
-                                                { autocompleteState | activeIndex = newIndex }
-                                            )
-                                , readOnly = readOnly
-                                , id = fieldId
-                                , hasChanged = fieldHasChanged
-                                , query = autocompleteState.query
-                                }
-
-                        Nothing ->
-                            buildListField listLens tags addTag
-
-                TList (TRecord fieldTypes) ->
-                    let
-                        listLens =
-                            paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
-
-                        recordValues =
-                            all (listLens << each) model
-
-                        defaultRecord =
-                            TRecordValue
-                                (Dict.map
-                                    (\_ fieldArgType ->
-                                        case fieldArgType.type_ of
-                                            TList _ ->
-                                                TListValue []
-
-                                            TEnum (first :: _) _ ->
-                                                TEnumValue first
-
-                                            TEnum [] _ ->
-                                                TEnumValue ""
-
-                                            _ ->
-                                                TStringValue ""
-                                    )
-                                    fieldTypes
-                                )
-
-                        getDict rec =
-                            case rec of
-                                TRecordValue d ->
-                                    d
-
-                                _ ->
-                                    Dict.empty
-
-                        updateField idx fieldName newVal =
-                            Flow.modify
-                                (over listLens
-                                    (List.updateAt idx
-                                        (\rec -> TRecordValue (Dict.insert fieldName newVal (getDict rec)))
-                                    )
-                                )
-
-                        viewRecordField idx fieldName fieldArgType =
-                            let
-                                currentDict =
-                                    List.getAt idx recordValues |> Maybe.map getDict |> Maybe.withDefault Dict.empty
-
-                                currentVal =
-                                    Dict.get fieldName currentDict
-
-                                fieldId_ =
-                                    paramName ++ "-" ++ String.fromInt idx ++ "-" ++ fieldName
-
-                                recordFieldLabel =
-                                    Maybe.withDefault fieldName fieldArgType.displayName
-
-                                strVal =
-                                    case currentVal of
-                                        Just (TStringValue s) ->
-                                            s
-
-                                        _ ->
-                                            ""
-
-                                recordContext =
-                                    currentDict
-                                        |> Dict.foldl
-                                            (\k v acc ->
-                                                case v of
-                                                    TEnumValue s ->
-                                                        Dict.insert k s acc
-
-                                                    TStringValue s ->
-                                                        Dict.insert k s acc
-
-                                                    _ ->
-                                                        acc
-                                            )
-                                            Dict.empty
-                            in
-                            case fieldArgType.type_ of
-                                TString display _ ->
-                                    case display of
-                                        TextField ->
-                                            textField
-                                                { label = recordFieldLabel
-                                                , mHint = Nothing
-                                                , placeholder = fieldName
-                                                , value = strVal
-                                                , onInput = \s -> updateField idx fieldName (TStringValue s)
-                                                , hasChanged = False
-                                                , readOnly = readOnly
-                                                , id = fieldId_ ++ "-input"
-                                                }
-
-                                        TextArea ->
-                                            textArea
-                                                { label = recordFieldLabel
-                                                , mHint = Nothing
-                                                , placeholder = ""
-                                                , value = strVal
-                                                , onInput = \s -> updateField idx fieldName (TStringValue s)
-                                                , hasChanged = False
-                                                , readOnly = readOnly
-                                                , id = fieldId_ ++ "-input"
-                                                }
-
-                                        Command cmdPrefix ->
-                                            commandField
-                                                { label = recordFieldLabel
-                                                , mHint = Nothing
-                                                , placeholder = fieldName
-                                                , value = strVal
-                                                , onInput = \s -> updateField idx fieldName (TStringValue s)
-                                                , hasChanged = False
-                                                , readOnly = readOnly
-                                                , id = fieldId_ ++ "-input"
-                                                , commandPrefix = cmdPrefix
-                                                }
-
-                                        Code language ->
-                                            codeField
-                                                { label = recordFieldLabel
-                                                , mHint = Nothing
-                                                , value = strVal
-                                                , onInput = \s -> updateField idx fieldName (TStringValue s)
-                                                , hasChanged = False
-                                                , readOnly = readOnly
-                                                , id = fieldId_ ++ "-input"
-                                                , language = language
-                                                }
-
-                                TEnum enumValues enumDisplayNames ->
-                                    formField
-                                        { label = recordFieldLabel
-                                        , mHint = Nothing
-                                        , id = fieldId_ ++ "-input"
-                                        }
-                                        (Html.select
-                                            [ id (fieldId_ ++ "-input")
-                                            , class "form-input"
-                                            , disabled readOnly
-                                            , Events.onInput (\v -> updateField idx fieldName (TEnumValue v))
-                                            ]
-                                            (List.map
-                                                (\v ->
-                                                    Html.option
-                                                        [ value v
-                                                        , selected
-                                                            (case currentVal of
-                                                                Just (TEnumValue current) ->
-                                                                    current == v
-
-                                                                _ ->
-                                                                    False
-                                                            )
-                                                        ]
-                                                        [ Html.text (Dict.get v enumDisplayNames |> Maybe.withDefault v) ]
+                                                    Nothing ->
+                                                        False
                                                 )
-                                                enumValues
-                                            )
+                                            ]
+                                            [ Html.text (Dict.get v enumDisplayNames |> Maybe.withDefault v) ]
+                                    )
+                                    values
+                                )
+                            )
+
+                    TString display _ ->
+                        case display of
+                            TextField ->
+                                textField
+                                    { label = fieldLabel
+                                    , mHint = fieldHint
+                                    , placeholder = fieldLabel
+                                    , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
+                                    , onInput = Flow.modify << set paramLens << Just << TStringValue
+                                    , hasChanged = fieldHasChanged
+                                    , readOnly = readOnly
+                                    , id = paramName ++ "-input"
+                                    }
+
+                            TextArea ->
+                                textArea
+                                    { label = fieldLabel
+                                    , mHint = fieldHint
+                                    , placeholder = ""
+                                    , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
+                                    , onInput = Flow.modify << set paramLens << Just << TStringValue
+                                    , hasChanged = fieldHasChanged
+                                    , readOnly = readOnly
+                                    , id = paramName ++ "-input"
+                                    }
+
+                            Command cmdPrefix ->
+                                commandField
+                                    { label = fieldLabel
+                                    , mHint = fieldHint
+                                    , placeholder = fieldLabel
+                                    , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
+                                    , onInput = Flow.modify << set paramLens << Just << TStringValue
+                                    , hasChanged = fieldHasChanged
+                                    , readOnly = readOnly
+                                    , id = paramName ++ "-input"
+                                    , commandPrefix = cmdPrefix
+                                    }
+
+                            Code language ->
+                                codeField
+                                    { label = fieldLabel
+                                    , mHint = fieldHint
+                                    , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
+                                    , onInput = Flow.modify << set paramLens << Just << TStringValue
+                                    , hasChanged = fieldHasChanged
+                                    , readOnly = readOnly
+                                    , id = paramName ++ "-input"
+                                    , language = language
+                                    }
+
+                    TList (TStep mAllowedStepTypes) ->
+                        let
+                            listLens =
+                                paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
+                        in
+                        buildStepSelect
+                            { selectedStepIds = all (listLens << each) model |> List.filterMap (try tStepId)
+                            , onRemoveStep = \stepId -> Flow.modify (over listLens (List.filter (\val -> try tStepId val /= Just stepId)))
+                            , activeAfterSelect = True
+                            , onSelectStep = \stepId -> Flow.modify (over listLens (flip (++) [ TStepValue stepId ]))
+                            , mAllowedStepTypes = mAllowedStepTypes
+                            }
+
+                    TList (TString _ mAutocomplete) ->
+                        let
+                            listLens =
+                                paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
+
+                            strings =
+                                all (listLens << each << tStringValue) model
+
+                            tags =
+                                strings
+                                    |> List.map
+                                        (\str ->
+                                            { body = Html.text str
+                                            , route = Nothing
+                                            , backgroundColor = Nothing
+                                            }
                                         )
 
-                                TList (TString _ mAutocomplete) ->
-                                    let
-                                        items =
-                                            case currentVal of
-                                                Just (TListValue xs) ->
-                                                    xs
+                            addTag val =
+                                let
+                                    trimmed =
+                                        String.trim val
+                                in
+                                Flow.modify (over listLens (flip (++) [ TStringValue trimmed ]))
+                                    |> Flow.seq (focus fieldId)
+                                    |> Flow.when (not <| String.isEmpty trimmed)
+                        in
+                        case mAutocomplete of
+                            Just autocompleteKey ->
+                                let
+                                    autocompleteStateKey =
+                                        tableId ++ ":" ++ paramName
+
+                                    autocompleteState =
+                                        Dict.get autocompleteStateKey (Model.getAutocomplete model)
+                                            |> Maybe.withDefault Model.initAutocompleteState
+                                in
+                                autocompleteListField
+                                    { label = fieldLabel
+                                    , mHint = fieldHint
+                                    , selectedStrings = strings
+                                    , suggestions = autocompleteState.suggestions
+                                    , activeIndex = autocompleteState.activeIndex
+                                    , onQueryChange =
+                                        \input ->
+                                            Actions.fetchAutocomplete autocompleteStateKey
+                                                currentRouteCommit
+                                                { template = tableId
+                                                , autocomplete = autocompleteKey
+                                                , context = Dict.empty
+                                                , query = input
+                                                , limit = 25
+                                                }
+                                    , onSuggestionSelect =
+                                        \suggestion ->
+                                            addTag suggestion
+                                                |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                    , onAddItem =
+                                        \val ->
+                                            addTag val
+                                                |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                    , onRemoveIndex =
+                                        \i ->
+                                            Flow.modify (over listLens (List.removeAt i))
+                                                |> Flow.seq (focus fieldId)
+                                    , onActiveIndexChange =
+                                        \newIndex ->
+                                            Flow.over Lenses.autocomplete
+                                                (Dict.insert autocompleteStateKey
+                                                    { autocompleteState | activeIndex = newIndex }
+                                                )
+                                    , readOnly = readOnly
+                                    , id = fieldId
+                                    , hasChanged = fieldHasChanged
+                                    , query = autocompleteState.query
+                                    }
+
+                            Nothing ->
+                                buildListField listLens tags addTag
+
+                    TList (TRecord fieldTypes) ->
+                        let
+                            listLens =
+                                paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
+
+                            recordValues =
+                                all (listLens << each) model
+
+                            defaultRecord =
+                                TRecordValue
+                                    (Dict.map
+                                        (\_ fieldArgType ->
+                                            case fieldArgType.type_ of
+                                                TList _ ->
+                                                    TListValue []
+
+                                                TEnum (first :: _) _ ->
+                                                    TEnumValue first
+
+                                                TEnum [] _ ->
+                                                    TEnumValue ""
 
                                                 _ ->
-                                                    []
-
-                                        packageStrings =
-                                            List.filterMap
-                                                (\v ->
-                                                    case v of
-                                                        TStringValue s ->
-                                                            Just s
-
-                                                        _ ->
-                                                            Nothing
-                                                )
-                                                items
-
-                                        tags =
-                                            List.filterMap
-                                                (\v ->
-                                                    case v of
-                                                        TStringValue s ->
-                                                            Just { body = Html.text s, route = Nothing, backgroundColor = Nothing }
-
-                                                        _ ->
-                                                            Nothing
-                                                )
-                                                items
-
-                                        listId =
-                                            fieldId_ ++ "-list-input"
-
-                                        addItem val =
-                                            let
-                                                trimmed =
-                                                    String.trim val
-                                            in
-                                            updateField idx fieldName (TListValue (items ++ [ TStringValue trimmed ]))
-                                                |> Flow.seq (focus listId)
-                                                |> Flow.when (not <| String.isEmpty trimmed)
-                                    in
-                                    case mAutocomplete of
-                                        Just autocompleteKey ->
-                                            let
-                                                autocompleteStateKey =
-                                                    recordAutocompleteStateKey tableId paramName fieldName recordValues idx (TRecordValue currentDict)
-
-                                                autocompleteState =
-                                                    Dict.get autocompleteStateKey (Model.getAutocomplete model)
-                                                        |> Maybe.withDefault Model.initAutocompleteState
-                                            in
-                                            autocompleteListField
-                                                { label = recordFieldLabel
-                                                , mHint = Nothing
-                                                , selectedStrings = packageStrings
-                                                , suggestions = autocompleteState.suggestions
-                                                , activeIndex = autocompleteState.activeIndex
-                                                , onQueryChange =
-                                                    \input ->
-                                                        Actions.fetchAutocomplete autocompleteStateKey
-                                                            currentRouteCommit
-                                                            { template = tableId
-                                                            , autocomplete = autocompleteKey
-                                                            , context = recordContext
-                                                            , query = input
-                                                            , limit = 25
-                                                            }
-                                                , onSuggestionSelect =
-                                                    \suggestion ->
-                                                        addItem suggestion
-                                                            |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
-                                                , onAddItem =
-                                                    \val ->
-                                                        addItem val
-                                                            |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
-                                                , onRemoveIndex =
-                                                    \i ->
-                                                        updateField idx fieldName (TListValue (List.removeAt i items))
-                                                            |> Flow.seq (focus listId)
-                                                , onActiveIndexChange =
-                                                    \newIndex ->
-                                                        Flow.over Lenses.autocomplete
-                                                            (Dict.insert autocompleteStateKey
-                                                                { autocompleteState | activeIndex = newIndex }
-                                                            )
-                                                , readOnly = readOnly
-                                                , id = listId
-                                                , hasChanged = False
-                                                , query = autocompleteState.query
-                                                }
-
-                                        Nothing ->
-                                            listField
-                                                { label = recordFieldLabel
-                                                , mHint = Nothing
-                                                , tags = tags
-                                                , onAdd = addItem
-                                                , onRemoveLast =
-                                                    updateField idx fieldName (TListValue (List.take (List.length items - 1) items))
-                                                        |> Flow.seq (focus listId)
-                                                , onRemoveIndex =
-                                                    \i ->
-                                                        updateField idx fieldName (TListValue (List.removeAt i items))
-                                                            |> Flow.seq (focus listId)
-                                                , readOnly = readOnly
-                                                , id = listId
-                                                , hasChanged = False
-                                                }
-
-                                _ ->
-                                    Html.nothing
-
-                        viewRecord idx _ =
-                            Html.div [ class "record-item" ]
-                                ([ Html.div [ class "record-item-fields" ]
-                                    (List.map
-                                        (\( fName, argType_ ) -> viewRecordField idx fName argType_)
-                                        (Dict.toList fieldTypes)
+                                                    TStringValue ""
+                                        )
+                                        fieldTypes
                                     )
-                                 ]
+
+                            getDict rec =
+                                case rec of
+                                    TRecordValue d ->
+                                        d
+
+                                    _ ->
+                                        Dict.empty
+
+                            updateField idx fieldName newVal =
+                                Flow.modify
+                                    (over listLens
+                                        (List.updateAt idx
+                                            (\rec -> TRecordValue (Dict.insert fieldName newVal (getDict rec)))
+                                        )
+                                    )
+
+                            viewRecordField idx fieldName fieldArgType =
+                                let
+                                    currentDict =
+                                        List.getAt idx recordValues |> Maybe.map getDict |> Maybe.withDefault Dict.empty
+
+                                    currentVal =
+                                        Dict.get fieldName currentDict
+
+                                    fieldId_ =
+                                        paramName ++ "-" ++ String.fromInt idx ++ "-" ++ fieldName
+
+                                    recordFieldLabel =
+                                        Maybe.withDefault fieldName fieldArgType.displayName
+
+                                    strVal =
+                                        case currentVal of
+                                            Just (TStringValue s) ->
+                                                s
+
+                                            _ ->
+                                                ""
+
+                                    recordContext =
+                                        currentDict
+                                            |> Dict.foldl
+                                                (\k v acc ->
+                                                    case v of
+                                                        TEnumValue s ->
+                                                            Dict.insert k s acc
+
+                                                        TStringValue s ->
+                                                            Dict.insert k s acc
+
+                                                        _ ->
+                                                            acc
+                                                )
+                                                Dict.empty
+                                in
+                                case fieldArgType.type_ of
+                                    TString display _ ->
+                                        case display of
+                                            TextField ->
+                                                textField
+                                                    { label = recordFieldLabel
+                                                    , mHint = Nothing
+                                                    , placeholder = fieldName
+                                                    , value = strVal
+                                                    , onInput = \s -> updateField idx fieldName (TStringValue s)
+                                                    , hasChanged = False
+                                                    , readOnly = readOnly
+                                                    , id = fieldId_ ++ "-input"
+                                                    }
+
+                                            TextArea ->
+                                                textArea
+                                                    { label = recordFieldLabel
+                                                    , mHint = Nothing
+                                                    , placeholder = ""
+                                                    , value = strVal
+                                                    , onInput = \s -> updateField idx fieldName (TStringValue s)
+                                                    , hasChanged = False
+                                                    , readOnly = readOnly
+                                                    , id = fieldId_ ++ "-input"
+                                                    }
+
+                                            Command cmdPrefix ->
+                                                commandField
+                                                    { label = recordFieldLabel
+                                                    , mHint = Nothing
+                                                    , placeholder = fieldName
+                                                    , value = strVal
+                                                    , onInput = \s -> updateField idx fieldName (TStringValue s)
+                                                    , hasChanged = False
+                                                    , readOnly = readOnly
+                                                    , id = fieldId_ ++ "-input"
+                                                    , commandPrefix = cmdPrefix
+                                                    }
+
+                                            Code language ->
+                                                codeField
+                                                    { label = recordFieldLabel
+                                                    , mHint = Nothing
+                                                    , value = strVal
+                                                    , onInput = \s -> updateField idx fieldName (TStringValue s)
+                                                    , hasChanged = False
+                                                    , readOnly = readOnly
+                                                    , id = fieldId_ ++ "-input"
+                                                    , language = language
+                                                    }
+
+                                    TEnum enumValues enumDisplayNames ->
+                                        formField
+                                            { label = recordFieldLabel
+                                            , mHint = Nothing
+                                            , id = fieldId_ ++ "-input"
+                                            }
+                                            (Html.select
+                                                [ id (fieldId_ ++ "-input")
+                                                , class "form-input"
+                                                , disabled readOnly
+                                                , Events.onInput (\v -> updateField idx fieldName (TEnumValue v))
+                                                ]
+                                                (List.map
+                                                    (\v ->
+                                                        Html.option
+                                                            [ value v
+                                                            , selected
+                                                                (case currentVal of
+                                                                    Just (TEnumValue current) ->
+                                                                        current == v
+
+                                                                    _ ->
+                                                                        False
+                                                                )
+                                                            ]
+                                                            [ Html.text (Dict.get v enumDisplayNames |> Maybe.withDefault v) ]
+                                                    )
+                                                    enumValues
+                                                )
+                                            )
+
+                                    TList (TString _ mAutocomplete) ->
+                                        let
+                                            items =
+                                                case currentVal of
+                                                    Just (TListValue xs) ->
+                                                        xs
+
+                                                    _ ->
+                                                        []
+
+                                            packageStrings =
+                                                List.filterMap
+                                                    (\v ->
+                                                        case v of
+                                                            TStringValue s ->
+                                                                Just s
+
+                                                            _ ->
+                                                                Nothing
+                                                    )
+                                                    items
+
+                                            tags =
+                                                List.filterMap
+                                                    (\v ->
+                                                        case v of
+                                                            TStringValue s ->
+                                                                Just { body = Html.text s, route = Nothing, backgroundColor = Nothing }
+
+                                                            _ ->
+                                                                Nothing
+                                                    )
+                                                    items
+
+                                            listId =
+                                                fieldId_ ++ "-list-input"
+
+                                            addItem val =
+                                                let
+                                                    trimmed =
+                                                        String.trim val
+                                                in
+                                                updateField idx fieldName (TListValue (items ++ [ TStringValue trimmed ]))
+                                                    |> Flow.seq (focus listId)
+                                                    |> Flow.when (not <| String.isEmpty trimmed)
+                                        in
+                                        case mAutocomplete of
+                                            Just autocompleteKey ->
+                                                let
+                                                    autocompleteStateKey =
+                                                        recordAutocompleteStateKey tableId paramName fieldName recordValues idx (TRecordValue currentDict)
+
+                                                    autocompleteState =
+                                                        Dict.get autocompleteStateKey (Model.getAutocomplete model)
+                                                            |> Maybe.withDefault Model.initAutocompleteState
+                                                in
+                                                autocompleteListField
+                                                    { label = recordFieldLabel
+                                                    , mHint = Nothing
+                                                    , selectedStrings = packageStrings
+                                                    , suggestions = autocompleteState.suggestions
+                                                    , activeIndex = autocompleteState.activeIndex
+                                                    , onQueryChange =
+                                                        \input ->
+                                                            Actions.fetchAutocomplete autocompleteStateKey
+                                                                currentRouteCommit
+                                                                { template = tableId
+                                                                , autocomplete = autocompleteKey
+                                                                , context = recordContext
+                                                                , query = input
+                                                                , limit = 25
+                                                                }
+                                                    , onSuggestionSelect =
+                                                        \suggestion ->
+                                                            addItem suggestion
+                                                                |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                                    , onAddItem =
+                                                        \val ->
+                                                            addItem val
+                                                                |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                                    , onRemoveIndex =
+                                                        \i ->
+                                                            updateField idx fieldName (TListValue (List.removeAt i items))
+                                                                |> Flow.seq (focus listId)
+                                                    , onActiveIndexChange =
+                                                        \newIndex ->
+                                                            Flow.over Lenses.autocomplete
+                                                                (Dict.insert autocompleteStateKey
+                                                                    { autocompleteState | activeIndex = newIndex }
+                                                                )
+                                                    , readOnly = readOnly
+                                                    , id = listId
+                                                    , hasChanged = False
+                                                    , query = autocompleteState.query
+                                                    }
+
+                                            Nothing ->
+                                                listField
+                                                    { label = recordFieldLabel
+                                                    , mHint = Nothing
+                                                    , tags = tags
+                                                    , onAdd = addItem
+                                                    , onRemoveLast =
+                                                        updateField idx fieldName (TListValue (List.take (List.length items - 1) items))
+                                                            |> Flow.seq (focus listId)
+                                                    , onRemoveIndex =
+                                                        \i ->
+                                                            updateField idx fieldName (TListValue (List.removeAt i items))
+                                                                |> Flow.seq (focus listId)
+                                                    , readOnly = readOnly
+                                                    , id = listId
+                                                    , hasChanged = False
+                                                    }
+
+                                    _ ->
+                                        Html.nothing
+
+                            viewRecord idx _ =
+                                Html.div [ class "record-item" ]
+                                    ([ Html.div [ class "record-item-fields" ]
+                                        (List.map
+                                            (\( fName, argType_ ) -> viewRecordField idx fName argType_)
+                                            (Dict.toList fieldTypes)
+                                        )
+                                     ]
+                                        ++ (if readOnly then
+                                                []
+
+                                            else
+                                                [ Html.button
+                                                    [ Events.onClick (Flow.modify (over listLens (List.removeAt idx)))
+                                                    , class "remove-record-btn"
+                                                    , attribute "type" "button"
+                                                    ]
+                                                    [ icon True "remove" ]
+                                                ]
+                                           )
+                                    )
+                        in
+                        Html.div [ class "form-field" ]
+                            [ Html.label [ class "form-label" ] [ Html.text fieldLabel ]
+                            , Html.div [ class "record-list" ]
+                                (List.indexedMap viewRecord recordValues
                                     ++ (if readOnly then
                                             []
 
                                         else
                                             [ Html.button
-                                                [ Events.onClick (Flow.modify (over listLens (List.removeAt idx)))
-                                                , class "remove-record-btn"
+                                                [ Events.onClick (Flow.modify (over listLens (flip (++) [ defaultRecord ])))
+                                                , class "add-record-btn"
                                                 , attribute "type" "button"
                                                 ]
-                                                [ icon True "remove" ]
+                                                [ Html.text ("Add " ++ fieldLabel) ]
                                             ]
                                        )
                                 )
-                    in
-                    Html.div [ class "form-field" ]
-                        [ Html.label [ class "form-label" ] [ Html.text fieldLabel ]
-                        , Html.div [ class "record-list" ]
-                            (List.indexedMap viewRecord recordValues
-                                ++ (if readOnly then
-                                        []
+                            ]
 
-                                    else
-                                        [ Html.button
-                                            [ Events.onClick (Flow.modify (over listLens (flip (++) [ defaultRecord ])))
-                                            , class "add-record-btn"
-                                            , attribute "type" "button"
-                                            ]
-                                            [ Html.text ("Add " ++ fieldLabel) ]
-                                        ]
-                                   )
-                            )
-                        ]
+                    TList _ ->
+                        Html.nothing
 
-                TList _ ->
-                    Html.nothing
+                    TUploadHash ->
+                        Html.nothing
 
-                TUploadHash ->
-                    Html.nothing
-
-                TRecord _ ->
-                    Html.nothing
+                    TRecord _ ->
+                        Html.nothing
     in
     Html.div [ class "form-group" ] <|
         case stepDef of
