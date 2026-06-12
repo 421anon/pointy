@@ -10,13 +10,13 @@ module Api.Api exposing
     , fetchDirectoryContents
     , fetchExtras
     , fetchFileContents
+    , fetchNotices
     , fetchPresets
     , fetchProjects
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchStepConfig
     , fetchStepLog
-    , fetchNotices
     , fetchUserRepoInfo
     , runStep
     , saveProject
@@ -322,6 +322,7 @@ fetchNotices id commit =
             { url = appendCommitQuery ("/backend/notices?id=" ++ String.fromInt id) commit
             , expect = Http.expectJson identity (Json.Decode.list Decode.notice)
             }
+
 
 fetchDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int -> Maybe String -> List String -> Flow s (Result Http.Error (Dict String DirectoryItem))
 fetchDirectoryContents itemDecoder stepId commit folderPath =

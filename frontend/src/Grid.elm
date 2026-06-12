@@ -52,6 +52,7 @@ type alias Row =
 type alias State =
     { columns : List Column
     , rows : List Row
+    , rowCount : Int
     , sortColumn : Maybe ( Int, SortDir )
     , filters : Dict Int String
     , infiniteList : InfiniteList.Model
@@ -64,6 +65,7 @@ init columns rows =
     refreshVisible
         { columns = columns
         , rows = rows
+        , rowCount = List.length rows
         , sortColumn = Nothing
         , filters = Dict.empty
         , infiniteList = InfiniteList.init
@@ -342,19 +344,53 @@ view model =
         totalWidth =
             List.foldl (\col acc -> acc + col.width) 0 model.columns
     in
-    Html.div
-        [ Html.Attributes.class "delimited-grid-viewer"
-        , InfiniteList.onScroll (\listModel -> Flow.modify (setInfiniteList listModel))
-        ]
-        [ Html.div
-            [ Html.Attributes.class "delimited-grid"
-            , Html.Attributes.style "width" (String.fromInt totalWidth ++ "px")
+    Html.div [ Html.Attributes.class "delimited-grid-shell" ]
+        [ Html.div [ Html.Attributes.class "delimited-grid-toolbar" ]
+            [ Html.span [ Html.Attributes.class "delimited-grid-row-count" ]
+                [ Html.text (rowCountLabel model) ]
             ]
-            [ Html.div [ Html.Attributes.class "delimited-grid-header" ]
-                (List.indexedMap (viewHeaderCell model) model.columns)
-            , InfiniteList.viewArray (listConfig model.columns) model.infiniteList model.visible
+        , Html.div
+            [ Html.Attributes.class "delimited-grid-viewer"
+            , InfiniteList.onScroll (\listModel -> Flow.modify (setInfiniteList listModel))
+            ]
+            [ Html.div
+                [ Html.Attributes.class "delimited-grid"
+                , Html.Attributes.style "width" (String.fromInt totalWidth ++ "px")
+                ]
+                [ Html.div [ Html.Attributes.class "delimited-grid-header" ]
+                    (List.indexedMap (viewHeaderCell model) model.columns)
+                , InfiniteList.viewArray (listConfig model.columns) model.infiniteList model.visible
+                ]
             ]
         ]
+
+
+rowCountLabel : State -> String
+rowCountLabel model =
+    let
+        filteredCount =
+            Array.length model.visible
+
+        filteredLabel =
+            rowLabel filteredCount
+    in
+    if Dict.isEmpty model.filters || filteredCount == model.rowCount then
+        filteredLabel
+
+    else
+        filteredLabel ++ " (filtered from " ++ rowLabel model.rowCount ++ ")"
+
+
+rowLabel : Int -> String
+rowLabel count =
+    String.fromInt count
+        ++ " "
+        ++ (if count == 1 then
+                "row"
+
+            else
+                "rows"
+           )
 
 
 {-| Fixed body-row height in pixels. Must stay in sync with

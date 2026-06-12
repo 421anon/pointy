@@ -292,6 +292,7 @@ replayStepStatusBuffer =
                     |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
             )
 
+
 loadUserRepoInfo : Flow Model ()
 loadUserRepoInfo =
     callApi userRepoInfo Api.fetchUserRepoInfo |> Flow.return ()
@@ -1207,6 +1208,11 @@ toggleSrcFile recordId path =
 wrapDelimitedGridFlow : Int -> List String -> Flow Grid.State () -> Flow Model ()
 wrapDelimitedGridFlow recordId path =
     Flow.via (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << gridState)
+
+
+toggleFileGridViewer : Int -> List String -> Flow Model ()
+toggleFileGridViewer recordId path =
+    Flow.over (currentProject << success << tables << values << fileUseGridAt recordId path) not
 
 
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()

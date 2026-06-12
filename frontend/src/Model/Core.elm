@@ -75,6 +75,7 @@ type alias Notice =
     , message : String
     }
 
+
 type alias ProjectRecord =
     BaseRecord
         { tables : Dict String (Table StepRecord)
@@ -421,6 +422,7 @@ getStepLogs : Model -> Dict String (ApiData String)
 getStepLogs (Model model) =
     model.stepLogs
 
+
 getNotices : Model -> Dict String (ApiData (List Notice))
 getNotices (Model model) =
     model.notices
@@ -452,6 +454,7 @@ getStepStatusHooks (Model model) =
 getStepStatusBuffer : Model -> Dict Int ( String, Status )
 getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
+
 
 getAutocomplete : Model -> Dict String AutocompleteState
 getAutocomplete (Model model) =
@@ -553,6 +556,7 @@ initialModel key route flags =
 type alias FileView =
     { isViewing : Bool
     , zoom : Float
+    , useGrid : Bool
     }
 
 
@@ -587,7 +591,7 @@ extractDirectoryItemBase item =
                 , size = file.size
                 , viewable = file.viewable
                 , mimeType = file.mimeType
-                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom }
+                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, useGrid = file.view.useGrid }
                 , delimitedGrid = file.delimitedGrid
                 }
 

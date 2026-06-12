@@ -161,6 +161,7 @@ stepLogs : Lens ls Model (Dict String (ApiData String)) x y
 stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
 
+
 notices : Lens ls Model (Dict String (ApiData (List Model.Notice))) x y
 notices =
     lens ".notices" Model.getNotices (\(Model m) notices_ -> Model { m | notices = notices_ })
@@ -206,6 +207,12 @@ fileZoom : Lens ls { a | view : { b | zoom : c } } c x y
 fileZoom =
     lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
         << lens ".zoom" .zoom (\view zoom_ -> { view | zoom = zoom_ })
+
+
+fileUseGrid : Lens ls { a | view : { b | useGrid : c } } c x y
+fileUseGrid =
+    lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
+        << lens ".useGrid" .useGrid (\view useGrid_ -> { view | useGrid = useGrid_ })
 
 
 children : Lens ls { a | children : b } b x y
@@ -331,6 +338,11 @@ fileIsViewingAt recordId_ path =
 fileZoomAt : Int -> List String -> Traversal (Table StepRecord) Float x y
 fileZoomAt recordId_ path =
     directoryItemAtPath recordId_ path << file << fileZoom
+
+
+fileUseGridAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
+fileUseGridAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileUseGrid
 
 
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
