@@ -16,10 +16,11 @@ import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), Model, StepRecord)
-import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, fileDelimitedGrid, gridState, projectStep, projects, records)
+import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareLeftUseGrid, compareRightContent, compareRightInspect, compareRightUseGrid, compareSelecting, compareState, fileDelimitedGrid, gridState, projectStep, projects, records)
 import Model.Shadow as Shadow exposing (ArgType, StepArgType(..), StepArgValue(..), TStringDisplay(..))
 import Route exposing (Route)
 import View.Icons exposing (icon)
+import View.Lib as Lib
 
 
 viewCompareBanner : Model -> Html (Flow Model ())
@@ -110,24 +111,24 @@ viewBody model d =
 
         panes =
             Html.div [ class "compare-panes" ]
-                [ viewPane model d.left d.leftContent (gridUpdate compareLeftContent) d.leftInspect (toggleInspect compareLeftInspect)
-                , viewPane model d.right d.rightContent (gridUpdate compareRightContent) d.rightInspect (toggleInspect compareRightInspect)
+                [ viewPane model d.left d.leftContent (gridUpdate compareLeftContent) d.leftInspect (toggleFlag compareLeftInspect) d.leftUseGrid (toggleFlag compareLeftUseGrid)
+                , viewPane model d.right d.rightContent (gridUpdate compareRightContent) d.rightInspect (toggleFlag compareRightInspect) d.rightUseGrid (toggleFlag compareRightUseGrid)
                 ]
     in
     mTextPair
         |> Maybe.unwrap panes (\( l, r ) -> viewTextDiff model d l r)
 
 
-viewPane : Model -> CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Bool -> Flow Model () -> Html (Flow Model ())
-viewPane model sel content gridFlow inspectOpen toggle =
+viewPane : Model -> CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Bool -> Flow Model () -> Bool -> Flow Model () -> Html (Flow Model ())
+viewPane model sel content gridFlow inspectOpen toggle useGrid toggleGrid =
     let
         mParams =
             derivationParamsFor model sel
     in
     Html.div [ class "compare-pane" ]
-        [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
+        [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle (gridToggleFor content useGrid toggleGrid)
         , Html.div [ class "compare-pane-body" ]
-            [ viewPaneBody sel content gridFlow
+            [ viewPaneBody sel content gridFlow useGrid
             , viewInlineParams model sel inspectOpen mParams
             ]
         ]
@@ -138,17 +139,31 @@ gridUpdate contentLens =
     Flow.via (compareState << compareActive << remkT contentLens << success << fileDelimitedGrid << just << gridState)
 
 
-toggleInspect : An_Optic pr ls CompareActiveData Bool -> Flow Model ()
-toggleInspect inspectLens =
-    Flow.over (compareState << compareActive << remkT inspectLens) not
+toggleFlag : An_Optic pr ls CompareActiveData Bool -> Flow Model ()
+toggleFlag flagLens =
+    Flow.over (compareState << compareActive << remkT flagLens) not
 
 
-viewPaneHeader : Model -> CompareSelection -> Bool -> Bool -> Flow Model () -> Html (Flow Model ())
-viewPaneHeader model sel hasParams inspectOpen toggle =
+gridToggleFor : ApiData CompareFile -> Bool -> Flow Model () -> Html (Flow Model ())
+gridToggleFor content useGrid toggleGrid =
+    case content of
+        Success file ->
+            if Maybe.isJust file.delimitedGrid then
+                Lib.viewGridModeToggle useGrid (Html.Events.onClick toggleGrid)
+
+            else
+                Html.nothing
+
+        _ ->
+            Html.nothing
+
+viewPaneHeader : Model -> CompareSelection -> Bool -> Bool -> Flow Model () -> Html (Flow Model ()) -> Html (Flow Model ())
+viewPaneHeader model sel hasParams inspectOpen toggle gridToggle =
     Html.div [ class "compare-pane-header" ]
         [ Html.div [ class "compare-pane-label" ] [ Html.text (selectionLabel model sel) ]
         , Html.div [ class "compare-pane-actions" ]
-            [ viewInspectButton hasParams inspectOpen toggle
+            [ gridToggle
+            , viewInspectButton hasParams inspectOpen toggle
             , Html.button
                 [ class "dir-item-icon-btn compare-pane-source-btn"
                 , Html.Attributes.title "Open source in project"
@@ -316,8 +331,8 @@ sourceRoute sel =
         }
 
 
-viewPaneBody : CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Html (Flow Model ())
-viewPaneBody sel content gridFlow =
+viewPaneBody : CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Bool -> Html (Flow Model ())
+viewPaneBody sel content gridFlow useGrid =
     case Model.compareSelectionMode sel of
         CompareImage ->
             Html.img [ src (rawUrl sel), class "compare-image" ] []
@@ -331,18 +346,18 @@ viewPaneBody sel content gridFlow =
                 []
 
         CompareText ->
-            viewTextContent gridFlow content
+            viewTextContent gridFlow useGrid content
 
 
-viewTextContent : (Flow Grid.State () -> Flow Model ()) -> ApiData CompareFile -> Html (Flow Model ())
-viewTextContent gridFlow content =
+viewTextContent : (Flow Grid.State () -> Flow Model ()) -> Bool -> ApiData CompareFile -> Html (Flow Model ())
+viewTextContent gridFlow useGrid content =
     case content of
         Success file ->
-            case file.delimitedGrid of
-                Just grid ->
+            case ( file.delimitedGrid, useGrid ) of
+                ( Just grid, True ) ->
                     Grid.view grid.grid |> Html.map gridFlow
 
-                Nothing ->
+                _ ->
                     Html.div [ class "compare-pane-text" ]
                         (List.map (\line -> Html.div [ class "diff-line" ] [ Html.text line ]) (String.lines file.text))
 
@@ -376,7 +391,7 @@ viewTextDiff model d leftStr rightStr =
                     derivationParamsFor model sel
             in
             Html.div [ class "compare-diff-pane" ]
-                [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
+                [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle Html.nothing
                 , Html.div [ class "compare-diff-scroll" ]
                     [ Html.div [ class "compare-diff-lines" ]
                         (List.map
@@ -392,8 +407,8 @@ viewTextDiff model d leftStr rightStr =
                 ]
     in
     Html.div [ class "compare-diff" ]
-        [ viewDiffPane d.left d.leftInspect (toggleInspect compareLeftInspect) Tuple.first
-        , viewDiffPane d.right d.rightInspect (toggleInspect compareRightInspect) Tuple.second
+        [ viewDiffPane d.left d.leftInspect (toggleFlag compareLeftInspect) Tuple.first
+        , viewDiffPane d.right d.rightInspect (toggleFlag compareRightInspect) Tuple.second
         ]
 
 

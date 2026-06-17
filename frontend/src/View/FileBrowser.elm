@@ -439,24 +439,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             False
 
                                 viewModeToggle showingGrid =
-                                    Html.button
-                                        [ class "btn file-view-mode-toggle"
-                                        , Html.Attributes.type_ "button"
-                                        , Html.Attributes.title
-                                            (if showingGrid then
-                                                "Show regular file viewer"
-
-                                             else
-                                                "Show grid viewer"
-                                            )
-                                        , Html.Attributes.attribute "aria-pressed"
-                                            (if showingGrid then
-                                                "true"
-
-                                             else
-                                                "false"
-                                            )
-                                        , Html.Events.stopPropagationOn "click"
+                                    View.Lib.viewGridModeToggle showingGrid
+                                        (Html.Events.stopPropagationOn "click"
                                             (Decode.succeed
                                                 ( case ( mRecordId, mDirCtx ) of
                                                     ( Just recordId, Just (OutputDir _ _) ) ->
@@ -467,24 +451,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 , True
                                                 )
                                             )
-                                        ]
-                                        [ icon True
-                                            (if showingGrid then
-                                                "description"
-
-                                             else
-                                                "table_chart"
-                                            )
-                                        , Html.span [ class "file-view-mode-toggle-label" ]
-                                            [ Html.text
-                                                (if showingGrid then
-                                                    "Regular viewer"
-
-                                                 else
-                                                    "Grid viewer"
-                                                )
-                                            ]
-                                        ]
+                                        )
 
                                 viewGridOrPlain text =
                                     case ( file.delimitedGrid, gridAction, mSelectedRange ) of

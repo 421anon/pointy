@@ -1117,6 +1117,8 @@ activateCompare left right =
                             , rightContent = NotAsked
                             , leftInspect = False
                             , rightInspect = False
+                            , leftUseGrid = True
+                            , rightUseGrid = True
                             }
                         )
                         |> Flow.seq (openDialog "compare-dialog")

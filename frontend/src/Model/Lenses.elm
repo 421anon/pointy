@@ -598,6 +598,16 @@ compareRightInspect =
     lens ".rightInspect" .rightInspect (\d v -> { d | rightInspect = v })
 
 
+compareLeftUseGrid : Lens ls CompareActiveData Bool x y
+compareLeftUseGrid =
+    lens ".leftUseGrid" .leftUseGrid (\d v -> { d | leftUseGrid = v })
+
+
+compareRightUseGrid : Lens ls CompareActiveData Bool x y
+compareRightUseGrid =
+    lens ".rightUseGrid" .rightUseGrid (\d v -> { d | rightUseGrid = v })
+
+
 key =
     lens ".key" Model.getKey (\(Model m) key_ -> Model { m | key = key_ })
 
