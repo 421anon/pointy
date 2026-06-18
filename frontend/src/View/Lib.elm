@@ -10,7 +10,7 @@ import Maybe.Extra as Maybe
 import Model.Core exposing (Model)
 import Model.Lenses exposing (searchBox)
 import Model.Lib as Lib
-import View.Icons exposing (icon, iconCustom)
+import View.Icons exposing (iconCustom)
 
 
 viewLoading : Html a -> Html a
@@ -18,46 +18,6 @@ viewLoading prevState =
     Html.div [ class "loading-wrapper" ]
         [ prevState
         , Html.div [ class "loading-overlay" ] [ iconCustom True "progress_activity" [ class "loading-icon" ] ]
-        ]
-
-
-viewGridModeToggle : Bool -> Html.Attribute msg -> Html msg
-viewGridModeToggle showingGrid clickAttr =
-    Html.button
-        [ class "btn file-view-mode-toggle"
-        , Html.Attributes.type_ "button"
-        , Html.Attributes.title
-            (if showingGrid then
-                "Show regular file viewer"
-
-             else
-                "Show grid viewer"
-            )
-        , Html.Attributes.attribute "aria-pressed"
-            (if showingGrid then
-                "true"
-
-             else
-                "false"
-            )
-        , clickAttr
-        ]
-        [ icon True
-            (if showingGrid then
-                "description"
-
-             else
-                "table_chart"
-            )
-        , Html.span [ class "file-view-mode-toggle-label" ]
-            [ Html.text
-                (if showingGrid then
-                    "Regular viewer"
-
-                 else
-                    "Grid viewer"
-                )
-            ]
         ]
 
 

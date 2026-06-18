@@ -24,6 +24,7 @@ import Html.Events
 import Html.Extra as Html
 import InfiniteList
 import Json.Decode as Decode
+import View.Icons exposing (icon)
 
 
 type ColumnType
@@ -57,6 +58,7 @@ type alias State =
     , filters : Dict Int String
     , infiniteList : InfiniteList.Model
     , visible : Array ( Int, Row )
+    , showGrid : Bool
     }
 
 
@@ -70,6 +72,7 @@ init columns rows =
         , filters = Dict.empty
         , infiniteList = InfiniteList.init
         , visible = Array.empty
+        , showGrid = True
         }
 
 
@@ -338,29 +341,88 @@ setFilter colIndex value model =
 -- VIEW
 
 
-view : State -> Html (Flow State ())
-view model =
+view : (Flow State () -> msg) -> Html msg -> State -> Html msg
+view toMsg plainContent model =
+    Html.div [ Html.Attributes.class "delimited-grid-shell" ]
+        [ Html.div [ Html.Attributes.class "delimited-grid-toolbar" ]
+            [ if model.showGrid then
+                Html.span [ Html.Attributes.class "delimited-grid-row-count" ]
+                    [ Html.text (rowCountLabel model) ]
+
+              else
+                Html.nothing
+            , viewModeToggle model.showGrid (Html.Events.stopPropagationOn "click" (Decode.succeed ( toMsg (Flow.modify toggleShowGrid), True )))
+            ]
+        , if model.showGrid then
+            Html.map toMsg (viewGrid model)
+
+          else
+            plainContent
+        ]
+
+
+toggleShowGrid : State -> State
+toggleShowGrid model =
+    { model | showGrid = not model.showGrid }
+
+
+viewModeToggle : Bool -> Html.Attribute msg -> Html msg
+viewModeToggle showingGrid clickAttr =
+    Html.button
+        [ Html.Attributes.class "btn file-view-mode-toggle"
+        , Html.Attributes.type_ "button"
+        , Html.Attributes.title
+            (if showingGrid then
+                "Show regular file viewer"
+
+             else
+                "Show grid viewer"
+            )
+        , Html.Attributes.attribute "aria-pressed"
+            (if showingGrid then
+                "true"
+
+             else
+                "false"
+            )
+        , clickAttr
+        ]
+        [ icon True
+            (if showingGrid then
+                "description"
+
+             else
+                "table_chart"
+            )
+        , Html.span [ Html.Attributes.class "file-view-mode-toggle-label" ]
+            [ Html.text
+                (if showingGrid then
+                    "Regular viewer"
+
+                 else
+                    "Grid viewer"
+                )
+            ]
+        ]
+
+
+viewGrid : State -> Html (Flow State ())
+viewGrid model =
     let
         totalWidth =
             List.foldl (\col acc -> acc + col.width) 0 model.columns
     in
-    Html.div [ Html.Attributes.class "delimited-grid-shell" ]
-        [ Html.div [ Html.Attributes.class "delimited-grid-toolbar" ]
-            [ Html.span [ Html.Attributes.class "delimited-grid-row-count" ]
-                [ Html.text (rowCountLabel model) ]
+    Html.div
+        [ Html.Attributes.class "delimited-grid-viewer"
+        , InfiniteList.onScroll (\listModel -> Flow.modify (setInfiniteList listModel))
+        ]
+        [ Html.div
+            [ Html.Attributes.class "delimited-grid"
+            , Html.Attributes.style "width" (String.fromInt totalWidth ++ "px")
             ]
-        , Html.div
-            [ Html.Attributes.class "delimited-grid-viewer"
-            , InfiniteList.onScroll (\listModel -> Flow.modify (setInfiniteList listModel))
-            ]
-            [ Html.div
-                [ Html.Attributes.class "delimited-grid"
-                , Html.Attributes.style "width" (String.fromInt totalWidth ++ "px")
-                ]
-                [ Html.div [ Html.Attributes.class "delimited-grid-header" ]
-                    (List.indexedMap (viewHeaderCell model) model.columns)
-                , InfiniteList.viewArray (listConfig model.columns) model.infiniteList model.visible
-                ]
+            [ Html.div [ Html.Attributes.class "delimited-grid-header" ]
+                (List.indexedMap (viewHeaderCell model) model.columns)
+            , InfiniteList.viewArray (listConfig model.columns) model.infiniteList model.visible
             ]
         ]
 

@@ -209,12 +209,6 @@ fileZoom =
         << lens ".zoom" .zoom (\view zoom_ -> { view | zoom = zoom_ })
 
 
-fileUseGrid : Lens ls { a | view : { b | useGrid : c } } c x y
-fileUseGrid =
-    lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
-        << lens ".useGrid" .useGrid (\view useGrid_ -> { view | useGrid = useGrid_ })
-
-
 children : Lens ls { a | children : b } b x y
 children =
     lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
@@ -338,11 +332,6 @@ fileIsViewingAt recordId_ path =
 fileZoomAt : Int -> List String -> Traversal (Table StepRecord) Float x y
 fileZoomAt recordId_ path =
     directoryItemAtPath recordId_ path << file << fileZoom
-
-
-fileUseGridAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
-fileUseGridAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileUseGrid
 
 
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -596,16 +585,6 @@ compareLeftInspect =
 compareRightInspect : Lens ls CompareActiveData Bool x y
 compareRightInspect =
     lens ".rightInspect" .rightInspect (\d v -> { d | rightInspect = v })
-
-
-compareLeftUseGrid : Lens ls CompareActiveData Bool x y
-compareLeftUseGrid =
-    lens ".leftUseGrid" .leftUseGrid (\d v -> { d | leftUseGrid = v })
-
-
-compareRightUseGrid : Lens ls CompareActiveData Bool x y
-compareRightUseGrid =
-    lens ".rightUseGrid" .rightUseGrid (\d v -> { d | rightUseGrid = v })
 
 
 key =

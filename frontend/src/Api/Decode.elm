@@ -302,7 +302,7 @@ directoryItem fileView =
 
 directoryItemGeneric : Decoder ( String, DirectoryItem )
 directoryItemGeneric =
-    directoryItem { isViewing = False, zoom = 1.0, useGrid = True }
+    directoryItem { isViewing = False, zoom = 1.0 }
 
 
 stepArgType : Decoder StepArgType

@@ -219,8 +219,6 @@ type alias CompareActiveData =
     , rightContent : ApiData CompareFile
     , leftInspect : Bool
     , rightInspect : Bool
-    , leftUseGrid : Bool
-    , rightUseGrid : Bool
     }
 
 
@@ -558,7 +556,6 @@ initialModel key route flags =
 type alias FileView =
     { isViewing : Bool
     , zoom : Float
-    , useGrid : Bool
     }
 
 
@@ -593,7 +590,7 @@ extractDirectoryItemBase item =
                 , size = file.size
                 , viewable = file.viewable
                 , mimeType = file.mimeType
-                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, useGrid = file.view.useGrid }
+                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom }
                 , delimitedGrid = file.delimitedGrid
                 }
 

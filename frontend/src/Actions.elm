@@ -1117,8 +1117,6 @@ activateCompare left right =
                             , rightContent = NotAsked
                             , leftInspect = False
                             , rightInspect = False
-                            , leftUseGrid = True
-                            , rightUseGrid = True
                             }
                         )
                         |> Flow.seq (openDialog "compare-dialog")
@@ -1210,11 +1208,6 @@ toggleSrcFile recordId path =
 wrapDelimitedGridFlow : Int -> List String -> Flow Grid.State () -> Flow Model ()
 wrapDelimitedGridFlow recordId path =
     Flow.via (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << gridState)
-
-
-toggleFileGridViewer : Int -> List String -> Flow Model ()
-toggleFileGridViewer recordId path =
-    Flow.over (currentProject << success << tables << values << fileUseGridAt recordId path) not
 
 
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()
