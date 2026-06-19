@@ -27,7 +27,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import NixRepl (restartNixReplSessions)
 import System.IO.Unsafe (unsafePerformIO)
-import UserRepo (ReadRepoContext (..), WriteRepoContext, runNixEvalJsonInRepo, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
+import UserRepo (ReadRepoContext (..), WriteRepoContext, runNixEvalJsonInRepo, runNixEvalJsonInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
 
 -- Types
 
@@ -88,12 +88,12 @@ getProjectOutPaths pid targetCommit = do
 lastWarmedHeadCommitRef :: MVar (Maybe String)
 lastWarmedHeadCommitRef = unsafePerformIO (newMVar Nothing)
 
-restartReplIfHeadChanged :: String -> IO ()
-restartReplIfHeadChanged targetCommit =
+refreshReplIfHeadChanged :: String -> IO ()
+refreshReplIfHeadChanged targetCommit =
     modifyMVar_ lastWarmedHeadCommitRef $ \previous -> do
         case previous of
             Just oldCommit | oldCommit /= targetCommit -> do
-                putStrLn $ "User repo HEAD changed from " ++ oldCommit ++ " to " ++ targetCommit ++ "; restarting nix REPL sessions before warming project out paths."
+                putStrLn $ "User repo HEAD changed from " ++ oldCommit ++ " to " ++ targetCommit ++ "; refreshing nix REPL sessions in the background."
                 restartNixReplSessions
             _ -> return ()
         return (Just targetCommit)
@@ -107,7 +107,7 @@ warmProjectOutPaths = do
         Left err -> putStrLn $ "Project outPath warm skipped: " ++ err
         Right targetCommit -> do
             let targetCommitString = unpack targetCommit
-            restartReplIfHeadChanged targetCommitString
+            refreshReplIfHeadChanged targetCommitString
             result <- runExceptT $ warmProjectOutPathsForCommit (ReadRepoContext repoPath targetCommitString)
             case result of
                 Left err -> putStrLn $ "Project outPath warm failed: " ++ err
@@ -115,7 +115,7 @@ warmProjectOutPaths = do
 
 warmProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
 warmProjectOutPathsForCommit ctx = do
-    _ <- runNixEvalJsonInRepo ctx "#pointy.projectOutPaths"
+    _ <- runNixEvalJsonInRepoBackground ctx "#pointy.projectOutPaths"
     return ()
 
 -- Coalesced background warming

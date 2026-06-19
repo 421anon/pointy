@@ -6,6 +6,7 @@ module UserRepo (
     ensureUserRepo,
     runNix,
     runNixEvalJsonInRepo,
+    runNixEvalJsonInRepoBackground,
     runNixEvalRawInRepo,
     runNixEvalJsonApplyInRepo,
     runNixEvalImpureJsonExpr,
@@ -29,7 +30,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval)
+import NixRepl (NixEvalOutput (..), NixEvalPriority (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval, runNixEvalWithPriority)
 import ProcessLimiter (readCreateProcessWithExitCodeL, readProcessWithExitCodeL)
 import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
@@ -68,6 +69,9 @@ runNix args = ExceptT $ runNixProcess args
 runNixEvalJsonInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
 runNixEvalJsonInRepo ctx = runNixEvalInRepo ctx EvalJson Nothing
 
+runNixEvalJsonInRepoBackground :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
+runNixEvalJsonInRepoBackground ctx = runNixEvalInRepoWithPriority BackgroundEval ctx EvalJson Nothing
+
 runNixEvalRawInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
 runNixEvalRawInRepo ctx = runNixEvalInRepo ctx EvalRaw Nothing
 
@@ -79,9 +83,13 @@ runNixEvalImpureJsonExpr expr =
     ExceptT $ runNixEval $ NixEvalRequest True EvalJson Nothing (EvalExpr expr)
 
 runNixEvalInRepo :: (RepoContext ctx) => ctx -> NixEvalOutput -> Maybe String -> String -> ExceptT String IO String
-runNixEvalInRepo ctx output applyExpr attr =
+runNixEvalInRepo =
+    runNixEvalInRepoWithPriority ForegroundEval
+
+runNixEvalInRepoWithPriority :: (RepoContext ctx) => NixEvalPriority -> ctx -> NixEvalOutput -> Maybe String -> String -> ExceptT String IO String
+runNixEvalInRepoWithPriority priority ctx output applyExpr attr =
     ExceptT $
-        runNixEval $
+        runNixEvalWithPriority priority $
             NixEvalRequest
                 False
                 output
