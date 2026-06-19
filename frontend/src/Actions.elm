@@ -1210,11 +1210,6 @@ wrapDelimitedGridFlow recordId path =
     Flow.via (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << gridState)
 
 
-toggleFileGridViewer : Int -> List String -> Flow Model ()
-toggleFileGridViewer recordId path =
-    Flow.over (currentProject << success << tables << values << fileUseGridAt recordId path) not
-
-
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()
 zoomHtmlFileBy tableZoomLens iframeId factor =
     let

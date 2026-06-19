@@ -53,19 +53,25 @@
     event.preventDefault();
   });
 
-  document.addEventListener("pointermove", (event) => {
-    if (!active) return;
+  document.addEventListener(
+    "pointermove",
+    (event) => {
+      if (!active) return;
 
-    const newWidth = clamp(
-      active.startWidth + event.clientX - active.startX,
-      MIN_COLUMN_WIDTH,
-      MAX_COLUMN_WIDTH
-    );
-    const widthDelta = newWidth - active.startWidth;
+      event.preventDefault();
 
-    active.grid.style.setProperty("--dg-col-" + active.colIndex, newWidth + "px");
-    active.grid.style.width = active.startGridWidth + widthDelta + "px";
-  });
+      const newWidth = clamp(
+        active.startWidth + event.clientX - active.startX,
+        MIN_COLUMN_WIDTH,
+        MAX_COLUMN_WIDTH
+      );
+      const widthDelta = newWidth - active.startWidth;
+
+      active.grid.style.setProperty("--dg-col-" + active.colIndex, newWidth + "px");
+      active.grid.style.width = active.startGridWidth + widthDelta + "px";
+    },
+    { passive: false }
+  );
 
   const releasePointer = () => {
     active = null;

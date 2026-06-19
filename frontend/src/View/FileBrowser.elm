@@ -430,74 +430,6 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         _ ->
                                             Nothing
 
-                                canUseDelimitedGrid =
-                                    case ( file.delimitedGrid, gridAction, mSelectedRange ) of
-                                        ( Just _, Just _, Nothing ) ->
-                                            True
-
-                                        _ ->
-                                            False
-
-                                viewModeToggle showingGrid =
-                                    Html.button
-                                        [ class "btn file-view-mode-toggle"
-                                        , Html.Attributes.type_ "button"
-                                        , Html.Attributes.title
-                                            (if showingGrid then
-                                                "Show regular file viewer"
-
-                                             else
-                                                "Show grid viewer"
-                                            )
-                                        , Html.Attributes.attribute "aria-pressed"
-                                            (if showingGrid then
-                                                "true"
-
-                                             else
-                                                "false"
-                                            )
-                                        , Html.Events.stopPropagationOn "click"
-                                            (Decode.succeed
-                                                ( case ( mRecordId, mDirCtx ) of
-                                                    ( Just recordId, Just (OutputDir _ _) ) ->
-                                                        Actions.toggleFileGridViewer recordId path
-
-                                                    _ ->
-                                                        Flow.none
-                                                , True
-                                                )
-                                            )
-                                        ]
-                                        [ icon True
-                                            (if showingGrid then
-                                                "description"
-
-                                             else
-                                                "table_chart"
-                                            )
-                                        , Html.span [ class "file-view-mode-toggle-label" ]
-                                            [ Html.text
-                                                (if showingGrid then
-                                                    "Regular viewer"
-
-                                                 else
-                                                    "Grid viewer"
-                                                )
-                                            ]
-                                        ]
-
-                                viewGridOrPlain text =
-                                    case ( file.delimitedGrid, gridAction, mSelectedRange ) of
-                                        ( Just delimitedGrid, Just updateGrid, Nothing ) ->
-                                            if file.view.useGrid then
-                                                Grid.view delimitedGrid.grid |> Html.map updateGrid
-
-                                            else
-                                                viewPlainContent text
-
-                                        _ ->
-                                            viewPlainContent text
-
                                 viewPlainContent text =
                                     let
                                         lines =
@@ -511,19 +443,12 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         (List.indexedMap renderLine lines)
 
                                 viewContent text =
-                                    if canUseDelimitedGrid then
-                                        let
-                                            showingGrid =
-                                                file.view.useGrid
-                                        in
-                                        Html.div [ class "file-viewer-mode" ]
-                                            [ Html.div [ class "file-viewer-mode-toolbar" ]
-                                                [ viewModeToggle showingGrid ]
-                                            , viewGridOrPlain text
-                                            ]
+                                    case ( file.delimitedGrid, gridAction, mSelectedRange ) of
+                                        ( Just delimitedGrid, Just updateGrid, Nothing ) ->
+                                            Grid.view updateGrid (viewPlainContent text) delimitedGrid.grid
 
-                                    else
-                                        viewPlainContent text
+                                        _ ->
+                                            viewPlainContent text
                             in
                             Html.div [ class "file-viewer" ]
                                 [ ApiData.foldVisible

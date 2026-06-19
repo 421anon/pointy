@@ -110,8 +110,8 @@ viewBody model d =
 
         panes =
             Html.div [ class "compare-panes" ]
-                [ viewPane model d.left d.leftContent (gridUpdate compareLeftContent) d.leftInspect (toggleInspect compareLeftInspect)
-                , viewPane model d.right d.rightContent (gridUpdate compareRightContent) d.rightInspect (toggleInspect compareRightInspect)
+                [ viewPane model d.left d.leftContent (gridUpdate compareLeftContent) d.leftInspect (toggleFlag compareLeftInspect)
+                , viewPane model d.right d.rightContent (gridUpdate compareRightContent) d.rightInspect (toggleFlag compareRightInspect)
                 ]
     in
     mTextPair
@@ -138,9 +138,9 @@ gridUpdate contentLens =
     Flow.via (compareState << compareActive << remkT contentLens << success << fileDelimitedGrid << just << gridState)
 
 
-toggleInspect : An_Optic pr ls CompareActiveData Bool -> Flow Model ()
-toggleInspect inspectLens =
-    Flow.over (compareState << compareActive << remkT inspectLens) not
+toggleFlag : An_Optic pr ls CompareActiveData Bool -> Flow Model ()
+toggleFlag flagLens =
+    Flow.over (compareState << compareActive << remkT flagLens) not
 
 
 viewPaneHeader : Model -> CompareSelection -> Bool -> Bool -> Flow Model () -> Html (Flow Model ())
@@ -338,13 +338,17 @@ viewTextContent : (Flow Grid.State () -> Flow Model ()) -> ApiData CompareFile -
 viewTextContent gridFlow content =
     case content of
         Success file ->
-            case file.delimitedGrid of
-                Just grid ->
-                    Grid.view grid.grid |> Html.map gridFlow
-
-                Nothing ->
+            let
+                plain =
                     Html.div [ class "compare-pane-text" ]
                         (List.map (\line -> Html.div [ class "diff-line" ] [ Html.text line ]) (String.lines file.text))
+            in
+            case file.delimitedGrid of
+                Just grid ->
+                    Grid.view gridFlow plain grid.grid
+
+                Nothing ->
+                    plain
 
         Error _ ->
             Html.div [ class "compare-error" ] [ Html.text "Failed to load file." ]
@@ -392,8 +396,8 @@ viewTextDiff model d leftStr rightStr =
                 ]
     in
     Html.div [ class "compare-diff" ]
-        [ viewDiffPane d.left d.leftInspect (toggleInspect compareLeftInspect) Tuple.first
-        , viewDiffPane d.right d.rightInspect (toggleInspect compareRightInspect) Tuple.second
+        [ viewDiffPane d.left d.leftInspect (toggleFlag compareLeftInspect) Tuple.first
+        , viewDiffPane d.right d.rightInspect (toggleFlag compareRightInspect) Tuple.second
         ]
 
 
