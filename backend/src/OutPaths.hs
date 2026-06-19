@@ -12,8 +12,9 @@ module OutPaths (
 ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar)
-import Control.Monad (void)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
+import Control.Exception (SomeException, catch)
+import Control.Monad (void, when)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, genericParseJSON)
 import Data.Char (toLower)
@@ -117,12 +118,57 @@ warmProjectOutPathsForCommit ctx = do
     _ <- runNixEvalJsonInRepo ctx "#pointy.projectOutPaths"
     return ()
 
+-- Coalesced background warming
+
+{- | At most one background warm runs at a time. Writes that arrive while a
+warm is in flight set 'warmPending' so the worker re-reads the latest HEAD
+and warms again once the current eval finishes. This collapses bursts of
+rapid commits into a single warm of the latest HEAD instead of queuing one
+stale warm per commit behind the REPL session lock.
+-}
+data WarmState = WarmState
+    { warmRunning :: Bool
+    , warmPending :: Bool
+    }
+
+{-# NOINLINE warmStateRef #-}
+warmStateRef :: MVar WarmState
+warmStateRef = unsafePerformIO (newMVar (WarmState False False))
+
+-- | Mark a warm as pending, forking a worker if none is running.
+scheduleWarm :: IO ()
+scheduleWarm =
+    modifyMVar_ warmStateRef $ \st ->
+        if warmRunning st
+            then return st{warmPending = True}
+            else do
+                void $ forkIO warmWorker
+                return st{warmRunning = True, warmPending = False}
+
+runWarmSafely :: IO ()
+runWarmSafely =
+    warmProjectOutPaths `catch` handleWarmException
+
+handleWarmException :: SomeException -> IO ()
+handleWarmException err =
+    putStrLn $ "Project outPath warm crashed: " ++ show err
+
+-- | Run one warm, then loop once more if another write landed during it.
+warmWorker :: IO ()
+warmWorker = do
+    runWarmSafely
+    again <- modifyMVar warmStateRef $ \st ->
+        if warmPending st
+            then return (st{warmRunning = True, warmPending = False}, True)
+            else return (st{warmRunning = False, warmPending = False}, False)
+    when again warmWorker
+
 -- Write transaction with post-write REPL warming
 
 withWriteRepoTransaction :: (WriteRepoContext -> ExceptT String IO a) -> IO (Either String a)
 withWriteRepoTransaction action = do
     result <- withWriteRepoTransactionRaw action
     case result of
-        Right _ -> void $ forkIO warmProjectOutPaths
+        Right _ -> scheduleWarm
         Left _ -> return ()
     return result
