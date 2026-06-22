@@ -4,6 +4,7 @@ import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..))
+import Array
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
@@ -12,12 +13,12 @@ import Flow exposing (Flow)
 import Grid
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, href, id, rel, src, style, target)
-import Html.Attributes.Extra exposing (attributeIf)
 import Html.Events
 import Html.Extra as Html
+import Html.Lazy
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo, plainLineHeight)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -101,7 +102,7 @@ renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssC
     in
     Html.div [ class cssClass ]
         [ ApiData.foldVisible
-            (Html.div [] [ Html.text "Directory is empty" ])
+            (Html.div [] [])
             (Maybe.map (viewLoading << viewContents)
                 >> Maybe.withDefault (Html.div [] [ Html.span [ class "shimmer-text shimmer-text--low-contrast" ] [ Html.text "Loading directory contents..." ] ])
             )
@@ -338,129 +339,103 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         , viewCompareButton model mCompareSelection
                         ]
                     ]
-                , Html.viewIf file.view.isViewing <|
-                    Html.div [ class "file-content-viewer" ]
-                        [ if isImage then
-                            case mDirCtx of
-                                Just (OutputDir stepId_ commit_) ->
-                                    Html.img
-                                        [ src (Api.stepFileRawUrl stepId_ (Just commit_) path)
-                                        , class "file-image-viewer"
-                                        ]
-                                        []
-
-                                _ ->
-                                    Html.nothing
-
-                          else if isHtml then
-                            case mDirCtx of
-                                Just (OutputDir stepId_ commit_) ->
-                                    let
-                                        iframeId =
-                                            "iframe-" ++ anchor
-
-                                        zoomAction factor =
-                                            mRecordId
-                                                |> Maybe.map (\recordId -> Actions.zoomHtmlFileBy (fileZoomAt recordId path) iframeId factor)
-                                                |> Maybe.withDefault Flow.none
-                                    in
-                                    Html.div [ class "iframe-zoom-wrapper" ]
-                                        [ Html.node "iframe"
+                , Html.viewIfLazy file.view.isViewing <|
+                    \() ->
+                        Html.div [ class "file-content-viewer" ]
+                            [ if isImage then
+                                case mDirCtx of
+                                    Just (OutputDir stepId_ commit_) ->
+                                        Html.img
                                             [ src (Api.stepFileRawUrl stepId_ (Just commit_) path)
-                                            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
-                                            , class "file-html-viewer"
-                                            , id iframeId
+                                            , class "file-image-viewer"
                                             ]
                                             []
-                                        , Html.button
-                                            [ class "iframe-zoom-btn zoom-in"
-                                            , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction 1.16, True ))
-                                            ]
-                                            [ icon True "zoom_in" ]
-                                        , Html.button
-                                            [ class "iframe-zoom-btn zoom-out"
-                                            , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction (1 / 1.16), True ))
-                                            ]
-                                            [ icon True "zoom_out" ]
-                                        ]
 
-                                _ ->
-                                    Html.nothing
+                                    _ ->
+                                        Html.nothing
 
-                          else
-                            let
-                                renderLine n line =
-                                    let
-                                        lineNum =
-                                            n + 1
+                              else if isHtml then
+                                case mDirCtx of
+                                    Just (OutputDir stepId_ commit_) ->
+                                        let
+                                            iframeId =
+                                                "iframe-" ++ anchor
 
-                                        gutterAttrs =
-                                            Maybe.unwrap []
-                                                (\{ recordId, target } ->
-                                                    [ Html.Events.on "pointerdown" (Decode.succeed (Actions.startGutterDrag target recordId path lineNum))
-                                                    , attributeIf (has (gutterDrag << just) model) <|
-                                                        Html.Events.on "pointerenter" (Decode.succeed (Actions.extendGutterDrag target recordId path lineNum))
-                                                    ]
-                                                )
-                                                mGutter
-                                    in
-                                    Html.div
-                                        [ classList
-                                            [ ( "file-line", True )
-                                            , ( "highlighted", Maybe.unwrap False (\{ from, to } -> lineNum >= from && lineNum <= to) mSelectedRange )
-                                            ]
-                                        , id ("line-" ++ anchor ++ "-" ++ String.fromInt lineNum)
-                                        ]
-                                        [ Html.span
-                                            (classList
-                                                [ ( "file-line-number", True )
-                                                , ( "is-gutter", Maybe.isJust mGutter )
+                                            zoomAction factor =
+                                                mRecordId
+                                                    |> Maybe.map (\recordId -> Actions.zoomHtmlFileBy (fileZoomAt recordId path) iframeId factor)
+                                                    |> Maybe.withDefault Flow.none
+                                        in
+                                        Html.div [ class "iframe-zoom-wrapper" ]
+                                            [ Html.node "iframe"
+                                                [ src (Api.stepFileRawUrl stepId_ (Just commit_) path)
+                                                , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
+                                                , class "file-html-viewer"
+                                                , id iframeId
                                                 ]
-                                                :: gutterAttrs
-                                            )
-                                            [ Html.text (String.fromInt lineNum) ]
-                                        , Html.span [ class "file-line-content" ] [ Html.text line ]
-                                        ]
+                                                []
+                                            , Html.button
+                                                [ class "iframe-zoom-btn zoom-in"
+                                                , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction 1.16, True ))
+                                                ]
+                                                [ icon True "zoom_in" ]
+                                            , Html.button
+                                                [ class "iframe-zoom-btn zoom-out"
+                                                , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction (1 / 1.16), True ))
+                                                ]
+                                                [ icon True "zoom_out" ]
+                                            ]
 
-                                gridAction =
-                                    case ( mRecordId, mDirCtx ) of
-                                        ( Just recordId, Just (OutputDir _ _) ) ->
-                                            Just (Actions.wrapDelimitedGridFlow recordId path)
+                                    _ ->
+                                        Html.nothing
 
-                                        _ ->
-                                            Nothing
+                              else
+                                let
+                                    gridAction =
+                                        case ( mRecordId, mDirCtx ) of
+                                            ( Just recordId, Just (OutputDir _ _) ) ->
+                                                Just (Actions.wrapDelimitedGridFlow recordId path)
 
-                                viewPlainContent text =
-                                    let
-                                        lines =
-                                            String.split "\n" text
-                                    in
-                                    Html.div
-                                        [ class "file-content"
-                                        , id ("viewer-" ++ anchor)
-                                        , style "max-height" (calculateViewerHeight (List.length lines))
-                                        ]
-                                        (List.indexedMap renderLine lines)
+                                            _ ->
+                                                Nothing
 
-                                viewContent text =
-                                    case ( file.delimitedGrid, gridAction, mSelectedRange ) of
-                                        ( Just delimitedGrid, Just updateGrid, Nothing ) ->
-                                            Grid.view updateGrid (viewPlainContent text) delimitedGrid.grid
+                                    viewContent text =
+                                        let
+                                            selectedFrom =
+                                                Maybe.unwrap 0 .from mSelectedRange
 
-                                        _ ->
-                                            viewPlainContent text
-                            in
-                            Html.div [ class "file-viewer" ]
-                                [ ApiData.foldVisible
-                                    Html.nothing
-                                    (Maybe.map (viewLoading << viewContent)
-                                        >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])
-                                    )
-                                    viewContent
-                                    (always <| Html.span [ class "file-error" ] [ Html.text "Failed to load file" ])
-                                    file.content
-                                ]
-                        ]
+                                            selectedTo =
+                                                Maybe.unwrap 0 .to mSelectedRange
+
+                                            viewPlainContent_ () =
+                                                Html.Lazy.lazy8 viewPlainContent
+                                                    (gutterKey mGutter)
+                                                    (has (gutterDrag << just) model)
+                                                    selectedFrom
+                                                    selectedTo
+                                                    anchor
+                                                    file.view.plainScrollTop
+                                                    text
+                                                    file.plainLineStarts
+                                        in
+                                        case ( file.delimitedGrid, gridAction ) of
+                                            ( Just delimitedGrid, Just updateGrid ) ->
+                                                Grid.view updateGrid viewPlainContent_ delimitedGrid.grid
+
+                                            _ ->
+                                                viewPlainContent_ ()
+                                in
+                                Html.div [ class "file-viewer" ]
+                                    [ ApiData.foldVisible
+                                        Html.nothing
+                                        (Maybe.map (viewLoading << viewContent)
+                                            >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])
+                                        )
+                                        viewContent
+                                        (always <| Html.span [ class "file-error" ] [ Html.text "Failed to load file" ])
+                                        file.content
+                                    ]
+                            ]
                 ]
 
         Folder folder ->
@@ -518,22 +493,248 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 ]
 
 
+gutterKey : Maybe { a | recordId : Int, target : Route.HighlightTarget } -> Int
+gutterKey mGutter =
+    case mGutter of
+        Just { recordId, target } ->
+            case target of
+                Route.Output ->
+                    recordId
+
+                Route.Source ->
+                    -recordId
+
+        Nothing ->
+            0
+
+
+gutterFromKey : Int -> Maybe { recordId : Int, target : Route.HighlightTarget }
+gutterFromKey key =
+    if key > 0 then
+        Just { recordId = key, target = Route.Output }
+
+    else if key < 0 then
+        Just { recordId = -key, target = Route.Source }
+
+    else
+        Nothing
+
+
+pathFromAnchor : Int -> String -> List String
+pathFromAnchor gutterKeyValue anchor =
+    if gutterKeyValue == 0 then
+        []
+
+    else
+        case String.split "/" anchor of
+            _ :: _ :: path ->
+                path
+
+            _ ->
+                []
+
+
+lineNumberDecoder : Decode.Decoder Int
+lineNumberDecoder =
+    Decode.at [ "currentTarget", "dataset", "line" ] Decode.string
+        |> Decode.andThen
+            (\lineStr ->
+                case String.toInt lineStr of
+                    Just line ->
+                        Decode.succeed line
+
+                    Nothing ->
+                        Decode.fail ("Invalid line number: " ++ lineStr)
+            )
+
+
+scrollTopDecoder : Decode.Decoder Float
+scrollTopDecoder =
+    Decode.at [ "target", "scrollTop" ] Decode.float
+
+
+plainViewerPadding : Int
+plainViewerPadding =
+    16
+
+
+plainViewerMaxHeight : Int
+plainViewerMaxHeight =
+    600
+
+
+plainViewerMinHeight : Int
+plainViewerMinHeight =
+    100
+
+
+plainViewerOverscan : Int
+plainViewerOverscan =
+    600
+
+
+visibleLineIndexes : Float -> Int -> List Int
+visibleLineIndexes scrollTop lineCount =
+    let
+        containerHeight =
+            min (lineCount * plainLineHeight + plainViewerPadding) plainViewerMaxHeight
+
+        visibleCount =
+            (containerHeight + 2 * plainViewerOverscan) // plainLineHeight + 1
+
+        firstIndex =
+            max 0 ((floor scrollTop - plainViewerOverscan) // plainLineHeight)
+
+        boundedFirstIndex =
+            min firstIndex (max 0 (lineCount - 1))
+
+        lastIndexExclusive =
+            min lineCount (boundedFirstIndex + visibleCount)
+    in
+    if lastIndexExclusive <= boundedFirstIndex then
+        []
+
+    else
+        List.range boundedFirstIndex (lastIndexExclusive - 1)
+
+
+lineTextAt : String -> Int -> Array.Array Int -> Int -> String
+lineTextAt text textLength lineStarts lineIndex =
+    case Array.get lineIndex lineStarts of
+        Just lineStart ->
+            let
+                lineEnd =
+                    Array.get (lineIndex + 1) lineStarts
+                        |> Maybe.map (\nextLineStart -> max lineStart (nextLineStart - 1))
+                        |> Maybe.withDefault textLength
+            in
+            String.slice lineStart lineEnd text
+
+        Nothing ->
+            ""
+
+
+viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> Array.Array Int -> Html (Flow Model ())
+viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text lineStarts =
+    let
+        path =
+            pathFromAnchor gutterKeyValue anchor
+
+        mGutter =
+            gutterFromKey gutterKeyValue
+
+        hasGutter =
+            Maybe.isJust mGutter
+
+        lineCount =
+            max 1 (Array.length lineStarts)
+
+        textLength =
+            String.length text
+
+        lineIndexes =
+            visibleLineIndexes scrollTop lineCount
+
+        firstVisibleIndex =
+            List.head lineIndexes |> Maybe.withDefault 0
+
+        topOffset =
+            firstVisibleIndex * plainLineHeight
+
+        totalHeight =
+            lineCount * plainLineHeight
+
+        gutterEventAttrs =
+            case mGutter of
+                Just { recordId, target } ->
+                    let
+                        lineAction action =
+                            Decode.map (action target recordId path) lineNumberDecoder
+
+                        pointerDown =
+                            Html.Events.on "pointerdown" (lineAction Actions.startGutterDrag)
+
+                        pointerEnter =
+                            Html.Events.on "pointerenter" (lineAction Actions.extendGutterDrag)
+                    in
+                    if hasGutterDrag then
+                        [ pointerDown, pointerEnter ]
+
+                    else
+                        [ pointerDown ]
+
+                Nothing ->
+                    []
+
+        scrollAttrs =
+            case mGutter of
+                Just { recordId, target } ->
+                    [ Html.Events.on "scroll" (Decode.map (Actions.setPlainFileScrollTop target recordId path) scrollTopDecoder) ]
+
+                Nothing ->
+                    []
+
+        renderLine lineIndex =
+            let
+                lineNum =
+                    lineIndex + 1
+
+                line =
+                    lineTextAt text textLength lineStarts lineIndex
+            in
+            Html.div
+                [ classList
+                    [ ( "file-line", True )
+                    , ( "highlighted", selectedFrom > 0 && lineNum >= selectedFrom && lineNum <= selectedTo )
+                    ]
+                , id ("line-" ++ anchor ++ "-" ++ String.fromInt lineNum)
+                , style "height" (String.fromInt plainLineHeight ++ "px")
+                , style "line-height" (String.fromInt plainLineHeight ++ "px")
+                ]
+                [ Html.span
+                    (classList
+                        [ ( "file-line-number", True )
+                        , ( "is-gutter", hasGutter )
+                        ]
+                        :: Html.Attributes.attribute "data-line" (String.fromInt lineNum)
+                        :: gutterEventAttrs
+                    )
+                    [ Html.text (String.fromInt lineNum) ]
+                , Html.span [ class "file-line-content" ] [ Html.text line ]
+                ]
+    in
+    Html.div
+        ([ class "file-content"
+         , id ("viewer-" ++ anchor)
+         , style "max-height" (calculateViewerHeight lineCount)
+         ]
+            ++ scrollAttrs
+        )
+        [ Html.div
+            [ style "height" (String.fromInt totalHeight ++ "px")
+            , style "position" "relative"
+            ]
+            [ Html.div
+                [ style "position" "absolute"
+                , style "top" (String.fromInt topOffset ++ "px")
+                , style "left" "0"
+                , style "right" "0"
+                ]
+                (List.map renderLine lineIndexes)
+            ]
+        ]
+
+
 calculateViewerHeight : Int -> String
 calculateViewerHeight lineCount =
     let
-        lineHeight =
-            17
-
-        padding =
-            16
-
         calculatedHeight =
-            lineCount * lineHeight + padding
+            lineCount * plainLineHeight + plainViewerPadding
 
         cappedHeight =
-            min calculatedHeight 600
+            min calculatedHeight plainViewerMaxHeight
 
         finalHeight =
-            max cappedHeight 100
+            max cappedHeight plainViewerMinHeight
     in
     String.fromInt finalHeight ++ "px"

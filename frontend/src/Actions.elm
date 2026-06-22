@@ -1210,6 +1210,71 @@ wrapDelimitedGridFlow recordId path =
     Flow.via (currentProject << success << tables << values << fileDelimitedGridAt recordId path << just << gridState)
 
 
+setPlainFileScrollTop : Route.HighlightTarget -> Int -> List String -> Float -> Flow Model ()
+setPlainFileScrollTop target recordId path scrollTop =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+    in
+    case target of
+        Route.Output ->
+            Flow.setAll (allStepTables << filePlainScrollTopAt recordId path) scrollTop
+
+        Route.Source ->
+            Flow.setAll (allStepTables << srcFilesFilePlainScrollTopAt recordId path) scrollTop
+
+
+plainLineScrollTop : Int -> Float
+plainLineScrollTop line =
+    toFloat (max 0 ((line - 1) * Model.plainLineHeight))
+
+
+scrollPlainFileToLine : Route.HighlightTarget -> Int -> List String -> Int -> Flow Model ()
+scrollPlainFileToLine target recordId path line =
+    let
+        scrollTop =
+            plainLineScrollTop line
+    in
+    setPlainFileScrollTop target recordId path scrollTop
+        |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 scrollTop))
+
+
+scrollPlainFileToHighlightedRange : Route.HighlightTarget -> Int -> List String -> Flow Model ()
+scrollPlainFileToHighlightedRange target recordId path =
+    Flow.forAll route
+        (\route_ ->
+            try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+                |> Maybe.andThen .range
+                |> Maybe.unwrap (Flow.pure ()) (.from >> scrollPlainFileToLine target recordId path)
+        )
+
+
+setPlainFileLineStarts : Route.HighlightTarget -> Int -> List String -> String -> Flow Model ()
+setPlainFileLineStarts target recordId path content =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+
+        lineStarts =
+            Model.plainLineStartsFromText content
+    in
+    (case target of
+        Route.Output ->
+            Flow.setAll (allStepTables << filePlainLineStartsAt recordId path) lineStarts
+
+        Route.Source ->
+            Flow.setAll (allStepTables << srcFilesFilePlainLineStartsAt recordId path) lineStarts
+    )
+        |> Flow.seq (scrollPlainFileToHighlightedRange target recordId path)
+
+
+openHighlightedGridInPlainMode : Route.HighlightTarget -> Int -> List String -> Route -> Model.DelimitedGrid -> Model.DelimitedGrid
+openHighlightedGridInPlainMode target recordId path route_ delimitedGrid =
+    try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+        |> Maybe.andThen .range
+        |> Maybe.unwrap delimitedGrid (\_ -> { delimitedGrid | grid = Grid.showPlain delimitedGrid.grid })
+
+
 zoomHtmlFileBy : A_Traversal (Table StepRecord) Float -> String -> Float -> Flow Model ()
 zoomHtmlFileBy tableZoomLens iframeId factor =
     let
@@ -1300,26 +1365,32 @@ toggleOutputEntry recordId mOpen path =
                                                         |> Flow.map (Result.map (always ()))
                                         )
 
-                                materializeGrid content =
-                                    Flow.forAll parentExtrasLens
-                                        (\extrasData ->
-                                            let
-                                                mTableMeta =
-                                                    ApiData.toMaybe extrasData
-                                                        |> Maybe.andThen
-                                                            (\extrasDict ->
-                                                                List.last path
-                                                                    |> Maybe.andThen (\fileName -> Dict.get fileName extrasDict)
-                                                                    |> Maybe.andThen decodeTableMeta
-                                                            )
+                                materializeFileContent content =
+                                    setPlainFileLineStarts Route.Output recordId path content
+                                        |> Flow.seq
+                                            (Flow.forAll parentExtrasLens
+                                                (\extrasData ->
+                                                    let
+                                                        mTableMeta =
+                                                            ApiData.toMaybe extrasData
+                                                                |> Maybe.andThen
+                                                                    (\extrasDict ->
+                                                                        List.last path
+                                                                            |> Maybe.andThen (\fileName -> Dict.get fileName extrasDict)
+                                                                            |> Maybe.andThen decodeTableMeta
+                                                                    )
 
-                                                mGrid =
-                                                    Model.delimitedGridFromFile path file_.mimeType content mTableMeta
-                                            in
-                                            Flow.setAll
-                                                (allStepTables << fileDelimitedGridAt recordId path)
-                                                mGrid
-                                        )
+                                                        mGrid =
+                                                            Model.delimitedGridFromFile path file_.mimeType content mTableMeta
+                                                    in
+                                                    Flow.forAll route
+                                                        (\route_ ->
+                                                            Flow.setAll
+                                                                (allStepTables << fileDelimitedGridAt recordId path)
+                                                                (Maybe.map (openHighlightedGridInPlainMode Route.Output recordId path route_) mGrid)
+                                                        )
+                                                )
+                                            )
                             in
                             Flow.when (not (shouldSkipFileContents file_))
                                 (ensureExtras
@@ -1331,7 +1402,7 @@ toggleOutputEntry recordId mOpen path =
                                             callApi (allStepTables << fileContentAt recordId path)
                                                 (Api.fetchFileContents recordId (Just commit_) path)
                                         )
-                                    |> FlowError.andThen materializeGrid
+                                    |> FlowError.andThen materializeFileContent
                                     |> Flow.return ()
                                 )
                         )
@@ -1376,6 +1447,7 @@ toggleSrcEntry recordId mOpen path =
                     Flow.when (not (shouldSkipFileContents file_))
                         (callApi (allStepTables << srcFilesFileContentAt recordId path)
                             (Api.fetchSrcFileContents recordId path)
+                            |> FlowError.andThen (setPlainFileLineStarts Route.Source recordId path)
                             |> Flow.return ()
                         )
                 )
@@ -1446,13 +1518,10 @@ deepOpenSourceEntry stepId path mRange =
 deepOpenEntryWith : Route.HighlightTarget -> (Int -> Maybe Bool -> List String -> Flow Model Bool) -> Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenEntryWith target toggleEntry stepId path mRange =
     let
-        fileAnchor =
-            Route.highlightAnchor target stepId path
-
         scrollToRange =
             case mRange of
                 Just range ->
-                    Flow.attemptTask (Scroll.scrollElementY ("viewer-" ++ fileAnchor) ("line-" ++ fileAnchor ++ "-" ++ String.fromInt range.from) 0.05 0)
+                    scrollPlainFileToLine target stepId path range.from
 
                 Nothing ->
                     Flow.pure ()

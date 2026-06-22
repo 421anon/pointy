@@ -2,6 +2,7 @@ module Model.Lenses exposing (..)
 
 import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData, success)
+import Array
 import Components.Select exposing (SelectState)
 import Debounce
 import Dict exposing (Dict)
@@ -209,6 +210,17 @@ fileZoom =
         << lens ".zoom" .zoom (\view zoom_ -> { view | zoom = zoom_ })
 
 
+filePlainScrollTop : Lens ls { a | view : { b | plainScrollTop : c } } c x y
+filePlainScrollTop =
+    lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
+        << lens ".plainScrollTop" .plainScrollTop (\view plainScrollTop_ -> { view | plainScrollTop = plainScrollTop_ })
+
+
+filePlainLineStarts : Lens ls { a | plainLineStarts : b } b x y
+filePlainLineStarts =
+    lens ".plainLineStarts" .plainLineStarts (\file_ plainLineStarts_ -> { file_ | plainLineStarts = plainLineStarts_ })
+
+
 children : Lens ls { a | children : b } b x y
 children =
     lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
@@ -334,6 +346,16 @@ fileZoomAt recordId_ path =
     directoryItemAtPath recordId_ path << file << fileZoom
 
 
+filePlainScrollTopAt : Int -> List String -> Traversal (Table StepRecord) Float x y
+filePlainScrollTopAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << filePlainScrollTop
+
+
+filePlainLineStartsAt : Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
+filePlainLineStartsAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << filePlainLineStarts
+
+
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
 folderExpandedAt recordId_ path =
     directoryItemAtPath recordId_ path << folder << folderExpanded
@@ -382,6 +404,16 @@ srcFilesFileIsViewingAt recordId_ path =
 srcFilesFileZoomAt : Int -> List String -> Traversal (Table StepRecord) Float x y
 srcFilesFileZoomAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileZoom
+
+
+srcFilesFilePlainScrollTopAt : Int -> List String -> Traversal (Table StepRecord) Float x y
+srcFilesFilePlainScrollTopAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << filePlainScrollTop
+
+
+srcFilesFilePlainLineStartsAt : Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
+srcFilesFilePlainLineStartsAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << filePlainLineStarts
 
 
 srcFilesFolderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y

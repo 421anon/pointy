@@ -290,6 +290,7 @@ directoryItem fileView =
                                 , mimeType = mimeType
                                 , view = fileView
                                 , delimitedGrid = Nothing
+                                , plainLineStarts = Model.emptyPlainLineStarts
                                 }
                             )
                         )
@@ -302,7 +303,7 @@ directoryItem fileView =
 
 directoryItemGeneric : Decoder ( String, DirectoryItem )
 directoryItemGeneric =
-    directoryItem { isViewing = False, zoom = 1.0 }
+    directoryItem { isViewing = False, zoom = 1.0, plainScrollTop = 0 }
 
 
 stepArgType : Decoder StepArgType

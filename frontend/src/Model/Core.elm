@@ -553,9 +553,41 @@ initialModel key route flags =
         }
 
 
+plainLineHeight : Int
+plainLineHeight =
+    17
+
+
+emptyPlainLineStarts : Array.Array Int
+emptyPlainLineStarts =
+    Array.fromList [ 0 ]
+
+
+plainLineStartsFromText : String -> Array.Array Int
+plainLineStartsFromText text =
+    let
+        step char ( offset, starts ) =
+            let
+                nextOffset =
+                    offset + 1
+            in
+            if char == '\n' then
+                ( nextOffset, nextOffset :: starts )
+
+            else
+                ( nextOffset, starts )
+    in
+    text
+        |> String.foldl step ( 0, [ 0 ] )
+        |> Tuple.second
+        |> List.reverse
+        |> Array.fromList
+
+
 type alias FileView =
     { isViewing : Bool
     , zoom : Float
+    , plainScrollTop : Float
     }
 
 
@@ -566,6 +598,7 @@ type alias DirectoryFile =
     , mimeType : Maybe String
     , view : FileView
     , delimitedGrid : Maybe DelimitedGrid
+    , plainLineStarts : Array.Array Int
     }
 
 
@@ -590,8 +623,9 @@ extractDirectoryItemBase item =
                 , size = file.size
                 , viewable = file.viewable
                 , mimeType = file.mimeType
-                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom }
+                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, plainScrollTop = file.view.plainScrollTop }
                 , delimitedGrid = file.delimitedGrid
+                , plainLineStarts = file.plainLineStarts
                 }
 
         Folder folder ->
@@ -608,6 +642,7 @@ updateDirectoryItemBase item baseItem =
                     , size = base.size
                     , viewable = base.viewable
                     , mimeType = base.mimeType
+                    , plainLineStarts = base.plainLineStarts
                     , view =
                         let
                             view =

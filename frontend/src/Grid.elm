@@ -5,6 +5,7 @@ module Grid exposing
     , SortDir(..)
     , State
     , init
+    , showPlain
     , view
     )
 
@@ -341,8 +342,8 @@ setFilter colIndex value model =
 -- VIEW
 
 
-view : (Flow State () -> msg) -> Html msg -> State -> Html msg
-view toMsg plainContent model =
+view : (Flow State () -> msg) -> (() -> Html msg) -> State -> Html msg
+view toMsg viewPlainContent model =
     Html.div [ Html.Attributes.class "delimited-grid-shell" ]
         [ Html.div [ Html.Attributes.class "delimited-grid-toolbar" ]
             [ if model.showGrid then
@@ -357,13 +358,18 @@ view toMsg plainContent model =
             Html.map toMsg (viewGrid model)
 
           else
-            plainContent
+            viewPlainContent ()
         ]
 
 
 toggleShowGrid : State -> State
 toggleShowGrid model =
     { model | showGrid = not model.showGrid }
+
+
+showPlain : State -> State
+showPlain model =
+    { model | showGrid = False }
 
 
 viewModeToggle : Bool -> Html.Attribute msg -> Html msg

@@ -339,7 +339,7 @@ viewTextContent gridFlow content =
     case content of
         Success file ->
             let
-                plain =
+                plain () =
                     Html.div [ class "compare-pane-text" ]
                         (List.map (\line -> Html.div [ class "diff-line" ] [ Html.text line ]) (String.lines file.text))
             in
@@ -348,7 +348,7 @@ viewTextContent gridFlow content =
                     Grid.view gridFlow plain grid.grid
 
                 Nothing ->
-                    plain
+                    plain ()
 
         Error _ ->
             Html.div [ class "compare-error" ] [ Html.text "Failed to load file." ]
