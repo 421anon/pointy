@@ -364,7 +364,11 @@ view toMsg viewPlainContent model =
 
 toggleShowGrid : State -> State
 toggleShowGrid model =
-    { model | showGrid = not model.showGrid }
+    if model.showGrid then
+        { model | showGrid = False }
+
+    else
+        { model | showGrid = True, infiniteList = InfiniteList.init }
 
 
 showPlain : State -> State
