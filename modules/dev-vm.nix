@@ -56,7 +56,7 @@ in
   # config records requirements as metadata-only, so one advertised CPU is enough
   # to serialize jobs without rejecting large template CPU requirements.
   services.slurm.nodeName = lib.mkForce [
-    "${config.networking.hostName} CPUs=1 RealMemory=${slurmRealMemory} State=UNKNOWN"
+    "${config.networking.hostName} CPUs=4 RealMemory=${slurmRealMemory} State=UNKNOWN"
   ];
 
   # Automatically return DOWN nodes to service after unexpected reboots.
