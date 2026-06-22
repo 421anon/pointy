@@ -94,7 +94,7 @@ createAgentSession = do
     _ <- runGitChecked repoPath ["branch", agentBranchName, T.unpack base]
     _ <- runGitChecked repoPath ["worktree", "add", worktree, agentBranchName]
     _ <- runGitChecked worktree ["config", "user.email", "agent@invalid.local"]
-    _ <- runGitChecked worktree ["config", "user.name", "Pointy Agent"]
+    _ <- runGitChecked worktree ["config", "user.name", "agent"]
     now <- liftIO getCurrentTime
     let session_ =
             AgentSession
@@ -171,8 +171,8 @@ prepareApplyCandidate sid = do
 
     liftIO $ removeWorktreeIfExists repoPath applyWorktree
     _ <- runGitChecked repoPath ["worktree", "add", "--detach", applyWorktree, T.unpack targetHead_]
-    _ <- runGitChecked applyWorktree ["config", "user.email", "backend@invalid.local"]
-    _ <- runGitChecked applyWorktree ["config", "user.name", "Pointy Backend"]
+    _ <- runGitChecked applyWorktree ["config", "user.email", "agent@invalid.local"]
+    _ <- runGitChecked applyWorktree ["config", "user.name", "agent"]
     mergeResult <- liftIO $ runGitIn applyWorktree ["merge", "--squash", T.unpack (agentBranch session_)]
     case mergeResult of
         (ExitSuccess, _, _) -> do
