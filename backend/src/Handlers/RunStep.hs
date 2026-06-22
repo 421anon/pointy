@@ -8,19 +8,22 @@ module Handlers.RunStep (
 ) where
 
 import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
-import BuildRunner (StepRequirements (..), buildKeyForOutPath, cancel, submitAndWait)
+import BuildRunner (BuildKey, JobId, StepRequirements (..), buildKeyForOutPath, cancel, queryJobIds, submitAndWait, submitJob, waitForCompletion)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
-import Control.Exception (bracket_)
+import Control.Monad (foldM)
 
-import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
+import Data.List (foldl', nub, partition)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (addDependencyRunningOverrides, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, removeDependencyRunningOverrides)
+import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects)
 import NixUtils (isValidStorePath)
 import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
@@ -49,19 +52,13 @@ runStepSync eid commit = do
                     return (repoPath, maybe commitHash T.unpack commit)
 
         let ctx = ReadRepoContext repoPath targetCommit
-        depIds <- getDependencies ctx eid
-        let stepIds = depIds ++ [eid]
-        let targetCommitText = T.pack targetCommit
+        graph <- getDependencyGraph ctx eid
+        stepIds <- liftEither $ topoOrder graph
 
         warmProjectOutPathsForCommit ctx
-        liftIO $
-            bracket_
-                (addDependencyRunningOverrides targetCommitText stepIds)
-                (removeDependencyRunningOverrides targetCommitText stepIds)
-                ( do
-                    mapM_ (\sid -> broadcastKnownStepStatus sid targetCommitText ("running", Nothing)) stepIds
-                    mapConcurrently_ (buildStep ctx) stepIds
-                )
+        liftIO $ do
+            outcomes <- submitGraph ctx graph stepIds
+            mapConcurrently_ (finishStep ctx) (Map.toList outcomes)
 
     case result of
         Left err -> putStrLn $ "runStepAsync error: " ++ err
@@ -105,41 +102,88 @@ extrasInstallable :: ReadRepoContext -> Int -> String
 extrasInstallable ctx eid =
     stepInstallable ctx eid ++ ".meta.pointy.extras"
 
-buildStep :: ReadRepoContext -> Int -> IO ()
-buildStep ctx eid = do
-    let targetCommitText = T.pack (readCommitHash ctx)
-    result <- runExceptT $ do
-        outPathText <- getStepOutPath ctx eid
-        let outPath = T.unpack outPathText
-        built <- liftIO $ isBuilt outPath
-        if built
-            then liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
-            else do
-                let buildKey = buildKeyForOutPath outPath
-                requirements <- getStepRequirements ctx eid
-                exitCode <-
-                    liftIO $
-                        submitAndWait
-                            requirements
-                            buildKey
-                            ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx eid]
-                case exitCode of
-                    ExitSuccess -> do
-                        nowBuilt <- liftIO $ isBuilt outPath
-                        if nowBuilt
-                            then liftIO $ registerGcRootForOutPath outPath
-                            else return ()
-                    ExitFailure _ -> return ()
-                liftIO $ broadcastSingleStepForProjects eid targetCommitText outPath
+-- | Submission-phase result for a step.
+data SubmitOutcome
+    = -- | Store path is already valid; nothing to schedule.
+      AlreadyBuilt FilePath
+    | -- | A slurm job (new or already in flight) produces the path; carries
+      -- its job ids for dependents' @afterok@ edges.
+      Enqueued FilePath BuildKey [JobId]
+    | -- | Evaluation or submission failed; dependents are not scheduled.
+      NotSubmitted String
 
+{- | Submit one slurm job per unbuilt step, dependencies first, wired with
+@afterok@ edges so a dependent never builds a dependency's derivation
+inside its own allocation.
+-}
+submitGraph :: ReadRepoContext -> Map.Map Int [Int] -> [Int] -> IO (Map.Map Int SubmitOutcome)
+submitGraph ctx graph = foldM submitOne Map.empty
+  where
+    submitOne outcomes sid = do
+        outcome <- submitStep ctx outcomes (Map.findWithDefault [] sid graph) sid
+        return $ Map.insert sid outcome outcomes
+
+submitStep :: ReadRepoContext -> Map.Map Int SubmitOutcome -> [Int] -> Int -> IO SubmitOutcome
+submitStep ctx outcomes deps sid
+    | not (null blockedOn) =
+        return $ NotSubmitted $ "dependency step(s) " ++ show blockedOn ++ " could not be scheduled"
+    | otherwise = do
+        result <- runExceptT $ do
+            outPathText <- getStepOutPath ctx sid
+            let outPath = T.unpack outPathText
+            built <- liftIO $ isBuilt outPath
+            let buildKey = buildKeyForOutPath outPath
+            if built
+                then return $ AlreadyBuilt outPath
+                else do
+                    existing <- liftIO $ queryJobIds buildKey
+                    if not (null existing)
+                        then return $ Enqueued outPath buildKey existing
+                        else do
+                            requirements <- getStepRequirements ctx sid
+                            submitted <-
+                                liftIO $
+                                    submitJob
+                                        requirements
+                                        buildKey
+                                        depJobIds
+                                        ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx sid]
+                            case submitted of
+                                Left err -> throwError err
+                                Right jobId -> return $ Enqueued outPath buildKey [jobId]
+        return $ either NotSubmitted id result
+  where
+    blockedOn = [d | d <- deps, isBlocked (Map.lookup d outcomes)]
+    isBlocked (Just NotSubmitted{}) = True
+    isBlocked Nothing = True -- unreachable given topological order; fail closed
+    isBlocked _ = False
+    depJobIds = nub [jobId | d <- deps, Just (Enqueued _ _ jobIds) <- [Map.lookup d outcomes], jobId <- jobIds]
+
+{- | Wait for a step's job to leave the queue and broadcast the result.
+Success is judged by the store path; slurm reports no usable exit status
+for jobs not submitted with @--wait@.
+-}
+finishStep :: ReadRepoContext -> (Int, SubmitOutcome) -> IO ()
+finishStep ctx (sid, outcome) = case outcome of
+    AlreadyBuilt outPath -> do
+        broadcastSingleStepForProjects sid targetCommitText outPath
+        buildExtras ctx sid
+    Enqueued outPath buildKey _ -> do
+        broadcastSingleStepForProjects sid targetCommitText outPath
+        waitForCompletion buildKey
+        nowBuilt <- isBuilt outPath
+        if nowBuilt
+            then do
+                registerGcRootForOutPath outPath
+                broadcastSingleStepForProjects sid targetCommitText outPath
+            else broadcastFailedStepForProjects sid targetCommitText
         -- Build extras derivation if present, independently of main step status.
-        liftIO $ buildExtras ctx eid
-
-    case result of
-        Left err -> do
-            putStrLn $ "buildStep error: " ++ err
-            broadcastKnownStepStatus eid targetCommitText ("failure", Just (T.pack err))
-        Right _ -> return ()
+        buildExtras ctx sid
+    NotSubmitted err -> do
+        putStrLn $ "buildStep error: " ++ err
+        broadcastKnownStepStatus sid targetCommitText ("failure", Just (T.pack err))
+  where
+    targetCommitText = T.pack (readCommitHash ctx)
 
 {- | Attempt to build the extras derivation for a step.  Errors are non-fatal
 (logged only) because extras are supplementary metadata.
@@ -235,6 +279,34 @@ validateStepRequirements requirements
   where
     hasExportDelimiter = T.any (\c -> c == ',' || c == '\n' || c == '\r' || c == '\0')
 
+{- | Transitive step dependency graph rooted at a step: every reachable
+step mapped to its direct dependencies.
+-}
+getDependencyGraph :: ReadRepoContext -> Int -> ExceptT String IO (Map.Map Int [Int])
+getDependencyGraph ctx root = go Map.empty [root]
+  where
+    go acc [] = return acc
+    go acc (sid : rest)
+        | Map.member sid acc = go acc rest
+        | otherwise = do
+            deps <- nub <$> getDependencies ctx sid
+            go (Map.insert sid deps acc) (rest ++ deps)
+
+-- | Dependencies-first ordering of the step graph; fails on cycles.
+topoOrder :: Map.Map Int [Int] -> Either String [Int]
+topoOrder graph = go Set.empty [] (Map.keys graph)
+  where
+    go _ ordered [] = Right ordered
+    go done ordered pending
+        | null ready = Left $ "dependency cycle detected among steps " ++ show pending
+        | otherwise = go (foldl' (flip Set.insert) done ready) (ordered ++ ready) blocked
+      where
+        (ready, blocked) = partition (all (`Set.member` done) . depsOf) pending
+        depsOf sid = Map.findWithDefault [] sid graph
+
+{- | Direct dependencies of a step. A missing @pointy.dependencies@ attribute
+(or one that fails to decode) is treated as "no dependencies".
+-}
 getDependencies :: ReadRepoContext -> Int -> ExceptT String IO [Int]
 getDependencies ctx stepId = do
     result <- liftIO $ runExceptT $ runNixEvalJsonInRepo ctx ("#pointy.dependencies." ++ show stepId)
@@ -277,7 +349,6 @@ stopStepSync eid commit = do
 
         outPathText <- getStepOutPath ctx eid
         liftIO $ cancel $ buildKeyForOutPath $ T.unpack outPathText
-        liftIO $ removeDependencyRunningOverrides targetCommit [eid]
         liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of

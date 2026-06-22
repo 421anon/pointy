@@ -24,6 +24,7 @@ import Html.Events
 import Html.Extra as Html
 import InfiniteList
 import Json.Decode as Decode
+import View.Icons exposing (icon)
 
 
 type ColumnType
@@ -52,10 +53,12 @@ type alias Row =
 type alias State =
     { columns : List Column
     , rows : List Row
+    , rowCount : Int
     , sortColumn : Maybe ( Int, SortDir )
     , filters : Dict Int String
     , infiniteList : InfiniteList.Model
     , visible : Array ( Int, Row )
+    , showGrid : Bool
     }
 
 
@@ -64,10 +67,12 @@ init columns rows =
     refreshVisible
         { columns = columns
         , rows = rows
+        , rowCount = List.length rows
         , sortColumn = Nothing
         , filters = Dict.empty
         , infiniteList = InfiniteList.init
         , visible = Array.empty
+        , showGrid = True
         }
 
 
@@ -336,8 +341,73 @@ setFilter colIndex value model =
 -- VIEW
 
 
-view : State -> Html (Flow State ())
-view model =
+view : (Flow State () -> msg) -> Html msg -> State -> Html msg
+view toMsg plainContent model =
+    Html.div [ Html.Attributes.class "delimited-grid-shell" ]
+        [ Html.div [ Html.Attributes.class "delimited-grid-toolbar" ]
+            [ if model.showGrid then
+                Html.span [ Html.Attributes.class "delimited-grid-row-count" ]
+                    [ Html.text (rowCountLabel model) ]
+
+              else
+                Html.nothing
+            , viewModeToggle model.showGrid (Html.Events.stopPropagationOn "click" (Decode.succeed ( toMsg (Flow.modify toggleShowGrid), True )))
+            ]
+        , if model.showGrid then
+            Html.map toMsg (viewGrid model)
+
+          else
+            plainContent
+        ]
+
+
+toggleShowGrid : State -> State
+toggleShowGrid model =
+    { model | showGrid = not model.showGrid }
+
+
+viewModeToggle : Bool -> Html.Attribute msg -> Html msg
+viewModeToggle showingGrid clickAttr =
+    Html.button
+        [ Html.Attributes.class "btn file-view-mode-toggle"
+        , Html.Attributes.type_ "button"
+        , Html.Attributes.title
+            (if showingGrid then
+                "Show regular file viewer"
+
+             else
+                "Show grid viewer"
+            )
+        , Html.Attributes.attribute "aria-pressed"
+            (if showingGrid then
+                "true"
+
+             else
+                "false"
+            )
+        , clickAttr
+        ]
+        [ icon True
+            (if showingGrid then
+                "description"
+
+             else
+                "table_chart"
+            )
+        , Html.span [ Html.Attributes.class "file-view-mode-toggle-label" ]
+            [ Html.text
+                (if showingGrid then
+                    "Regular viewer"
+
+                 else
+                    "Grid viewer"
+                )
+            ]
+        ]
+
+
+viewGrid : State -> Html (Flow State ())
+viewGrid model =
     let
         totalWidth =
             List.foldl (\col acc -> acc + col.width) 0 model.columns
@@ -355,6 +425,34 @@ view model =
             , InfiniteList.viewArray (listConfig model.columns) model.infiniteList model.visible
             ]
         ]
+
+
+rowCountLabel : State -> String
+rowCountLabel model =
+    let
+        filteredCount =
+            Array.length model.visible
+
+        filteredLabel =
+            rowLabel filteredCount
+    in
+    if Dict.isEmpty model.filters || filteredCount == model.rowCount then
+        filteredLabel
+
+    else
+        filteredLabel ++ " (filtered from " ++ rowLabel model.rowCount ++ ")"
+
+
+rowLabel : Int -> String
+rowLabel count =
+    String.fromInt count
+        ++ " "
+        ++ (if count == 1 then
+                "row"
+
+            else
+                "rows"
+           )
 
 
 {-| Fixed body-row height in pixels. Must stay in sync with

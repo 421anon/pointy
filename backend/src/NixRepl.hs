@@ -4,17 +4,19 @@
 
 module NixRepl (
     NixEvalOutput (..),
+    NixEvalPriority (..),
     NixEvalRequest (..),
     NixEvalTarget (..),
     runNixEval,
+    runNixEvalWithPriority,
     restartNixReplSessions,
 ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
-import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
+import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
+import Control.Concurrent.STM (TMVar, TQueue, atomically, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, takeTMVar, writeTQueue)
 import Control.Exception (SomeException, catch, evaluate, try)
-import Control.Monad (void)
+import Control.Monad (forever, void)
 import Data.Aeson (Value (..), eitherDecode)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isAlphaNum, isSpace)
@@ -46,6 +48,9 @@ data NixEvalRequest = NixEvalRequest
     }
     deriving (Eq, Show)
 
+data NixEvalPriority = ForegroundEval | BackgroundEval
+    deriving (Eq, Show)
+
 data ReplKind = PureRepl | ImpureRepl
     deriving (Eq, Show)
 
@@ -72,33 +77,76 @@ data ReplOutcome
     | ReplDied String
     deriving (Eq, Show)
 
-{-# NOINLINE pureSessionRef #-}
-pureSessionRef :: MVar (Maybe ReplSession)
-pureSessionRef = unsafePerformIO (newMVar Nothing)
+data ReplWorker = ReplWorker
+    { replWorkerKind :: ReplKind
+    , replWorkerSession :: MVar (Maybe ReplSession)
+    , replWorkerForeground :: TQueue QueuedEval
+    , replWorkerBackground :: TQueue QueuedEval
+    }
 
-{-# NOINLINE impureSessionRef #-}
-impureSessionRef :: MVar (Maybe ReplSession)
-impureSessionRef = unsafePerformIO (newMVar Nothing)
+data QueuedEval = QueuedEval NixEvalRequest (TMVar (Either String String))
+
+{-# NOINLINE pureWorker #-}
+pureWorker :: ReplWorker
+pureWorker = unsafePerformIO (newWorker PureRepl)
+
+{-# NOINLINE impureWorker #-}
+impureWorker :: ReplWorker
+impureWorker = unsafePerformIO (newWorker ImpureRepl)
+
+newWorker :: ReplKind -> IO ReplWorker
+newWorker kind = do
+    session <- newMVar Nothing
+    foreground <- newTQueueIO
+    background <- newTQueueIO
+    let worker = ReplWorker kind session foreground background
+    void $ forkIO $ replWorkerLoop worker
+    return worker
+
+replWorkerLoop :: ReplWorker -> IO ()
+replWorkerLoop worker =
+    forever $ do
+        QueuedEval req response <-
+            atomically $
+                readTQueue (replWorkerForeground worker)
+                    `orElse` readTQueue (replWorkerBackground worker)
+        result <-
+            runWithSession True (replWorkerKind worker) (replWorkerSession worker) req
+                `catch` \(err :: SomeException) -> return (Left $ "nix repl worker failed: " ++ show err)
+        atomically $ putTMVar response result
 
 runNixEval :: NixEvalRequest -> IO (Either String String)
-runNixEval req = do
-    let kind = if evalImpure req then ImpureRepl else PureRepl
-        ref = case kind of
-            PureRepl -> pureSessionRef
-            ImpureRepl -> impureSessionRef
-    runWithSession True kind ref req
+runNixEval =
+    runNixEvalWithPriority ForegroundEval
+
+runNixEvalWithPriority :: NixEvalPriority -> NixEvalRequest -> IO (Either String String)
+runNixEvalWithPriority priority req = do
+    let worker = if evalImpure req then impureWorker else pureWorker
+    response <- newEmptyTMVarIO
+    atomically $ writeTQueue (replQueue priority worker) (QueuedEval req response)
+    atomically $ takeTMVar response
+
+replQueue :: NixEvalPriority -> ReplWorker -> TQueue QueuedEval
+replQueue ForegroundEval = replWorkerForeground
+replQueue BackgroundEval = replWorkerBackground
 
 restartNixReplSessions :: IO ()
 restartNixReplSessions = do
-    putStrLn "Restarting nix REPL sessions"
-    restartSession pureSessionRef
-    restartSession impureSessionRef
+    refreshSession PureRepl (replWorkerSession pureWorker)
+    refreshSession ImpureRepl (replWorkerSession impureWorker)
 
-restartSession :: MVar (Maybe ReplSession) -> IO ()
-restartSession ref =
-    modifyMVar_ ref $ \mSession -> do
-        mapM_ closeSession mSession
-        return Nothing
+refreshSession :: ReplKind -> MVar (Maybe ReplSession) -> IO ()
+refreshSession kind ref =
+    void $ forkIO $ do
+        eSession <- try $ openSession kind
+        case eSession of
+            Left (err :: SomeException) ->
+                putStrLn $ "Failed to refresh " ++ show kind ++ " nix repl: " ++ show err
+            Right newSession -> do
+                mOldSession <- modifyMVar ref $ \mOldSession ->
+                    return (Just newSession, mOldSession)
+                mapM_ closeSession mOldSession
+                putStrLn $ "Refreshed " ++ show kind ++ " nix repl"
 
 runWithSession :: Bool -> ReplKind -> MVar (Maybe ReplSession) -> NixEvalRequest -> IO (Either String String)
 runWithSession mayRetry kind ref req = do

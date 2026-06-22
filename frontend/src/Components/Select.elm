@@ -61,7 +61,8 @@ matchesOrderedTokens query haystack =
                         [] ->
                             False
     in
-    findTokens (String.words (String.toLower query)) (String.toLower haystack)
+    findTokens (List.filter (not << String.isEmpty) (String.words (String.toLower query))) (String.toLower haystack)
+
 
 
 type ChipAction

@@ -445,7 +445,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 viewContent text =
                                     case ( file.delimitedGrid, gridAction, mSelectedRange ) of
                                         ( Just delimitedGrid, Just updateGrid, Nothing ) ->
-                                            Grid.view delimitedGrid.grid |> Html.map updateGrid
+                                            Grid.view updateGrid (viewPlainContent text) delimitedGrid.grid
 
                                         _ ->
                                             viewPlainContent text

@@ -509,9 +509,44 @@ body {
   padding-left: var(--spacing-lg);
 }
 
+.file-view-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.file-view-mode-toggle .material-symbols-outlined {
+  font-size: 18px;
+}
+
 /* ── Delimited grid viewer ── */
 
 $delimited-grid-row-height: 28px;
+
+.delimited-grid-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-width: 100%;
+}
+
+.delimited-grid-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  min-height: 24px;
+  margin-bottom: var(--spacing-xs);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.delimited-grid-row-count {
+  white-space: nowrap;
+}
+
+.delimited-grid-toolbar .file-view-mode-toggle {
+  margin-left: auto;
+}
 
 .delimited-grid-viewer {
   max-width: 100%;
@@ -2207,6 +2242,7 @@ body:has(dialog[open]) {
 .compare-pane-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   overflow: auto;
 }
