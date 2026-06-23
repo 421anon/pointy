@@ -2218,6 +2218,16 @@ toggleAgentSidebar =
     updateAgentState (\s -> { s | isSidebarOpen = not s.isSidebarOpen })
 
 
+toggleAgentMaximized : Flow Model ()
+toggleAgentMaximized =
+    updateAgentState (\s -> { s | isMaximized = not s.isMaximized })
+
+
+toggleAgentSidebarCollapsed : Flow Model ()
+toggleAgentSidebarCollapsed =
+    updateAgentState (\s -> { s | isSidebarCollapsed = not s.isSidebarCollapsed })
+
+
 startAgentSessionNameEdit : String -> String -> Flow Model ()
 startAgentSessionNameEdit sessionId currentName =
     updateAgentState

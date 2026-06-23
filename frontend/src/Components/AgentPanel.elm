@@ -5,7 +5,7 @@ import Api.ApiData as ApiData exposing (ApiData(..))
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, rows, title, type_, value)
+import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, title, type_, value)
 import Html.Events as Events
 import Json.Decode as Decode
 import Keyboard
@@ -39,12 +39,34 @@ view model =
 
 viewPanel : Model.AgentState -> Html (Flow Model ())
 viewPanel agent =
-    Html.div [ class "agent-panel" ]
+    Html.div [ classList [ ( "agent-panel", True ), ( "is-maximized", agent.isMaximized ) ] ]
         [ Html.div [ class "agent-panel__header" ]
             [ Html.div []
                 [ Html.h2 [] [ Html.text "AI agent" ]
                 ]
-            , Html.button [ class "icon-btn", Events.onClick Actions.toggleAgentPanel, title "Close agent panel" ] [ View.Icons.icon False "close" ]
+            , Html.div [ class "agent-panel__header-actions" ]
+                [ Html.button [ class "icon-btn", Events.onClick Actions.toggleAgentPanel, title "Minimize agent panel" ] [ View.Icons.icon False "minimize" ]
+                , Html.button
+                    [ class "icon-btn"
+                    , Events.onClick Actions.toggleAgentMaximized
+                    , title
+                        (if agent.isMaximized then
+                            "Restore agent panel"
+
+                         else
+                            "Maximize agent panel"
+                        )
+                    ]
+                    [ View.Icons.icon False
+                        (if agent.isMaximized then
+                            "close_fullscreen"
+
+                         else
+                            "open_in_full"
+                        )
+                    ]
+                , Html.button [ class "icon-btn", Events.onClick Actions.toggleAgentPanel, title "Close agent panel" ] [ View.Icons.icon False "close" ]
+                ]
             ]
         , viewSessionBody agent
         ]
@@ -56,7 +78,7 @@ viewSessionBody agent =
         loaded =
             ApiData.withDefault [] agent.sessions
     in
-    Html.div [ class "agent-panel__split" ]
+    Html.div [ classList [ ( "agent-panel__split", True ), ( "is-sidebar-collapsed", agent.isSidebarCollapsed ) ] ]
         [ viewSessionSidebar agent loaded
         , viewSessionDetail agent loaded
         ]
@@ -70,7 +92,18 @@ viewSessionSidebar agent loaded =
             , ( "is-open", agent.isSidebarOpen )
             ]
         ]
-        [ Html.button
+        [ Html.div [ class "agent-panel__sidebar-header" ]
+            [ Html.h3 [] [ Html.text "Chats" ]
+            , Html.button
+                [ class "agent-panel__new-chat"
+                , Events.onClick Actions.createAgentSession
+                , title "New chat"
+                ]
+                [ View.Icons.icon False "add"
+                , Html.span [] [ Html.text "New chat" ]
+                ]
+            ]
+        , Html.button
             [ class "agent-panel__sidebar-toggle"
             , Events.onClick Actions.toggleAgentSidebar
             , attribute "aria-controls" "agent-panel-sidebar-content"
@@ -88,6 +121,25 @@ viewSessionSidebar agent loaded =
             , id "agent-panel-sidebar-content"
             ]
             (viewSessionSidebarContent agent loaded)
+        , Html.button
+            [ class "icon-btn agent-panel__sidebar-collapse"
+            , Events.onClick Actions.toggleAgentSidebarCollapsed
+            , title
+                (if agent.isSidebarCollapsed then
+                    "Show chats"
+
+                 else
+                    "Hide chats"
+                )
+            ]
+            [ View.Icons.icon False
+                (if agent.isSidebarCollapsed then
+                    "left_panel_open"
+
+                 else
+                    "left_panel_close"
+                )
+            ]
         ]
 
 
@@ -115,11 +167,7 @@ viewSessionSidebarContent agent loaded =
             else
                 []
     in
-    [ Html.div [ class "agent-panel__sidebar-header" ]
-        [ Html.h3 [] [ Html.text "Chats" ]
-        , Html.button [ class "primary-btn", Events.onClick Actions.createAgentSession ] [ Html.text "New chat" ]
-        ]
-    , case listingStatus of
+    [ case listingStatus of
         Just msg ->
             Html.p [ class "agent-panel__loading" ] [ Html.text msg ]
 
@@ -300,21 +348,6 @@ viewSession agent sessionView =
         closedChat =
             isArchivedStatus session.status
 
-        hasChangesetBox =
-            pendingChangeset sessionView /= Nothing || hasChangesetLifecycleTurn sessionView.turns
-
-        activeOperation =
-            activeChangesetOperation agent session.sessionId
-
-        actionRunning =
-            activeOperation /= Nothing
-
-        discardChatLabel =
-            if activeOperation == Just Model.DiscardingChangeset then
-                "Discarding chat..."
-
-            else
-                "Discard chat"
     in
     Html.div [ class "agent-panel__body" ]
         [ viewSessionTitle agent sessionView
@@ -325,21 +358,6 @@ viewSession agent sessionView =
 
           else
             viewPrompt agent runnerActive
-        , Html.div [ class "agent-panel__footer" ]
-            ([ Html.button [ class "secondary-btn", Events.onClick (Actions.loadAgentSession session.sessionId) ] [ Html.text "Refresh" ] ]
-                ++ (if closedChat || hasChangesetBox then
-                        []
-
-                    else
-                        [ Html.button
-                            [ class "danger-btn"
-                            , disabled (runnerActive || actionRunning)
-                            , Events.onClick Actions.discardAgentSession
-                            ]
-                            [ Html.text discardChatLabel ]
-                        ]
-                   )
-            )
         ]
 
 
@@ -500,11 +518,9 @@ viewPrompt agent runnerActive =
         , Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
                 [ class "agent-panel__prompt"
-                , rows 3
                 , value agent.prompt
                 , placeholder "Ask for a change..."
                 , disabled runnerActive
-                , attribute "data-auto-resize" "true"
                 , attribute "aria-label" "Agent prompt"
                 , submitShortcut runnerActive
                 , Events.onInput Actions.updateAgentPrompt
@@ -760,16 +776,6 @@ pendingChangeset sessionView =
 
     else
         Nothing
-
-
-hasChangesetLifecycleTurn : List Model.AgentTurn -> Bool
-hasChangesetLifecycleTurn turns =
-    hasLifecycleTurn "Apply proposed changeset" turns || hasLifecycleTurn "Discard proposed changeset" turns
-
-
-hasLifecycleTurn : String -> List Model.AgentTurn -> Bool
-hasLifecycleTurn prompt turns =
-    List.any (\turn -> turn.turnPrompt == prompt) turns
 
 
 defaultChangesetDescription : Model.ChatChangesetState -> String

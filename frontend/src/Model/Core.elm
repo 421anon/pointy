@@ -245,6 +245,8 @@ type alias AgentState =
     , prompt : String
     , isPanelOpen : Bool
     , isSidebarOpen : Bool
+    , isMaximized : Bool
+    , isSidebarCollapsed : Bool
     , activeTurnStream : Maybe String
     , chatEntries : List ChatEntry
     , chunkBuffer : String
@@ -263,6 +265,8 @@ initAgentState =
     , prompt = ""
     , isPanelOpen = False
     , isSidebarOpen = False
+    , isMaximized = False
+    , isSidebarCollapsed = False
     , activeTurnStream = Nothing
     , chatEntries = []
     , chunkBuffer = ""
