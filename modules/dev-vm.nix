@@ -56,7 +56,7 @@ in
   # config records requirements as metadata-only, so one advertised CPU is enough
   # to serialize jobs without rejecting large template CPU requirements.
   services.slurm.nodeName = lib.mkForce [
-    "${config.networking.hostName} CPUs=1 RealMemory=${slurmRealMemory} State=UNKNOWN"
+    "${config.networking.hostName} CPUs=4 RealMemory=${slurmRealMemory} State=UNKNOWN"
   ];
 
   # Automatically return DOWN nodes to service after unexpected reboots.
@@ -93,8 +93,13 @@ in
       echo "error: /shared/dev-config/dev-config.toml is missing — launch the VM via `nix run .#dev-vm` so backend/dev-config.toml is shared into the guest" >&2
       exit 1
     fi
-    cp /shared/dev-config/dev-config.toml /home/backend/config.toml
-    chmod u+w /home/backend/config.toml
+    install -m 0600 -o backend -g backend /shared/dev-config/dev-config.toml /home/backend/config.toml
+
+    # Optional agent secrets (e.g. DEEPSEEK_API_KEY=...) sourced as systemd EnvironmentFile.
+    if [ -f /shared/dev-config/agent-env ]; then
+      install -m 0600 -o backend -g backend /shared/dev-config/agent-env /home/backend/agent-env
+    fi
+
   '';
 
   # Simple nginx configuration for dev

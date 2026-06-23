@@ -1,1 +1,6 @@
 /nixos.qcow2
+
+
+# Per-machine agent runner secrets
+/backend/agent-env
+

@@ -1146,7 +1146,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 viewFieldNotice notice =
                     Html.div [ class "field-notice", class "field-notice-info" ]
                         [ iconCustom True "info" [ class "field-notice-icon" ]
-                        , Markdown.toHtml [ class "field-notice-markdown" ] notice.message
+                        , Html.div [ class "field-notice-markdown" ] <| Markdown.toHtml Nothing notice.message
                         ]
 
                 withFieldNotices field =

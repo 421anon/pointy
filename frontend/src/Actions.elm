@@ -1,6 +1,7 @@
 module Actions exposing (..)
 
 import Accessors exposing (An_Optic, all, each, get, has, just, keyI, over, set, try, values)
+import Api.Agent as AgentApi
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Api.Decode as ApiDecode
@@ -1808,6 +1809,966 @@ saveProject projectId =
 closeStepStatusStream : Flow Model ()
 closeStepStatusStream =
     callJs "closeStepStatusStream" (\_ -> Encode.null) (Decode.succeed ()) ()
+
+
+closeAgentTurnStream : Flow Model ()
+closeAgentTurnStream =
+    callJs "closeAgentTurnStream" (\_ -> Encode.null) (Decode.succeed ()) ()
+
+
+updateAgentState : (Model.AgentState -> Model.AgentState) -> Flow Model ()
+updateAgentState fn =
+    Flow.modify (\(Model.Model m) -> Model.Model { m | agent = fn m.agent })
+
+agentChatId : String
+agentChatId =
+    "agent-chat"
+
+
+agentChatEndId : String
+agentChatEndId =
+    "agent-chat-end"
+
+
+scrollAgentChatToBottom : Flow Model ()
+scrollAgentChatToBottom =
+    Flow.attemptTask (Scroll.scrollElementY agentChatId agentChatEndId 1 1)
+
+
+setAgentSessions : ApiData (List Model.AgentSessionView) -> Flow Model ()
+setAgentSessions data =
+    updateAgentState (\agentState -> { agentState | sessions = data })
+
+
+setAgentSessionsLoading : Flow Model ()
+setAgentSessionsLoading =
+    Flow.get
+        |> Flow.map (Model.getAgent >> .sessions >> ApiData.toMaybe)
+        |> Flow.andThen (\previous -> setAgentSessions (Loading previous))
+
+
+mergeSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
+mergeSessionView view agentState =
+    let
+        currentList =
+            ApiData.withDefault [] agentState.sessions
+
+        merged =
+            if List.any (\v -> v.session.sessionId == view.session.sessionId) currentList then
+                List.map
+                    (\v ->
+                        if v.session.sessionId == view.session.sessionId then
+                            view
+
+                        else
+                            v
+                    )
+                    currentList
+
+            else
+                view :: currentList
+    in
+    { agentState | sessions = Success merged }
+
+
+applyPersistedTranscript : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
+applyPersistedTranscript view agentState =
+    let
+        ( chatEntries, turnLog ) =
+            persistedTranscript view
+    in
+    { agentState | chatEntries = chatEntries, turnLog = turnLog, chunkBuffer = "" }
+
+
+shouldKeepLiveTranscript : Model.AgentSessionView -> Model.AgentState -> Bool
+shouldKeepLiveTranscript view agentState =
+    view.session.activeTurnId /= Nothing && agentState.activeTurnStream == view.session.activeTurnId
+
+
+persistedTranscript : Model.AgentSessionView -> ( List Model.ChatEntry, String )
+persistedTranscript view =
+    let
+        turnForTranscript turn =
+            if Just turn.turnId == view.session.activeTurnId then
+                { turn | turnLog = "" }
+
+            else
+                turn
+
+        turns =
+            List.map turnForTranscript view.turns
+    in
+    ( List.foldl appendPersistedTurn [] turns
+    , String.concat (List.map .turnLog turns)
+    )
+
+isChangesetLifecycleTurn : Model.AgentTurn -> Bool
+isChangesetLifecycleTurn turn =
+    turn.turnPrompt == "Apply proposed changeset" || turn.turnPrompt == "Discard proposed changeset"
+
+
+appendPersistedTurn : Model.AgentTurn -> List Model.ChatEntry -> List Model.ChatEntry
+appendPersistedTurn turn entries =
+    if isChangesetLifecycleTurn turn then
+        entries ++ [ Model.ChatChangesetEntry (changesetFromLifecycleTurn turn) ]
+
+    else
+        let
+            prompt =
+                if String.isEmpty (String.trim turn.turnPrompt) then
+                    "Prompt unavailable"
+
+                else
+                    turn.turnPrompt
+
+            seeded =
+                entries ++ [ Model.ChatTurnEntry { prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+
+            logLines =
+                turn.turnLog
+                    |> String.split "\n"
+                    |> List.filter (not << String.isEmpty)
+        in
+        List.foldl appendChatLine seeded logLines
+
+changesetFromLifecycleTurn : Model.AgentTurn -> Model.ChatChangeset
+changesetFromLifecycleTurn turn =
+    let
+        state =
+            if turn.turnPrompt == "Discard proposed changeset" then
+                Model.ChatChangesetDiscarded
+
+            else
+                Model.ChatChangesetApplied
+
+        ( description, diff ) =
+            parseChangesetLog turn.turnLog
+    in
+    { state = state
+    , description =
+        if String.isEmpty description then
+            defaultChangesetDescription state
+
+        else
+            description
+    , diff = diff
+    }
+
+
+defaultChangesetDescription : Model.ChatChangesetState -> String
+defaultChangesetDescription state =
+    case state of
+        Model.ChatChangesetProposed ->
+            "Review this changeset, then apply it to the target branch or discard the chat."
+
+        Model.ChatChangesetNeedsReview _ ->
+            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the chat."
+
+        Model.ChatChangesetApplied ->
+            "This changeset was applied. You can continue the conversation from the applied state."
+
+        Model.ChatChangesetDiscarded ->
+            "This changeset was discarded. No changes were applied."
+
+
+parseChangesetLog : String -> ( String, String )
+parseChangesetLog logText =
+    let
+        ( descriptionLines, diffLines ) =
+            splitChangesetDiffMarker (String.split "\n" logText)
+
+        description =
+            descriptionLines
+                |> List.map changesetLogLineBody
+                |> List.filter (not << String.isEmpty)
+                |> String.join "\n"
+                |> String.trim
+    in
+    ( description, String.trimRight (String.join "\n" diffLines) )
+
+
+changesetDiffMarker : String
+changesetDiffMarker =
+    "[system] changeset-diff"
+
+
+splitChangesetDiffMarker : List String -> ( List String, List String )
+splitChangesetDiffMarker lines =
+    case lines of
+        [] ->
+            ( [], [] )
+
+        line :: rest ->
+            if line == changesetDiffMarker then
+                ( [], rest )
+
+            else
+                let
+                    ( before, after ) =
+                        splitChangesetDiffMarker rest
+                in
+                ( line :: before, after )
+
+
+changesetLogLineBody : String -> String
+changesetLogLineBody line =
+    let
+        ( prefix, body ) =
+            splitLogPrefix line
+    in
+    case prefix of
+        "stdout" ->
+            body
+
+        "stderr" ->
+            body
+
+        "system" ->
+            ""
+
+        _ ->
+            line
+
+
+chatStatusFromTurn : Model.AgentTurn -> Model.ChatTurnStatus
+chatStatusFromTurn turn =
+    case turn.turnStatus of
+        "running" ->
+            Model.ChatPending
+
+        "failed" ->
+            Model.ChatFailed (turnFailureMessage turn)
+
+        _ ->
+            Model.ChatDone
+
+
+turnFailureMessage : Model.AgentTurn -> String
+turnFailureMessage turn =
+    case turn.turnExitCode of
+        Just code ->
+            "exit code " ++ String.fromInt code
+
+        Nothing ->
+            "agent failed"
+
+
+hydrateSelectedAgentSession : Flow Model ()
+hydrateSelectedAgentSession =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case Model.selectedSessionView (Model.getAgent model) of
+                    Just view ->
+                        updateAgentState
+                            (\s ->
+                                if shouldKeepLiveTranscript view s then
+                                    s
+
+                                else
+                                    applyPersistedTranscript view s
+                            )
+                            |> Flow.seq scrollAgentChatToBottom
+
+                    Nothing ->
+                        Flow.pure ()
+            )
+
+
+resumeSelectedAgentTurn : Flow Model ()
+resumeSelectedAgentTurn =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    agentState =
+                        Model.getAgent model
+                in
+                case Model.selectedSessionView agentState of
+                    Just view ->
+                        case view.session.activeTurnId of
+                            Just turnId ->
+                                if agentState.activeTurnStream == Just turnId then
+                                    Flow.pure ()
+
+                                else
+                                    updateAgentState (\s -> { s | activeTurnStream = Just turnId })
+                                        |> Flow.seq (Flow.async (listenAndProcessAgentTurn turnId))
+                                        |> Flow.return ()
+
+                            Nothing ->
+                                Flow.pure ()
+
+                    Nothing ->
+                        Flow.pure ()
+            )
+
+
+handleAgentSessionResult :
+    Bool
+    -> Result Http.Error Model.AgentSessionView
+    -> Flow Model ()
+handleAgentSessionResult selectOnSuccess result =
+    case result of
+        Ok view ->
+            updateAgentState
+                (\agentState ->
+                    let
+                        withView =
+                            mergeSessionView view agentState
+
+                        selectedState =
+                            if selectOnSuccess then
+                                { withView
+                                    | selectedSessionId = Just view.session.sessionId
+                                    , isSidebarOpen = False
+                                }
+
+                            else
+                                withView
+                    in
+                    if selectedState.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
+                        applyPersistedTranscript view selectedState
+
+                    else
+                        selectedState
+                )
+                |> Flow.seq scrollAgentChatToBottom
+
+        Err err ->
+            addToast False (Http.errorMessage err)
+
+
+loadAgentSessions : Flow Model ()
+loadAgentSessions =
+    setAgentSessionsLoading
+        |> Flow.seq AgentApi.listSessions
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok views ->
+                        setAgentSessions (Success views)
+                            |> Flow.seq
+                                (Flow.get
+                                    |> Flow.andThen
+                                        (\model ->
+                                            let
+                                                agentState =
+                                                    Model.getAgent model
+                                            in
+                                            case agentState.selectedSessionId of
+                                                Just _ ->
+                                                    Flow.pure ()
+
+                                                Nothing ->
+                                                    case List.head views of
+                                                        Just first ->
+                                                            updateAgentState
+                                                                (\s -> { s | selectedSessionId = Just first.session.sessionId })
+
+                                                        Nothing ->
+                                                            Flow.pure ()
+                                        )
+                                )
+                            |> Flow.seq hydrateSelectedAgentSession
+                            |> Flow.seq resumeSelectedAgentTurn
+
+                    Err err ->
+                        setAgentSessions (Error err)
+                            |> Flow.seq (addToast False (Http.errorMessage err))
+            )
+
+
+selectAgentSession : String -> Flow Model ()
+selectAgentSession sessionId =
+    updateAgentState
+        (\s ->
+            { s
+                | selectedSessionId = Just sessionId
+                , activeTurnStream = Nothing
+                , turnLog = ""
+                , chatEntries = []
+                , chunkBuffer = ""
+                , showRawLog = False
+                , isSidebarOpen = False
+                , sessionNameEdit = Nothing
+            }
+        )
+        |> Flow.seq (loadAgentSession sessionId)
+        |> Flow.seq resumeSelectedAgentTurn
+
+
+toggleAgentPanel : Flow Model ()
+toggleAgentPanel =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    nextOpen =
+                        not (Model.getAgent model).isPanelOpen
+                in
+                updateAgentState (\s -> { s | isPanelOpen = nextOpen, isSidebarOpen = False })
+                    |> Flow.seq (Flow.when nextOpen loadAgentSessions)
+            )
+
+
+
+toggleAgentSidebar : Flow Model ()
+toggleAgentSidebar =
+    updateAgentState (\s -> { s | isSidebarOpen = not s.isSidebarOpen })
+
+
+startAgentSessionNameEdit : String -> String -> Flow Model ()
+startAgentSessionNameEdit sessionId currentName =
+    updateAgentState
+        (\s ->
+            { s
+                | sessionNameEdit =
+                    Just
+                        { sessionId = sessionId
+                        , value = currentName
+                        , saving = False
+                        }
+            }
+        )
+
+
+updateAgentSessionNameEdit : String -> Flow Model ()
+updateAgentSessionNameEdit value =
+    updateAgentState
+        (\s ->
+            { s
+                | sessionNameEdit =
+                    Maybe.map (\edit -> { edit | value = value }) s.sessionNameEdit
+            }
+        )
+
+
+cancelAgentSessionNameEdit : Flow Model ()
+cancelAgentSessionNameEdit =
+    updateAgentState (\s -> { s | sessionNameEdit = Nothing })
+
+
+saveAgentSessionName : Flow Model ()
+saveAgentSessionName =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case (Model.getAgent model).sessionNameEdit of
+                    Nothing ->
+                        Flow.pure ()
+
+                    Just edit ->
+                        let
+                            name =
+                                String.trim edit.value
+                        in
+                        if String.isEmpty name then
+                            addToast False "Enter a chat name first."
+
+                        else
+                            updateAgentState (setSessionNameEditSaving edit.sessionId True)
+                                |> Flow.seq
+                                    (AgentApi.renameSession edit.sessionId name
+                                        |> Flow.andThen
+                                            (\result ->
+                                                case result of
+                                                    Ok view ->
+                                                        handleAgentSessionResult False (Ok view)
+                                                            |> Flow.seq (updateAgentState (clearSessionNameEdit edit.sessionId))
+
+                                                    Err err ->
+                                                        updateAgentState (setSessionNameEditSaving edit.sessionId False)
+                                                            |> Flow.seq (addToast False (Http.errorMessage err))
+                                            )
+                                    )
+            )
+
+
+setSessionNameEditSaving : String -> Bool -> Model.AgentState -> Model.AgentState
+setSessionNameEditSaving sessionId saving agentState =
+    case agentState.sessionNameEdit of
+        Just edit ->
+            if edit.sessionId == sessionId then
+                { agentState | sessionNameEdit = Just { edit | saving = saving } }
+
+            else
+                agentState
+
+        Nothing ->
+            agentState
+
+
+clearSessionNameEdit : String -> Model.AgentState -> Model.AgentState
+clearSessionNameEdit sessionId agentState =
+    case agentState.sessionNameEdit of
+        Just edit ->
+            if edit.sessionId == sessionId then
+                { agentState | sessionNameEdit = Nothing }
+
+            else
+                agentState
+
+        Nothing ->
+            agentState
+
+archiveAgentSession : String -> Flow Model ()
+archiveAgentSession sessionId =
+    AgentApi.archive sessionId
+        |> Flow.andThen (handleAgentSessionResult False)
+        |> Flow.seq
+            (Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        if (Model.getAgent model).selectedSessionId == Just sessionId then
+                            updateAgentState
+                                (\s ->
+                                    { s
+                                        | selectedSessionId = Nothing
+                                        , chatEntries = []
+                                        , chunkBuffer = ""
+                                        , turnLog = ""
+                                        , sessionNameEdit = Nothing
+                                    }
+                                )
+
+                        else
+                            Flow.pure ()
+                    )
+            )
+
+
+deleteAgentSession : String -> Flow Model ()
+deleteAgentSession sessionId =
+    AgentApi.delete_ sessionId
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok () ->
+                        updateAgentState
+                            (\s ->
+                                let
+                                    remaining =
+                                        ApiData.withDefault [] s.sessions
+                                            |> List.filter (\v -> v.session.sessionId /= sessionId)
+
+                                    cleared =
+                                        s.selectedSessionId == Just sessionId
+                                in
+                                { s
+                                    | sessions = Success remaining
+                                    , selectedSessionId =
+                                        if cleared then
+                                            Nothing
+
+                                        else
+                                            s.selectedSessionId
+                                    , chatEntries =
+                                        if cleared then
+                                            []
+
+                                        else
+                                            s.chatEntries
+                                    , chunkBuffer =
+                                        if cleared then
+                                            ""
+
+                                        else
+                                            s.chunkBuffer
+                                    , turnLog =
+                                        if cleared then
+                                            ""
+
+                                        else
+                                            s.turnLog
+                                    , sessionNameEdit =
+                                        if cleared then
+                                            Nothing
+
+                                        else
+                                            s.sessionNameEdit
+                                }
+                            )
+
+                    Err err ->
+                        addToast False (Http.errorMessage err)
+            )
+
+
+confirmDeleteAgentSession : String -> Flow Model ()
+confirmDeleteAgentSession sessionId =
+    let
+        cfg =
+            { id = "modal-confirm"
+            , title = "Delete chat"
+            , subtitle = Just ("Chat #" ++ String.left 12 sessionId)
+            , bodyLines =
+                [ "This permanently removes the chat metadata, runner logs, worktree, and agent branch."
+                , "This cannot be undone."
+                ]
+            , onConfirm = deleteAgentSession sessionId
+            }
+    in
+    Flow.modify (\(Model.Model m) -> Model.Model { m | modalConfirm = cfg })
+        |> Flow.seq (openDialog "modal-confirm")
+
+
+toggleAgentArchived : Flow Model ()
+toggleAgentArchived =
+    updateAgentState (\s -> { s | showArchived = not s.showArchived })
+
+
+toggleAgentLog : Flow Model ()
+toggleAgentLog =
+    updateAgentState (\agentState -> { agentState | showRawLog = not agentState.showRawLog })
+
+
+updateAgentPrompt : String -> Flow Model ()
+updateAgentPrompt prompt =
+    updateAgentState (\agentState -> { agentState | prompt = prompt })
+
+
+setChangesetOperation : String -> Model.ChangesetOperationKind -> Flow Model ()
+setChangesetOperation sessionId kind =
+    updateAgentState (\agentState -> { agentState | changesetOperation = Just { sessionId = sessionId, kind = kind } })
+
+
+clearChangesetOperation : String -> Flow Model ()
+clearChangesetOperation sessionId =
+    updateAgentState
+        (\agentState ->
+            case agentState.changesetOperation of
+                Just operation ->
+                    if operation.sessionId == sessionId then
+                        { agentState | changesetOperation = Nothing }
+
+                    else
+                        agentState
+
+                Nothing ->
+                    agentState
+        )
+
+
+createAgentSession : Flow Model ()
+createAgentSession =
+    AgentApi.createSession
+        |> Flow.andThen (handleAgentSessionResult True)
+
+
+loadAgentSession : String -> Flow Model ()
+loadAgentSession sessionId =
+    AgentApi.fetchSession sessionId
+        |> Flow.andThen (handleAgentSessionResult False)
+
+
+withSelectedAgentSession : (Model.AgentSessionView -> Flow Model ()) -> Flow Model ()
+withSelectedAgentSession fn =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case Model.selectedSessionView (Model.getAgent model) of
+                    Just view ->
+                        fn view
+
+                    Nothing ->
+                        addToast False "Select or create an agent session first."
+            )
+
+
+submitAgentPrompt : Flow Model ()
+submitAgentPrompt =
+    withSelectedAgentSession
+        (\view ->
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        let
+                            prompt =
+                                String.trim (Model.getAgent model).prompt
+                        in
+                        if String.isEmpty prompt then
+                            addToast False "Enter an agent prompt first."
+
+                        else
+                            AgentApi.sendTurn view.session.sessionId prompt
+                                |> Flow.andThen
+                                    (\result ->
+                                        case result of
+                                            Ok turn ->
+                                                updateAgentState
+                                                    (\agentState ->
+                                                        { agentState
+                                                            | prompt = ""
+                                                            , activeTurnStream = Just turn.turnId
+                                                            , turnLog = ""
+                                                            , chunkBuffer = ""
+                                                            , chatEntries =
+                                                                agentState.chatEntries
+                                                                    ++ [ Model.ChatTurnEntry { prompt = prompt, assistant = "", status = Model.ChatPending } ]
+                                                        }
+                                                    )
+                                                    |> Flow.seq scrollAgentChatToBottom
+                                                    |> Flow.seq (Flow.async (listenAndProcessAgentTurn turn.turnId))
+                                                    |> Flow.seq (loadAgentSession view.session.sessionId)
+
+                                            Err err ->
+                                                addToast False (Http.errorMessage err)
+                                    )
+                    )
+        )
+
+
+applyAgentChanges : Flow Model ()
+applyAgentChanges =
+    withSelectedAgentSession
+        (\view ->
+            setChangesetOperation view.session.sessionId Model.ApplyingChangeset
+                |> Flow.seq
+                    (AgentApi.prepareApply view.session.sessionId
+                        |> Flow.andThen
+                            (\prepareResult ->
+                                case prepareResult of
+                                    Ok preparedView ->
+                                        case preparedView.session.preparedApply of
+                                            Just candidate ->
+                                                AgentApi.confirmApply
+                                                    preparedView.session.sessionId
+                                                    candidate.targetHead
+                                                    candidate.candidateHead
+                                                    |> Flow.andThen
+                                                        (\confirmResult ->
+                                                            case confirmResult of
+                                                                Ok appliedView ->
+                                                                    handleAgentSessionResult False (Ok appliedView)
+                                                                        |> Flow.seq loadAgentSessions
+                                                                        |> Flow.seq (clearChangesetOperation view.session.sessionId)
+
+                                                                Err err ->
+                                                                    clearChangesetOperation view.session.sessionId
+                                                                        |> Flow.seq (addToast False (Http.errorMessage err))
+                                                        )
+
+                                            Nothing ->
+                                                -- prepare_conflict: conflict details are in session.lastError,
+                                                -- shown in the changeset box.
+                                                handleAgentSessionResult False (Ok preparedView)
+                                                    |> Flow.seq (clearChangesetOperation view.session.sessionId)
+
+                                    Err err ->
+                                        clearChangesetOperation view.session.sessionId
+                                            |> Flow.seq (addToast False (Http.errorMessage err))
+                            )
+                    )
+        )
+
+
+discardAgentSession : Flow Model ()
+discardAgentSession =
+    withSelectedAgentSession
+        (\view ->
+            setChangesetOperation view.session.sessionId Model.DiscardingChangeset
+                |> Flow.seq
+                    (AgentApi.discardSession view.session.sessionId
+                        |> Flow.andThen
+                            (\result ->
+                                case result of
+                                    Ok discardedView ->
+                                        handleAgentSessionResult False (Ok discardedView)
+                                            |> Flow.seq loadAgentSessions
+                                            |> Flow.seq (clearChangesetOperation view.session.sessionId)
+
+                                    Err err ->
+                                        clearChangesetOperation view.session.sessionId
+                                            |> Flow.seq (addToast False (Http.errorMessage err))
+                            )
+                    )
+        )
+
+
+listenAndProcessAgentTurn : String -> Flow Model Decode.Value
+listenAndProcessAgentTurn turnId =
+    Flow.subscribe onAgentTurnIn (Channels.agentTurn turnId)
+
+
+withActiveAgentTurn : String -> Flow Model () -> Flow Model ()
+withActiveAgentTurn turnId action =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if (Model.getAgent model).activeTurnStream == Just turnId then
+                    action
+
+                else
+                    Flow.pure ()
+            )
+
+
+onAgentTurnIn : Decode.Value -> Flow Model ()
+onAgentTurnIn value =
+    case Decode.decodeValue AgentApi.turnEvent value of
+        Ok (Model.AgentTurnChunk { turnId, chunk }) ->
+            withActiveAgentTurn turnId (updateAgentState (ingestAgentChunk chunk) |> Flow.seq scrollAgentChatToBottom)
+
+        Ok (Model.AgentTurnDone turnId) ->
+            withActiveAgentTurn turnId
+                (updateAgentState (finalizeChatTurn Nothing)
+                    |> Flow.seq scrollAgentChatToBottom
+                    |> Flow.seq
+                        (updateAgentState (\agentState -> { agentState | activeTurnStream = Nothing }))
+                    |> Flow.seq
+                        (Flow.get
+                            |> Flow.andThen
+                                (\model ->
+                                    case Model.selectedSessionView (Model.getAgent model) of
+                                        Just view ->
+                                            loadAgentSession view.session.sessionId
+
+                                        Nothing ->
+                                            Flow.pure ()
+                                )
+                        )
+                )
+
+        Ok Model.AgentTurnHeartbeat ->
+            Flow.pure ()
+
+        Ok (Model.AgentTurnError err) ->
+            updateAgentState (finalizeChatTurn (Just err))
+                |> Flow.seq scrollAgentChatToBottom
+                |> Flow.seq (addToast False err)
+
+        Err err ->
+            addToast False ("Agent stream decode error: " ++ Decode.errorToString err)
+
+
+ingestAgentChunk : String -> Model.AgentState -> Model.AgentState
+ingestAgentChunk chunk agentState =
+    let
+        combined =
+            agentState.chunkBuffer ++ chunk
+
+        ( completeBlock, remainder ) =
+            splitOnLastNewline combined
+
+        rawLines =
+            if String.isEmpty completeBlock then
+                []
+
+            else
+                String.split "\n" completeBlock
+
+        keptLines =
+            List.filter (not << String.isEmpty) rawLines
+
+        nextChatEntries =
+            List.foldl appendChatLine agentState.chatEntries keptLines
+    in
+    { agentState
+        | chunkBuffer = remainder
+        , turnLog = agentState.turnLog ++ chunk
+        , chatEntries = nextChatEntries
+    }
+
+
+splitOnLastNewline : String -> ( String, String )
+splitOnLastNewline text =
+    case String.indexes "\n" text |> List.reverse |> List.head of
+        Just idx ->
+            ( String.left idx text, String.dropLeft (idx + 1) text )
+
+        Nothing ->
+            ( "", text )
+
+
+appendChatLine : String -> List Model.ChatEntry -> List Model.ChatEntry
+appendChatLine rawLine entries =
+    let
+        ( prefix, body ) =
+            splitLogPrefix rawLine
+    in
+    case prefix of
+        "stdout" ->
+            appendToCurrentAssistant body entries
+
+        "stderr" ->
+            appendToCurrentAssistant body entries
+
+        "runner" ->
+            entries
+
+        _ ->
+            entries
+
+
+splitLogPrefix : String -> ( String, String )
+splitLogPrefix line =
+    if String.startsWith "[stdout] " line then
+        ( "stdout", String.dropLeft 9 line )
+
+    else if String.startsWith "[stderr] " line then
+        ( "stderr", String.dropLeft 9 line )
+
+    else if String.startsWith "[runner] " line then
+        ( "runner", String.dropLeft 9 line )
+
+    else if String.startsWith "[system] " line then
+        ( "system", String.dropLeft 9 line )
+
+    else
+        ( "unknown", line )
+
+
+appendToCurrentAssistant : String -> List Model.ChatEntry -> List Model.ChatEntry
+appendToCurrentAssistant body entries =
+    case List.reverse entries of
+        Model.ChatTurnEntry last :: rest ->
+            let
+                separator =
+                    if String.isEmpty last.assistant then
+                        ""
+
+                    else
+                        "\n"
+
+                updated =
+                    { last | assistant = last.assistant ++ separator ++ body }
+            in
+            List.reverse (Model.ChatTurnEntry updated :: rest)
+
+        _ ->
+            -- Output before any prompt was submitted (e.g. resumed turn); drop it.
+            entries
+
+
+finalizeChatTurn : Maybe String -> Model.AgentState -> Model.AgentState
+finalizeChatTurn mError agentState =
+    let
+        flushed =
+            if String.isEmpty agentState.chunkBuffer then
+                agentState
+
+            else
+                ingestAgentChunk "\n" agentState
+    in
+    case List.reverse flushed.chatEntries of
+        Model.ChatTurnEntry last :: rest ->
+            let
+                status =
+                    case mError of
+                        Just err ->
+                            Model.ChatFailed err
+
+                        Nothing ->
+                            Model.ChatDone
+
+                updated =
+                    { last | status = status }
+            in
+            { flushed | chatEntries = List.reverse (Model.ChatTurnEntry updated :: rest) }
+
+        _ ->
+            flushed
 
 
 listenAndProcessStepStatus : Int -> Maybe String -> Flow Model Decode.Value

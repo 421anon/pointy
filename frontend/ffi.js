@@ -43,6 +43,8 @@ function zoomIframe({ id, zoom }) {
 
 let stepStatusSource = null;
 let stepStatusTargetKey = null;
+let agentTurnSource = null;
+let agentTurnTargetKey = null;
 
 function closeStepStatusStream() {
   if (stepStatusSource) {
@@ -50,6 +52,14 @@ function closeStepStatusStream() {
     stepStatusSource = null;
   }
   stepStatusTargetKey = null;
+}
+
+function closeAgentTurnStream() {
+  if (agentTurnSource) {
+    agentTurnSource.close();
+    agentTurnSource = null;
+  }
+  agentTurnTargetKey = null;
 }
 
 function toggleTheme() {
@@ -80,6 +90,12 @@ export function connectPorts(app) {
   function emitToElm(type, data) {
     if (app.ports && app.ports.stepStatusIn) {
       app.ports.stepStatusIn.send({ type, data });
+    }
+  }
+
+  function emitAgentTurn(type, data) {
+    if (app.ports && app.ports.agentTurnIn) {
+      app.ports.agentTurnIn.send({ type, data });
     }
   }
 
@@ -123,12 +139,57 @@ export function connectPorts(app) {
     };
   }
 
+  function openAgentTurnStream({ turnId }) {
+    const url = `/backend/agent/turn/${encodeURIComponent(turnId)}/stream`;
+
+    if (
+      agentTurnSource &&
+      agentTurnTargetKey === url &&
+      agentTurnSource.readyState !== EventSource.CLOSED
+    ) {
+      return;
+    }
+
+    closeAgentTurnStream();
+
+    agentTurnSource = new EventSource(url);
+    agentTurnTargetKey = url;
+
+    agentTurnSource.addEventListener("chunk", (event) => {
+      try {
+        emitAgentTurn("chunk", JSON.parse(event.data));
+      } catch (err) {
+        emitAgentTurn("error", `Failed to parse agent log chunk: ${String(err)}`);
+      }
+    });
+
+    agentTurnSource.addEventListener("done", (event) => {
+      try {
+        emitAgentTurn("done", JSON.parse(event.data));
+      } catch {
+        emitAgentTurn("done", { turnId });
+      }
+      closeAgentTurnStream();
+    });
+
+    agentTurnSource.addEventListener("heartbeat", (event) => {
+      try {
+        emitAgentTurn("heartbeat", JSON.parse(event.data));
+      } catch {}
+    });
+
+    agentTurnSource.onerror = () => {
+      emitAgentTurn("error", "Agent turn stream connection issue");
+    };
+  }
+
   const ffiFns = {
     openDialog,
     closeDialog,
     hidePopover,
     copyToClipboard,
     closeStepStatusStream,
+    closeAgentTurnStream,
     zoomIframe,
     toggleTheme,
   };
@@ -146,5 +207,12 @@ export function connectPorts(app) {
     app.ports.openStepStatusStream.subscribe(openStepStatusStream);
   }
 
-  window.addEventListener("beforeunload", closeStepStatusStream);
+  if (app.ports && app.ports.openAgentTurnStream) {
+    app.ports.openAgentTurnStream.subscribe(openAgentTurnStream);
+  }
+
+  window.addEventListener("beforeunload", () => {
+    closeStepStatusStream();
+    closeAgentTurnStream();
+  });
 }

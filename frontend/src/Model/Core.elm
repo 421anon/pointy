@@ -142,6 +142,149 @@ type alias UserRepoInfo =
     }
 
 
+type alias AgentPreparedApply =
+    { targetHead : String
+    , agentHead : String
+    , candidateHead : String
+    , candidateWorktree : String
+    }
+
+
+type alias AgentSession =
+    { sessionId : String
+    , sessionName : Maybe String
+    , targetBranch : String
+    , agentBranch : String
+    , baseCommit : String
+    , worktreePath : String
+    , status : String
+    , preparedApply : Maybe AgentPreparedApply
+    , activeTurnId : Maybe String
+    , lastError : Maybe String
+    }
+
+
+type alias AgentGitState =
+    { headCommit : String
+    , commitLog : String
+    , branchDiff : String
+    , hasAgentCommits : Bool
+    }
+
+
+type alias AgentTurn =
+    { turnId : String
+    , turnSessionId : String
+    , turnPrompt : String
+    , turnStatus : String
+    , turnExitCode : Maybe Int
+    , turnLogPath : String
+    , turnLog : String
+    }
+
+
+type alias AgentSessionView =
+    { session : AgentSession
+    , gitState : AgentGitState
+    , turns : List AgentTurn
+    }
+
+
+type ChatTurnStatus
+    = ChatPending
+    | ChatDone
+    | ChatFailed String
+
+
+type alias ChatTurn =
+    { prompt : String
+    , assistant : String
+    , status : ChatTurnStatus
+    }
+
+type ChatChangesetState
+    = ChatChangesetProposed
+    | ChatChangesetNeedsReview String
+    | ChatChangesetApplied
+    | ChatChangesetDiscarded
+
+
+type alias ChatChangeset =
+    { state : ChatChangesetState
+    , description : String
+    , diff : String
+    }
+
+
+type ChatEntry
+    = ChatTurnEntry ChatTurn
+    | ChatChangesetEntry ChatChangeset
+
+type ChangesetOperationKind
+    = ApplyingChangeset
+    | DiscardingChangeset
+
+
+type alias ChangesetOperation =
+    { sessionId : String
+    , kind : ChangesetOperationKind
+    }
+
+type alias AgentSessionNameEdit =
+    { sessionId : String
+    , value : String
+    , saving : Bool
+    }
+
+
+
+
+type alias AgentState =
+    { sessions : ApiData (List AgentSessionView)
+    , selectedSessionId : Maybe String
+    , prompt : String
+    , isPanelOpen : Bool
+    , isSidebarOpen : Bool
+    , activeTurnStream : Maybe String
+    , chatEntries : List ChatEntry
+    , chunkBuffer : String
+    , turnLog : String
+    , showRawLog : Bool
+    , showArchived : Bool
+    , changesetOperation : Maybe ChangesetOperation
+    , sessionNameEdit : Maybe AgentSessionNameEdit
+    }
+
+
+initAgentState : AgentState
+initAgentState =
+    { sessions = NotAsked
+    , selectedSessionId = Nothing
+    , prompt = ""
+    , isPanelOpen = False
+    , isSidebarOpen = False
+    , activeTurnStream = Nothing
+    , chatEntries = []
+    , chunkBuffer = ""
+    , turnLog = ""
+    , showRawLog = False
+    , showArchived = False
+    , changesetOperation = Nothing
+    , sessionNameEdit = Nothing
+    }
+
+
+selectedSessionView : AgentState -> Maybe AgentSessionView
+selectedSessionView agentState =
+    agentState.selectedSessionId
+        |> Maybe.andThen
+            (\sid ->
+                agentState.sessions
+                    |> ApiData.toMaybe
+                    |> Maybe.andThen (List.head << List.filter (\view -> view.session.sessionId == sid))
+            )
+
+
 type alias AutocompleteJob =
     { fieldKey : String
     , commit : Maybe String
@@ -192,6 +335,7 @@ type Model
         , gutterDrag : Maybe GutterDrag
         , compareState : CompareState
         , now : Time.Posix
+        , agent : AgentState
         }
 
 
@@ -476,6 +620,11 @@ getCompareState (Model model) =
     model.compareState
 
 
+getAgent : Model -> AgentState
+getAgent (Model model) =
+    model.agent
+
+
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
@@ -523,6 +672,13 @@ type StepStatusEvent
     | SSEError String
 
 
+type AgentTurnEvent
+    = AgentTurnChunk { turnId : String, chunk : String }
+    | AgentTurnDone String
+    | AgentTurnHeartbeat
+    | AgentTurnError String
+
+
 initialModel : Browser.Navigation.Key -> Route -> Flags -> Model
 initialModel key route flags =
     Model
@@ -550,6 +706,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
+        , agent = initAgentState
         }
 
 

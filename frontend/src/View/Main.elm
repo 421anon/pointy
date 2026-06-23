@@ -4,6 +4,7 @@ import Accessors exposing (try)
 import Actions
 import Api.ApiData as ApiData exposing (success)
 import Browser
+import Components.AgentPanel as AgentPanel
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
@@ -65,6 +66,7 @@ view model =
             List.map Toast.view (Model.getToasts model)
         , Dialog.viewConfirm (Model.getModalConfirm model)
         , Compare.viewCompareDialog model
+        , AgentPanel.view model
         , Html.a
             [ Html.Attributes.href "/docs/"
             , Html.Attributes.target "_blank"

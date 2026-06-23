@@ -7,12 +7,32 @@
 
 module Main where
 
+import Agent.Git (AgentSessionView, AgentUsage, sweepStaleRunningSessions)
+import Agent.Session (AgentTurn)
 import Config (loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Monad.Except (runExceptT)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
+import Handlers.Agent (
+    ConfirmApplyRequest,
+    RenameSessionRequest,
+    SessionRequest,
+    TurnRequest,
+    archiveSessionHandler,
+    confirmApplyHandler,
+    createSessionHandler,
+    discardSessionHandler,
+    getSessionHandler,
+    listSessionsHandler,
+    postTurnHandler,
+    prepareApplyHandler,
+    purgeSessionHandler,
+    renameSessionHandler,
+    turnLogStreamHandler,
+    usageHandler,
+ )
 import Handlers.Autocomplete (AutocompleteRequest, autocompleteHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
@@ -67,6 +87,18 @@ type API =
         :<|> "stop-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
         :<|> "step-log" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[PlainText] Text
         :<|> "upload" :> QueryParam' '[Required, Strict] "id" Int :> MultipartForm Tmp (MultipartData Tmp) :> Post '[PlainText] Text
+        :<|> "agent" :> "session" :> Post '[JSON] AgentSessionView
+        :<|> "agent" :> "sessions" :> Get '[JSON] [AgentSessionView]
+        :<|> "agent" :> "session" :> Capture "id" Text :> Get '[JSON] AgentSessionView
+        :<|> "agent" :> "turn" :> ReqBody '[JSON] TurnRequest :> Post '[JSON] AgentTurn
+        :<|> "agent" :> "turn" :> Capture "id" Text :> "stream" :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+        :<|> "agent" :> "prepare-apply" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
+        :<|> "agent" :> "confirm-apply" :> ReqBody '[JSON] ConfirmApplyRequest :> Post '[JSON] AgentSessionView
+        :<|> "agent" :> "discard" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
+        :<|> "agent" :> "archive" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
+        :<|> "agent" :> "rename" :> ReqBody '[JSON] RenameSessionRequest :> Post '[JSON] AgentSessionView
+        :<|> "agent" :> "delete" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] NoContent
+        :<|> "agent" :> "usage" :> Get '[JSON] AgentUsage
 
 server :: Server API
 server =
@@ -97,9 +129,28 @@ server =
         :<|> stopStepHandler
         :<|> stepLogHandler
         :<|> uploadHandler
+        :<|> createSessionHandler
+        :<|> listSessionsHandler
+        :<|> getSessionHandler
+        :<|> postTurnHandler
+        :<|> turnLogStreamHandler
+        :<|> prepareApplyHandler
+        :<|> confirmApplyHandler
+        :<|> discardSessionHandler
+        :<|> archiveSessionHandler
+        :<|> renameSessionHandler
+        :<|> purgeSessionHandler
+        :<|> usageHandler
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy
 corsPolicy req = case pathInfo req of
+    ("agent" : _) ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type", "Last-Event-ID"]
+                , corsMethods = ["GET", "POST", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
     ["step-status-stream"] ->
         Just $
             simpleCorsResourcePolicy
@@ -260,6 +311,8 @@ main = do
     config <- loadConfig configPath
     putStrLn "Ensuring user repo is configured..."
     ensureUserRepo config
+    putStrLn "Resetting stale agent runner state..."
+    sweepStaleRunningSessions
     putStrLn "Ensuring store directories exist..."
     ensureStoreDirectories
 

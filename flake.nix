@@ -14,9 +14,11 @@
       url = "github:Mic92/nixos-shell";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    sbox.url = "github:DavHau/sbox";
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
-  outputs = { self, nixpkgs, flake-utils, dream2nix, nixos-shell, ... }:
+  outputs = { self, nixpkgs, flake-utils, dream2nix, nixos-shell, sbox, llm-agents, ... }:
     flake-utils.lib.eachDefaultSystem
       (system:
         let
@@ -83,7 +85,7 @@
           };
         }) // {
       nixosModules = {
-        shared = ./modules/shared.nix;
+        shared = args: import ./modules/shared.nix (args // { inherit self sbox llm-agents; });
         pointy-host = ./modules/pointy-host.nix;
         dev-vm = ./modules/dev-vm.nix;
         screenshots-vm = ./modules/screenshots-vm.nix;
@@ -92,12 +94,12 @@
       nixosConfigurations = {
         dev-vm = nixpkgs.lib.nixosSystem {
           system = "x86_64-linux";
-          specialArgs = { inherit self; };
+          specialArgs = { inherit self sbox llm-agents; };
           modules = [ ./modules/dev-vm.nix ];
         };
         screenshots-vm = nixpkgs.lib.nixosSystem {
           system = "x86_64-linux";
-          specialArgs = { inherit self; };
+          specialArgs = { inherit self sbox llm-agents; };
           modules = [ ./modules/screenshots-vm.nix ];
         };
       };

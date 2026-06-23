@@ -5,6 +5,8 @@ module Config (
     Config (..),
     UserRepoConfig (..),
     SlurmConfig (..),
+    AgentConfig (..),
+    defaultAgentConfig,
     loadConfig,
     defaultConfigPath,
     resolveConfigPath,
@@ -32,8 +34,33 @@ data SlurmConfig = SlurmConfig
     }
     deriving (Show)
 
+data AgentConfig = AgentConfig
+    { agentSboxCommand :: FilePath
+    , agentSboxArgs :: [Text]
+    , agentRunnerCommand :: FilePath
+    , agentRunnerArgs :: [Text]
+    , agentTimeoutSeconds :: Int
+    , agentOutputLimitBytes :: Int
+    , agentSessionRetentionDays :: Int
+    , agentBootstrapPrompt :: Text
+    }
+    deriving (Show)
+
+defaultAgentConfig :: AgentConfig
+defaultAgentConfig =
+    AgentConfig
+        { agentSboxCommand = "sbox"
+        , agentSboxArgs = ["--bind", "{home}", "{home}"]
+        , agentRunnerCommand = "pi"
+        , agentRunnerArgs = ["-p", "-c", "{prompt}"]
+        , agentTimeoutSeconds = 1800
+        , agentOutputLimitBytes = 1048576
+        , agentSessionRetentionDays = 7
+        , agentBootstrapPrompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
+        }
+
 data Config where
-    Config :: {configUserRepo :: UserRepoConfig, configSlurm :: SlurmConfig} -> Config
+    Config :: {configUserRepo :: UserRepoConfig, configSlurm :: SlurmConfig, configAgent :: AgentConfig} -> Config
     deriving (Show)
 
 userRepoCodec :: TomlCodec UserRepoConfig
@@ -61,11 +88,39 @@ slurmCodec =
     nonEmptyExtra extra = case extra of
         [] -> Nothing
         xs -> Just xs
+
+agentCodec :: TomlCodec AgentConfig
+agentCodec =
+    mkAgentConfig
+        <$> Toml.dioptional (Toml.string "sbox-command") .= (Just . agentSboxCommand)
+        <*> Toml.dioptional (Toml.arrayOf Toml._Text "sbox-args") .= (Just . agentSboxArgs)
+        <*> Toml.dioptional (Toml.string "runner-command") .= (Just . agentRunnerCommand)
+        <*> Toml.dioptional (Toml.arrayOf Toml._Text "runner-args") .= (Just . agentRunnerArgs)
+        <*> Toml.dioptional (Toml.int "timeout-seconds") .= (Just . agentTimeoutSeconds)
+        <*> Toml.dioptional (Toml.int "output-limit-bytes") .= (Just . agentOutputLimitBytes)
+        <*> Toml.dioptional (Toml.int "session-retention-days") .= (Just . agentSessionRetentionDays)
+        <*> Toml.dioptional (Toml.text "bootstrap-prompt") .= (Just . agentBootstrapPrompt)
+  where
+    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention mbootstrap =
+        AgentConfig
+            { agentSboxCommand = fromMaybe (agentSboxCommand defaultAgentConfig) msbox
+            , agentSboxArgs = fromMaybe (agentSboxArgs defaultAgentConfig) msboxArgs
+            , agentRunnerCommand = fromMaybe (agentRunnerCommand defaultAgentConfig) mrunner
+            , agentRunnerArgs = fromMaybe (agentRunnerArgs defaultAgentConfig) mrunnerArgs
+            , agentTimeoutSeconds = fromMaybe (agentTimeoutSeconds defaultAgentConfig) mtimeout
+            , agentOutputLimitBytes = fromMaybe (agentOutputLimitBytes defaultAgentConfig) mlimit
+            , agentSessionRetentionDays = fromMaybe (agentSessionRetentionDays defaultAgentConfig) mretention
+            , agentBootstrapPrompt = fromMaybe (agentBootstrapPrompt defaultAgentConfig) mbootstrap
+            }
+
 configCodec :: TomlCodec Config
 configCodec =
-    Config
+    mkConfig
         <$> Toml.table userRepoCodec "user-repo" .= configUserRepo
         <*> Toml.dimap Just (fromMaybe defaultSlurmConfig) (Toml.dioptional (Toml.table slurmCodec "slurm")) .= configSlurm
+        <*> Toml.dioptional (Toml.table agentCodec "agent") .= (Just . configAgent)
+  where
+    mkConfig userRepo slurm mAgent = Config userRepo slurm (fromMaybe defaultAgentConfig mAgent)
 
 defaultConfigPath :: FilePath
 defaultConfigPath = "/home/backend/config.toml"
