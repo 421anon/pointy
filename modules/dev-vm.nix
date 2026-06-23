@@ -100,13 +100,6 @@ in
       install -m 0600 -o backend -g backend /shared/dev-config/agent-env /home/backend/agent-env
     fi
 
-    # Optional pi-mono config directory (models.json etc.) made visible to the runner sandbox.
-    if [ -d /shared/dev-config/pi ]; then
-      rm -rf /home/backend/.pi
-      cp -r /shared/dev-config/pi /home/backend/.pi
-      chown -R backend:backend /home/backend/.pi
-      chmod -R u=rwX,go= /home/backend/.pi
-    fi
   '';
 
   # Simple nginx configuration for dev

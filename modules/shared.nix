@@ -15,14 +15,16 @@ let
   # so reserve 512 MiB for the OS/hypervisor rather than advertising all VM RAM.
   slurmRealMemory = toString ((config.virtualisation.memorySize or 1536) - 512);
   cfg = config.services.pointy-backend;
+  defaultPiConfigDir = "${self}/backend/pi";
 
   agentEnvLink = lib.optionalString (cfg.agentEnvFile != null) ''
     ln -sfn ${lib.escapeShellArg (toString cfg.agentEnvFile)} /home/backend/agent-env
   '';
 
-  piConfigLink = lib.optionalString (cfg.piConfigDir != null) ''
+  piConfigLink = ''
     rm -rf /home/backend/.pi
     cp -r ${lib.escapeShellArg (toString cfg.piConfigDir)} /home/backend/.pi
+    chown -R backend:backend /home/backend/.pi
     chmod -R u=rwX,go= /home/backend/.pi
   '';
 in
@@ -46,14 +48,12 @@ in
     };
 
     piConfigDir = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
-      default = null;
+      type = lib.types.path;
+      default = defaultPiConfigDir;
+      defaultText = lib.literalExpression "\${self}/backend/pi";
       description = ''
-        Path on the host to a directory whose contents are copied to /home/backend/.pi
-        before the backend service starts (e.g. agent/models.json for pi-mono provider
-        definitions). The directory itself should not contain secrets; reference
-        $DEEPSEEK_API_KEY (etc.) inside models.json and put the actual key in
-        `agentEnvFile`.
+        Directory copied to /home/backend/.pi before the backend starts.
+        Defaults to backend/pi from this flake.
       '';
       example = lib.literalExpression "./pi-config";
     };

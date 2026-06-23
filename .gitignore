@@ -1,6 +1,6 @@
 /nixos.qcow2
 
 
-# Per-machine agent runner secrets / config (consumed by dev-vm preStart)
+# Per-machine agent runner secrets
 /backend/agent-env
-/backend/pi/
+

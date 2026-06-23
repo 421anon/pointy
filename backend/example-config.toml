@@ -20,12 +20,6 @@ enforcement = "scheduler"
 #   {sessionRoot} {worktree}/.., useful for binding turn logs etc.
 #   {sessionId}   short opaque session id
 #   {prompt}      the user-supplied prompt (only for runner-args)
-#
-# Defaults assume pi-mono (https://api-docs.deepseek.com/quick_start/agent_integrations/pi_mono).
-# To wire DeepSeek: export DEEPSEEK_API_KEY in the backend service environment
-# (the runner inherits a whitelist that includes provider API keys), then make
-# the host pi config visible inside the sandbox, e.g.:
-#   sbox-args = ["--bind", "{home}", "{home}", "--ro-bind", "/home/backend/.pi", "{home}/.pi"]
 sbox-command = "sbox"
 sbox-args = ["--bind", "{home}", "{home}"]
 runner-command = "pi"

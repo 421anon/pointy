@@ -165,7 +165,7 @@ runBootstrapProcess cfg worktreeDir home piSessionDir = do
     realHome <- getHomeDirectory
     repoPath <- userRepoPath
     let realPiAgentDir = realHome </> ".pi" </> "agent"
-        pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
+    let pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
         passthroughKeys =
             [ "USER"
             , "LOGNAME"
@@ -191,9 +191,7 @@ runBootstrapProcess cfg worktreeDir home piSessionDir = do
         runnerEnv =
             [ ("PATH", pathValue)
             , ("HOME", home)
-            , -- Use the real Pi agent config (models.json, extensions, etc.) from the backend home.
-              -- PI_CODING_AGENT_SESSION_DIR keeps bootstrap sessions isolated from normal sessions.
-              ("PI_CODING_AGENT_DIR", realPiAgentDir)
+            , ("PI_CODING_AGENT_DIR", realPiAgentDir)
             , ("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
             ]
                 ++ passthrough
@@ -205,8 +203,6 @@ runBootstrapProcess cfg worktreeDir home piSessionDir = do
             map
                 (expandBootstrapArg worktreeDir home)
                 (agentSboxArgs cfg)
-        -- Bind the real Pi agent config dir read-only so Pi can load models and extensions.
-        -- The path is bound at its own host path so PI_CODING_AGENT_DIR resolves inside sbox.
         piConfigBind = ["--ro-bind", realPiAgentDir, realPiAgentDir]
         -- Bind the main git repo so the worktree's .git file resolves inside sbox.
         gitDirBind = ["--ro-bind", repoPath, repoPath]
