@@ -7,6 +7,7 @@ module Agent.WarmSession (
     getOrBuildWarmSession,
 ) where
 
+import Agent.Sandbox (nixDaemonBindArgs)
 import Agent.Session (agentSessionsRoot)
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
@@ -164,6 +165,7 @@ runBootstrapProcess cfg worktreeDir home piSessionDir = do
     baseEnv <- getEnvironment
     realHome <- getHomeDirectory
     repoPath <- userRepoPath
+    nixBind <- nixDaemonBindArgs
     let realPiAgentDir = realHome </> ".pi" </> "agent"
     let pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
         passthroughKeys =
@@ -206,7 +208,6 @@ runBootstrapProcess cfg worktreeDir home piSessionDir = do
         piConfigBind = ["--ro-bind", realPiAgentDir, realPiAgentDir]
         -- Bind the main git repo so the worktree's .git file resolves inside sbox.
         gitDirBind = ["--ro-bind", repoPath, repoPath]
-        nixBind = ["--bind", "/run/nix-daemon-socket", "/var/run/nix-daemon-socket"]
         args = sboxArgExpanded ++ piConfigBind ++ gitDirBind ++ nixBind ++ ["--"] ++ runnerArgs
         process =
             (proc (agentSboxCommand cfg) args)

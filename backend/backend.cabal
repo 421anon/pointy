@@ -22,6 +22,7 @@ executable backend
                    UserRepo,
                    NixRepl,
                    OutPaths,
+                   Agent.Sandbox,
                    Agent.Session,
                    Agent.Git,
                    Agent.Runner,

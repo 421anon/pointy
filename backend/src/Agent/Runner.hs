@@ -8,6 +8,7 @@ module Agent.Runner (
 ) where
 
 import Agent.Git (commitAgentTurnOutputs)
+import Agent.Sandbox (nixDaemonBindArgs)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
@@ -136,6 +137,7 @@ runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     baseEnv <- getEnvironment
     repoPath <- userRepoPath
+    nixBind <- nixDaemonBindArgs
     let pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
         sessionRoot = takeDirectory (worktreePath session_)
         runnerHome = sessionRoot </> "home"
@@ -193,14 +195,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
         warmBindArgs = case mWarmFile of
             Just warmFile -> ["--ro-bind", warmFile, warmFile]
             Nothing -> []
-        -- Bind the main git repo and nix daemon so nix flake evaluation works.
-        -- Without the git repo bind the worktree's .git file can't resolve.
-        -- Without the daemon socket nix eval fails with 'cannot connect to socket'.
         gitDirBind = ["--ro-bind", repoPath, repoPath]
-        -- nix is built with store = unix:///var/run/nix-daemon-socket, but sbox doesn't
-        -- preserve the host's /var/run -> /run symlink, so we bind the socket directly
-        -- at /var/run/nix-daemon-socket where nix expects it.
-        nixBind = ["--bind", "/run/nix-daemon-socket", "/var/run/nix-daemon-socket"]
         args =
             map (expandArg session_ promptText) (agentSboxArgs cfg)
                 ++ warmBindArgs
