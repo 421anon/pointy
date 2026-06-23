@@ -300,11 +300,12 @@ finishTurn cfg _session turn exitCode = do
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
         Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
         Right (Right _) -> return ()
-    -- saveTurn is always called; forkIO swallows exceptions so an uncaught throw above
-    -- would leave the turn stuck as "running" forever.
     now <- getCurrentTime
-    void $ (try (saveTurn turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}) :: IO (Either SomeException ()))
-    return ()
+    let finalTurn = turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}
+    saveResult <- try (saveTurn finalTurn) :: IO (Either SomeException ())
+    case saveResult of
+        Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Turn finalization error: " <> T.pack (show ex))
+        Right _ -> return ()
 
 combineErrorMessages :: [Maybe Text] -> Maybe Text
 combineErrorMessages messages =
@@ -357,7 +358,12 @@ streamLoop turn offset heartbeatTick = do
         chunk = T.drop offset content
         newOffset = contentLength
     mTurn <- findTurn (turnId turn)
-    let done = maybe False ((/= "running") . turnStatus) mTurn
+    mSession <- loadSessionById (turnSessionId turn)
+    let turnDone = maybe False ((/= "running") . turnStatus) mTurn
+        noLongerActive = case mSession of
+            Left _ -> True
+            Right session_ -> activeTurnId session_ /= Just (turnId turn)
+        done = turnDone || noLongerActive
     if not (T.null chunk)
         then
             return $

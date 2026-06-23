@@ -26,7 +26,6 @@ import Agent.Session (
     PreparedApply (..),
     freshSessionLayout,
     listSessions,
-    listTurns,
     listTurnsWithLogs,
     loadSessionById,
     newSessionId,
@@ -39,6 +38,7 @@ import Agent.Session (
     touchSession,
  )
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
+import Control.Exception (IOException, try)
 import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -49,9 +49,9 @@ import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Time.Clock (getCurrentTime)
+import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import UserRepo (fetchRepoStrict, runGitIn, runGitWithSshKey, userRepoPath)
@@ -124,7 +124,8 @@ loadAgentSessionView :: Text -> ExceptT String IO AgentSessionView
 loadAgentSessionView sid = do
     session_ <- loadSessionOrThrow sid
     state <- collectGitState session_
-    turns_ <- liftIO $ sortOn turnStartedAtCompat <$> listTurnsWithLogs sid
+    loadedTurns <- liftIO $ sortOn turnStartedAtCompat <$> listTurnsWithLogs sid
+    turns_ <- liftIO $ mapM (repairInactiveRunningTurn session_) loadedTurns
     return $ AgentSessionView session_ state turns_
 
 renameAgentSession :: Text -> Text -> ExceptT String IO AgentSessionView
@@ -455,20 +456,12 @@ sweepStaleRunningSessions = do
     mapM_ resetIfRunning sessions
   where
     resetIfRunning session_ = do
-        -- Fix stuck turns first so the frontend doesn't show stale ChatPending.
-        turns_ <- listTurns (sessionId session_)
+        -- A turn is live only while the session points at it. Anything else is
+        -- stale metadata from an interrupted final write; repair it from the log.
+        turns_ <- listTurnsWithLogs (sessionId session_)
+        let inactiveSession = session_{activeTurnId = Nothing}
+        mapM_ (repairInactiveRunningTurn inactiveSession) turns_
         now <- getCurrentTime
-        let stuckTurns = filter ((== "running") . turnStatus) turns_
-        mapM_
-            ( \t ->
-                saveTurn
-                    t
-                        { turnStatus = "failed"
-                        , turnExitCode = Just (-1)
-                        , turnFinishedAt = Just now
-                        }
-            )
-            stuckTurns
         -- Fix the session itself.
         if status session_ == "running"
             then
@@ -483,3 +476,45 @@ sweepStaleRunningSessions = do
                 Just _ ->
                     saveSession session_{activeTurnId = Nothing, updatedAt = now}
                 Nothing -> return ()
+
+repairInactiveRunningTurn :: AgentSession -> AgentTurn -> IO AgentTurn
+repairInactiveRunningTurn session_ turn
+    | turnStatus turn /= "running" = return turn
+    | activeTurnId session_ == Just (turnId turn) = return turn
+    | otherwise = do
+        finishedAt <- turnTerminalTime session_ turn
+        let exitCode = inferTurnExitCode (turnLog turn)
+            finalCode = maybe (-1) id exitCode
+            finalStatus =
+                if exitCode == Just 0
+                    then "succeeded"
+                    else "failed"
+            repaired =
+                turn
+                    { turnStatus = finalStatus
+                    , turnExitCode = Just finalCode
+                    , turnFinishedAt = Just finishedAt
+                    }
+        saveTurn repaired
+        return repaired
+
+turnTerminalTime :: AgentSession -> AgentTurn -> IO UTCTime
+turnTerminalTime session_ turn = do
+    result <- try (getModificationTime (turnLogPath turn)) :: IO (Either IOException UTCTime)
+    return $ case result of
+        Right modified -> modified
+        Left _ -> updatedAt session_
+
+inferTurnExitCode :: Text -> Maybe Int
+inferTurnExitCode logText = go (reverse (T.lines logText))
+  where
+    prefix = "[system] Agent turn finished with exit code "
+
+    go [] = Nothing
+    go (line : rest) =
+        case T.stripPrefix prefix line of
+            Just codeText ->
+                case reads (T.unpack codeText) of
+                    [(code, "")] -> Just code
+                    _ -> go rest
+            Nothing -> go rest
