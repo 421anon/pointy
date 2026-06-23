@@ -328,6 +328,15 @@ loadPresets =
         |> Flow.return ()
 
 
+reloadWorkspaceData : Flow Model ()
+reloadWorkspaceData =
+    Flow.over (projects << records) ApiData.toLoading
+        |> Flow.seq (Flow.over commitHash ApiData.toLoading)
+        |> Flow.seq loadStepConfig
+        |> Flow.seq loadPresets
+        |> Flow.seq loadProjects
+
+
 chooseProjectPreset : String -> Flow Model ()
 chooseProjectPreset =
     Flow.setAll (projects << edited << just << templateSource) << FromPreset
@@ -2551,6 +2560,7 @@ applyAgentChanges =
                                                             case confirmResult of
                                                                 Ok appliedView ->
                                                                     handleAgentSessionResult False (Ok appliedView)
+                                                                        |> Flow.seq reloadWorkspaceData
                                                                         |> Flow.seq loadAgentSessions
                                                                         |> Flow.seq (clearChangesetOperation view.session.sessionId)
 
