@@ -85,7 +85,7 @@
           };
         }) // {
       nixosModules = {
-        shared = args: import ./modules/shared.nix (args // { inherit self sbox llm-agents; });
+        shared = { config, lib, pkgs, ... }@args: import ./modules/shared.nix (args // { inherit self sbox llm-agents; });
         pointy-host = ./modules/pointy-host.nix;
         dev-vm = ./modules/dev-vm.nix;
         screenshots-vm = ./modules/screenshots-vm.nix;
