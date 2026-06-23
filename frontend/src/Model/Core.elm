@@ -202,6 +202,7 @@ type alias ChatTurn =
     , status : ChatTurnStatus
     }
 
+
 type ChatChangesetState
     = ChatChangesetProposed
     | ChatChangesetNeedsReview String
@@ -220,6 +221,7 @@ type ChatEntry
     = ChatTurnEntry ChatTurn
     | ChatChangesetEntry ChatChangeset
 
+
 type ChangesetOperationKind
     = ApplyingChangeset
     | DiscardingChangeset
@@ -230,6 +232,7 @@ type alias ChangesetOperation =
     , kind : ChangesetOperationKind
     }
 
+
 type alias AgentSessionNameEdit =
     { sessionId : String
     , value : String
@@ -237,16 +240,14 @@ type alias AgentSessionNameEdit =
     }
 
 
-
-
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
     , selectedSessionId : Maybe String
     , prompt : String
     , isPanelOpen : Bool
-    , isSidebarOpen : Bool
+    , isMobileSidebarOpen : Bool
     , isMaximized : Bool
-    , isSidebarCollapsed : Bool
+    , isDesktopSidebarCollapsed : Bool
     , activeTurnStream : Maybe String
     , chatEntries : List ChatEntry
     , chunkBuffer : String
@@ -264,9 +265,9 @@ initAgentState =
     , selectedSessionId = Nothing
     , prompt = ""
     , isPanelOpen = False
-    , isSidebarOpen = False
+    , isMobileSidebarOpen = False
     , isMaximized = False
-    , isSidebarCollapsed = False
+    , isDesktopSidebarCollapsed = False
     , activeTurnStream = Nothing
     , chatEntries = []
     , chunkBuffer = ""

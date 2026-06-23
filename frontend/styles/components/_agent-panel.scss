@@ -217,35 +217,36 @@
   flex: 1;
 }
 
-.agent-panel__split.is-sidebar-collapsed {
-  grid-template-columns: 44px 1fr;
-}
+@media (min-width: 701px) {
+  .agent-panel__split.is-desktop-sidebar-collapsed {
+    grid-template-columns: 44px 1fr;
+  }
 
-.agent-panel__split.is-sidebar-collapsed .agent-panel__sidebar {
-  align-items: center;
-  padding: var(--spacing-sm) 0;
-}
+  .agent-panel__split.is-desktop-sidebar-collapsed .agent-panel__sidebar {
+    align-items: center;
+    padding: var(--spacing-sm) 0;
+  }
 
-.agent-panel__split.is-sidebar-collapsed .agent-panel__sidebar-content {
-  display: none;
-}
+  .agent-panel__split.is-desktop-sidebar-collapsed .agent-panel__sidebar-content {
+    display: none;
+  }
 
+  .agent-panel__split.is-desktop-sidebar-collapsed .agent-panel__sidebar-header {
+    justify-content: center;
+    padding: 0;
+  }
 
-.agent-panel__split.is-sidebar-collapsed .agent-panel__sidebar-header {
-  justify-content: center;
-  padding: 0;
-}
+  .agent-panel__split.is-desktop-sidebar-collapsed .agent-panel__sidebar-header h3 {
+    display: none;
+  }
 
-.agent-panel__split.is-sidebar-collapsed .agent-panel__sidebar-header h3 {
-  display: none;
-}
+  .agent-panel__split.is-desktop-sidebar-collapsed .agent-panel__new-chat {
+    padding-inline: var(--spacing-xs);
+  }
 
-.agent-panel__split.is-sidebar-collapsed .agent-panel__new-chat {
-  padding-inline: var(--spacing-xs);
-}
-
-.agent-panel__split.is-sidebar-collapsed .agent-panel__new-chat span:not(.material-symbols-outlined) {
-  display: none;
+  .agent-panel__split.is-desktop-sidebar-collapsed .agent-panel__new-chat span:not(.material-symbols-outlined) {
+    display: none;
+  }
 }
 
 .agent-panel__body,
@@ -872,14 +873,6 @@
     display: none;
   }
 
-  .agent-panel__split.is-sidebar-collapsed {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .agent-panel__split.is-sidebar-collapsed .agent-panel__sidebar {
-    display: flex;
-  }
 
   .agent-panel__sidebar {
     gap: 0;
@@ -914,7 +907,7 @@
     transition: transform 120ms ease-in-out;
   }
 
-  .agent-panel__sidebar.is-open .agent-panel__sidebar-toggle::after {
+  .agent-panel__sidebar.is-mobile-sidebar-open .agent-panel__sidebar-toggle::after {
     transform: rotate(225deg);
   }
 
@@ -962,7 +955,7 @@
     grid-template-columns: 1fr;
     flex-direction: column;
   }
-  .agent-panel__sidebar.is-open .agent-panel__sidebar-content {
+  .agent-panel__sidebar.is-mobile-sidebar-open .agent-panel__sidebar-content {
     display: flex;
   }
 }

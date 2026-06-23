@@ -1825,10 +1825,6 @@ closeAgentTurnStream =
     callJs "closeAgentTurnStream" (\_ -> Encode.null) (Decode.succeed ()) ()
 
 
-updateAgentState : (Model.AgentState -> Model.AgentState) -> Flow Model ()
-updateAgentState fn =
-    Flow.modify (\(Model.Model m) -> Model.Model { m | agent = fn m.agent })
-
 agentChatId : String
 agentChatId =
     "agent-chat"
@@ -1846,7 +1842,7 @@ scrollAgentChatToBottom =
 
 setAgentSessions : ApiData (List Model.AgentSessionView) -> Flow Model ()
 setAgentSessions data =
-    updateAgentState (\agentState -> { agentState | sessions = data })
+    Flow.over agent (\agentState -> { agentState | sessions = data })
 
 
 setAgentSessionsLoading : Flow Model ()
@@ -1911,6 +1907,7 @@ persistedTranscript view =
     , String.concat (List.map .turnLog turns)
     )
 
+
 isChangesetLifecycleTurn : Model.AgentTurn -> Bool
 isChangesetLifecycleTurn turn =
     turn.turnPrompt == "Apply proposed changeset" || turn.turnPrompt == "Discard proposed changeset"
@@ -1939,6 +1936,7 @@ appendPersistedTurn turn entries =
                     |> List.filter (not << String.isEmpty)
         in
         List.foldl appendChatLine seeded logLines
+
 
 changesetFromLifecycleTurn : Model.AgentTurn -> Model.ChatChangeset
 changesetFromLifecycleTurn turn =
@@ -2069,7 +2067,7 @@ hydrateSelectedAgentSession =
             (\model ->
                 case Model.selectedSessionView (Model.getAgent model) of
                     Just view ->
-                        updateAgentState
+                        Flow.over agent
                             (\s ->
                                 if shouldKeepLiveTranscript view s then
                                     s
@@ -2101,7 +2099,7 @@ resumeSelectedAgentTurn =
                                     Flow.pure ()
 
                                 else
-                                    updateAgentState (\s -> { s | activeTurnStream = Just turnId })
+                                    Flow.over agent (\s -> { s | activeTurnStream = Just turnId })
                                         |> Flow.seq (Flow.async (listenAndProcessAgentTurn turnId))
                                         |> Flow.return ()
 
@@ -2120,7 +2118,7 @@ handleAgentSessionResult :
 handleAgentSessionResult selectOnSuccess result =
     case result of
         Ok view ->
-            updateAgentState
+            Flow.over agent
                 (\agentState ->
                     let
                         withView =
@@ -2130,7 +2128,7 @@ handleAgentSessionResult selectOnSuccess result =
                             if selectOnSuccess then
                                 { withView
                                     | selectedSessionId = Just view.session.sessionId
-                                    , isSidebarOpen = False
+                                    , isMobileSidebarOpen = False
                                 }
 
                             else
@@ -2172,7 +2170,7 @@ loadAgentSessions =
                                                 Nothing ->
                                                     case List.head views of
                                                         Just first ->
-                                                            updateAgentState
+                                                            Flow.over agent
                                                                 (\s -> { s | selectedSessionId = Just first.session.sessionId })
 
                                                         Nothing ->
@@ -2190,7 +2188,7 @@ loadAgentSessions =
 
 selectAgentSession : String -> Flow Model ()
 selectAgentSession sessionId =
-    updateAgentState
+    Flow.over agent
         (\s ->
             { s
                 | selectedSessionId = Just sessionId
@@ -2199,7 +2197,7 @@ selectAgentSession sessionId =
                 , chatEntries = []
                 , chunkBuffer = ""
                 , showRawLog = False
-                , isSidebarOpen = False
+                , isMobileSidebarOpen = False
                 , sessionNameEdit = Nothing
             }
         )
@@ -2216,30 +2214,29 @@ toggleAgentPanel =
                     nextOpen =
                         not (Model.getAgent model).isPanelOpen
                 in
-                updateAgentState (\s -> { s | isPanelOpen = nextOpen, isSidebarOpen = False })
+                Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isMobileSidebarOpen = False })
                     |> Flow.seq (Flow.when nextOpen loadAgentSessions)
             )
 
 
-
-toggleAgentSidebar : Flow Model ()
-toggleAgentSidebar =
-    updateAgentState (\s -> { s | isSidebarOpen = not s.isSidebarOpen })
+toggleAgentMobileSidebar : Flow Model ()
+toggleAgentMobileSidebar =
+    Flow.over agent (\s -> { s | isMobileSidebarOpen = not s.isMobileSidebarOpen })
 
 
 toggleAgentMaximized : Flow Model ()
 toggleAgentMaximized =
-    updateAgentState (\s -> { s | isMaximized = not s.isMaximized })
+    Flow.over agent (\s -> { s | isMaximized = not s.isMaximized })
 
 
-toggleAgentSidebarCollapsed : Flow Model ()
-toggleAgentSidebarCollapsed =
-    updateAgentState (\s -> { s | isSidebarCollapsed = not s.isSidebarCollapsed })
+toggleAgentDesktopSidebarCollapsed : Flow Model ()
+toggleAgentDesktopSidebarCollapsed =
+    Flow.over agent (\s -> { s | isDesktopSidebarCollapsed = not s.isDesktopSidebarCollapsed })
 
 
 startAgentSessionNameEdit : String -> String -> Flow Model ()
 startAgentSessionNameEdit sessionId currentName =
-    updateAgentState
+    Flow.over agent
         (\s ->
             { s
                 | sessionNameEdit =
@@ -2254,7 +2251,7 @@ startAgentSessionNameEdit sessionId currentName =
 
 updateAgentSessionNameEdit : String -> Flow Model ()
 updateAgentSessionNameEdit value =
-    updateAgentState
+    Flow.over agent
         (\s ->
             { s
                 | sessionNameEdit =
@@ -2265,7 +2262,7 @@ updateAgentSessionNameEdit value =
 
 cancelAgentSessionNameEdit : Flow Model ()
 cancelAgentSessionNameEdit =
-    updateAgentState (\s -> { s | sessionNameEdit = Nothing })
+    Flow.over agent (\s -> { s | sessionNameEdit = Nothing })
 
 
 saveAgentSessionName : Flow Model ()
@@ -2286,7 +2283,7 @@ saveAgentSessionName =
                             addToast False "Enter a chat name first."
 
                         else
-                            updateAgentState (setSessionNameEditSaving edit.sessionId True)
+                            Flow.over agent (setSessionNameEditSaving edit.sessionId True)
                                 |> Flow.seq
                                     (AgentApi.renameSession edit.sessionId name
                                         |> Flow.andThen
@@ -2294,10 +2291,10 @@ saveAgentSessionName =
                                                 case result of
                                                     Ok view ->
                                                         handleAgentSessionResult False (Ok view)
-                                                            |> Flow.seq (updateAgentState (clearSessionNameEdit edit.sessionId))
+                                                            |> Flow.seq (Flow.over agent (clearSessionNameEdit edit.sessionId))
 
                                                     Err err ->
-                                                        updateAgentState (setSessionNameEditSaving edit.sessionId False)
+                                                        Flow.over agent (setSessionNameEditSaving edit.sessionId False)
                                                             |> Flow.seq (addToast False (Http.errorMessage err))
                                             )
                                     )
@@ -2331,6 +2328,7 @@ clearSessionNameEdit sessionId agentState =
         Nothing ->
             agentState
 
+
 archiveAgentSession : String -> Flow Model ()
 archiveAgentSession sessionId =
     AgentApi.archive sessionId
@@ -2340,7 +2338,7 @@ archiveAgentSession sessionId =
                 |> Flow.andThen
                     (\model ->
                         if (Model.getAgent model).selectedSessionId == Just sessionId then
-                            updateAgentState
+                            Flow.over agent
                                 (\s ->
                                     { s
                                         | selectedSessionId = Nothing
@@ -2364,7 +2362,7 @@ deleteAgentSession sessionId =
             (\result ->
                 case result of
                     Ok () ->
-                        updateAgentState
+                        Flow.over agent
                             (\s ->
                                 let
                                     remaining =
@@ -2434,27 +2432,27 @@ confirmDeleteAgentSession sessionId =
 
 toggleAgentArchived : Flow Model ()
 toggleAgentArchived =
-    updateAgentState (\s -> { s | showArchived = not s.showArchived })
+    Flow.over agent (\s -> { s | showArchived = not s.showArchived })
 
 
 toggleAgentLog : Flow Model ()
 toggleAgentLog =
-    updateAgentState (\agentState -> { agentState | showRawLog = not agentState.showRawLog })
+    Flow.over agent (\agentState -> { agentState | showRawLog = not agentState.showRawLog })
 
 
 updateAgentPrompt : String -> Flow Model ()
 updateAgentPrompt prompt =
-    updateAgentState (\agentState -> { agentState | prompt = prompt })
+    Flow.over agent (\agentState -> { agentState | prompt = prompt })
 
 
 setChangesetOperation : String -> Model.ChangesetOperationKind -> Flow Model ()
 setChangesetOperation sessionId kind =
-    updateAgentState (\agentState -> { agentState | changesetOperation = Just { sessionId = sessionId, kind = kind } })
+    Flow.over agent (\agentState -> { agentState | changesetOperation = Just { sessionId = sessionId, kind = kind } })
 
 
 clearChangesetOperation : String -> Flow Model ()
 clearChangesetOperation sessionId =
-    updateAgentState
+    Flow.over agent
         (\agentState ->
             case agentState.changesetOperation of
                 Just operation ->
@@ -2515,7 +2513,7 @@ submitAgentPrompt =
                                     (\result ->
                                         case result of
                                             Ok turn ->
-                                                updateAgentState
+                                                Flow.over agent
                                                     (\agentState ->
                                                         { agentState
                                                             | prompt = ""
@@ -2628,14 +2626,14 @@ onAgentTurnIn : Decode.Value -> Flow Model ()
 onAgentTurnIn value =
     case Decode.decodeValue AgentApi.turnEvent value of
         Ok (Model.AgentTurnChunk { turnId, chunk }) ->
-            withActiveAgentTurn turnId (updateAgentState (ingestAgentChunk chunk) |> Flow.seq scrollAgentChatToBottom)
+            withActiveAgentTurn turnId (Flow.over agent (ingestAgentChunk chunk) |> Flow.seq scrollAgentChatToBottom)
 
         Ok (Model.AgentTurnDone turnId) ->
             withActiveAgentTurn turnId
-                (updateAgentState (finalizeChatTurn Nothing)
+                (Flow.over agent (finalizeChatTurn Nothing)
                     |> Flow.seq scrollAgentChatToBottom
                     |> Flow.seq
-                        (updateAgentState (\agentState -> { agentState | activeTurnStream = Nothing }))
+                        (Flow.over agent (\agentState -> { agentState | activeTurnStream = Nothing }))
                     |> Flow.seq
                         (Flow.get
                             |> Flow.andThen
@@ -2654,7 +2652,7 @@ onAgentTurnIn value =
             Flow.pure ()
 
         Ok (Model.AgentTurnError err) ->
-            updateAgentState (finalizeChatTurn (Just err))
+            Flow.over agent (finalizeChatTurn (Just err))
                 |> Flow.seq scrollAgentChatToBottom
                 |> Flow.seq (addToast False err)
 
@@ -2742,7 +2740,7 @@ splitLogPrefix line =
 appendToCurrentAssistant : String -> List Model.ChatEntry -> List Model.ChatEntry
 appendToCurrentAssistant body entries =
     case List.reverse entries of
-        Model.ChatTurnEntry last :: rest ->
+        (Model.ChatTurnEntry last) :: rest ->
             let
                 separator =
                     if String.isEmpty last.assistant then
@@ -2772,7 +2770,7 @@ finalizeChatTurn mError agentState =
                 ingestAgentChunk "\n" agentState
     in
     case List.reverse flushed.chatEntries of
-        Model.ChatTurnEntry last :: rest ->
+        (Model.ChatTurnEntry last) :: rest ->
             let
                 status =
                     case mError of

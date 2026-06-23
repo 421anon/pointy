@@ -78,7 +78,7 @@ viewSessionBody agent =
         loaded =
             ApiData.withDefault [] agent.sessions
     in
-    Html.div [ classList [ ( "agent-panel__split", True ), ( "is-sidebar-collapsed", agent.isSidebarCollapsed ) ] ]
+    Html.div [ classList [ ( "agent-panel__split", True ), ( "is-desktop-sidebar-collapsed", agent.isDesktopSidebarCollapsed ) ] ]
         [ viewSessionSidebar agent loaded
         , viewSessionDetail agent loaded
         ]
@@ -89,7 +89,7 @@ viewSessionSidebar agent loaded =
     Html.div
         [ classList
             [ ( "agent-panel__sidebar", True )
-            , ( "is-open", agent.isSidebarOpen )
+            , ( "is-mobile-sidebar-open", agent.isMobileSidebarOpen )
             ]
         ]
         [ Html.div [ class "agent-panel__sidebar-header" ]
@@ -105,10 +105,10 @@ viewSessionSidebar agent loaded =
             ]
         , Html.button
             [ class "agent-panel__sidebar-toggle"
-            , Events.onClick Actions.toggleAgentSidebar
+            , Events.onClick Actions.toggleAgentMobileSidebar
             , attribute "aria-controls" "agent-panel-sidebar-content"
             , attribute "aria-expanded"
-                (if agent.isSidebarOpen then
+                (if agent.isMobileSidebarOpen then
                     "true"
 
                  else
@@ -123,9 +123,9 @@ viewSessionSidebar agent loaded =
             (viewSessionSidebarContent agent loaded)
         , Html.button
             [ class "icon-btn agent-panel__sidebar-collapse"
-            , Events.onClick Actions.toggleAgentSidebarCollapsed
+            , Events.onClick Actions.toggleAgentDesktopSidebarCollapsed
             , title
-                (if agent.isSidebarCollapsed then
+                (if agent.isDesktopSidebarCollapsed then
                     "Show chats"
 
                  else
@@ -133,7 +133,7 @@ viewSessionSidebar agent loaded =
                 )
             ]
             [ View.Icons.icon False
-                (if agent.isSidebarCollapsed then
+                (if agent.isDesktopSidebarCollapsed then
                     "left_panel_open"
 
                  else
@@ -347,7 +347,6 @@ viewSession agent sessionView =
 
         closedChat =
             isArchivedStatus session.status
-
     in
     Html.div [ class "agent-panel__body" ]
         [ viewSessionTitle agent sessionView

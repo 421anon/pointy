@@ -88,6 +88,7 @@ discardSession : String -> Flow s (Result Http.Error Model.AgentSessionView)
 discardSession sessionId =
     postSessionView "/discard" (sessionIdBody sessionId)
 
+
 renameSession : String -> String -> Flow s (Result Http.Error Model.AgentSessionView)
 renameSession sessionId name =
     postSessionView "/rename"
@@ -96,7 +97,6 @@ renameSession sessionId name =
             , ( "name", Encode.string name )
             ]
         )
-
 
 
 postSessionView : String -> Encode.Value -> Flow s (Result Http.Error Model.AgentSessionView)
