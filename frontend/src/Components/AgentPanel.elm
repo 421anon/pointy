@@ -5,7 +5,7 @@ import Api.ApiData as ApiData exposing (ApiData(..))
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, title, type_, value)
+import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, rows, title, type_, value)
 import Html.Events as Events
 import Json.Decode as Decode
 import Keyboard
@@ -356,7 +356,7 @@ viewSession agent sessionView =
             viewClosedChat session.status
 
           else
-            viewPrompt agent runnerActive
+            viewPrompt runnerActive
         ]
 
 
@@ -496,12 +496,9 @@ viewError session =
             Html.text ""
 
 
-viewPrompt : Model.AgentState -> Bool -> Html (Flow Model ())
-viewPrompt agent runnerActive =
+viewPrompt : Bool -> Html (Flow Model ())
+viewPrompt runnerActive =
     let
-        hasPrompt =
-            not (String.isEmpty (String.trim agent.prompt))
-
         buttonText =
             if runnerActive then
                 "Working..."
@@ -517,17 +514,17 @@ viewPrompt agent runnerActive =
         , Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
                 [ class "agent-panel__prompt"
-                , value agent.prompt
+                , id "agent-prompt"
+                , rows 3
                 , placeholder "Ask for a change..."
                 , disabled runnerActive
                 , attribute "aria-label" "Agent prompt"
                 , submitShortcut runnerActive
-                , Events.onInput Actions.updateAgentPrompt
                 ]
                 []
             , Html.button
                 [ class "primary-btn agent-panel__run-button"
-                , disabled (runnerActive || not hasPrompt)
+                , disabled runnerActive
                 , Events.onClick Actions.submitAgentPrompt
                 , title "Send message"
                 ]

@@ -2440,9 +2440,14 @@ toggleAgentLog =
     Flow.over agent (\agentState -> { agentState | showRawLog = not agentState.showRawLog })
 
 
-updateAgentPrompt : String -> Flow Model ()
-updateAgentPrompt prompt =
-    Flow.over agent (\agentState -> { agentState | prompt = prompt })
+readAgentPrompt : Flow Model String
+readAgentPrompt =
+    callJs "agentPrompt" Encode.string Decode.string "read"
+
+
+clearAgentPrompt : Flow Model ()
+clearAgentPrompt =
+    callJs "agentPrompt" Encode.string (Decode.succeed ()) "clear"
 
 
 setChangesetOperation : String -> Model.ChangesetOperationKind -> Flow Model ()
@@ -2497,12 +2502,12 @@ submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
     withSelectedAgentSession
         (\view ->
-            Flow.get
+            readAgentPrompt
                 |> Flow.andThen
-                    (\model ->
+                    (\rawPrompt ->
                         let
                             prompt =
-                                String.trim (Model.getAgent model).prompt
+                                String.trim rawPrompt
                         in
                         if String.isEmpty prompt then
                             addToast False "Enter an agent prompt first."
@@ -2516,8 +2521,7 @@ submitAgentPrompt =
                                                 Flow.over agent
                                                     (\agentState ->
                                                         { agentState
-                                                            | prompt = ""
-                                                            , activeTurnStream = Just turn.turnId
+                                                            | activeTurnStream = Just turn.turnId
                                                             , turnLog = ""
                                                             , chunkBuffer = ""
                                                             , chatEntries =
@@ -2525,6 +2529,7 @@ submitAgentPrompt =
                                                                     ++ [ Model.ChatTurnEntry { prompt = prompt, assistant = "", status = Model.ChatPending } ]
                                                         }
                                                     )
+                                                    |> Flow.seq clearAgentPrompt
                                                     |> Flow.seq scrollAgentChatToBottom
                                                     |> Flow.seq (Flow.async (listenAndProcessAgentTurn turn.turnId))
                                                     |> Flow.seq (loadAgentSession view.session.sessionId)

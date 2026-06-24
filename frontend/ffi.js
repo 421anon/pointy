@@ -69,6 +69,21 @@ function toggleTheme() {
   localStorage.setItem("theme", next);
 }
 
+function agentPrompt(action) {
+  const prompt = document.getElementById("agent-prompt");
+
+  if (action === "read") {
+    return prompt?.value ?? "";
+  }
+
+  if (action === "clear" && prompt) {
+    prompt.value = "";
+    prompt.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  return null;
+}
+
 function installGutterDragListeners(app) {
   const emitEnd = () => {
     if (app.ports && app.ports.gutterDragEnd) {
@@ -192,6 +207,7 @@ export function connectPorts(app) {
     closeAgentTurnStream,
     zoomIframe,
     toggleTheme,
+    agentPrompt,
   };
 
   installGutterDragListeners(app);

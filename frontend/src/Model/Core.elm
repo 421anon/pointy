@@ -243,7 +243,6 @@ type alias AgentSessionNameEdit =
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
     , selectedSessionId : Maybe String
-    , prompt : String
     , isPanelOpen : Bool
     , isMobileSidebarOpen : Bool
     , isMaximized : Bool
@@ -263,7 +262,6 @@ initAgentState : AgentState
 initAgentState =
     { sessions = NotAsked
     , selectedSessionId = Nothing
-    , prompt = ""
     , isPanelOpen = False
     , isMobileSidebarOpen = False
     , isMaximized = False
