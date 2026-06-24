@@ -25,7 +25,6 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects)
 import NixUtils (isValidStorePath)
-import OutPaths (warmProjectOutPathsForCommit)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), err404, err500, errBody)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
@@ -55,7 +54,6 @@ runStepSync eid commit = do
         graph <- getDependencyGraph ctx eid
         stepIds <- liftEither $ topoOrder graph
 
-        warmProjectOutPathsForCommit ctx
         liftIO $ do
             outcomes <- submitGraph ctx graph stepIds
             mapConcurrently_ (finishStep ctx) (Map.toList outcomes)
