@@ -41,7 +41,6 @@ import Handlers.Projects (RawJSON, deleteProjectHandler, getProjectsHandler, pat
 import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.SrcFiles (UserRepoInfo, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler)
 import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
-
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (DirEntry, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
@@ -60,8 +59,7 @@ import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo, fetchRepo)
 
 type API =
-    "hello" :> Get '[PlainText] Text
-        :<|> "commit-hash" :> Get '[PlainText] Text
+    "commit-hash" :> Get '[PlainText] Text
         :<|> "user-repo-info" :> Get '[JSON] UserRepoInfo
         :<|> "step-files" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
         :<|> "step-files" :> "download" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
@@ -102,8 +100,7 @@ type API =
 
 server :: Server API
 server =
-    return "Hello, World!"
-        :<|> getCommitHashHandler
+    getCommitHashHandler
         :<|> getUserRepoInfoHandler
         :<|> stepListHandler
         :<|> stepDownloadHandler
