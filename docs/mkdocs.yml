@@ -64,4 +64,5 @@ nav:
     - Setting Up the User Repository: user-repo-setup.md
     - Type Reference: type-reference.md
     - CLI Reference: cli-reference.md
+  - API Reference: api.html
 docs_dir: pages

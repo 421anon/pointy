@@ -2,6 +2,7 @@
 
 module Handlers.Steps (patchStepHandler, postStepHandler, noticesHandler) where
 
+import ApiTypes (DynamicJson (..))
 import Control.Monad (forM_, when)
 import Control.Monad.Except (ExceptT (..), catchError)
 import Control.Monad.IO.Class (liftIO)
@@ -24,8 +25,8 @@ import System.FilePath (takeBaseName, (</>))
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction)
 
-patchStepHandler :: Int -> LBS.ByteString -> Handler NoContent
-patchStepHandler stepId jsonBody = do
+patchStepHandler :: Int -> DynamicJson -> Handler NoContent
+patchStepHandler stepId (DynamicJson jsonBody) = do
     case TE.decodeUtf8' (LBS.toStrict jsonBody) of
         Left utf8Err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack $ "Invalid UTF-8 in request body: " ++ show utf8Err}
         Right jsonText -> do
@@ -41,8 +42,8 @@ patchStepHandler stepId jsonBody = do
                     return NoContent
                 Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-postStepHandler :: Maybe Int -> Maybe Int -> LBS.ByteString -> Handler LBS.ByteString
-postStepHandler maybeProjectId maybeSourceId jsonBody = do
+postStepHandler :: Maybe Int -> Maybe Int -> DynamicJson -> Handler DynamicJson
+postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         stepId <- saveStep ctx Nothing jsonBody
         liftIO $ copyClonedSrcFiles worktreePath maybeSourceId stepId
@@ -65,10 +66,10 @@ postStepHandler maybeProjectId maybeSourceId jsonBody = do
             case maybeProjectId of
                 Just projectId -> liftIO $ forkBroadcastProjectStatusAtHead projectId
                 Nothing -> return ()
-            return output
+            return (DynamicJson output)
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-noticesHandler :: Int -> Maybe T.Text -> Handler LBS.ByteString
+noticesHandler :: Int -> Maybe T.Text -> Handler DynamicJson
 noticesHandler stepId mCommit = do
     result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath headCommit) -> do
         let targetCommit = maybe headCommit T.unpack mCommit
@@ -77,7 +78,7 @@ noticesHandler stepId mCommit = do
             applyExpr = "s: if s ? meta && s.meta ? pointy && s.meta.pointy ? notices then s.meta.pointy.notices else []"
         TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonApplyInRepo ctx applyExpr attr
     case result of
-        Right output -> return output
+        Right output -> return (DynamicJson output)
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 saveStep :: WriteRepoContext -> Maybe Int -> LBS.ByteString -> ExceptT String IO Int

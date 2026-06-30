@@ -35,6 +35,9 @@
               ${pkgs.elm2nix}/bin/elm2nix convert > elm-srcs.nix
               ${pkgs.elm2nix}/bin/elm2nix snapshot
             '';
+            generate-openapi = mkApp "generate-openapi" ''
+              exec ${self.packages.${system}.backend}/bin/generate-openapi "''${1:-docs/pages/openapi.json}"
+            '';
             install-elm-pkg = mkApp "install-elm-pkg" ''
               ${pkgs.elmPackages.elm}/bin/elm install "$@"
             '';
@@ -71,7 +74,11 @@
               specialArgs = { inherit self; };
             };
             backend = pkgs.haskellPackages.callCabal2nix "backend" ./backend { };
-            docs = pkgs.callPackage ./docs { };
+            docs = pkgs.callPackage ./docs {
+              openapiJson = pkgs.runCommand "openapi.json" { } ''
+                ${self.packages.${system}.backend}/bin/generate-openapi $out
+              '';
+            };
             screenshots = pkgs.runCommand "pointy-screenshots" { } ''
               mkdir -p $out/light $out/dark
               cp ${./docs/pages/screenshots}/light/*.png $out/light/

@@ -6,6 +6,8 @@
 
 module Handlers.Store (listHandler, downloadHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepRawHandler, stepExtrasHandler, DirEntry (..)) where
 
+import ApiTypes (DynamicJson (..))
+
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Monad (unless, void, when)
@@ -246,7 +248,7 @@ Returns 500 when meta.json exists but is not a JSON object, or when the
 Nix evaluation itself fails for any reason other than the extras
 attribute being absent.
 -}
-stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler LBS.ByteString
+stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler DynamicJson
 stepExtrasHandler stepId mCommit mDirPath = do
     repoPath <- liftIO userRepoPath
     commitHash <- resolveCommitHash mCommit
@@ -270,7 +272,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
                 Right (Just path) ->
                     return (Just path)
     case extrasPath of
-        Nothing -> return "{}"
+        Nothing -> return (DynamicJson "{}")
         Just extrasPath_ -> do
             assertNixStorePath extrasPath_
             let dirPath = fromMaybe "" mDirPath
@@ -287,7 +289,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
                     -- GC-root refresh when the derivation is already built, so
                     -- case (b) costs only one Nix eval and one squeue check.
                     liftIO $ void $ forkIO $ buildExtras ctx stepId
-                    return "{}"
+                    return (DynamicJson "{}")
                 else do
                     sz <- liftIO $ getFileSize metaPath
                     when (sz > maxExtrasJsonBytes) $
@@ -296,7 +298,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
                     case eitherDecode content of
                         Left err ->
                             throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("extras meta.json parse error: " ++ err))}
-                        Right (Object _) -> return content
+                        Right (Object _) -> return (DynamicJson content)
                         Right _ ->
                             throwError err500{errBody = "extras meta.json is not a JSON object"}
   where

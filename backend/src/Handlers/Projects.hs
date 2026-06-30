@@ -3,6 +3,7 @@
 
 module Handlers.Projects (getProjectsHandler, patchProjectHandler, postProjectHandler, deleteProjectHandler, evaluateJsonToNix, RawJSON) where
 
+import ApiTypes (DynamicJson (..))
 import Control.Monad.Except (ExceptT (..), catchError, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString.Lazy as LB
@@ -41,11 +42,12 @@ import Prettyprinter (defaultLayoutOptions, layoutPretty)
 import Prettyprinter.Render.Text (renderStrict)
 
 data RawJSON
-instance Accept RawJSON where contentType _ = "application" // "json"
-instance MimeRender RawJSON LB.ByteString where mimeRender _ = id
-instance MimeUnrender RawJSON LB.ByteString where mimeUnrender _ = Right
 
-getProjectsHandler :: Maybe T.Text -> Handler LB.ByteString
+instance Accept RawJSON where contentType _ = "application" // "json"
+instance MimeRender RawJSON DynamicJson where mimeRender _ = unDynamicJson
+instance MimeUnrender RawJSON DynamicJson where mimeUnrender _ = Right . DynamicJson
+
+getProjectsHandler :: Maybe T.Text -> Handler DynamicJson
 getProjectsHandler commit = do
     result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
         let targetCommit = maybe commitHash T.unpack commit
@@ -55,7 +57,7 @@ getProjectsHandler commit = do
             Left err -> ExceptT $ return $ Left $ "decoding #pointy.projects failed: " ++ err
             Right value -> return $ encode (annotateRecordMtimes mtimes value)
     case result of
-        Right output -> return output
+        Right output -> return (DynamicJson output)
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 readRecordMtimes :: FilePath -> String -> IO (Map.Map FilePath T.Text)
@@ -81,8 +83,8 @@ annotateRecordMtimes mts = onObject (KeyMap.map decorateProject)
     onArray f v = case v of Array a -> Array (f a); _ -> v
     adjustKey k f m = maybe m (\v -> KeyMap.insert k (f v) m) (KeyMap.lookup k m)
 
-patchProjectHandler :: Int -> LB.ByteString -> Handler NoContent
-patchProjectHandler projectId jsonBody = do
+patchProjectHandler :: Int -> DynamicJson -> Handler NoContent
+patchProjectHandler projectId (DynamicJson jsonBody) = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
         _ <- saveProject ctx (Just projectId) jsonBody
         commitAndPushChanges ctx $ "Update project " ++ show projectId
@@ -100,8 +102,8 @@ deleteProjectHandler projectId = do
         Right _ -> return NoContent
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-postProjectHandler :: LB.ByteString -> Handler LB.ByteString
-postProjectHandler jsonBody = do
+postProjectHandler :: DynamicJson -> Handler DynamicJson
+postProjectHandler (DynamicJson jsonBody) = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         projectId <- saveProject ctx Nothing jsonBody
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
@@ -112,7 +114,7 @@ postProjectHandler jsonBody = do
         commitAndPushChanges ctx $ "Create project " ++ show projectId
         return output
     case result of
-        Right output -> return output
+        Right output -> return (DynamicJson output)
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 saveProject :: WriteRepoContext -> Maybe Int -> LB.ByteString -> ExceptT String IO Int

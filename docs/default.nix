@@ -1,4 +1,4 @@
-{ stdenv, mkdocs, python313Packages }:
+{ stdenv, mkdocs, python313Packages, redocly, openapiJson }:
 
 stdenv.mkDerivation {
   pname = "docs";
@@ -6,11 +6,15 @@ stdenv.mkDerivation {
 
   src = ./.;
 
-  buildInputs = [ mkdocs python313Packages.mkdocs-material ];
+  buildInputs = [ mkdocs python313Packages.mkdocs-material redocly ];
 
   installPhase = ''
-    ls -l
-    pwd
+    # Render the API reference as a self-contained Redoc page from the spec.
+    export HOME=$(mktemp -d)
+    export REDOCLY_TELEMETRY=off
+    cp ${openapiJson} pages/openapi.json
+    redocly build-docs pages/openapi.json --output pages/api.html
+
     mkdocs build
     mv site $out
   '';

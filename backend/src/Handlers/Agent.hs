@@ -32,8 +32,8 @@ import Agent.Git (
     listAgentSessions,
     loadAgentSessionView,
     prepareApplyCandidate,
-    renameAgentSession,
     purgeAgentSession,
+    renameAgentSession,
  )
 import Agent.Runner (startAgentTurn, turnLogStreamHandler)
 import Agent.Session (AgentTurn)
@@ -80,7 +80,6 @@ instance FromJSON RenameSessionRequest where
             <$> obj .: "sessionId"
             <*> obj .: "name"
 
-
 data ConfirmApplyRequest = ConfirmApplyRequest
     { confirmSessionId :: Text
     , confirmTargetHead :: Text
@@ -124,7 +123,6 @@ renameSessionHandler :: RenameSessionRequest -> Handler AgentSessionView
 renameSessionHandler req =
     runLockedAction $ renameAgentSession (renameSessionId req) (renameSessionName req)
 
-
 usageHandler :: Handler AgentUsage
 usageHandler = liftIO getAgentUsage
 
@@ -144,12 +142,12 @@ throwAgentError err =
             case err of
                 "empty_session_name" ->
                     err400
-
                 _ ->
-                    if err `elem` ["session_applied", "session_discarded", "session_archived", "runner_active"] then
-                        err409
-                    else
-                        err500
+                    if err `elem` ["session_applied", "session_discarded", "session_archived", "runner_active"]
+                        then
+                            err409
+                        else
+                            err500
      in throwError baseError{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 archiveSessionHandler :: SessionRequest -> Handler AgentSessionView

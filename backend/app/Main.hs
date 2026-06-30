@@ -7,19 +7,12 @@
 
 module Main where
 
-import Agent.Git (AgentSessionView, AgentUsage, sweepStaleRunningSessions)
-import Agent.Session (AgentTurn)
+import Agent.Git (sweepStaleRunningSessions)
+import Api (API)
 import Config (loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Monad.Except (runExceptT)
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
-import Data.Text (Text)
 import Handlers.Agent (
-    ConfirmApplyRequest,
-    RenameSessionRequest,
-    SessionRequest,
-    TurnRequest,
     archiveSessionHandler,
     confirmApplyHandler,
     createSessionHandler,
@@ -33,17 +26,17 @@ import Handlers.Agent (
     turnLogStreamHandler,
     usageHandler,
  )
-import Handlers.Autocomplete (AutocompleteRequest, autocompleteHandler)
+import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
-import Handlers.Projects (RawJSON, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
+import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
-import Handlers.SrcFiles (UserRepoInfo, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler)
-import Handlers.StatusStream (EventStream, stepStatusStreamHandler)
+import Handlers.SrcFiles (downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler)
+import Handlers.StatusStream (stepStatusStreamHandler)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
-import Handlers.Store (DirEntry, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
+import Handlers.Store (stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
@@ -52,51 +45,10 @@ import Network.Wai.Parse (setMaxRequestNumFiles)
 import OutPaths (warmProjectOutPaths)
 import Servant hiding (runHandler)
 import Servant.Multipart
-import Servant.Types.SourceT (SourceT)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo, fetchRepo)
-
-type API =
-    "commit-hash" :> Get '[PlainText] Text
-        :<|> "user-repo-info" :> Get '[JSON] UserRepoInfo
-        :<|> "step-files" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
-        :<|> "step-files" :> "download" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
-        :<|> "step-files" :> "raw" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> CaptureAll "segments" String :> Raw
-        :<|> "step-files" :> "extras" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> QueryParam "path" FilePath :> Get '[RawJSON] LBS.ByteString
-        :<|> "src-files" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "path" FilePath :> Get '[JSON] [DirEntry]
-        :<|> "src-files" :> "download" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam' '[Required] "path" FilePath :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
-        :<|> "projects" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
-        :<|> "projects" :> ReqBody '[RawJSON] LBS.ByteString :> Post '[RawJSON] LBS.ByteString
-        :<|> "projects" :> QueryParam' '[Required, Strict] "id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Patch '[JSON] NoContent
-        :<|> "projects" :> QueryParam' '[Required, Strict] "id" Int :> Delete '[JSON] NoContent
-        :<|> "project-entities" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam' '[Required, Strict] "entity_id" Int :> Post '[JSON] NoContent
-        :<|> "project-entities" :> "batch" :> QueryParam' '[Required, Strict] "project_id" Int :> ReqBody '[JSON] [Int] :> Post '[JSON] NoContent
-        :<|> "project-entities" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam' '[Required, Strict] "entity_id" Int :> Delete '[JSON] NoContent
-        :<|> "step-status-stream" :> QueryParam' '[Required, Strict] "project_id" Int :> QueryParam "commit" Text :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
-        :<|> "step-config" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
-        :<|> "presets" :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
-        :<|> "autocomplete" :> QueryParam "commit" Text :> ReqBody '[JSON] AutocompleteRequest :> Post '[JSON] [Text]
-        :<|> "step" :> QueryParam' '[Required, Strict] "id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Patch '[JSON] NoContent
-        :<|> "step" :> QueryParam "project_id" Int :> QueryParam "source_id" Int :> ReqBody '[RawJSON] LBS.ByteString :> Post '[RawJSON] LBS.ByteString
-        :<|> "notices" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[RawJSON] LBS.ByteString
-        :<|> "run-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
-        :<|> "stop-step" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Post '[PlainText] NoContent
-        :<|> "step-log" :> QueryParam' '[Required, Strict] "id" Int :> QueryParam "commit" Text :> Get '[PlainText] Text
-        :<|> "upload" :> QueryParam' '[Required, Strict] "id" Int :> MultipartForm Tmp (MultipartData Tmp) :> Post '[PlainText] Text
-        :<|> "agent" :> "session" :> Post '[JSON] AgentSessionView
-        :<|> "agent" :> "sessions" :> Get '[JSON] [AgentSessionView]
-        :<|> "agent" :> "session" :> Capture "id" Text :> Get '[JSON] AgentSessionView
-        :<|> "agent" :> "turn" :> ReqBody '[JSON] TurnRequest :> Post '[JSON] AgentTurn
-        :<|> "agent" :> "turn" :> Capture "id" Text :> "stream" :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
-        :<|> "agent" :> "prepare-apply" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
-        :<|> "agent" :> "confirm-apply" :> ReqBody '[JSON] ConfirmApplyRequest :> Post '[JSON] AgentSessionView
-        :<|> "agent" :> "discard" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
-        :<|> "agent" :> "archive" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] AgentSessionView
-        :<|> "agent" :> "rename" :> ReqBody '[JSON] RenameSessionRequest :> Post '[JSON] AgentSessionView
-        :<|> "agent" :> "delete" :> ReqBody '[JSON] SessionRequest :> Post '[JSON] NoContent
-        :<|> "agent" :> "usage" :> Get '[JSON] AgentUsage
 
 server :: Server API
 server =

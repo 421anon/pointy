@@ -15,8 +15,8 @@ import Agent.Session (
     findTurn,
     listTurns,
     loadSessionById,
-    normalizeSessionName,
     newTurnId,
+    normalizeSessionName,
     saveSession,
     saveTurn,
     touchSession,
@@ -81,13 +81,12 @@ startAgentTurn sid prompt = do
         let isFirstTurn = null existingTurns
             shouldAutoName = isFirstTurn && maybe True (T.null . T.strip) (sessionName session_)
             namedSession =
-                if shouldAutoName then
-                    case normalizeSessionName prompt of
+                if shouldAutoName
+                    then case normalizeSessionName prompt of
                         Just name -> session_{sessionName = Just name}
                         Nothing -> session_
-
-                else
-                    session_
+                    else
+                        session_
         saveTurn turn
         touched <- touchSession namedSession{status = "running", activeTurnId = Just tid, preparedApply = Nothing, lastError = Nothing}
         saveSession touched
@@ -347,7 +346,6 @@ expandArg session_ promptText arg =
                     T.replace "{home}" runnerHome $
                         T.replace "{sessionRoot}" sessionRoot $
                             T.replace "{sessionId}" (sessionId session_) arg
-
 
 streamLoop :: AgentTurn -> Int -> Int -> IO (S.StepT IO BS.ByteString)
 streamLoop turn offset heartbeatTick = do

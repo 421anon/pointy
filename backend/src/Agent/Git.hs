@@ -29,13 +29,13 @@ import Agent.Session (
     listTurnsWithLogs,
     loadSessionById,
     newSessionId,
-    normalizeSessionName,
     newTurnId,
+    normalizeSessionName,
     saveSession,
     saveTurn,
     sessionDir,
-    turnLogFilePath,
     touchSession,
+    turnLogFilePath,
  )
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Exception (IOException, try)
@@ -260,7 +260,6 @@ discardAgentSession sid = do
         changesetDiff
     saveSessionUpdate session_{status = "discarded", activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
     loadAgentSessionView sid
-
 
 appendLifecycleTurn :: Text -> Text -> Text -> Text -> ExceptT String IO ()
 appendLifecycleTurn sid prompt body changesetDiff = do
