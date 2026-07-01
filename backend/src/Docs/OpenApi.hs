@@ -140,14 +140,34 @@ instance ToSchema AgentUsage
 -- | The complete OpenAPI specification.
 pointyOpenApi :: OpenApi
 pointyOpenApi =
-    withPathSummaries $
-        toOpenApi (Proxy :: Proxy API)
+    withPathTags $
+        withPathSummaries $
+            toOpenApi (Proxy :: Proxy API)
             & info . title .~ "Pointy Backend API"
             & info . version .~ "1.0.0"
             & info . description ?~ "HTTP API served by the Pointy backend. All routes are mounted under the `/backend` prefix by the reverse proxy."
             & servers .~ ["/backend"]
 
--- | Derive operation summaries from the path (e.g. @/agent/session/{id}@).
+methodLenses :: [ALens' PathItem (Maybe Operation)]
+methodLenses = [get, put, post, delete, options, head_, patch, trace]
+
+-- | Group operations by their first path segment so Sourcey renders API sections.
+withPathTags :: OpenApi -> OpenApi
+withPathTags = paths %~ imap tagOperations
+  where
+    tagOperations path item = foldr setTags item methodLenses
+      where
+        section = firstPathSegment path
+        setTags :: ALens' PathItem (Maybe Operation) -> PathItem -> PathItem
+        setTags methodLens = cloneLens methodLens . _Just %~ \operation ->
+            operation{_operationTags = fromList [section]}
+
+firstPathSegment :: FilePath -> Text
+firstPathSegment path =
+    case takeWhile (/= '/') (dropWhile (== '/') path) of
+        "" -> "root"
+        segment -> pack segment
+
 withPathSummaries :: OpenApi -> OpenApi
 withPathSummaries = paths %~ imap nameOperations
   where
@@ -155,5 +175,3 @@ withPathSummaries = paths %~ imap nameOperations
       where
         setSummary :: ALens' PathItem (Maybe Operation) -> PathItem -> PathItem
         setSummary methodLens = cloneLens methodLens . _Just . summary ?~ pack path
-    methodLenses :: [ALens' PathItem (Maybe Operation)]
-    methodLenses = [get, put, post, delete, options, head_, patch, trace]
