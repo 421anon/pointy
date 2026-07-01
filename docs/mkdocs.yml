@@ -24,8 +24,6 @@ theme:
     text: Fira Sans
     code: Fira Mono
   features:
-    - navigation.tabs
-    - navigation.tabs.sticky
     - navigation.sections
     - navigation.path
     - navigation.footer
@@ -43,6 +41,7 @@ extra_css:
 
 extra_javascript:
   - javascripts/theme-screenshots.js
+  - javascripts/api-reference.js
 
 markdown_extensions:
   - attr_list
@@ -64,5 +63,5 @@ nav:
     - Setting Up the User Repository: user-repo-setup.md
     - Type Reference: type-reference.md
     - CLI Reference: cli-reference.md
-  - API Reference: api.html
+  - API Reference: api.md
 docs_dir: pages

@@ -67,24 +67,45 @@
               exec ${self.nixosConfigurations.screenshots-vm.config.system.build.vm}/bin/run-nixos-vm
             '';
           };
-          packages = {
-            frontend = dream2nix.lib.evalModules {
-              packageSets.nixpkgs = nixpkgs.legacyPackages.${system};
-              modules = [ ./frontend/module.nix ];
-              specialArgs = { inherit self; };
-            };
-            backend = pkgs.haskellPackages.callCabal2nix "backend" ./backend { };
-            docs = pkgs.callPackage ./docs {
-              openapiJson = pkgs.runCommand "openapi.json" { } ''
-                ${self.packages.${system}.backend}/bin/generate-openapi $out
+          packages =
+            let
+              sourcey = pkgs.buildNpmPackage {
+                pname = "sourcey";
+                version = "3.6.4";
+                src = ./docs/sourcey;
+                npmDepsHash = "sha256-JvBfTaBKBCBo4MSfgnmK1qdb5Rt0H+abP8sY1+pxPEY=";
+                dontNpmBuild = true;
+                nativeBuildInputs = [ pkgs.makeWrapper ];
+                installPhase = ''
+                  runHook preInstall
+                  mkdir -p $out/lib/sourcey $out/bin
+                  cp -r node_modules package.json package-lock.json $out/lib/sourcey/
+                  makeWrapper ${pkgs.nodejs}/bin/node $out/bin/sourcey \
+                    --add-flags "$out/lib/sourcey/node_modules/sourcey/dist/cli.js"
+                  runHook postInstall
+                '';
+              };
+            in
+            {
+              inherit sourcey;
+              frontend = dream2nix.lib.evalModules {
+                packageSets.nixpkgs = nixpkgs.legacyPackages.${system};
+                modules = [ ./frontend/module.nix ];
+                specialArgs = { inherit self; };
+              };
+              backend = pkgs.haskellPackages.callCabal2nix "backend" ./backend { };
+              docs = pkgs.callPackage ./docs {
+                inherit sourcey;
+                openapiJson = pkgs.runCommand "openapi.json" { } ''
+                  ${self.packages.${system}.backend}/bin/generate-openapi $out
+                '';
+              };
+              screenshots = pkgs.runCommand "pointy-screenshots" { } ''
+                mkdir -p $out/light $out/dark
+                cp ${./docs/pages/screenshots}/light/*.png $out/light/
+                cp ${./docs/pages/screenshots}/dark/*.png $out/dark/
               '';
             };
-            screenshots = pkgs.runCommand "pointy-screenshots" { } ''
-              mkdir -p $out/light $out/dark
-              cp ${./docs/pages/screenshots}/light/*.png $out/light/
-              cp ${./docs/pages/screenshots}/dark/*.png $out/dark/
-            '';
-          };
           devShells = {
             backend = self.packages.${system}.backend.env.overrideAttrs (oldAttrs: {
               buildInputs = oldAttrs.buildInputs ++ (with pkgs; [ haskell-language-server cabal-install fourmolu ]);
