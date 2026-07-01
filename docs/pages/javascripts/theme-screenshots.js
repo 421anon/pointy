@@ -8,9 +8,6 @@
     if (localStorage.getItem("sourcey-theme") === "dark") {
       return "dark";
     }
-    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      return "dark";
-    }
     return "light";
   }
 

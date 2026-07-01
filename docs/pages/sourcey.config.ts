@@ -86,6 +86,7 @@ async function collectAssets(configDir: string, absDir: string): Promise<Adapter
 
 export default {
   name: "Pointy Notebook",
+  baseUrl: "/docs/",
   prettyUrls: "slash",
   theme: {
     colors: {
