@@ -1,31 +1,17 @@
 (() => {
   const SCREENSHOT_PATH_SEGMENT = "/screenshots/";
 
-  function getPaletteScheme() {
-    const schemeAttr =
-      document.body?.getAttribute("data-md-color-scheme") ||
-      document.documentElement?.getAttribute("data-md-color-scheme");
-
-    if (schemeAttr) {
-      return schemeAttr;
+  function getTheme() {
+    if (document.documentElement.classList.contains("dark")) {
+      return "dark";
     }
-
-    try {
-      const palette = JSON.parse(localStorage.getItem("__palette") || "null");
-      if (palette && palette.color && typeof palette.color.scheme === "string") {
-        return palette.color.scheme;
-      }
-    } catch (_err) {
-      // Ignore palette parsing issues and fall back below.
+    if (localStorage.getItem("sourcey-theme") === "dark") {
+      return "dark";
     }
-
-    return window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "slate"
-      : "default";
-  }
-
-  function getScreenshotTheme() {
-    return getPaletteScheme() === "slate" ? "dark" : "light";
+    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      return "dark";
+    }
+    return "light";
   }
 
   function normalizeScreenshotBaseSrc(rawSrc) {
@@ -126,8 +112,8 @@
     img.setAttribute("src", themedSrc);
   }
 
-  function syncThemeScreenshots(root = document) {
-    const theme = getScreenshotTheme();
+  function syncThemeScreenshots(root) {
+    const theme = getTheme();
 
     for (const img of screenshotImagesWithin(root)) {
       applyThemeToScreenshot(img, theme);
@@ -139,16 +125,9 @@
       syncThemeScreenshots(document);
     });
 
-    if (document.body) {
-      observer.observe(document.body, {
-        attributes: true,
-        attributeFilter: ["data-md-color-scheme"],
-      });
-    }
-
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-md-color-scheme"],
+      attributeFilter: ["class"],
     });
   }
 
@@ -177,12 +156,6 @@
     syncThemeScreenshots(document);
     observeThemeChanges();
     observeContentChanges();
-
-    if (typeof document$ !== "undefined" && document$.subscribe) {
-      document$.subscribe(() => {
-        syncThemeScreenshots(document);
-      });
-    }
   }
 
   if (document.readyState === "loading") {

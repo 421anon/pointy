@@ -12,7 +12,7 @@ A notebook for writing, running, organizing and sharing research computation.
 
 ## Documentation
 
-User and admin guides live under [docs/](docs/). Build them with `nix build .#docs` and open `./result/index.html`. But it is possible to view them using a markdown reader as well, such as the GitHub web UI.
+User and admin guides live under [docs/](docs/). The guides build as a Sourcey static site with `nix build .#docs` and can also be read directly as Markdown.
 
 - [Managing Projects](docs/pages/projects.md), [Building Workflows (Steps)](docs/pages/steps.md), [Execution and Data Management](docs/pages/execution.md) — web UI workflow
 - [Architecture & Configuration](docs/pages/admin.md), [Setting Up the User Repository](docs/pages/user-repo-setup.md) — instance administration
@@ -52,8 +52,8 @@ nix develop .#frontend -c npm run dev-vm
 ```bash
 nix build .#backend        # Haskell backend binary
 nix build .#frontend       # compiled static assets
-nix build .#docs           # mkdocs site
-nix run .#take-screenshots # take screenshots for the mkdocs site
+nix build .#docs           # Sourcey docs site
+nix run .#take-screenshots # take screenshots for the docs site
 ```
 
 ## License
