@@ -51,6 +51,12 @@ in
     };
   };
 
+  # Nix's libgit2-based fetcher writes packfile indexes via writable MAP_SHARED
+  # mmap. The default 9p mount (cache=none) rejects those with EINVAL
+  # ("appending to git packfile index: failed to mmap"), so opt this share into
+  # the v9fs mmap cache mode.
+  virtualisation.fileSystems."/var/cache/nix".options = [ "cache=mmap" ];
+
   systemd.services.backend.environment.NIX_CACHE_HOME = "/var/cache/nix";
   # Keep the dev scheduler permissive but low-concurrency: the backend's dev
   # config records requirements as metadata-only, so one advertised CPU is enough
