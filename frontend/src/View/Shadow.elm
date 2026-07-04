@@ -19,7 +19,7 @@ import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewLoading, viewPage, viewSearchBox)
-import View.Table exposing (viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
@@ -27,6 +27,11 @@ viewProject model proj =
     let
         mCommit_ =
             try (route << Route.project << mCommit << just) model
+
+        mProjectSpec =
+            Maybe.map2 Specs.projects
+                (ApiData.toMaybe (Model.getPresets model))
+                (ApiData.toMaybe (Model.getStepConfig model))
     in
     viewPage
         { header =
@@ -34,6 +39,16 @@ viewProject model proj =
                 [ Html.div [ Html.Attributes.class "project-header" ]
                     [ Html.a [ Route.href Route.Home, Html.Attributes.class "back-btn" ] [ iconCustom True "arrow_back" [ Html.Attributes.class "back-icon" ] ]
                     , Html.h2 [] [ Html.text proj.name ]
+                    , Html.viewMaybe
+                        (\spec ->
+                            viewIconButtonWithTooltip "edit" True "Edit project" (Actions.toggleAddOrEditRecordForm False spec proj.id)
+                        )
+                        (if Maybe.isNothing mCommit_ then
+                            mProjectSpec
+
+                         else
+                            Nothing
+                        )
                     ]
                 , Html.viewMaybe
                     (\commit ->
@@ -61,6 +76,18 @@ viewProject model proj =
             ]
         , content =
             let
+                projectEditForm =
+                    let
+                        mEditedProject =
+                            try (Lenses.projects << Lenses.edited << just) model
+                                |> Maybe.filter (.id >> (==) proj.id)
+                    in
+                    Maybe.map2 Tuple.pair mProjectSpec mEditedProject
+                        |> Html.viewMaybe
+                            (\( spec, editedProject ) ->
+                                viewAddOrEditRecordForm model spec (get Lenses.projects model) editedProject
+                            )
+
                 orphanWarning =
                     Html.viewIf (not (List.isEmpty proj.orphanedSteps)) <|
                         Html.div [ Html.Attributes.class "project-config-warning" ]
@@ -98,7 +125,8 @@ viewProject model proj =
 
                 sections =
                     Html.div [ Html.Attributes.class "sections" ]
-                        (configErrors
+                        (projectEditForm
+                            :: configErrors
                             :: orphanWarning
                             :: (proj.tables
                                     |> Dict.toList
