@@ -28,6 +28,9 @@ viewProject model proj =
         mCommit_ =
             try (route << Route.project << mCommit << just) model
 
+        isReadOnly =
+            Maybe.isJust mCommit_
+
         mProjectSpec =
             Maybe.map2 Specs.projects
                 (ApiData.toMaybe (Model.getPresets model))
@@ -39,16 +42,12 @@ viewProject model proj =
                 [ Html.div [ Html.Attributes.class "project-header" ]
                     [ Html.a [ Route.href Route.Home, Html.Attributes.class "back-btn" ] [ iconCustom True "arrow_back" [ Html.Attributes.class "back-icon" ] ]
                     , Html.h2 [] [ Html.text proj.name ]
-                    , Html.viewMaybe
-                        (\spec ->
-                            viewIconButtonWithTooltip "edit" True "Edit project" (Actions.toggleAddOrEditRecordForm False spec proj.id)
-                        )
-                        (if Maybe.isNothing mCommit_ then
+                    , Html.viewIf (not isReadOnly) <|
+                        Html.viewMaybe
+                            (\spec ->
+                                viewIconButtonWithTooltip "edit" True "Edit project" (Actions.toggleAddOrEditRecordForm False spec proj.id)
+                            )
                             mProjectSpec
-
-                         else
-                            Nothing
-                        )
                     ]
                 , Html.viewMaybe
                     (\commit ->
@@ -82,11 +81,12 @@ viewProject model proj =
                             try (Lenses.projects << Lenses.edited << just) model
                                 |> Maybe.filter (.id >> (==) proj.id)
                     in
-                    Maybe.map2 Tuple.pair mProjectSpec mEditedProject
-                        |> Html.viewMaybe
-                            (\( spec, editedProject ) ->
-                                viewAddOrEditRecordForm model spec (get Lenses.projects model) editedProject
-                            )
+                    Html.viewIf (not isReadOnly)
+                        (Maybe.map2 (\spec -> viewAddOrEditRecordForm model spec (get Lenses.projects model))
+                            mProjectSpec
+                            mEditedProject
+                            |> Maybe.withDefault Html.nothing
+                        )
 
                 orphanWarning =
                     Html.viewIf (not (List.isEmpty proj.orphanedSteps)) <|
