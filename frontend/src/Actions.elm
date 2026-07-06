@@ -278,13 +278,7 @@ replayStepStatusBuffer =
                     applyOne ( stepId, ( commit, status ) ) =
                         Flow.over
                             (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState)
-                            (\rs ->
-                                let
-                                    current =
-                                        ApiData.withDefault { commit = commit, status = NotAsked, directoryView = { children = NotAsked, expanded = False, extras = NotAsked } } rs
-                                in
-                                Success { current | commit = commit, status = Success status }
-                            )
+                            (applyStatusSnapshot commit status)
                 in
                 get stepStatusBuffer model
                     |> Dict.toList
@@ -292,6 +286,25 @@ replayStepStatusBuffer =
                     |> Flow.batchM
                     |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
             )
+
+
+applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStatusSnapshot snapshotCommit newStatus rs =
+    let
+        collapsedDirectoryView =
+            { children = NotAsked, expanded = False, extras = NotAsked }
+
+        current =
+            ApiData.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView } rs
+
+        directoryView_ =
+            if current.commit == snapshotCommit then
+                current.directoryView
+
+            else
+                collapsedDirectoryView
+    in
+    Success { current | commit = snapshotCommit, status = Success newStatus, directoryView = directoryView_ }
 
 
 loadUserRepoInfo : Flow Model ()
@@ -2820,22 +2833,12 @@ updateStepStatus snapshotCommit stepId newStatus =
     let
         stepRunState =
             projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState
-
-        defaultRunState =
-            { commit = snapshotCommit, status = NotAsked, directoryView = { children = NotAsked, expanded = False, extras = NotAsked } }
     in
     Flow.get
         |> Flow.andThen
             (\model ->
                 if has stepRunState model then
-                    Flow.over stepRunState
-                        (\rs ->
-                            let
-                                current =
-                                    ApiData.withDefault defaultRunState rs
-                            in
-                            Success { current | commit = snapshotCommit, status = Success newStatus }
-                        )
+                    Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
                         |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
 
                 else

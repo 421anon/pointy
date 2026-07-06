@@ -39,19 +39,22 @@ import Agent.Session (
     turnLogFilePath,
  )
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
+import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
-import Control.Monad (unless, when)
+import Control.Monad (unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
-import Data.Char (isDigit)
 import Data.List (nub, sortOn)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.Text.Read as TR
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
+import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
@@ -281,6 +284,8 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             _ <- runGitChecked (worktreePath session_) ["reset", "--hard", candidateSha]
             _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
             liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
+            changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
+            liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) changedPaths
             appendLifecycleTurn
                 sid
                 "Apply proposed changeset"
@@ -430,20 +435,40 @@ hasStagedChanges worktree = ExceptT $ do
 
 isAgentOutputPath :: Text -> Bool
 isAgentOutputPath path =
+    isJust (appliedProjectId path) || isJust (appliedStepId path)
+
+appliedProjectId :: Text -> Maybe Int
+appliedProjectId path =
     case T.splitOn "/" path of
-        ["projects", file] -> isNumberedNix file
-        ["steps", file] -> isNumberedNix file
-        "srcFiles" : stepId : rest -> isDigits stepId && not (null rest)
-        _ -> False
+        ["projects", file] -> numberedNixId file
+        _ -> Nothing
 
-isNumberedNix :: Text -> Bool
-isNumberedNix file =
-    case T.stripSuffix ".nix" file of
-        Just stem -> isDigits stem
-        Nothing -> False
+appliedStepId :: Text -> Maybe Int
+appliedStepId path =
+    case T.splitOn "/" path of
+        ["steps", file] -> numberedNixId file
+        "srcFiles" : stepId : _ : _ -> decimalId stepId
+        _ -> Nothing
 
-isDigits :: Text -> Bool
-isDigits text_ = not (T.null text_) && T.all isDigit text_
+numberedNixId :: Text -> Maybe Int
+numberedNixId file = T.stripSuffix ".nix" file >>= decimalId
+
+decimalId :: Text -> Maybe Int
+decimalId text_ =
+    case TR.decimal text_ of
+        Right (n, rest) | T.null rest -> Just n
+        _ -> Nothing
+
+{- | Broadcast fresh step statuses for the projects and steps touched by an
+applied agent changeset, so open status streams pick up the new commit
+(typically flipping run states to not-started). Run this forked: status
+resolution takes the shared repo lock, which the apply handler still holds
+exclusively until it returns.
+-}
+broadcastAppliedStatuses :: Text -> [Text] -> IO ()
+broadcastAppliedStatuses commit paths = do
+    mapM_ (\pid -> broadcastProjectStatus pid commit Nothing) (nub (mapMaybe appliedProjectId paths))
+    mapM_ (\sid -> broadcastStatusForStepProjects sid commit Nothing) (nub (mapMaybe appliedStepId paths))
 
 sessionHasActiveRunner :: AgentSession -> Bool
 sessionHasActiveRunner session_ =
