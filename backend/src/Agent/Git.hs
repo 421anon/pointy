@@ -13,6 +13,7 @@ module Agent.Git (
     renameAgentSession,
     loadAgentSessionView,
     commitAgentTurnOutputs,
+    refreshSessionBase,
     prepareApplyCandidate,
     confirmApplyCandidate,
     discardAgentSession,
@@ -40,7 +41,7 @@ import Agent.Session (
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Exception (IOException, try)
 import Control.Monad (unless, when)
-import Control.Monad.Except (ExceptT (..), throwError)
+import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import Data.Char (isDigit)
@@ -154,6 +155,59 @@ commitAgentTurnOutputs session_ turn = do
                     _ <- runGitChecked (worktreePath session_) ["commit", "-m", "Agent turn " ++ T.unpack (turnId turn)]
                     head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
                     return (Just head_, skippedPaths)
+
+refreshSessionBase :: AgentSession -> ExceptT String IO (AgentSession, [Text])
+refreshSessionBase session_ = do
+    fetchResult <- liftIO $ runExceptT fetchRepoStrict
+    let fetchNotes = case fetchResult of
+            Left err -> ["Warning: could not fetch latest repo state: " <> T.pack err]
+            Right () -> []
+    repoPath <- liftIO userRepoPath
+    latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+    worktreeExists <- liftIO $ doesDirectoryExist (worktreePath session_)
+    if latest == baseCommit session_ || not worktreeExists
+        then return (session_, fetchNotes)
+        else do
+            (updated, syncNote) <- syncWorktreeToTarget session_ latest
+            return (updated, fetchNotes ++ [syncNote])
+
+syncWorktreeToTarget :: AgentSession -> Text -> ExceptT String IO (AgentSession, Text)
+syncWorktreeToTarget session_ latest = do
+    head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
+    if head_ == baseCommit session_
+        then do
+            -- No agent commits yet: stray uncommitted files are disposable
+            -- (same policy as confirmApplyCandidate), so jump straight to latest.
+            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+            _ <- runGitChecked (worktreePath session_) ["reset", "--hard", T.unpack latest]
+            advanceBase $ "Updated session to latest `" <> targetBranch session_ <> "` state (" <> shortCommit latest <> ")"
+        else do
+            mergeResult <-
+                liftIO $
+                    runGitIn
+                        (worktreePath session_)
+                        ["merge", "-m", "Merge latest " ++ T.unpack (targetBranch session_) ++ " into agent session", T.unpack latest]
+            case mergeResult of
+                (ExitSuccess, _, _) ->
+                    advanceBase $ "Merged latest `" <> targetBranch session_ <> "` state (" <> shortCommit latest <> ") into session"
+                (ExitFailure _, mergeOut, mergeErr) -> do
+                    _ <- liftIO $ runGitIn (worktreePath session_) ["merge", "--abort"]
+                    return
+                        ( session_
+                        , "Warning: could not merge latest `"
+                            <> targetBranch session_
+                            <> "` ("
+                            <> shortCommit latest
+                            <> ") into session; continuing from "
+                            <> shortCommit (baseCommit session_)
+                            <> "."
+                            <> T.pack (formatGitOutput mergeOut mergeErr)
+                        )
+  where
+    advanceBase note = do
+        let refreshed = session_{baseCommit = latest}
+        saveSessionUpdate refreshed
+        return (refreshed, note)
 
 prepareApplyCandidate :: Text -> ExceptT String IO AgentSessionView
 prepareApplyCandidate sid = do

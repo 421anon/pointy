@@ -7,7 +7,7 @@ module Agent.Runner (
     turnLogStreamHandler,
 ) where
 
-import Agent.Git (commitAgentTurnOutputs)
+import Agent.Git (commitAgentTurnOutputs, refreshSessionBase)
 import Agent.Sandbox (nixDaemonBindArgs)
 import Agent.Session (
     AgentSession (..),
@@ -59,6 +59,9 @@ startAgentTurn sid prompt = do
     when (status session_ == "archived") $ Except.throwError "session_archived"
     when (status session_ == "running" || activeTurnId session_ /= Nothing) $ Except.throwError "runner_active"
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
+    -- Sync the session worktree with the latest target branch state so the
+    -- agent sees changes made while the thread was inactive.
+    (freshSession, syncNotes) <- refreshSessionBase session_
     tid <- liftIO newTurnId
     logPath <- liftIO $ turnLogFilePath sid tid
     now <- liftIO getCurrentTime
@@ -77,16 +80,17 @@ startAgentTurn sid prompt = do
     liftIO $ do
         createDirectoryIfMissing True (takeDirectory logPath)
         TIO.writeFile logPath ""
+        mapM_ (appendLogLine (configAgent cfg) logPath "system") syncNotes
         existingTurns <- listTurns sid
         let isFirstTurn = null existingTurns
-            shouldAutoName = isFirstTurn && maybe True (T.null . T.strip) (sessionName session_)
+            shouldAutoName = isFirstTurn && maybe True (T.null . T.strip) (sessionName freshSession)
             namedSession =
                 if shouldAutoName
                     then case normalizeSessionName prompt of
-                        Just name -> session_{sessionName = Just name}
-                        Nothing -> session_
+                        Just name -> freshSession{sessionName = Just name}
+                        Nothing -> freshSession
                     else
-                        session_
+                        freshSession
         saveTurn turn
         touched <- touchSession namedSession{status = "running", activeTurnId = Just tid, preparedApply = Nothing, lastError = Nothing}
         saveSession touched
