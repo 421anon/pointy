@@ -1,21 +1,17 @@
 {
   config,
   pkgs,
-  self,
-  sbox,
-  llm-agents,
   lib,
   ...
 }:
 let
-  inherit (pkgs.stdenv.hostPlatform) system;
+  pointy = config.services.pointy.internal;
   slurmCpus = toString (config.virtualisation.cores or 1);
   # Slurm invalidates a node when slurmd reports less memory than configured.
   # QEMU guests report slightly less usable RAM than virtualisation.memorySize,
   # so reserve 512 MiB for the OS/hypervisor rather than advertising all VM RAM.
   slurmRealMemory = toString ((config.virtualisation.memorySize or 1536) - 512);
   cfg = config.services.pointy-backend;
-  defaultPiConfigDir = "${self}/backend/pi";
 
   agentEnvLink = lib.optionalString (cfg.agentEnvFile != null) ''
     ln -sfn ${lib.escapeShellArg (toString cfg.agentEnvFile)} /home/backend/agent-env
@@ -29,9 +25,6 @@ let
   '';
 in
 {
-  imports = [
-    sbox.nixosModules.sbox
-  ];
 
   options.services.pointy-backend = {
     agentEnvFile = lib.mkOption {
@@ -49,8 +42,8 @@ in
 
     piConfigDir = lib.mkOption {
       type = lib.types.path;
-      default = defaultPiConfigDir;
-      defaultText = lib.literalExpression "\${self}/backend/pi";
+      default = pointy.piConfigDir;
+      defaultText = lib.literalExpression "config.services.pointy.internal.piConfigDir";
       description = ''
         Directory copied to /home/backend/.pi before the backend starts.
         Defaults to backend/pi from this flake.
@@ -69,7 +62,7 @@ in
 
     nix = {
       settings.experimental-features = "nix-command flakes pipe-operators";
-      registry.nixpkgs.flake = self.inputs.nixpkgs;
+      registry.nixpkgs.flake = pointy.nixpkgsFlake;
     };
 
     security.polkit = {
@@ -145,8 +138,8 @@ in
           config.services.slurm.package
         ])
         ++ [
-          sbox.packages.${system}.sbox
-          llm-agents.packages.${system}.pi
+          pointy.packages.sbox
+          pointy.packages.pi
         ];
       environment.SLURM_CONF = "${config.services.slurm.etcSlurm}/slurm.conf";
       preStart = lib.mkBefore ''
@@ -155,7 +148,7 @@ in
       '';
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${self.packages.${system}.backend}/bin/backend";
+        ExecStart = "${pointy.packages.backend}/bin/backend";
         Restart = "always";
         RestartSec = 5;
         User = "backend";

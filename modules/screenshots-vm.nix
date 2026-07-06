@@ -1,11 +1,11 @@
 {
-  self,
   pkgs,
   lib,
+  config,
   ...
 }:
 let
-  inherit (pkgs.stdenv.hostPlatform) system;
+  pointy = config.services.pointy.internal;
 
   # Fake node_modules so require('playwright-core') resolves to the nixpkgs package.
   playwrightNodeModules = pkgs.runCommand "playwright-node-modules" { } ''
@@ -30,7 +30,7 @@ in
 
   # Serve the built frontend package statically (dev-vm only proxies /api and /backend/).
   services.nginx.virtualHosts."localhost".locations."/" = {
-    root = "${self.packages.${system}.frontend}";
+    root = "${pointy.packages.frontend}";
     tryFiles = "$uri $uri/ /index.html";
   };
 
@@ -52,7 +52,7 @@ in
     serviceConfig = {
       Type = "oneshot";
       TimeoutStartSec = "600";
-      WorkingDirectory = "${self}";
+      WorkingDirectory = pointy.source;
       # Pipe stdout+stderr into the shared screenshots dir so the host can read it.
       StandardOutput = "append:/screenshots/service.log";
       StandardError = "append:/screenshots/service.log";

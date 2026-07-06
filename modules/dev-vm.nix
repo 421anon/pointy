@@ -1,5 +1,4 @@
 {
-  self,
   pkgs,
   modulesPath,
   config,
@@ -7,6 +6,7 @@
   ...
 }:
 let
+  pointy = config.services.pointy.internal;
   slurmRealMemory = toString ((config.virtualisation.memorySize or 1536) - 512);
 in
 {
@@ -125,7 +125,7 @@ in
         '';
       };
       locations."/docs/" = {
-        alias = "${self.packages.${pkgs.stdenv.hostPlatform.system}.docs}/";
+        alias = "${pointy.packages.docs}/";
         extraConfig = ''
           auth_basic off;
         '';

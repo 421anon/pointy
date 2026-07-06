@@ -18,7 +18,51 @@
     llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
-  outputs = { self, nixpkgs, flake-utils, dream2nix, nixos-shell, sbox, llm-agents, ... }:
+  outputs =
+    { self, nixpkgs, flake-utils, dream2nix, nixos-shell, sbox, llm-agents, ... }:
+    let
+      pointyBootstrap =
+        { lib, pkgs, ... }:
+        let
+          targetSystem = pkgs.stdenv.hostPlatform.system;
+          internalOption =
+            type:
+            lib.mkOption {
+              inherit type;
+              internal = true;
+              readOnly = true;
+            };
+        in
+        {
+          imports = [ sbox.nixosModules.sbox ];
+
+          options.services.pointy.internal = {
+            source = internalOption lib.types.str;
+            nixpkgsFlake = internalOption lib.types.raw;
+            piConfigDir = internalOption lib.types.path;
+            packages = {
+              backend = internalOption lib.types.package;
+              docs = internalOption lib.types.package;
+              frontend = internalOption lib.types.package;
+              pi = internalOption lib.types.package;
+              sbox = internalOption lib.types.package;
+            };
+          };
+
+          config.services.pointy.internal = {
+            source = toString self;
+            nixpkgsFlake = nixpkgs;
+            piConfigDir = "${self}/backend/pi";
+            packages = {
+              backend = self.packages.${targetSystem}.backend;
+              docs = self.packages.${targetSystem}.docs;
+              frontend = self.packages.${targetSystem}.frontend;
+              pi = llm-agents.packages.${targetSystem}.pi;
+              sbox = sbox.packages.${targetSystem}.sbox;
+            };
+          };
+        };
+    in
     flake-utils.lib.eachDefaultSystem
       (system:
         let
@@ -111,30 +155,44 @@
               buildInputs = oldAttrs.buildInputs ++ (with pkgs; [ haskell-language-server cabal-install fourmolu ]);
             });
           };
-        }) // {
-      nixosModules =
-        let
-          shared = { config, lib, pkgs, ... }@args:
-            import ./modules/shared.nix (args // { inherit self sbox llm-agents; });
-        in
-        {
-          inherit shared;
-          pointy-host = { config, lib, pkgs, ... }@args:
-            import ./modules/pointy-host.nix (args // { sharedModule = shared; });
-          dev-vm = ./modules/dev-vm.nix;
-          screenshots-vm = ./modules/screenshots-vm.nix;
+        })
+    // {
+      nixosModules = rec {
+        bootstrap = pointyBootstrap;
+        shared = {
+          imports = [
+            bootstrap
+            ./modules/shared.nix
+          ];
         };
+        pointy-host = {
+          imports = [
+            bootstrap
+            ./modules/pointy-host.nix
+          ];
+        };
+        dev-vm = {
+          imports = [
+            bootstrap
+            ./modules/dev-vm.nix
+          ];
+        };
+        screenshots-vm = {
+          imports = [
+            bootstrap
+            ./modules/screenshots-vm.nix
+          ];
+        };
+      };
 
       nixosConfigurations = {
         dev-vm = nixpkgs.lib.nixosSystem {
           system = "x86_64-linux";
-          specialArgs = { inherit self sbox llm-agents; };
-          modules = [ ./modules/dev-vm.nix ];
+          modules = [ self.nixosModules.dev-vm ];
         };
         screenshots-vm = nixpkgs.lib.nixosSystem {
           system = "x86_64-linux";
-          specialArgs = { inherit self sbox llm-agents; };
-          modules = [ ./modules/screenshots-vm.nix ];
+          modules = [ self.nixosModules.screenshots-vm ];
         };
       };
     };
