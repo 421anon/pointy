@@ -112,12 +112,18 @@
             });
           };
         }) // {
-      nixosModules = {
-        shared = { config, lib, pkgs, ... }@args: import ./modules/shared.nix (args // { inherit self sbox llm-agents; });
-        pointy-host = ./modules/pointy-host.nix;
-        dev-vm = ./modules/dev-vm.nix;
-        screenshots-vm = ./modules/screenshots-vm.nix;
-      };
+      nixosModules =
+        let
+          shared = { config, lib, pkgs, ... }@args:
+            import ./modules/shared.nix (args // { inherit self sbox llm-agents; });
+        in
+        {
+          inherit shared;
+          pointy-host = { config, lib, pkgs, ... }@args:
+            import ./modules/pointy-host.nix (args // { sharedModule = shared; });
+          dev-vm = ./modules/dev-vm.nix;
+          screenshots-vm = ./modules/screenshots-vm.nix;
+        };
 
       nixosConfigurations = {
         dev-vm = nixpkgs.lib.nixosSystem {

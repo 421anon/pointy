@@ -1,9 +1,9 @@
-{ config, lib, ... }:
+{ config, lib, sharedModule ? ./shared.nix, ... }:
 let
   cfg = config.services.pointy-host;
 in
 {
-  imports = [ ./shared.nix ];
+  imports = [ sharedModule ];
   
   options.services.pointy-host = {
     hostname = lib.mkOption {
