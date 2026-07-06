@@ -3,6 +3,8 @@ let
   cfg = config.services.pointy-host;
 in
 {
+  imports = [ ./shared.nix ];
+  
   options.services.pointy-host = {
     hostname = lib.mkOption {
       type = lib.types.str;
