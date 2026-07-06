@@ -301,23 +301,29 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             loadAgentSessionView sid
         (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
+{- | Discard the proposed changeset but keep the chat usable: instead of
+deleting the agent branch and worktree, reset them to the current target
+head so the conversation can continue from a clean slate.
+-}
 discardAgentSession :: Text -> ExceptT String IO AgentSessionView
 discardAgentSession sid = do
-    session_ <- loadSessionOrThrow sid
+    session_ <- requireEditableSession sid
     when (sessionHasActiveRunner session_) $ throwError "runner_active"
     changesetDiff <- branchDiff <$> collectGitState session_
     repoPath <- liftIO userRepoPath
-    liftIO $ removeWorktreeIfExists repoPath (worktreePath session_)
+    latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+    _ <- runGitChecked (worktreePath session_) ["reset", "--hard", T.unpack latest]
+    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
     case preparedApply session_ of
         Nothing -> return ()
         Just candidate -> liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
-    _ <- liftIO $ runGitIn repoPath ["branch", "-D", T.unpack (agentBranch session_)]
     appendLifecycleTurn
         sid
         "Discard proposed changeset"
-        ("Discarded this draft. No changes were applied to `" <> targetBranch session_ <> "`.")
+        ("Discarded this draft. No changes were applied to `" <> targetBranch session_ <> "`. You can continue from a clean state in this chat.")
         changesetDiff
-    saveSessionUpdate session_{status = "discarded", activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
+    saveSessionUpdate session_{status = "open", baseCommit = latest, activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
     loadAgentSessionView sid
 
 appendLifecycleTurn :: Text -> Text -> Text -> Text -> ExceptT String IO ()

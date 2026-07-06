@@ -778,10 +778,10 @@ defaultChangesetDescription : Model.ChatChangesetState -> String
 defaultChangesetDescription state =
     case state of
         Model.ChatChangesetProposed ->
-            "Review this changeset, then apply it to the target branch or discard the chat."
+            "Review this changeset, then apply it to the target branch or discard it."
 
         Model.ChatChangesetNeedsReview _ ->
-            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the chat."
+            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the changeset."
 
         Model.ChatChangesetApplied ->
             "This changeset was applied. You can continue the conversation from the applied state."
