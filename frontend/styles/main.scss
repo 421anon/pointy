@@ -1313,14 +1313,15 @@ $readonly-disabled-targets: (
   }
 }
 
-.page-content {
-  background: var(--bg-elevated);
-}
 
 .project-header-container {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-xs);
+}
+
+.sections > .table-form-wrapper {
+  padding: 0;
 }
 
 .project-header {
