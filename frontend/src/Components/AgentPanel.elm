@@ -29,17 +29,19 @@ view model =
             [ View.Icons.iconCustom False "smart_toy" []
             , Html.span [] [ Html.text "Agent" ]
             ]
-        , if agent.isPanelOpen then
-            viewPanel agent
-
-          else
-            Html.text ""
+        , viewPanel agent
         ]
 
 
 viewPanel : Model.AgentState -> Html (Flow Model ())
 viewPanel agent =
-    Html.div [ classList [ ( "agent-panel", True ), ( "is-maximized", agent.isMaximized ) ] ]
+    Html.div
+        [ classList
+            [ ( "agent-panel", True )
+            , ( "is-maximized", agent.isMaximized )
+            , ( "is-minimized", not agent.isPanelOpen )
+            ]
+        ]
         [ Html.div [ class "agent-panel__header" ]
             [ Html.div []
                 [ Html.h2 [] [ Html.text "AI agent" ]

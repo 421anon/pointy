@@ -38,6 +38,10 @@
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
 }
 
+.agent-panel.is-minimized {
+  display: none;
+}
+
 .agent-panel.is-maximized {
   top: var(--spacing-md);
   right: var(--spacing-md);
