@@ -509,11 +509,7 @@ viewPrompt runnerActive =
                 "Send"
     in
     Html.div [ class "agent-panel__section agent-panel__composer" ]
-        [ Html.div [ class "agent-panel__composer-header" ]
-            [ Html.h3 [] [ Html.text "Message" ]
-            , Html.span [ class "agent-panel__shortcut" ] [ Html.text "Ctrl/⌘+Enter" ]
-            ]
-        , Html.div [ class "agent-panel__composer-row" ]
+        [ Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
                 [ class "agent-panel__prompt"
                 , id "agent-prompt"
@@ -528,9 +524,11 @@ viewPrompt runnerActive =
                 [ class "primary-btn agent-panel__run-button"
                 , disabled runnerActive
                 , Events.onClick Actions.submitAgentPrompt
-                , title "Send message"
+                , title "Send message (Ctrl/⌘+Enter)"
                 ]
-                [ Html.text buttonText ]
+                [ Html.text buttonText
+                , Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
+                ]
             ]
         ]
 
