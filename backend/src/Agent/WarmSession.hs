@@ -12,7 +12,7 @@ import Agent.Session (agentSessionsRoot)
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
 import Control.Exception (IOException, try)
-import Data.Aeson (FromJSON, ToJSON, eitherDecode, encode)
+import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict', encode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (isSuffixOf, sortOn)
@@ -70,7 +70,7 @@ loadWarmMeta = do
     if not exists
         then return Nothing
         else do
-            result <- eitherDecode <$> LBS.readFile path
+            result <- eitherDecodeStrict' <$> BS.readFile path
             return $ case result of
                 Left _ -> Nothing
                 Right meta -> Just meta

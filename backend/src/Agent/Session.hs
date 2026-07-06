@@ -28,9 +28,13 @@ module Agent.Session (
     touchSession,
 ) where
 
+import Control.Concurrent (threadDelay)
+import Control.Exception (IOException, throwIO, try)
 import Control.Monad (filterM)
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict', encode, object, withObject, (.!=), (.:), (.:?), (.=))
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.List (isInfixOf)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -40,6 +44,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory)
 import System.FilePath (takeDirectory, (</>))
+import System.IO.Error (ioeGetErrorString, isAlreadyInUseError)
 import System.Posix.Process (getProcessID)
 
 data PreparedApply = PreparedApply
@@ -188,7 +193,7 @@ loadSession path = do
     exists <- doesFileExist path
     if not exists
         then return $ Left $ "session metadata not found: " ++ path
-        else eitherDecode <$> LBS.readFile path
+        else eitherDecodeStrict' <$> BS.readFile path
 
 loadSessionById :: Text -> IO (Either String AgentSession)
 loadSessionById sid = sessionMetadataPath sid >>= loadSession
@@ -197,7 +202,7 @@ saveSession :: AgentSession -> IO ()
 saveSession session = do
     path <- sessionMetadataPath (sessionId session)
     createDirectoryIfMissing True (takeDirectory path)
-    LBS.writeFile path (encode session)
+    writeMetadataFile path (encode session)
 
 listSessions :: IO [AgentSession]
 listSessions = do
@@ -215,14 +220,34 @@ saveTurn :: AgentTurn -> IO ()
 saveTurn turn = do
     path <- turnMetadataPath (turnSessionId turn) (turnId turn)
     createDirectoryIfMissing True (takeDirectory path)
-    LBS.writeFile path (encode turn{turnLog = ""})
+    writeMetadataFile path (encode turn{turnLog = ""})
+
+writeMetadataFile :: FilePath -> LBS.ByteString -> IO ()
+writeMetadataFile path bytes = go 0
+  where
+    maxRetries = 10 :: Int
+    go attempt = do
+        result <- try (LBS.writeFile path bytes) :: IO (Either IOException ())
+        case result of
+            Right () -> return ()
+            Left err
+                | attempt < maxRetries && isTransientFileLock err -> do
+                    threadDelay (50000 * (attempt + 1))
+                    go (attempt + 1)
+                | otherwise -> throwIO err
+
+isTransientFileLock :: IOException -> Bool
+isTransientFileLock err =
+    isAlreadyInUseError err
+        || "resource busy" `isInfixOf` ioeGetErrorString err
+        || "file is locked" `isInfixOf` ioeGetErrorString err
 
 loadTurn :: FilePath -> IO (Either String AgentTurn)
 loadTurn path = do
     exists <- doesFileExist path
     if not exists
         then return $ Left $ "turn metadata not found: " ++ path
-        else eitherDecode <$> LBS.readFile path
+        else eitherDecodeStrict' <$> BS.readFile path
 
 loadTurnWithLog :: FilePath -> IO (Either String AgentTurn)
 loadTurnWithLog path = do
