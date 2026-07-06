@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Agent.Git (
+    AgentApplyView (..),
     AgentGitState (..),
     AgentSessionView (..),
     AgentUsage (..),
@@ -72,6 +73,13 @@ data AgentSessionView = AgentSessionView
     { session :: AgentSession
     , gitState :: AgentGitState
     , turns :: [AgentTurn]
+    }
+    deriving (Show, Eq, Generic, ToJSON)
+
+data AgentApplyView = AgentApplyView
+    { sessionView :: AgentSessionView
+    , invalidatedProjectIds :: [Int]
+    , invalidatedStepIds :: [Int]
     }
     deriving (Show, Eq, Generic, ToJSON)
 
@@ -256,7 +264,7 @@ prepareApplyCandidate sid = do
             saveSessionUpdate session_{status = "prepare_conflict", preparedApply = Nothing, lastError = Just conflictSummary}
             loadAgentSessionView sid
 
-confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO AgentSessionView
+confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO AgentApplyView
 confirmApplyCandidate sid requestedTarget requestedCandidate = do
     session_ <- requireEditableSession sid
     candidate <- case preparedApply session_ of
@@ -285,7 +293,9 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
             liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
             changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-            liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) changedPaths
+            let projectIds = nub (mapMaybe appliedProjectId changedPaths)
+                stepIds = nub (mapMaybe appliedStepId changedPaths)
+            liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) projectIds stepIds
             appendLifecycleTurn
                 sid
                 "Apply proposed changeset"
@@ -298,7 +308,8 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
                     , preparedApply = Nothing
                     , lastError = Nothing
                     }
-            loadAgentSessionView sid
+            view_ <- loadAgentSessionView sid
+            return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
         (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
 {- | Discard the proposed changeset but keep the chat usable: instead of
@@ -471,10 +482,10 @@ applied agent changeset, so open status streams pick up the new commit
 resolution takes the shared repo lock, which the apply handler still holds
 exclusively until it returns.
 -}
-broadcastAppliedStatuses :: Text -> [Text] -> IO ()
-broadcastAppliedStatuses commit paths = do
-    mapM_ (\pid -> broadcastProjectStatus pid commit Nothing) (nub (mapMaybe appliedProjectId paths))
-    mapM_ (\sid -> broadcastStatusForStepProjects sid commit Nothing) (nub (mapMaybe appliedStepId paths))
+broadcastAppliedStatuses :: Text -> [Int] -> [Int] -> IO ()
+broadcastAppliedStatuses commit projectIds stepIds = do
+    mapM_ (\pid -> broadcastProjectStatus pid commit Nothing) projectIds
+    mapM_ (\sid -> broadcastStatusForStepProjects sid commit Nothing) stepIds
 
 sessionHasActiveRunner :: AgentSession -> Bool
 sessionHasActiveRunner session_ =

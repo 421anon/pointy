@@ -4,7 +4,7 @@
 -- | The backend HTTP API, served by @Main@ and documented by @Docs.OpenApi@.
 module Api (API) where
 
-import Agent.Git (AgentSessionView, AgentUsage)
+import Agent.Git (AgentApplyView, AgentSessionView, AgentUsage)
 import Agent.Session (AgentTurn)
 import ApiTypes (DynamicJson)
 import qualified Data.ByteString as BS
@@ -145,7 +145,7 @@ type ConfirmApply =
         :> "confirm-apply"
         :> Description "Applies a prepared agent session's changes to the target branch."
         :> ReqBody '[JSON] ConfirmApplyRequest
-        :> Post '[JSON] AgentSessionView
+        :> Post '[JSON] AgentApplyView
 
 type DiscardSession =
     "agent"

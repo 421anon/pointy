@@ -190,6 +190,13 @@ type alias AgentSessionView =
     }
 
 
+type alias AgentApplyView =
+    { sessionView : AgentSessionView
+    , invalidatedProjectIds : List Int
+    , invalidatedStepIds : List Int
+    }
+
+
 type ChatTurnStatus
     = ChatPending
     | ChatDone

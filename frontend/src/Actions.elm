@@ -2574,8 +2574,9 @@ applyAgentChanges =
                                                     |> Flow.andThen
                                                         (\confirmResult ->
                                                             case confirmResult of
-                                                                Ok appliedView ->
-                                                                    handleAgentSessionResult False (Ok appliedView)
+                                                                Ok applyView ->
+                                                                    handleAgentSessionResult False (Ok applyView.sessionView)
+                                                                        |> Flow.seq (markInvalidatedStatusesLoading applyView)
                                                                         |> Flow.seq reloadWorkspaceData
                                                                         |> Flow.seq loadAgentSessions
                                                                         |> Flow.seq (clearChangesetOperation view.session.sessionId)
@@ -2597,6 +2598,18 @@ applyAgentChanges =
                             )
                     )
         )
+
+
+markInvalidatedStatusesLoading : Model.AgentApplyView -> Flow Model ()
+markInvalidatedStatusesLoading applyView =
+    let
+        wipeProject projectId =
+            Flow.setAll (projects << records << success << by .id (Just projectId) << projectStepRecords << runState) (ApiData.loading Nothing)
+
+        wipeStep stepId =
+            Flow.setAll (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState) (ApiData.loading Nothing)
+    in
+    Flow.batchM (List.map wipeProject applyView.invalidatedProjectIds ++ List.map wipeStep applyView.invalidatedStepIds)
 
 
 discardAgentSession : Flow Model ()
