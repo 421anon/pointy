@@ -16,7 +16,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (evaluateJsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
-import OutPaths (withWriteRepoTransaction)
+import OutPaths (scheduleProjectOutPathsWarm, withWriteRepoTransaction)
 import ProcessLimiter (readProcessWithExitCodeL)
 import Servant (Handler, NoContent (..), throwError)
 import Servant.Server (err400, err500, errBody)
@@ -64,7 +64,14 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
     case result of
         Right output -> do
             case maybeProjectId of
-                Just projectId -> liftIO $ forkBroadcastProjectStatusAtHead projectId
+                Just projectId -> do
+                    -- Schedule explicit outPath warming for the affected project/commit
+                    -- before status broadcast so the broadcast and any open stream share it.
+                    eHead <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (T.pack hash)
+                    case eHead of
+                        Right headCommit -> liftIO $ scheduleProjectOutPathsWarm projectId headCommit
+                        Left _ -> return ()
+                    liftIO $ forkBroadcastProjectStatusAtHead projectId
                 Nothing -> return ()
             return (DynamicJson output)
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}

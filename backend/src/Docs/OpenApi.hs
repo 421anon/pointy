@@ -143,10 +143,10 @@ pointyOpenApi =
     withPathTags $
         withPathSummaries $
             toOpenApi (Proxy :: Proxy API)
-            & info . title .~ "Pointy Backend API"
-            & info . version .~ "1.0.0"
-            & info . description ?~ "HTTP API served by the Pointy backend. All routes are mounted under the `/backend` prefix by the reverse proxy."
-            & servers .~ ["/backend"]
+                & info . title .~ "Pointy Backend API"
+                & info . version .~ "1.0.0"
+                & info . description ?~ "HTTP API served by the Pointy backend. All routes are mounted under the `/backend` prefix by the reverse proxy."
+                & servers .~ ["/backend"]
 
 methodLenses :: [ALens' PathItem (Maybe Operation)]
 methodLenses = [get, put, post, delete, options, head_, patch, trace]
@@ -159,8 +159,9 @@ withPathTags = paths %~ imap tagOperations
       where
         section = firstPathSegment path
         setTags :: ALens' PathItem (Maybe Operation) -> PathItem -> PathItem
-        setTags methodLens = cloneLens methodLens . _Just %~ \operation ->
-            operation{_operationTags = fromList [section]}
+        setTags methodLens =
+            cloneLens methodLens . _Just %~ \operation ->
+                operation{_operationTags = fromList [section]}
 
 firstPathSegment :: FilePath -> Text
 firstPathSegment path =

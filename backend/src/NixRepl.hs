@@ -10,17 +10,18 @@ module NixRepl (
     runNixEval,
     runNixEvalWithPriority,
     restartNixReplSessions,
+    scheduleNixReplWarmRotation,
 ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TMVar, TQueue, atomically, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, takeTMVar, writeTQueue)
 import Control.Exception (SomeException, catch, evaluate, try)
-import Control.Monad (forever, void)
+import Control.Monad (forM, forever, unless, void, when)
 import Data.Aeson (Value (..), eitherDecode)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isAlphaNum, isSpace)
-import Data.List (intercalate, isInfixOf)
+import Data.List (intercalate, isInfixOf, partition)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsClosed, hPutStrLn, hSetBuffering)
@@ -77,11 +78,21 @@ data ReplOutcome
     | ReplDied String
     deriving (Eq, Show)
 
+{- | Per-worker warm-rotation coordination. At most one rotation runs per worker.
+When a rotation is requested while one is active, the latest non-empty request
+list is kept as pending and run once the current attempt finishes.
+-}
+data RotationState = RotationState
+    { rotationActive :: Bool
+    , rotationPending :: Maybe [NixEvalRequest]
+    }
+
 data ReplWorker = ReplWorker
     { replWorkerKind :: ReplKind
     , replWorkerSession :: MVar (Maybe ReplSession)
     , replWorkerForeground :: TQueue QueuedEval
     , replWorkerBackground :: TQueue QueuedEval
+    , replWorkerRotation :: MVar RotationState
     }
 
 data QueuedEval = QueuedEval NixEvalRequest (TMVar (Either String String))
@@ -99,7 +110,8 @@ newWorker kind = do
     session <- newMVar Nothing
     foreground <- newTQueueIO
     background <- newTQueueIO
-    let worker = ReplWorker kind session foreground background
+    rotation <- newMVar (RotationState False Nothing)
+    let worker = ReplWorker kind session foreground background rotation
     void $ forkIO $ replWorkerLoop worker
     return worker
 
@@ -114,6 +126,12 @@ replWorkerLoop worker =
             runWithSession True (replWorkerKind worker) (replWorkerSession worker) req
                 `catch` \(err :: SomeException) -> return (Left $ "nix repl worker failed: " ++ show err)
         atomically $ putTMVar response result
+        -- Check binding pressure after successful foreground/background evals.
+        -- Warm-path evals bypass this by calling runRequest directly on a
+        -- standby session, avoiding recursive scheduling.
+        case result of
+            Right _ -> checkBindingPressure worker req
+            Left _ -> return ()
 
 runNixEval :: NixEvalRequest -> IO (Either String String)
 runNixEval =
@@ -130,23 +148,126 @@ replQueue :: NixEvalPriority -> ReplWorker -> TQueue QueuedEval
 replQueue ForegroundEval = replWorkerForeground
 replQueue BackgroundEval = replWorkerBackground
 
+{- | Compatibility shim. The old implementation swapped in blank cold REPLs
+which was destructive to warmed sessions. This version is a deliberate
+no-op: warm rotations MUST carry non-empty request lists so they can
+pre-populate flake bindings before promotion. Use
+'scheduleNixReplWarmRotation' with real requests to rotate safely.
+-}
 restartNixReplSessions :: IO ()
-restartNixReplSessions = do
-    refreshSession PureRepl (replWorkerSession pureWorker)
-    refreshSession ImpureRepl (replWorkerSession impureWorker)
+restartNixReplSessions =
+    putStrLn "restartNixReplSessions: no-op (blank REPL rotation refused; use scheduleNixReplWarmRotation)"
 
-refreshSession :: ReplKind -> MVar (Maybe ReplSession) -> IO ()
-refreshSession kind ref =
-    void $ forkIO $ do
-        eSession <- try $ openSession kind
-        case eSession of
-            Left (err :: SomeException) ->
-                putStrLn $ "Failed to refresh " ++ show kind ++ " nix repl: " ++ show err
-            Right newSession -> do
-                mOldSession <- modifyMVar ref $ \mOldSession ->
-                    return (Just newSession, mOldSession)
-                mapM_ closeSession mOldSession
-                putStrLn $ "Refreshed " ++ show kind ++ " nix repl"
+{- | Binding count at which a successful foreground/background eval triggers
+an automatic warm rotation carrying that request, keeping the REPL from
+accumulating unbounded flake references.
+-}
+replFlakeVarBindingLimit :: Int
+replFlakeVarBindingLimit = 10
+
+{- | Schedule a warmed rotation on every worker whose kind matches at least
+one request. Requests are partitioned by 'evalImpure'. Workers without
+requests are left alone.
+-}
+scheduleNixReplWarmRotation :: [NixEvalRequest] -> IO ()
+scheduleNixReplWarmRotation reqs = do
+    let (pureReqs, impureReqs) = partition (not . evalImpure) reqs
+    unless (null pureReqs) $ scheduleWorkerWarmRotation pureWorker pureReqs
+    unless (null impureReqs) $ scheduleWorkerWarmRotation impureWorker impureReqs
+
+{- | Enqueue a warm rotation for a single worker, forking a worker thread
+if none is currently active. When a rotation is already in flight the
+latest (non-empty) request list replaces any previously-stored pending
+list; empty lists are silently dropped so a blank REPL is never promoted.
+-}
+scheduleWorkerWarmRotation :: ReplWorker -> [NixEvalRequest] -> IO ()
+scheduleWorkerWarmRotation worker reqs
+    | null reqs = return ()
+    | otherwise = do
+        shouldStart <- modifyMVar (replWorkerRotation worker) $ \st ->
+            if rotationActive st
+                then return (st{rotationPending = Just reqs}, False)
+                else return (st{rotationActive = True, rotationPending = Nothing}, True)
+        when shouldStart $
+            void $
+                forkIO $
+                    warmRotateWorker worker reqs
+
+{- | Execute a warm rotation for a single worker. Opens a fresh standby REPL,
+runs every warm request through it, and only promotes (atomically swaps
+the active session) after every request succeeds. On any failure the
+standby is closed without disturbing the active session. When the round
+finishes the rotation state is re-checked so any pending request list
+picked up while this one ran is executed next.
+-}
+warmRotateWorker :: ReplWorker -> [NixEvalRequest] -> IO ()
+warmRotateWorker worker reqs = do
+    result <- try $ do
+        standbySession <- openSession (replWorkerKind worker)
+        eOutcomes <-
+            try
+                ( forM reqs $ \req -> do
+                    o <- runRequest standbySession req
+                    return $ case o of
+                        ReplSucceeded _ -> Right ()
+                        ReplFailed err -> Left err
+                        ReplDied err -> Left err
+                ) ::
+                IO (Either SomeException [Either String ()])
+        case eOutcomes of
+            Left err -> do
+                closeSession standbySession
+                fail $ "warm rotation crashed: " ++ show err
+            Right outcomes -> do
+                let failed = [err | Left err <- outcomes]
+                if null failed
+                    then do
+                        -- Atomically promote: install the warmed standby as the
+                        -- active session, then close the previous one.
+                        mOldSession <- modifyMVar (replWorkerSession worker) $ \mOldSession ->
+                            return (Just standbySession, mOldSession)
+                        mapM_ closeSession mOldSession
+                        putStrLn $ "Warm rotation completed for " ++ show (replWorkerKind worker)
+                    else do
+                        closeSession standbySession
+                        fail $ "warm rotation failed: " ++ intercalate "; " failed
+    case result of
+        Left (err :: SomeException) ->
+            putStrLn $ "Warm rotation failed for " ++ show (replWorkerKind worker) ++ ": " ++ show err
+        Right () ->
+            return ()
+    -- After finishing (whether success or failure), check for a pending
+    -- rotation that was queued while this one ran.
+    pendingReqs <- modifyMVar (replWorkerRotation worker) $ \st ->
+        case rotationPending st of
+            Just pending -> return (st{rotationActive = True, rotationPending = Nothing}, Just pending)
+            Nothing -> return (st{rotationActive = False}, Nothing)
+    case pendingReqs of
+        Just nextReqs -> warmRotateWorker worker nextReqs
+        Nothing -> return ()
+
+{- | After a successful foreground/background eval on the active session,
+check whether the number of flake bindings has crossed the limit. If so,
+schedule a warm rotation carrying the same request so the standby is
+pre-warmed with the same flake, keeping the active session compact.
+
+This is called from the worker loop only; the warm rotation path calls
+'runRequest' directly on a standby session and never enters this function,
+so recursive warm scheduling is impossible.
+-}
+checkBindingPressure :: ReplWorker -> NixEvalRequest -> IO ()
+checkBindingPressure worker req = do
+    mBindings <- modifyMVar (replWorkerSession worker) $ \mSession ->
+        case mSession of
+            Just session -> do
+                bs <- readMVar (replFlakeVars session)
+                return (mSession, Just bs)
+            Nothing -> return (mSession, Nothing)
+    case mBindings of
+        Just bindings
+            | length bindings > replFlakeVarBindingLimit ->
+                scheduleWorkerWarmRotation worker [req]
+        _ -> return ()
 
 runWithSession :: Bool -> ReplKind -> MVar (Maybe ReplSession) -> NixEvalRequest -> IO (Either String String)
 runWithSession mayRetry kind ref req = do

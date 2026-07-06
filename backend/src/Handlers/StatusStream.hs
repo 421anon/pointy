@@ -23,7 +23,7 @@ import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Statuses (getRawStatuses, partitionImmediateStatuses, resolveStepStatus)
+import Handlers.Statuses (getRawStatusesWithPaths, partitionImmediateStatuses, resolveStepStatus)
 import Network.HTTP.Media ((//))
 
 import Servant (Handler, Header, Headers, addHeader, throwError)
@@ -50,24 +50,31 @@ stepStatusStreamHandler projectId commit = do
             Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
             Right c -> pure c
     let targetCommit = pack (readCommitHash ctx)
-    statusesResult <- liftIO $ getRawStatuses projectId targetCommit
-    rawStatuses <-
-        case statusesResult of
-            Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-            Right statuses -> pure statuses
-
-    let (initialStatuses, pendingStatuses) = partitionImmediateStatuses rawStatuses
 
     localChan <- liftIO newTChanIO
     busChan <- liftIO subscribe
-    when (not (Map.null pendingStatuses)) $
-        liftIO $
-            void $
-                forkIO $
-                    publishResolvedStatuses localChan commit projectId ctx pendingStatuses
+
+    -- Fork async status fetch and resolution; the initial SSE response
+    -- goes out immediately with an empty snapshot so the client is never
+    -- blocked on Nix evaluation.
+    liftIO $
+        void $
+            forkIO $ do
+                result <- getRawStatusesWithPaths projectId targetCommit
+                case result of
+                    Left _ -> return ()
+                    Right (rawStatuses, outPaths) -> do
+                        let (initialStatuses, pendingStatuses) = partitionImmediateStatuses rawStatuses
+                        when (not (Map.null initialStatuses)) $ do
+                            stillCurrent <- statusStreamCommitStillCurrent commit targetCommit
+                            when stillCurrent $
+                                atomically $
+                                    writeTChan localChan (Bus.ProjectSnapshot projectId targetCommit initialStatuses)
+                        when (not (Map.null pendingStatuses)) $
+                            publishResolvedStatuses localChan commit projectId ctx outPaths pendingStatuses
 
     let padding = sseComment $ "padding " <> pack (replicate 4096 ' ')
-    let snapshotPayload = encodeSnapshot projectId targetCommit initialStatuses
+    let emptySnapshot = encodeSnapshot projectId targetCommit Map.empty
     let source =
             S.fromStepT
                 ( S.Yield
@@ -75,25 +82,25 @@ stepStatusStreamHandler projectId commit = do
                     ( S.Yield
                         padding
                         ( S.Yield
-                            (sseEvent "snapshot" snapshotPayload)
+                            (sseEvent "snapshot" emptySnapshot)
                             (S.Effect (streamLoop projectId commit 0 localChan busChan))
                         )
                     )
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
 
-publishResolvedStatuses :: TChan ProjectSnapshot -> Maybe Text -> Int -> ReadRepoContext -> Map Int (Text, Maybe Text) -> IO ()
-publishResolvedStatuses updatesChan pinnedCommit projectId ctx statuses =
+publishResolvedStatuses :: TChan ProjectSnapshot -> Maybe Text -> Int -> ReadRepoContext -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
+publishResolvedStatuses updatesChan pinnedCommit projectId ctx outPaths statuses =
     mapConcurrently_ publishOne (Map.toList statuses)
   where
     targetCommit = pack (readCommitHash ctx)
 
-    publishOne entry = do
-        (sid, status_) <- resolveStepStatus ctx entry
+    publishOne (sid, entry) = do
+        (sid', status_) <- resolveStepStatus ctx (fmap unpack $ Map.lookup sid outPaths) (sid, entry)
         shouldPublish <- statusStreamCommitStillCurrent pinnedCommit targetCommit
         when shouldPublish $
             atomically $
-                writeTChan updatesChan (Bus.ProjectSnapshot projectId targetCommit (Map.singleton sid status_))
+                writeTChan updatesChan (Bus.ProjectSnapshot projectId targetCommit (Map.singleton sid' status_))
 
 statusStreamCommitStillCurrent :: Maybe Text -> Text -> IO Bool
 statusStreamCommitStillCurrent pinnedCommit targetCommit =

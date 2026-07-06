@@ -5,6 +5,7 @@
 module Handlers.Statuses (
     checkStatus,
     getRawStatuses,
+    getRawStatusesWithPaths,
     getStatuses,
     partitionImmediateStatuses,
     resolveStepStatus,
@@ -24,7 +25,6 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, void, when)
-import Control.Monad.Except (runExceptT)
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
@@ -35,7 +35,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import NixUtils (isValidStorePath)
 import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), getProjectOutPaths)
-import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, userRepoPath, withReadRepoTransaction)
 
 checkStatus :: FilePath -> IO (Text, Maybe Text)
 checkStatus path = do
@@ -56,44 +56,36 @@ isImmediateStatus (state, _) = state == "success" || state == "running"
 partitionImmediateStatuses :: Map Int (Text, Maybe Text) -> (Map Int (Text, Maybe Text), Map Int (Text, Maybe Text))
 partitionImmediateStatuses = Map.partition isImmediateStatus
 
-{- | Resolve build logs only for statuses whose durable Nix log can refine them.
-Successful and running steps are already authoritative, so they return without
-derivation traversal. A @"not-started"@ step is upgraded to @"failure"@ only
-when the resolver finds a recorded failed build after the scheduler job has
-disappeared.
--}
-resolveStatuses :: ReadRepoContext -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
-resolveStatuses ctx statuses =
-    Map.fromList <$> mapConcurrently (resolveStepStatus ctx) (Map.toList statuses)
-
-resolveStepStatus :: ReadRepoContext -> (Int, (Text, Maybe Text)) -> IO (Int, (Text, Maybe Text))
-resolveStepStatus _ entry@(_, status_)
+resolveStepStatus :: ReadRepoContext -> Maybe FilePath -> (Int, (Text, Maybe Text)) -> IO (Int, (Text, Maybe Text))
+resolveStepStatus _ _ entry@(_, status_)
     | isImmediateStatus status_ = return entry
-resolveStepStatus ctx entry@(sid, (state, _))
+resolveStepStatus _ Nothing entry@(_, (state, _))
+    | state == "failure" || state == "not-started" = return entry
+resolveStepStatus _ Nothing entry = return entry
+resolveStepStatus _ (Just outPath) entry@(sid, (state, _))
     | state == "failure" || state == "not-started" = do
-        result <- runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show sid ++ ".outPath")
-        case result of
-            Left _ -> return entry
-            Right outPath -> do
-                mResolved <- resolveBuildLog outPath
-                return $ case mResolved of
-                    Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
-                    Nothing -> entry
+        mResolved <- resolveBuildLog outPath
+        return $ case mResolved of
+            Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
+            Nothing -> entry
     | otherwise = return entry
 
-resolveStatusesAtCommit :: Text -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
-resolveStatusesAtCommit targetCommit statuses = do
+resolveStatusesAtCommitWithPaths :: Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+resolveStatusesAtCommitWithPaths targetCommit outPaths statuses = do
     repoPath <- userRepoPath
-    resolveStatuses (ReadRepoContext repoPath (unpack targetCommit)) statuses
-
-getRawStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
-getRawStatuses pid targetCommit = do
+    let ctx = ReadRepoContext repoPath (unpack targetCommit)
+    Map.fromList <$> mapConcurrently (resolveOneWithPath ctx outPaths) (Map.toList statuses)
+  where
+    resolveOneWithPath ctx outPaths (sid, entry) =
+        resolveStepStatus ctx (fmap unpack $ Map.lookup sid outPaths) (sid, entry)
+getRawStatusesWithPaths :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text), Map Int Text))
+getRawStatusesWithPaths pid targetCommit = do
     result <- getProjectOutPaths pid targetCommit
     case result of
         Left err -> return $ Left err
         Right outPaths -> do
             rawStatuses <- Map.fromList <$> mapConcurrently getStatusForStep (Map.toList outPaths)
-            return $ Right rawStatuses
+            return $ Right (rawStatuses, outPaths)
   where
     getStatusForStep (sid, path) = do
         status_ <-
@@ -101,29 +93,33 @@ getRawStatuses pid targetCommit = do
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
 
+getRawStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
+getRawStatuses pid targetCommit = do
+    result <- getRawStatusesWithPaths pid targetCommit
+    return $ fmap fst result
 getStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
 getStatuses pid targetCommit = do
-    rawResult <- getRawStatuses pid targetCommit
+    rawResult <- getRawStatusesWithPaths pid targetCommit
     case rawResult of
         Left err -> return $ Left err
-        Right statuses -> Right <$> resolveStatusesAtCommit targetCommit statuses
+        Right (statuses, outPaths) -> Right <$> resolveStatusesAtCommitWithPaths targetCommit outPaths statuses
 
-broadcastResolvedStatusesAtCommit :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
-broadcastResolvedStatusesAtCommit pid targetCommit statuses = do
+broadcastResolvedStatusesAtCommit :: Int -> Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
+broadcastResolvedStatusesAtCommit pid targetCommit outPaths statuses = do
     repoPath <- userRepoPath
     let ctx = ReadRepoContext repoPath (unpack targetCommit)
-    mapConcurrently_ (broadcastResolvedStatus ctx) (Map.toList statuses)
+    mapConcurrently_ (broadcastResolvedStatus ctx outPaths) (Map.toList statuses)
   where
-    broadcastResolvedStatus ctx entry = do
-        (sid, status_) <- resolveStepStatus ctx entry
-        broadcastSnapshot pid targetCommit (Map.singleton sid status_)
+    broadcastResolvedStatus ctx outPaths (sid, entry) = do
+        (sid', status_) <- resolveStepStatus ctx (fmap unpack $ Map.lookup sid outPaths) (sid, entry)
+        broadcastSnapshot pid targetCommit (Map.singleton sid' status_)
 
 broadcastProjectStatus :: Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> IO ()
 broadcastProjectStatus pid targetCommit mStatusOverride = do
-    statusesResult <- getRawStatuses pid targetCommit
-    case statusesResult of
+    result <- getRawStatusesWithPaths pid targetCommit
+    case result of
         Left err -> putStrLn $ "broadcastProjectStatus skipped: " ++ err
-        Right stats -> do
+        Right (stats, outPaths) -> do
             let finalStats = case mStatusOverride of
                     Just (sid, st) -> Map.insert sid st stats
                     Nothing -> stats
@@ -132,7 +128,7 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
             when (not (Map.null pending)) $
                 void $
                     forkIO $
-                        broadcastResolvedStatusesAtCommit pid targetCommit pending
+                        broadcastResolvedStatusesAtCommit pid targetCommit outPaths pending
 
 withStepProjects :: Int -> Text -> (Int -> ReadRepoContext -> IO ()) -> IO ()
 withStepProjects sid targetCommit action = do
@@ -158,13 +154,17 @@ broadcastSingleStepForProjects :: Int -> Text -> FilePath -> IO ()
 broadcastSingleStepForProjects sid targetCommit outPath = do
     rawStatus <- checkStatus outPath `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
     withStepProjects sid targetCommit $ \pid ctx -> do
-        (_, resolvedStatus) <- resolveStepStatus ctx (sid, rawStatus)
+        (_, resolvedStatus) <- resolveStepStatus ctx (Just outPath) (sid, rawStatus)
         broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
 
 broadcastFailedStepForProjects :: Int -> Text -> IO ()
 broadcastFailedStepForProjects sid targetCommit =
     withStepProjects sid targetCommit $ \pid ctx -> do
-        (_, status) <- resolveStepStatus ctx (sid, ("failure", Nothing))
+        outPathsResult <- getProjectOutPaths pid targetCommit
+        let mOutPath = case outPathsResult of
+                Right outPaths -> fmap unpack (Map.lookup sid outPaths)
+                Left _ -> Nothing
+        (_, status) <- resolveStepStatus ctx mOutPath (sid, ("failure", Nothing))
         broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
 broadcastKnownStepStatus :: Int -> Text -> (Text, Maybe Text) -> IO ()
