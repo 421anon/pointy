@@ -187,8 +187,6 @@ syncWorktreeToTarget session_ latest = do
     head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
     if head_ == baseCommit session_
         then do
-            -- No agent commits yet: stray uncommitted files are disposable
-            -- (same policy as confirmApplyCandidate), so jump straight to latest.
             _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
             _ <- runGitChecked (worktreePath session_) ["reset", "--hard", T.unpack latest]
             advanceBase $ "Updated session to latest `" <> targetBranch session_ <> "` state (" <> shortCommit latest <> ")"
