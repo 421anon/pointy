@@ -557,31 +557,7 @@ submitShortcut runnerActive =
 viewChat : Model.AgentState -> Model.AgentSessionView -> Bool -> Html (Flow Model ())
 viewChat agent sessionView runnerActive =
     Html.div [ class "agent-panel__section agent-panel__conversation" ]
-        [ Html.div [ class "agent-panel__section-header agent-panel__conversation-header" ]
-            [ Html.h3 [] [ Html.text "Messages" ]
-            , Html.button
-                [ classList
-                    [ ( "link-btn", True )
-                    , ( "is-active", agent.showRawLog )
-                    ]
-                , Events.onClick Actions.toggleAgentLog
-                ]
-                [ Html.text
-                    (if agent.showRawLog then
-                        "Hide details"
-
-                     else
-                        "Show details"
-                    )
-                ]
-            ]
-        , if agent.showRawLog then
-            Html.pre [ class "agent-panel__log" ]
-                [ Html.text (emptyAs "No details yet." agent.turnLog) ]
-
-          else
-            viewChatTurns agent sessionView runnerActive
-        ]
+        [ viewChatTurns agent sessionView runnerActive ]
 
 
 activeChangesetOperation : Model.AgentState -> String -> Maybe Model.ChangesetOperationKind
@@ -954,12 +930,3 @@ shortSha sha =
 
     else
         String.left 12 sha
-
-
-emptyAs : String -> String -> String
-emptyAs fallback text =
-    if String.isEmpty (String.trim text) then
-        fallback
-
-    else
-        text

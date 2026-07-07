@@ -1891,11 +1891,7 @@ mergeSessionView view agentState =
 
 applyPersistedTranscript : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
 applyPersistedTranscript view agentState =
-    let
-        ( chatEntries, turnLog ) =
-            persistedTranscript view
-    in
-    { agentState | chatEntries = chatEntries, turnLog = turnLog, chunkBuffer = "" }
+    { agentState | chatEntries = persistedTranscript view, chunkBuffer = "" }
 
 
 shouldKeepLiveTranscript : Model.AgentSessionView -> Model.AgentState -> Bool
@@ -1903,7 +1899,7 @@ shouldKeepLiveTranscript view agentState =
     view.session.activeTurnId /= Nothing && agentState.activeTurnStream == view.session.activeTurnId
 
 
-persistedTranscript : Model.AgentSessionView -> ( List Model.ChatEntry, String )
+persistedTranscript : Model.AgentSessionView -> List Model.ChatEntry
 persistedTranscript view =
     let
         turnForTranscript turn =
@@ -1912,13 +1908,8 @@ persistedTranscript view =
 
             else
                 turn
-
-        turns =
-            List.map turnForTranscript view.turns
     in
-    ( List.foldl appendPersistedTurn [] turns
-    , String.concat (List.map .turnLog turns)
-    )
+    List.foldl appendPersistedTurn [] (List.map turnForTranscript view.turns)
 
 
 isChangesetLifecycleTurn : Model.AgentTurn -> Bool
@@ -2206,10 +2197,8 @@ selectAgentSession sessionId =
             { s
                 | selectedSessionId = Just sessionId
                 , activeTurnStream = Nothing
-                , turnLog = ""
                 , chatEntries = []
                 , chunkBuffer = ""
-                , showRawLog = False
                 , isMobileSidebarOpen = False
                 , sessionNameEdit = Nothing
             }
@@ -2357,7 +2346,6 @@ archiveAgentSession sessionId =
                                         | selectedSessionId = Nothing
                                         , chatEntries = []
                                         , chunkBuffer = ""
-                                        , turnLog = ""
                                         , sessionNameEdit = Nothing
                                     }
                                 )
@@ -2405,12 +2393,6 @@ deleteAgentSession sessionId =
 
                                         else
                                             s.chunkBuffer
-                                    , turnLog =
-                                        if cleared then
-                                            ""
-
-                                        else
-                                            s.turnLog
                                     , sessionNameEdit =
                                         if cleared then
                                             Nothing
@@ -2447,10 +2429,6 @@ toggleAgentArchived : Flow Model ()
 toggleAgentArchived =
     Flow.over agent (\s -> { s | showArchived = not s.showArchived })
 
-
-toggleAgentLog : Flow Model ()
-toggleAgentLog =
-    Flow.over agent (\agentState -> { agentState | showRawLog = not agentState.showRawLog })
 
 
 readAgentPrompt : Flow Model String
@@ -2535,7 +2513,6 @@ submitAgentPrompt =
                                                     (\agentState ->
                                                         { agentState
                                                             | activeTurnStream = Just turn.turnId
-                                                            , turnLog = ""
                                                             , chunkBuffer = ""
                                                             , chatEntries =
                                                                 agentState.chatEntries
@@ -2715,7 +2692,6 @@ ingestAgentChunk chunk agentState =
     in
     { agentState
         | chunkBuffer = remainder
-        , turnLog = agentState.turnLog ++ chunk
         , chatEntries = nextChatEntries
     }
 

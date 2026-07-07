@@ -257,8 +257,6 @@ type alias AgentState =
     , activeTurnStream : Maybe String
     , chatEntries : List ChatEntry
     , chunkBuffer : String
-    , turnLog : String
-    , showRawLog : Bool
     , showArchived : Bool
     , changesetOperation : Maybe ChangesetOperation
     , sessionNameEdit : Maybe AgentSessionNameEdit
@@ -276,8 +274,6 @@ initAgentState =
     , activeTurnStream = Nothing
     , chatEntries = []
     , chunkBuffer = ""
-    , turnLog = ""
-    , showRawLog = False
     , showArchived = False
     , changesetOperation = Nothing
     , sessionNameEdit = Nothing
