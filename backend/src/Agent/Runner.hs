@@ -59,8 +59,6 @@ startAgentTurn sid prompt = do
     when (status session_ == "archived") $ Except.throwError "session_archived"
     when (status session_ == "running" || activeTurnId session_ /= Nothing) $ Except.throwError "runner_active"
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
-    -- Sync the session worktree with the latest target branch state so the
-    -- agent sees changes made while the thread was inactive.
     (freshSession, syncNotes) <- refreshSessionBase session_
     tid <- liftIO newTurnId
     logPath <- liftIO $ turnLogFilePath sid tid

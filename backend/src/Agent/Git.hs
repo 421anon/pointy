@@ -312,10 +312,6 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
         (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
-{- | Discard the proposed changeset but keep the chat usable: instead of
-deleting the agent branch and worktree, reset them to the current target
-head so the conversation can continue from a clean slate.
--}
 discardAgentSession :: Text -> ExceptT String IO AgentSessionView
 discardAgentSession sid = do
     session_ <- requireEditableSession sid
@@ -476,12 +472,6 @@ decimalId text_ =
         Right (n, rest) | T.null rest -> Just n
         _ -> Nothing
 
-{- | Broadcast fresh step statuses for the projects and steps touched by an
-applied agent changeset, so open status streams pick up the new commit
-(typically flipping run states to not-started). Run this forked: status
-resolution takes the shared repo lock, which the apply handler still holds
-exclusively until it returns.
--}
 broadcastAppliedStatuses :: Text -> [Int] -> [Int] -> IO ()
 broadcastAppliedStatuses commit projectIds stepIds = do
     mapM_ (\pid -> broadcastProjectStatus pid commit Nothing) projectIds
