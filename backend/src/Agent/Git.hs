@@ -43,7 +43,7 @@ import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
 import Control.Monad (unless, void, when)
-import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), catchError, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import Data.List (nub, sortOn)
@@ -169,10 +169,10 @@ commitAgentTurnOutputs session_ turn = do
 
 refreshSessionBase :: AgentSession -> ExceptT String IO (AgentSession, [Text])
 refreshSessionBase session_ = do
-    fetchResult <- liftIO $ runExceptT fetchRepoStrict
-    let fetchNotes = case fetchResult of
-            Left err -> ["Warning: could not fetch latest repo state: " <> T.pack err]
-            Right () -> []
+    fetchNotes <-
+        (fetchRepoStrict >> pure [])
+            `catchError` \err ->
+                pure ["Warning: could not fetch latest repo state: " <> T.pack err]
     repoPath <- liftIO userRepoPath
     latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
     worktreeExists <- liftIO $ doesDirectoryExist (worktreePath session_)
