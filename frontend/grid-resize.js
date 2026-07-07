@@ -4,13 +4,9 @@
 // `.delimited-grid` CSS variables instead of rendered row cells.
 (function () {
   const MIN_COLUMN_WIDTH = 40;
-  const MAX_COLUMN_WIDTH = 800;
 
   let active = null;
 
-  function clamp(v, lo, hi) {
-    return v < lo ? lo : v > hi ? hi : v;
-  }
 
   // Suppress click events on resize handles to avoid triggering sort.
   document.addEventListener(
@@ -60,10 +56,9 @@
 
       event.preventDefault();
 
-      const newWidth = clamp(
+      const newWidth = Math.max(
         active.startWidth + event.clientX - active.startX,
-        MIN_COLUMN_WIDTH,
-        MAX_COLUMN_WIDTH
+        MIN_COLUMN_WIDTH
       );
       const widthDelta = newWidth - active.startWidth;
 
