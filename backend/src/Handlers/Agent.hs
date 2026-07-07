@@ -22,6 +22,7 @@ module Handlers.Agent (
 ) where
 
 import Agent.Git (
+    AgentApplyView,
     AgentSessionView,
     AgentUsage,
     archiveAgentSession,
@@ -111,7 +112,7 @@ prepareApplyHandler :: SessionRequest -> Handler AgentSessionView
 prepareApplyHandler req =
     runLockedAction $ prepareApplyCandidate (sessionRequestSessionId req)
 
-confirmApplyHandler :: ConfirmApplyRequest -> Handler AgentSessionView
+confirmApplyHandler :: ConfirmApplyRequest -> Handler AgentApplyView
 confirmApplyHandler req =
     runLockedAction $ confirmApplyCandidate (confirmSessionId req) (confirmTargetHead req) (confirmCandidateHead req)
 

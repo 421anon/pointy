@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Agent.Git (
+    AgentApplyView (..),
     AgentGitState (..),
     AgentSessionView (..),
     AgentUsage (..),
@@ -13,6 +14,7 @@ module Agent.Git (
     renameAgentSession,
     loadAgentSessionView,
     commitAgentTurnOutputs,
+    refreshSessionBase,
     prepareApplyCandidate,
     confirmApplyCandidate,
     discardAgentSession,
@@ -38,19 +40,22 @@ import Agent.Session (
     turnLogFilePath,
  )
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
+import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
-import Control.Monad (unless, when)
-import Control.Monad.Except (ExceptT (..), throwError)
+import Control.Monad (unless, void, when)
+import Control.Monad.Except (ExceptT (..), catchError, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
-import Data.Char (isDigit)
 import Data.List (nub, sortOn)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.Text.Read as TR
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
+import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
@@ -68,6 +73,13 @@ data AgentSessionView = AgentSessionView
     { session :: AgentSession
     , gitState :: AgentGitState
     , turns :: [AgentTurn]
+    }
+    deriving (Show, Eq, Generic, ToJSON)
+
+data AgentApplyView = AgentApplyView
+    { sessionView :: AgentSessionView
+    , invalidatedProjectIds :: [Int]
+    , invalidatedStepIds :: [Int]
     }
     deriving (Show, Eq, Generic, ToJSON)
 
@@ -155,6 +167,59 @@ commitAgentTurnOutputs session_ turn = do
                     head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
                     return (Just head_, skippedPaths)
 
+refreshSessionBase :: AgentSession -> ExceptT String IO (AgentSession, [Text])
+refreshSessionBase session_ = do
+    fetchNotes <-
+        (fetchRepoStrict >> pure [])
+            `catchError` \err ->
+                pure ["Warning: could not fetch latest repo state: " <> T.pack err]
+    repoPath <- liftIO userRepoPath
+    latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+    worktreeExists <- liftIO $ doesDirectoryExist (worktreePath session_)
+    if latest == baseCommit session_ || not worktreeExists
+        then return (session_, fetchNotes)
+        else do
+            (updated, syncNote) <- syncWorktreeToTarget session_ latest
+            return (updated, fetchNotes ++ [syncNote])
+
+syncWorktreeToTarget :: AgentSession -> Text -> ExceptT String IO (AgentSession, Text)
+syncWorktreeToTarget session_ latest = do
+    head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
+    if head_ == baseCommit session_
+        then do
+            -- No agent commits yet: stray uncommitted files are disposable
+            -- (same policy as confirmApplyCandidate), so jump straight to latest.
+            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+            _ <- runGitChecked (worktreePath session_) ["reset", "--hard", T.unpack latest]
+            advanceBase $ "Updated session to latest `" <> targetBranch session_ <> "` state (" <> shortCommit latest <> ")"
+        else do
+            mergeResult <-
+                liftIO $
+                    runGitIn
+                        (worktreePath session_)
+                        ["merge", "-m", "Merge latest " ++ T.unpack (targetBranch session_) ++ " into agent session", T.unpack latest]
+            case mergeResult of
+                (ExitSuccess, _, _) ->
+                    advanceBase $ "Merged latest `" <> targetBranch session_ <> "` state (" <> shortCommit latest <> ") into session"
+                (ExitFailure _, mergeOut, mergeErr) -> do
+                    _ <- liftIO $ runGitIn (worktreePath session_) ["merge", "--abort"]
+                    return
+                        ( session_
+                        , "Warning: could not merge latest `"
+                            <> targetBranch session_
+                            <> "` ("
+                            <> shortCommit latest
+                            <> ") into session; continuing from "
+                            <> shortCommit (baseCommit session_)
+                            <> "."
+                            <> T.pack (formatGitOutput mergeOut mergeErr)
+                        )
+  where
+    advanceBase note = do
+        let refreshed = session_{baseCommit = latest}
+        saveSessionUpdate refreshed
+        return (refreshed, note)
+
 prepareApplyCandidate :: Text -> ExceptT String IO AgentSessionView
 prepareApplyCandidate sid = do
     session_ <- requireEditableSession sid
@@ -199,7 +264,7 @@ prepareApplyCandidate sid = do
             saveSessionUpdate session_{status = "prepare_conflict", preparedApply = Nothing, lastError = Just conflictSummary}
             loadAgentSessionView sid
 
-confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO AgentSessionView
+confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO AgentApplyView
 confirmApplyCandidate sid requestedTarget requestedCandidate = do
     session_ <- requireEditableSession sid
     candidate <- case preparedApply session_ of
@@ -227,6 +292,10 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             _ <- runGitChecked (worktreePath session_) ["reset", "--hard", candidateSha]
             _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
             liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
+            changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
+            let projectIds = nub (mapMaybe appliedProjectId changedPaths)
+                stepIds = nub (mapMaybe appliedStepId changedPaths)
+            liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) projectIds stepIds
             appendLifecycleTurn
                 sid
                 "Apply proposed changeset"
@@ -239,26 +308,29 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
                     , preparedApply = Nothing
                     , lastError = Nothing
                     }
-            loadAgentSessionView sid
+            view_ <- loadAgentSessionView sid
+            return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
         (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
 discardAgentSession :: Text -> ExceptT String IO AgentSessionView
 discardAgentSession sid = do
-    session_ <- loadSessionOrThrow sid
+    session_ <- requireEditableSession sid
     when (sessionHasActiveRunner session_) $ throwError "runner_active"
     changesetDiff <- branchDiff <$> collectGitState session_
     repoPath <- liftIO userRepoPath
-    liftIO $ removeWorktreeIfExists repoPath (worktreePath session_)
+    latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+    _ <- runGitChecked (worktreePath session_) ["reset", "--hard", T.unpack latest]
+    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
     case preparedApply session_ of
         Nothing -> return ()
         Just candidate -> liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
-    _ <- liftIO $ runGitIn repoPath ["branch", "-D", T.unpack (agentBranch session_)]
     appendLifecycleTurn
         sid
         "Discard proposed changeset"
-        ("Discarded this draft. No changes were applied to `" <> targetBranch session_ <> "`.")
+        ("Discarded this draft. No changes were applied to `" <> targetBranch session_ <> "`. You can continue from a clean state in this chat.")
         changesetDiff
-    saveSessionUpdate session_{status = "discarded", activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
+    saveSessionUpdate session_{status = "open", baseCommit = latest, activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
     loadAgentSessionView sid
 
 appendLifecycleTurn :: Text -> Text -> Text -> Text -> ExceptT String IO ()
@@ -376,20 +448,34 @@ hasStagedChanges worktree = ExceptT $ do
 
 isAgentOutputPath :: Text -> Bool
 isAgentOutputPath path =
+    isJust (appliedProjectId path) || isJust (appliedStepId path)
+
+appliedProjectId :: Text -> Maybe Int
+appliedProjectId path =
     case T.splitOn "/" path of
-        ["projects", file] -> isNumberedNix file
-        ["steps", file] -> isNumberedNix file
-        "srcFiles" : stepId : rest -> isDigits stepId && not (null rest)
-        _ -> False
+        ["projects", file] -> numberedNixId file
+        _ -> Nothing
 
-isNumberedNix :: Text -> Bool
-isNumberedNix file =
-    case T.stripSuffix ".nix" file of
-        Just stem -> isDigits stem
-        Nothing -> False
+appliedStepId :: Text -> Maybe Int
+appliedStepId path =
+    case T.splitOn "/" path of
+        ["steps", file] -> numberedNixId file
+        "srcFiles" : stepId : _ : _ -> decimalId stepId
+        _ -> Nothing
 
-isDigits :: Text -> Bool
-isDigits text_ = not (T.null text_) && T.all isDigit text_
+numberedNixId :: Text -> Maybe Int
+numberedNixId file = T.stripSuffix ".nix" file >>= decimalId
+
+decimalId :: Text -> Maybe Int
+decimalId text_ =
+    case TR.decimal text_ of
+        Right (n, rest) | T.null rest -> Just n
+        _ -> Nothing
+
+broadcastAppliedStatuses :: Text -> [Int] -> [Int] -> IO ()
+broadcastAppliedStatuses commit projectIds stepIds = do
+    mapM_ (\pid -> broadcastProjectStatus pid commit Nothing) projectIds
+    mapM_ (\sid -> broadcastStatusForStepProjects sid commit Nothing) stepIds
 
 sessionHasActiveRunner :: AgentSession -> Bool
 sessionHasActiveRunner session_ =

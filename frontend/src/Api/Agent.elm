@@ -73,15 +73,20 @@ prepareApply sessionId =
     postSessionView "/prepare-apply" (sessionIdBody sessionId)
 
 
-confirmApply : String -> String -> String -> Flow s (Result Http.Error Model.AgentSessionView)
+confirmApply : String -> String -> String -> Flow s (Result Http.Error Model.AgentApplyView)
 confirmApply sessionId targetHead candidateHead =
-    postSessionView "/confirm-apply"
-        (Encode.object
-            [ ( "sessionId", Encode.string sessionId )
-            , ( "targetHead", Encode.string targetHead )
-            , ( "candidateHead", Encode.string candidateHead )
-            ]
-        )
+    Flow.lift <|
+        Http.post
+            { url = baseUrl ++ "/confirm-apply"
+            , body =
+                Http.jsonBody <|
+                    Encode.object
+                        [ ( "sessionId", Encode.string sessionId )
+                        , ( "targetHead", Encode.string targetHead )
+                        , ( "candidateHead", Encode.string candidateHead )
+                        ]
+            , expect = Http.expectJson identity applyViewDecoder
+            }
 
 
 discardSession : String -> Flow s (Result Http.Error Model.AgentSessionView)
@@ -120,6 +125,14 @@ sessionViewDecoder =
         |> required "session" sessionDecoder
         |> required "gitState" gitStateDecoder
         |> required "turns" (Decode.list turnDecoder)
+
+
+applyViewDecoder : Decoder Model.AgentApplyView
+applyViewDecoder =
+    Decode.succeed Model.AgentApplyView
+        |> required "sessionView" sessionViewDecoder
+        |> required "invalidatedProjectIds" (Decode.list Decode.int)
+        |> required "invalidatedStepIds" (Decode.list Decode.int)
 
 
 sessionDecoder : Decoder Model.AgentSession

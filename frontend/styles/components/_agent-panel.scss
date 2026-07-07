@@ -38,6 +38,10 @@
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
 }
 
+.agent-panel.is-minimized {
+  display: none;
+}
+
 .agent-panel.is-maximized {
   top: var(--spacing-md);
   right: var(--spacing-md);
@@ -58,7 +62,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--spacing-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-md);
   border-bottom: 1px solid var(--line-color);
   background: var(--bg-secondary);
 
@@ -84,14 +88,14 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: var(--spacing-md);
+  padding: var(--spacing-sm);
 }
 
 .agent-panel__body {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: var(--spacing-sm);
 }
 
 .agent-panel__empty {
@@ -125,32 +129,6 @@
 .agent-panel__composer {
   flex: 0 0 auto;
   margin-top: auto;
-  padding: var(--spacing-sm);
-  border: 1px solid var(--line-color);
-  border-radius: 8px;
-  background: var(--bg-secondary);
-}
-
-.agent-panel__composer-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--spacing-sm);
-
-  p {
-    margin-top: 2px;
-    font-size: var(--font-size-sm);
-  }
-}
-
-.agent-panel__shortcut {
-  flex: 0 0 auto;
-  border: 1px solid var(--line-color);
-  border-radius: 999px;
-  padding: 2px var(--spacing-xs);
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
 }
 
 .agent-panel__composer-row {
@@ -176,8 +154,19 @@
 }
 
 .agent-panel__run-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   min-width: 88px;
   height: 42px;
+}
+
+.agent-panel__run-hint {
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.7;
+  line-height: 1.2;
 }
 
 .agent-panel__log,
@@ -389,7 +378,7 @@
 }
 
 .agent-panel__session-title-card {
-  padding: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
   border: 1px solid var(--line-color);
   border-radius: 8px;
   background: var(--bg-secondary);
@@ -500,7 +489,7 @@
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: var(--spacing-sm);
   overflow: auto;
   padding: var(--spacing-sm);
   border: 1px solid var(--line-color);
@@ -536,8 +525,8 @@
   min-width: 0;
   max-width: 100%;
   flex-direction: column;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-md);
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
   border: 1px solid var(--line-color);
   border-radius: 10px;
   background: var(--bg-secondary);

@@ -29,17 +29,19 @@ view model =
             [ View.Icons.iconCustom False "smart_toy" []
             , Html.span [] [ Html.text "Agent" ]
             ]
-        , if agent.isPanelOpen then
-            viewPanel agent
-
-          else
-            Html.text ""
+        , viewPanel agent
         ]
 
 
 viewPanel : Model.AgentState -> Html (Flow Model ())
 viewPanel agent =
-    Html.div [ classList [ ( "agent-panel", True ), ( "is-maximized", agent.isMaximized ) ] ]
+    Html.div
+        [ classList
+            [ ( "agent-panel", True )
+            , ( "is-maximized", agent.isMaximized )
+            , ( "is-minimized", not agent.isPanelOpen )
+            ]
+        ]
         [ Html.div [ class "agent-panel__header" ]
             [ Html.div []
                 [ Html.h2 [] [ Html.text "AI agent" ]
@@ -507,11 +509,7 @@ viewPrompt runnerActive =
                 "Send"
     in
     Html.div [ class "agent-panel__section agent-panel__composer" ]
-        [ Html.div [ class "agent-panel__composer-header" ]
-            [ Html.h3 [] [ Html.text "Message" ]
-            , Html.span [ class "agent-panel__shortcut" ] [ Html.text "Ctrl/⌘+Enter" ]
-            ]
-        , Html.div [ class "agent-panel__composer-row" ]
+        [ Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
                 [ class "agent-panel__prompt"
                 , id "agent-prompt"
@@ -526,9 +524,11 @@ viewPrompt runnerActive =
                 [ class "primary-btn agent-panel__run-button"
                 , disabled runnerActive
                 , Events.onClick Actions.submitAgentPrompt
-                , title "Send message"
+                , title "Send message (Ctrl/⌘+Enter)"
                 ]
-                [ Html.text buttonText ]
+                [ Html.text buttonText
+                , Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
+                ]
             ]
         ]
 
@@ -778,10 +778,10 @@ defaultChangesetDescription : Model.ChatChangesetState -> String
 defaultChangesetDescription state =
     case state of
         Model.ChatChangesetProposed ->
-            "Review this changeset, then apply it to the target branch or discard the chat."
+            "Review this changeset, then apply it to the target branch or discard it."
 
         Model.ChatChangesetNeedsReview _ ->
-            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the chat."
+            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the changeset."
 
         Model.ChatChangesetApplied ->
             "This changeset was applied. You can continue the conversation from the applied state."

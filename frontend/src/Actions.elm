@@ -278,13 +278,7 @@ replayStepStatusBuffer =
                     applyOne ( stepId, ( commit, status ) ) =
                         Flow.over
                             (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState)
-                            (\rs ->
-                                let
-                                    current =
-                                        ApiData.withDefault { commit = commit, status = NotAsked, directoryView = { children = NotAsked, expanded = False, extras = NotAsked } } rs
-                                in
-                                Success { current | commit = commit, status = Success status }
-                            )
+                            (applyStatusSnapshot commit status)
                 in
                 get stepStatusBuffer model
                     |> Dict.toList
@@ -292,6 +286,25 @@ replayStepStatusBuffer =
                     |> Flow.batchM
                     |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
             )
+
+
+applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStatusSnapshot snapshotCommit newStatus rs =
+    let
+        collapsedDirectoryView =
+            { children = NotAsked, expanded = False, extras = NotAsked }
+
+        current =
+            ApiData.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView } rs
+
+        directoryView_ =
+            if current.commit == snapshotCommit then
+                current.directoryView
+
+            else
+                collapsedDirectoryView
+    in
+    Success { current | commit = snapshotCommit, status = Success newStatus, directoryView = directoryView_ }
 
 
 loadUserRepoInfo : Flow Model ()
@@ -1966,10 +1979,10 @@ defaultChangesetDescription : Model.ChatChangesetState -> String
 defaultChangesetDescription state =
     case state of
         Model.ChatChangesetProposed ->
-            "Review this changeset, then apply it to the target branch or discard the chat."
+            "Review this changeset, then apply it to the target branch or discard it."
 
         Model.ChatChangesetNeedsReview _ ->
-            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the chat."
+            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the changeset."
 
         Model.ChatChangesetApplied ->
             "This changeset was applied. You can continue the conversation from the applied state."
@@ -2561,8 +2574,9 @@ applyAgentChanges =
                                                     |> Flow.andThen
                                                         (\confirmResult ->
                                                             case confirmResult of
-                                                                Ok appliedView ->
-                                                                    handleAgentSessionResult False (Ok appliedView)
+                                                                Ok applyView ->
+                                                                    handleAgentSessionResult False (Ok applyView.sessionView)
+                                                                        |> Flow.seq (markInvalidatedStatusesLoading applyView)
                                                                         |> Flow.seq reloadWorkspaceData
                                                                         |> Flow.seq loadAgentSessions
                                                                         |> Flow.seq (clearChangesetOperation view.session.sessionId)
@@ -2584,6 +2598,18 @@ applyAgentChanges =
                             )
                     )
         )
+
+
+markInvalidatedStatusesLoading : Model.AgentApplyView -> Flow Model ()
+markInvalidatedStatusesLoading applyView =
+    let
+        wipeProject projectId =
+            Flow.setAll (projects << records << success << by .id (Just projectId) << projectStepRecords << runState) (ApiData.loading Nothing)
+
+        wipeStep stepId =
+            Flow.setAll (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState) (ApiData.loading Nothing)
+    in
+    Flow.batchM (List.map wipeProject applyView.invalidatedProjectIds ++ List.map wipeStep applyView.invalidatedStepIds)
 
 
 discardAgentSession : Flow Model ()
@@ -2820,22 +2846,12 @@ updateStepStatus snapshotCommit stepId newStatus =
     let
         stepRunState =
             projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState
-
-        defaultRunState =
-            { commit = snapshotCommit, status = NotAsked, directoryView = { children = NotAsked, expanded = False, extras = NotAsked } }
     in
     Flow.get
         |> Flow.andThen
             (\model ->
                 if has stepRunState model then
-                    Flow.over stepRunState
-                        (\rs ->
-                            let
-                                current =
-                                    ApiData.withDefault defaultRunState rs
-                            in
-                            Success { current | commit = snapshotCommit, status = Success newStatus }
-                        )
+                    Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
                         |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
 
                 else
