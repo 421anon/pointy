@@ -291,10 +291,7 @@ stepNameOf model projectId stepId =
 
 openSource : CompareSelection -> Flow Model ()
 openSource sel =
-    Actions.cancelCompare
-        |> Flow.seq (Actions.closeDialog "compare-dialog")
-        |> Flow.seq (Actions.goToRoute (sourceRoute sel))
-        |> Flow.seq (Actions.addToast True "Opened source")
+    Actions.goToRoute (sourceRoute sel)
 
 
 sourceRoute : CompareSelection -> Route
