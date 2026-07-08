@@ -7,7 +7,7 @@ module Agent.Runner (
     turnLogStreamHandler,
 ) where
 
-import Agent.Git (commitAgentTurnOutputs, refreshSessionBase)
+import Agent.Git (commitAgentTurnOutputs, refreshSessionBase, sessionHasActiveRunner)
 import Agent.Sandbox (nixDaemonBindArgs)
 import Agent.Session (
     AgentSession (..),
@@ -20,7 +20,9 @@ import Agent.Session (
     saveSession,
     saveTurn,
     touchSession,
+    turnIsUnfinished,
     turnLogFilePath,
+    turnLogHasFinalizationFailure,
  )
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
@@ -57,7 +59,8 @@ startAgentTurn sid prompt = do
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
-    when (status session_ == "running" || activeTurnId session_ /= Nothing) $ Except.throwError "runner_active"
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ Except.throwError "runner_active"
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     (freshSession, syncNotes) <- refreshSessionBase session_
     tid <- liftIO newTurnId
@@ -90,8 +93,11 @@ startAgentTurn sid prompt = do
                     else
                         freshSession
         saveTurn turn
-        touched <- touchSession namedSession{status = "running", activeTurnId = Just tid, preparedApply = Nothing, lastError = Nothing}
-        saveSession touched
+        touched <- touchSession namedSession{status = "open", activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
+        startSaveResult <- try (saveSession touched) :: IO (Either SomeException ())
+        case startSaveResult of
+            Left ex -> appendLogLine (configAgent cfg) logPath "system" ("Session start metadata warning: " <> T.pack (show ex))
+            Right _ -> return ()
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
     return turn
 
@@ -265,35 +271,29 @@ finishTurn cfg _session turn exitCode = do
         ( try
                 ( withUserRepoExclusive $ do
                     loaded <- ExceptT $ loadSessionById (turnSessionId turn)
-                    let clearActive = activeTurnId loaded == Just (turnId turn)
-                    if not clearActive
-                        then
-                            liftIO $
-                                appendLogLine cfg (turnLogPath turn) "system" "Skipping session finalization; turn is no longer active"
-                        else do
-                            autoCommitResult <- liftIO $ Except.runExceptT $ commitAgentTurnOutputs loaded turn
-                            autoCommitError <- case autoCommitResult of
-                                Left err -> do
-                                    liftIO $ appendLogLine cfg (turnLogPath turn) "system" ("Agent output auto-commit failed: " <> T.pack err)
-                                    return $ Just ("auto_commit_failed: " <> T.pack err)
-                                Right (mCommit, skippedPaths) -> do
-                                    liftIO $ case mCommit of
-                                        Just commitSha -> appendLogLine cfg (turnLogPath turn) "system" ("Committed agent outputs " <> T.take 12 commitSha)
-                                        Nothing -> appendLogLine cfg (turnLogPath turn) "system" "No agent output changes to commit"
-                                    let skippedError =
-                                            if null skippedPaths
-                                                then Nothing
-                                                else Just ("ignored non-output changes: " <> summarizePaths skippedPaths)
-                                    case skippedError of
-                                        Just msg -> liftIO $ appendLogLine cfg (turnLogPath turn) "system" msg
-                                        Nothing -> return ()
-                                    return skippedError
-                            let nextStatus = if status loaded == "running" then "open" else status loaded
-                                runnerError = if exitCode == ExitSuccess then Nothing else Just "runner_failed"
-                                nextError = combineErrorMessages [runnerError, autoCommitError]
-                                updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
-                            touched <- liftIO $ touchSession updated
-                            liftIO $ saveSession touched
+                    autoCommitResult <- liftIO $ Except.runExceptT $ commitAgentTurnOutputs loaded turn
+                    autoCommitError <- case autoCommitResult of
+                        Left err -> do
+                            liftIO $ appendLogLine cfg (turnLogPath turn) "system" ("Agent output auto-commit failed: " <> T.pack err)
+                            return $ Just ("auto_commit_failed: " <> T.pack err)
+                        Right (mCommit, skippedPaths) -> do
+                            liftIO $ case mCommit of
+                                Just commitSha -> appendLogLine cfg (turnLogPath turn) "system" ("Committed agent outputs " <> T.take 12 commitSha)
+                                Nothing -> appendLogLine cfg (turnLogPath turn) "system" "No agent output changes to commit"
+                            let skippedError =
+                                    if null skippedPaths
+                                        then Nothing
+                                        else Just ("ignored non-output changes: " <> summarizePaths skippedPaths)
+                            case skippedError of
+                                Just msg -> liftIO $ appendLogLine cfg (turnLogPath turn) "system" msg
+                                Nothing -> return ()
+                            return skippedError
+                    let nextStatus = if status loaded == "running" then "open" else status loaded
+                        runnerError = if exitCode == ExitSuccess then Nothing else Just "runner_failed"
+                        nextError = combineErrorMessages [runnerError, autoCommitError]
+                        updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
+                    touched <- liftIO $ touchSession updated
+                    liftIO $ saveSession touched
                 ) ::
                 IO (Either SomeException (Either String ()))
             )
@@ -358,12 +358,13 @@ streamLoop turn offset heartbeatTick = do
         chunk = T.drop offset content
         newOffset = contentLength
     mTurn <- findTurn (turnId turn)
-    mSession <- loadSessionById (turnSessionId turn)
-    let turnDone = maybe False ((/= "running") . turnStatus) mTurn
-        noLongerActive = case mSession of
-            Left _ -> True
-            Right session_ -> activeTurnId session_ /= Just (turnId turn)
-        done = turnDone || noLongerActive
+    let finalizationFailed = turnLogHasFinalizationFailure content
+        turnDone =
+            maybe
+                True
+                (\savedTurn -> not (turnIsUnfinished savedTurn) || finalizationFailed)
+                mTurn
+        done = turnDone
     if not (T.null chunk)
         then
             return $

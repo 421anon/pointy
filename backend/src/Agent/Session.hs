@@ -6,6 +6,10 @@ module Agent.Session (
     AgentSession (..),
     PreparedApply (..),
     AgentTurn (..),
+    turnIsUnfinished,
+    latestUnfinishedTurn,
+    inferTurnExitCode,
+    turnLogHasFinalizationFailure,
     agentSessionsRoot,
     sessionDir,
     sessionMetadataPath,
@@ -31,7 +35,7 @@ module Agent.Session (
 import Control.Monad (filterM)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.ByteString.Lazy as LBS
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -122,6 +126,34 @@ instance FromJSON AgentTurn where
             <*> obj .: "turnLogPath"
             <*> obj .:? "turnLog" .!= ""
 
+turnIsUnfinished :: AgentTurn -> Bool
+turnIsUnfinished turn =
+    turnStatus turn == "running"
+        || turnExitCode turn == Nothing
+        || turnFinishedAt turn == Nothing
+
+latestUnfinishedTurn :: [AgentTurn] -> Maybe AgentTurn
+latestUnfinishedTurn =
+    listToMaybe . reverse . filter turnIsUnfinished
+
+inferTurnExitCode :: Text -> Maybe Int
+inferTurnExitCode logText = go (reverse (T.lines logText))
+  where
+    prefix = "[system] Agent turn finished with exit code "
+
+    go [] = Nothing
+    go (line : rest) =
+        case T.stripPrefix prefix line of
+            Just codeText ->
+                case reads (T.unpack codeText) of
+                    [(code, "")] -> Just code
+                    _ -> go rest
+            Nothing -> go rest
+
+turnLogHasFinalizationFailure :: Text -> Bool
+turnLogHasFinalizationFailure =
+    any (T.isPrefixOf "[system] Turn finalization error:") . T.lines
+
 agentSessionsRoot :: IO FilePath
 agentSessionsRoot = do
     home <- getHomeDirectory
@@ -197,7 +229,17 @@ saveSession :: AgentSession -> IO ()
 saveSession session = do
     path <- sessionMetadataPath (sessionId session)
     createDirectoryIfMissing True (takeDirectory path)
-    LBS.writeFile path (encode session)
+    LBS.writeFile path (encode (persistableSession session))
+
+persistableSession :: AgentSession -> AgentSession
+persistableSession session =
+    session
+        { status =
+            if status session == "running"
+                then "open"
+                else status session
+        , activeTurnId = Nothing
+        }
 
 listSessions :: IO [AgentSession]
 listSessions = do

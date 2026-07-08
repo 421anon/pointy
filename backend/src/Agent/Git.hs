@@ -13,6 +13,7 @@ module Agent.Git (
     purgeAgentSession,
     renameAgentSession,
     loadAgentSessionView,
+    sessionHasActiveRunner,
     commitAgentTurnOutputs,
     refreshSessionBase,
     prepareApplyCandidate,
@@ -27,6 +28,8 @@ import Agent.Session (
     AgentTurn (..),
     PreparedApply (..),
     freshSessionLayout,
+    inferTurnExitCode,
+    latestUnfinishedTurn,
     listSessions,
     listTurnsWithLogs,
     loadSessionById,
@@ -37,7 +40,9 @@ import Agent.Session (
     saveTurn,
     sessionDir,
     touchSession,
+    turnIsUnfinished,
     turnLogFilePath,
+    turnLogHasFinalizationFailure,
  )
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
@@ -132,13 +137,11 @@ listAgentSessions = do
     let ordered = sortOn (Down . createdAt) sessions
     mapM (loadAgentSessionView . sessionId) ordered
 
-loadAgentSessionView :: Text -> ExceptT String IO AgentSessionView
 loadAgentSessionView sid = do
     session_ <- loadSessionOrThrow sid
     state <- collectGitState session_
-    loadedTurns <- liftIO $ sortOn turnStartedAtCompat <$> listTurnsWithLogs sid
-    turns_ <- liftIO $ mapM (repairInactiveRunningTurn session_) loadedTurns
-    return $ AgentSessionView session_ state turns_
+    turns_ <- liftIO $ loadRepairedSessionTurns session_
+    return $ AgentSessionView (deriveSessionRuntime session_ turns_) state turns_
 
 renameAgentSession :: Text -> Text -> ExceptT String IO AgentSessionView
 renameAgentSession sid rawName = do
@@ -223,7 +226,8 @@ syncWorktreeToTarget session_ latest = do
 prepareApplyCandidate :: Text -> ExceptT String IO AgentSessionView
 prepareApplyCandidate sid = do
     session_ <- requireEditableSession sid
-    when (sessionHasActiveRunner session_) $ throwError "runner_active"
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ throwError "runner_active"
     state <- collectGitState session_
     unless (hasAgentCommits state) $ throwError "no_agent_commits"
 
@@ -315,7 +319,8 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
 discardAgentSession :: Text -> ExceptT String IO AgentSessionView
 discardAgentSession sid = do
     session_ <- requireEditableSession sid
-    when (sessionHasActiveRunner session_) $ throwError "runner_active"
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ throwError "runner_active"
     changesetDiff <- branchDiff <$> collectGitState session_
     repoPath <- liftIO userRepoPath
     latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
@@ -361,14 +366,16 @@ renderLifecycleLog body changesetDiff =
 archiveAgentSession :: Text -> ExceptT String IO AgentSessionView
 archiveAgentSession sid = do
     session_ <- loadSessionOrThrow sid
-    when (sessionHasActiveRunner session_) $ throwError "runner_active"
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ throwError "runner_active"
     saveSessionUpdate session_{status = "archived", activeTurnId = Nothing}
     loadAgentSessionView sid
 
 purgeAgentSession :: Text -> ExceptT String IO ()
 purgeAgentSession sid = do
     session_ <- loadSessionOrThrow sid
-    when (sessionHasActiveRunner session_) $ throwError "runner_active"
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ throwError "runner_active"
     repoPath <- liftIO userRepoPath
     liftIO $ removeWorktreeIfExists repoPath (worktreePath session_)
     case preparedApply session_ of
@@ -381,15 +388,20 @@ purgeAgentSession sid = do
 getAgentUsage :: IO AgentUsage
 getAgentUsage = do
     sessions <- listSessions
-    let countStatus st = length $ filter ((== st) . status) sessions
+    viewSessions <- mapM deriveUsageSession sessions
+    let countStatus st = length $ filter ((== st) . status) viewSessions
     return
         AgentUsage
-            { totalSessions = length sessions
+            { totalSessions = length viewSessions
             , openSessions = countStatus "open"
             , runningSessions = countStatus "running"
             , appliedSessions = countStatus "applied"
             , discardedSessions = countStatus "discarded"
             }
+  where
+    deriveUsageSession session_ = do
+        turns_ <- loadRepairedSessionTurns session_
+        return $ deriveSessionRuntime session_ turns_
 
 collectGitState :: AgentSession -> ExceptT String IO AgentGitState
 collectGitState session_ = do
@@ -477,9 +489,10 @@ broadcastAppliedStatuses commit projectIds stepIds = do
     mapM_ (\pid -> broadcastProjectStatus pid commit Nothing) projectIds
     mapM_ (\sid -> broadcastStatusForStepProjects sid commit Nothing) stepIds
 
-sessionHasActiveRunner :: AgentSession -> Bool
-sessionHasActiveRunner session_ =
-    status session_ == "running" || activeTurnId session_ /= Nothing
+sessionHasActiveRunner :: AgentSession -> ExceptT String IO Bool
+sessionHasActiveRunner session_ = do
+    turns_ <- liftIO $ loadRepairedSessionTurns session_
+    return $ isJust (latestUnfinishedTurn turns_)
 
 requireEditableSession :: Text -> ExceptT String IO AgentSession
 requireEditableSession sid = do
@@ -496,6 +509,60 @@ saveSessionUpdate :: AgentSession -> ExceptT String IO ()
 saveSessionUpdate session_ = do
     touched <- liftIO $ touchSession session_
     liftIO $ saveSession touched
+
+loadRepairedSessionTurns :: AgentSession -> IO [AgentTurn]
+loadRepairedSessionTurns session_ = do
+    loadedTurns <- sortOn turnStartedAtCompat <$> listTurnsWithLogs (sessionId session_)
+    mapM (repairLoggedTerminalTurn session_) loadedTurns
+
+deriveSessionRuntime :: AgentSession -> [AgentTurn] -> AgentSession
+deriveSessionRuntime session_ turns_ =
+    let baseSession =
+            session_
+                { status =
+                    if status session_ == "running"
+                        then "open"
+                        else status session_
+                , activeTurnId = Nothing
+                }
+     in case latestUnfinishedTurn turns_ of
+            Just turn
+                | sessionAllowsRunner baseSession ->
+                    baseSession{status = "running", activeTurnId = Just (turnId turn)}
+            _ -> baseSession
+
+sessionAllowsRunner :: AgentSession -> Bool
+sessionAllowsRunner session_ =
+    status session_ `notElem` ["applied", "discarded", "archived"]
+
+repairLoggedTerminalTurn :: AgentSession -> AgentTurn -> IO AgentTurn
+repairLoggedTerminalTurn session_ turn
+    | not (turnIsUnfinished turn) = return turn
+    | not (turnLogHasFinalizationFailure (turnLog turn)) = return turn
+    | otherwise =
+        case inferTurnExitCode (turnLog turn) of
+            Nothing -> return turn
+            Just exitCode -> finalizeTurnWithExitCode session_ turn exitCode
+
+finalizeTurnWithExitCode :: AgentSession -> AgentTurn -> Int -> IO AgentTurn
+finalizeTurnWithExitCode session_ turn exitCode = do
+    finishedAt <- turnTerminalTime session_ turn
+    let finalStatus =
+            if exitCode == 0
+                then "succeeded"
+                else "failed"
+        repaired =
+            turn
+                { turnStatus = finalStatus
+                , turnExitCode = Just exitCode
+                , turnFinishedAt = Just finishedAt
+                }
+    saveTurnBestEffort repaired
+    return repaired
+
+saveTurnBestEffort :: AgentTurn -> IO ()
+saveTurnBestEffort turn =
+    void (try (saveTurn turn) :: IO (Either IOException ()))
 
 collectConflictSummary :: FilePath -> String -> String -> ExceptT String IO Text
 collectConflictSummary worktree mergeOut mergeErr = do
@@ -531,57 +598,44 @@ removeWorktreeIfExists repoPath path = do
 turnStartedAtCompat :: AgentTurn -> String
 turnStartedAtCompat = show . turnStartedAt
 
-{- | Reset sessions left mid-run when the backend exited. Called once at startup;
-the new process has no live runner attached, so the only honest status is "open"
-(or whatever non-running status was set before). Active turn IDs are cleared.
+{- | Reset stale turn metadata left by a backend exit. New sessions never persist
+session-level running state, but old metadata may still contain `status =
+"running"` or an `activeTurnId`; normalize those fields while repairing any
+unfinished turns because the new process has no live runner attached.
 -}
 sweepStaleRunningSessions :: IO ()
 sweepStaleRunningSessions = do
     sessions <- listSessions
-    mapM_ resetIfRunning sessions
+    mapM_ resetStaleSession sessions
   where
-    resetIfRunning session_ = do
-        -- A turn is live only while the session points at it. Anything else is
-        -- stale metadata from an interrupted final write; repair it from the log.
+    resetStaleSession session_ = do
         turns_ <- listTurnsWithLogs (sessionId session_)
-        let inactiveSession = session_{activeTurnId = Nothing}
-        mapM_ (repairInactiveRunningTurn inactiveSession) turns_
+        let unfinishedTurns = filter turnIsUnfinished turns_
+        mapM_ (repairStaleUnfinishedTurn session_) unfinishedTurns
         now <- getCurrentTime
-        -- Fix the session itself.
-        if status session_ == "running"
-            then
-                saveSession
-                    session_
-                        { status = "open"
-                        , activeTurnId = Nothing
-                        , lastError = Just "runner exited while backend was offline"
-                        , updatedAt = now
-                        }
-            else case activeTurnId session_ of
-                Just _ ->
-                    saveSession session_{activeTurnId = Nothing, updatedAt = now}
-                Nothing -> return ()
-
-repairInactiveRunningTurn :: AgentSession -> AgentTurn -> IO AgentTurn
-repairInactiveRunningTurn session_ turn
-    | turnStatus turn /= "running" = return turn
-    | activeTurnId session_ == Just (turnId turn) = return turn
-    | otherwise = do
-        finishedAt <- turnTerminalTime session_ turn
-        let exitCode = inferTurnExitCode (turnLog turn)
-            finalCode = maybe (-1) id exitCode
-            finalStatus =
-                if exitCode == Just 0
-                    then "succeeded"
-                    else "failed"
-            repaired =
-                turn
-                    { turnStatus = finalStatus
-                    , turnExitCode = Just finalCode
-                    , turnFinishedAt = Just finishedAt
+        let hadPersistedRunner = status session_ == "running" || activeTurnId session_ /= Nothing
+            staleFailure = any ((/= Just 0) . inferTurnExitCode . turnLog) unfinishedTurns
+            shouldSave = hadPersistedRunner || staleFailure
+            nextStatus =
+                if status session_ == "running"
+                    then "open"
+                    else status session_
+            nextError =
+                if staleFailure
+                    then Just "runner exited while backend was offline"
+                    else lastError session_
+        when shouldSave $
+            saveSession
+                session_
+                    { status = nextStatus
+                    , activeTurnId = Nothing
+                    , lastError = nextError
+                    , updatedAt = now
                     }
-        saveTurn repaired
-        return repaired
+
+    repairStaleUnfinishedTurn session_ turn =
+        let exitCode = maybe (-1) id (inferTurnExitCode (turnLog turn))
+         in void $ finalizeTurnWithExitCode session_ turn exitCode
 
 turnTerminalTime :: AgentSession -> AgentTurn -> IO UTCTime
 turnTerminalTime session_ turn = do
@@ -589,17 +643,3 @@ turnTerminalTime session_ turn = do
     return $ case result of
         Right modified -> modified
         Left _ -> updatedAt session_
-
-inferTurnExitCode :: Text -> Maybe Int
-inferTurnExitCode logText = go (reverse (T.lines logText))
-  where
-    prefix = "[system] Agent turn finished with exit code "
-
-    go [] = Nothing
-    go (line : rest) =
-        case T.stripPrefix prefix line of
-            Just codeText ->
-                case reads (T.unpack codeText) of
-                    [(code, "")] -> Just code
-                    _ -> go rest
-            Nothing -> go rest
