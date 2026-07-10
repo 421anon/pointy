@@ -1,9 +1,0 @@
-/* Screenshot theme fade */
-#sourcey img[data-theme-screenshot="true"] {
-  transition: opacity 0.15s ease-in-out;
-}
-
-#sourcey img[data-theme-screenshot="true"][data-theme-screenshot-ready="false"] {
-  opacity: 0;
-}
-

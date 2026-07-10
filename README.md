@@ -4,7 +4,7 @@ A notebook for writing, running, organizing and sharing research computation.
 
 [Demo](https://demo.pointy.cloud/)
 
-![Project view](docs/pages/screenshots/light/project-view.png)
+![Project view](https://pointy.cloud/screenshots/projects-home.png)
 
 **For researchers**: Pointy is a web app where you upload experiment design / outcome data, and run analyses on them using any program. The results are pinned to the exact program versions that produced them for maximum traceability even after years. The server side needs to be set up on a Linux computer. Ask your admin.
 
@@ -12,11 +12,7 @@ A notebook for writing, running, organizing and sharing research computation.
 
 ## Documentation
 
-User and admin guides live under [docs/](docs/). The guides build as a Sourcey static site with `nix build .#docs` and can also be read directly as Markdown.
-
-- [Managing Projects](docs/pages/projects.md), [Building Workflows (Steps)](docs/pages/steps.md), [Execution and Data Management](docs/pages/execution.md) — web UI workflow
-- [Architecture & Configuration](docs/pages/admin.md), [Setting Up the User Repository](docs/pages/user-repo-setup.md) — instance administration
-- [Type Reference](docs/pages/type-reference.md), [CLI Reference](docs/pages/cli-reference.md) — template options and flake outputs
+User and admin guides are available at [pointy.cloud/docs/](https://pointy.cloud/docs/). For documentation contributions and the Sourcey build tooling, see the [pointy-demo](https://github.com/421anon/pointy-demo) repository.
 
 ## Development
 
@@ -28,7 +24,7 @@ nix run .#dev-vm
 
 This starts the VM with the backend and nginx, and forwards:
 
-- `localhost:8080` → VM nginx (backend + docs proxy)
+- `localhost:8080` → VM nginx (backend)
 - `localhost:2222` → VM SSH
 
 Useful commands inside the VM:
@@ -52,9 +48,10 @@ nix develop .#frontend -c npm run dev-vm
 ```bash
 nix build .#backend        # Haskell backend binary
 nix build .#frontend       # compiled static assets
-nix build .#docs           # Sourcey docs site
-nix run .#take-screenshots # take screenshots for the docs site
+nix run .#generate-openapi # generate OpenAPI specification
 ```
+
+For building the Sourcey docs site or taking screenshots, see the [pointy-demo](https://github.com/421anon/pointy-demo) repository.
 
 ## License
 

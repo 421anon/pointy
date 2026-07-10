@@ -25,7 +25,7 @@ import qualified Data.ByteString as BS
 import Data.OpenApi hiding (Header)
 import Data.Text (Text, pack)
 import Data.Typeable (Typeable)
-import GHC.Exts (fromList)
+import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
@@ -138,16 +138,21 @@ instance ToSchema AgentSessionView
 instance ToSchema AgentApplyView
 instance ToSchema AgentUsage
 
--- | The complete OpenAPI specification.
+-- | The publicly documented OpenAPI specification.
 pointyOpenApi :: OpenApi
 pointyOpenApi =
     withPathTags $
         withPathSummaries $
-            toOpenApi (Proxy :: Proxy API)
+            withoutAgentApi $
+                toOpenApi (Proxy :: Proxy API)
                 & info . title .~ "Pointy Backend API"
                 & info . version .~ "1.0.0"
                 & info . description ?~ "HTTP API served by the Pointy backend. All routes are mounted under the `/backend` prefix by the reverse proxy."
                 & servers .~ ["/backend"]
+
+-- | The agent API is an internal UI integration, not part of the public API reference.
+withoutAgentApi :: OpenApi -> OpenApi
+withoutAgentApi = paths %~ fromList . filter ((/= "agent") . firstPathSegment . fst) . toList
 
 methodLenses :: [ALens' PathItem (Maybe Operation)]
 methodLenses = [get, put, post, delete, options, head_, patch, trace]

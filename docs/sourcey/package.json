@@ -1,8 +1,0 @@
-{
-  "name": "pointy-docs-sourcey",
-  "version": "1.0.0",
-  "private": true,
-  "dependencies": {
-    "sourcey": "3.6.4"
-  }
-}

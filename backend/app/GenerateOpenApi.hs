@@ -1,6 +1,6 @@
 {- | Writes the backend OpenAPI specification to a JSON file.
 
-Usage: @generate-openapi [OUTPUT_PATH]@ (defaults to @docs/pages/openapi.json@).
+Usage: @generate-openapi [OUTPUT_PATH]@ (defaults to @openapi.json@).
 -}
 module Main (main) where
 
@@ -14,6 +14,6 @@ main = do
     args <- getArgs
     let out = case args of
             (path : _) -> path
-            [] -> "docs/pages/openapi.json"
+            [] -> "openapi.json"
     LBS.writeFile out (encodePretty pointyOpenApi)
     putStrLn ("Wrote OpenAPI specification to " <> out)

@@ -1,4 +1,0 @@
-[user-repo]
-url = "file:///shared/user-repo"
-branch = "screenshots"
-keyfile = "/dev/null"

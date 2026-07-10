@@ -124,12 +124,6 @@ in
           add_header X-Accel-Buffering "no" always;
         '';
       };
-      locations."/docs/" = {
-        alias = "${pointy.packages.docs}/";
-        extraConfig = ''
-          auth_basic off;
-        '';
-      };
     };
   };
 
