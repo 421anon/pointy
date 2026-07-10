@@ -12,7 +12,7 @@ A notebook for writing, running, organizing and sharing research computation.
 
 ## Documentation
 
-User and admin guides are available at [pointy.cloud/docs/](https://pointy.cloud/docs/). For documentation contributions and the Sourcey build tooling, see the [pointy-demo](https://github.com/421anon/pointy-demo) repository.
+User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 
 ## Development
 
@@ -50,8 +50,6 @@ nix build .#backend        # Haskell backend binary
 nix build .#frontend       # compiled static assets
 nix run .#generate-openapi # generate OpenAPI specification
 ```
-
-For building the Sourcey docs site or taking screenshots, see the [pointy-demo](https://github.com/421anon/pointy-demo) repository.
 
 ## License
 

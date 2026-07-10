@@ -68,7 +68,7 @@ view model =
         , Compare.viewCompareDialog model
         , AgentPanel.view model
         , Html.a
-            [ Html.Attributes.href "/docs/"
+            [ Html.Attributes.href "https://pointy.cloud"
             , Html.Attributes.target "_blank"
             , Html.Attributes.title "Open documentation"
             , Html.Attributes.class "help-btn"
