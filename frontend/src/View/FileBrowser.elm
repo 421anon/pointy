@@ -598,22 +598,6 @@ visibleLineIndexes scrollTop lineCount =
         List.range boundedFirstIndex (lastIndexExclusive - 1)
 
 
-lineTextAt : String -> Int -> Array.Array Int -> Int -> String
-lineTextAt text textLength lineStarts lineIndex =
-    case Array.get lineIndex lineStarts of
-        Just lineStart ->
-            let
-                lineEnd =
-                    Array.get (lineIndex + 1) lineStarts
-                        |> Maybe.map (\nextLineStart -> max lineStart (nextLineStart - 1))
-                        |> Maybe.withDefault textLength
-            in
-            String.slice lineStart lineEnd text
-
-        Nothing ->
-            ""
-
-
 viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> Array.Array Int -> Html (Flow Model ())
 viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text lineStarts =
     let
@@ -629,9 +613,6 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
         lineCount =
             max 1 (Array.length lineStarts)
 
-        textLength =
-            String.length text
-
         lineIndexes =
             visibleLineIndexes scrollTop lineCount
 
@@ -643,6 +624,10 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
 
         totalHeight =
             lineCount * plainLineHeight
+
+        gutterWidth =
+            -- widest line number in `ch` plus the cells' horizontal padding
+            "calc(" ++ String.fromInt (String.length (String.fromInt lineCount)) ++ "ch + var(--spacing-sm) + var(--spacing-xs))"
 
         gutterEventAttrs =
             case mGutter of
@@ -674,34 +659,38 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
                 Nothing ->
                     []
 
-        renderLine lineIndex =
+        renderLineNumber lineIndex =
             let
                 lineNum =
                     lineIndex + 1
-
-                line =
-                    lineTextAt text textLength lineStarts lineIndex
             in
             Html.div
-                [ classList
-                    [ ( "file-line", True )
+                (classList
+                    [ ( "file-line-number", True )
+                    , ( "is-gutter", hasGutter )
                     , ( "highlighted", selectedFrom > 0 && lineNum >= selectedFrom && lineNum <= selectedTo )
                     ]
-                , id ("line-" ++ anchor ++ "-" ++ String.fromInt lineNum)
-                , style "height" (String.fromInt plainLineHeight ++ "px")
-                , style "line-height" (String.fromInt plainLineHeight ++ "px")
-                ]
-                [ Html.span
-                    (classList
-                        [ ( "file-line-number", True )
-                        , ( "is-gutter", hasGutter )
-                        ]
-                        :: Html.Attributes.attribute "data-line" (String.fromInt lineNum)
-                        :: gutterEventAttrs
-                    )
-                    [ Html.text (String.fromInt lineNum) ]
-                , Html.span [ class "file-line-content" ] [ Html.text line ]
-                ]
+                    :: Html.Attributes.attribute "data-line" (String.fromInt lineNum)
+                    :: style "height" (String.fromInt plainLineHeight ++ "px")
+                    :: style "line-height" (String.fromInt plainLineHeight ++ "px")
+                    :: gutterEventAttrs
+                )
+                [ Html.text (String.fromInt lineNum) ]
+
+        overlayFrom =
+            max 1 selectedFrom
+
+        overlayTo =
+            min selectedTo lineCount
+
+        highlightOverlay =
+            Html.viewIf (selectedFrom > 0 && overlayFrom <= overlayTo) <|
+                Html.div
+                    [ class "file-highlight-overlay"
+                    , style "top" (String.fromInt ((overlayFrom - 1) * plainLineHeight) ++ "px")
+                    , style "height" (String.fromInt ((overlayTo - overlayFrom + 1) * plainLineHeight) ++ "px")
+                    ]
+                    []
     in
     Html.div
         ([ class "file-content"
@@ -711,18 +700,28 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
             ++ scrollAttrs
         )
         [ Html.div
-            [ style "height" (String.fromInt totalHeight ++ "px")
-            , style "position" "relative"
+            [ class "file-body"
+            , style "height" (String.fromInt totalHeight ++ "px")
             ]
             [ Html.div
-                [ style "position" "absolute"
-                , style "top" (String.fromInt topOffset ++ "px")
-                , style "left" "0"
-                , style "right" "0"
+                [ class "file-gutter"
+                , style "width" gutterWidth
                 ]
-                (List.map renderLine lineIndexes)
+                [ Html.div
+                    [ class "file-gutter-window"
+                    , style "top" (String.fromInt topOffset ++ "px")
+                    ]
+                    (List.map renderLineNumber lineIndexes)
+                ]
+            , highlightOverlay
+            , Html.Lazy.lazy viewFileText text
             ]
         ]
+
+
+viewFileText : String -> Html (Flow Model ())
+viewFileText text =
+    Html.div [ class "file-text" ] [ Html.text text ]
 
 
 calculateViewerHeight : Int -> String

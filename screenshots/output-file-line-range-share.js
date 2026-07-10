@@ -80,8 +80,8 @@ async function selectLineRange(fileViewer, preferredRange) {
   const fileContent = fileViewer.locator(".file-content").first();
   await fileContent.waitFor({ state: "visible", timeout: 3000 });
 
-  const lineRows = fileContent.locator(".file-line");
-  const lineCount = await lineRows.count();
+  const gutterCells = fileContent.locator(".file-gutter .file-line-number");
+  const lineCount = await gutterCells.count();
   if (lineCount === 0) return null;
 
   const hasPreferredRange = lineCount >= preferredRange.to;
@@ -89,8 +89,10 @@ async function selectLineRange(fileViewer, preferredRange) {
   const to = hasPreferredRange ? preferredRange.to : Math.min(lineCount, 3);
   if (from > to) return null;
 
-  const startGutter = lineRows.nth(from - 1).locator(".file-line-number").first();
-  const endGutter = lineRows.nth(to - 1).locator(".file-line-number").first();
+  const gutterFor = (line) =>
+    fileContent.locator(`.file-line-number[data-line="${line}"]`).first();
+  const startGutter = gutterFor(from);
+  const endGutter = gutterFor(to);
   await startGutter.scrollIntoViewIfNeeded();
   await endGutter.scrollIntoViewIfNeeded();
 
@@ -112,7 +114,7 @@ async function selectLineRange(fileViewer, preferredRange) {
   await page.mouse.up();
   await page.waitForTimeout(200);
 
-  const highlightedCount = await fileContent.locator(".file-line.highlighted").count();
+  const highlightedCount = await fileContent.locator(".file-line-number.highlighted").count();
   return highlightedCount > 0 ? { from, to } : null;
 }
 

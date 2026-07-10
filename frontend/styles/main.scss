@@ -711,31 +711,35 @@ $delimited-grid-row-height: 28px;
   padding: var(--spacing-sm) 0;
 }
 
-.file-line {
+.file-body {
+  position: relative;
   display: flex;
-  align-items: flex-start;
-  font-family: inherit;
-  white-space: pre;
   min-width: max-content;
+}
 
-  &.highlighted {
-    background: var(--color-highlight, rgba(255, 213, 79, 0.18));
+.file-gutter {
+  flex: 0 0 auto;
+  position: relative;
+  min-width: 3.5em;
+}
 
-    .file-line-number {
-      box-shadow: inset -2px 0 0 var(--state-info);
-    }
-  }
+.file-gutter-window {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
 }
 
 .file-line-number {
-  flex: 0 0 auto;
-  min-width: 3.5em;
   padding: 0 var(--spacing-xs) 0 var(--spacing-sm);
-  margin-right: var(--spacing-sm);
   text-align: right;
   color: var(--text-muted);
   user-select: none;
   -webkit-user-select: none;
+
+  &.highlighted {
+    box-shadow: inset -2px 0 0 var(--state-info);
+  }
 
   &.is-gutter {
     cursor: ns-resize;
@@ -748,14 +752,25 @@ $delimited-grid-row-height: 28px;
   }
 }
 
+.file-highlight-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--color-highlight, rgba(255, 213, 79, 0.18));
+  pointer-events: none;
+}
+
 .file-viewer {
   position: relative;
 }
 
-.file-line-content {
+.file-text {
   flex: 1 1 auto;
-  padding-right: var(--spacing-sm);
+  padding: 0 var(--spacing-sm);
   white-space: pre;
+  // Must stay in sync with `plainLineHeight` in Model/Core.elm — the
+  // virtualized gutter positions line numbers using that constant.
+  line-height: 17px;
 }
 
 .file-image-viewer {
