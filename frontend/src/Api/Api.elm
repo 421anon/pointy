@@ -1,5 +1,6 @@
 module Api.Api exposing
     ( AutocompleteRequest
+    , SeekPosition(..)
     , assignRecordToProject
     , batchAssignRecordsToProject
     , createProject
@@ -10,11 +11,13 @@ module Api.Api exposing
     , fetchDirectoryContents
     , fetchExtras
     , fetchFileContents
+    , fetchFileSeek
     , fetchNotices
     , fetchPresets
     , fetchProjects
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
+    , fetchSrcFileSeek
     , fetchStepConfig
     , fetchStepLog
     , fetchUserRepoInfo
@@ -38,7 +41,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, Notice, ProjectRecord, StepRecord)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -51,6 +54,25 @@ type alias AutocompleteRequest =
     , query : String
     , limit : Int
     }
+
+
+type SeekPosition
+    = AtLine Int
+    | AtOffset Int
+    | BeforeOffset Int
+
+
+seekQueryParam : SeekPosition -> UrlBuilder.QueryParameter
+seekQueryParam position =
+    case position of
+        AtLine n ->
+            UrlBuilder.string "line" (String.fromInt n)
+
+        AtOffset n ->
+            UrlBuilder.string "offset" (String.fromInt n)
+
+        BeforeOffset n ->
+            UrlBuilder.string "before" (String.fromInt n)
 
 
 collectionPath : TableSpec a -> String
@@ -352,6 +374,35 @@ fetchFileContents stepId commit filePath =
         Http.get
             { url = stepFileDownloadUrl stepId commit filePath
             , expect = Http.expectString identity
+            }
+
+
+fetchFileSeek : Int -> Maybe String -> List String -> SeekPosition -> Flow s (Result Http.Error FileChunk)
+fetchFileSeek stepId commit filePath position =
+    Flow.lift <|
+        Http.get
+            { url =
+                UrlBuilder.absolute [ "backend", "step-files", "seek" ]
+                    (stepFileQuery stepId commit
+                        ++ [ UrlBuilder.string "path" (String.join "/" filePath)
+                           , seekQueryParam position
+                           ]
+                    )
+            , expect = Http.expectJson identity Decode.fileChunk
+            }
+
+
+fetchSrcFileSeek : Int -> List String -> SeekPosition -> Flow s (Result Http.Error FileChunk)
+fetchSrcFileSeek recordId filePath position =
+    Flow.lift <|
+        Http.get
+            { url =
+                UrlBuilder.absolute [ "backend", "src-files", "seek" ]
+                    [ UrlBuilder.int "id" recordId
+                    , UrlBuilder.string "path" (String.join "/" filePath)
+                    , seekQueryParam position
+                    ]
+            , expect = Http.expectJson identity Decode.fileChunk
             }
 
 

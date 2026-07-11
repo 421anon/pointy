@@ -32,11 +32,11 @@ import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
-import Handlers.SrcFiles (downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler)
+import Handlers.SrcFiles (downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, seekSrcFilesHandler)
 import Handlers.StatusStream (stepStatusStreamHandler)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
-import Handlers.Store (stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler)
+import Handlers.Store (stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
@@ -56,10 +56,12 @@ server =
         :<|> getUserRepoInfoHandler
         :<|> stepListHandler
         :<|> stepDownloadHandler
+        :<|> stepSeekHandler
         :<|> stepRawHandler
         :<|> stepExtrasHandler
         :<|> listSrcFilesHandler
         :<|> downloadSrcFilesHandler
+        :<|> seekSrcFilesHandler
         :<|> getProjectsHandler
         :<|> postProjectHandler
         :<|> patchProjectHandler

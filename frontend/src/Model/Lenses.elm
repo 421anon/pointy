@@ -12,9 +12,9 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), FileChunk, Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
-import Route exposing (ProjectParams, Route(..))
+import Route exposing (HighlightTarget(..), ProjectParams, Route(..))
 import Time
 import Toast exposing (Toast)
 
@@ -221,6 +221,16 @@ filePlainLineStarts =
     lens ".plainLineStarts" .plainLineStarts (\file_ plainLineStarts_ -> { file_ | plainLineStarts = plainLineStarts_ })
 
 
+fileSeekChunk : Lens ls { a | seekChunk : b } b x y
+fileSeekChunk =
+    lens ".seekChunk" .seekChunk (\file_ seekChunk_ -> { file_ | seekChunk = seekChunk_ })
+
+
+fileSeekable : Lens ls { a | seekable : b } b x y
+fileSeekable =
+    lens ".seekable" .seekable (\file_ seekable_ -> { file_ | seekable = seekable_ })
+
+
 children : Lens ls { a | children : b } b x y
 children =
     lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
@@ -356,6 +366,11 @@ filePlainLineStartsAt recordId_ path =
     directoryItemAtPath recordId_ path << file << filePlainLineStarts
 
 
+fileSeekChunkAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.FileChunk) x y
+fileSeekChunkAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileSeekChunk
+
+
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
 folderExpandedAt recordId_ path =
     directoryItemAtPath recordId_ path << folder << folderExpanded
@@ -396,6 +411,11 @@ srcFilesFileContentAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileContent
 
 
+srcFilesFileSeekChunkAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.FileChunk) x y
+srcFilesFileSeekChunkAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileSeekChunk
+
+
 srcFilesFileIsViewingAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
 srcFilesFileIsViewingAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileIsViewing
@@ -424,6 +444,46 @@ srcFilesFolderExpandedAt recordId_ path =
 srcFilesChildrenAt : Int -> List String -> Traversal (Table StepRecord) (ApiData (Dict String DirectoryItem)) x y
 srcFilesChildrenAt recordId_ path =
     srcFilesItemAtPath recordId_ path << folder << children
+
+
+directoryItemForTargetAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) DirectoryItem x y
+directoryItemForTargetAt target recordId_ path =
+    case target of
+        Output ->
+            directoryItemAtPath recordId_ path
+
+        Source ->
+            srcFilesItemAtPath recordId_ path
+
+
+seekChunkAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (ApiData Model.FileChunk) x y
+seekChunkAt target recordId_ path =
+    case target of
+        Output ->
+            fileSeekChunkAt recordId_ path
+
+        Source ->
+            srcFilesFileSeekChunkAt recordId_ path
+
+
+plainLineStartsAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
+plainLineStartsAt target recordId_ path =
+    case target of
+        Output ->
+            filePlainLineStartsAt recordId_ path
+
+        Source ->
+            srcFilesFilePlainLineStartsAt recordId_ path
+
+
+plainScrollTopAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) Float x y
+plainScrollTopAt target recordId_ path =
+    case target of
+        Output ->
+            filePlainScrollTopAt recordId_ path
+
+        Source ->
+            srcFilesFilePlainScrollTopAt recordId_ path
 
 
 toasts : Lens ls Model (List Toast) x y

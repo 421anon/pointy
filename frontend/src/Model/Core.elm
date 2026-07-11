@@ -754,10 +754,22 @@ type alias FileView =
     }
 
 
+type alias FileChunk =
+    { content : String
+    , startOffset : Int
+    , endOffset : Int
+    , startLine : Int
+    , endLine : Int
+    , eof : Bool
+    }
+
+
 type alias DirectoryFile =
     { content : ApiData String
     , size : Int
     , viewable : Bool
+    , seekable : Bool
+    , seekChunk : ApiData FileChunk
     , mimeType : Maybe String
     , view : FileView
     , delimitedGrid : Maybe DelimitedGrid
@@ -785,6 +797,8 @@ extractDirectoryItemBase item =
                 { content = file.content
                 , size = file.size
                 , viewable = file.viewable
+                , seekable = file.seekable
+                , seekChunk = file.seekChunk
                 , mimeType = file.mimeType
                 , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, plainScrollTop = file.view.plainScrollTop }
                 , delimitedGrid = file.delimitedGrid
@@ -804,6 +818,8 @@ updateDirectoryItemBase item baseItem =
                     | content = base.content
                     , size = base.size
                     , viewable = base.viewable
+                    , seekable = base.seekable
+                    , seekChunk = base.seekChunk
                     , mimeType = base.mimeType
                     , plainLineStarts = base.plainLineStarts
                     , view =

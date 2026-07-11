@@ -281,12 +281,14 @@ directoryItem fileView =
 
                 else
                     Decode.succeed
-                        (\name size viewable mimeType ->
+                        (\name size viewable seekable mimeType ->
                             ( name
                             , File
                                 { content = NotAsked
                                 , size = size
                                 , viewable = viewable
+                                , seekable = seekable
+                                , seekChunk = NotAsked
                                 , mimeType = mimeType
                                 , view = fileView
                                 , delimitedGrid = Nothing
@@ -297,8 +299,20 @@ directoryItem fileView =
                         |> required "name" Decode.string
                         |> required "size" Decode.int
                         |> required "viewable" Decode.bool
+                        |> optional "seekable" Decode.bool False
                         |> required "mimeType" (Decode.nullable Decode.string)
             )
+
+
+fileChunk : Decoder Model.FileChunk
+fileChunk =
+    Decode.succeed Model.FileChunk
+        |> required "content" Decode.string
+        |> required "startOffset" Decode.int
+        |> required "endOffset" Decode.int
+        |> required "startLine" Decode.int
+        |> required "endLine" Decode.int
+        |> required "eof" Decode.bool
 
 
 directoryItemGeneric : Decoder ( String, DirectoryItem )

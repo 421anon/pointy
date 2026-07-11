@@ -18,7 +18,7 @@ import Html.Extra as Html
 import Html.Lazy
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, Status(..), StepRecord, getUserRepoInfo, plainLineHeight)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, Status(..), StepRecord, getUserRepoInfo, plainLineHeight)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -251,13 +251,13 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     has (mimeType << just << where_ (String.startsWith "image/")) file
 
                 canView =
-                    file.viewable || isImage
+                    file.viewable || file.seekable || isImage
 
                 isHtml =
                     has (mimeType << just << where_ (String.startsWith "text/html")) file
 
                 mCompareSelection =
-                    if canView then
+                    if file.viewable || isImage then
                         Maybe.map2 (\pid ctx -> compareSelectionFor pid itemName file.mimeType path ctx)
                             (try currentProjectId model)
                             mDirCtx
@@ -354,7 +354,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     _ ->
                                         Html.nothing
 
-                              else if isHtml then
+                              else if isHtml && not file.seekable then
                                 case mDirCtx of
                                     Just (OutputDir stepId_ commit_) ->
                                         let
@@ -389,6 +389,45 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     _ ->
                                         Html.nothing
 
+                              else if file.seekable then
+                                let
+                                    viewSeekChunk chunk =
+                                        let
+                                            selectedFrom =
+                                                Maybe.unwrap 0 .from mSelectedRange
+
+                                            selectedTo =
+                                                Maybe.unwrap 0 .to mSelectedRange
+
+                                            viewSeekPlainContent_ () =
+                                                Html.Lazy.lazy8 viewPlainContent
+                                                    (gutterKey mGutter)
+                                                    (has (gutterDrag << just) model)
+                                                    selectedFrom
+                                                    selectedTo
+                                                    anchor
+                                                    file.view.plainScrollTop
+                                                    chunk.content
+                                                    ( chunk.startLine, file.plainLineStarts )
+                                        in
+                                        Html.div [ class "seekable-file-viewer" ]
+                                            [ viewSeekControls
+                                                (mGutter |> Maybe.map (\{ recordId, target } -> ( Actions.seekPrev target recordId path, Actions.seekNext target recordId path )))
+                                                chunk
+                                            , viewSeekPlainContent_ ()
+                                            ]
+                                in
+                                Html.div [ class "file-viewer" ]
+                                    [ ApiData.foldVisible
+                                        Html.nothing
+                                        (Maybe.map (viewLoading << viewSeekChunk)
+                                            >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])
+                                        )
+                                        viewSeekChunk
+                                        (always <| Html.span [ class "file-error" ] [ Html.text "Failed to load file" ])
+                                        file.seekChunk
+                                    ]
+
                               else
                                 let
                                     gridAction =
@@ -416,7 +455,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                     anchor
                                                     file.view.plainScrollTop
                                                     text
-                                                    file.plainLineStarts
+                                                    ( 1, file.plainLineStarts )
                                         in
                                         case ( file.delimitedGrid, gridAction ) of
                                             ( Just delimitedGrid, Just updateGrid ) ->
@@ -598,8 +637,8 @@ visibleLineIndexes scrollTop lineCount =
         List.range boundedFirstIndex (lastIndexExclusive - 1)
 
 
-viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> Array.Array Int -> Html (Flow Model ())
-viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text lineStarts =
+viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> ( Int, Array.Array Int ) -> Html (Flow Model ())
+viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text ( startLine, lineStarts ) =
     let
         path =
             pathFromAnchor gutterKeyValue anchor
@@ -626,8 +665,8 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
             lineCount * plainLineHeight
 
         gutterWidth =
-            -- widest line number in `ch` plus the cells' horizontal padding
-            "calc(" ++ String.fromInt (String.length (String.fromInt lineCount)) ++ "ch + var(--spacing-sm) + var(--spacing-xs))"
+            -- widest absolute line number in `ch` plus the cells' horizontal padding
+            "calc(" ++ String.fromInt (String.length (String.fromInt (startLine + lineCount - 1))) ++ "ch + var(--spacing-sm) + var(--spacing-xs))"
 
         gutterEventAttrs =
             case mGutter of
@@ -662,7 +701,7 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
         renderLineNumber lineIndex =
             let
                 lineNum =
-                    lineIndex + 1
+                    startLine + lineIndex
             in
             Html.div
                 (classList
@@ -678,16 +717,16 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
                 [ Html.text (String.fromInt lineNum) ]
 
         overlayFrom =
-            max 1 selectedFrom
+            max startLine selectedFrom
 
         overlayTo =
-            min selectedTo lineCount
+            min selectedTo (startLine + lineCount - 1)
 
         highlightOverlay =
             Html.viewIf (selectedFrom > 0 && overlayFrom <= overlayTo) <|
                 Html.div
                     [ class "file-highlight-overlay"
-                    , style "top" (String.fromInt ((overlayFrom - 1) * plainLineHeight) ++ "px")
+                    , style "top" (String.fromInt ((overlayFrom - startLine) * plainLineHeight) ++ "px")
                     , style "height" (String.fromInt ((overlayTo - overlayFrom + 1) * plainLineHeight) ++ "px")
                     ]
                     []
@@ -737,3 +776,56 @@ calculateViewerHeight lineCount =
             max cappedHeight plainViewerMinHeight
     in
     String.fromInt finalHeight ++ "px"
+
+
+viewSeekControls : Maybe ( Flow Model (), Flow Model () ) -> FileChunk -> Html (Flow Model ())
+viewSeekControls mActions chunk =
+    let
+        label =
+            "Lines "
+                ++ String.fromInt chunk.startLine
+                ++ " – "
+                ++ String.fromInt chunk.endLine
+                ++ " (bytes "
+                ++ String.fromInt chunk.startOffset
+                ++ " – "
+                ++ String.fromInt chunk.endOffset
+                ++ ")"
+                ++ (if chunk.eof then
+                        ""
+
+                    else
+                        " …"
+                   )
+
+        ( prevDisabled, prevAction ) =
+            case mActions of
+                Just ( prev, _ ) ->
+                    ( chunk.startOffset == 0, prev )
+
+                Nothing ->
+                    ( True, Flow.none )
+
+        ( nextDisabled, nextAction ) =
+            case mActions of
+                Just ( _, next ) ->
+                    ( chunk.eof, next )
+
+                Nothing ->
+                    ( True, Flow.none )
+    in
+    Html.div [ class "seek-controls" ]
+        [ Html.button
+            [ classList [ ( "seek-btn", True ), ( "disabled", prevDisabled ) ]
+            , Html.Events.onClick prevAction
+            , Html.Attributes.disabled prevDisabled
+            ]
+            [ Html.text "← Prev" ]
+        , Html.span [ class "seek-range-label" ] [ Html.text label ]
+        , Html.button
+            [ classList [ ( "seek-btn", True ), ( "disabled", nextDisabled ) ]
+            , Html.Events.onClick nextAction
+            , Html.Attributes.disabled nextDisabled
+            ]
+            [ Html.text "Next →" ]
+        ]

@@ -764,6 +764,49 @@ $delimited-grid-row-height: 28px;
   position: relative;
 }
 
+.seek-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-bottom: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.seek-btn {
+  padding: 2px var(--spacing-sm);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+
+  &:hover:not(.disabled) {
+    background: var(--bg-hover);
+  }
+
+  &.disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+}
+
+.seek-range-label {
+  white-space: nowrap;
+}
+
+.seekable-file-viewer {
+  display: flex;
+  flex-direction: column;
+}
+
 .file-text {
   flex: 1 1 auto;
   padding: 0 var(--spacing-sm);
