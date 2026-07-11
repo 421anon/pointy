@@ -23,6 +23,7 @@ module Agent.Git (
     sweepStaleRunningSessions,
 ) where
 
+import Agent.Policy (appliedProjectId, appliedStepId, isAgentOutputPath)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
@@ -57,7 +58,6 @@ import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Read as TR
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
@@ -457,32 +457,6 @@ hasStagedChanges worktree = ExceptT $ do
         ExitSuccess -> Right False
         ExitFailure 1 -> Right True
         ExitFailure code -> Left $ "git diff --cached --quiet --exit-code failed with exit code " ++ show code ++ formatGitOutput stdout stderr
-
-isAgentOutputPath :: Text -> Bool
-isAgentOutputPath path =
-    isJust (appliedProjectId path) || isJust (appliedStepId path)
-
-appliedProjectId :: Text -> Maybe Int
-appliedProjectId path =
-    case T.splitOn "/" path of
-        ["projects", file] -> numberedNixId file
-        _ -> Nothing
-
-appliedStepId :: Text -> Maybe Int
-appliedStepId path =
-    case T.splitOn "/" path of
-        ["steps", file] -> numberedNixId file
-        "srcFiles" : stepId : _ : _ -> decimalId stepId
-        _ -> Nothing
-
-numberedNixId :: Text -> Maybe Int
-numberedNixId file = T.stripSuffix ".nix" file >>= decimalId
-
-decimalId :: Text -> Maybe Int
-decimalId text_ =
-    case TR.decimal text_ of
-        Right (n, rest) | T.null rest -> Just n
-        _ -> Nothing
 
 broadcastAppliedStatuses :: Text -> [Int] -> [Int] -> IO ()
 broadcastAppliedStatuses commit projectIds stepIds = do

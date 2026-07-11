@@ -18,6 +18,7 @@ library
                      NixRepl,
                      OutPaths,
                      Agent.Sandbox,
+                     Agent.Policy,
                      Agent.Session,
                      Agent.Git,
                      Agent.Runner,
