@@ -1348,18 +1348,14 @@ seekAndMerge target recordId path anchor bytes_ =
     Flow.forAll apiDataTraversal
         (\current ->
             apiCall
-                |> Flow.andThen
-                    (\result ->
-                        case result of
-                            Ok chunk ->
-                                applySeekChunk target recordId path chunk
-
-                            Err e ->
-                                Flow.setAll apiDataTraversal
-                                    (ApiData.toMaybe current
-                                        |> Maybe.unwrap (ApiData.Error e) (\w -> ApiData.Success { w | loading = False })
-                                    )
-                                    |> Flow.seq (addToast False (Http.errorMessage e))
+                |> FlowError.foldResult
+                    (applySeekChunk target recordId path)
+                    (\e ->
+                        Flow.setAll apiDataTraversal
+                            (ApiData.toMaybe current
+                                |> Maybe.unwrap (ApiData.Error e) (\w -> ApiData.Success { w | loading = False })
+                            )
+                            |> Flow.seq (addToast False (Http.errorMessage e))
                     )
         )
 
