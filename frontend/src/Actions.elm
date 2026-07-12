@@ -1374,16 +1374,13 @@ scrollPlainFileToHighlightedRange target recordId path =
         )
 
 
-setPlainFileLineStarts : Route.HighlightTarget -> Int -> List String -> String -> Flow Model ()
-setPlainFileLineStarts target recordId path content =
+setPlainFileLineCount : Route.HighlightTarget -> Int -> List String -> String -> Flow Model ()
+setPlainFileLineCount target recordId path content =
     let
         allStepTables =
             currentProject << success << tables << values
-
-        lineStarts =
-            Model.plainLineStartsFromText content
     in
-    Flow.setAll (allStepTables << plainLineStartsAt target recordId path) lineStarts
+    Flow.setAll (allStepTables << plainLineCountAt target recordId path) (Model.countLines content)
         |> Flow.seq (scrollPlainFileToHighlightedRange target recordId path)
 
 
@@ -1576,7 +1573,7 @@ toggleOutputEntry recordId mOpen path =
                                         )
 
                                 materializeFileContent content =
-                                    setPlainFileLineStarts Route.Output recordId path content
+                                    setPlainFileLineCount Route.Output recordId path content
                                         |> Flow.seq
                                             (Flow.forAll parentExtrasLens
                                                 (\extrasData ->
@@ -1677,7 +1674,7 @@ toggleSrcEntry recordId mOpen path =
                         Flow.when (not (shouldSkipFileContents file_))
                             (callApi (allStepTables << srcFilesFileContentAt recordId path)
                                 (Api.fetchSrcFileContents recordId path)
-                                |> FlowError.andThen (setPlainFileLineStarts Route.Source recordId path)
+                                |> FlowError.andThen (setPlainFileLineCount Route.Source recordId path)
                                 |> Flow.return ()
                             )
                 )

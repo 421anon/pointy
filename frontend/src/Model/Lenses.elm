@@ -2,7 +2,6 @@ module Model.Lenses exposing (..)
 
 import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData, success)
-import Array
 import Components.Select exposing (SelectState)
 import Debounce
 import Dict exposing (Dict)
@@ -216,9 +215,9 @@ filePlainScrollTop =
         << lens ".plainScrollTop" .plainScrollTop (\view plainScrollTop_ -> { view | plainScrollTop = plainScrollTop_ })
 
 
-filePlainLineStarts : Lens ls { a | plainLineStarts : b } b x y
-filePlainLineStarts =
-    lens ".plainLineStarts" .plainLineStarts (\file_ plainLineStarts_ -> { file_ | plainLineStarts = plainLineStarts_ })
+filePlainLineCount : Lens ls { a | plainLineCount : b } b x y
+filePlainLineCount =
+    lens ".plainLineCount" .plainLineCount (\file_ plainLineCount_ -> { file_ | plainLineCount = plainLineCount_ })
 
 
 fileSeekWindow : Lens ls { a | seekWindow : b } b x y
@@ -361,9 +360,9 @@ filePlainScrollTopAt recordId_ path =
     directoryItemAtPath recordId_ path << file << filePlainScrollTop
 
 
-filePlainLineStartsAt : Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
-filePlainLineStartsAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << filePlainLineStarts
+filePlainLineCountAt : Int -> List String -> Traversal (Table StepRecord) Int x y
+filePlainLineCountAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << filePlainLineCount
 
 
 fileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
@@ -431,9 +430,9 @@ srcFilesFilePlainScrollTopAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << filePlainScrollTop
 
 
-srcFilesFilePlainLineStartsAt : Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
-srcFilesFilePlainLineStartsAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << filePlainLineStarts
+srcFilesFilePlainLineCountAt : Int -> List String -> Traversal (Table StepRecord) Int x y
+srcFilesFilePlainLineCountAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << filePlainLineCount
 
 
 srcFilesFolderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -466,14 +465,14 @@ seekWindowAt target recordId_ path =
             srcFilesFileSeekWindowAt recordId_ path
 
 
-plainLineStartsAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
-plainLineStartsAt target recordId_ path =
+plainLineCountAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) Int x y
+plainLineCountAt target recordId_ path =
     case target of
         Output ->
-            filePlainLineStartsAt recordId_ path
+            filePlainLineCountAt recordId_ path
 
         Source ->
-            srcFilesFilePlainLineStartsAt recordId_ path
+            srcFilesFilePlainLineCountAt recordId_ path
 
 
 plainScrollTopAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) Float x y

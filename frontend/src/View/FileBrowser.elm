@@ -4,7 +4,6 @@ import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..))
-import Array
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
@@ -450,7 +449,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                     anchor
                                                     file.view.plainScrollTop
                                                     text
-                                                    ( 1, max 1 (Array.length file.plainLineStarts) )
+                                                    ( 1, file.plainLineCount )
                                         in
                                         case ( file.delimitedGrid, gridAction ) of
                                             ( Just delimitedGrid, Just updateGrid ) ->

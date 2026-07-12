@@ -292,7 +292,7 @@ directoryItem fileView =
                                 , mimeType = mimeType
                                 , view = fileView
                                 , delimitedGrid = Nothing
-                                , plainLineStarts = Model.emptyPlainLineStarts
+                                , plainLineCount = 1
                                 }
                             )
                         )

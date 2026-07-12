@@ -728,30 +728,18 @@ type alias ScrollMetrics =
     }
 
 
-emptyPlainLineStarts : Array.Array Int
-emptyPlainLineStarts =
-    Array.fromList [ 0 ]
-
-
-plainLineStartsFromText : String -> Array.Array Int
-plainLineStartsFromText text =
-    let
-        step char ( offset, starts ) =
-            let
-                nextOffset =
-                    offset + 1
-            in
+countLines : String -> Int
+countLines text =
+    String.foldl
+        (\char count ->
             if char == '\n' then
-                ( nextOffset, nextOffset :: starts )
+                count + 1
 
             else
-                ( nextOffset, starts )
-    in
-    text
-        |> String.foldl step ( 0, [ 0 ] )
-        |> Tuple.second
-        |> List.reverse
-        |> Array.fromList
+                count
+        )
+        1
+        text
 
 
 type alias FileView =
@@ -856,7 +844,7 @@ type alias DirectoryFile =
     , mimeType : Maybe String
     , view : FileView
     , delimitedGrid : Maybe DelimitedGrid
-    , plainLineStarts : Array.Array Int
+    , plainLineCount : Int
     }
 
 
@@ -885,7 +873,7 @@ extractDirectoryItemBase item =
                 , mimeType = file.mimeType
                 , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, plainScrollTop = file.view.plainScrollTop }
                 , delimitedGrid = file.delimitedGrid
-                , plainLineStarts = file.plainLineStarts
+                , plainLineCount = file.plainLineCount
                 }
 
         Folder folder ->
@@ -904,7 +892,7 @@ updateDirectoryItemBase item baseItem =
                     , seekable = base.seekable
                     , seekWindow = base.seekWindow
                     , mimeType = base.mimeType
-                    , plainLineStarts = base.plainLineStarts
+                    , plainLineCount = base.plainLineCount
                     , view =
                         let
                             view =
