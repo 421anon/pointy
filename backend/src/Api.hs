@@ -193,13 +193,13 @@ type DownloadStepFile =
 type StepFileSeek =
     "step-files"
         :> "seek"
-        :> Description "Seeks into a file from a step's output directory, returning a bounded chunk."
+        :> Description "Returns a bounded file chunk. Specify exactly one of line or offset and a nonzero signed byte count: positive bytes read forward from the anchor; negative bytes read backward and end at the anchor."
         :> ReqId
         :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
         :> QueryParam "line" Int
         :> QueryParam "offset" Int
-        :> QueryParam "before" Int
+        :> QueryParam' '[Required] "bytes" Int
         :> Get '[JSON] FileChunk
 type RawStepFile =
     "step-files"
@@ -230,12 +230,12 @@ type DownloadSrcFile =
 type SrcFileSeek =
     "src-files"
         :> "seek"
-        :> Description "Seeks into a source file, returning a bounded chunk."
+        :> Description "Returns a bounded source-file chunk. Specify exactly one of line or offset and a nonzero signed byte count: positive bytes read forward from the anchor; negative bytes read backward and end at the anchor."
         :> ReqId
         :> QueryParam' '[Required] "path" FilePath
         :> QueryParam "line" Int
         :> QueryParam "offset" Int
-        :> QueryParam "before" Int
+        :> QueryParam' '[Required] "bytes" Int
         :> Get '[JSON] FileChunk
 
 type GetProjects =

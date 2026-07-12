@@ -42,7 +42,6 @@ getSrcFilesBasePath = do
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}
         Right path -> return path
 
--- | Resolve a step id to the full source-files directory path for that step.
 getStepSrcFilesPath :: Int -> Handler FilePath
 getStepSrcFilesPath stepId = do
     basePath <- getSrcFilesBasePath
@@ -61,8 +60,8 @@ downloadSrcFilesHandler stepId rel = do
     fullBasePath <- getStepSrcFilesPath stepId
     downloadHandler (T.pack fullBasePath) rel
 
-seekSrcFilesHandler :: Int -> FilePath -> Maybe Int -> Maybe Int -> Maybe Int -> Handler FileChunk
-seekSrcFilesHandler stepId rel mLine mOffset mBefore = do
-    pos <- parseSeekPosition mLine mOffset mBefore
+seekSrcFilesHandler :: Int -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
+seekSrcFilesHandler stepId rel mLine mOffset bytes = do
+    pos <- parseSeekPosition mLine mOffset bytes
     fullBasePath <- getStepSrcFilesPath stepId
-    seekHandler (T.pack fullBasePath) rel pos
+    seekHandler (T.pack fullBasePath) rel pos bytes

@@ -18,7 +18,7 @@ import Html.Extra as Html
 import Html.Lazy
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, Status(..), StepRecord, getUserRepoInfo, plainLineHeight)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, Status(..), StepRecord, getUserRepoInfo, plainLineHeight, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -391,7 +391,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                               else if file.seekable then
                                 let
-                                    viewSeekChunk chunk =
+                                    viewSeekWindow window_ =
                                         let
                                             selectedFrom =
                                                 Maybe.unwrap 0 .from mSelectedRange
@@ -400,32 +400,27 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 Maybe.unwrap 0 .to mSelectedRange
 
                                             viewSeekPlainContent_ () =
-                                                Html.Lazy.lazy8 viewPlainContent
+                                                Html.Lazy.lazy8 viewSeekPlainContent
                                                     (gutterKey mGutter)
                                                     (has (gutterDrag << just) model)
                                                     selectedFrom
                                                     selectedTo
                                                     anchor
                                                     file.view.plainScrollTop
-                                                    chunk.content
-                                                    ( chunk.startLine, file.plainLineStarts )
+                                                    window_.chunks
+                                                    ( windowStartLine window_, windowLineCount window_ )
                                         in
-                                        Html.div [ class "seekable-file-viewer" ]
-                                            [ viewSeekControls
-                                                (mGutter |> Maybe.map (\{ recordId, target } -> ( Actions.seekPrev target recordId path, Actions.seekNext target recordId path )))
-                                                chunk
-                                            , viewSeekPlainContent_ ()
-                                            ]
+                                        viewSeekPlainContent_ ()
                                 in
                                 Html.div [ class "file-viewer" ]
                                     [ ApiData.foldVisible
                                         Html.nothing
-                                        (Maybe.map (viewLoading << viewSeekChunk)
+                                        (Maybe.map (viewLoading << viewSeekWindow)
                                             >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])
                                         )
-                                        viewSeekChunk
+                                        viewSeekWindow
                                         (always <| Html.span [ class "file-error" ] [ Html.text "Failed to load file" ])
-                                        file.seekChunk
+                                        file.seekWindow
                                     ]
 
                               else
@@ -455,7 +450,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                     anchor
                                                     file.view.plainScrollTop
                                                     text
-                                                    ( 1, file.plainLineStarts )
+                                                    ( 1, max 1 (Array.length file.plainLineStarts) )
                                         in
                                         case ( file.delimitedGrid, gridAction ) of
                                             ( Just delimitedGrid, Just updateGrid ) ->
@@ -587,9 +582,12 @@ lineNumberDecoder =
             )
 
 
-scrollTopDecoder : Decode.Decoder Float
-scrollTopDecoder =
-    Decode.at [ "target", "scrollTop" ] Decode.float
+scrollMetricsDecoder : Decode.Decoder ScrollMetrics
+scrollMetricsDecoder =
+    Decode.map3 ScrollMetrics
+        (Decode.at [ "target", "scrollTop" ] Decode.float)
+        (Decode.at [ "target", "clientHeight" ] Decode.float)
+        (Decode.at [ "target", "scrollHeight" ] Decode.float)
 
 
 plainViewerPadding : Int
@@ -637,8 +635,18 @@ visibleLineIndexes scrollTop lineCount =
         List.range boundedFirstIndex (lastIndexExclusive - 1)
 
 
-viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> ( Int, Array.Array Int ) -> Html (Flow Model ())
-viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text ( startLine, lineStarts ) =
+viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> ( Int, Int ) -> Html (Flow Model ())
+viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text lineRange =
+    viewPlainContentBody False gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop (Html.Lazy.lazy viewFileText text) lineRange
+
+
+viewSeekPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> List FileChunk -> ( Int, Int ) -> Html (Flow Model ())
+viewSeekPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop chunks lineRange =
+    viewPlainContentBody True gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop (Html.Lazy.lazy viewFileChunks chunks) lineRange
+
+
+viewPlainContentBody : Bool -> Int -> Bool -> Int -> Int -> String -> Float -> Html (Flow Model ()) -> ( Int, Int ) -> Html (Flow Model ())
+viewPlainContentBody seekable gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop fileText ( startLine, lineCount_ ) =
     let
         path =
             pathFromAnchor gutterKeyValue anchor
@@ -650,7 +658,7 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
             Maybe.isJust mGutter
 
         lineCount =
-            max 1 (Array.length lineStarts)
+            max 1 lineCount_
 
         lineIndexes =
             visibleLineIndexes scrollTop lineCount
@@ -665,7 +673,6 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
             lineCount * plainLineHeight
 
         gutterWidth =
-            -- widest absolute line number in `ch` plus the cells' horizontal padding
             "calc(" ++ String.fromInt (String.length (String.fromInt (startLine + lineCount - 1))) ++ "ch + var(--spacing-sm) + var(--spacing-xs))"
 
         gutterEventAttrs =
@@ -693,7 +700,15 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
         scrollAttrs =
             case mGutter of
                 Just { recordId, target } ->
-                    [ Html.Events.on "scroll" (Decode.map (Actions.setPlainFileScrollTop target recordId path) scrollTopDecoder) ]
+                    let
+                        onScroll =
+                            if seekable then
+                                Actions.onSeekScroll target recordId path
+
+                            else
+                                \metrics -> Actions.setPlainFileScrollTop target recordId path metrics.scrollTop
+                    in
+                    [ Html.Events.on "scroll" (Decode.map onScroll scrollMetricsDecoder) ]
 
                 Nothing ->
                     []
@@ -753,7 +768,7 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
                     (List.map renderLineNumber lineIndexes)
                 ]
             , highlightOverlay
-            , Html.Lazy.lazy viewFileText text
+            , fileText
             ]
         ]
 
@@ -761,6 +776,11 @@ viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scr
 viewFileText : String -> Html (Flow Model ())
 viewFileText text =
     Html.div [ class "file-text" ] [ Html.text text ]
+
+
+viewFileChunks : List FileChunk -> Html (Flow Model ())
+viewFileChunks chunks =
+    Html.div [ class "file-text" ] (List.map (Html.text << .content) chunks)
 
 
 calculateViewerHeight : Int -> String
@@ -776,56 +796,3 @@ calculateViewerHeight lineCount =
             max cappedHeight plainViewerMinHeight
     in
     String.fromInt finalHeight ++ "px"
-
-
-viewSeekControls : Maybe ( Flow Model (), Flow Model () ) -> FileChunk -> Html (Flow Model ())
-viewSeekControls mActions chunk =
-    let
-        label =
-            "Lines "
-                ++ String.fromInt chunk.startLine
-                ++ " – "
-                ++ String.fromInt chunk.endLine
-                ++ " (bytes "
-                ++ String.fromInt chunk.startOffset
-                ++ " – "
-                ++ String.fromInt chunk.endOffset
-                ++ ")"
-                ++ (if chunk.eof then
-                        ""
-
-                    else
-                        " …"
-                   )
-
-        ( prevDisabled, prevAction ) =
-            case mActions of
-                Just ( prev, _ ) ->
-                    ( chunk.startOffset == 0, prev )
-
-                Nothing ->
-                    ( True, Flow.none )
-
-        ( nextDisabled, nextAction ) =
-            case mActions of
-                Just ( _, next ) ->
-                    ( chunk.eof, next )
-
-                Nothing ->
-                    ( True, Flow.none )
-    in
-    Html.div [ class "seek-controls" ]
-        [ Html.button
-            [ classList [ ( "seek-btn", True ), ( "disabled", prevDisabled ) ]
-            , Html.Events.onClick prevAction
-            , Html.Attributes.disabled prevDisabled
-            ]
-            [ Html.text "← Prev" ]
-        , Html.span [ class "seek-range-label" ] [ Html.text label ]
-        , Html.button
-            [ classList [ ( "seek-btn", True ), ( "disabled", nextDisabled ) ]
-            , Html.Events.onClick nextAction
-            , Html.Attributes.disabled nextDisabled
-            ]
-            [ Html.text "Next →" ]
-        ]

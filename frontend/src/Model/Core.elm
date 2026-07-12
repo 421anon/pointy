@@ -721,6 +721,13 @@ plainLineHeight =
     17
 
 
+type alias ScrollMetrics =
+    { scrollTop : Float
+    , clientHeight : Float
+    , scrollHeight : Float
+    }
+
+
 emptyPlainLineStarts : Array.Array Int
 emptyPlainLineStarts =
     Array.fromList [ 0 ]
@@ -754,6 +761,82 @@ type alias FileView =
     }
 
 
+type alias SeekWindow =
+    { chunks : List FileChunk
+    , loading : Bool
+    }
+
+
+emptySeekWindow : SeekWindow
+emptySeekWindow =
+    { chunks = [], loading = False }
+
+
+insertChunk : SeekWindow -> FileChunk -> SeekWindow
+insertChunk window chunk =
+    let
+        append existingChunks =
+            case existingChunks of
+                [ _, _, _ ] ->
+                    List.drop 1 existingChunks ++ [ chunk ]
+
+                _ ->
+                    existingChunks ++ [ chunk ]
+
+        updatedChunks =
+            case ( List.head window.chunks, List.last window.chunks ) of
+                ( Nothing, Nothing ) ->
+                    [ chunk ]
+
+                ( Just first, Just last ) ->
+                    if List.any (\existing -> existing.startOffset == chunk.startOffset) window.chunks then
+                        window.chunks
+
+                    else if chunk.endOffset == first.startOffset then
+                        List.take 3 (chunk :: window.chunks)
+
+                    else if last.endOffset == chunk.startOffset then
+                        append window.chunks
+
+                    else
+                        window.chunks
+
+                _ ->
+                    [ chunk ]
+    in
+    { chunks = updatedChunks, loading = False }
+
+
+windowLineCount : SeekWindow -> Int
+windowLineCount window =
+    case ( List.head window.chunks, List.last window.chunks ) of
+        ( Just first, Just last ) ->
+            max 1 (last.endLine - first.startLine + 1)
+
+        _ ->
+            1
+
+
+windowStartOffset : SeekWindow -> Maybe Int
+windowStartOffset window =
+    List.head window.chunks |> Maybe.map .startOffset
+
+
+windowEndOffset : SeekWindow -> Maybe Int
+windowEndOffset window =
+    List.last window.chunks |> Maybe.map .endOffset
+
+
+windowEof : SeekWindow -> Bool
+windowEof window =
+    List.last window.chunks |> Maybe.unwrap False .eof
+
+
+windowStartLine : SeekWindow -> Int
+windowStartLine window =
+    List.head window.chunks |> Maybe.unwrap 1 .startLine
+
+
 type alias FileChunk =
     { content : String
     , startOffset : Int
@@ -769,7 +852,7 @@ type alias DirectoryFile =
     , size : Int
     , viewable : Bool
     , seekable : Bool
-    , seekChunk : ApiData FileChunk
+    , seekWindow : ApiData SeekWindow
     , mimeType : Maybe String
     , view : FileView
     , delimitedGrid : Maybe DelimitedGrid
@@ -798,7 +881,7 @@ extractDirectoryItemBase item =
                 , size = file.size
                 , viewable = file.viewable
                 , seekable = file.seekable
-                , seekChunk = file.seekChunk
+                , seekWindow = file.seekWindow
                 , mimeType = file.mimeType
                 , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, plainScrollTop = file.view.plainScrollTop }
                 , delimitedGrid = file.delimitedGrid
@@ -819,7 +902,7 @@ updateDirectoryItemBase item baseItem =
                     , size = base.size
                     , viewable = base.viewable
                     , seekable = base.seekable
-                    , seekChunk = base.seekChunk
+                    , seekWindow = base.seekWindow
                     , mimeType = base.mimeType
                     , plainLineStarts = base.plainLineStarts
                     , view =

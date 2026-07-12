@@ -12,7 +12,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), FileChunk, Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, SeekWindow, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), ProjectParams, Route(..))
 import Time
@@ -221,9 +221,9 @@ filePlainLineStarts =
     lens ".plainLineStarts" .plainLineStarts (\file_ plainLineStarts_ -> { file_ | plainLineStarts = plainLineStarts_ })
 
 
-fileSeekChunk : Lens ls { a | seekChunk : b } b x y
-fileSeekChunk =
-    lens ".seekChunk" .seekChunk (\file_ seekChunk_ -> { file_ | seekChunk = seekChunk_ })
+fileSeekWindow : Lens ls { a | seekWindow : b } b x y
+fileSeekWindow =
+    lens ".seekWindow" .seekWindow (\file_ seekWindow_ -> { file_ | seekWindow = seekWindow_ })
 
 
 fileSeekable : Lens ls { a | seekable : b } b x y
@@ -366,9 +366,9 @@ filePlainLineStartsAt recordId_ path =
     directoryItemAtPath recordId_ path << file << filePlainLineStarts
 
 
-fileSeekChunkAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.FileChunk) x y
-fileSeekChunkAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileSeekChunk
+fileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
+fileSeekWindowAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileSeekWindow
 
 
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -411,9 +411,9 @@ srcFilesFileContentAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileContent
 
 
-srcFilesFileSeekChunkAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.FileChunk) x y
-srcFilesFileSeekChunkAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileSeekChunk
+srcFilesFileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
+srcFilesFileSeekWindowAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileSeekWindow
 
 
 srcFilesFileIsViewingAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -456,14 +456,14 @@ directoryItemForTargetAt target recordId_ path =
             srcFilesItemAtPath recordId_ path
 
 
-seekChunkAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (ApiData Model.FileChunk) x y
-seekChunkAt target recordId_ path =
+seekWindowAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
+seekWindowAt target recordId_ path =
     case target of
         Output ->
-            fileSeekChunkAt recordId_ path
+            fileSeekWindowAt recordId_ path
 
         Source ->
-            srcFilesFileSeekChunkAt recordId_ path
+            srcFilesFileSeekWindowAt recordId_ path
 
 
 plainLineStartsAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y

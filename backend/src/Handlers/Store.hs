@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepExtrasHandler, DirEntry (..), FileChunk (..), SeekPosition (..), fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekPosition, seekFileChunk', trimToValidUTF8) where
+module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepExtrasHandler, DirEntry (..), FileChunk (..), SeekPosition, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekPosition) where
 
 import ApiTypes (DynamicJson (..))
 
@@ -156,7 +156,7 @@ fileChunkSize :: Int
 fileChunkSize = 262144 -- 256 KiB
 
 maxViewableSize :: Integer
-maxViewableSize = 5 * 1024 * 1024 -- 5 MiB
+maxViewableSize = 5 * 1024 * 1024
 
 readFileChunked :: FilePath -> S.SourceT IO BS.ByteString
 readFileChunked path = S.SourceT $ \k ->
@@ -321,7 +321,6 @@ resolveCommitHash mCommit = case mCommit of
             Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveCommitHash: " ++ err))}
             Right h -> return h
 
--- | Bounded chunk of a file returned by the seek API.
 data FileChunk = FileChunk
     { content :: Text
     , startOffset :: Int
@@ -332,42 +331,34 @@ data FileChunk = FileChunk
     }
     deriving (Generic, Show, ToJSON)
 
--- | Typed seek position from user-facing query parameters.
 data SeekPosition
-    = FromStart
-    | AtLine Int
+    = AtLine Int
     | AtOffset Int
-    | BeforeOffset Int
     deriving (Show, Eq)
 
--- | Parse and validate the three Maybe Int query params into a SeekPosition.
-parseSeekPosition :: Maybe Int -> Maybe Int -> Maybe Int -> Handler SeekPosition
-parseSeekPosition mLine mOffset mBefore = do
-    when (length (filter (/= Nothing) [mLine, mOffset, mBefore]) > 1) $
-        throwError err400{errBody = "Specify only one of line, offset, or before"}
-    case (mLine, mOffset, mBefore) of
-        (Just l, _, _)
+parseSeekPosition :: Maybe Int -> Maybe Int -> Int -> Handler SeekPosition
+parseSeekPosition mLine mOffset bytes = do
+    when (bytes == 0) $
+        throwError err400{errBody = "bytes must not be zero"}
+    when (bytes < -fileChunkSize || bytes > fileChunkSize) $
+        throwError err400{errBody = TLE.encodeUtf8 (TL.pack ("abs(bytes) must be <= " ++ show fileChunkSize))}
+    case (mLine, mOffset) of
+        (Just l, Nothing)
             | l < 1 -> throwError err400{errBody = "line must be >= 1"}
-            | otherwise -> return $ AtLine l
-        (_, Just o, _)
+            | otherwise -> return (AtLine l)
+        (Nothing, Just o)
             | o < 0 -> throwError err400{errBody = "offset must be >= 0"}
-            | otherwise -> return $ AtOffset o
-        (_, _, Just o)
-            | o < 0 -> throwError err400{errBody = "before must be >= 0"}
-            | otherwise -> return $ BeforeOffset o
-        (Nothing, Nothing, Nothing) -> return FromStart
+            | otherwise -> return (AtOffset o)
+        _ -> throwError err400{errBody = "Specify exactly one of line or offset"}
 
-{- | GET /step-files/seek?id=<stepId>&commit=<commit>&path=<filePath>[&line=<N>|&offset=<N>|&before=<N>]
-Returns a bounded chunk beginning at a line/offset, or ending before an offset.
--}
-stepSeekHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Maybe Int -> Handler FileChunk
-stepSeekHandler stepId mCommit rel mLine mOffset mBefore = do
-    pos <- parseSeekPosition mLine mOffset mBefore
+stepSeekHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
+stepSeekHandler stepId mCommit rel mLine mOffset bytes = do
+    pos <- parseSeekPosition mLine mOffset bytes
     outPath <- resolveStepOutPath stepId mCommit
-    seekHandler outPath rel pos
+    seekHandler outPath rel pos bytes
 
-seekHandler :: Text -> FilePath -> SeekPosition -> Handler FileChunk
-seekHandler basePathText rel pos = do
+seekHandler :: Text -> FilePath -> SeekPosition -> Int -> Handler FileChunk
+seekHandler basePathText rel pos bytes = do
     let basePath = T.unpack basePathText
     assertNixStorePath basePath
     let absPath = normalise (basePath </> rel)
@@ -375,40 +366,41 @@ seekHandler basePathText rel pos = do
     isFile <- liftIO $ doesFileExist absPath
     unless isFile $ throwError err404
     fileSize <- liftIO $ getFileSize absPath
-    let beyondEnd = case pos of
-            AtOffset o | fromIntegral o > fileSize -> True
-            BeforeOffset o | fromIntegral o > fileSize -> True
-            _ -> False
-    when beyondEnd $
-        throwError err400{errBody = "seek position beyond end of file"}
-    liftIO $ seekFileChunk' absPath pos fileSize
+    case pos of
+        AtOffset o
+            | fromIntegral o > fileSize ->
+                throwError err400{errBody = "seek offset beyond end of file"}
+        _ -> return ()
+    liftIO $ seekFileChunk absPath pos bytes fileSize
 
--- | Core seek logic: read a bounded chunk at a typed position.
-seekFileChunk' :: FilePath -> SeekPosition -> Integer -> IO FileChunk
-seekFileChunk' path pos fileSize = do
-    requestedOffset <- case pos of
-        FromStart -> return 0
-        AtLine l -> findLineOffset path l fileSize
-        AtOffset o -> return o
-        BeforeOffset before -> return (max 0 (before - fileChunkSize))
-    startOff <- alignUTF8Start path requestedOffset fileSize
-    let requestedBytes = case pos of
-            BeforeOffset before -> before - startOff
-            _ -> fileChunkSize
-    readSeekChunk path startOff requestedBytes fileSize
+seekFileChunk :: FilePath -> SeekPosition -> Int -> Integer -> IO FileChunk
+seekFileChunk path pos bytes fileSize = do
+    (anchorOffset, anchorLine) <- case pos of
+        AtLine l -> do
+            (offset, resolvedLine) <- findLineOffset path l fileSize
+            return (offset, Just resolvedLine)
+        AtOffset o -> return (o, Nothing)
+    let rawStartOff =
+            if bytes > 0 then anchorOffset else max 0 (anchorOffset + bytes)
+    startOff <- alignUTF8Start path rawStartOff fileSize
+    let requestedBytes =
+            if bytes > 0 then bytes else anchorOffset - startOff
+        knownStartLine =
+            if bytes > 0 then anchorLine else Nothing
+    readSeekChunk path startOff requestedBytes fileSize knownStartLine
 
--- | Scan forward in fixed-size blocks to locate the byte offset where targetLine begins.
-findLineOffset :: FilePath -> Int -> Integer -> IO Int
+-- | Byte offset where targetLine begins, and the line actually reached (short of targetLine when the file ends first).
+findLineOffset :: FilePath -> Int -> Integer -> IO (Int, Int)
 findLineOffset path targetLine fileSize =
     withBinaryFile path ReadMode $ \h -> do
         let go currentOffset currentLine
-                | currentLine >= targetLine = return currentOffset
-                | currentOffset >= fromIntegral fileSize = return (fromIntegral fileSize)
+                | currentLine >= targetLine = return (currentOffset, currentLine)
+                | currentOffset >= fromIntegral fileSize = return (fromIntegral fileSize, currentLine)
                 | otherwise = do
                     let bufSize = min fileChunkSize (fromIntegral fileSize - currentOffset)
                     bs <- BS.hGet h bufSize
                     if BS.null bs
-                        then return currentOffset
+                        then return (currentOffset, currentLine)
                         else do
                             let nlCount = BS.count 10 bs
                             if currentLine + nlCount >= targetLine
@@ -418,13 +410,12 @@ findLineOffset path targetLine fileSize =
                                         pos = case drop (targetNl - 1) indices of
                                             (i : _) -> currentOffset + i + 1
                                             [] -> currentOffset
-                                    return pos
+                                    return (pos, targetLine)
                                 else go (currentOffset + BS.length bs) (currentLine + nlCount)
         go 0 1
 
--- | Count newlines in fixed-size blocks to determine the 1-based line number at a given byte offset.
-countPrecedingNewlines :: FilePath -> Int -> IO Int
-countPrecedingNewlines path upTo
+lineNumberAtOffset :: FilePath -> Int -> IO Int
+lineNumberAtOffset path upTo
     | upTo <= 0 = return 1
     | otherwise = withBinaryFile path ReadMode $ \h -> do
         let go offset lineCount
@@ -438,7 +429,6 @@ countPrecedingNewlines path upTo
                     go startRead (lineCount + nlCount)
         go upTo 1
 
--- | Move an arbitrary byte offset past UTF-8 continuation bytes.
 alignUTF8Start :: FilePath -> Int -> Integer -> IO Int
 alignUTF8Start path requested fileSize
     | requested <= 0 || fromIntegral requested >= fileSize = return requested
@@ -448,9 +438,8 @@ alignUTF8Start path requested fileSize
             prefix <- BS.hGet h 3
             return $ requested + BS.length (BS.takeWhile (\b -> b >= 0x80 && b < 0xC0) prefix)
 
--- | Read a bounded number of bytes from startOff and compute line metadata.
-readSeekChunk :: FilePath -> Int -> Int -> Integer -> IO FileChunk
-readSeekChunk path startOff requestedBytes fileSize = do
+readSeekChunk :: FilePath -> Int -> Int -> Integer -> Maybe Int -> IO FileChunk
+readSeekChunk path startOff requestedBytes fileSize knownStartLine = do
     withBinaryFile path ReadMode $ \h -> do
         hSeek h AbsoluteSeek (fromIntegral startOff)
         bs <- BS.hGet h (min fileChunkSize (max 0 requestedBytes))
@@ -458,7 +447,7 @@ readSeekChunk path startOff requestedBytes fileSize = do
             content' = TE.decodeUtf8With lenientDecode trimmed
             endOff = startOff + BS.length trimmed
             eof' = endOff >= fromIntegral fileSize
-        startLine' <- countPrecedingNewlines path startOff
+        startLine' <- maybe (lineNumberAtOffset path startOff) return knownStartLine
         let endLine' = startLine' + BS.count 10 trimmed
         return
             FileChunk
@@ -470,9 +459,7 @@ readSeekChunk path startOff requestedBytes fileSize = do
                 , eof = eof'
                 }
 
-{- | Trim a ByteString so it ends on a valid UTF-8 sequence boundary.
-When the input is valid UTF-8, the output is a prefix ending at a complete codepoint.
--}
+-- | For valid UTF-8 input, the output is a prefix ending at a complete codepoint.
 trimToValidUTF8 :: BS.ByteString -> BS.ByteString
 trimToValidUTF8 bs
     | BS.null bs = bs
