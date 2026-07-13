@@ -1371,16 +1371,33 @@ highlightStartLine target recordId path route_ =
         |> Maybe.withDefault 1
 
 
+seekTargetPaddingInLines : Int
+seekTargetPaddingInLines =
+    10
+
+
 requestSeekWindow : Route.HighlightTarget -> Int -> List String -> Api.SeekAnchor -> Flow Model ()
 requestSeekWindow target recordId path anchor =
     let
         allStepTables =
             currentProject << success << tables << values
+
+        ( paddedAnchor, targetScrollTop ) =
+            case anchor of
+                Api.AtLine line ->
+                    let
+                        paddedLine =
+                            max 1 (line - seekTargetPaddingInLines)
+                    in
+                    ( Api.AtLine paddedLine, plainLineScrollTop (line - paddedLine + 1) )
+
+                Api.AtOffset _ ->
+                    ( anchor, 0 )
     in
     Flow.setAll (allStepTables << seekWindowAt target recordId path) (ApiData.Loading Nothing)
-        |> Flow.seq (seekAndMerge target recordId path anchor seekChunkSizeInBytes)
-        |> Flow.seq (setPlainFileScrollTop target recordId path 0)
-        |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 0))
+        |> Flow.seq (seekAndMerge target recordId path paddedAnchor seekChunkSizeInBytes)
+        |> Flow.seq (setPlainFileScrollTop target recordId path targetScrollTop)
+        |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 targetScrollTop))
         |> Flow.seq (prefetchAdjacentChunk target recordId path Model.Before)
         |> Flow.seq (prefetchAdjacentChunk target recordId path Model.After)
 
