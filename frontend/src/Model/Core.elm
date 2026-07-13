@@ -749,15 +749,20 @@ type alias FileView =
     }
 
 
+type SeekDirection
+    = Before
+    | After
+
+
 type alias SeekWindow =
     { chunks : List FileChunk
-    , loading : Bool
+    , loading : Maybe SeekDirection
     }
 
 
 emptySeekWindow : SeekWindow
 emptySeekWindow =
-    { chunks = [], loading = False }
+    { chunks = [], loading = Nothing }
 
 
 insertChunk : SeekWindow -> FileChunk -> SeekWindow
@@ -792,7 +797,7 @@ insertChunk window chunk =
                 _ ->
                     [ chunk ]
     in
-    { chunks = updatedChunks, loading = False }
+    { chunks = updatedChunks, loading = Nothing }
 
 
 windowLineCount : SeekWindow -> Int

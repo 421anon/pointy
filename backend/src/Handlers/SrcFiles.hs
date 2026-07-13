@@ -14,7 +14,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
-import Handlers.Store (DirEntry, FileChunk, downloadHandler, listHandler, parseSeekPosition, seekHandler)
+import Handlers.Store (DirEntry, FileChunk, downloadHandler, listHandler, parseSeekOffset, seekHandler)
 import Servant (Handler, Header, Headers, ServerError (..), err500, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist)
@@ -61,7 +61,7 @@ downloadSrcFilesHandler stepId rel = do
     downloadHandler (T.pack fullBasePath) rel
 
 seekSrcFilesHandler :: Int -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
-seekSrcFilesHandler stepId rel mLine mOffset bytes = do
-    pos <- parseSeekPosition mLine mOffset bytes
+seekSrcFilesHandler stepId rel line byteOffset bytes = do
+    offset <- parseSeekOffset line byteOffset bytes
     fullBasePath <- getStepSrcFilesPath stepId
-    seekHandler (T.pack fullBasePath) rel pos bytes
+    seekHandler (T.pack fullBasePath) rel offset bytes

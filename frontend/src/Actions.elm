@@ -1257,14 +1257,9 @@ scrollPlainFileToLine target recordId path line =
         |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 scrollTop))
 
 
-seekForwardBytes : Int
-seekForwardBytes =
-    262144
-
-
-seekBackwardBytes : Int
-seekBackwardBytes =
-    -262144
+seekChunkSizeInBytes : Int
+seekChunkSizeInBytes =
+    2 * 1024 * 1024
 
 
 applySeekChunk : Route.HighlightTarget -> Int -> List String -> Model.FileChunk -> Flow Model ()
@@ -1310,18 +1305,6 @@ applySeekChunk target recordId path chunk =
                      else
                         Flow.pure ()
                     )
-                |> Flow.seq
-                    (case merged.chunks of
-                        [ only ] ->
-                            if only.eof then
-                                Flow.pure ()
-
-                            else
-                                requestAdjacentChunk target recordId path merged (Api.AtOffset only.endOffset) seekForwardBytes
-
-                        _ ->
-                            Flow.pure ()
-                    )
         )
 
 
@@ -1353,7 +1336,7 @@ seekAndMerge target recordId path anchor bytes_ =
                     (\e ->
                         Flow.setAll apiDataTraversal
                             (ApiData.toMaybe current
-                                |> Maybe.unwrap (ApiData.Error e) (\w -> ApiData.Success { w | loading = False })
+                                |> Maybe.unwrap (ApiData.Error e) (\w -> ApiData.Success { w | loading = Nothing })
                             )
                             |> Flow.seq (addToast False (Http.errorMessage e))
                     )
@@ -1395,9 +1378,11 @@ requestSeekWindow target recordId path anchor =
             currentProject << success << tables << values
     in
     Flow.setAll (allStepTables << seekWindowAt target recordId path) (ApiData.Loading Nothing)
-        |> Flow.seq (seekAndMerge target recordId path anchor seekForwardBytes)
+        |> Flow.seq (seekAndMerge target recordId path anchor seekChunkSizeInBytes)
         |> Flow.seq (setPlainFileScrollTop target recordId path 0)
         |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 0))
+        |> Flow.seq (prefetchAdjacentChunk target recordId path Model.Before)
+        |> Flow.seq (prefetchAdjacentChunk target recordId path Model.After)
 
 
 scrollSeekableFileToLine : Route.HighlightTarget -> Int -> List String -> Int -> Flow Model ()
@@ -1423,46 +1408,63 @@ scrollSeekableFileToLine target recordId path line =
     Flow.forAll (allStepTables << seekWindowAt target recordId path << success) scroll
 
 
-requestAdjacentChunk : Route.HighlightTarget -> Int -> List String -> SeekWindow -> Api.SeekAnchor -> Int -> Flow Model ()
-requestAdjacentChunk target recordId path window_ anchor bytes_ =
+requestAdjacentChunk : Route.HighlightTarget -> Int -> List String -> Model.SeekDirection -> SeekWindow -> Flow Model ()
+requestAdjacentChunk target recordId path direction window_ =
     let
         allStepTables =
             currentProject << success << tables << values
+
+        request byteOffset bytes_ =
+            Flow.setAll (allStepTables << seekWindowAt target recordId path)
+                (ApiData.Success { window_ | loading = Just direction })
+                |> Flow.seq (seekAndMerge target recordId path (Api.AtOffset byteOffset) bytes_)
     in
-    if window_.loading then
+    if Maybe.isJust window_.loading then
         Flow.pure ()
 
     else
-        Flow.setAll (allStepTables << seekWindowAt target recordId path)
-            (ApiData.Success { window_ | loading = True })
-            |> Flow.seq (seekAndMerge target recordId path anchor bytes_)
+        case direction of
+            Model.Before ->
+                Model.windowStartOffset window_
+                    |> Maybe.filter (\byteOffset -> byteOffset > 0)
+                    |> Maybe.unwrap (Flow.pure ()) (\byteOffset -> request byteOffset -seekChunkSizeInBytes)
+
+            Model.After ->
+                if Model.windowEof window_ then
+                    Flow.pure ()
+
+                else
+                    Model.windowEndOffset window_
+                        |> Maybe.unwrap (Flow.pure ()) (\byteOffset -> request byteOffset seekChunkSizeInBytes)
 
 
-scrollEdgeThreshold : Float
-scrollEdgeThreshold =
-    200
+prefetchAdjacentChunk : Route.HighlightTarget -> Int -> List String -> Model.SeekDirection -> Flow Model ()
+prefetchAdjacentChunk target recordId path direction =
+    Flow.forAll
+        (currentProject << success << tables << values << seekWindowAt target recordId path << success)
+        (requestAdjacentChunk target recordId path direction)
+
+
+seekPrefetchDistanceInLines : Int
+seekPrefetchDistanceInLines =
+    20
 
 
 onSeekScroll : Route.HighlightTarget -> Int -> List String -> Model.ScrollMetrics -> Flow Model ()
 onSeekScroll target recordId path metrics =
     let
         nearBottom =
-            metrics.scrollTop + metrics.clientHeight >= metrics.scrollHeight - scrollEdgeThreshold
+            metrics.scrollTop + metrics.clientHeight >= metrics.scrollHeight - toFloat (seekPrefetchDistanceInLines * Model.plainLineHeight)
 
         nearTop =
-            metrics.scrollTop <= scrollEdgeThreshold
+            metrics.scrollTop <= toFloat (seekPrefetchDistanceInLines * Model.plainLineHeight)
 
         extendWindow window_ =
             if nearBottom && not (Model.windowEof window_) then
-                Model.windowEndOffset window_
-                    |> Maybe.unwrap (Flow.pure ())
-                        (\endOffset -> requestAdjacentChunk target recordId path window_ (Api.AtOffset endOffset) seekForwardBytes)
+                requestAdjacentChunk target recordId path Model.After window_
 
             else if nearTop then
-                Model.windowStartOffset window_
-                    |> Maybe.filter (\startOffset -> startOffset > 0)
-                    |> Maybe.unwrap (Flow.pure ())
-                        (\startOffset -> requestAdjacentChunk target recordId path window_ (Api.AtOffset startOffset) seekBackwardBytes)
+                requestAdjacentChunk target recordId path Model.Before window_
 
             else
                 Flow.pure ()
@@ -1605,7 +1607,7 @@ toggleOutputEntry recordId mOpen path =
                                         requestSeekWindow Route.Output recordId path (Api.AtLine initialLine)
 
                             else
-                                Flow.when (not (shouldSkipFileContents file_))
+                                Flow.when (file_.viewable && not (shouldSkipFileContents file_))
                                     (ensureExtras
                                         |> Flow.andThen
                                             (\_ ->
@@ -1667,7 +1669,7 @@ toggleSrcEntry recordId mOpen path =
                                 requestSeekWindow Route.Source recordId path (Api.AtLine initialLine)
 
                     else
-                        Flow.when (not (shouldSkipFileContents file_))
+                        Flow.when (file_.viewable && not (shouldSkipFileContents file_))
                             (callApi (allStepTables << srcFilesFileContentAt recordId path)
                                 (Api.fetchSrcFileContents recordId path)
                                 |> FlowError.andThen (setPlainFileLineCount Route.Source recordId path)

@@ -773,6 +773,25 @@ $delimited-grid-row-height: 28px;
   line-height: 17px;
 }
 
+.seek-loading-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 17px;
+  line-height: 17px;
+  color: var(--text-muted);
+}
+
+.seek-loading-icon {
+  display: inline-flex;
+  animation: spin 1s linear infinite;
+
+  .material-symbols-outlined {
+    font-size: 14px;
+    line-height: 17px;
+  }
+}
+
 .file-image-viewer {
   max-width: 100%;
   height: auto;
