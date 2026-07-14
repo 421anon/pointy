@@ -2,7 +2,6 @@ module Model.Lenses exposing (..)
 
 import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData, success)
-import Array
 import Components.Select exposing (SelectState)
 import Debounce
 import Dict exposing (Dict)
@@ -12,9 +11,9 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, SeekWindow, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
-import Route exposing (ProjectParams, Route(..))
+import Route exposing (HighlightTarget(..), ProjectParams, Route(..))
 import Time
 import Toast exposing (Toast)
 
@@ -216,9 +215,19 @@ filePlainScrollTop =
         << lens ".plainScrollTop" .plainScrollTop (\view plainScrollTop_ -> { view | plainScrollTop = plainScrollTop_ })
 
 
-filePlainLineStarts : Lens ls { a | plainLineStarts : b } b x y
-filePlainLineStarts =
-    lens ".plainLineStarts" .plainLineStarts (\file_ plainLineStarts_ -> { file_ | plainLineStarts = plainLineStarts_ })
+filePlainLineCount : Lens ls { a | plainLineCount : b } b x y
+filePlainLineCount =
+    lens ".plainLineCount" .plainLineCount (\file_ plainLineCount_ -> { file_ | plainLineCount = plainLineCount_ })
+
+
+fileSeekWindow : Lens ls { a | seekWindow : b } b x y
+fileSeekWindow =
+    lens ".seekWindow" .seekWindow (\file_ seekWindow_ -> { file_ | seekWindow = seekWindow_ })
+
+
+fileSeekable : Lens ls { a | seekable : b } b x y
+fileSeekable =
+    lens ".seekable" .seekable (\file_ seekable_ -> { file_ | seekable = seekable_ })
 
 
 children : Lens ls { a | children : b } b x y
@@ -351,9 +360,14 @@ filePlainScrollTopAt recordId_ path =
     directoryItemAtPath recordId_ path << file << filePlainScrollTop
 
 
-filePlainLineStartsAt : Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
-filePlainLineStartsAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << filePlainLineStarts
+filePlainLineCountAt : Int -> List String -> Traversal (Table StepRecord) Int x y
+filePlainLineCountAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << filePlainLineCount
+
+
+fileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
+fileSeekWindowAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileSeekWindow
 
 
 folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -396,6 +410,11 @@ srcFilesFileContentAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileContent
 
 
+srcFilesFileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
+srcFilesFileSeekWindowAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileSeekWindow
+
+
 srcFilesFileIsViewingAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
 srcFilesFileIsViewingAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileIsViewing
@@ -411,9 +430,9 @@ srcFilesFilePlainScrollTopAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << filePlainScrollTop
 
 
-srcFilesFilePlainLineStartsAt : Int -> List String -> Traversal (Table StepRecord) (Array.Array Int) x y
-srcFilesFilePlainLineStartsAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << filePlainLineStarts
+srcFilesFilePlainLineCountAt : Int -> List String -> Traversal (Table StepRecord) Int x y
+srcFilesFilePlainLineCountAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << filePlainLineCount
 
 
 srcFilesFolderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
@@ -424,6 +443,46 @@ srcFilesFolderExpandedAt recordId_ path =
 srcFilesChildrenAt : Int -> List String -> Traversal (Table StepRecord) (ApiData (Dict String DirectoryItem)) x y
 srcFilesChildrenAt recordId_ path =
     srcFilesItemAtPath recordId_ path << folder << children
+
+
+directoryItemForTargetAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) DirectoryItem x y
+directoryItemForTargetAt target recordId_ path =
+    case target of
+        Output ->
+            directoryItemAtPath recordId_ path
+
+        Source ->
+            srcFilesItemAtPath recordId_ path
+
+
+seekWindowAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
+seekWindowAt target recordId_ path =
+    case target of
+        Output ->
+            fileSeekWindowAt recordId_ path
+
+        Source ->
+            srcFilesFileSeekWindowAt recordId_ path
+
+
+plainLineCountAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) Int x y
+plainLineCountAt target recordId_ path =
+    case target of
+        Output ->
+            filePlainLineCountAt recordId_ path
+
+        Source ->
+            srcFilesFilePlainLineCountAt recordId_ path
+
+
+plainScrollTopAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) Float x y
+plainScrollTopAt target recordId_ path =
+    case target of
+        Output ->
+            filePlainScrollTopAt recordId_ path
+
+        Source ->
+            srcFilesFilePlainScrollTopAt recordId_ path
 
 
 toasts : Lens ls Model (List Toast) x y

@@ -3,7 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.SrcFiles (listSrcFilesHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
+module Handlers.SrcFiles (listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Monad.IO.Class (liftIO)
@@ -14,7 +14,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
-import Handlers.Store (DirEntry, downloadHandler, listHandler)
+import Handlers.Store (DirEntry, FileChunk, downloadHandler, listHandler, parseSeekOffset, seekHandler)
 import Servant (Handler, Header, Headers, ServerError (..), err500, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist)
@@ -42,10 +42,14 @@ getSrcFilesBasePath = do
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}
         Right path -> return path
 
+getStepSrcFilesPath :: Int -> Handler FilePath
+getStepSrcFilesPath stepId = do
+    basePath <- getSrcFilesBasePath
+    return (T.unpack basePath </> show stepId)
+
 listSrcFilesHandler :: Int -> Maybe FilePath -> Handler [DirEntry]
 listSrcFilesHandler stepId mRel = do
-    basePath <- getSrcFilesBasePath
-    let fullBasePath = T.unpack basePath </> show stepId
+    fullBasePath <- getStepSrcFilesPath stepId
     exists <- liftIO $ doesDirectoryExist fullBasePath
     if exists
         then listHandler (T.pack fullBasePath) mRel
@@ -53,6 +57,11 @@ listSrcFilesHandler stepId mRel = do
 
 downloadSrcFilesHandler :: Int -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadSrcFilesHandler stepId rel = do
-    basePath <- getSrcFilesBasePath
-    let fullBasePath = T.unpack basePath </> show stepId
+    fullBasePath <- getStepSrcFilesPath stepId
     downloadHandler (T.pack fullBasePath) rel
+
+seekSrcFilesHandler :: Int -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
+seekSrcFilesHandler stepId rel line byteOffset bytes = do
+    offset <- parseSeekOffset line byteOffset bytes
+    fullBasePath <- getStepSrcFilesPath stepId
+    seekHandler (T.pack fullBasePath) rel offset bytes

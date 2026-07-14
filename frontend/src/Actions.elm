@@ -25,7 +25,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
@@ -1239,12 +1239,7 @@ setPlainFileScrollTop target recordId path scrollTop =
         allStepTables =
             currentProject << success << tables << values
     in
-    case target of
-        Route.Output ->
-            Flow.setAll (allStepTables << filePlainScrollTopAt recordId path) scrollTop
-
-        Route.Source ->
-            Flow.setAll (allStepTables << srcFilesFilePlainScrollTopAt recordId path) scrollTop
+    Flow.setAll (allStepTables << plainScrollTopAt target recordId path) scrollTop
 
 
 plainLineScrollTop : Int -> Float
@@ -1262,6 +1257,92 @@ scrollPlainFileToLine target recordId path line =
         |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 scrollTop))
 
 
+seekChunkSizeInBytes : Int
+seekChunkSizeInBytes =
+    2 * 1024 * 1024
+
+
+applySeekChunk : Route.HighlightTarget -> Int -> List String -> Model.FileChunk -> Flow Model ()
+applySeekChunk target recordId path chunk =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+
+        apiDataTraversal =
+            allStepTables << seekWindowAt target recordId path
+
+        viewTraversal =
+            allStepTables << plainScrollTopAt target recordId path
+    in
+    Flow.forAll apiDataTraversal
+        (\currentApiData ->
+            let
+                oldWindow =
+                    ApiData.toMaybe currentApiData |> Maybe.withDefault Model.emptySeekWindow
+
+                merged =
+                    Model.insertChunk oldWindow chunk
+
+                deltaLines =
+                    Model.windowStartLine oldWindow - Model.windowStartLine merged
+            in
+            Flow.setAll apiDataTraversal (ApiData.Success merged)
+                |> Flow.seq
+                    (if deltaLines /= 0 then
+                        Flow.forAll viewTraversal
+                            (\oldScrollTop ->
+                                let
+                                    adjustment =
+                                        toFloat (deltaLines * Model.plainLineHeight)
+
+                                    newScrollTop =
+                                        max 0 (oldScrollTop + adjustment)
+                                in
+                                setPlainFileScrollTop target recordId path newScrollTop
+                                    |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 newScrollTop))
+                            )
+
+                     else
+                        Flow.pure ()
+                    )
+        )
+
+
+seekAndMerge : Route.HighlightTarget -> Int -> List String -> Api.SeekAnchor -> Int -> Flow Model ()
+seekAndMerge target recordId path anchor bytes_ =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+
+        apiDataTraversal =
+            allStepTables << seekWindowAt target recordId path
+
+        apiCall =
+            case target of
+                Route.Output ->
+                    Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+                        (\commit_ ->
+                            Api.fetchFileSeek recordId (Just commit_) path anchor bytes_
+                        )
+
+                Route.Source ->
+                    Api.fetchSrcFileSeek recordId path anchor bytes_
+    in
+    Flow.forAll apiDataTraversal
+        (\current ->
+            apiCall
+                |> FlowError.foldResult
+                    (applySeekChunk target recordId path)
+                    (\e ->
+                        Flow.setAll apiDataTraversal
+                            (ApiData.toMaybe current
+                                |> Maybe.unwrap (ApiData.Error e) (\w -> ApiData.Success { w | loading = Nothing })
+                            )
+                            |> Flow.seq (addToast False (Http.errorMessage e))
+                    )
+        )
+
+
 scrollPlainFileToHighlightedRange : Route.HighlightTarget -> Int -> List String -> Flow Model ()
 scrollPlainFileToHighlightedRange target recordId path =
     Flow.forAll route
@@ -1272,23 +1353,141 @@ scrollPlainFileToHighlightedRange target recordId path =
         )
 
 
-setPlainFileLineStarts : Route.HighlightTarget -> Int -> List String -> String -> Flow Model ()
-setPlainFileLineStarts target recordId path content =
+setPlainFileLineCount : Route.HighlightTarget -> Int -> List String -> String -> Flow Model ()
+setPlainFileLineCount target recordId path content =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+    in
+    Flow.setAll (allStepTables << plainLineCountAt target recordId path) (Model.countLines content)
+        |> Flow.seq (scrollPlainFileToHighlightedRange target recordId path)
+
+
+highlightStartLine : Route.HighlightTarget -> Int -> List String -> Route -> Int
+highlightStartLine target recordId path route_ =
+    try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+        |> Maybe.andThen .range
+        |> Maybe.map .from
+        |> Maybe.withDefault 1
+
+
+seekTargetPaddingInLines : Int
+seekTargetPaddingInLines =
+    10
+
+
+requestSeekWindow : Route.HighlightTarget -> Int -> List String -> Api.SeekAnchor -> Flow Model ()
+requestSeekWindow target recordId path anchor =
     let
         allStepTables =
             currentProject << success << tables << values
 
-        lineStarts =
-            Model.plainLineStartsFromText content
-    in
-    (case target of
-        Route.Output ->
-            Flow.setAll (allStepTables << filePlainLineStartsAt recordId path) lineStarts
+        ( paddedAnchor, targetScrollTop ) =
+            case anchor of
+                Api.AtLine line ->
+                    let
+                        paddedLine =
+                            max 1 (line - seekTargetPaddingInLines)
+                    in
+                    ( Api.AtLine paddedLine, plainLineScrollTop (line - paddedLine + 1) )
 
-        Route.Source ->
-            Flow.setAll (allStepTables << srcFilesFilePlainLineStartsAt recordId path) lineStarts
-    )
-        |> Flow.seq (scrollPlainFileToHighlightedRange target recordId path)
+                Api.AtOffset _ ->
+                    ( anchor, 0 )
+    in
+    Flow.setAll (allStepTables << seekWindowAt target recordId path) (ApiData.Loading Nothing)
+        |> Flow.seq (seekAndMerge target recordId path paddedAnchor seekChunkSizeInBytes)
+        |> Flow.seq (setPlainFileScrollTop target recordId path targetScrollTop)
+        |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 targetScrollTop))
+        |> Flow.seq (prefetchAdjacentChunk target recordId path Model.Before)
+        |> Flow.seq (prefetchAdjacentChunk target recordId path Model.After)
+
+
+scrollSeekableFileToLine : Route.HighlightTarget -> Int -> List String -> Int -> Flow Model ()
+scrollSeekableFileToLine target recordId path line =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+
+        scroll window_ =
+            let
+                startLine =
+                    Model.windowStartLine window_
+
+                localLine =
+                    max 1 (line - startLine + 1)
+
+                scrollTop =
+                    plainLineScrollTop localLine
+            in
+            setPlainFileScrollTop target recordId path scrollTop
+                |> Flow.seq (Flow.attemptTask (Dom.setViewportOf ("viewer-" ++ Route.highlightAnchor target recordId path) 0 scrollTop))
+    in
+    Flow.forAll (allStepTables << seekWindowAt target recordId path << success) scroll
+
+
+requestAdjacentChunk : Route.HighlightTarget -> Int -> List String -> Model.SeekDirection -> SeekWindow -> Flow Model ()
+requestAdjacentChunk target recordId path direction window_ =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+
+        request byteOffset bytes_ =
+            Flow.setAll (allStepTables << seekWindowAt target recordId path)
+                (ApiData.Success { window_ | loading = Just direction })
+                |> Flow.seq (seekAndMerge target recordId path (Api.AtOffset byteOffset) bytes_)
+    in
+    if Maybe.isJust window_.loading then
+        Flow.pure ()
+
+    else
+        case direction of
+            Model.Before ->
+                Model.windowStartOffset window_
+                    |> Maybe.filter (\byteOffset -> byteOffset > 0)
+                    |> Maybe.unwrap (Flow.pure ()) (\byteOffset -> request byteOffset -seekChunkSizeInBytes)
+
+            Model.After ->
+                if Model.windowEof window_ then
+                    Flow.pure ()
+
+                else
+                    Model.windowEndOffset window_
+                        |> Maybe.unwrap (Flow.pure ()) (\byteOffset -> request byteOffset seekChunkSizeInBytes)
+
+
+prefetchAdjacentChunk : Route.HighlightTarget -> Int -> List String -> Model.SeekDirection -> Flow Model ()
+prefetchAdjacentChunk target recordId path direction =
+    Flow.forAll
+        (currentProject << success << tables << values << seekWindowAt target recordId path << success)
+        (requestAdjacentChunk target recordId path direction)
+
+
+seekPrefetchDistanceInLines : Int
+seekPrefetchDistanceInLines =
+    20
+
+
+onSeekScroll : Route.HighlightTarget -> Int -> List String -> Model.ScrollMetrics -> Flow Model ()
+onSeekScroll target recordId path metrics =
+    let
+        nearBottom =
+            metrics.scrollTop + metrics.clientHeight >= metrics.scrollHeight - toFloat (seekPrefetchDistanceInLines * Model.plainLineHeight)
+
+        nearTop =
+            metrics.scrollTop <= toFloat (seekPrefetchDistanceInLines * Model.plainLineHeight)
+
+        extendWindow window_ =
+            if nearBottom && not (Model.windowEof window_) then
+                requestAdjacentChunk target recordId path Model.After window_
+
+            else if nearTop then
+                requestAdjacentChunk target recordId path Model.Before window_
+
+            else
+                Flow.pure ()
+    in
+    setPlainFileScrollTop target recordId path metrics.scrollTop
+        |> Flow.seq (Flow.forAll (currentProject << success << tables << values << seekWindowAt target recordId path << success) extendWindow)
 
 
 openHighlightedGridInPlainMode : Route.HighlightTarget -> Int -> List String -> Route -> Model.DelimitedGrid -> Model.DelimitedGrid
@@ -1389,7 +1588,7 @@ toggleOutputEntry recordId mOpen path =
                                         )
 
                                 materializeFileContent content =
-                                    setPlainFileLineStarts Route.Output recordId path content
+                                    setPlainFileLineCount Route.Output recordId path content
                                         |> Flow.seq
                                             (Flow.forAll parentExtrasLens
                                                 (\extrasData ->
@@ -1415,19 +1614,29 @@ toggleOutputEntry recordId mOpen path =
                                                 )
                                             )
                             in
-                            Flow.when (not (shouldSkipFileContents file_))
-                                (ensureExtras
-                                    |> Flow.andThen
-                                        (\_ ->
-                                            -- Extras errors are non-blocking; the grid simply
-                                            -- falls back to string-typed columns. Always proceed
-                                            -- to fetch the file content.
-                                            callApi (allStepTables << fileContentAt recordId path)
-                                                (Api.fetchFileContents recordId (Just commit_) path)
-                                        )
-                                    |> FlowError.andThen materializeFileContent
-                                    |> Flow.return ()
-                                )
+                            if file_.seekable then
+                                Flow.forAll route <|
+                                    \route_ ->
+                                        let
+                                            initialLine =
+                                                highlightStartLine Route.Output recordId path route_
+                                        in
+                                        requestSeekWindow Route.Output recordId path (Api.AtLine initialLine)
+
+                            else
+                                Flow.when (file_.viewable && not (shouldSkipFileContents file_))
+                                    (ensureExtras
+                                        |> Flow.andThen
+                                            (\_ ->
+                                                -- Extras errors are non-blocking; the grid simply
+                                                -- falls back to string-typed columns. Always proceed
+                                                -- to fetch the file content.
+                                                callApi (allStepTables << fileContentAt recordId path)
+                                                    (Api.fetchFileContents recordId (Just commit_) path)
+                                            )
+                                        |> FlowError.andThen materializeFileContent
+                                        |> Flow.return ()
+                                    )
                         )
     in
     Flow.forAll isExpanded
@@ -1467,12 +1676,22 @@ toggleSrcEntry recordId mOpen path =
         fileAction =
             Flow.forAll (allStepTables << srcFilesItemAtPath recordId path << file)
                 (\file_ ->
-                    Flow.when (not (shouldSkipFileContents file_))
-                        (callApi (allStepTables << srcFilesFileContentAt recordId path)
-                            (Api.fetchSrcFileContents recordId path)
-                            |> FlowError.andThen (setPlainFileLineStarts Route.Source recordId path)
-                            |> Flow.return ()
-                        )
+                    if file_.seekable then
+                        Flow.forAll route <|
+                            \route_ ->
+                                let
+                                    initialLine =
+                                        highlightStartLine Route.Source recordId path route_
+                                in
+                                requestSeekWindow Route.Source recordId path (Api.AtLine initialLine)
+
+                    else
+                        Flow.when (file_.viewable && not (shouldSkipFileContents file_))
+                            (callApi (allStepTables << srcFilesFileContentAt recordId path)
+                                (Api.fetchSrcFileContents recordId path)
+                                |> FlowError.andThen (setPlainFileLineCount Route.Source recordId path)
+                                |> Flow.return ()
+                            )
                 )
     in
     Flow.forAll isExpanded
@@ -1541,10 +1760,20 @@ deepOpenSourceEntry stepId path mRange =
 deepOpenEntryWith : Route.HighlightTarget -> (Int -> Maybe Bool -> List String -> Flow Model Bool) -> Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenEntryWith target toggleEntry stepId path mRange =
     let
+        allStepTables =
+            currentProject << success << tables << values
+
         scrollToRange =
             case mRange of
                 Just range ->
-                    scrollPlainFileToLine target stepId path range.from
+                    Flow.forAll (allStepTables << directoryItemForTargetAt target stepId path << file)
+                        (\file_ ->
+                            if file_.seekable then
+                                scrollSeekableFileToLine target stepId path range.from
+
+                            else
+                                scrollPlainFileToLine target stepId path range.from
+                        )
 
                 Nothing ->
                     Flow.pure ()
@@ -2428,7 +2657,6 @@ confirmDeleteAgentSession sessionId =
 toggleAgentArchived : Flow Model ()
 toggleAgentArchived =
     Flow.over agent (\s -> { s | showArchived = not s.showArchived })
-
 
 
 readAgentPrompt : Flow Model String

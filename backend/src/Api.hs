@@ -14,7 +14,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
-import Handlers.Store (DirEntry)
+import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
 import Servant.Types.SourceT (SourceT)
@@ -190,6 +190,17 @@ type DownloadStepFile =
         :> QueryParam' '[Required] "path" FilePath
         :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
 
+type StepFileSeek =
+    "step-files"
+        :> "seek"
+        :> Description "Returns a bounded file chunk. Specify exactly one of line or offset and a nonzero signed byte count: positive bytes read forward from the anchor; negative bytes read backward and end at the anchor."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> QueryParam' '[Required] "path" FilePath
+        :> QueryParam "line" Int
+        :> QueryParam "offset" Int
+        :> QueryParam' '[Required] "bytes" Int
+        :> Get '[JSON] FileChunk
 type RawStepFile =
     "step-files"
         :> "raw"
@@ -215,6 +226,17 @@ type DownloadSrcFile =
         :> ReqId
         :> QueryParam' '[Required] "path" FilePath
         :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
+
+type SrcFileSeek =
+    "src-files"
+        :> "seek"
+        :> Description "Returns a bounded source-file chunk. Specify exactly one of line or offset and a nonzero signed byte count: positive bytes read forward from the anchor; negative bytes read backward and end at the anchor."
+        :> ReqId
+        :> QueryParam' '[Required] "path" FilePath
+        :> QueryParam "line" Int
+        :> QueryParam "offset" Int
+        :> QueryParam' '[Required] "bytes" Int
+        :> Get '[JSON] FileChunk
 
 type GetProjects =
     "projects"
@@ -297,10 +319,12 @@ type API =
         :<|> GetUserRepoInfo
         :<|> ListStepFiles
         :<|> DownloadStepFile
+        :<|> StepFileSeek
         :<|> RawStepFile
         :<|> StepFileExtras
         :<|> ListSrcFiles
         :<|> DownloadSrcFile
+        :<|> SrcFileSeek
         :<|> GetProjects
         :<|> CreateProject
         :<|> UpdateProject

@@ -30,7 +30,7 @@ import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.SrcFiles (UserRepoInfo)
-import Handlers.Store (DirEntry)
+import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm', Tmp)
@@ -127,7 +127,14 @@ instance ToSchema ConfirmApplyRequest where
                 "ConfirmApplyRequest"
                 [("sessionId", stringField), ("targetHead", stringField), ("candidateHead", stringField)]
 
+instance ToSchema LineOffset where
+    declareNamedSchema _ = declareNamedSchema (Proxy :: Proxy Int)
+
+instance ToSchema ByteOffset where
+    declareNamedSchema _ = declareNamedSchema (Proxy :: Proxy Int)
+
 instance ToSchema DirEntry
+instance ToSchema FileChunk
 instance ToSchema UserRepoInfo
 instance ToSchema AutocompleteRequest
 instance ToSchema PreparedApply
