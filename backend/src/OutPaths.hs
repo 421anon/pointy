@@ -30,7 +30,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), scheduleNixReplWarmRotation)
 import System.IO.Unsafe (unsafePerformIO)
-import UserRepo (ReadRepoContext (..), WriteRepoContext, runNixEvalJsonInRepo, runNixEvalJsonInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
+import UserRepo (ReadRepoContext (..), WriteRepoContext, ensureRepoCommit, runNixEvalJsonInRepo, runNixEvalJsonInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
 
 -- Types
 
@@ -117,23 +117,45 @@ getProjectOutPaths pid targetCommit = do
                     `catch` \(err :: SomeException) ->
                         return $ Left $ "Project outPath evaluation crashed: " ++ show err
             putMVar mv result
+            case result of
+                Left _ -> discardFailedProjectOutPaths key mv
+                Right _ -> return ()
             return result
         else readMVar mv
 
+-- Failed evaluations are removed after waking current waiters. A later caller
+-- can retry once a transiently missing commit or repository fetch recovers.
+discardFailedProjectOutPaths :: (Int, Text) -> MVar (Either String (Map Int Text)) -> IO ()
+discardFailedProjectOutPaths key evaluatedMv =
+    modifyMVar_ outPathCacheRef $ \cache ->
+        case Map.lookup key (cacheEntries cache) of
+            Just cachedMv
+                | cachedMv == evaluatedMv ->
+                    return
+                        cache
+                            { cacheEntries = Map.delete key (cacheEntries cache)
+                            , cacheOrder = filter (/= key) (cacheOrder cache)
+                            }
+            _ -> return cache
+
 evalProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
 evalProjectOutPaths pid targetCommit = do
-    repoPath <- userRepoPath
-    result <-
-        runExceptT $
-            runNixEvalJsonInRepo
-                (ReadRepoContext repoPath (unpack targetCommit))
-                ("#pointy.projectOutPaths." ++ show pid)
-    return $ case result of
-        Left err -> Left $ "Failed to evaluate #pointy.projectOutPaths." ++ show pid ++ ": " ++ err
-        Right output ->
-            case decode (TLE.encodeUtf8 (TL.pack output)) of
-                Nothing -> Left $ "Failed to parse #pointy.projectOutPaths." ++ show pid
-                Just paths -> Right paths
+    commitResult <- runExceptT $ ensureRepoCommit (unpack targetCommit)
+    case commitResult of
+        Left err -> return $ Left $ "Failed to prepare project commit: " ++ err
+        Right () -> do
+            repoPath <- userRepoPath
+            result <-
+                runExceptT $
+                    runNixEvalJsonInRepo
+                        (ReadRepoContext repoPath (unpack targetCommit))
+                        ("#pointy.projectOutPaths." ++ show pid)
+            return $ case result of
+                Left err -> Left $ "Failed to evaluate #pointy.projectOutPaths." ++ show pid ++ ": " ++ err
+                Right output ->
+                    case decode (TLE.encodeUtf8 (TL.pack output)) of
+                        Nothing -> Left $ "Failed to parse #pointy.projectOutPaths." ++ show pid
+                        Just paths -> Right paths
 
 {- | Schedule a warmed REPL rotation for a project's outPaths attribute,
 and fork a background cache fill so the result is available immediately

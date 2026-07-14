@@ -21,6 +21,7 @@ module UserRepo (
     commitAndPushChanges,
     fetchRepo,
     fetchRepoStrict,
+    ensureRepoCommit,
 ) where
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
@@ -216,6 +217,27 @@ cloneRepoFresh cfg = do
     case res of
         Right () -> putStrLn "User repo cloned successfully"
         Left err -> error err
+
+{- | Ensure a pinned commit exists in the local bare repository. Fetch only
+when the object is absent so cached project evaluations stay network-free.
+-}
+ensureRepoCommit :: String -> ExceptT String IO ()
+ensureRepoCommit commit = do
+    repoPath <- liftIO userRepoPath
+    present <- liftIO $ repoContainsCommit repoPath commit
+    when (not present) $ do
+        fetchRepo
+        presentAfterFetch <- liftIO $ repoContainsCommit repoPath commit
+        when (not presentAfterFetch) $
+            ExceptT $
+                return $
+                    Left $
+                        "Git commit " ++ commit ++ " is unavailable after fetching the user repository"
+
+repoContainsCommit :: FilePath -> String -> IO Bool
+repoContainsCommit repoPath commit = do
+    (exitCode, _, _) <- runGitIn repoPath ["cat-file", "-e", "--", commit ++ "^{commit}"]
+    return $ exitCode == ExitSuccess
 
 fetchRepo :: ExceptT String IO ()
 fetchRepo = ExceptT $ do

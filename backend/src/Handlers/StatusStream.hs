@@ -34,6 +34,10 @@ import UserRepo (ReadRepoContext (..), withReadRepoTransaction)
 
 data EventStream
 
+data LocalStatusUpdate
+    = LocalSnapshot ProjectSnapshot
+    | LocalError Text
+
 instance Accept EventStream where
     contentType _ = "text" // "event-stream"
 
@@ -62,14 +66,16 @@ stepStatusStreamHandler projectId commit = do
             forkIO $ do
                 result <- getRawStatusesWithPaths projectId targetCommit
                 case result of
-                    Left _ -> return ()
+                    Left err -> do
+                        putStrLn $ "Project status stream failed for project " ++ show projectId ++ ": " ++ err
+                        atomically $ writeTChan localChan (LocalError (pack err))
                     Right (rawStatuses, outPaths) -> do
                         let (initialStatuses, pendingStatuses) = partitionImmediateStatuses rawStatuses
                         when (not (Map.null initialStatuses)) $ do
                             stillCurrent <- statusStreamCommitStillCurrent commit targetCommit
                             when stillCurrent $
                                 atomically $
-                                    writeTChan localChan (Bus.ProjectSnapshot projectId targetCommit initialStatuses)
+                                    writeTChan localChan (LocalSnapshot (Bus.ProjectSnapshot projectId targetCommit initialStatuses))
                         when (not (Map.null pendingStatuses)) $
                             publishResolvedStatuses localChan commit projectId ctx outPaths pendingStatuses
 
@@ -89,7 +95,7 @@ stepStatusStreamHandler projectId commit = do
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
 
-publishResolvedStatuses :: TChan ProjectSnapshot -> Maybe Text -> Int -> ReadRepoContext -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
+publishResolvedStatuses :: TChan LocalStatusUpdate -> Maybe Text -> Int -> ReadRepoContext -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
 publishResolvedStatuses updatesChan pinnedCommit projectId ctx outPaths statuses =
     mapConcurrently_ publishOne (Map.toList statuses)
   where
@@ -100,7 +106,7 @@ publishResolvedStatuses updatesChan pinnedCommit projectId ctx outPaths statuses
         shouldPublish <- statusStreamCommitStillCurrent pinnedCommit targetCommit
         when shouldPublish $
             atomically $
-                writeTChan updatesChan (Bus.ProjectSnapshot projectId targetCommit (Map.singleton sid' status_))
+                writeTChan updatesChan (LocalSnapshot (Bus.ProjectSnapshot projectId targetCommit (Map.singleton sid' status_)))
 
 statusStreamCommitStillCurrent :: Maybe Text -> Text -> IO Bool
 statusStreamCommitStillCurrent pinnedCommit targetCommit =
@@ -110,33 +116,39 @@ statusStreamCommitStillCurrent pinnedCommit targetCommit =
             latest <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
             return $ latest == Right targetCommit
 
-streamLoop :: Int -> Maybe Text -> Int -> TChan ProjectSnapshot -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
+streamLoop :: Int -> Maybe Text -> Int -> TChan LocalStatusUpdate -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
 streamLoop projectId pinnedCommit heartbeatTick localChan busChan = do
     return $ S.Effect $ do
         threadDelay 500000
         localUpdates <- atomically $ drainTChan localChan
         busUpdates <- atomically $ drainTChan busChan
 
-        let matchingSnapshots = filter matchesSnapshot (localUpdates ++ busUpdates)
+        let localErrors = [err | LocalError err <- localUpdates]
+        let localSnapshots = [snapshot | LocalSnapshot snapshot <- localUpdates]
+        let matchingSnapshots = filter matchesSnapshot (localSnapshots ++ busUpdates)
 
-        case matchingSnapshots of
-            [] -> do
-                let nextHeartbeatTick = heartbeatTick + 1
-                let (heartbeatEvents, finalTick) =
-                        if nextHeartbeatTick >= 10
-                            then ([sseEvent "heartbeat" (encode (object ["projectId" .= projectId]))], 0)
-                            else ([], nextHeartbeatTick)
+        case localErrors of
+            (err : _) ->
+                return $ S.Yield (sseEvent "status-error" (encode err)) S.Stop
+            [] ->
+                case matchingSnapshots of
+                    [] -> do
+                        let nextHeartbeatTick = heartbeatTick + 1
+                        let (heartbeatEvents, finalTick) =
+                                if nextHeartbeatTick >= 10
+                                    then ([sseEvent "heartbeat" (encode (object ["projectId" .= projectId]))], 0)
+                                    else ([], nextHeartbeatTick)
 
-                let tickComment = sseComment $ "tick-" <> pack (show nextHeartbeatTick) <> " " <> pack (replicate 64 ' ')
-                let events =
-                        if null heartbeatEvents
-                            then [tickComment]
-                            else heartbeatEvents
+                        let tickComment = sseComment $ "tick-" <> pack (show nextHeartbeatTick) <> " " <> pack (replicate 64 ' ')
+                        let events =
+                                if null heartbeatEvents
+                                    then [tickComment]
+                                    else heartbeatEvents
 
-                return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit finalTick localChan busChan))
-            snapshots -> do
-                let events = map snapshotEvent snapshots
-                return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit 0 localChan busChan))
+                        return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit finalTick localChan busChan))
+                    snapshots -> do
+                        let events = map snapshotEvent snapshots
+                        return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit 0 localChan busChan))
   where
     matchesSnapshot snapshot =
         Bus.projectId snapshot == projectId && maybe True (== Bus.commit snapshot) pinnedCommit

@@ -259,7 +259,7 @@ type UpdateProject =
 
 type StepStatusStream =
     "step-status-stream"
-        :> Description "Streams live status updates for every step in a project."
+        :> Description "Streams snapshot and heartbeat SSE events for a project's steps. Emits status-error and closes when status evaluation fails."
         :> ReqProjectId
         :> QueryParam "commit" Text
         :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))

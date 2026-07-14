@@ -43,6 +43,7 @@ function zoomIframe({ id, zoom }) {
 
 let stepStatusSource = null;
 let stepStatusTargetKey = null;
+let stepStatusApplicationError = false;
 let agentTurnSource = null;
 let agentTurnTargetKey = null;
 
@@ -52,6 +53,7 @@ function closeStepStatusStream() {
     stepStatusSource = null;
   }
   stepStatusTargetKey = null;
+  stepStatusApplicationError = false;
 }
 
 function closeAgentTurnStream() {
@@ -149,7 +151,20 @@ export function connectPorts(app) {
       } catch {}
     });
 
+    stepStatusSource.addEventListener("status-error", (event) => {
+      stepStatusApplicationError = true;
+      try {
+        emitToElm("error", JSON.parse(event.data));
+      } catch (err) {
+        emitToElm("error", `Failed to parse status error event: ${String(err)}`);
+      }
+    });
+
     stepStatusSource.onerror = () => {
+      if (stepStatusApplicationError) {
+        stepStatusApplicationError = false;
+        return;
+      }
       emitToElm("error", "Step status stream connection issue");
     };
   }
