@@ -33,7 +33,6 @@ import Data.List (isInfixOf)
 import Data.Text (Text)
 import qualified Data.Text as T
 import NixRepl (NixEvalOutput (..), NixEvalPriority (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval, runNixEvalWithPriority)
-import ProcessLimiter (readCreateProcessWithExitCodeL, readProcessWithExitCodeL)
 import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -44,6 +43,8 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process (
     CreateProcess (..),
     proc,
+    readCreateProcessWithExitCode,
+    readProcessWithExitCode,
  )
 
 data ReadRepoContext = ReadRepoContext
@@ -100,7 +101,7 @@ runNixEvalInRepoWithPriority priority ctx output applyExpr attr =
 
 runNixProcess :: [String] -> IO (Either String String)
 runNixProcess args = do
-    (exitCode, stdout, stderr) <- readProcessWithExitCodeL "nix" args ""
+    (exitCode, stdout, stderr) <- readProcessWithExitCode "nix" args ""
     return $ case exitCode of
         ExitSuccess -> Right stdout
         ExitFailure _ -> Left stderr
@@ -133,11 +134,11 @@ data RepoAccess = ReadOnly | ReadWrite deriving (Eq, Show)
 runGit :: [String] -> IO (ExitCode, String, String)
 runGit args = do
     repoPath <- userRepoPath
-    readCreateProcessWithExitCodeL (proc "git" ("-C" : repoPath : args)) ""
+    readCreateProcessWithExitCode (proc "git" ("-C" : repoPath : args)) ""
 
 runGitIn :: FilePath -> [String] -> IO (ExitCode, String, String)
 runGitIn path args = do
-    readCreateProcessWithExitCodeL (proc "git" ("-C" : path : args)) ""
+    readCreateProcessWithExitCode (proc "git" ("-C" : path : args)) ""
 
 runGitWithSshKey :: FilePath -> FilePath -> [String] -> IO (ExitCode, String, String)
 runGitWithSshKey keyfile path args = do
@@ -145,7 +146,7 @@ runGitWithSshKey keyfile path args = do
     baseEnv <- getEnvironment
     let env_ = ("GIT_SSH_COMMAND", sshCommand) : baseEnv
         process = (proc "git" ("-C" : path : args)){env = Just env_}
-    readCreateProcessWithExitCodeL process ""
+    readCreateProcessWithExitCode process ""
 
 getRemoteUrl :: IO (Maybe Text)
 getRemoteUrl = do

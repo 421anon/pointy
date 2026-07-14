@@ -17,7 +17,7 @@ import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (evaluateJsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
 import OutPaths (scheduleProjectOutPathsWarm, withWriteRepoTransaction)
-import ProcessLimiter (readProcessWithExitCodeL)
+import System.Process (readProcessWithExitCode)
 import Servant (Handler, NoContent (..), throwError)
 import Servant.Server (err400, err500, errBody)
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
@@ -53,7 +53,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
             Nothing -> return ()
         output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)) $ \err -> do
             let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
-            _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
+            _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err
         let cloneNote = maybe "" (\srcId -> " (clone of " ++ show srcId ++ ")") maybeSourceId
         commitAndPushChanges ctx $

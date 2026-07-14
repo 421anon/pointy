@@ -21,8 +21,8 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text, pack)
 import NixUtils (isValidStorePath)
-import ProcessLimiter (readProcessWithExitCodeL)
 import System.Exit (ExitCode (..))
+import System.Process (readProcessWithExitCode)
 import UserRepo (runNix)
 
 data LogSource
@@ -146,7 +146,7 @@ fetchInputLog drv = do
 -- | Output store paths declared by a derivation.
 drvOutputs :: FilePath -> IO [FilePath]
 drvOutputs drv = do
-    (code, out, _) <- readProcessWithExitCodeL "nix-store" ["--query", "--outputs", drv] ""
+    (code, out, _) <- readProcessWithExitCode "nix-store" ["--query", "--outputs", drv] ""
     return $ case code of
         ExitSuccess -> filter (not . null) (lines out)
         _ -> []
@@ -156,7 +156,7 @@ too; filter to .drv suffix to get only build-time dependencies.
 -}
 inputDrvs :: FilePath -> IO [FilePath]
 inputDrvs drv = do
-    (code, out, _) <- readProcessWithExitCodeL "nix-store" ["--query", "--references", drv] ""
+    (code, out, _) <- readProcessWithExitCode "nix-store" ["--query", "--references", drv] ""
     return $ case code of
         ExitSuccess -> filter (".drv" `isSuffixOf`) (lines out)
         _ -> []

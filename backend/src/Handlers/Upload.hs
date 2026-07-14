@@ -15,7 +15,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import OutPaths (withWriteRepoTransaction)
-import ProcessLimiter (readProcessWithExitCodeL)
+import System.Process (readProcessWithExitCode)
 import Servant (Handler, err400, err500, errBody, throwError)
 import Servant.Multipart (FileData (fdFileName, fdPayload), MultipartData (files), Tmp)
 import System.Directory (createDirectoryIfMissing, renameFile)
@@ -41,7 +41,7 @@ uploadHandler stepId multipartData = do
                 tempFilePath = fdPayload file
             renameFile tempFilePath filePath
 
-        (exitCode1, storePathOut, stderr1) <- readProcessWithExitCodeL "nix-store" ["--add-fixed", "--recursive", "sha256", storeRefDir] ""
+        (exitCode1, storePathOut, stderr1) <- readProcessWithExitCode "nix-store" ["--add-fixed", "--recursive", "sha256", storeRefDir] ""
         case exitCode1 of
             ExitFailure _ -> error $ "nix-store --add-fixed failed: " ++ stderr1
             ExitSuccess -> return ()

@@ -13,7 +13,6 @@ library
                      Config,
                      BuildRunner,
                      BuildLog,
-                     ProcessLimiter,
                      UserRepo,
                      NixRepl,
                      OutPaths,

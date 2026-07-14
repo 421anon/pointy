@@ -7,8 +7,8 @@ import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Text as T
 import Nix.Expr.Types (Binding (..), NExpr, NExprF (..), NKeyName (..), VarName (..))
-import ProcessLimiter (readProcessWithExitCodeL)
 import System.Exit (ExitCode (..))
+import System.Process (readProcessWithExitCode)
 
 {- | True iff Nix considers the path a valid store path.
 
@@ -19,7 +19,7 @@ overlay and hide the path even after the host daemon creates it.
 -}
 isValidStorePath :: FilePath -> IO Bool
 isValidStorePath path = do
-    (code, _, _) <- readProcessWithExitCodeL "nix" ["--offline", "path-info", path] ""
+    (code, _, _) <- readProcessWithExitCode "nix" ["--offline", "path-info", path] ""
     return $ case code of
         ExitSuccess -> True
         ExitFailure _ -> False

@@ -25,7 +25,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects)
 import NixUtils (isValidStorePath)
-import ProcessLimiter (readProcessWithExitCodeL)
+import System.Process (readProcessWithExitCode)
 import Servant (Handler, NoContent (..), err404, err500, errBody)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode (..))
@@ -324,7 +324,7 @@ registerGcRootForOutPath outPath = do
     let gcRootDir = home </> ".local" </> "state" </> "pointy" </> "gc-roots"
         gcRootPath = gcRootDir </> takeFileName outPath
     createDirectoryIfMissing True gcRootDir
-    _ <- readProcessWithExitCodeL "nix-store" ["--add-root", gcRootPath, "--realise", outPath] ""
+    _ <- readProcessWithExitCode "nix-store" ["--add-root", gcRootPath, "--realise", outPath] ""
     return ()
 
 stopStepSync :: Int -> Maybe T.Text -> IO ()

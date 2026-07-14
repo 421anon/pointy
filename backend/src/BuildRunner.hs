@@ -23,8 +23,8 @@ import Data.List (foldl', intercalate)
 import qualified Data.Text as T
 import Data.Word (Word64)
 import Numeric (showHex)
-import ProcessLimiter (readProcessWithExitCodeL)
 import System.Exit (ExitCode (..))
+import System.Process (readProcessWithExitCode)
 
 data StepRequirements = StepRequirements
     { ram :: T.Text
@@ -91,7 +91,7 @@ submitAndWait requirements key command = do
 
 queryState :: BuildKey -> IO BuildState
 queryState (BuildKey key) = do
-    (exitCode, stdout, _) <- readProcessWithExitCodeL "squeue" ["-h", "-n", key, "-o", "%T"] ""
+    (exitCode, stdout, _) <- readProcessWithExitCode "squeue" ["-h", "-n", key, "-o", "%T"] ""
     pure $ case exitCode of
         ExitSuccess
             | any isRunningState (lines stdout) -> BRunning
@@ -102,21 +102,21 @@ queryState (BuildKey key) = do
 -- | Job ids of every queued or running job with the given name.
 queryJobIds :: BuildKey -> IO [JobId]
 queryJobIds (BuildKey key) = do
-    (exitCode, stdout, _) <- readProcessWithExitCodeL "squeue" ["-h", "-n", key, "-o", "%i"] ""
+    (exitCode, stdout, _) <- readProcessWithExitCode "squeue" ["-h", "-n", key, "-o", "%i"] ""
     pure $ case exitCode of
         ExitSuccess -> map JobId (filter (not . null) (lines stdout))
         ExitFailure _ -> []
 
 cancel :: BuildKey -> IO ()
 cancel (BuildKey key) = do
-    _ <- readProcessWithExitCodeL "scancel" ["--name=" ++ key] ""
+    _ <- readProcessWithExitCode "scancel" ["--name=" ++ key] ""
     pure ()
 
 submitNewJob :: StepRequirements -> BuildKey -> [String] -> IO ExitCode
 submitNewJob requirements (BuildKey key) command = do
     slurm <- configSlurm <$> (resolveConfigPath >>= loadConfig)
     (exitCode, _, _) <-
-        readProcessWithExitCodeL
+        readProcessWithExitCode
             "sbatch"
             ( [ "--wait"
               , "--parsable"
@@ -138,7 +138,7 @@ submitJob :: StepRequirements -> BuildKey -> [JobId] -> [String] -> IO (Either S
 submitJob requirements (BuildKey key) depJobIds command = do
     slurm <- configSlurm <$> (resolveConfigPath >>= loadConfig)
     (exitCode, stdout, stderr) <-
-        readProcessWithExitCodeL
+        readProcessWithExitCode
             "sbatch"
             ( [ "--parsable"
               , "--job-name=" ++ key

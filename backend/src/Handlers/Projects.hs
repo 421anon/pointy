@@ -20,7 +20,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import qualified Data.Vector as V
 import Network.HTTP.Media ((//))
 import OutPaths (withWriteRepoTransaction)
-import ProcessLimiter (readProcessWithExitCodeL)
+import System.Process (readProcessWithExitCode)
 import Servant (Accept (..), Handler, MimeRender (..), MimeUnrender (..), NoContent (..))
 import Servant.Server (err400, err500, errBody)
 import System.Directory (doesDirectoryExist, listDirectory)
@@ -96,7 +96,7 @@ deleteProjectHandler :: Int -> Handler NoContent
 deleteProjectHandler projectId = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         let outputPath = worktreePath </> "projects" </> show projectId ++ ".nix"
-        _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
+        _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
         commitAndPushChanges ctx $ "Delete project " ++ show projectId
     case result of
         Right _ -> return NoContent
@@ -109,7 +109,7 @@ postProjectHandler (DynamicJson jsonBody) = do
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
         output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx ("#pointy.projects." ++ show projectId)) $ \err -> do
             let outputPath = worktreePath </> "projects" </> show projectId ++ ".nix"
-            _ <- liftIO $ readProcessWithExitCodeL "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
+            _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err
         commitAndPushChanges ctx $ "Create project " ++ show projectId
         return output

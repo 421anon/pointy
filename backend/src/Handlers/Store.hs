@@ -28,7 +28,7 @@ import GHC.Generics (Generic)
 import Handlers.RunStep (buildExtras)
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
-import ProcessLimiter (readProcessWithExitCodeL)
+import System.Process (readProcessWithExitCode)
 import Servant (
     Handler,
     Header,
@@ -160,7 +160,7 @@ readFileChunked path = S.SourceT $ \k ->
 
 getMimeType :: FilePath -> IO (Maybe Text)
 getMimeType path = do
-    (exitCode, output, _) <- readProcessWithExitCodeL "file" ["-b", "-L", "--mime-type", path] ""
+    (exitCode, output, _) <- readProcessWithExitCode "file" ["-b", "-L", "--mime-type", path] ""
     case exitCode of
         ExitSuccess -> pure $ Just (T.strip $ T.pack output)
         ExitFailure _ -> pure Nothing
