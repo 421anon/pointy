@@ -1,9 +1,10 @@
-module Route exposing (CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, parseLineRange, project, toString)
+module Route exposing (ArtifactParams, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, parseLineRange, project, toString)
 
 import Accessors exposing (Prism, prism)
 import Html
 import Html.Attributes as Attr
 import Url exposing (Url)
+import Url.Builder as UrlBuilder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser)
 import Url.Parser.Query as Query
 
@@ -11,6 +12,7 @@ import Url.Parser.Query as Query
 type Route
     = Home
     | Project ProjectParams
+    | Artifact ArtifactParams
     | NotFound
 
 
@@ -19,6 +21,14 @@ type alias ProjectParams =
     , mHighlight : Maybe Highlight
     , mCommit : Maybe String
     , mCompare : Maybe Comparison
+    }
+
+
+type alias ArtifactParams =
+    { projectId : Int
+    , stepId : Int
+    , commit : String
+    , path : List String
     }
 
 
@@ -105,6 +115,21 @@ parser =
                 <?> Query.custom "compareRight" compareTargetParser
                 <?> Query.string "compareRightCommit"
                 <?> Query.string "compareRightMime"
+            )
+        , Parser.map
+            (\projectId stepId commit mPath ->
+                Artifact
+                    { projectId = projectId
+                    , stepId = stepId
+                    , commit = commit
+                    , path = Maybe.map (String.split "/") mPath |> Maybe.withDefault []
+                    }
+            )
+            (Parser.s "artifact"
+                </> Parser.int
+                </> Parser.int
+                </> Parser.string
+                <?> Query.string "path"
             )
         ]
 
@@ -310,6 +335,11 @@ toString route =
 
             else
                 baseUrl ++ "?" ++ String.join "&" queryParts
+
+        Artifact { projectId, stepId, commit, path } ->
+            UrlBuilder.absolute
+                [ "artifact", String.fromInt projectId, String.fromInt stepId, commit ]
+                [ UrlBuilder.string "path" (String.join "/" path) ]
 
         NotFound ->
             "/404"

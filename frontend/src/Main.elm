@@ -101,6 +101,10 @@ applyRouteFromUrl forceRevealHighlight url =
                                         )
                                     |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
+                            Route.Artifact _ ->
+                                Actions.closeStepStatusStream
+                                    |> Flow.seq (Actions.syncCompareFromRoute newRoute)
+
                             Route.Home ->
                                 Actions.closeStepStatusStream
                                     |> Flow.seq (Actions.syncCompareFromRoute newRoute)

@@ -267,9 +267,16 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 externalHtmlUrl =
                     if isHtml then
-                        case mDirCtx of
-                            Just (OutputDir stepId_ commit_) ->
-                                Just (Api.stepFileRawUrl stepId_ (Just commit_) path)
+                        case ( try currentProjectId model, mDirCtx ) of
+                            ( Just projectId, Just (OutputDir stepId_ commit_) ) ->
+                                Just <|
+                                    Route.toString <|
+                                        Route.Artifact
+                                            { projectId = projectId
+                                            , stepId = stepId_
+                                            , commit = commit_
+                                            , path = path
+                                            }
 
                             _ ->
                                 Nothing
@@ -346,7 +353,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 case mDirCtx of
                                     Just (OutputDir stepId_ commit_) ->
                                         Html.img
-                                            [ src (Api.stepFileRawUrl stepId_ (Just commit_) path)
+                                            [ src (Api.stepFileBundleUrl stepId_ commit_ path)
                                             , class "file-image-viewer"
                                             ]
                                             []
@@ -368,7 +375,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         in
                                         Html.div [ class "iframe-zoom-wrapper" ]
                                             [ Html.node "iframe"
-                                                [ src (Api.stepFileRawUrl stepId_ (Just commit_) path)
+                                                [ src (Api.stepFileBundleUrl stepId_ commit_ path)
                                                 , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
                                                 , class "file-html-viewer"
                                                 , id iframeId

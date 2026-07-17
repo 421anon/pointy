@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
+module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
 
 import ApiTypes (DynamicJson (..))
 
@@ -29,7 +29,6 @@ import GHC.Generics (Generic)
 import Handlers.RunStep (buildExtras)
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
-import System.Process (readProcessWithExitCode)
 import Servant (
     Handler,
     Header,
@@ -47,6 +46,7 @@ import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitPath, takeExtension, takeFileName, (</>))
+import System.Process (readProcessWithExitCode)
 import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
 
 import System.IO (IOMode (..), SeekMode (..), hSeek, withBinaryFile)
@@ -97,6 +97,9 @@ stepRawHandler stepId mCommit segments = Tagged $ \_ respond -> do
             let outPathSegments = drop 1 (splitPath (T.unpack outPathText))
                 allSegments = outPathSegments ++ segments
             storeFilesHandler' allSegments respond
+
+stepBundleHandler :: Int -> Text -> [String] -> Tagged Handler Application
+stepBundleHandler stepId commit = stepRawHandler stepId (Just commit)
 
 storeFilesHandler' :: [String] -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 storeFilesHandler' segments respond = do

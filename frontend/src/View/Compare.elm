@@ -359,7 +359,7 @@ rawUrl : CompareSelection -> String
 rawUrl sel =
     case sel.source of
         FromOutput commit_ ->
-            Api.stepFileRawUrl sel.recordId (Just commit_) sel.path
+            Api.stepFileBundleUrl sel.recordId commit_ sel.path
 
         FromSrc ->
             Api.srcFileDownloadUrl sel.recordId sel.path

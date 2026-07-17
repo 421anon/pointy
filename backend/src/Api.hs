@@ -210,6 +210,15 @@ type RawStepFile =
         :> CaptureAll "segments" String
         :> Raw
 
+type BundleStepFile =
+    "step-files"
+        :> "bundle"
+        :> Description "Serves a raw file within an immutable step-output bundle."
+        :> Capture "step-id" Int
+        :> Capture "commit" Text
+        :> CaptureAll "segments" String
+        :> Raw
+
 type StepFileExtras =
     "step-files"
         :> "extras"
@@ -321,6 +330,7 @@ type API =
         :<|> DownloadStepFile
         :<|> StepFileSeek
         :<|> RawStepFile
+        :<|> BundleStepFile
         :<|> StepFileExtras
         :<|> ListSrcFiles
         :<|> DownloadSrcFile

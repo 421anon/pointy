@@ -36,7 +36,7 @@ import Handlers.SrcFiles (downloadSrcFilesHandler, getUserRepoInfoHandler, listS
 import Handlers.StatusStream (stepStatusStreamHandler)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
-import Handlers.Store (stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
+import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
@@ -58,6 +58,7 @@ server =
         :<|> stepDownloadHandler
         :<|> stepSeekHandler
         :<|> stepRawHandler
+        :<|> stepBundleHandler
         :<|> stepExtrasHandler
         :<|> listSrcFilesHandler
         :<|> downloadSrcFilesHandler

@@ -25,8 +25,8 @@ module Api.Api exposing
     , saveProject
     , saveRecord
     , srcFileDownloadUrl
+    , stepFileBundleUrl
     , stepFileDownloadUrl
-    , stepFileRawUrl
     , stopStep
     , unassignRecordFromProject
     , uploadFiles
@@ -117,9 +117,9 @@ stepFileDownloadUrl stepId commit filePath =
         (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
 
 
-stepFileRawUrl : Int -> Maybe String -> List String -> String
-stepFileRawUrl stepId commit filePath =
-    UrlBuilder.absolute ([ "backend", "step-files", "raw" ] ++ filePath) (stepFileQuery stepId commit)
+stepFileBundleUrl : Int -> String -> List String -> String
+stepFileBundleUrl stepId commit filePath =
+    UrlBuilder.absolute ([ "backend", "step-files", "bundle", String.fromInt stepId, commit ] ++ filePath) []
 
 
 srcFileDownloadUrl : Int -> List String -> String
