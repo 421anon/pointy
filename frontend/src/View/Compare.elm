@@ -188,8 +188,19 @@ derivationParamsFor model sel =
                 Model.getStepConfig model
                     |> ApiData.toMaybe
                     |> Maybe.andThen (Dict.get step.type_)
-                    |> Maybe.andThen (\entry -> try Shadow.derivation entry.stepType)
-                    |> Maybe.map (\( argTypes, _ ) -> ( step, argTypes ))
+                    |> Maybe.andThen
+                        (\entry ->
+                            case entry.stepType of
+                                Shadow.Derivation argTypes _ ->
+                                    Just argTypes
+
+                                Shadow.Download ->
+                                    Just Shadow.downloadArgs
+
+                                _ ->
+                                    Nothing
+                        )
+                    |> Maybe.map (\argTypes -> ( step, argTypes ))
             )
 
 

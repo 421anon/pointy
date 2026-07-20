@@ -20,12 +20,12 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import qualified Data.Vector as V
 import Network.HTTP.Media ((//))
 import OutPaths (withWriteRepoTransaction)
-import System.Process (readProcessWithExitCode)
 import Servant (Accept (..), Handler, MimeRender (..), MimeUnrender (..), NoContent (..))
 import Servant.Server (err400, err500, errBody)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeBaseName, (</>))
+import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonInRepo, withReadRepoTransaction)
 
@@ -51,11 +51,14 @@ getProjectsHandler :: Maybe T.Text -> Handler DynamicJson
 getProjectsHandler commit = do
     result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
         let targetCommit = maybe commitHash T.unpack commit
-        output <- runNixEvalJsonInRepo (ReadRepoContext repoPath targetCommit) "#pointy.projects"
+            targetCtx = ReadRepoContext repoPath targetCommit
+        output <- runNixEvalJsonInRepo targetCtx "#pointy.projects"
         mtimes <- liftIO $ readRecordMtimes repoPath targetCommit
         case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of
             Left err -> ExceptT $ return $ Left $ "decoding #pointy.projects failed: " ++ err
-            Right value -> return $ encode (annotateRecordMtimes mtimes value)
+            Right value ->
+                let annotated = annotateRecordMtimes mtimes value
+                 in return $ encode annotated
     case result of
         Right output -> return (DynamicJson output)
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}

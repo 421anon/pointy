@@ -432,6 +432,10 @@ stepArgs stepType_ =
                         (Decode.succeed Dict.empty)
                     )
 
+        Download ->
+            Decode.field "url" Decode.string
+                |> Decode.map (\url_ -> Dict.singleton "url" (TStringValue url_))
+
 
 argType : Decoder ArgType
 argType =
@@ -465,6 +469,8 @@ stepType =
             (maybe (Decode.field "allowedExtensions" (Decode.list Decode.string))
                 |> Decode.map FileUpload
             )
+        , Decode.field "download" (Decode.dict Decode.value)
+            |> Decode.map (always Download)
         ]
 
 

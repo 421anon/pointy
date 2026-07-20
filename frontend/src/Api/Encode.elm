@@ -72,6 +72,14 @@ stepArgsValue stepType args =
                 |> Dict.fromList
                 |> Encode.dict identity identity
 
+        Download ->
+            case Dict.get "url" args of
+                Just (TStringValue str) ->
+                    Encode.object [ ( "url", Encode.string str ) ]
+
+                _ ->
+                    Encode.object []
+
 
 stepValue : StepType -> StepRecord -> Encode.Value
 stepValue stepType record =

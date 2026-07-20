@@ -22,6 +22,7 @@ library
                      Agent.Git,
                      Agent.Runner,
                      Agent.WarmSession,
+                     Handlers.Download,
                      Handlers.Store,
                      Handlers.SrcFiles,
                      Handlers.CommitHash,
@@ -74,6 +75,7 @@ library
                    data-fix,
                    mtl,
                    temporary,
+                   network-uri,
                    filelock
     hs-source-dirs: src
     default-language: Haskell2010
@@ -113,3 +115,4 @@ executable generate-openapi
                    bytestring
     hs-source-dirs: app
     default-language: Haskell2010
+

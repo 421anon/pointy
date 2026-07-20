@@ -22,6 +22,41 @@ import View.Lib exposing (viewLoading, viewPage, viewSearchBox)
 import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
+viewRunStop : TableSpec.TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewRunStop spec r =
+    case r.id of
+        Just id ->
+            let
+                status =
+                    TableSpec.getStatus spec r
+
+                isRunning =
+                    status
+                        |> ApiData.toMaybe
+                        |> (==) (Just Model.StatusRunning)
+
+                canRun =
+                    case status of
+                        ApiData.Loading _ ->
+                            False
+
+                        ApiData.Success Model.StatusSuccess ->
+                            False
+
+                        ApiData.Success Model.StatusRunning ->
+                            False
+
+                        _ ->
+                            True
+            in
+            [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
+            , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
+            ]
+
+        Nothing ->
+            []
+
+
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
 viewProject model proj =
     let
@@ -183,43 +218,19 @@ viewSection model sectionName entry steps =
 
                     Derivation _ _ ->
                         []
+
+                    Download ->
+                        []
         , specificRecordActions =
             \r ->
                 let
                     runActions =
                         case stepType of
                             Derivation _ _ ->
-                                case r.id of
-                                    Just id ->
-                                        let
-                                            status =
-                                                TableSpec.getStatus spec r
+                                viewRunStop spec r
 
-                                            isRunning =
-                                                status
-                                                    |> ApiData.toMaybe
-                                                    |> (==) (Just Model.StatusRunning)
-
-                                            canRun =
-                                                case status of
-                                                    ApiData.Loading _ ->
-                                                        False
-
-                                                    ApiData.Success Model.StatusSuccess ->
-                                                        False
-
-                                                    ApiData.Success Model.StatusRunning ->
-                                                        False
-
-                                                    _ ->
-                                                        True
-                                        in
-                                        [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-                                        , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
-                                        ]
-
-                                    Nothing ->
-                                        []
+                            Download ->
+                                viewRunStop spec r
 
                             FileUpload _ ->
                                 []
@@ -239,6 +250,9 @@ viewSection model sectionName entry steps =
                                             [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id ]
 
                                 Derivation _ _ ->
+                                    []
+
+                                Download ->
                                     []
                 in
                 uploadActions ++ runActions

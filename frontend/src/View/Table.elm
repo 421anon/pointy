@@ -29,7 +29,7 @@ import Markdown
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), tEnumValue, tListValue, tRecordValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tEnumValue, tListValue, tRecordValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Scroll
@@ -1692,6 +1692,9 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
             Derivation args _ ->
                 List.map viewField (Dict.toList args)
+
+            Download ->
+                List.map viewField (Dict.toList downloadArgs)
 
 
 viewStepNoteField : Model -> Bool -> String -> Html (Flow Model ())

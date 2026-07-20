@@ -107,11 +107,21 @@ type alias ArgType =
 type StepType
     = FileUpload (Maybe (List String))
     | Derivation (Dict String ArgType) WithSrcFiles
+    | Download
 
 
 type WithSrcFiles
     = WithSrcFiles
     | WithoutSrcFiles
+
+
+downloadArgs : Dict String ArgType
+downloadArgs =
+    Dict.singleton "url"
+        { description = "URL to fetch into the Nix store"
+        , type_ = TString TextField Nothing
+        , displayName = Just "URL"
+        }
 
 
 derivation : Prism ls StepType ( Dict String ArgType, WithSrcFiles ) x y

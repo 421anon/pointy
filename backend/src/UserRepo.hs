@@ -15,6 +15,7 @@ module UserRepo (
     runGitWithSshKey,
     ReadRepoContext (..),
     WriteRepoContext (..),
+    RepoContext,
     withReadRepoTransaction,
     withWriteRepoTransactionRaw,
     withUserRepoExclusive,
