@@ -45,8 +45,6 @@ import Network.Wai.Parse (setMaxRequestNumFiles)
 import OutPaths (warmProjectOutPaths)
 import Servant hiding (runHandler)
 import Servant.Multipart
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
-import System.FilePath ((</>))
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo, fetchRepo)
 
@@ -232,28 +230,15 @@ corsPolicy req = case pathInfo req of
     _ -> Nothing
 
 app :: IO Application
-app = do
-    multipartOpts <- customMultipartOptions
-    let context = multipartOpts :. EmptyContext
-    return $ cors corsPolicy $ serveWithContext (Proxy :: Proxy API) context server
+app =
+    let context = multipartOptions :. EmptyContext
+     in pure $ cors corsPolicy $ serveWithContext (Proxy :: Proxy API) context server
 
-customMultipartOptions :: IO (MultipartOptions Tmp)
-customMultipartOptions = do
-    homeDir <- getHomeDirectory
-    let tmpDir = homeDir </> "tmp"
-        tmpBackendOpts =
-            TmpBackendOptions
-                { getTmpDir = return tmpDir
-                , filenamePat = "upload_*.tmp"
-                }
-        opts = defaultMultipartOptions (Proxy :: Proxy Tmp)
+multipartOptions :: MultipartOptions Tmp
+multipartOptions =
+    let opts = defaultMultipartOptions (Proxy :: Proxy Tmp)
         parserOpts = setMaxRequestNumFiles 100 (generalOptions opts)
-    return $ opts{generalOptions = parserOpts, backendOptions = tmpBackendOpts}
-
-ensureStoreDirectories :: IO ()
-ensureStoreDirectories = do
-    homeDir <- getHomeDirectory
-    createDirectoryIfMissing True (homeDir </> "tmp")
+     in opts{generalOptions = parserOpts}
 
 main :: IO ()
 main = do
@@ -265,8 +250,6 @@ main = do
     ensureUserRepo config
     putStrLn "Resetting stale agent runner state..."
     sweepStaleRunningSessions
-    putStrLn "Ensuring store directories exist..."
-    ensureStoreDirectories
 
     putStrLn "Fetching repository updates..."
     fetchResult <- runExceptT fetchRepo
