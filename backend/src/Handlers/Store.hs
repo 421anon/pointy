@@ -29,6 +29,7 @@ import GHC.Generics (Generic)
 import Handlers.RunStep (buildExtras)
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
+import OutPaths (lookupCachedStepOutPath)
 import Servant (
     Handler,
     Header,
@@ -72,11 +73,16 @@ resolveStepOutPath stepId mCommit = do
             case result of
                 Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveStepOutPath: " ++ err))}
                 Right h -> return h
-    let ctx = ReadRepoContext repoPath commitHash
-    result <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
-    case result of
-        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
-        Right path -> return (T.pack path)
+    -- Consult the project outPath cache first (read-only, non-blocking).
+    mCached <- liftIO $ lookupCachedStepOutPath (T.pack commitHash) stepId
+    case mCached of
+        Just path -> return path
+        Nothing -> do
+            let ctx = ReadRepoContext repoPath commitHash
+            result <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
+            case result of
+                Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
+                Right path -> return (T.pack path)
 
 stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler [DirEntry]
 stepListHandler stepId mCommit mRel = do
