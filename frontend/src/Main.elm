@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Accessors exposing (each, get, has, just, set, try)
 import Actions
-import Api.ApiData exposing (success)
+import Api.ApiData exposing (ApiData(..), success)
 import Browser.Events
 import Browser.Navigation as Nav
 import Dict
@@ -11,7 +11,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig)
+import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
 import Ports
 import Route
 import Specs
@@ -38,25 +38,44 @@ init flags url key =
             Route.fromUrl url
     in
     ( initialModel key initialRoute flags
-    , Actions.loadUserRepoInfo
+    , case initialRoute of
+        Route.Artifact _ ->
+            Flow.pure ()
+
+        _ ->
+            initializeWorkspace
+                |> Flow.seq
+                    (Flow.forAll route
+                        (\currentRoute ->
+                            Flow.when (currentRoute == initialRoute) (applyRoute True initialRoute)
+                        )
+                    )
+    )
+
+
+initializeWorkspace : Flow Model ()
+initializeWorkspace =
+    Actions.loadUserRepoInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
-        |> Flow.seq (applyRouteFromUrl True url)
-    )
 
 
 applyRouteFromUrl : Bool -> Url -> Flow Model ()
 applyRouteFromUrl forceRevealHighlight url =
-    let
-        newRoute =
-            Route.fromUrl url
-    in
+    applyRoute forceRevealHighlight (Route.fromUrl url)
+
+
+applyRoute : Bool -> Route.Route -> Flow Model ()
+applyRoute forceRevealHighlight newRoute =
     Flow.get
         |> Flow.andThen
             (\model ->
                 let
+                    currentRoute =
+                        get route model
+
                     mOldCommit =
                         try (route << Route.project << mCommit << just) model
 
@@ -65,52 +84,82 @@ applyRouteFromUrl forceRevealHighlight url =
 
                     shouldRevealHighlight =
                         forceRevealHighlight
-                            || Route.navigationTarget (get route model)
+                            || Route.navigationTarget currentRoute
                             /= Route.navigationTarget newRoute
+
+                    workspaceNotStarted =
+                        case get userRepoInfo model of
+                            NotAsked ->
+                                True
+
+                            _ ->
+                                False
+
+                    routeNeedsWorkspace =
+                        case newRoute of
+                            Route.Home ->
+                                True
+
+                            Route.Project _ ->
+                                True
+
+                            _ ->
+                                False
+
+                    shouldInitializeWorkspace =
+                        workspaceNotStarted && routeNeedsWorkspace
 
                     isDragging =
                         has (gutterDrag << just) model
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq
-                        (Flow.setAll
-                            (projects << records << success << each << projectStepRecords << runState)
-                            (Api.ApiData.loading Nothing)
-                            |> Flow.seq (Flow.over (projects << records) Api.ApiData.toLoading)
-                            |> Flow.seq (Flow.over commitHash Api.ApiData.toLoading)
-                            |> Flow.seq Actions.loadStepConfig
-                            |> Flow.seq Actions.loadPresets
-                            |> Flow.seq Actions.loadProjects
-                            |> Flow.when (mOldCommit /= mNewCommit)
+                        (if shouldInitializeWorkspace then
+                            initializeWorkspace
+
+                         else
+                            Flow.setAll
+                                (projects << records << success << each << projectStepRecords << runState)
+                                (Api.ApiData.loading Nothing)
+                                |> Flow.seq (Flow.over (projects << records) Api.ApiData.toLoading)
+                                |> Flow.seq (Flow.over commitHash Api.ApiData.toLoading)
+                                |> Flow.seq Actions.loadStepConfig
+                                |> Flow.seq Actions.loadPresets
+                                |> Flow.seq Actions.loadProjects
+                                |> Flow.when (mOldCommit /= mNewCommit)
                         )
                     |> Flow.seq
-                        (case newRoute of
-                            Route.Project { projectId, mHighlight, mCommit } ->
-                                (Flow.async <| Actions.listenAndProcessStepStatus projectId mCommit)
-                                    |> Flow.seq
-                                        (case mHighlight of
-                                            Just highlight ->
-                                                if isDragging || not shouldRevealHighlight then
-                                                    Flow.pure ()
+                        (Flow.forAll route
+                            (\currentRoute_ ->
+                                Flow.when (currentRoute_ == newRoute) <|
+                                    case newRoute of
+                                        Route.Project { projectId, mHighlight, mCommit } ->
+                                            (Flow.async <| Actions.listenAndProcessStepStatus projectId mCommit)
+                                                |> Flow.seq
+                                                    (case mHighlight of
+                                                        Just highlight ->
+                                                            if isDragging || not shouldRevealHighlight then
+                                                                Flow.pure ()
 
-                                                else
-                                                    Actions.openHighlightedEntry highlight
+                                                            else
+                                                                Actions.openHighlightedEntry highlight
 
-                                            Nothing ->
-                                                Flow.pure ()
-                                        )
-                                    |> Flow.seq (Actions.syncCompareFromRoute newRoute)
+                                                        Nothing ->
+                                                            Flow.pure ()
+                                                    )
+                                                |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
-                            Route.Artifact _ ->
-                                Actions.closeStepStatusStream
-                                    |> Flow.seq (Actions.syncCompareFromRoute newRoute)
+                                        Route.Artifact _ ->
+                                            Actions.closeStepStatusStream
+                                                |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
-                            Route.Home ->
-                                Actions.closeStepStatusStream
-                                    |> Flow.seq (Actions.syncCompareFromRoute newRoute)
+                                        Route.Home ->
+                                            Actions.closeStepStatusStream
+                                                |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
-                            Route.NotFound ->
-                                Actions.syncCompareFromRoute newRoute
+                                        Route.NotFound ->
+                                            Actions.syncCompareFromRoute newRoute
+                            )
                         )
             )
 
