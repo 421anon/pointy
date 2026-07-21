@@ -288,14 +288,15 @@ replayStepStatusBuffer =
             )
 
 
-applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-applyStatusSnapshot snapshotCommit newStatus rs =
+applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStepStatus snapshotCommit status_ rs =
     let
         collapsedDirectoryView =
             { children = NotAsked, expanded = False, extras = NotAsked }
 
         current =
-            ApiData.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView } rs
+            ApiData.toMaybe rs
+                |> Maybe.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView }
 
         directoryView_ =
             if current.commit == snapshotCommit then
@@ -304,7 +305,38 @@ applyStatusSnapshot snapshotCommit newStatus rs =
             else
                 collapsedDirectoryView
     in
-    Success { current | commit = snapshotCommit, status = Success newStatus, directoryView = directoryView_ }
+    Success { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
+
+
+applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStatusSnapshot snapshotCommit newStatus rs =
+    let
+        pendingRun =
+            has
+                (success
+                    << where_ (.commit >> (==) snapshotCommit)
+                    << status
+                    << where_ ((==) (Loading (Just StatusRunning)))
+                )
+                rs
+    in
+    -- A save broadcasts its pre-run status asynchronously. Keep the pending marker
+    -- until a terminal run status arrives so that stale save snapshots cannot win.
+    if pendingRun && (newStatus == StatusNotStarted || newStatus == StatusRunning) then
+        rs
+
+    else
+        applyStepStatus snapshotCommit (Success newStatus) rs
+
+
+setLocalStepStatus : An_Optic pr ls Model (Table StepRecord) -> Int -> ApiData Status -> Flow Model ()
+setLocalStepStatus table stepId status_ =
+    Flow.try (commitHash << success)
+        (Maybe.unwrap (Flow.pure ())
+            (\currentCommit ->
+                Flow.over (remkT table << recordById stepId << runState) (applyStepStatus currentCommit status_)
+            )
+        )
 
 
 loadUserRepoInfo : Flow Model ()
@@ -830,8 +862,8 @@ runStep spec id =
         table =
             TableSpec.getLens spec
 
-        setStatus status =
-            Flow.setAll (statusAt table id) status
+        setStatus =
+            setLocalStepStatus table id
     in
     Flow.get
         |> Flow.andThen
@@ -861,7 +893,7 @@ runStep spec id =
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
-            (\_ -> setStatus (ApiData.loading <| Just (StatusFailure Nothing)))
+            (\_ -> setStatus (Success (StatusFailure Nothing)))
 
 
 stopStep : StepSpec -> Int -> Flow Model ()
@@ -870,8 +902,8 @@ stopStep spec id =
         table =
             TableSpec.getLens spec
 
-        setStatus status =
-            Flow.setAll (statusAt table id) status
+        setStatus =
+            setLocalStepStatus table id
     in
     Flow.get
         |> Flow.andThen
@@ -880,12 +912,12 @@ stopStep spec id =
                     mCommit_ =
                         try (route << Route.project << mCommit << just) model
                 in
-                setStatus (ApiData.loading <| Just StatusRunning)
+                setStatus (Success StatusRunning)
                     |> Flow.seq (callApi void (Api.stopStep id mCommit_))
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
-            (\_ -> setStatus (ApiData.loading <| Just (StatusFailure Nothing)))
+            (\_ -> setStatus (Success (StatusFailure Nothing)))
 
 
 setAddMode : A_Traversal s (Table (BaseRecord a)) -> BaseRecord a -> AddMode -> Flow s ()

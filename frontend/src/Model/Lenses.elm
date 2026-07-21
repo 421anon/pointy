@@ -11,7 +11,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, SeekWindow, Status, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, SeekWindow, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), ProjectParams, Route(..))
 import Time
@@ -523,11 +523,6 @@ status =
 runState : Lens ls { a | runState : b } b x y
 runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
-
-
-statusAt : An_Optic pr ls Model (Table StepRecord) -> Int -> Traversal Model (ApiData Status) x y
-statusAt lens recordId_ =
-    remkT lens << recordById recordId_ << runState << success << status
 
 
 projectStepRecords : Traversal ProjectRecord StepRecord x y
