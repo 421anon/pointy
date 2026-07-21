@@ -177,14 +177,15 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
 
     -- Write transaction.
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+        stepId <- saveStep ctx Nothing (unDynamicJson finalBody)
+        liftIO $ copyClonedSrcFiles worktreePath maybeSourceId stepId
+        _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
+
         -- Re-discover templates under the write lock; abort if classification changed.
         templatesW <- discoverDownloadTemplates ctx
         let isDownloadW = maybe False (\t -> Set.member t templatesW) mReqType
         when (isDownload /= isDownloadW) $
             throwError "Step kind classification changed; retry"
-        stepId <- saveStep ctx Nothing (unDynamicJson finalBody)
-        liftIO $ copyClonedSrcFiles worktreePath maybeSourceId stepId
-        _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
         case maybeProjectId of
             Just projectId -> assignRecordToProject ctx projectId stepId
             Nothing -> return ()
