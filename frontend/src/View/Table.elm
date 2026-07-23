@@ -1038,7 +1038,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                            )
 
                 fieldHasChanged =
-                    not readOnly && fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                    not readOnly && paramName /= "downloadedAt" && fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
 
                 buildListField listLens tagStrings addTag =
                     listField
@@ -1219,7 +1219,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                     , onInput = Flow.modify << set paramLens << Just << TStringValue
                                     , hasChanged = fieldHasChanged
-                                    , readOnly = readOnly
+                                    , readOnly = readOnly || paramName == "downloadedAt"
                                     , id = paramName ++ "-input"
                                     }
 
@@ -1694,7 +1694,14 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 List.map viewField (Dict.toList args)
 
             Download ->
-                List.map viewField (Dict.toList downloadArgs)
+                let
+                    showDownloadedAt =
+                        Maybe.isJust (try (argsLens << key "downloadedAt") model)
+                in
+                downloadArgs
+                    |> Dict.toList
+                    |> List.filter (\( paramName, _ ) -> paramName /= "downloadedAt" || showDownloadedAt)
+                    |> List.map viewField
 
 
 viewStepNoteField : Model -> Bool -> String -> Html (Flow Model ())

@@ -117,11 +117,20 @@ type WithSrcFiles
 
 downloadArgs : Dict String ArgType
 downloadArgs =
-    Dict.singleton "url"
-        { description = "URL to fetch into the Nix store"
-        , type_ = TString TextField Nothing
-        , displayName = Just "URL"
-        }
+    Dict.fromList
+        [ ( "url"
+          , { description = "URL to fetch"
+            , type_ = TString TextField Nothing
+            , displayName = Just "URL"
+            }
+          )
+        , ( "downloadedAt"
+          , { description = "UTC timestamp when the URL was downloaded"
+            , type_ = TString TextField Nothing
+            , displayName = Just "Downloaded at"
+            }
+          )
+        ]
 
 
 derivation : Prism ls StepType ( Dict String ArgType, WithSrcFiles ) x y

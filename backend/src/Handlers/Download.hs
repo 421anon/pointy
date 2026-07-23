@@ -3,7 +3,7 @@
 {- | Download-kind step support: URL prefetch and hash injection.
 
 The browser sends @args.url@ as a top-level template option.  The backend
-prefetches the URL, then injects @args.downloaded = { url = args.url; hash }@
+prefetches the URL, then injects @args.downloaded = { url = args.url; hash; downloadedAt? }@
 so the existing stdlib resolver works unchanged.
 
 Download-step detection uses @#pointy.stepConfig.\<template\>.type.download@
@@ -14,8 +14,9 @@ module Handlers.Download (
     prefetchFile,
     extractDownloadUrl,
     extractDownloadHash,
+    extractDownloadedAt,
     extractReqType,
-    injectDownloadHash,
+    injectDownloaded,
     validateHttpUrl,
 )
 where
@@ -32,6 +33,8 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import System.Exit (ExitCode (..))
 import System.Process (readProcessWithExitCode)
@@ -70,16 +73,17 @@ newtype PrefetchResult = PrefetchResult Text
 instance FromJSON PrefetchResult where
     parseJSON = withObject "PrefetchResult" $ \o -> do
         h <- o .: "hash"
-        when (T.null h) $ fail "prefetch-file returned empty hash"
+        when (T.null h) $ fail "Download produced empty hash"
         unless ("sha256-" `T.isPrefixOf` h) $
             fail $
-                "prefetch-file hash missing sha256- prefix: " ++ T.unpack h
+                "Download hash missing sha256- prefix: " ++ T.unpack h
         return $ PrefetchResult h
 
 {- | Run @nix store prefetch-file --json --hash-type sha256 \<url\>@ using
-process arguments (never a shell).  Returns the validated hash on success.
+process arguments (never a shell).  Returns the validated hash and the
+current UTC time formatted as RFC 3339 on success.
 -}
-prefetchFile :: Text -> IO (Either String Text)
+prefetchFile :: Text -> IO (Either String (Text, Text))
 prefetchFile url = do
     (exitCode, stdout', stderr) <-
         readProcessWithExitCode
@@ -87,14 +91,17 @@ prefetchFile url = do
             ["store", "prefetch-file", "--json", "--hash-type", "sha256", T.unpack url]
             ""
     case exitCode of
-        ExitFailure _ ->
-            return $ Left $ "nix store prefetch-file failed: " ++ stderr
+        ExitFailure code -> do
+            putStrLn $ "download command failed with exit code " ++ show code ++ ": " ++ stderr
+            return $ Left "Download failed"
         ExitSuccess ->
             case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack stdout'))) of
                 Left err ->
-                    return $ Left $ "Failed to parse prefetch-file JSON output: " ++ err
-                Right (PrefetchResult h) ->
-                    return $ Right h
+                    return $ Left $ "Failed to parse download result: " ++ err
+                Right (PrefetchResult h) -> do
+                    now <- getCurrentTime
+                    let ts = T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" now)
+                    return $ Right (h, ts)
 
 -----------------------------------------------------------------------------
 -- Step-config classification
@@ -150,6 +157,17 @@ extractDownloadHash val = do
     String h <- KM.lookup "hash" downloaded
     return h
 
+{- | Extract @args.downloaded.downloadedAt@ from a step JSON value.
+Returns 'Nothing' for legacy records that lack the timestamp field.
+-}
+extractDownloadedAt :: Value -> Maybe Text
+extractDownloadedAt val = do
+    Object obj <- Just val
+    Object args <- KM.lookup "args" obj
+    Object downloaded <- KM.lookup "downloaded" args
+    String ts <- KM.lookup "downloadedAt" downloaded
+    return ts
+
 -- | Extract the @type@ field from a step JSON value.
 extractReqType :: Value -> Maybe Text
 extractReqType (Object o) = case KM.lookup "type" o of
@@ -157,24 +175,32 @@ extractReqType (Object o) = case KM.lookup "type" o of
     _ -> Nothing
 extractReqType _ = Nothing
 
-{- | Inject a trusted hash by reading the canonical @args.url@ and
-constructing @args.downloaded = { url = args.url; hash }@.
+{- | Inject trusted download provenance by reading the canonical @args.url@ and
+constructing @args.downloaded = { url = args.url; hash; downloadedAt? }@.
 
 Any pre-existing @args.downloaded@ from the client is replaced entirely
-so that client-supplied hash values or extra fields are never preserved.
+so that client-supplied hash values, timestamps, or extra fields are
+never preserved.  @downloadedAt@ is omitted when 'Nothing' (legacy
+records) and formatted as UTC RFC 3339 when present.
 -}
-injectDownloadHash :: Value -> Text -> Value
-injectDownloadHash val hash = case val of
+injectDownloaded :: Value -> Text -> Maybe Text -> Value
+injectDownloaded val hash mTs = case val of
     Object obj ->
         let argsKey = AK.fromText "args"
             urlKey = AK.fromText "url"
             downloadedKey = AK.fromText "downloaded"
             hashKey = AK.fromText "hash"
+            atKey = AK.fromText "downloadedAt"
+            tsField = case mTs of
+                Just ts -> [(atKey, String ts)]
+                Nothing -> []
          in case KM.lookup argsKey obj of
                 Just (Object args) ->
                     case KM.lookup urlKey args of
                         Just urlVal ->
-                            let newDownloaded = KM.fromList [(urlKey, urlVal), (hashKey, String hash)]
+                            let newDownloaded =
+                                    KM.fromList $
+                                        [(urlKey, urlVal), (hashKey, String hash)] ++ tsField
                                 newArgs = KM.insert downloadedKey (Object newDownloaded) args
                              in Object (KM.insert argsKey (Object newArgs) obj)
                         _ -> val

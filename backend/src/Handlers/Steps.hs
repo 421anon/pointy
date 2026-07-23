@@ -15,7 +15,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extractDownloadUrl, extractReqType, injectDownloadHash, prefetchFile, validateHttpUrl)
+import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extractDownloadUrl, extractDownloadedAt, extractReqType, injectDownloaded, prefetchFile, validateHttpUrl)
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (evaluateJsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
@@ -32,10 +32,11 @@ import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChang
 -- Internal helpers
 -----------------------------------------------------------------------------
 
-{- | Validate a URL then prefetch it, returning the Nix store hash.
-Errors are thrown as 400s directly in the Handler monad.
+{- | Validate a URL then prefetch it, returning the trusted hash and
+download timestamp (RFC 3339).  Errors are thrown as 400s directly in the
+Handler monad.
 -}
-prefetchDownloadUrl :: T.Text -> Handler T.Text
+prefetchDownloadUrl :: T.Text -> Handler (T.Text, T.Text)
 prefetchDownloadUrl url = do
     case validateHttpUrl url of
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack err}
@@ -43,7 +44,7 @@ prefetchDownloadUrl url = do
             result <- liftIO $ prefetchFile validUrl
             case result of
                 Left err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack err}
-                Right hash -> return hash
+                Right (hash, ts) -> return (hash, ts)
 
 -----------------------------------------------------------------------------
 -- PATCH /api/steps/:id'
@@ -66,7 +67,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
         isDownload = maybe False (\t -> Set.member t templates') mReqType
 
     -- Prefetch phase: only for downloads — evaluate existing step then prefetch.
-    (mHash, mExistingVal) <-
+    (mDownloaded, mExistingVal) <-
         if isDownload
             then do
                 case extractDownloadUrl bodyValue of
@@ -84,18 +85,23 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
 
                         let mOldUrl = extractDownloadUrl existingVal
                             mOldHash = extractDownloadHash existingVal
-                        h <-
+                            mOldDownloadedAt = extractDownloadedAt existingVal
+                        (h, mTs) <-
                             if Just newUrl == mOldUrl
                                 then case mOldHash of
-                                    Just h -> return h
-                                    Nothing -> prefetchDownloadUrl newUrl
-                                else prefetchDownloadUrl newUrl
-                        return (Just h, Just existingVal)
+                                    Just h -> return (h, mOldDownloadedAt)
+                                    Nothing -> do
+                                        (h', ts') <- prefetchDownloadUrl newUrl
+                                        return (h', Just ts')
+                                else do
+                                    (h', ts') <- prefetchDownloadUrl newUrl
+                                    return (h', Just ts')
+                        return (Just (h, mTs), Just existingVal)
             else return (Nothing, Nothing)
 
-    -- Build the final request body, injecting the hash when needed.
-    let finalBody = case mHash of
-            Just h -> DynamicJson (encode (injectDownloadHash bodyValue h))
+    -- Build the final request body, injecting the provenance when needed.
+    let finalBody = case mDownloaded of
+            Just (h, mTs) -> DynamicJson (encode (injectDownloaded bodyValue h mTs))
             Nothing -> DynamicJson jsonBody
 
     -- Write transaction.
@@ -118,6 +124,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                 when
                     ( extractDownloadUrl existingVal /= extractDownloadUrl currentVal
                         || extractDownloadHash existingVal /= extractDownloadHash currentVal
+                        || extractDownloadedAt existingVal /= extractDownloadedAt currentVal
                     )
                     $ throwError "Step changed underfoot; retry"
             Nothing -> return ()
@@ -128,7 +135,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
 
         -- For download steps: evaluate the saved definition to verify the
         -- hash is valid and no mismatch crept in.
-        case mHash of
+        case mDownloaded of
             Just _ -> do
                 _ <- runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)
                 return ()
@@ -162,17 +169,19 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
         isDownload = maybe False (\t -> Set.member t templates') mReqType
 
     -- Prefetch phase: download the URL before the write transaction.
-    mHash <-
+    mDownloaded <-
         if isDownload
             then do
                 case extractDownloadUrl bodyValue of
                     Nothing -> throwError $ err400{errBody = "Download step requires args.url"}
-                    Just url -> Just <$> prefetchDownloadUrl url
+                    Just url -> do
+                        (h, ts) <- prefetchDownloadUrl url
+                        return $ Just (h, Just ts)
             else return Nothing
 
-    -- Build the final request body, injecting the hash when needed.
-    let finalBody = case mHash of
-            Just h -> DynamicJson (encode (injectDownloadHash bodyValue h))
+    -- Build the final request body, injecting the provenance when needed.
+    let finalBody = case mDownloaded of
+            Just (h, mTs) -> DynamicJson (encode (injectDownloaded bodyValue h mTs))
             Nothing -> DynamicJson jsonBody
 
     -- Write transaction.

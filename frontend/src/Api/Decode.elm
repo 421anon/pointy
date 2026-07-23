@@ -433,8 +433,19 @@ stepArgs stepType_ =
                     )
 
         Download ->
-            Decode.field "url" Decode.string
-                |> Decode.map (\url_ -> Dict.singleton "url" (TStringValue url_))
+            Decode.map2
+                (\url_ maybeDownloadedAt ->
+                    Dict.singleton "url" (TStringValue url_)
+                        |> (case maybeDownloadedAt of
+                                Just ts ->
+                                    Dict.insert "downloadedAt" (TStringValue ts)
+
+                                Nothing ->
+                                    identity
+                           )
+                )
+                (Decode.field "url" Decode.string)
+                (Decode.maybe (Decode.at [ "downloaded", "downloadedAt" ] Decode.string))
 
 
 argType : Decoder ArgType

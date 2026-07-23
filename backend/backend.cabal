@@ -1,118 +1,139 @@
 cabal-version: 3.0
-name: backend
-version: 0.1.0.0
-build-type: Simple
+name:          backend
+version:       0.1.0.0
+build-type:    Simple
 
 common warnings
-    ghc-options: -Wall
+  ghc-options: -Wall
 
 library
-    import: warnings
-    exposed-modules: Api,
-                     ApiTypes,
-                     Config,
-                     BuildRunner,
-                     BuildLog,
-                     UserRepo,
-                     NixRepl,
-                     OutPaths,
-                     Agent.Sandbox,
-                     Agent.Policy,
-                     Agent.Session,
-                     Agent.Git,
-                     Agent.Runner,
-                     Agent.WarmSession,
-                     Handlers.Download,
-                     Handlers.Store,
-                     Handlers.SrcFiles,
-                     Handlers.CommitHash,
-                     Handlers.Projects,
-                     Handlers.ProjectEntities,
-                     Handlers.Statuses,
-                     Handlers.Steps,
-                     Handlers.Autocomplete,
-                     Handlers.StepConfig,
-                     Handlers.Presets,
-                     Handlers.RunStep,
-                     Handlers.StatusStream,
-                     Handlers.Agent,
-                     Handlers.Upload,
-                     Bus,
-                     NixUtils,
-                     Docs.OpenApi
-    build-depends: base ^>=4.19.2.0,
-                   stm,
-                   async,
-                   tomland,
-                   servant,
-                   servant-server,
-                   servant-multipart,
-                   servant-openapi3,
-                   openapi3,
-                   lens,
-                   warp,
-                   wai-cors,
-                   text,
-                   wai,
-                   wai-extra,
-                   directory,
-                   filepath,
-                   bytestring,
-                   cassava,
-                   vector,
-                   conduit,
-                   conduit-extra,
-                   resourcet,
-                   http-media,
-                   process,
-                   aeson,
-                   containers,
-                   time,
-                   unix,
-                   http-types,
-                   hnix,
-                   prettyprinter,
-                   data-fix,
-                   mtl,
-                   temporary,
-                   network-uri,
-                   filelock
-    hs-source-dirs: src
-    default-language: Haskell2010
+  import:           warnings
+  exposed-modules:
+    Agent.Git
+    Agent.Policy
+    Agent.Runner
+    Agent.Sandbox
+    Agent.Session
+    Agent.WarmSession
+    Api
+    ApiTypes
+    BuildLog
+    BuildRunner
+    Bus
+    Config
+    Docs.OpenApi
+    Handlers.Agent
+    Handlers.Autocomplete
+    Handlers.CommitHash
+    Handlers.Download
+    Handlers.Presets
+    Handlers.ProjectEntities
+    Handlers.Projects
+    Handlers.RunStep
+    Handlers.SrcFiles
+    Handlers.Statuses
+    Handlers.StatusStream
+    Handlers.StepConfig
+    Handlers.Steps
+    Handlers.Store
+    Handlers.Upload
+    NixRepl
+    NixUtils
+    OutPaths
+    UserRepo
+
+  build-depends:
+    , aeson
+    , async
+    , base               ^>=4.19.2.0
+    , bytestring
+    , cassava
+    , conduit
+    , conduit-extra
+    , containers
+    , data-fix
+    , directory
+    , filelock
+    , filepath
+    , hnix
+    , http-media
+    , http-types
+    , lens
+    , mtl
+    , network-uri
+    , openapi3
+    , prettyprinter
+    , process
+    , resourcet
+    , servant
+    , servant-multipart
+    , servant-openapi3
+    , servant-server
+    , stm
+    , temporary
+    , text
+    , time
+    , tomland
+    , unix
+    , vector
+    , wai
+    , wai-cors
+    , wai-extra
+    , warp
+
+  hs-source-dirs:   src
+  default-language: Haskell2010
 
 executable backend
-    import: warnings
-    main-is: Main.hs
-    -- The -threaded flag is CRITICAL here. We use blocking file locks (flock) to synchronize
-    -- access to the git repository. Without this flag, the app runs on a single OS thread.
-    -- If one request waits for a lock, it puts that single OS thread to sleep, freezing the
-    -- entire app. This includes the request that currently holds the lock, meaning it can
-    -- never finish its work and release the lock, resulting in a permanent freeze.
-    ghc-options: -threaded
-    build-depends: base,
-                   backend,
-                   mtl,
-                   text,
-                   bytestring,
-                   servant,
-                   servant-server,
-                   servant-multipart,
-                   warp,
-                   wai,
-                   wai-cors,
-                   wai-extra,
-                   directory,
-                   filepath
-    hs-source-dirs: app
-    default-language: Haskell2010
+  import:           warnings
+  main-is:          Main.hs
+
+  -- The -threaded flag is CRITICAL here. We use blocking file locks (flock) to synchronize
+  -- access to the git repository. Without this flag, the app runs on a single OS thread.
+  -- If one request waits for a lock, it puts that single OS thread to sleep, freezing the
+  -- entire app. This includes the request that currently holds the lock, meaning it can
+  -- never finish its work and release the lock, resulting in a permanent freeze.
+  ghc-options:      -threaded
+  build-depends:
+    , backend
+    , base
+    , bytestring
+    , directory
+    , filepath
+    , mtl
+    , servant
+    , servant-multipart
+    , servant-server
+    , text
+    , wai
+    , wai-cors
+    , wai-extra
+    , warp
+
+  hs-source-dirs:   app
+  default-language: Haskell2010
 
 executable generate-openapi
-    import: warnings
-    main-is: GenerateOpenApi.hs
-    build-depends: base,
-                   backend,
-                   aeson-pretty,
-                   bytestring
-    hs-source-dirs: app
-    default-language: Haskell2010
+  import:           warnings
+  main-is:          GenerateOpenApi.hs
+  build-depends:
+    , aeson-pretty
+    , backend
+    , base
+    , bytestring
 
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
+test-suite download-metadata
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          DownloadMetadata.hs
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
