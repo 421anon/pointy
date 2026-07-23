@@ -167,16 +167,17 @@ finishStep ctx (sid, outcome) = case outcome of
         broadcastSingleStepForProjects sid targetCommitText outPath
         buildExtras ctx sid
     Enqueued outPath buildKey _ -> do
-        broadcastSingleStepForProjects sid targetCommitText outPath
+        -- The job is already submitted; broadcast "running" immediately
+        -- instead of querying squeue which may not have registered it yet.
+        broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
         waitForCompletion buildKey
         nowBuilt <- isBuilt outPath
         if nowBuilt
             then do
                 registerGcRootForOutPath outPath
                 broadcastSingleStepForProjects sid targetCommitText outPath
+                buildExtras ctx sid
             else broadcastFailedStepForProjects sid targetCommitText
-        -- Build extras derivation if present, independently of main step status.
-        buildExtras ctx sid
     NotSubmitted err -> do
         putStrLn $ "buildStep error: " ++ err
         broadcastKnownStepStatus sid targetCommitText ("failure", Just (T.pack err))

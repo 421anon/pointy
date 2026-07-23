@@ -917,7 +917,7 @@ stopStep spec id =
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
-            (\_ -> setStatus (Success (StatusFailure Nothing)))
+            (\_ -> Flow.pure ())
 
 
 setAddMode : A_Traversal s (Table (BaseRecord a)) -> BaseRecord a -> AddMode -> Flow s ()
