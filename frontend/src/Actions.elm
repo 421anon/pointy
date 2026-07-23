@@ -322,7 +322,7 @@ applyStatusSnapshot snapshotCommit newStatus rs =
     in
     -- A save broadcasts its pre-run status asynchronously. Keep the pending marker
     -- until a terminal run status arrives so that stale save snapshots cannot win.
-    if pendingRun && (newStatus == StatusNotStarted || newStatus == StatusRunning) then
+    if pendingRun && newStatus == StatusNotStarted then
         rs
 
     else
