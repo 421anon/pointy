@@ -26,6 +26,13 @@ type Status
     | StatusFailure (Maybe String)
 
 
+type ClusterStatus
+    = ClusterAvailable
+    | ClusterDegraded
+    | ClusterUnavailable
+    | ClusterUnknown
+
+
 type AddMode
     = AddNew
     | AddFromOtherProject
@@ -374,6 +381,9 @@ type Model
         , compareState : CompareState
         , now : Time.Posix
         , agent : AgentState
+        , clusterStatus : ClusterStatus
+        , runningStepIds : List Int
+        , statusBarOpen : Bool
         }
 
 
@@ -469,6 +479,22 @@ getProjects (Model model) =
 getRoute : Model -> Route
 getRoute (Model model) =
     model.route
+
+
+getClusterStatus : Model -> ClusterStatus
+getClusterStatus (Model model) =
+    model.clusterStatus
+
+
+getRunningStepIds : Model -> List Int
+getRunningStepIds (Model model) =
+    model.runningStepIds
+
+
+getStatusBarOpen : Model -> Bool
+getStatusBarOpen (Model model) =
+    model.statusBarOpen
+
 
 
 getOrigin : Model -> String
@@ -745,6 +771,9 @@ initialModel key route flags =
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
         , agent = initAgentState
+        , clusterStatus = ClusterUnknown
+        , runningStepIds = []
+        , statusBarOpen = False
         }
 
 
@@ -1180,6 +1209,49 @@ getSortKey record =
     , record.sortKey |> Maybe.withDefault 0
     , record.id |> Maybe.withDefault 2147483647
     )
+
+
+type alias RunningStepSummary =
+    { stepId : Int
+    , stepName : String
+    , projectId : Int
+    , projectName : String
+    }
+
+
+getRunningStepSummaries : Model -> List RunningStepSummary
+getRunningStepSummaries (Model model) =
+    let
+        projectsList =
+            model.projects.records
+                |> ApiData.withDefault []
+                |> List.sortBy getSortKey
+
+        stepInProject : Int -> ProjectRecord -> Maybe RunningStepSummary
+        stepInProject stepId project =
+            let
+                allSteps =
+                    Dict.values project.tables
+                        |> List.concatMap (\t -> ApiData.withDefault [] t.records)
+            in
+            case List.filter (\s -> s.id == Just stepId) allSteps of
+                first :: _ ->
+                    project.id
+                        |> Maybe.map
+                            (\pid ->
+                                { stepId = stepId
+                                , stepName = first.name
+                                , projectId = pid
+                                , projectName = project.name
+                                }
+                            )
+
+                [] ->
+                    Nothing
+    in
+    model.runningStepIds
+        |> List.unique
+        |> List.filterMap (\stepId -> List.findMap (stepInProject stepId) projectsList)
 
 
 getModalConfirm : Model -> ModalConfirmConfig

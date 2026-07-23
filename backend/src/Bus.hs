@@ -1,5 +1,6 @@
 module Bus (ProjectSnapshot (..), broadcastSnapshot, subscribe) where
 
+import ClusterBus (updateRunningSteps)
 import Control.Concurrent.STM
 import Data.Map.Strict (Map)
 import Data.Text (Text)
@@ -17,7 +18,9 @@ statusBus :: TChan ProjectSnapshot
 statusBus = unsafePerformIO newBroadcastTChanIO
 
 broadcastSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
-broadcastSnapshot pid c stats = atomically $ writeTChan statusBus (ProjectSnapshot pid c stats)
+broadcastSnapshot pid c stats = atomically $ do
+    writeTChan statusBus (ProjectSnapshot pid c stats)
+    updateRunningSteps stats
 
 subscribe :: IO (TChan ProjectSnapshot)
 subscribe = atomically $ dupTChan statusBus

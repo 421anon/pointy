@@ -11,7 +11,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, SeekWindow, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, SeekWindow, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), ProjectParams, Route(..))
 import Time
@@ -709,3 +709,19 @@ templatesSelect =
 hideOrphans : Lens ls { a | hideOrphans : Bool } Bool x y
 hideOrphans =
     lens ".hideOrphans" .hideOrphans (\p b -> { p | hideOrphans = b })
+
+
+
+clusterStatus : Lens ls Model ClusterStatus x y
+clusterStatus =
+    lens ".clusterStatus" Model.getClusterStatus (\(Model m) s -> Model { m | clusterStatus = s })
+
+
+runningStepIds : Lens ls Model (List Int) x y
+runningStepIds =
+    lens ".runningStepIds" Model.getRunningStepIds (\(Model m) ids -> Model { m | runningStepIds = ids })
+
+
+statusBarOpen : Lens ls Model Bool x y
+statusBarOpen =
+    lens ".statusBarOpen" Model.getStatusBarOpen (\(Model m) open -> Model { m | statusBarOpen = open })

@@ -32,8 +32,10 @@ import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
+import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.SrcFiles (downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, seekSrcFilesHandler)
 import Handlers.StatusStream (stepStatusStreamHandler)
+import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
@@ -47,6 +49,7 @@ import Servant hiding (runHandler)
 import Servant.Multipart
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo, fetchRepo)
+
 
 server :: Server API
 server =
@@ -79,6 +82,7 @@ server =
         :<|> stopStepHandler
         :<|> stepLogHandler
         :<|> uploadHandler
+        :<|> clusterStatusStreamHandler
         :<|> createSessionHandler
         :<|> listSessionsHandler
         :<|> getSessionHandler
@@ -227,6 +231,13 @@ corsPolicy req = case pathInfo req of
                 , corsMethods = ["POST", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
+    ["cluster-status-stream"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type", "Last-Event-ID"]
+                , corsMethods = ["GET", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
     _ -> Nothing
 
 app :: IO Application
@@ -265,5 +276,10 @@ main = do
                 putStrLn "Warming project out paths..."
                 warmProjectOutPaths
                 putStrLn "Project out paths warmed."
+                putStrLn "Restoring running statuses..."
+                restoreRunningStatuses
+                putStrLn "Running statuses restored."
             return ()
+            putStrLn "Starting cluster status poller..."
+            startClusterPoller
     runSettings (setPort 8081 $ setBeforeMainLoop warmAfterServerStart defaultSettings) application

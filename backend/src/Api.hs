@@ -314,6 +314,11 @@ type Upload =
         :> MultipartForm Tmp (MultipartData Tmp)
         :> Post '[PlainText] Text
 
+type ClusterStatusStream =
+    "cluster-status-stream"
+        :> Description "Streams the current SLURM cluster availability and subsequent status changes."
+        :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+
 type AgentTurnStream =
     "agent"
         :> "turn"
@@ -353,6 +358,7 @@ type API =
         :<|> StopStep
         :<|> StepLog
         :<|> Upload
+        :<|> ClusterStatusStream
         :<|> CreateAgentSession
         :<|> ListAgentSessions
         :<|> GetAgentSession

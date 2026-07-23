@@ -1,20 +1,3 @@
-.agent-panel-toggle {
-  position: fixed;
-  right: calc(var(--spacing-xl) + var(--spacing-5xl) + var(--spacing-sm));
-  bottom: var(--spacing-xl);
-  z-index: 900;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  height: 32px;
-  padding: 0 var(--spacing-sm);
-  border: 1px solid var(--line-color);
-  border-radius: 999px;
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  cursor: pointer;
-}
 
 .agent-panel,
 .agent-panel * {
@@ -25,7 +8,7 @@
 .agent-panel {
   position: fixed;
   right: var(--spacing-xl);
-  bottom: calc(var(--spacing-xl) + 96px);
+  bottom: calc(var(--spacing-5xl) + var(--spacing-sm));
   z-index: 950;
   width: min(960px, calc(100vw - 2 * var(--spacing-xl)));
   max-height: min(820px, calc(100vh - 140px));

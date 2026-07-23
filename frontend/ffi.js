@@ -41,6 +41,22 @@ function zoomIframe({ id, zoom }) {
   }
 }
 
+let clusterStatusSource = null;
+
+function openClusterStatusStream(app) {
+  if (clusterStatusSource && clusterStatusSource.readyState !== EventSource.CLOSED) {
+    return;
+  }
+  clusterStatusSource = new EventSource("/backend/cluster-status-stream");
+  clusterStatusSource.addEventListener("cluster-status", (event) => {
+    try {
+      if (app.ports && app.ports.clusterStatusIn) {
+        app.ports.clusterStatusIn.send(JSON.parse(event.data));
+      }
+    } catch (_) {}
+  });
+}
+
 let stepStatusSource = null;
 let stepStatusTargetKey = null;
 let stepStatusApplicationError = false;
@@ -242,8 +258,13 @@ export function connectPorts(app) {
     app.ports.openAgentTurnStream.subscribe(openAgentTurnStream);
   }
 
+  if (app.ports && app.ports.openClusterStatusStream) {
+    app.ports.openClusterStatusStream.subscribe(() => openClusterStatusStream(app));
+  }
+
   window.addEventListener("beforeunload", () => {
     closeStepStatusStream();
     closeAgentTurnStream();
+    if (clusterStatusSource) clusterStatusSource.close();
   });
 }

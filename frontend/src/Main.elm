@@ -60,6 +60,7 @@ initializeWorkspace =
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
+        |> Flow.seq (Flow.async Actions.startClusterStatusStream)
 
 
 applyRouteFromUrl : Bool -> Url -> Flow Model ()

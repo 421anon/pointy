@@ -3197,3 +3197,70 @@ updateStepStatus snapshotCommit stepId newStatus =
                     Flow.over stepStatusBuffer (Dict.insert stepId ( snapshotCommit, newStatus ))
             )
         |> Flow.seq (Flow.when (newStatus == StatusSuccess) (runAndClearStepStatusHook stepId))
+
+
+
+startClusterStatusStream : Flow Model Decode.Value
+startClusterStatusStream =
+    Flow.subscribe onClusterStatusIn Channels.clusterStatus
+
+
+onClusterStatusIn : Decode.Value -> Flow Model ()
+onClusterStatusIn value =
+    let
+        decoder =
+            Decode.map2
+                (\statusStr ids ->
+                    ( case statusStr of
+                        "available" ->
+                            Model.ClusterAvailable
+
+                        "degraded" ->
+                            Model.ClusterDegraded
+
+                        "unavailable" ->
+                            Model.ClusterUnavailable
+
+                        _ ->
+                            Model.ClusterUnknown
+                    , ids
+                    )
+                )
+                (Decode.field "status" Decode.string)
+                (Decode.field "runningStepIds" (Decode.list Decode.int))
+    in
+    case Decode.decodeValue decoder value of
+        Ok ( status, ids ) ->
+            Flow.setAll clusterStatus status
+                |> Flow.seq (Flow.setAll runningStepIds ids)
+
+        Err _ ->
+            Flow.pure ()
+
+
+toggleStatusBar : Flow Model ()
+toggleStatusBar =
+    Flow.over statusBarOpen not
+
+
+closeStatusBar : Flow Model ()
+closeStatusBar =
+    Flow.setAll statusBarOpen False
+
+
+openRunningStep : Int -> Flow Model ()
+openRunningStep stepId =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    pickedProjectId =
+                        try (projectsContainingEntity stepId << recordId << just) model
+                in
+                pickedProjectId
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\pId ->
+                            Flow.setAll statusBarOpen False
+                                |> Flow.seq (goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = Nothing, mCompare = Nothing }))
+                        )
+            )

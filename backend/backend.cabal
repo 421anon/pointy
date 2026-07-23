@@ -20,11 +20,13 @@ library
     BuildLog
     BuildRunner
     Bus
+    ClusterBus
     Config
     Docs.OpenApi
     Handlers.Agent
     Handlers.Autocomplete
     Handlers.CommitHash
+    Handlers.ClusterStream
     Handlers.Download
     Handlers.Presets
     Handlers.ProjectEntities

@@ -6,10 +6,10 @@ import Api.Api as Api
 import Api.ApiData as ApiData exposing (success)
 import Browser
 import Components.AgentPanel as AgentPanel
+import Components.StatusBar as StatusBar
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
-import Html.Events as Events
 import Html.Extra as Html
 import Model.Core as Model exposing (Model)
 import Model.Lenses exposing (currentProject, name)
@@ -18,7 +18,6 @@ import Specs
 import Toast
 import View.Compare as Compare
 import View.Dialog as Dialog
-import View.Icons
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Project exposing (viewCurrentProject)
 import View.Table exposing (viewTable)
@@ -76,23 +75,7 @@ view model =
                 , Dialog.viewConfirm (Model.getModalConfirm model)
                 , Compare.viewCompareDialog model
                 , AgentPanel.view model
-                , Html.a
-                    [ Html.Attributes.href "https://pointy.cloud"
-                    , Html.Attributes.target "_blank"
-                    , Html.Attributes.title "Open documentation"
-                    , Html.Attributes.class "help-btn"
-                    ]
-                    [ View.Icons.iconCustom False "help_outline" []
-                    , Html.span [] [ Html.text "Docs" ]
-                    ]
-                , Html.button
-                    [ Html.Attributes.class "theme-toggle-btn"
-                    , Events.onClick Actions.toggleTheme
-                    , Html.Attributes.title "Toggle light/dark theme"
-                    ]
-                    [ View.Icons.iconCustom False "light_mode" [ Html.Attributes.class "icon-dark" ]
-                    , View.Icons.iconCustom False "dark_mode" [ Html.Attributes.class "icon-light" ]
-                    ]
+                , StatusBar.view model
                 ]
     }
 
@@ -121,7 +104,6 @@ viewArtifact artifact =
             ]
             [ Html.text "View in Pointy" ]
         ]
-
 
 view404 : Html (Flow Model ())
 view404 =

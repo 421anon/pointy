@@ -16,21 +16,7 @@ import View.Icons
 
 view : Model -> Html (Flow Model ())
 view model =
-    let
-        agent =
-            Model.getAgent model
-    in
-    Html.div []
-        [ Html.button
-            [ class "agent-panel-toggle"
-            , Events.onClick Actions.toggleAgentPanel
-            , title "Open AI agent"
-            ]
-            [ View.Icons.iconCustom False "smart_toy" []
-            , Html.span [] [ Html.text "Agent" ]
-            ]
-        , viewPanel agent
-        ]
+    viewPanel (Model.getAgent model)
 
 
 viewPanel : Model.AgentState -> Html (Flow Model ())
@@ -41,6 +27,7 @@ viewPanel agent =
             , ( "is-maximized", agent.isMaximized )
             , ( "is-minimized", not agent.isPanelOpen )
             ]
+        , id "agent-panel"
         ]
         [ Html.div [ class "agent-panel__header" ]
             [ Html.div []

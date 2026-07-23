@@ -16,11 +16,13 @@ module Handlers.Statuses (
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
     forkBroadcastStatusForStepProjectsAtHead,
+    restoreRunningStatuses,
 ) where
 
 import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
 import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
 import Bus (broadcastSnapshot)
+import ClusterBus (restoreRunningStepIds)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
 import Control.Exception (SomeException, catch)
@@ -30,7 +32,9 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Set (Set)
 import Data.Text (Text, pack, unpack)
+import qualified Data.Set as Set
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import NixUtils (isValidStorePath)
@@ -185,6 +189,49 @@ forkBroadcastStatusForStepProjectsAtHead sid = do
     case eHead of
         Left err -> putStrLn $ "forkBroadcastStatusForStepProjectsAtHead skipped: " ++ err
         Right c -> void $ forkIO $ broadcastStatusForStepProjects sid c Nothing
+
+-- | Evaluate #pointy.projects, query raw statuses for every visible project,
+-- and collect step IDs whose sampled state is @running@.  Those IDs are passed
+-- through 'restoreRunningStepIds' so live updates that overlap are never
+-- clobbered.  Per-project and top-level errors are logged; individual failures
+-- do not prevent remaining projects from being processed.
+restoreRunningStatuses :: IO ()
+restoreRunningStatuses = do
+    eHead <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
+    case eHead of
+        Left err -> putStrLn $ "restoreRunningStatuses: cannot read HEAD: " ++ err
+        Right targetCommit ->
+            restoreRunningStepIds $ do
+                eProjects <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
+                    let ctx = ReadRepoContext repoPath (unpack targetCommit)
+                    output <- runNixEvalJsonInRepo ctx "#pointy.projects"
+                    let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
+                    case decodeResult of
+                        Left err -> do
+                            liftIO $ putStrLn $ "restoreRunningStatuses: error parsing projects: " ++ err
+                            return []
+                        Right projects -> return $ filter (not . projectDefHidden) (Map.elems projects)
+                case eProjects of
+                    Left err -> do
+                        putStrLn $ "restoreRunningStatuses: transaction error: " ++ err
+                        return Set.empty
+                    Right projects
+                        | null projects -> return Set.empty
+                        | otherwise -> do
+                            results <- mapConcurrently (\p -> do
+                                let pid = projectDefId p
+                                rawResult <- getRawStatuses pid targetCommit
+                                    `catch` \(e :: SomeException) -> do
+                                        putStrLn $ "restoreRunningStatuses: error for project " ++ show pid ++ ": " ++ show e
+                                        return (Right Map.empty)
+                                case rawResult of
+                                    Left err -> do
+                                        putStrLn $ "restoreRunningStatuses: raw status error for project " ++ show pid ++ ": " ++ err
+                                        return Set.empty
+                                    Right statuses ->
+                                        return $ Map.keysSet $ Map.filter (\(st, _) -> st == pack "running") statuses
+                                ) projects
+                            return $ Set.unions results
 
 projectContainsStep :: Int -> ProjectDef -> Bool
 projectContainsStep sid p =
