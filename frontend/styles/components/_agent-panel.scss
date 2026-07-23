@@ -52,9 +52,7 @@
   max-height: none;
 }
 
-.agent-panel__split,
-.agent-panel__body,
-.agent-panel__empty {
+.agent-panel__split {
   min-width: 0;
 }
 
@@ -161,6 +159,19 @@
   justify-content: center;
   min-width: 88px;
   height: 42px;
+}
+
+.agent-panel__button-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2xs);
+}
+
+.agent-panel__button-spinner {
+  flex: 0 0 auto;
+  font-size: 1rem;
+  animation: spin 1s linear infinite;
 }
 
 .agent-panel__run-hint {
@@ -337,6 +348,14 @@
   &.is-selected {
     border-color: var(--line-color);
     background: var(--bg-secondary);
+  }
+
+  &.is-optimistic {
+    cursor: default;
+  }
+
+  &.is-updating {
+    cursor: wait;
   }
 }
 
