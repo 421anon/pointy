@@ -1,12 +1,13 @@
 .agent-panel-toggle {
   position: fixed;
-  right: var(--spacing-xl);
-  bottom: calc(var(--spacing-xl) + 48px);
+  right: calc(var(--spacing-xl) + var(--spacing-5xl) + var(--spacing-sm));
+  bottom: var(--spacing-xl);
   z-index: 900;
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-xs);
-  padding: var(--spacing-xs) var(--spacing-sm);
+  height: 32px;
+  padding: 0 var(--spacing-sm);
   border: 1px solid var(--line-color);
   border-radius: 999px;
   background: var(--bg-elevated);
