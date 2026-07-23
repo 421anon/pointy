@@ -78,11 +78,51 @@ viewSessionBody : Model.AgentState -> Html (Flow Model ())
 viewSessionBody agent =
     let
         loaded =
-            ApiData.withDefault [] agent.sessions
+            Maybe.withDefault [] (ApiData.toMaybe agent.sessions)
     in
     Html.div [ classList [ ( "agent-panel__split", True ), ( "is-desktop-sidebar-collapsed", agent.isDesktopSidebarCollapsed ) ] ]
         [ viewSessionSidebar agent loaded
-        , viewSessionDetail agent loaded
+        , case agent.sessions of
+            Loading Nothing ->
+                Html.div [ class "agent-panel__empty" ]
+                    [ Html.span [ class "agent-panel__loading shimmer-text shimmer-text--low-contrast" ] [ Html.text "Loading chat..." ] ]
+
+            _ ->
+                viewSessionDetail agent loaded
+        ]
+
+
+isCreatingAgentSession : Model.AgentState -> Bool
+isCreatingAgentSession agent =
+    agent.request == Just Model.CreatingAgentSession
+
+
+viewButtonSpinner : Html msg
+viewButtonSpinner =
+    View.Icons.iconCustom True "progress_activity" [ class "agent-panel__button-spinner" ]
+
+
+viewButtonContent : Bool -> String -> Html msg
+viewButtonContent busy label =
+    Html.span [ class "agent-panel__button-content" ]
+        (if busy then
+            [ viewButtonSpinner, Html.text label ]
+
+         else
+            [ Html.text label ]
+        )
+
+
+viewNewChatButtonContents : Model.AgentState -> List (Html msg)
+viewNewChatButtonContents agent =
+    if isCreatingAgentSession agent then
+        [ viewButtonSpinner
+        , Html.span [] [ Html.text "Creating..." ]
+        ]
+
+    else
+        [ View.Icons.icon False "add"
+        , Html.span [] [ Html.text "New chat" ]
         ]
 
 
@@ -98,12 +138,11 @@ viewSessionSidebar agent loaded =
             [ Html.h3 [] [ Html.text "Chats" ]
             , Html.button
                 [ class "agent-panel__new-chat"
+                , disabled (Model.agentInteractionsBlocked agent)
                 , Events.onClick Actions.createAgentSession
                 , title "New chat"
                 ]
-                [ View.Icons.icon False "add"
-                , Html.span [] [ Html.text "New chat" ]
-                ]
+                (viewNewChatButtonContents agent)
             ]
         , Html.button
             [ class "agent-panel__sidebar-toggle"
@@ -150,17 +189,29 @@ viewSessionSidebarContent agent loaded =
     let
         listingStatus =
             case agent.sessions of
-                Loading _ ->
-                    Just "Loading chats..."
+                Loading (Just _) ->
+                    Nothing
+
+                Loading Nothing ->
+                    Just ( True, "Loading chats..." )
 
                 Error err ->
-                    Just (Http.errorMessage err)
+                    Just ( False, Http.errorMessage err )
 
                 _ ->
                     Nothing
 
         ( active, archived ) =
             List.partition (\v -> not (isArchivedStatus v.session.status)) loaded
+
+        activeRows =
+            (if isCreatingAgentSession agent then
+                [ viewCreatingSessionRow ]
+
+             else
+                []
+            )
+                ++ List.map (viewSessionRow agent) active
 
         archivedToShow =
             if agent.showArchived then
@@ -170,14 +221,20 @@ viewSessionSidebarContent agent loaded =
                 []
     in
     [ case listingStatus of
-        Just msg ->
-            Html.p [ class "agent-panel__loading" ] [ Html.text msg ]
+        Just ( isLoading, msg ) ->
+            Html.p
+                [ classList
+                    [ ( "agent-panel__loading", True )
+                    , ( "shimmer-text", isLoading )
+                    , ( "shimmer-text--low-contrast", isLoading )
+                    ]
+                ]
+                [ Html.text msg ]
 
         Nothing ->
             Html.text ""
-    , Html.ul [ class "agent-panel__session-list" ]
-        (List.map (viewSessionRow agent.selectedSessionId) active)
-    , if List.isEmpty active && listingStatus == Nothing then
+    , Html.ul [ class "agent-panel__session-list" ] activeRows
+    , if List.isEmpty activeRows && listingStatus == Nothing then
         Html.p [ class "agent-panel__empty-hint" ] [ Html.text "No chats yet." ]
 
       else
@@ -203,7 +260,7 @@ viewSessionSidebarContent agent loaded =
                     )
                 ]
             , Html.ul [ class "agent-panel__session-list" ]
-                (List.map (viewSessionRow agent.selectedSessionId) archivedToShow)
+                (List.map (viewSessionRow agent) archivedToShow)
             ]
     ]
 
@@ -252,14 +309,27 @@ isArchivedStatus s =
     s == "archived" || s == "discarded" || s == "applied"
 
 
-viewSessionRow : Maybe String -> Model.AgentSessionView -> Html (Flow Model ())
-viewSessionRow selectedId sessionView =
+viewCreatingSessionRow : Html msg
+viewCreatingSessionRow =
+    Html.li
+        [ class "agent-panel__session-row is-selected is-optimistic"
+        , attribute "aria-busy" "true"
+        ]
+        [ Html.div [ class "agent-panel__session-row-main" ]
+            [ Html.div [ class "agent-panel__session-name shimmer-text shimmer-text--low-contrast" ] [ Html.text "New chat" ]
+            , Html.div [ class "agent-panel__session-meta shimmer-text shimmer-text--low-contrast" ] [ Html.text "Creating..." ]
+            ]
+        ]
+
+
+viewSessionRow : Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
+viewSessionRow agent sessionView =
     let
         session =
             sessionView.session
 
         isSelected =
-            selectedId == Just session.sessionId
+            agent.selectedSessionId == Just session.sessionId
 
         isArchived =
             isArchivedStatus session.status
@@ -267,8 +337,17 @@ viewSessionRow selectedId sessionView =
         displayName =
             sessionDisplayName sessionView
 
+        interactionActive =
+            Model.agentInteractionsBlocked agent
+
+        isArchiving =
+            agent.request == Just (Model.ArchivingAgentSession session.sessionId)
+
+        isDeleting =
+            agent.request == Just (Model.DeletingAgentSession session.sessionId)
+
         rowMainAttrs =
-            if isArchived then
+            if isArchived || interactionActive then
                 [ class "agent-panel__session-row-main" ]
 
             else
@@ -281,13 +360,31 @@ viewSessionRow selectedId sessionView =
             [ ( "agent-panel__session-row", True )
             , ( "is-selected", isSelected )
             , ( "is-archived", isArchived )
+            , ( "is-updating", isArchiving || isDeleting )
             ]
+        , attribute "aria-busy"
+            (if isArchiving || isDeleting then
+                "true"
+
+             else
+                "false"
+            )
         ]
         [ Html.div
             rowMainAttrs
             [ Html.div [ class "agent-panel__session-name", title session.sessionId ] [ Html.text displayName ]
             , Html.div [ class "agent-panel__session-meta" ]
-                [ Html.text (chatStatusLabel session.status) ]
+                [ Html.text
+                    (if isArchiving then
+                        "Archiving..."
+
+                     else if isDeleting then
+                        "Deleting..."
+
+                     else
+                        chatStatusLabel session.status
+                    )
+                ]
             , if sessionView.gitState.hasAgentCommits then
                 Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ]
 
@@ -299,17 +396,29 @@ viewSessionRow selectedId sessionView =
                 Html.button
                     [ class "icon-btn"
                     , title "Delete permanently"
+                    , disabled interactionActive
                     , Events.onClick (Actions.confirmDeleteAgentSession session.sessionId)
                     ]
-                    [ View.Icons.icon False "delete_forever" ]
+                    [ if isDeleting then
+                        viewButtonSpinner
+
+                      else
+                        View.Icons.icon False "delete_forever"
+                    ]
 
               else if session.status /= "running" then
                 Html.button
                     [ class "icon-btn"
                     , title "Archive"
+                    , disabled interactionActive
                     , Events.onClick (Actions.archiveAgentSession session.sessionId)
                     ]
-                    [ View.Icons.icon False "archive" ]
+                    [ if isArchiving then
+                        viewButtonSpinner
+
+                      else
+                        View.Icons.icon False "archive"
+                    ]
 
               else
                 Html.text ""
@@ -319,11 +428,14 @@ viewSessionRow selectedId sessionView =
 
 viewSessionDetail : Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
 viewSessionDetail agent loaded =
-    case Model.selectedSessionView agent of
-        Just sessionView ->
+    case ( isCreatingAgentSession agent, Model.selectedSessionView agent ) of
+        ( True, _ ) ->
+            viewCreatingSession
+
+        ( False, Just sessionView ) ->
             viewSession agent sessionView
 
-        Nothing ->
+        ( False, Nothing ) ->
             Html.div [ class "agent-panel__empty" ]
                 [ Html.p []
                     [ Html.text
@@ -334,8 +446,35 @@ viewSessionDetail agent loaded =
                             "Pick a chat on the left or start a new one."
                         )
                     ]
-                , Html.button [ class "primary-btn", Events.onClick Actions.createAgentSession ] [ Html.text "New chat" ]
+                , Html.button
+                    [ class "primary-btn"
+                    , disabled (Model.agentInteractionsBlocked agent)
+                    , Events.onClick Actions.createAgentSession
+                    ]
+                    (viewNewChatButtonContents agent)
                 ]
+
+
+viewCreatingSession : Html msg
+viewCreatingSession =
+    Html.div
+        [ class "agent-panel__body"
+        , attribute "aria-busy" "true"
+        , attribute "aria-live" "polite"
+        ]
+        [ Html.div [ class "agent-panel__session-title-card" ]
+            [ Html.h3 [ class "agent-panel__session-title shimmer-text shimmer-text--low-contrast" ] [ Html.text "New chat" ]
+            , Html.div [ class "agent-panel__session-title-meta shimmer-text shimmer-text--low-contrast" ] [ Html.text "Creating..." ]
+            ]
+        , Html.div [ class "agent-panel__section agent-panel__conversation" ]
+            [ Html.div [ class "agent-panel__chat agent-panel__chat--empty" ]
+                [ Html.div [ class "agent-panel__empty-state" ]
+                    [ Html.strong [ class "shimmer-text shimmer-text--low-contrast" ] [ Html.text "Creating chat..." ]
+                    , Html.p [] [ Html.text "Preparing agent workspace." ]
+                    ]
+                ]
+            ]
+        ]
 
 
 viewSession : Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
@@ -345,7 +484,15 @@ viewSession agent sessionView =
             sessionView.session
 
         runnerActive =
-            session.activeTurnId /= Nothing || session.status == "running"
+            (agent.activeTurnStream /= Nothing)
+                || (session.activeTurnId /= Nothing)
+                || (session.status == "running")
+
+        sendingPrompt =
+            agent.request == Just (Model.SendingAgentPrompt session.sessionId)
+
+        detailBlocked =
+            runnerActive || Model.agentInteractionsBlocked agent
 
         closedChat =
             isArchivedStatus session.status
@@ -353,12 +500,12 @@ viewSession agent sessionView =
     Html.div [ class "agent-panel__body" ]
         [ viewSessionTitle agent sessionView
         , viewError session
-        , viewChat agent sessionView runnerActive
+        , viewChat agent sessionView runnerActive detailBlocked
         , if closedChat then
             viewClosedChat session.status
 
           else
-            viewPrompt runnerActive
+            viewPrompt runnerActive sendingPrompt detailBlocked
         ]
 
 
@@ -370,6 +517,11 @@ viewSessionTitle agent sessionView =
 
         displayName =
             sessionDisplayName sessionView
+
+        renameBlocked =
+            Model.agentInteractionsBlocked agent
+                || (session.activeTurnId /= Nothing)
+                || (session.status == "running")
 
         editing =
             case agent.sessionNameEdit of
@@ -386,7 +538,7 @@ viewSessionTitle agent sessionView =
     Html.div [ class "agent-panel__session-title-card" ]
         [ case editing of
             Just edit ->
-                viewSessionTitleEditor edit
+                viewSessionTitleEditor renameBlocked edit
 
             Nothing ->
                 Html.div [ class "agent-panel__session-title-row" ]
@@ -405,6 +557,7 @@ viewSessionTitle agent sessionView =
                     , Html.button
                         [ class "icon-btn"
                         , title "Rename chat"
+                        , disabled renameBlocked
                         , Events.onClick (Actions.startAgentSessionNameEdit session.sessionId displayName)
                         ]
                         [ View.Icons.icon False "edit" ]
@@ -412,8 +565,8 @@ viewSessionTitle agent sessionView =
         ]
 
 
-viewSessionTitleEditor : Model.AgentSessionNameEdit -> Html (Flow Model ())
-viewSessionTitleEditor edit =
+viewSessionTitleEditor : Bool -> Model.AgentSessionNameEdit -> Html (Flow Model ())
+viewSessionTitleEditor renameBlocked edit =
     let
         trimmed =
             String.trim edit.value
@@ -423,7 +576,7 @@ viewSessionTitleEditor edit =
             [ class "agent-panel__session-name-input"
             , type_ "text"
             , value edit.value
-            , disabled edit.saving
+            , disabled (renameBlocked || edit.saving)
             , attribute "maxlength" (String.fromInt chatNameMaxLength)
             , attribute "aria-label" "Chat name"
             , Events.onInput Actions.updateAgentSessionNameEdit
@@ -437,10 +590,10 @@ viewSessionTitleEditor edit =
         , Html.div [ class "agent-panel__session-title-actions" ]
             [ Html.button
                 [ class "primary-btn"
-                , disabled (edit.saving || String.isEmpty trimmed)
+                , disabled (renameBlocked || edit.saving || String.isEmpty trimmed)
                 , Events.onClick Actions.saveAgentSessionName
                 ]
-                [ Html.text
+                [ viewButtonContent edit.saving
                     (if edit.saving then
                         "Saving..."
 
@@ -498,11 +651,14 @@ viewError session =
             Html.text ""
 
 
-viewPrompt : Bool -> Html (Flow Model ())
-viewPrompt runnerActive =
+viewPrompt : Bool -> Bool -> Bool -> Html (Flow Model ())
+viewPrompt runnerActive sendingPrompt composerBusy =
     let
         buttonText =
-            if runnerActive then
+            if sendingPrompt then
+                "Sending..."
+
+            else if runnerActive then
                 "Working..."
 
             else
@@ -515,18 +671,25 @@ viewPrompt runnerActive =
                 , id "agent-prompt"
                 , rows 3
                 , placeholder "Ask for a change..."
-                , disabled runnerActive
+                , disabled composerBusy
                 , attribute "aria-label" "Agent prompt"
-                , submitShortcut runnerActive
+                , submitShortcut composerBusy
                 ]
                 []
             , Html.button
                 [ class "primary-btn agent-panel__run-button"
-                , disabled runnerActive
+                , disabled composerBusy
+                , attribute "aria-busy"
+                    (if sendingPrompt then
+                        "true"
+
+                     else
+                        "false"
+                    )
                 , Events.onClick Actions.submitAgentPrompt
                 , title "Send message (Ctrl/⌘+Enter)"
                 ]
-                [ Html.text buttonText
+                [ viewButtonContent sendingPrompt buttonText
                 , Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
                 ]
             ]
@@ -554,10 +717,10 @@ submitShortcut runnerActive =
     Events.preventDefaultOn "keydown" decoder
 
 
-viewChat : Model.AgentState -> Model.AgentSessionView -> Bool -> Html (Flow Model ())
-viewChat agent sessionView runnerActive =
+viewChat : Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Html (Flow Model ())
+viewChat agent sessionView runnerActive interactionsBlocked =
     Html.div [ class "agent-panel__section agent-panel__conversation" ]
-        [ viewChatTurns agent sessionView runnerActive ]
+        [ viewChatTurns agent sessionView runnerActive interactionsBlocked ]
 
 
 activeChangesetOperation : Model.AgentState -> String -> Maybe Model.ChangesetOperationKind
@@ -574,8 +737,8 @@ activeChangesetOperation agent sessionId =
             Nothing
 
 
-viewChatTurns : Model.AgentState -> Model.AgentSessionView -> Bool -> Html (Flow Model ())
-viewChatTurns agent sessionView runnerActive =
+viewChatTurns : Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Html (Flow Model ())
+viewChatTurns agent sessionView runnerActive interactionsBlocked =
     let
         activeOperation =
             activeChangesetOperation agent sessionView.session.sessionId
@@ -583,13 +746,13 @@ viewChatTurns agent sessionView runnerActive =
         pendingChangesetNodes =
             case pendingChangeset sessionView of
                 Just changeset ->
-                    [ viewChangesetBox runnerActive activeOperation changeset ]
+                    [ viewChangesetBox interactionsBlocked activeOperation changeset ]
 
                 Nothing ->
                     []
 
         content =
-            List.map (viewChatEntry runnerActive) agent.chatEntries ++ pendingChangesetNodes
+            List.map (viewChatEntry interactionsBlocked) agent.chatEntries ++ pendingChangesetNodes
     in
     if List.isEmpty content then
         Html.div [ class "agent-panel__chat agent-panel__chat--empty", id Actions.agentChatId ]
@@ -622,13 +785,13 @@ viewChatTurns agent sessionView runnerActive =
 
 
 viewChatEntry : Bool -> Model.ChatEntry -> Html (Flow Model ())
-viewChatEntry runnerActive entry =
+viewChatEntry interactionsBlocked entry =
     case entry of
         Model.ChatTurnEntry turn ->
             viewChatTurn turn
 
         Model.ChatChangesetEntry changeset ->
-            viewChangesetBox runnerActive Nothing changeset
+            viewChangesetBox interactionsBlocked Nothing changeset
 
 
 viewChatTurn : Model.ChatTurn -> Html msg
@@ -701,7 +864,13 @@ viewAgentMessage turn =
                 , ( "is-failed", failedMessage /= Nothing )
                 ]
             ]
-            [ Html.div [ class "agent-panel__chat-content" ]
+            [ Html.div
+                [ classList
+                    [ ( "agent-panel__chat-content", True )
+                    , ( "shimmer-text", turn.status == Model.ChatPending && isEmptyAssistant )
+                    , ( "shimmer-text--low-contrast", turn.status == Model.ChatPending && isEmptyAssistant )
+                    ]
+                ]
                 (Markdown.toHtml Nothing body)
             , if turn.status == Model.ChatPending then
                 Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "█" ]
@@ -767,7 +936,7 @@ defaultChangesetDescription state =
 
 
 viewChangesetBox : Bool -> Maybe Model.ChangesetOperationKind -> Model.ChatChangeset -> Html (Flow Model ())
-viewChangesetBox runnerActive activeOperation changeset =
+viewChangesetBox interactionsBlocked activeOperation changeset =
     let
         state =
             changeset.state
@@ -812,10 +981,13 @@ viewChangesetBox runnerActive activeOperation changeset =
             else
                 changeset.description
 
+        actionsAllowed =
+            not interactionsBlocked && not isBusy
+
         canApply =
             case state of
                 Model.ChatChangesetProposed ->
-                    not runnerActive && not isBusy
+                    actionsAllowed
 
                 _ ->
                     False
@@ -823,10 +995,10 @@ viewChangesetBox runnerActive activeOperation changeset =
         canDiscard =
             case state of
                 Model.ChatChangesetProposed ->
-                    not runnerActive && not isBusy
+                    actionsAllowed
 
                 Model.ChatChangesetNeedsReview _ ->
-                    not runnerActive && not isBusy
+                    actionsAllowed
 
                 _ ->
                     False
@@ -863,14 +1035,6 @@ viewChangesetBox runnerActive activeOperation changeset =
                 _ ->
                     False
 
-        errorNode =
-            case state of
-                Model.ChatChangesetNeedsReview err ->
-                    Html.pre [ class "agent-panel__changeset-error" ] [ Html.text err ]
-
-                _ ->
-                    Html.text ""
-
         applyLabel =
             if isApplying then
                 "Applying..."
@@ -884,6 +1048,14 @@ viewChangesetBox runnerActive activeOperation changeset =
 
             else
                 "Discard changeset"
+
+        errorNode =
+            case state of
+                Model.ChatChangesetNeedsReview err ->
+                    Html.pre [ class "agent-panel__changeset-error" ] [ Html.text err ]
+
+                _ ->
+                    Html.text ""
     in
     Html.div
         [ classList
@@ -912,13 +1084,13 @@ viewChangesetBox runnerActive activeOperation changeset =
                 , disabled (not canApply)
                 , Events.onClick Actions.applyAgentChanges
                 ]
-                [ Html.text applyLabel ]
+                [ viewButtonContent isApplying applyLabel ]
             , Html.button
                 [ class "danger-btn"
                 , disabled (not canDiscard)
                 , Events.onClick Actions.discardAgentSession
                 ]
-                [ Html.text discardLabel ]
+                [ viewButtonContent isDiscarding discardLabel ]
             ]
         ]
 

@@ -247,6 +247,13 @@ type alias AgentSessionNameEdit =
     }
 
 
+type AgentRequest
+    = CreatingAgentSession
+    | SendingAgentPrompt String
+    | ArchivingAgentSession String
+    | DeletingAgentSession String
+
+
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
     , selectedSessionId : Maybe String
@@ -259,6 +266,7 @@ type alias AgentState =
     , chunkBuffer : String
     , showArchived : Bool
     , changesetOperation : Maybe ChangesetOperation
+    , request : Maybe AgentRequest
     , sessionNameEdit : Maybe AgentSessionNameEdit
     }
 
@@ -276,8 +284,32 @@ initAgentState =
     , chunkBuffer = ""
     , showArchived = False
     , changesetOperation = Nothing
+    , request = Nothing
     , sessionNameEdit = Nothing
     }
+
+
+agentOperationActive : AgentState -> Bool
+agentOperationActive agentState =
+    (agentState.request /= Nothing)
+        || (agentState.activeTurnStream /= Nothing)
+        || (agentState.changesetOperation /= Nothing)
+        || (agentState.sessionNameEdit
+                |> Maybe.map .saving
+                |> Maybe.withDefault False
+           )
+
+
+agentInteractionsBlocked : AgentState -> Bool
+agentInteractionsBlocked agentState =
+    agentOperationActive agentState
+        || (case agentState.sessions of
+                Loading _ ->
+                    True
+
+                _ ->
+                    False
+           )
 
 
 selectedSessionView : AgentState -> Maybe AgentSessionView
