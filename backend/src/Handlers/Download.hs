@@ -11,6 +11,8 @@ rather than any hard-coded template name.
 -}
 module Handlers.Download (
     discoverDownloadTemplates,
+    downloadTemplatesFromConfig,
+    loadStepConfig,
     prefetchFile,
     extractDownloadUrl,
     extractDownloadHash,
@@ -107,6 +109,29 @@ prefetchFile url = do
 -- Step-config classification
 -----------------------------------------------------------------------------
 
+loadStepConfig :: (RepoContext ctx) => ctx -> ExceptT String IO Value
+loadStepConfig ctx = do
+    output <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
+    case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of
+        Left err -> throwError $ "Failed to decode stepConfig JSON: " ++ err
+        Right value -> return value
+
+downloadTemplatesFromConfig :: Value -> Either String (Set Text)
+downloadTemplatesFromConfig (Object config) =
+    Right $
+        Set.fromList
+            [ AK.toText key
+            | (key, value) <- KM.toList config
+            , hasDownloadType value
+            ]
+  where
+    hasDownloadType (Object entry) =
+        case KM.lookup "type" entry of
+            Just (Object typeObject) -> KM.member "download" typeObject
+            _ -> False
+    hasDownloadType _ = False
+downloadTemplatesFromConfig _ = Left "stepConfig is not a JSON object"
+
 {- | Evaluate @#pointy.stepConfig@ and return the set of template names whose
 @type.download@ attribute is present (i.e. the step kind is \"download\").
 
@@ -114,24 +139,8 @@ Fails with an error when the evaluated JSON is not an object.
 -}
 discoverDownloadTemplates :: (RepoContext ctx) => ctx -> ExceptT String IO (Set Text)
 discoverDownloadTemplates ctx = do
-    output <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
-    case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of
-        Left err -> throwError $ "Failed to decode stepConfig JSON: " ++ err
-        Right (Object km) ->
-            return $
-                Set.fromList
-                    [ AK.toText key
-                    | (key, val) <- KM.toList km
-                    , hasDownloadType val
-                    ]
-        Right _ -> throwError "stepConfig is not a JSON object"
-  where
-    hasDownloadType :: Value -> Bool
-    hasDownloadType (Object obj) =
-        case KM.lookup "type" obj of
-            Just (Object typeObj) -> KM.member "download" typeObj
-            _ -> False
-    hasDownloadType _ = False
+    config <- loadStepConfig ctx
+    either throwError return (downloadTemplatesFromConfig config)
 
 -----------------------------------------------------------------------------
 -- JSON navigation helpers
