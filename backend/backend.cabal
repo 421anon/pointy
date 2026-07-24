@@ -42,7 +42,6 @@ library
     NixRepl
     NixUtils
     OutPaths
-    StepSerialization
     UserRepo
 
   build-depends:

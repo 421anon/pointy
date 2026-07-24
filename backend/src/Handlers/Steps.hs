@@ -6,7 +6,7 @@ import ApiTypes (DynamicJson (..))
 import Control.Monad (forM_, when)
 import Control.Monad.Except (ExceptT (..), catchError)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (Value, eitherDecode, encode)
+import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
@@ -15,13 +15,13 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Download (discoverDownloadTemplates, downloadTemplatesFromConfig, extractDownloadHash, extractDownloadUrl, extractDownloadedAt, extractReqType, injectDownloaded, loadStepConfig, prefetchFile, validateHttpUrl)
+import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extractDownloadUrl, extractDownloadedAt, extractReqType, injectDownloaded, prefetchFile, validateHttpUrl)
 import Handlers.ProjectEntities (assignRecordToProject)
+import Handlers.Projects (evaluateJsonToNixPreservingNewlines)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
 import OutPaths (scheduleProjectOutPathsWarm, withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), throwError)
 import Servant.Server (err400, err500, errBody)
-import StepSerialization (evaluateStepJsonToNix)
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.FilePath (takeBaseName, (</>))
 import System.Process (readProcessWithExitCode)
@@ -107,8 +107,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
     -- Write transaction.
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         -- Re-discover templates under the write lock; abort if classification changed.
-        stepConfig <- loadStepConfig ctx
-        templatesW <- either throwError return (downloadTemplatesFromConfig stepConfig)
+        templatesW <- discoverDownloadTemplates ctx
         let isDownloadW = maybe False (\t -> Set.member t templatesW) mReqType
         when (isDownload /= isDownloadW) $
             throwError "Step kind classification changed; retry"
@@ -130,7 +129,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                     $ throwError "Step changed underfoot; retry"
             Nothing -> return ()
 
-        evalRes <- ExceptT $ evaluateStepJsonToNix stepConfig (TE.decodeUtf8 (LBS.toStrict (unDynamicJson finalBody)))
+        evalRes <- ExceptT $ evaluateJsonToNixPreservingNewlines (TE.decodeUtf8 (LBS.toStrict (unDynamicJson finalBody)))
         let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
         liftIO $ TIO.writeFile outputPath (evalRes <> "\n")
 
@@ -159,14 +158,12 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack $ "Invalid JSON in request body: " ++ err}
         Right v -> return v
 
-    -- Read-only phase: load step config and discover download templates.
-    configResult <- liftIO $ withReadRepoTransaction $ \ctx -> do
-        stepConfig <- loadStepConfig ctx
-        templates <- either throwError return (downloadTemplatesFromConfig stepConfig)
-        return (stepConfig, templates)
-    (stepConfig, templates') <- case configResult of
+    -- Read-only phase: discover download templates.
+    templates <- liftIO $ withReadRepoTransaction $ \ctx ->
+        discoverDownloadTemplates ctx
+    templates' <- case templates of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 $ TL.pack $ "Failed to load step config: " ++ err}
-        Right config -> return config
+        Right ts -> return ts
 
     let mReqType = extractReqType bodyValue
         isDownload = maybe False (\t -> Set.member t templates') mReqType
@@ -189,13 +186,15 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
 
     -- Write transaction.
     result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
-        stepId <- saveStep ctx stepConfig Nothing (unDynamicJson finalBody)
+        stepId <- saveStep ctx Nothing (unDynamicJson finalBody)
         liftIO $ copyClonedSrcFiles worktreePath maybeSourceId stepId
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
 
-        stepConfigW <- loadStepConfig ctx
-        when (stepConfig /= stepConfigW) $
-            throwError "Step config changed; retry"
+        -- Re-discover templates under the write lock; abort if classification changed.
+        templatesW <- discoverDownloadTemplates ctx
+        let isDownloadW = maybe False (\t -> Set.member t templatesW) mReqType
+        when (isDownload /= isDownloadW) $
+            throwError "Step kind classification changed; retry"
         case maybeProjectId of
             Just projectId -> assignRecordToProject ctx projectId stepId
             Nothing -> return ()
@@ -245,12 +244,12 @@ noticesHandler stepId mCommit = do
 -- Save / allocate step
 -----------------------------------------------------------------------------
 
-saveStep :: WriteRepoContext -> Value -> Maybe Int -> LBS.ByteString -> ExceptT String IO Int
-saveStep (WriteRepoContext worktreePath) stepConfig maybeId jsonBody = ExceptT $ do
+saveStep :: WriteRepoContext -> Maybe Int -> LBS.ByteString -> ExceptT String IO Int
+saveStep (WriteRepoContext worktreePath) maybeId jsonBody = ExceptT $ do
     case TE.decodeUtf8' (LBS.toStrict jsonBody) of
         Left utf8Err -> return $ Left $ "Invalid UTF-8 in request body: " ++ show utf8Err
         Right jsonText -> do
-            result <- evaluateStepJsonToNix stepConfig jsonText
+            result <- evaluateJsonToNixPreservingNewlines jsonText
             case result of
                 Left err -> return $ Left err
                 Right nixText -> do

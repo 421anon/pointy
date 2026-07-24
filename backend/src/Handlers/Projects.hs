@@ -1,7 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.Projects (getProjectsHandler, patchProjectHandler, postProjectHandler, deleteProjectHandler, evaluateJsonToNix, RawJSON) where
+module Handlers.Projects (getProjectsHandler, patchProjectHandler, postProjectHandler, deleteProjectHandler, evaluateJsonToNix, evaluateJsonToNixPreservingNewlines, RawJSON) where
 
 import ApiTypes (DynamicJson (..))
 import Control.Monad.Except (ExceptT (..), catchError, throwError)
@@ -13,6 +13,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 
 import Data.Aeson (Result (..), Value (..), eitherDecode, encode, fromJSON)
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Fix (Fix (..), foldFix)
 import Data.List (foldl')
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
@@ -32,13 +33,14 @@ import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChang
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Nix (nixEvalExpr, withNixContext)
-import Nix.Expr.Shorthands (mkStr, mkSym, (@.), (@@))
+import Nix.Expr.Shorthands (mkIndentedStr, mkStr, mkSym, (@.), (@@))
+import Nix.Expr.Types (Antiquoted (..), NExpr, NExprF (..), NString (..))
 import Nix.Normal (normalForm)
 import Nix.Options (defaultOptions)
-import Nix.Pretty (prettyNix, valueToExpr)
+import Nix.Pretty (exprFNixDoc, getDoc, prettyNix, simpleExpr, valueToExpr)
 import Nix.Standard (runWithBasicEffectsIO)
 import NixUtils (sortAttrSet)
-import Prettyprinter (defaultLayoutOptions, layoutPretty)
+import Prettyprinter (defaultLayoutOptions, hardline, layoutPretty, pretty)
 import Prettyprinter.Render.Text (renderStrict)
 
 data RawJSON
@@ -146,7 +148,13 @@ getNextProjectId projectsDir = do
             return $ if null ids then 1 else maximum ids + 1
 
 evaluateJsonToNix :: T.Text -> IO (Either String T.Text)
-evaluateJsonToNix jsonText = do
+evaluateJsonToNix = evaluateJsonToNixWith False
+
+evaluateJsonToNixPreservingNewlines :: T.Text -> IO (Either String T.Text)
+evaluateJsonToNixPreservingNewlines = evaluateJsonToNixWith True
+
+evaluateJsonToNixWith :: Bool -> T.Text -> IO (Either String T.Text)
+evaluateJsonToNixWith preserveNewlines jsonText = do
     let fullExpr = mkSym "builtins" @. "fromJSON" @@ mkStr jsonText
     let opts = defaultOptions $ posixSecondsToUTCTime 0
     result <- runWithBasicEffectsIO opts $ withNixContext Nothing $ do
@@ -154,5 +162,31 @@ evaluateJsonToNix jsonText = do
         nf <- normalForm val
         return $ valueToExpr nf
     let sortedResult = sortAttrSet result
-        nixText = renderStrict $ layoutPretty defaultLayoutOptions $ prettyNix sortedResult
+        nixText
+            | preserveNewlines = renderMultilineNix $ rewriteMultilineStrings sortedResult
+            | otherwise = renderStrict $ layoutPretty defaultLayoutOptions $ prettyNix sortedResult
     return $ Right nixText
+
+rewriteMultilineStrings :: NExpr -> NExpr
+rewriteMultilineStrings = foldFix rewriteNode
+  where
+    rewriteNode (NStr (DoubleQuoted [Plain text]))
+        | T.any (== '\n') text = mkIndentedStr 0 text
+    rewriteNode node = Fix node
+
+renderMultilineNix :: NExpr -> T.Text
+renderMultilineNix = renderStrict . layoutPretty defaultLayoutOptions . getDoc . foldFix renderNode
+  where
+    renderNode (NStr (Indented _ [Plain text])) =
+        simpleExpr $ "''" <> hardline <> pretty (escapeIndented text) <> "''"
+    renderNode node = exprFNixDoc node
+
+escapeIndented :: T.Text -> T.Text
+escapeIndented = preserveCommonIndent . T.replace "${" "''${" . T.replace "''" "'''"
+
+preserveCommonIndent :: T.Text -> T.Text
+preserveCommonIndent text
+    | not (null contentLines) && all (T.isPrefixOf " ") contentLines = "${\"\"}" <> text
+    | otherwise = text
+  where
+    contentLines = filter (not . T.null) $ T.splitOn "\n" text
