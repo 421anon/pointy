@@ -85,7 +85,6 @@ viewMainControl model runningCount isOpen =
                 , attribute "aria-hidden" "true"
                 ]
                 []
-            , Html.span [ class "status-bar__state-text" ] [ Html.text stateText ]
             ]
         , Html.span
             [ class "status-bar__running-count"
