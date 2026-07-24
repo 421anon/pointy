@@ -6,7 +6,7 @@
     "elm-version": "0.19.1",
     "dependencies": {
         "direct": {
-            "421anon/elm-flow": "3.1.0",
+            "421anon/elm-flow": "3.2.0",
             "BrianHicks/elm-csv": "4.0.1",
             "FabienHenon/elm-infinite-list-view": "3.3.1",
             "NoRedInk/elm-json-decode-pipeline": "1.0.1",

@@ -11,7 +11,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
+import Model.Lenses exposing (commitHash, currentProject, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
 import Ports
 import Route
 import Specs
@@ -135,7 +135,10 @@ applyRoute forceRevealHighlight newRoute =
                                 Flow.when (currentRoute_ == newRoute) <|
                                     case newRoute of
                                         Route.Project { projectId, mHighlight, mCommit } ->
-                                            (Flow.async <| Actions.listenAndProcessStepStatus projectId mCommit)
+                                            Flow.ifHas
+                                                (currentProject << success)
+                                                (\_ -> Flow.async <| Actions.listenAndProcessStepStatus projectId mCommit)
+                                                Actions.closeStepStatusStream
                                                 |> Flow.seq
                                                     (case mHighlight of
                                                         Just highlight ->

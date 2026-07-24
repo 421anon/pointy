@@ -1,8 +1,8 @@
 {
 
       "421anon/elm-flow" = {
-        sha256 = "12wkjkn7dcpscjzy0s5q0aw8jfgr4f6a2sfm01plhckxw83crzib";
-        version = "3.1.0";
+        sha256 = "1xpwgpn63cls5334amha4vkm2c4vpcjaza65lviacxl9hnsyg69q";
+        version = "3.2.0";
       };
 
       "BrianHicks/elm-csv" = {
@@ -38,11 +38,6 @@
       "elm-community/json-extra" = {
         sha256 = "10phb49jhfb2764zni5aivz59a06mjbggxlpqqza2iwn212h6m6j";
         version = "4.3.0";
-      };
-
-      "elm-explorations/markdown" = {
-        sha256 = "0k3110ixa4wwf3vkkdplagwah9ypr965qxr1y147rnsc1xsxmr6y";
-        version = "1.0.0";
       };
 
       "elm/browser" = {
