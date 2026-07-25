@@ -2,7 +2,7 @@
 
 module Handlers.ProjectEntities (assignRecordHandler, assignRecordToProject, batchAssignRecordsHandler, unassignRecordHandler) where
 
-import Control.Monad.Except (ExceptT (..), runExceptT)
+import Control.Monad.Except (ExceptT, liftEither)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -14,7 +14,7 @@ import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNixEvalImpureJs
 
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Projects (evaluateJsonToNix)
+import Handlers.Projects (jsonToNix)
 
 assignRecordHandler :: Int -> Int -> Handler NoContent
 assignRecordHandler projectId recordId = do
@@ -67,11 +67,10 @@ removeRecord recordId =
     "orig // { steps = builtins.filter (s: s.id != " <> T.pack (show recordId) <> ") orig.steps; }"
 
 updateProjectNixFile :: WriteRepoContext -> Int -> T.Text -> ExceptT String IO ()
-updateProjectNixFile (WriteRepoContext worktreePath) projectId transformation = ExceptT $ do
+updateProjectNixFile (WriteRepoContext worktreePath) projectId transformation = do
     let nixFilePath = worktreePath </> "projects" </> show projectId ++ ".nix"
         nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in " <> transformation
 
-    runExceptT $ do
-        output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
-        nixResult <- ExceptT $ evaluateJsonToNix (T.pack output)
-        liftIO $ TIO.writeFile nixFilePath (nixResult <> "\n")
+    output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
+    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
+    liftIO $ TIO.writeFile nixFilePath (nixResult <> "\n")

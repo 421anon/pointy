@@ -3,7 +3,7 @@
 module Handlers.Upload (uploadHandler) where
 
 import Control.Monad (forM_, when)
-import Control.Monad.Except (ExceptT (..), runExceptT)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (..), decode)
 import qualified Data.Aeson.KeyMap as KM
@@ -15,16 +15,16 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import OutPaths (withWriteRepoTransaction)
-import System.Process (readProcessWithExitCode)
 import Servant (Handler, err400, err500, errBody, throwError)
 import Servant.Multipart (FileData (fdFileName, fdPayload), MultipartData (files), Tmp)
 import System.Directory (createDirectoryIfMissing, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import System.Process (readProcessWithExitCode)
 import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNix, runNixEvalImpureJsonExpr)
 
-import Handlers.Projects (evaluateJsonToNix)
+import Handlers.Projects (jsonToNix)
 
 uploadHandler :: Int -> MultipartData Tmp -> Handler Text
 uploadHandler stepId multipartData = do
@@ -71,11 +71,10 @@ extractNarHash (Object outerObj) = do
 extractNarHash _ = Nothing
 
 updateStepNixFile :: WriteRepoContext -> Int -> Text -> ExceptT String IO ()
-updateStepNixFile (WriteRepoContext worktreePath) stepId hash = ExceptT $ do
+updateStepNixFile (WriteRepoContext worktreePath) stepId hash = do
     let nixFilePath = worktreePath </> "steps" </> show stepId ++ ".nix"
         nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in orig // { args = orig.args // { uploaded = (orig.args.uploaded or {}) // { hash = \"" <> hash <> "\"; }; }; }"
 
-    runExceptT $ do
-        output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
-        nixResult <- ExceptT $ evaluateJsonToNix (T.pack output)
-        liftIO $ TIO.writeFile nixFilePath nixResult
+    output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
+    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
+    liftIO $ TIO.writeFile nixFilePath nixResult
