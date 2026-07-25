@@ -20,8 +20,8 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TMVar, TQueue, atomically, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, takeTMVar, writeTQueue)
-import Control.Exception (SomeException, catch, try)
-import Control.Monad (forM, forever, void)
+import Control.Exception (SomeException, catch, finally, try)
+import Control.Monad (forM, forever, void, when)
 import Data.Char (ord)
 import Data.Foldable (for_)
 import Data.List (foldl')
@@ -61,8 +61,10 @@ data ReplShard = ReplShard
     , replShardSession :: MVar (Maybe ReplSession)
     , replShardInteractive :: TQueue QueuedEval
     , replShardBackground :: TQueue QueuedEval
-    , replShardWarmEvaluation :: MVar (Maybe Evaluation)
+    , replShardWarmEvaluation :: MVar (Int, Maybe Evaluation)
     , replShardMemoryLimitBytes :: MVar Integer
+    , replShardSessionGeneration :: MVar Int
+    , replShardReplacementActive :: MVar Bool
     }
 
 data ReplWorker = ReplWorker
@@ -76,6 +78,11 @@ data WarmEvaluation = WarmEvaluation
     { warmEvaluation :: Evaluation
     , warmCallback :: Maybe (Either String String -> IO ())
     }
+
+data SwapResult
+    = SwapRetry
+    | SwapObsolete
+    | SwapComplete (Maybe ReplSession)
 
 pureReplShardCount :: Int
 pureReplShardCount = 4
@@ -145,8 +152,10 @@ newWorker kind shardCount = do
             <$> newMVar Nothing
             <*> newTQueueIO
             <*> newTQueueIO
-            <*> newMVar Nothing
+            <*> newMVar (0, Nothing)
             <*> newMVar initialReplMemoryLimitBytes
+            <*> newMVar 0
+            <*> newMVar False
 
 replShardLoop :: ReplWorker -> ReplShard -> IO ()
 replShardLoop worker shard = forever $ do
@@ -215,38 +224,68 @@ runWarmEvaluation worker shard pending = do
 
 rememberWarmEvaluation :: ReplShard -> Evaluation -> IO ()
 rememberWarmEvaluation shard evaluation =
-    modifyMVar_ (replShardWarmEvaluation shard) $ const $ pure $ Just evaluation
+    modifyMVar_ (replShardWarmEvaluation shard) $ \(version, _) ->
+        pure (version + 1, Just evaluation)
 
-replaceShardIfOverLimit :: ReplWorker -> ReplShard -> IO ()
-replaceShardIfOverLimit worker shard =
-    modifyMVar_ (replShardSession shard) $ \case
-        Nothing -> pure Nothing
-        Just session -> do
-            memoryBytes <- readSessionMemoryBytes session
-            memoryLimit <- readMVar $ replShardMemoryLimitBytes shard
-            case memoryBytes of
-                Just bytes | bytes > memoryLimit -> replaceSession session bytes
-                _ -> pure $ Just session
+scheduleReplacementCheck :: ReplWorker -> ReplShard -> IO ()
+scheduleReplacementCheck worker shard = do
+    started <- modifyMVar (replShardReplacementActive shard) $ \active ->
+        pure (True, not active)
+    when started $
+        void $
+            forkIO $
+                checkShardMemory worker shard
+                    `finally` modifyMVar_ (replShardReplacementActive shard) (const $ pure False)
+
+checkShardMemory :: ReplWorker -> ReplShard -> IO ()
+checkShardMemory worker shard = do
+    snapshot <- modifyMVar (replShardSession shard) $ \mSession -> do
+        generation <- readMVar $ replShardSessionGeneration shard
+        pure (mSession, (\session -> (generation, session)) <$> mSession)
+    for_ snapshot $ \(generation, session) -> do
+        memoryBytes <- readSessionMemoryBytes session
+        memoryLimit <- readMVar $ replShardMemoryLimitBytes shard
+        for_ memoryBytes $ \bytes ->
+            when (bytes > memoryLimit) $
+                replaceSession worker shard generation bytes
+
+replaceSession :: ReplWorker -> ReplShard -> Int -> Integer -> IO ()
+replaceSession worker shard oldGeneration oldMemoryBytes =
+    try (openSession $ replWorkerKind worker) >>= \case
+        Left (err :: SomeException) ->
+            logWarning $ replacementPrefix ++ "failed to start: " ++ show err
+        Right standby ->
+            warmAndSwap standby >>= \case
+                Left err -> do
+                    closeQuietly standby
+                    logWarning $ replacementPrefix ++ "failed to warm: " ++ err
+                Right Nothing -> closeQuietly standby
+                Right (Just oldSession) -> do
+                    closeQuietly oldSession
+                    logWarning $ replacementPrefix ++ "replaced at " ++ formatMiB oldMemoryBytes
   where
-    replaceSession oldSession oldMemoryBytes =
-        try (openSession $ replWorkerKind worker) >>= \case
-            Left (err :: SomeException) -> do
-                logWarning $ replacementPrefix ++ "failed to start: " ++ show err
-                pure $ Just oldSession
-            Right standby -> do
-                warmResult <-
-                    maybe (pure $ Right ()) (fmap (void . outcomeResult) . runStandby standby)
-                        =<< readMVar (replShardWarmEvaluation shard)
-                case warmResult of
-                    Left err -> do
-                        closeQuietly standby
-                        logWarning $ replacementPrefix ++ "failed to warm: " ++ err
-                        pure $ Just oldSession
-                    Right () -> do
-                        growLimitForStandby standby
-                        closeQuietly oldSession
-                        logWarning $ replacementPrefix ++ "replaced at " ++ formatMiB oldMemoryBytes
-                        pure $ Just standby
+    warmAndSwap standby = do
+        (version, mEvaluation) <- readMVar $ replShardWarmEvaluation shard
+        warmResult <- maybe (pure $ Right ()) (fmap (void . outcomeResult) . runStandby standby) mEvaluation
+        case warmResult of
+            Left err -> pure $ Left err
+            Right () -> do
+                growLimitForStandby standby
+                swapResult <- modifyMVar (replShardSession shard) $ \mSession -> do
+                    generation <- readMVar $ replShardSessionGeneration shard
+                    (latestVersion, _) <- readMVar $ replShardWarmEvaluation shard
+                    if generation /= oldGeneration
+                        then pure (mSession, SwapObsolete)
+                        else
+                            if latestVersion /= version
+                                then pure (mSession, SwapRetry)
+                                else do
+                                    bumpSessionGeneration shard
+                                    pure (Just standby, SwapComplete mSession)
+                case swapResult of
+                    SwapRetry -> warmAndSwap standby
+                    SwapObsolete -> pure $ Right Nothing
+                    SwapComplete oldSession -> pure $ Right oldSession
 
     runStandby standby evaluation =
         runRequest standby (evaluationRequest evaluation)
@@ -277,10 +316,14 @@ replaceShardIfOverLimit worker shard =
             ++ show (replShardId shard)
             ++ " RAM replacement "
 
+bumpSessionGeneration :: ReplShard -> IO ()
+bumpSessionGeneration shard =
+    modifyMVar_ (replShardSessionGeneration shard) $ pure . (+ 1)
+
 runWithShard :: Bool -> ReplWorker -> ReplShard -> Evaluation -> IO (Either String String)
 runWithShard mayRetry worker shard evaluation = do
     outcome <- modifyMVar (replShardSession shard) $ \mSession -> do
-        eSession <- maybe (try $ openSession $ replWorkerKind worker) (pure . Right) mSession
+        eSession <- maybe openActiveSession (pure . Right) mSession
         case eSession of
             Left (err :: SomeException) ->
                 pure (Nothing, ReplDied $ "failed to start " ++ show (replWorkerKind worker) ++ " nix repl: " ++ show err)
@@ -289,17 +332,27 @@ runWithShard mayRetry worker shard evaluation = do
                     runRequest session (evaluationRequest evaluation)
                         `catch` \(err :: SomeException) -> pure $ ReplDied $ "nix repl session failed: " ++ show err
                 case result of
-                    ReplDied _ -> closeSession session >> pure (Nothing, result)
-                    _ -> pure (Just session, result)
+                    ReplDied _ -> do
+                        closeSession session
+                        bumpSessionGeneration shard
+                        pure (Nothing, result)
+                    ReplSucceeded _ -> do
+                        rememberWarmEvaluation shard evaluation
+                        pure (Just session, result)
+                    ReplFailed _ -> pure (Just session, result)
     case outcome of
         ReplSucceeded output -> do
-            rememberWarmEvaluation shard evaluation
-            replaceShardIfOverLimit worker shard
+            scheduleReplacementCheck worker shard
             pure $ Right output
         ReplFailed err -> pure $ Left err
         ReplDied err
             | mayRetry -> runWithShard False worker shard evaluation
             | otherwise -> pure $ Left err
+  where
+    openActiveSession = do
+        result <- try $ openSession $ replWorkerKind worker
+        for_ result $ const $ bumpSessionGeneration shard
+        pure result
 
 closeQuietly :: ReplSession -> IO ()
 closeQuietly session = closeSession session `catch` \(_ :: SomeException) -> pure ()

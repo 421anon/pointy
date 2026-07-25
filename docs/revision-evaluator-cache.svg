@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1110" viewBox="0 0 1200 1110" role="img" aria-labelledby="title desc">
   <title id="title">Revision evaluator worker rack and RAM lifecycle</title>
-  <desc id="desc">Expressions route to a rack of warm evaluator workers. Each worker owns priority inboxes, one active Nix REPL cartridge, a local RSS gauge, its latest expression card, and a temporary standby bay. Commit changes rewarm the same cartridge. After successful evaluations an over-limit worker pauses while a replacement cartridge warms and is promoted.</desc>
+  <desc id="desc">Expressions route to four Nix evaluation workers. Each worker owns two request queues, one running Nix process, a memory gauge, its last successful request, and a replacement slot. Commit changes reload the same process. Memory checks run in the background; an over-limit worker keeps serving while a replacement gets ready, then switches over briefly.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
@@ -142,7 +142,7 @@
   <text x="1025" y="450" text-anchor="middle" class="label">Replacement slot</text>
   <text x="1025" y="474" text-anchor="middle" class="small">normally empty</text>
   <text x="1025" y="497" text-anchor="middle" class="tiny">new Nix process</text>
-  <text x="1025" y="514" text-anchor="middle" class="tiny">gets ready while paused</text>
+  <text x="1025" y="514" text-anchor="middle" class="tiny">gets ready beside old Nix</text>
 
   <text x="90" y="575" class="tiny">each worker owns its queues, Nix process, saved request, memory limit, lock, and replacement slot</text>
 
@@ -166,16 +166,16 @@
 
   <rect x="625" y="695" width="175" height="90" class="box"/>
   <text x="712" y="722" text-anchor="middle" class="label">Save this request</text>
-  <text x="712" y="744" text-anchor="middle" class="small">pause this worker</text>
-  <text x="712" y="765" text-anchor="middle" class="small">check memory used</text>
+  <text x="712" y="744" text-anchor="middle" class="small">return answer</text>
+  <text x="712" y="765" text-anchor="middle" class="small">check memory separately</text>
 
   <polygon points="885,690 955,740 885,790 815,740" class="decision"/>
   <text x="885" y="734" text-anchor="middle" class="label">Memory too high?</text>
   <text x="885" y="755" text-anchor="middle" class="small">after success only</text>
 
   <rect x="1000" y="695" width="125" height="90" class="active"/>
-  <text x="1062" y="728" text-anchor="middle" class="label">Resume worker</text>
-  <text x="1062" y="750" text-anchor="middle" class="small">return answer</text>
+  <text x="1062" y="728" text-anchor="middle" class="label">Memory OK</text>
+  <text x="1062" y="750" text-anchor="middle" class="small">keep serving</text>
 
   <rect x="442" y="825" width="126" height="55" class="error"/>
   <text x="505" y="848" text-anchor="middle" class="label">Return error</text>
@@ -193,14 +193,14 @@
   <text x="978" y="724" text-anchor="middle" class="small">no</text>
 
   <rect x="640" y="835" width="200" height="65" class="paused"/>
-  <text x="740" y="860" text-anchor="middle" class="label">Worker stays paused</text>
-  <text x="740" y="881" text-anchor="middle" class="small">requests wait · old Nix kept</text>
+  <text x="740" y="860" text-anchor="middle" class="label">Old Nix keeps serving</text>
+  <text x="740" y="881" text-anchor="middle" class="small">replacement starts beside it</text>
   <path d="M885 790 V813 H740 V835" class="orange-line"/>
   <text x="898" y="812" class="small">yes</text>
 
   <rect x="640" y="930" width="200" height="65" class="standby"/>
   <text x="740" y="955" text-anchor="middle" class="label">Prepare replacement</text>
-  <text x="740" y="976" text-anchor="middle" class="small">start Nix · replay request</text>
+  <text x="740" y="976" text-anchor="middle" class="small">start Nix · catch up</text>
   <path d="M740 900 V930" class="orange-line"/>
 
   <polygon points="920,920 990,962 920,1004 850,962" class="decision"/>
@@ -216,10 +216,10 @@
   <path d="M990 962 H995" class="orange-line"/>
 
   <rect x="870" y="1040" width="270" height="35" class="active"/>
-  <text x="1005" y="1063" text-anchor="middle" class="label">Use replacement · resume worker</text>
+  <text x="1005" y="1063" text-anchor="middle" class="label">Brief swap · use replacement</text>
   <path d="M920 1004 V1040" class="orange-line"/>
   <text x="903" y="1028" text-anchor="end" class="small">no</text>
   <path d="M1067 1003 V1025 H1045 V1040" class="orange-line"/>
 
-  <text x="60" y="1070" class="small">The other workers keep handling requests while W1 is paused.</text>
+  <text x="60" y="1070" class="small">W1 keeps handling requests while its replacement gets ready.</text>
 </svg>
