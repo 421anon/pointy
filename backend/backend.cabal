@@ -78,6 +78,7 @@ library
     , tomland
     , unix
     , vector
+    , scientific
     , wai
     , wai-cors
     , wai-extra

@@ -1,10 +1,10 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.Projects (getProjectsHandler, patchProjectHandler, postProjectHandler, deleteProjectHandler, evaluateJsonToNix, RawJSON) where
+module Handlers.Projects (getProjectsHandler, patchProjectHandler, postProjectHandler, deleteProjectHandler, jsonToNix, RawJSON) where
 
 import ApiTypes (DynamicJson (..))
-import Control.Monad.Except (ExceptT (..), catchError, throwError)
+import Control.Monad.Except (ExceptT (..), catchError, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.Text.Encoding as TE
@@ -12,11 +12,13 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
 import Data.Aeson (Result (..), Value (..), eitherDecode, encode, fromJSON)
+import Data.Aeson.Key (toText)
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Fix (foldFix)
 import Data.List (foldl')
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.Scientific (floatingOrInteger)
 import qualified Data.Vector as V
 import Network.HTTP.Media ((//))
 import OutPaths (withWriteRepoTransaction)
@@ -31,14 +33,10 @@ import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChang
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Nix (nixEvalExpr, withNixContext)
-import Nix.Expr.Shorthands (mkStr, mkSym, (@.), (@@))
-import Nix.Normal (normalForm)
-import Nix.Options (defaultOptions)
-import Nix.Pretty (prettyNix, valueToExpr)
-import Nix.Standard (runWithBasicEffectsIO)
-import NixUtils (sortAttrSet)
-import Prettyprinter (defaultLayoutOptions, layoutPretty)
+import Nix.Expr.Shorthands (attrsE, mkBool, mkFloat, mkIndentedStr, mkInt, mkList, mkNull, mkStr)
+import Nix.Expr.Types (Antiquoted (..), NExpr, NExprF (..), NString (..))
+import Nix.Pretty (exprFNixDoc, getDoc, simpleExpr)
+import Prettyprinter (defaultLayoutOptions, hardline, layoutPretty, pretty)
 import Prettyprinter.Render.Text (renderStrict)
 
 data RawJSON
@@ -121,19 +119,13 @@ postProjectHandler (DynamicJson jsonBody) = do
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 saveProject :: WriteRepoContext -> Maybe Int -> LB.ByteString -> ExceptT String IO Int
-saveProject (WriteRepoContext worktreePath) maybeId jsonBody = ExceptT $ do
-    case TE.decodeUtf8' (LB.toStrict jsonBody) of
-        Left utf8Err -> return $ Left $ "Invalid UTF-8 in request body: " ++ show utf8Err
-        Right jsonText -> do
-            result <- evaluateJsonToNix jsonText
-            case result of
-                Left err -> return $ Left err
-                Right nixText -> do
-                    let projectsDir = worktreePath </> "projects"
-                    projectId <- maybe (getNextProjectId projectsDir) return maybeId
-                    let outputPath = projectsDir </> show projectId ++ ".nix"
-                    TIO.writeFile outputPath (nixText <> "\n")
-                    return $ Right projectId
+saveProject (WriteRepoContext worktreePath) maybeId jsonBody = do
+    nixText <- liftEither $ jsonToNix jsonBody
+    let projectsDir = worktreePath </> "projects"
+    projectId <- liftIO $ maybe (getNextProjectId projectsDir) return maybeId
+    let outputPath = projectsDir </> show projectId ++ ".nix"
+    liftIO $ TIO.writeFile outputPath (nixText <> "\n")
+    return projectId
 
 getNextProjectId :: FilePath -> IO Int
 getNextProjectId projectsDir = do
@@ -145,14 +137,25 @@ getNextProjectId projectsDir = do
             let ids = mapMaybe (readMaybe . takeBaseName) files :: [Int]
             return $ if null ids then 1 else maximum ids + 1
 
-evaluateJsonToNix :: T.Text -> IO (Either String T.Text)
-evaluateJsonToNix jsonText = do
-    let fullExpr = mkSym "builtins" @. "fromJSON" @@ mkStr jsonText
-    let opts = defaultOptions $ posixSecondsToUTCTime 0
-    result <- runWithBasicEffectsIO opts $ withNixContext Nothing $ do
-        val <- nixEvalExpr Nothing fullExpr
-        nf <- normalForm val
-        return $ valueToExpr nf
-    let sortedResult = sortAttrSet result
-        nixText = renderStrict $ layoutPretty defaultLayoutOptions $ prettyNix sortedResult
-    return $ Right nixText
+jsonToNix :: LB.ByteString -> Either String T.Text
+jsonToNix bs = do
+    val <- eitherDecode bs
+    return $ renderMultilineNix $ jsonValueToNixExpr val
+
+jsonValueToNixExpr :: Value -> NExpr
+jsonValueToNixExpr (Object obj) =
+    attrsE [(toText key, jsonValueToNixExpr value) | (key, value) <- KeyMap.toAscList obj]
+jsonValueToNixExpr (Array arr) = mkList (map jsonValueToNixExpr $ V.toList arr)
+jsonValueToNixExpr (String text)
+    | T.any (== '\n') text = mkIndentedStr 0 text
+    | otherwise = mkStr text
+jsonValueToNixExpr (Number number) = either mkFloat mkInt $ floatingOrInteger number
+jsonValueToNixExpr (Bool boolean) = mkBool boolean
+jsonValueToNixExpr Null = mkNull
+
+renderMultilineNix :: NExpr -> T.Text
+renderMultilineNix = renderStrict . layoutPretty defaultLayoutOptions . getDoc . foldFix renderNode
+  where
+    renderNode (NStr (Indented _ [Plain text])) =
+        simpleExpr $ "''" <> hardline <> pretty (T.replace "${" "''${" $ T.replace "'" "''\\'" text) <> "''"
+    renderNode node = exprFNixDoc node

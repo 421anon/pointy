@@ -4,7 +4,7 @@ module Handlers.Steps (patchStepHandler, postStepHandler, noticesHandler) where
 
 import ApiTypes (DynamicJson (..))
 import Control.Monad (forM_, when)
-import Control.Monad.Except (ExceptT (..), catchError)
+import Control.Monad.Except (ExceptT (..), catchError, liftEither)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString.Lazy as LBS
@@ -17,7 +17,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extractDownloadUrl, extractDownloadedAt, extractReqType, injectDownloaded, prefetchFile, validateHttpUrl)
 import Handlers.ProjectEntities (assignRecordToProject)
-import Handlers.Projects (evaluateJsonToNix)
+import Handlers.Projects (jsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
 import OutPaths (scheduleProjectOutPathsWarm, withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), throwError)
@@ -129,7 +129,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                     $ throwError "Step changed underfoot; retry"
             Nothing -> return ()
 
-        evalRes <- ExceptT $ evaluateJsonToNix (TE.decodeUtf8 (LBS.toStrict (unDynamicJson finalBody)))
+        evalRes <- liftEither $ jsonToNix (unDynamicJson finalBody)
         let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
         liftIO $ TIO.writeFile outputPath (evalRes <> "\n")
 
@@ -245,19 +245,13 @@ noticesHandler stepId mCommit = do
 -----------------------------------------------------------------------------
 
 saveStep :: WriteRepoContext -> Maybe Int -> LBS.ByteString -> ExceptT String IO Int
-saveStep (WriteRepoContext worktreePath) maybeId jsonBody = ExceptT $ do
-    case TE.decodeUtf8' (LBS.toStrict jsonBody) of
-        Left utf8Err -> return $ Left $ "Invalid UTF-8 in request body: " ++ show utf8Err
-        Right jsonText -> do
-            result <- evaluateJsonToNix jsonText
-            case result of
-                Left err -> return $ Left err
-                Right nixText -> do
-                    let stepsDir = worktreePath </> "steps"
-                    stepId <- maybe (getNextStepId stepsDir) return maybeId
-                    let outputPath = stepsDir </> show stepId ++ ".nix"
-                    TIO.writeFile outputPath (nixText <> "\n")
-                    return $ Right stepId
+saveStep (WriteRepoContext worktreePath) maybeId jsonBody = do
+    nixText <- liftEither $ jsonToNix jsonBody
+    let stepsDir = worktreePath </> "steps"
+    stepId <- liftIO $ maybe (getNextStepId stepsDir) return maybeId
+    let outputPath = stepsDir </> show stepId ++ ".nix"
+    liftIO $ TIO.writeFile outputPath (nixText <> "\n")
+    return stepId
 
 getNextStepId :: FilePath -> IO Int
 getNextStepId stepsDir = do
