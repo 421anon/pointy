@@ -157,5 +157,5 @@ renderMultilineNix :: NExpr -> T.Text
 renderMultilineNix = renderStrict . layoutPretty defaultLayoutOptions . getDoc . foldFix renderNode
   where
     renderNode (NStr (Indented _ [Plain text])) =
-        simpleExpr $ "''" <> hardline <> pretty (T.replace "${" "''${" $ T.replace "''" "'''" text) <> "''"
+        simpleExpr $ "''" <> hardline <> pretty (T.replace "${" "''${" $ T.replace "'" "''\\'" text) <> "''"
     renderNode node = exprFNixDoc node
