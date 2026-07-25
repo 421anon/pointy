@@ -46,7 +46,7 @@ library
     UserRepo
 
   other-modules:
-    NixRepl
+    RevisionEvaluator.NixRepl
 
   build-depends:
     , aeson
