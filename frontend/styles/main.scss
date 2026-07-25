@@ -806,6 +806,12 @@ $delimited-grid-row-height: 28px;
   border-radius: var(--radius-sm);
 }
 
+@media (max-width: 600px) {
+  .file-molstar-viewer {
+    height: 716px;
+  }
+}
+
 .iframe-zoom-wrapper {
   position: relative;
   overflow: hidden;

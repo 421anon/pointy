@@ -124,11 +124,8 @@ storeFilesHandler' segments respond = do
             Just (zipPath, internalPath)
                 | null internalPath -> throwError err404
                 | otherwise -> do
-                    zipResult <- liftIO $ Zip.readZipFile zipPath internalPath
-                    case zipResult of
-                        Left err -> throwError err404{errBody = TLE.encodeUtf8 $ TL.pack err}
-                        Right (_, lbs) ->
-                            pure $ Right (lbs, fromMaybe "application/octet-stream" (mimeTypeByExtension internalPath))
+                    (_, lbs) <- liftZip err404 $ Zip.readZipFile zipPath internalPath
+                    pure $ Right (lbs, fromMaybe "application/octet-stream" (mimeTypeByExtension internalPath))
             Nothing -> do
                 exists <- liftIO $ doesFileExist absPath
                 unless exists $ throwError err404
@@ -152,11 +149,8 @@ listHandler outPathText mRel = do
     assertInside absPath basePath
     mZipResult <- liftIO $ resolveZipPath basePath rel
     case mZipResult of
-        Just (zipPath, internalPath) -> do
-            result <- liftIO $ Zip.listZipDirectory zipPath internalPath
-            case result of
-                Left message -> throwError err400 { errBody = LBS.fromStrict (TE.encodeUtf8 (T.pack message)) }
-                Right items -> pure $ map zipItemToDirEntry items
+        Just (zipPath, internalPath) ->
+            map zipItemToDirEntry <$> liftZip err400 (Zip.listZipDirectory zipPath internalPath)
         Nothing -> do
             names <- liftIO $ listDirectory absPath
             liftIO $ mapConcurrently (buildDirEntry absPath) names
@@ -176,12 +170,13 @@ buildDirEntry absPath n = do
                     (isViewable, isSeekable, mime) <- checkViewableAndMime p sz
                     pure $ DirEntry (T.pack n) False (fromIntegral sz) isViewable isSeekable mime
 
--- | Check if a path has a .zip extension (case-insensitive).
 isZipPath :: FilePath -> Bool
 isZipPath p = map toLower (takeExtension p) == ".zip"
 
--- | Resolve a relative path to a ZIP file and its internal path.
--- Returns Nothing if no ZIP file is found or the path contains '.'/'..' components.
+liftZip :: ServerError -> IO (Either String a) -> Handler a
+liftZip serverError action =
+    either (\message -> throwError serverError{errBody = TLE.encodeUtf8 $ TL.pack message}) pure =<< liftIO action
+
 resolveZipPath :: FilePath -> FilePath -> IO (Maybe (FilePath, FilePath))
 resolveZipPath basePath rel = do
     let comps = splitDirectories rel
@@ -203,30 +198,14 @@ resolveZipPath basePath rel = do
                         else findZipPrefix comps (k + 1)
                 else findZipPrefix comps (k + 1)
 
--- | Convert a ZipItem to a DirEntry.
-zipItemToDirEntry :: Zip.ZipItem -> DirEntry
-zipItemToDirEntry item =
-    if Zip.zipItemIsDirectory item
-        then DirEntry
-            { name = T.pack (Zip.zipItemName item)
-            , isDir = True
-            , size = 0
-            , viewable = False
-            , seekable = False
-            , mimeType = Nothing
-            }
-        else
-            let mime = mimeTypeByExtension (Zip.zipItemName item)
-                sz = Zip.zipItemSize item
-                viewable' = maybe False (\m -> isReadableMimeType m && sz <= maxViewableSize) mime
-            in DirEntry
-                { name = T.pack (Zip.zipItemName item)
-                , isDir = False
-                , size = sz
-                , viewable = viewable'
-                , seekable = False
-                , mimeType = mime
-                }
+zipItemToDirEntry item
+    | Zip.zipItemIsDirectory item = DirEntry itemName True 0 False False Nothing
+    | otherwise = DirEntry itemName False itemSize viewable' False mime
+  where
+    itemName = T.pack $ Zip.zipItemName item
+    itemSize = Zip.zipItemSize item
+    mime = mimeTypeByExtension $ Zip.zipItemName item
+    viewable' = maybe False (\m -> isReadableMimeType m && itemSize <= maxViewableSize) mime
 
 downloadHandler :: Text -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadHandler outPathText rel = do
@@ -240,12 +219,9 @@ downloadHandler outPathText rel = do
     case mZip of
         Just (zipPath, internalPath) -> do
             when (null internalPath) $ throwError err404
-            content <- liftIO $ Zip.readZipFile zipPath internalPath
-            case content of
-                Left msg -> throwError err404{errBody = LBS.fromStrict (TE.encodeUtf8 (T.pack msg))}
-                Right (size, lbs) -> do
-                    let source = S.source (LBS.toChunks lbs)
-                    return $ addHeader disposition $ addHeader size source
+            (size, lbs) <- liftZip err404 $ Zip.readZipFile zipPath internalPath
+            let source = S.source (LBS.toChunks lbs)
+            return $ addHeader disposition $ addHeader size source
         Nothing -> do
             isFile <- liftIO $ doesFileExist absPath
             unless isFile $ throwError err404
