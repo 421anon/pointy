@@ -292,7 +292,7 @@ applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiD
 applyStepStatus snapshotCommit status_ rs =
     let
         collapsedDirectoryView =
-            { children = NotAsked, expanded = False, extras = NotAsked }
+            { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
 
         current =
             ApiData.toMaybe rs
@@ -1208,6 +1208,7 @@ shouldSkipFileContents : { r | mimeType : Maybe String } -> Bool
 shouldSkipFileContents file_ =
     has (mimeType << just << where_ (String.startsWith "image/")) file_
         || has (mimeType << just << where_ (String.startsWith "text/html")) file_
+        || has (mimeType << just << where_ ((==) "chemical/x-pdb")) file_
 
 
 decodeTableMeta : Decode.Value -> Maybe Model.TableMeta

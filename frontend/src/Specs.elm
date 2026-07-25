@@ -52,6 +52,8 @@ steps name entry =
                 { children = NotAsked
                 , expanded = False
                 , extras = NotAsked
+                , size = Nothing
+                , mimeType = Nothing
                 }
             }
         , displayName = Maybe.withDefault name entry.displayName
