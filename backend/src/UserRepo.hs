@@ -37,13 +37,14 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import NixEvaluator (EvalPriority (..), RepoExpression, RepoSource, defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, mutableRepoSource, rawExpression, repoSource, rewarmRevision)
-import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FileLock (SharedExclusive (..))
 import qualified System.FileLock
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import System.Posix.Process (getProcessID)
 import System.Process (
     CreateProcess (..),
     proc,
@@ -134,16 +135,36 @@ runGit args = do
     readCreateProcessWithExitCode (proc "git" ("-C" : repoPath : args)) ""
 
 runGitIn :: FilePath -> [String] -> IO (ExitCode, String, String)
-runGitIn path args = do
-    readCreateProcessWithExitCode (proc "git" ("-C" : path : args)) ""
+runGitIn path args = readCreateProcessWithExitCode (proc "git" ("-C" : path : args)) ""
 
 runGitWithSshKey :: FilePath -> FilePath -> [String] -> IO (ExitCode, String, String)
 runGitWithSshKey keyfile path args = do
-    let sshCommand = "ssh -i " ++ keyfile ++ " -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-    baseEnv <- getEnvironment
-    let env_ = ("GIT_SSH_COMMAND", sshCommand) : baseEnv
-        process = (proc "git" ("-C" : path : args)){env = Just env_}
-    readCreateProcessWithExitCode process ""
+    controlPath <- sshControlPath
+    let sshOptions =
+            [ "IdentitiesOnly=yes"
+            , "StrictHostKeyChecking=accept-new"
+            , "ControlMaster=auto"
+            , "ControlPersist=600"
+            , "ControlPath=" ++ controlPath
+            ]
+        sshCommand =
+            unwords . map shellQuote $
+                ["ssh", "-i", keyfile] ++ concatMap (\option -> ["-o", option]) sshOptions
+    environment <- (("GIT_SSH_COMMAND", sshCommand) :) <$> getEnvironment
+    readCreateProcessWithExitCode (proc "git" ("-C" : path : args)){env = Just environment} ""
+
+sshControlPath :: IO FilePath
+sshControlPath = do
+    sshDir <- (</> ".ssh") <$> getHomeDirectory
+    createDirectoryIfMissing True sshDir
+    pid <- getProcessID
+    pure $ sshDir </> ("pointy-user-repo-" ++ show pid ++ "-%C")
+
+shellQuote :: String -> String
+shellQuote value = "'" ++ concatMap escape value ++ "'"
+  where
+    escape '\'' = "'\\''"
+    escape char = [char]
 
 getRemoteUrl :: IO (Maybe Text)
 getRemoteUrl = do
@@ -343,7 +364,6 @@ withWriteRepoTransactionRaw action = do
         _ <- liftIO $ runGitIn worktreePath ["config", "user.email", "backend@invalid.local"]
         _ <- liftIO $ runGitIn worktreePath ["config", "user.name", "backend"]
 
-        -- Run the action, ensuring we clean up the worktree afterwards
         ExceptT $
             runExceptT (action (WriteRepoContext worktreePath)) `finally` do
                 _ <- runGitIn repoPath ["worktree", "remove", "--force", worktreePath]
