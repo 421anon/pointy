@@ -91,8 +91,10 @@ runNixEvalImpureJsonExpr = ExceptT . evaluateImpure defaultRevisionEvaluator
 runRepoExpression :: (RepoContext ctx) => EvalPriority -> ctx -> RepoExpression -> ExceptT String IO String
 runRepoExpression priority ctx expr = ExceptT $ evaluate defaultRevisionEvaluator priority (repoSource (nixInstallable ctx)) expr
 
-rewarmRepoJsonExpressions :: (RepoContext ctx) => ctx -> NonEmpty String -> IO [Either String String]
-rewarmRepoJsonExpressions ctx attrs = rewarmRevision defaultRevisionEvaluator (repoSource (nixInstallable ctx)) (fmap jsonExpression attrs)
+rewarmRepoJsonExpressions :: (RepoContext ctx) => ctx -> IO (Either String (NonEmpty (key, String))) -> IO (Either String (NonEmpty (key, Either String String)))
+rewarmRepoJsonExpressions ctx resolveAttrs =
+    rewarmRevision defaultRevisionEvaluator (repoSource $ nixInstallable ctx) $
+        fmap (fmap $ fmap $ \(key, attr) -> (key, jsonExpression attr)) resolveAttrs
 
 runNixProcess :: [String] -> IO (Either String String)
 runNixProcess args = do

@@ -61,7 +61,6 @@ data ReplShard = ReplShard
     , replShardSession :: MVar (Maybe ReplSession)
     , replShardInteractive :: TQueue QueuedEval
     , replShardBackground :: TQueue QueuedEval
-    , replShardWarmEvaluation :: MVar (Int, Maybe Evaluation)
     , replShardMemoryLimitBytes :: MVar Integer
     , replShardSessionGeneration :: MVar Int
     , replShardReplacementActive :: MVar Bool
@@ -70,7 +69,10 @@ data ReplShard = ReplShard
 data ReplWorker = ReplWorker
     { replWorkerKind :: ReplKind
     , replWorkerShards :: [ReplShard]
+    , replWorkerWarmRevision :: MVar (Int, Maybe WarmRevision)
     }
+
+data WarmRevision = WarmRevision RepoSource (IO (Either String (NonEmpty RepoExpression)))
 
 data QueuedEval = QueuedEval Evaluation (TMVar (Either String String))
 
@@ -121,13 +123,20 @@ evaluateImpure evaluator expr =
     evaluateRequest evaluator Interactive $
         Evaluation (ImpureId expr) (NixEvalRequest True EvalJson Nothing $ EvalExpr expr)
 
-rewarmRevision :: RevisionEvaluator -> RepoSource -> NonEmpty RepoExpression -> IO [Either String String]
-rewarmRevision evaluator source expressions = do
-    pending <- forM (map (repoEvaluation source) $ NonEmpty.toList expressions) $ \evaluation -> do
-        response <- newEmptyTMVarIO
-        pure (WarmEvaluation evaluation $ Just $ atomically . putTMVar response, response)
-    rewarmWorker (pureWorker evaluator) $ map fst pending
-    mapM (atomically . takeTMVar . snd) pending
+rewarmRevision :: RevisionEvaluator -> RepoSource -> IO (Either String (NonEmpty (key, RepoExpression))) -> IO (Either String (NonEmpty (key, Either String String)))
+rewarmRevision evaluator source resolveExpressions = do
+    let worker = pureWorker evaluator
+        revision = WarmRevision source $ fmap (fmap $ fmap snd) resolveExpressions
+    modifyMVar_ (replWorkerWarmRevision worker) $ \(version, _) -> pure (version + 1, Just revision)
+    resolved <- resolveExpressions `catch` \(err :: SomeException) -> pure $ Left $ "revision expression discovery failed: " ++ show err
+    case resolved of
+        Left err -> pure $ Left err
+        Right expressions -> do
+            pending <- forM expressions $ \(key, repoExpr) -> do
+                response <- newEmptyTMVarIO
+                pure (key, WarmEvaluation (repoEvaluation source repoExpr) $ Just $ atomically . putTMVar response, response)
+            rewarmWorker worker $ fmap (\(_, warm, _) -> warm) pending
+            Right <$> forM pending (\(key, _, response) -> fmap ((,) key) $ atomically $ takeTMVar response)
 
 repoEvaluation :: RepoSource -> RepoExpression -> Evaluation
 repoEvaluation (RepoSource installable) repoExpr =
@@ -143,7 +152,8 @@ repoEvaluation (RepoSource installable) repoExpr =
 newWorker :: ReplKind -> Int -> IO ReplWorker
 newWorker kind shardCount = do
     shards <- mapM newShard [0 .. shardCount - 1]
-    let worker = ReplWorker kind shards
+    warmRevision <- newMVar (0, Nothing)
+    let worker = ReplWorker kind shards warmRevision
     mapM_ (void . forkIO . replShardLoop worker) shards
     pure worker
   where
@@ -152,7 +162,6 @@ newWorker kind shardCount = do
             <$> newMVar Nothing
             <*> newTQueueIO
             <*> newTQueueIO
-            <*> newMVar (0, Nothing)
             <*> newMVar initialReplMemoryLimitBytes
             <*> newMVar 0
             <*> newMVar False
@@ -202,17 +211,24 @@ expressionHash (ImpureId expr) = hashString 2 expr
 hashString :: Word -> String -> Word
 hashString = foldl' $ \hash c -> hash * 33 + fromIntegral (ord c)
 
-rewarmWorker :: ReplWorker -> [WarmEvaluation] -> IO ()
-rewarmWorker _ [] = pure ()
-rewarmWorker worker evaluations@(first : _) =
+rewarmWorker :: ReplWorker -> NonEmpty WarmEvaluation -> IO ()
+rewarmWorker worker evaluations =
     mapConcurrently_ rewarm $ replWorkerShards worker
   where
-    fallback = first{warmCallback = Nothing}
     rewarm shard =
         mapM_ (runWarmEvaluation worker shard) $
-            case filter ((== replShardId shard) . evaluationShardIndex worker . warmEvaluation) evaluations of
-                [] -> [fallback]
-                assigned -> assigned
+            shardWarmItems worker shard warmEvaluation (\pending -> pending{warmCallback = Nothing}) evaluations
+
+shardWarmItems :: ReplWorker -> ReplShard -> (item -> Evaluation) -> (item -> item) -> NonEmpty item -> [item]
+shardWarmItems worker shard evaluationOf fallback items =
+    case filter ((== replShardId shard) . evaluationShardIndex worker . evaluationOf) $ NonEmpty.toList items of
+        [] -> [fallback $ NonEmpty.head items]
+        assigned -> assigned
+
+resolveWarmRevision :: WarmRevision -> IO (Either String (NonEmpty Evaluation))
+resolveWarmRevision (WarmRevision source resolveExpressions) =
+    fmap (fmap $ fmap $ repoEvaluation source) resolveExpressions
+        `catch` \(err :: SomeException) -> pure $ Left $ "revision expression discovery failed: " ++ show err
 
 runWarmEvaluation :: ReplWorker -> ReplShard -> WarmEvaluation -> IO ()
 runWarmEvaluation worker shard pending = do
@@ -221,11 +237,6 @@ runWarmEvaluation worker shard pending = do
             `catch` \(err :: SomeException) -> pure $ Left $ "revision evaluator rewarm failed: " ++ show err
     for_ (warmCallback pending) $ \callback ->
         callback result `catch` \(_ :: SomeException) -> pure ()
-
-rememberWarmEvaluation :: ReplShard -> Evaluation -> IO ()
-rememberWarmEvaluation shard evaluation =
-    modifyMVar_ (replShardWarmEvaluation shard) $ \(version, _) ->
-        pure (version + 1, Just evaluation)
 
 scheduleReplacementCheck :: ReplWorker -> ReplShard -> IO ()
 scheduleReplacementCheck worker shard = do
@@ -265,15 +276,15 @@ replaceSession worker shard oldGeneration oldMemoryBytes =
                     logWarning $ replacementPrefix ++ "replaced at " ++ formatMiB oldMemoryBytes
   where
     warmAndSwap standby = do
-        (version, mEvaluation) <- readMVar $ replShardWarmEvaluation shard
-        warmResult <- maybe (pure $ Right ()) (fmap (void . outcomeResult) . runStandby standby) mEvaluation
+        (version, mRevision) <- readMVar $ replWorkerWarmRevision worker
+        warmResult <- maybe (pure $ Right ()) (warmStandbyRevision standby) mRevision
         case warmResult of
             Left err -> pure $ Left err
             Right () -> do
                 growLimitForStandby standby
                 swapResult <- modifyMVar (replShardSession shard) $ \mSession -> do
                     generation <- readMVar $ replShardSessionGeneration shard
-                    (latestVersion, _) <- readMVar $ replShardWarmEvaluation shard
+                    (latestVersion, _) <- readMVar $ replWorkerWarmRevision worker
                     if generation /= oldGeneration
                         then pure (mSession, SwapObsolete)
                         else
@@ -286,6 +297,17 @@ replaceSession worker shard oldGeneration oldMemoryBytes =
                     SwapRetry -> warmAndSwap standby
                     SwapObsolete -> pure $ Right Nothing
                     SwapComplete oldSession -> pure $ Right oldSession
+
+    warmStandbyRevision standby revision =
+        resolveWarmRevision revision >>= \case
+            Left err -> pure $ Left err
+            Right evaluations -> warmEvaluations $ shardWarmItems worker shard id id evaluations
+      where
+        warmEvaluations [] = pure $ Right ()
+        warmEvaluations (evaluation : rest) =
+            fmap outcomeResult (runStandby standby evaluation) >>= \case
+                Left err -> pure $ Left err
+                Right _ -> warmEvaluations rest
 
     runStandby standby evaluation =
         runRequest standby (evaluationRequest evaluation)
@@ -336,9 +358,7 @@ runWithShard mayRetry worker shard evaluation = do
                         closeSession session
                         bumpSessionGeneration shard
                         pure (Nothing, result)
-                    ReplSucceeded _ -> do
-                        rememberWarmEvaluation shard evaluation
-                        pure (Just session, result)
+                    ReplSucceeded _ -> pure (Just session, result)
                     ReplFailed _ -> pure (Just session, result)
     case outcome of
         ReplSucceeded output -> do

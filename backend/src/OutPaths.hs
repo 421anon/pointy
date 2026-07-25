@@ -19,7 +19,7 @@ import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, new
 
 import Control.Concurrent (forkIO)
 import Control.Exception (SomeException, catch, handle)
-import Control.Monad (forM, forM_, void, when)
+import Control.Monad (forM_, void, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, genericParseJSON)
@@ -194,34 +194,29 @@ scheduleHeadOutPathsWarm = warmProjectOutPaths
 
 warmProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
 warmProjectOutPathsForCommit ctx = do
-    let commit = readCommitHash ctx
-        commitText = pack commit
+    let commitText = pack $ readCommitHash ctx
+    warmed <- liftIO $ rewarmRepoJsonExpressions ctx $ revisionProjectExpressions ctx
+    results <- either throwError pure warmed
+    forM_ results $ \case
+        (Nothing, result) ->
+            either (throwError . ("Failed to warm #pointy.projects: " ++)) (const $ pure ()) result
+        (Just pid, result) -> do
+            value <- either throwError pure $ decodeOutPathResult pid result
+            (mv, isNew) <- liftIO $ claimProjectOutPaths (pid, commitText)
+            if isNew
+                then liftIO $ completeProjectOutPaths (pid, commitText) mv $ Right value
+                else
+                    liftIO (readMVar mv)
+                        >>= either
+                            (throwError . (("Project " ++ show pid ++ " outPath evaluation failed: ") ++))
+                            (const $ pure ())
+
+revisionProjectExpressions :: ReadRepoContext -> IO (Either String (NonEmpty.NonEmpty (Maybe Int, String)))
+revisionProjectExpressions ctx = runExceptT $ do
     projectsRaw <- runNixEvalJsonInRepo ctx "#pointy.projects"
     projectDefs <-
         maybe (throwError "Failed to parse #pointy.projects") pure (decodeJson projectsRaw :: Maybe (Map String ProjectDef))
-    claims <- liftIO $ forM (map projectDefId $ Map.elems projectDefs) $ \pid -> do
-        (mv, isNew) <- claimProjectOutPaths (pid, commitText)
-        pure (pid, mv, isNew)
-
-    let newClaims = [(pid, mv) | (pid, mv, True) <- claims]
-    forM_ [(pid, mv) | (pid, mv, False) <- claims] $ \(pid, mv) ->
-        liftIO (readMVar mv)
-            >>= either
-                (throwError . (("Project " ++ show pid ++ " outPath evaluation failed: ") ++))
-                (const $ pure ())
-
-    case NonEmpty.nonEmpty newClaims of
-        Nothing -> pure ()
-        Just pending -> do
-            results <-
-                liftIO $
-                    rewarmRepoJsonExpressions ctx $
-                        fmap (projectOutPathAttr . fst) pending
-            decoded <- liftIO $ forM (zip (NonEmpty.toList pending) results) $ \((pid, mv), result) -> do
-                let value = decodeOutPathResult pid result
-                completeProjectOutPaths (pid, commitText) mv value
-                pure value
-            mapM_ (either throwError $ const $ pure ()) decoded
+    pure $ NonEmpty.fromList $ (Nothing, "#pointy.projects") : [(Just pid, projectOutPathAttr pid) | pid <- map projectDefId $ Map.elems projectDefs]
 
 projectOutPathAttr :: Int -> String
 projectOutPathAttr pid = "#pointy.projectOutPaths." ++ show pid

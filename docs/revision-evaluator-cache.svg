@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1110" viewBox="0 0 1200 1110" role="img" aria-labelledby="title desc">
   <title id="title">Revision evaluator worker rack and RAM lifecycle</title>
-  <desc id="desc">Expressions route to four Nix evaluation workers. Each worker owns two request queues, one running Nix process, a memory gauge, its last successful request, and a replacement slot. Commit changes reload the same process. Memory checks run in the background; an over-limit worker keeps serving while a replacement gets ready, then switches over briefly.</desc>
+  <desc id="desc">Expressions route to four Nix evaluation workers. The cache keeps the current revision and recomputes each shard's expressions whenever it warms a Nix process. Initial and replacement processes evaluate the same shard expressions. Memory checks run in the background; an over-limit worker keeps serving while a replacement gets ready, then switches over briefly.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
@@ -99,7 +99,7 @@
 
   <rect x="245" y="270" width="230" height="48" class="api"/>
   <text x="360" y="291" text-anchor="middle" class="label">New commit available</text>
-  <text x="360" y="309" text-anchor="middle" class="small">reload the same workers</text>
+  <text x="360" y="309" text-anchor="middle" class="tiny">recompute expressions · warm workers</text>
   <path d="M475 294 H1062" class="blue-bus"/>
   <path d="M707 294 V245" class="blue-line"/>
   <path d="M822 294 V245" class="blue-line"/>
@@ -107,7 +107,7 @@
   <path d="M1052 294 V245" class="blue-line"/>
 
   <rect x="35" y="365" width="1130" height="220" class="panel"/>
-  <text x="60" y="398" class="section">Worker W1 · what it owns</text>
+  <text x="60" y="398" class="section">Worker W1 · request and replacement path</text>
   <rect x="65" y="410" width="1070" height="145" class="worker-selected"/>
   <text x="88" y="437" class="label">W1</text><circle cx="122" cy="431" r="7" class="led"/>
 
@@ -135,9 +135,8 @@
   <text x="595" y="531" text-anchor="middle" class="tiny">green = ready</text>
   <path d="M460 493 H500" class="line"/>
   <rect x="715" y="495" width="185" height="48" class="api"/>
-  <text x="807" y="514" text-anchor="middle" class="small">Saved request</text>
-  <text x="807" y="534" text-anchor="middle" class="tiny">used to prepare replacement</text>
-  <path d="M690 520 H715" class="line"/>
+  <text x="807" y="514" text-anchor="middle" class="small">Current revision</text>
+  <text x="807" y="534" text-anchor="middle" class="tiny">recompute W1 expressions</text>
   <path d="M900 520 H915 V505 H930" class="blue-line"/>
 
   <rect x="930" y="420" width="190" height="105" class="standby"/>
@@ -152,7 +151,7 @@
   <text x="127" y="705" text-anchor="middle" class="label">Regular request</text>
   <rect x="55" y="755" width="145" height="58" class="api"/>
   <text x="127" y="780" text-anchor="middle" class="label">New commit</text>
-  <text x="127" y="801" text-anchor="middle" class="small">reload current Nix</text>
+  <text x="127" y="801" text-anchor="middle" class="small">set current revision</text>
 
   <rect x="250" y="695" width="180" height="90" class="active"/>
   <text x="340" y="727" text-anchor="middle" class="label">Current Nix process</text>
@@ -163,8 +162,8 @@
   <text x="505" y="735" text-anchor="middle" class="label">Did it work?</text>
 
   <rect x="615" y="695" width="195" height="90" class="box"/>
-  <text x="712" y="722" text-anchor="middle" class="label">Save this request</text>
-  <text x="712" y="744" text-anchor="middle" class="small">return answer</text>
+  <text x="712" y="722" text-anchor="middle" class="label">Return answer</text>
+  <text x="712" y="744" text-anchor="middle" class="small">current Nix keeps serving</text>
   <text x="712" y="765" text-anchor="middle" class="small">check memory separately</text>
 
   <polygon points="885,690 955,740 885,790 815,740" class="decision"/>
@@ -191,14 +190,15 @@
   <text x="970" y="724" text-anchor="middle" class="small">no</text>
 
   <rect x="635" y="835" width="210" height="65" class="paused"/>
-  <text x="740" y="860" text-anchor="middle" class="label">Old Nix keeps serving</text>
-  <text x="740" y="881" text-anchor="middle" class="small">replacement starts beside it</text>
+  <text x="740" y="855" text-anchor="middle" class="label">Old Nix keeps serving</text>
+  <text x="740" y="877" text-anchor="middle" class="small">recompute W1 expressions</text>
+  <text x="740" y="895" text-anchor="middle" class="tiny">from the current revision</text>
   <path d="M885 790 V813 H740 V835" class="orange-line"/>
   <text x="898" y="812" class="small">yes</text>
 
   <rect x="635" y="930" width="210" height="65" class="standby"/>
   <text x="740" y="955" text-anchor="middle" class="label">Prepare replacement</text>
-  <text x="740" y="976" text-anchor="middle" class="small">start Nix · catch up</text>
+  <text x="740" y="976" text-anchor="middle" class="small">start Nix · evaluate all</text>
   <path d="M740 900 V930" class="orange-line"/>
 
   <polygon points="920,920 990,962 920,1004 850,962" class="decision"/>
