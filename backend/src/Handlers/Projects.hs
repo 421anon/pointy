@@ -15,7 +15,7 @@ import Data.Aeson (Result (..), Value (..), eitherDecode, encode, fromJSON)
 import Data.Aeson.Key (toText)
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Fix (foldFix)
-import Data.List (foldl', sortOn)
+import Data.List (foldl')
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
 import Data.Scientific (floatingOrInteger)
@@ -144,15 +144,12 @@ jsonToNix bs = do
 
 jsonValueToNixExpr :: Value -> NExpr
 jsonValueToNixExpr (Object obj) =
-    let pairs = sortOn fst [(toText k, jsonValueToNixExpr v) | (k, v) <- KeyMap.toList obj]
-     in attrsE pairs
+    attrsE [(toText key, jsonValueToNixExpr value) | (key, value) <- KeyMap.toAscList obj]
 jsonValueToNixExpr (Array arr) = mkList (map jsonValueToNixExpr $ V.toList arr)
 jsonValueToNixExpr (String text)
     | T.any (== '\n') text = mkIndentedStr 0 text
     | otherwise = mkStr text
-jsonValueToNixExpr (Number number) = case floatingOrInteger number of
-    Left float -> mkFloat float
-    Right integer -> mkInt integer
+jsonValueToNixExpr (Number number) = either mkFloat mkInt $ floatingOrInteger number
 jsonValueToNixExpr (Bool boolean) = mkBool boolean
 jsonValueToNixExpr Null = mkNull
 
@@ -160,8 +157,5 @@ renderMultilineNix :: NExpr -> T.Text
 renderMultilineNix = renderStrict . layoutPretty defaultLayoutOptions . getDoc . foldFix renderNode
   where
     renderNode (NStr (Indented _ [Plain text])) =
-        simpleExpr $ "''" <> hardline <> pretty (escapeIndented text) <> "''"
+        simpleExpr $ "''" <> hardline <> pretty (T.replace "${" "''${" $ T.replace "''" "'''" text) <> "''"
     renderNode node = exprFNixDoc node
-
-escapeIndented :: T.Text -> T.Text
-escapeIndented = T.replace "${" "''${" . T.replace "''" "'''"
