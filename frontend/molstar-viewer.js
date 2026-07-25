@@ -1,5 +1,15 @@
-import { Viewer } from "molstar/lib/apps/viewer/app";
-import "molstar/lib/mol-plugin-ui/skin/light.scss";
+let molstarPromise = null;
+
+function loadMolstar() {
+  if (molstarPromise === null) {
+    molstarPromise = Promise.all([
+      import(/* webpackChunkName: "molstar" */ "molstar/lib/apps/viewer/app"),
+      import(/* webpackChunkName: "molstar" */ "molstar/lib/mol-plugin-ui/skin/light.scss"),
+    ]).then(([{ Viewer }]) => Viewer);
+  }
+
+  return molstarPromise;
+}
 
 class MolstarViewer extends HTMLElement {
   constructor() {
@@ -24,6 +34,9 @@ class MolstarViewer extends HTMLElement {
 
   async _initViewer(container, generation) {
     try {
+      const Viewer = await loadMolstar();
+      if (generation !== this._generation || !this.isConnected) return;
+
       const viewer = await Viewer.create(container, {
         layoutIsExpanded: false,
         layoutShowLog: false,
