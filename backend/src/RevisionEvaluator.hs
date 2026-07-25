@@ -81,10 +81,12 @@ data ReplWorker = ReplWorker
 
 data WarmRevision = WarmRevision RepoSource (IO (Either String (NonEmpty RepoExpression)))
 
+type ResultSlot = MVar (Either String String)
+
 data RevisionResultCache = RevisionResultCache
     { resultCurrentRevision :: Maybe RepoSource
     , resultRevisionOrder :: [RepoSource]
-    , resultRevisions :: Map.Map RepoSource (Map.Map ExpressionId (MVar (Either String String)))
+    , resultRevisions :: Map.Map RepoSource (Map.Map ExpressionId ResultSlot)
     }
 
 data QueuedEval = QueuedEval Evaluation (TMVar (Either String String))
@@ -190,7 +192,7 @@ activateRevisionResults evaluator source =
             pruneRevisionResults $
                 (touchResultRevision source cache){resultCurrentRevision = Just source}
 
-claimRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> IO (MVar (Either String String), Bool)
+claimRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> IO (ResultSlot, Bool)
 claimRevisionResult evaluator source exprId =
     modifyMVar (revisionResults evaluator) $ \cache -> do
         let cache' = pruneRevisionResults $ touchResultRevision source cache
@@ -202,29 +204,28 @@ claimRevisionResult evaluator source exprId =
                 let revisions = Map.insert source (Map.insert exprId result results) $ resultRevisions cache'
                 pure (cache'{resultRevisions = revisions}, (result, True))
 
-completeRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> MVar (Either String String) -> Either String String -> IO ()
+completeRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> ResultSlot -> Either String String -> IO ()
 completeRevisionResult evaluator source exprId resultSlot result = do
     completed <- tryPutMVar resultSlot result
     when (completed && isLeft result) $
         discardRevisionResult evaluator source exprId resultSlot
 
-discardRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> MVar (Either String String) -> IO ()
+discardRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> ResultSlot -> IO ()
 discardRevisionResult evaluator source exprId resultSlot =
     modifyMVar_ (revisionResults evaluator) $ \cache ->
-        case Map.lookup source (resultRevisions cache) >>= Map.lookup exprId of
-            Just cachedSlot
-                | cachedSlot == resultSlot ->
-                    let revisionResults' = Map.delete exprId $ Map.findWithDefault Map.empty source $ resultRevisions cache
-                        revisions =
-                            if Map.null revisionResults'
-                                then Map.delete source $ resultRevisions cache
-                                else Map.insert source revisionResults' $ resultRevisions cache
-                        order =
-                            if Map.member source revisions
-                                then resultRevisionOrder cache
-                                else filter (/= source) $ resultRevisionOrder cache
-                     in pure cache{resultRevisionOrder = order, resultRevisions = revisions}
-            _ -> pure cache
+        let revisions = Map.update discard source $ resultRevisions cache
+         in pure
+                cache
+                    { resultRevisionOrder = filter (`Map.member` revisions) $ resultRevisionOrder cache
+                    , resultRevisions = revisions
+                    }
+  where
+    discard results
+        | Map.lookup exprId results /= Just resultSlot = Just results
+        | Map.null remaining = Nothing
+        | otherwise = Just remaining
+      where
+        remaining = Map.delete exprId results
 
 touchResultRevision :: RepoSource -> RevisionResultCache -> RevisionResultCache
 touchResultRevision source cache =

@@ -63,7 +63,6 @@ data DirEntry = DirEntry
     }
     deriving (Generic, Show, ToJSON)
 
--- | Resolve a step id + optional commit to a store output path.
 resolveStepOutPath :: Int -> Maybe Text -> Handler Text
 resolveStepOutPath stepId mCommit = do
     repoPath <- liftIO userRepoPath

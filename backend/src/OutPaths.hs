@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 module OutPaths (
     getProjectOutPaths,
@@ -19,13 +18,13 @@ import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Concurrent (forkIO)
 import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, void, when)
-import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
+import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, genericParseJSON)
 import Data.Char (toLower)
 import Data.Either (isRight)
 import Data.List (stripPrefix)
-import qualified Data.List.NonEmpty as NonEmpty
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
@@ -71,10 +70,7 @@ prefixedFieldOptions prefix =
         }
 
 getProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
-getProjectOutPaths = evalProjectOutPaths
-
-evalProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
-evalProjectOutPaths pid targetCommit = runExceptT $ do
+getProjectOutPaths pid targetCommit = runExceptT $ do
     let attr = projectOutPathAttr pid
     withExceptT ("Failed to prepare project commit: " ++) $
         ensureRepoCommit $
@@ -102,25 +98,21 @@ warmProjectOutPaths = do
             runExceptT (warmProjectOutPathsForCommit $ ReadRepoContext repoPath $ unpack commit)
                 >>= either (putStrLn . ("Project outPath warm failed: " ++)) pure
 
-scheduleHeadOutPathsWarm :: IO ()
-scheduleHeadOutPathsWarm = warmProjectOutPaths
-
 warmProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
 warmProjectOutPathsForCommit ctx = do
-    warmed <- liftIO $ rewarmRepoJsonExpressions ctx $ revisionProjectExpressions ctx
-    results <- either throwError pure warmed
+    results <- ExceptT $ rewarmRepoJsonExpressions ctx $ revisionProjectExpressions ctx
     forM_ results $ \case
         (Nothing, result) ->
             either (throwError . ("Failed to warm #pointy.projects: " ++)) (const $ pure ()) result
         (Just pid, result) ->
             void $ either throwError pure $ decodeOutPathResult pid result
 
-revisionProjectExpressions :: ReadRepoContext -> IO (Either String (NonEmpty.NonEmpty (Maybe Int, String)))
+revisionProjectExpressions :: ReadRepoContext -> IO (Either String (NonEmpty (Maybe Int, String)))
 revisionProjectExpressions ctx = runExceptT $ do
     projectsRaw <- runNixEvalJsonInRepo ctx "#pointy.projects"
     projectDefs <-
         maybe (throwError "Failed to parse #pointy.projects") pure (decodeJson projectsRaw :: Maybe (Map String ProjectDef))
-    pure $ NonEmpty.fromList $ (Nothing, "#pointy.projects") : [(Just pid, projectOutPathAttr pid) | pid <- map projectDefId $ Map.elems projectDefs]
+    pure $ (Nothing, "#pointy.projects") :| [(Just pid, projectOutPathAttr pid) | pid <- map projectDefId $ Map.elems projectDefs]
 
 projectOutPathAttr :: Int -> String
 projectOutPathAttr pid = "#pointy.projectOutPaths." ++ show pid
@@ -156,7 +148,7 @@ scheduleWarm =
 
 runWarmSafely :: IO ()
 runWarmSafely =
-    scheduleHeadOutPathsWarm `catch` handleWarmException
+    warmProjectOutPaths `catch` handleWarmException
 
 handleWarmException :: SomeException -> IO ()
 handleWarmException err =
