@@ -17,12 +17,13 @@ module RevisionEvaluator (
 ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.Async (mapConcurrently_)
+import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TMVar, TQueue, atomically, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, takeTMVar, writeTQueue)
 import Control.Exception (SomeException, catch, finally, try)
-import Control.Monad (forM, forever, void, when)
+import Control.Monad (forM, forever, unless, void, when)
 import Data.Char (ord)
+import Data.Either (isRight)
 import Data.Foldable (for_)
 import Data.List (foldl')
 import Data.List.NonEmpty (NonEmpty)
@@ -70,6 +71,7 @@ data ReplWorker = ReplWorker
     { replWorkerKind :: ReplKind
     , replWorkerShards :: [ReplShard]
     , replWorkerWarmRevision :: MVar (Int, Maybe WarmRevision)
+    , replWorkerInitialWarm :: MVar Bool
     }
 
 data WarmRevision = WarmRevision RepoSource (IO (Either String (NonEmpty RepoExpression)))
@@ -135,8 +137,11 @@ rewarmRevision evaluator source resolveExpressions = do
             pending <- forM expressions $ \(key, repoExpr) -> do
                 response <- newEmptyTMVarIO
                 pure (key, WarmEvaluation (repoEvaluation source repoExpr) $ Just $ atomically . putTMVar response, response)
-            rewarmWorker worker $ fmap (\(_, warm, _) -> warm) pending
-            Right <$> forM pending (\(key, _, response) -> fmap ((,) key) $ atomically $ takeTMVar response)
+            warmed <- rewarmWorker worker $ fmap (\(_, warm, _) -> warm) pending
+            results <- forM pending (\(key, _, response) -> fmap ((,) key) $ atomically $ takeTMVar response)
+            initialWarm <- readMVar $ replWorkerInitialWarm worker
+            when (initialWarm && warmed && all (isRight . snd) results) $ finishInitialWarm worker
+            pure $ Right results
 
 repoEvaluation :: RepoSource -> RepoExpression -> Evaluation
 repoEvaluation (RepoSource installable) repoExpr =
@@ -153,7 +158,8 @@ newWorker :: ReplKind -> Int -> IO ReplWorker
 newWorker kind shardCount = do
     shards <- mapM newShard [0 .. shardCount - 1]
     warmRevision <- newMVar (0, Nothing)
-    let worker = ReplWorker kind shards warmRevision
+    initialWarm <- newMVar $ kind == PureRepl
+    let worker = ReplWorker kind shards warmRevision initialWarm
     mapM_ (void . forkIO . replShardLoop worker) shards
     pure worker
   where
@@ -211,13 +217,14 @@ expressionHash (ImpureId expr) = hashString 2 expr
 hashString :: Word -> String -> Word
 hashString = foldl' $ \hash c -> hash * 33 + fromIntegral (ord c)
 
-rewarmWorker :: ReplWorker -> NonEmpty WarmEvaluation -> IO ()
+rewarmWorker :: ReplWorker -> NonEmpty WarmEvaluation -> IO Bool
 rewarmWorker worker evaluations =
-    mapConcurrently_ rewarm $ replWorkerShards worker
+    and <$> mapConcurrently rewarm (replWorkerShards worker)
   where
     rewarm shard =
-        mapM_ (runWarmEvaluation worker shard) $
-            shardWarmItems worker shard warmEvaluation (\pending -> pending{warmCallback = Nothing}) evaluations
+        fmap (all isRight) $
+            mapM (runWarmEvaluation worker shard) $
+                shardWarmItems worker shard warmEvaluation (\pending -> pending{warmCallback = Nothing}) evaluations
 
 shardWarmItems :: ReplWorker -> ReplShard -> (item -> Evaluation) -> (item -> item) -> NonEmpty item -> [item]
 shardWarmItems worker shard evaluationOf fallback items =
@@ -230,23 +237,35 @@ resolveWarmRevision (WarmRevision source resolveExpressions) =
     fmap (fmap $ fmap $ repoEvaluation source) resolveExpressions
         `catch` \(err :: SomeException) -> pure $ Left $ "revision expression discovery failed: " ++ show err
 
-runWarmEvaluation :: ReplWorker -> ReplShard -> WarmEvaluation -> IO ()
+runWarmEvaluation :: ReplWorker -> ReplShard -> WarmEvaluation -> IO (Either String String)
 runWarmEvaluation worker shard pending = do
     result <-
         runWithShard True worker shard (warmEvaluation pending)
             `catch` \(err :: SomeException) -> pure $ Left $ "revision evaluator rewarm failed: " ++ show err
     for_ (warmCallback pending) $ \callback ->
         callback result `catch` \(_ :: SomeException) -> pure ()
+    pure result
+
+finishInitialWarm :: ReplWorker -> IO ()
+finishInitialWarm worker = do
+    mapM_ raiseLimit $ replWorkerShards worker
+    modifyMVar_ (replWorkerInitialWarm worker) $ const $ pure False
+  where
+    raiseLimit shard =
+        readMVar (replShardSession shard)
+            >>= mapM_ (\session -> readSessionMemoryBytes session >>= mapM_ (growShardMemoryLimit worker shard "initial warm"))
 
 scheduleReplacementCheck :: ReplWorker -> ReplShard -> IO ()
 scheduleReplacementCheck worker shard = do
-    started <- modifyMVar (replShardReplacementActive shard) $ \active ->
-        pure (True, not active)
-    when started $
-        void $
-            forkIO $
-                checkShardMemory worker shard
-                    `finally` modifyMVar_ (replShardReplacementActive shard) (const $ pure False)
+    initialWarm <- readMVar $ replWorkerInitialWarm worker
+    unless initialWarm $ do
+        started <- modifyMVar (replShardReplacementActive shard) $ \active ->
+            pure (True, not active)
+        when started $
+            void $
+                forkIO $
+                    checkShardMemory worker shard
+                        `finally` modifyMVar_ (replShardReplacementActive shard) (const $ pure False)
 
 checkShardMemory :: ReplWorker -> ReplShard -> IO ()
 checkShardMemory worker shard = do
@@ -314,29 +333,34 @@ replaceSession worker shard oldGeneration oldMemoryBytes =
             `catch` \(err :: SomeException) -> pure (ReplDied $ show err)
 
     growLimitForStandby standby =
-        readSessionMemoryBytes standby >>= mapM_ adjust
-      where
-        adjust standbyMemoryBytes =
-            modifyMVar_ (replShardMemoryLimitBytes shard) $ \memoryLimit ->
-                if standbyMemoryBytes <= memoryLimit
-                    then pure memoryLimit
-                    else do
-                        let grownLimit = until (> standbyMemoryBytes) (* 2) memoryLimit
-                        logWarning $
-                            replacementPrefix
-                                ++ "warmed replacement uses "
-                                ++ formatMiB standbyMemoryBytes
-                                ++ "; growing limit from "
-                                ++ formatMiB memoryLimit
-                                ++ " to "
-                                ++ formatMiB grownLimit
-                        pure grownLimit
+        readSessionMemoryBytes standby >>= mapM_ (growShardMemoryLimit worker shard "warmed replacement")
 
     replacementPrefix =
         show (replWorkerKind worker)
             ++ " shard "
             ++ show (replShardId shard)
             ++ " RAM replacement "
+
+growShardMemoryLimit :: ReplWorker -> ReplShard -> String -> Integer -> IO ()
+growShardMemoryLimit worker shard reason memoryBytes =
+    modifyMVar_ (replShardMemoryLimitBytes shard) $ \memoryLimit ->
+        if memoryBytes <= memoryLimit
+            then pure memoryLimit
+            else do
+                let grownLimit = until (> memoryBytes) (* 2) memoryLimit
+                logWarning $
+                    show (replWorkerKind worker)
+                        ++ " shard "
+                        ++ show (replShardId shard)
+                        ++ " "
+                        ++ reason
+                        ++ " uses "
+                        ++ formatMiB memoryBytes
+                        ++ "; growing limit from "
+                        ++ formatMiB memoryLimit
+                        ++ " to "
+                        ++ formatMiB grownLimit
+                pure grownLimit
 
 bumpSessionGeneration :: ReplShard -> IO ()
 bumpSessionGeneration shard =

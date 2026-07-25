@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1110" viewBox="0 0 1200 1110" role="img" aria-labelledby="title desc">
   <title id="title">Revision evaluator worker rack and RAM lifecycle</title>
-  <desc id="desc">Expressions route to four Nix evaluation workers. The cache keeps the current revision and recomputes each shard's expressions whenever it warms a Nix process. Initial and replacement processes evaluate the same shard expressions. Memory checks run in the background; an over-limit worker keeps serving while a replacement gets ready, then switches over briefly.</desc>
+  <desc id="desc">Expressions route to four Nix evaluation workers. The cache keeps the current revision and recomputes each shard's expressions whenever it warms a Nix process. Initial and replacement processes evaluate the same shard expressions. During startup, an over-limit worker stays online while its limit grows with a warning. Later memory pressure prepares a replacement beside the serving worker, then switches over briefly.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
@@ -97,10 +97,11 @@
     <rect x="12" y="69" width="81" height="28" class="active"/><text x="52" y="87" text-anchor="middle" class="tiny">RUNNING NIX</text>
   </g>
 
-  <rect x="245" y="270" width="230" height="48" class="api"/>
-  <text x="360" y="291" text-anchor="middle" class="label">New commit available</text>
-  <text x="360" y="309" text-anchor="middle" class="tiny">recompute expressions · warm workers</text>
-  <path d="M475 294 H1062" class="blue-bus"/>
+  <rect x="230" y="255" width="260" height="75" class="api"/>
+  <text x="360" y="278" text-anchor="middle" class="label">Backend start or new commit</text>
+  <text x="360" y="300" text-anchor="middle" class="small">recompute expressions · warm workers</text>
+  <text x="360" y="320" text-anchor="middle" class="tiny">startup: raise limit if needed · no restart</text>
+  <path d="M490 294 H1062" class="blue-bus"/>
   <path d="M707 294 V245" class="blue-line"/>
   <path d="M822 294 V245" class="blue-line"/>
   <path d="M937 294 V245" class="blue-line"/>
@@ -128,7 +129,7 @@
   <line x1="640" y1="430" x2="640" y2="468" class="limit"/>
   <text x="640" y="472" text-anchor="middle" class="tiny">limit</text>
   <path d="M640 450 H900 V472 H930" class="orange-line"/>
-  <text x="790" y="442" text-anchor="middle" class="tiny">over limit starts replacement</text>
+  <text x="770" y="434" text-anchor="middle" class="tiny">after startup, over limit starts replacement</text>
 
   <rect x="500" y="480" width="190" height="63" class="active"/>
   <text x="595" y="506" text-anchor="middle" class="label">Running Nix REPL</text>
