@@ -51,7 +51,7 @@
   <text x="130" y="158" text-anchor="middle" class="label">UserRepo</text>
   <text x="130" y="181" text-anchor="middle" class="small">OutPaths / handlers</text>
 
-  <rect x="245" y="120" width="190" height="90" class="api"/>
+  <rect x="235" y="120" width="210" height="90" class="api"/>
   <text x="340" y="148" text-anchor="middle" class="label">Expression request</text>
   <text x="340" y="171" text-anchor="middle" class="small">stable request ID</text>
   <text x="340" y="192" text-anchor="middle" class="small">what to evaluate</text>
@@ -61,51 +61,50 @@
   <text x="535" y="158" text-anchor="middle" class="label">Pick worker</text>
   <text x="535" y="181" text-anchor="middle" class="tiny">same ID → same worker</text>
 
-  <path d="M205 165 H245" class="line"/>
-  <path d="M435 165 H475" class="line"/>
+  <path d="M205 165 H235" class="line"/>
+  <path d="M445 165 H475" class="line"/>
   <path d="M595 165 H645" class="line"/>
 
   <rect x="645" y="100" width="490" height="165" class="box"/>
   <text x="665" y="125" class="label">Four workers kept ready</text>
 
-  <g transform="translate(670 137)">
-    <rect width="95" height="105" class="worker"/>
-    <text x="14" y="21" class="label">W0</text><circle cx="78" cy="17" r="6" class="led"/>
-    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">queue</text>
-    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">RUNNING NIX</text>
-    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="39" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  <g transform="translate(655 137)">
+    <rect width="105" height="105" class="worker"/>
+    <text x="14" y="21" class="label">W0</text><circle cx="88" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="81" height="18" class="tray"/><text x="52" y="44" text-anchor="middle" class="tiny">queue</text>
+    <rect x="12" y="55" width="81" height="7" class="gauge"/><rect x="13" y="56" width="43" height="5" class="gauge-fill"/><line x1="72" y1="52" x2="72" y2="65" class="limit"/>
+    <rect x="12" y="69" width="81" height="28" class="active"/><text x="52" y="87" text-anchor="middle" class="tiny">RUNNING NIX</text>
   </g>
-  <g transform="translate(785 137)">
-    <rect width="95" height="105" class="worker-selected"/>
-    <text x="14" y="21" class="label">W1</text><circle cx="78" cy="17" r="6" class="led"/>
-    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">queue</text>
-    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">RUNNING NIX</text>
-    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="45" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  <g transform="translate(770 137)">
+    <rect width="105" height="105" class="worker-selected"/>
+    <text x="14" y="21" class="label">W1</text><circle cx="88" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="81" height="18" class="tray"/><text x="52" y="44" text-anchor="middle" class="tiny">queue</text>
+    <rect x="12" y="55" width="81" height="7" class="gauge"/><rect x="13" y="56" width="49" height="5" class="gauge-fill"/><line x1="72" y1="52" x2="72" y2="65" class="limit"/>
+    <rect x="12" y="69" width="81" height="28" class="active"/><text x="52" y="87" text-anchor="middle" class="tiny">RUNNING NIX</text>
   </g>
-  <g transform="translate(900 137)">
-    <rect width="95" height="105" class="worker"/>
-    <text x="14" y="21" class="label">W2</text><circle cx="78" cy="17" r="6" class="led"/>
-    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">queue</text>
-    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">RUNNING NIX</text>
-    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="32" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  <g transform="translate(885 137)">
+    <rect width="105" height="105" class="worker"/>
+    <text x="14" y="21" class="label">W2</text><circle cx="88" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="81" height="18" class="tray"/><text x="52" y="44" text-anchor="middle" class="tiny">queue</text>
+    <rect x="12" y="55" width="81" height="7" class="gauge"/><rect x="13" y="56" width="36" height="5" class="gauge-fill"/><line x1="72" y1="52" x2="72" y2="65" class="limit"/>
+    <rect x="12" y="69" width="81" height="28" class="active"/><text x="52" y="87" text-anchor="middle" class="tiny">RUNNING NIX</text>
   </g>
-  <g transform="translate(1015 137)">
-    <rect width="95" height="105" class="worker"/>
-    <text x="14" y="21" class="label">W3</text><circle cx="78" cy="17" r="6" class="led"/>
-    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">queue</text>
-    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">RUNNING NIX</text>
-    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="51" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  <g transform="translate(1000 137)">
+    <rect width="105" height="105" class="worker"/>
+    <text x="14" y="21" class="label">W3</text><circle cx="88" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="81" height="18" class="tray"/><text x="52" y="44" text-anchor="middle" class="tiny">queue</text>
+    <rect x="12" y="55" width="81" height="7" class="gauge"/><rect x="13" y="56" width="55" height="5" class="gauge-fill"/><line x1="72" y1="52" x2="72" y2="65" class="limit"/>
+    <rect x="12" y="69" width="81" height="28" class="active"/><text x="52" y="87" text-anchor="middle" class="tiny">RUNNING NIX</text>
   </g>
 
   <rect x="245" y="270" width="230" height="48" class="api"/>
   <text x="360" y="291" text-anchor="middle" class="label">New commit available</text>
   <text x="360" y="309" text-anchor="middle" class="small">reload the same workers</text>
   <path d="M475 294 H1062" class="blue-bus"/>
-  <path d="M717 294 V245" class="blue-line"/>
-  <path d="M832 294 V245" class="blue-line"/>
-  <path d="M947 294 V245" class="blue-line"/>
-  <path d="M1062 294 V245" class="blue-line"/>
-  <text x="760" y="325" class="small">same processes · a commit alone does not restart them</text>
+  <path d="M707 294 V245" class="blue-line"/>
+  <path d="M822 294 V245" class="blue-line"/>
+  <path d="M937 294 V245" class="blue-line"/>
+  <path d="M1052 294 V245" class="blue-line"/>
 
   <rect x="35" y="365" width="1130" height="220" class="panel"/>
   <text x="60" y="398" class="section">Worker W1 · what it owns</text>
@@ -119,32 +118,32 @@
   <text x="225" y="511" text-anchor="middle" class="label">Background work</text>
 
   <rect x="345" y="450" width="115" height="55" class="box"/>
-  <text x="402" y="473" text-anchor="middle" class="label">One at a time</text>
-  <text x="402" y="493" text-anchor="middle" class="tiny">one Nix request</text>
+  <text x="402" y="483" text-anchor="middle" class="label">One at a time</text>
   <path d="M300 447 H330 V466 H345" class="line"/>
   <path d="M300 507 H330 V489 H345" class="line"/>
 
-  <rect x="500" y="425" width="190" height="88" class="active"/>
-  <text x="595" y="451" text-anchor="middle" class="label">Running Nix REPL</text>
-  <text x="595" y="474" text-anchor="middle" class="small">the worker's Nix process</text>
-  <text x="595" y="495" text-anchor="middle" class="tiny">green light = ready</text>
-  <path d="M460 478 H500" class="line"/>
-  <rect x="515" y="522" width="160" height="23" class="api"/>
-  <text x="595" y="538" text-anchor="middle" class="tiny">last successful request</text>
+  <text x="595" y="428" text-anchor="middle" class="label">Memory used</text>
+  <rect x="510" y="438" width="170" height="24" class="gauge"/>
+  <rect x="512" y="440" width="95" height="20" class="gauge-fill"/>
+  <line x1="640" y1="430" x2="640" y2="468" class="limit"/>
+  <text x="640" y="472" text-anchor="middle" class="tiny">limit</text>
+  <path d="M640 450 H900 V472 H930" class="orange-line"/>
+  <text x="790" y="442" text-anchor="middle" class="tiny">over limit starts replacement</text>
 
-  <text x="770" y="433" text-anchor="middle" class="label">Memory used</text>
-  <rect x="725" y="450" width="170" height="24" class="gauge"/>
-  <rect x="727" y="452" width="104" height="20" class="gauge-fill"/>
-  <line x1="855" y1="442" x2="855" y2="482" class="limit"/>
-  <text x="855" y="500" text-anchor="middle" class="tiny">memory limit</text>
+  <rect x="500" y="480" width="190" height="63" class="active"/>
+  <text x="595" y="506" text-anchor="middle" class="label">Running Nix REPL</text>
+  <text x="595" y="531" text-anchor="middle" class="tiny">green = ready</text>
+  <path d="M460 493 H500" class="line"/>
+  <rect x="715" y="495" width="185" height="48" class="api"/>
+  <text x="807" y="514" text-anchor="middle" class="small">Saved request</text>
+  <text x="807" y="534" text-anchor="middle" class="tiny">used to prepare replacement</text>
+  <path d="M690 520 H715" class="line"/>
+  <path d="M900 520 H915 V505 H930" class="blue-line"/>
 
-  <rect x="945" y="420" width="160" height="105" class="standby"/>
+  <rect x="930" y="420" width="190" height="105" class="standby"/>
   <text x="1025" y="450" text-anchor="middle" class="label">Replacement slot</text>
-  <text x="1025" y="474" text-anchor="middle" class="small">normally empty</text>
-  <text x="1025" y="497" text-anchor="middle" class="tiny">new Nix process</text>
-  <text x="1025" y="514" text-anchor="middle" class="tiny">gets ready beside old Nix</text>
-
-  <text x="90" y="575" class="tiny">each worker owns its queues, Nix process, saved request, memory limit, lock, and replacement slot</text>
+  <text x="1025" y="478" text-anchor="middle" class="small">empty until needed</text>
+  <text x="1025" y="505" text-anchor="middle" class="tiny">new Nix gets ready here</text>
 
   <rect x="35" y="605" width="1130" height="490" class="panel"/>
   <text x="60" y="640" class="section">What happens after a request</text>
@@ -162,9 +161,8 @@
 
   <polygon points="505,690 575,740 505,790 435,740" class="decision"/>
   <text x="505" y="735" text-anchor="middle" class="label">Did it work?</text>
-  <text x="505" y="755" text-anchor="middle" class="small">request outcome</text>
 
-  <rect x="625" y="695" width="175" height="90" class="box"/>
+  <rect x="615" y="695" width="195" height="90" class="box"/>
   <text x="712" y="722" text-anchor="middle" class="label">Save this request</text>
   <text x="712" y="744" text-anchor="middle" class="small">return answer</text>
   <text x="712" y="765" text-anchor="middle" class="small">check memory separately</text>
@@ -173,11 +171,11 @@
   <text x="885" y="734" text-anchor="middle" class="label">Memory too high?</text>
   <text x="885" y="755" text-anchor="middle" class="small">after success only</text>
 
-  <rect x="1000" y="695" width="125" height="90" class="active"/>
-  <text x="1062" y="728" text-anchor="middle" class="label">Memory OK</text>
-  <text x="1062" y="750" text-anchor="middle" class="small">keep serving</text>
+  <rect x="985" y="695" width="150" height="90" class="active"/>
+  <text x="1060" y="728" text-anchor="middle" class="label">Memory OK</text>
+  <text x="1060" y="750" text-anchor="middle" class="small">keep serving</text>
 
-  <rect x="442" y="825" width="126" height="55" class="error"/>
+  <rect x="430" y="825" width="150" height="55" class="error"/>
   <text x="505" y="848" text-anchor="middle" class="label">Return error</text>
   <text x="505" y="868" text-anchor="middle" class="small">no memory check</text>
 
@@ -188,17 +186,17 @@
   <text x="598" y="724" text-anchor="middle" class="small">yes</text>
   <path d="M505 790 V825" class="line"/>
   <text x="518" y="812" class="small">no</text>
-  <path d="M800 740 H815" class="line"/>
-  <path d="M955 740 H1000" class="line"/>
-  <text x="978" y="724" text-anchor="middle" class="small">no</text>
+  <path d="M810 740 H815" class="line"/>
+  <path d="M955 740 H985" class="line"/>
+  <text x="970" y="724" text-anchor="middle" class="small">no</text>
 
-  <rect x="640" y="835" width="200" height="65" class="paused"/>
+  <rect x="635" y="835" width="210" height="65" class="paused"/>
   <text x="740" y="860" text-anchor="middle" class="label">Old Nix keeps serving</text>
   <text x="740" y="881" text-anchor="middle" class="small">replacement starts beside it</text>
   <path d="M885 790 V813 H740 V835" class="orange-line"/>
   <text x="898" y="812" class="small">yes</text>
 
-  <rect x="640" y="930" width="200" height="65" class="standby"/>
+  <rect x="635" y="930" width="210" height="65" class="standby"/>
   <text x="740" y="955" text-anchor="middle" class="label">Prepare replacement</text>
   <text x="740" y="976" text-anchor="middle" class="small">start Nix · catch up</text>
   <path d="M740 900 V930" class="orange-line"/>
@@ -206,20 +204,19 @@
   <polygon points="920,920 990,962 920,1004 850,962" class="decision"/>
   <text x="920" y="956" text-anchor="middle" class="label">New Nix memory</text>
   <text x="920" y="977" text-anchor="middle" class="small">too high?</text>
-  <path d="M840 962 H850" class="orange-line"/>
+  <path d="M845 962 H850" class="orange-line"/>
 
-  <rect x="995" y="915" width="145" height="88" class="paused"/>
-  <text x="1067" y="938" text-anchor="middle" class="label">If yes</text>
-  <text x="1067" y="960" text-anchor="middle" class="small">double the limit</text>
-  <text x="1067" y="979" text-anchor="middle" class="small">until it fits</text>
-  <text x="1067" y="997" text-anchor="middle" class="small">warn once</text>
-  <path d="M990 962 H995" class="orange-line"/>
+  <rect x="1000" y="915" width="140" height="88" class="paused"/>
+  <text x="1070" y="938" text-anchor="middle" class="label">If yes</text>
+  <text x="1070" y="960" text-anchor="middle" class="small">double the limit</text>
+  <text x="1070" y="979" text-anchor="middle" class="small">until it fits</text>
+  <text x="1070" y="997" text-anchor="middle" class="small">warn once</text>
+  <path d="M990 962 H1000" class="orange-line"/>
 
-  <rect x="870" y="1040" width="270" height="35" class="active"/>
-  <text x="1005" y="1063" text-anchor="middle" class="label">Brief swap · use replacement</text>
+  <rect x="840" y="1040" width="300" height="35" class="active"/>
+  <text x="990" y="1063" text-anchor="middle" class="label">Brief swap · use replacement</text>
   <path d="M920 1004 V1040" class="orange-line"/>
   <text x="903" y="1028" text-anchor="end" class="small">no</text>
-  <path d="M1067 1003 V1025 H1045 V1040" class="orange-line"/>
+  <path d="M1070 1003 V1025 H1045 V1040" class="orange-line"/>
 
-  <text x="60" y="1070" class="small">W1 keeps handling requests while its replacement gets ready.</text>
 </svg>
