@@ -34,7 +34,7 @@ import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe)
 import Text.Read (readMaybe)
 
 data NixEvalOutput = EvalJson | EvalRaw
-    deriving (Eq, Show)
+    deriving (Eq, Ord, Show)
 
 data NixEvalTarget
     = EvalInstallable

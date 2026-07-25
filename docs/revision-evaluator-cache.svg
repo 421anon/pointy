@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1110" viewBox="0 0 1200 1110" role="img" aria-labelledby="title desc">
   <title id="title">Revision evaluator worker rack and RAM lifecycle</title>
-  <desc id="desc">Expressions route to four Nix evaluation workers. The cache keeps the current revision and recomputes each shard's expressions whenever it warms a Nix process. Initial and replacement processes evaluate the same shard expressions. During startup, an over-limit worker stays online while its limit grows with a warning. Later memory pressure prepares a replacement beside the serving worker, then switches over briefly.</desc>
+  <desc id="desc">Expressions first check revision-scoped completed results owned by the evaluator. Cache misses route to four Nix workers by stable request ID. The current revision stays cached while old revisions are evicted as whole slices. Startup raises an undersized memory limit without restarting; later memory pressure prepares a replacement beside the serving worker, then switches over briefly.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
@@ -42,7 +42,7 @@
 
   <rect width="1200" height="1110" fill="#ffffff"/>
   <text x="40" y="40" class="title">Nix evaluation workers</text>
-  <text x="1160" y="40" text-anchor="end" class="small">workers stay ready · completed answers are stored separately</text>
+  <text x="1160" y="40" text-anchor="end" class="small">workers stay ready · completed answers cached by revision</text>
 
   <rect x="35" y="65" width="1130" height="280" class="panel"/>
   <text x="60" y="98" class="section">Ready worker pool</text>
@@ -57,16 +57,18 @@
   <text x="340" y="192" text-anchor="middle" class="small">what to evaluate</text>
   <text x="340" y="207" text-anchor="middle" class="tiny">commit keeps the same worker</text>
 
-  <rect x="475" y="130" width="120" height="70" class="box"/>
-  <text x="535" y="158" text-anchor="middle" class="label">Pick worker</text>
-  <text x="535" y="181" text-anchor="middle" class="tiny">same ID → same worker</text>
+  <rect x="475" y="125" width="120" height="80" class="api"/>
+  <text x="535" y="150" text-anchor="middle" class="label">Result cache</text>
+  <text x="535" y="172" text-anchor="middle" class="tiny">revision + request ID</text>
+  <text x="535" y="193" text-anchor="middle" class="tiny">hit → answer</text>
 
   <path d="M205 165 H235" class="line"/>
   <path d="M445 165 H475" class="line"/>
   <path d="M595 165 H645" class="line"/>
+  <text x="620" y="155" text-anchor="middle" class="tiny">miss</text>
 
   <rect x="645" y="100" width="490" height="165" class="box"/>
-  <text x="665" y="125" class="label">Four workers kept ready</text>
+  <text x="665" y="125" class="label">Cache misses use four ready workers</text>
 
   <g transform="translate(655 137)">
     <rect width="105" height="105" class="worker"/>
@@ -137,7 +139,7 @@
   <path d="M460 493 H500" class="line"/>
   <rect x="715" y="495" width="185" height="48" class="api"/>
   <text x="807" y="514" text-anchor="middle" class="small">Current revision</text>
-  <text x="807" y="534" text-anchor="middle" class="tiny">recompute W1 expressions</text>
+  <text x="807" y="534" text-anchor="middle" class="tiny">warm recipe + result slice</text>
   <path d="M900 520 H915 V505 H930" class="blue-line"/>
 
   <rect x="930" y="420" width="190" height="105" class="standby"/>
@@ -146,10 +148,10 @@
   <text x="1025" y="505" text-anchor="middle" class="tiny">new Nix gets ready here</text>
 
   <rect x="35" y="605" width="1130" height="490" class="panel"/>
-  <text x="60" y="640" class="section">What happens after a request</text>
+  <text x="60" y="640" class="section">What happens after a cache miss</text>
 
   <rect x="55" y="675" width="145" height="48" class="box"/>
-  <text x="127" y="705" text-anchor="middle" class="label">Regular request</text>
+  <text x="127" y="705" text-anchor="middle" class="label">Cache miss</text>
   <rect x="55" y="755" width="145" height="58" class="api"/>
   <text x="127" y="780" text-anchor="middle" class="label">New commit</text>
   <text x="127" y="801" text-anchor="middle" class="small">set current revision</text>
@@ -163,8 +165,8 @@
   <text x="505" y="735" text-anchor="middle" class="label">Did it work?</text>
 
   <rect x="615" y="695" width="195" height="90" class="box"/>
-  <text x="712" y="722" text-anchor="middle" class="label">Return answer</text>
-  <text x="712" y="744" text-anchor="middle" class="small">current Nix keeps serving</text>
+  <text x="712" y="722" text-anchor="middle" class="label">Cache result</text>
+  <text x="712" y="744" text-anchor="middle" class="small">return answer</text>
   <text x="712" y="765" text-anchor="middle" class="small">check memory separately</text>
 
   <polygon points="885,690 955,740 885,790 815,740" class="decision"/>

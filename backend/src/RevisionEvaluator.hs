@@ -8,6 +8,7 @@ module RevisionEvaluator (
     RepoExpression,
     defaultRevisionEvaluator,
     repoSource,
+    mutableRepoSource,
     jsonExpression,
     rawExpression,
     jsonAppliedExpression,
@@ -18,24 +19,27 @@ module RevisionEvaluator (
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, readMVar, tryPutMVar)
 import Control.Concurrent.STM (TMVar, TQueue, atomically, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, takeTMVar, writeTQueue)
 import Control.Exception (SomeException, catch, finally, try)
 import Control.Monad (forM, forever, unless, void, when)
 import Data.Char (ord)
-import Data.Either (isRight)
+import Data.Either (isLeft, isRight)
 import Data.Foldable (for_)
-import Data.List (foldl')
+import Data.List (find, foldl')
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
+import qualified Data.Map.Strict as Map
 import RevisionEvaluator.NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), ReplKind (..), ReplOutcome (..), ReplSession, closeSession, openSession, outcomeResult, readSessionMemoryBytes, runRequest)
 import System.IO.Unsafe (unsafePerformIO)
 
-newtype RepoSource = RepoSource String
+data RepoSource = RepoSource Bool String
+    deriving (Eq, Ord)
 
 data ExpressionId
-    = AttributeId String (Maybe String)
+    = AttributeId NixEvalOutput String (Maybe String)
     | ImpureId String
+    deriving (Eq, Ord)
 
 data RepoExpression = RepoExpression
     { expressionId :: ExpressionId
@@ -55,6 +59,7 @@ data EvalPriority = Interactive | Background
 data RevisionEvaluator = RevisionEvaluator
     { pureWorker :: ReplWorker
     , impureWorker :: ReplWorker
+    , revisionResults :: MVar RevisionResultCache
     }
 
 data ReplShard = ReplShard
@@ -76,6 +81,12 @@ data ReplWorker = ReplWorker
 
 data WarmRevision = WarmRevision RepoSource (IO (Either String (NonEmpty RepoExpression)))
 
+data RevisionResultCache = RevisionResultCache
+    { resultCurrentRevision :: Maybe RepoSource
+    , resultRevisionOrder :: [RepoSource]
+    , resultRevisions :: Map.Map RepoSource (Map.Map ExpressionId (MVar (Either String String)))
+    }
+
 data QueuedEval = QueuedEval Evaluation (TMVar (Either String String))
 
 data WarmEvaluation = WarmEvaluation
@@ -94,15 +105,25 @@ pureReplShardCount = 4
 initialReplMemoryLimitBytes :: Integer
 initialReplMemoryLimitBytes = 512 * 1024 * 1024
 
+maxCachedRevisionCount :: Int
+maxCachedRevisionCount = 8
+
 {-# NOINLINE defaultRevisionEvaluator #-}
 defaultRevisionEvaluator :: RevisionEvaluator
 defaultRevisionEvaluator = unsafePerformIO newRevisionEvaluator
 
 newRevisionEvaluator :: IO RevisionEvaluator
-newRevisionEvaluator = RevisionEvaluator <$> newWorker PureRepl pureReplShardCount <*> newWorker ImpureRepl 1
+newRevisionEvaluator =
+    RevisionEvaluator
+        <$> newWorker PureRepl pureReplShardCount
+        <*> newWorker ImpureRepl 1
+        <*> newMVar (RevisionResultCache Nothing [] Map.empty)
 
 repoSource :: String -> RepoSource
-repoSource = RepoSource
+repoSource = RepoSource True
+
+mutableRepoSource :: String -> RepoSource
+mutableRepoSource = RepoSource False
 
 jsonExpression :: String -> RepoExpression
 jsonExpression = expression EvalJson Nothing
@@ -115,10 +136,23 @@ jsonAppliedExpression applyExpr = expression EvalJson $ Just applyExpr
 
 expression :: NixEvalOutput -> Maybe String -> String -> RepoExpression
 expression output applyExpr attr =
-    RepoExpression (AttributeId attr applyExpr) output applyExpr attr
+    RepoExpression (AttributeId output attr applyExpr) output applyExpr attr
 
 evaluate :: RevisionEvaluator -> EvalPriority -> RepoSource -> RepoExpression -> IO (Either String String)
-evaluate evaluator priority source = evaluateRequest evaluator priority . repoEvaluation source
+evaluate evaluator priority source@(RepoSource cacheable _) repoExpr
+    | not cacheable = evaluateRequest evaluator priority evaluation
+    | otherwise = do
+        (resultSlot, ownsResult) <- claimRevisionResult evaluator source $ evaluationId evaluation
+        if ownsResult
+            then do
+                result <-
+                    evaluateRequest evaluator priority evaluation
+                        `catch` \(err :: SomeException) -> pure $ Left $ "revision evaluation failed: " ++ show err
+                completeRevisionResult evaluator source (evaluationId evaluation) resultSlot result
+                pure result
+            else readMVar resultSlot
+  where
+    evaluation = repoEvaluation source repoExpr
 
 evaluateImpure :: RevisionEvaluator -> String -> IO (Either String String)
 evaluateImpure evaluator expr =
@@ -129,6 +163,7 @@ rewarmRevision :: RevisionEvaluator -> RepoSource -> IO (Either String (NonEmpty
 rewarmRevision evaluator source resolveExpressions = do
     let worker = pureWorker evaluator
         revision = WarmRevision source $ fmap (fmap $ fmap snd) resolveExpressions
+    activateRevisionResults evaluator source
     modifyMVar_ (replWorkerWarmRevision worker) $ \(version, _) -> pure (version + 1, Just revision)
     resolved <- resolveExpressions `catch` \(err :: SomeException) -> pure $ Left $ "revision expression discovery failed: " ++ show err
     case resolved of
@@ -136,15 +171,81 @@ rewarmRevision evaluator source resolveExpressions = do
         Right expressions -> do
             pending <- forM expressions $ \(key, repoExpr) -> do
                 response <- newEmptyTMVarIO
-                pure (key, WarmEvaluation (repoEvaluation source repoExpr) $ Just $ atomically . putTMVar response, response)
+                let evaluation = repoEvaluation source repoExpr
+                (resultSlot, ownsResult) <- claimRevisionResult evaluator source $ evaluationId evaluation
+                let publish result = do
+                        when ownsResult $ completeRevisionResult evaluator source (evaluationId evaluation) resultSlot result
+                        atomically $ putTMVar response result
+                pure (key, WarmEvaluation evaluation $ Just publish, response)
             warmed <- rewarmWorker worker $ fmap (\(_, warm, _) -> warm) pending
             results <- forM pending (\(key, _, response) -> fmap ((,) key) $ atomically $ takeTMVar response)
             initialWarm <- readMVar $ replWorkerInitialWarm worker
             when (initialWarm && warmed && all (isRight . snd) results) $ finishInitialWarm worker
             pure $ Right results
 
+activateRevisionResults :: RevisionEvaluator -> RepoSource -> IO ()
+activateRevisionResults evaluator source =
+    modifyMVar_ (revisionResults evaluator) $ \cache ->
+        pure $
+            pruneRevisionResults $
+                (touchResultRevision source cache){resultCurrentRevision = Just source}
+
+claimRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> IO (MVar (Either String String), Bool)
+claimRevisionResult evaluator source exprId =
+    modifyMVar (revisionResults evaluator) $ \cache -> do
+        let cache' = pruneRevisionResults $ touchResultRevision source cache
+            results = Map.findWithDefault Map.empty source $ resultRevisions cache'
+        case Map.lookup exprId results of
+            Just result -> pure (cache', (result, False))
+            Nothing -> do
+                result <- newEmptyMVar
+                let revisions = Map.insert source (Map.insert exprId result results) $ resultRevisions cache'
+                pure (cache'{resultRevisions = revisions}, (result, True))
+
+completeRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> MVar (Either String String) -> Either String String -> IO ()
+completeRevisionResult evaluator source exprId resultSlot result = do
+    completed <- tryPutMVar resultSlot result
+    when (completed && isLeft result) $
+        discardRevisionResult evaluator source exprId resultSlot
+
+discardRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> MVar (Either String String) -> IO ()
+discardRevisionResult evaluator source exprId resultSlot =
+    modifyMVar_ (revisionResults evaluator) $ \cache ->
+        case Map.lookup source (resultRevisions cache) >>= Map.lookup exprId of
+            Just cachedSlot
+                | cachedSlot == resultSlot ->
+                    let revisionResults' = Map.delete exprId $ Map.findWithDefault Map.empty source $ resultRevisions cache
+                        revisions =
+                            if Map.null revisionResults'
+                                then Map.delete source $ resultRevisions cache
+                                else Map.insert source revisionResults' $ resultRevisions cache
+                        order =
+                            if Map.member source revisions
+                                then resultRevisionOrder cache
+                                else filter (/= source) $ resultRevisionOrder cache
+                     in pure cache{resultRevisionOrder = order, resultRevisions = revisions}
+            _ -> pure cache
+
+touchResultRevision :: RepoSource -> RevisionResultCache -> RevisionResultCache
+touchResultRevision source cache =
+    cache
+        { resultRevisionOrder = filter (/= source) (resultRevisionOrder cache) ++ [source]
+        , resultRevisions = Map.insertWith (\_ existing -> existing) source Map.empty $ resultRevisions cache
+        }
+
+pruneRevisionResults :: RevisionResultCache -> RevisionResultCache
+pruneRevisionResults cache
+    | Map.size (resultRevisions cache) <= maxCachedRevisionCount = cache
+    | Just oldest <- find ((/= resultCurrentRevision cache) . Just) $ resultRevisionOrder cache =
+        pruneRevisionResults
+            cache
+                { resultRevisionOrder = filter (/= oldest) $ resultRevisionOrder cache
+                , resultRevisions = Map.delete oldest $ resultRevisions cache
+                }
+    | otherwise = cache
+
 repoEvaluation :: RepoSource -> RepoExpression -> Evaluation
-repoEvaluation (RepoSource installable) repoExpr =
+repoEvaluation (RepoSource _ installable) repoExpr =
     Evaluation
         (expressionId repoExpr)
         NixEvalRequest
@@ -209,10 +310,10 @@ evaluationShardIndex worker evaluation =
     fromIntegral $ expressionHash (evaluationId evaluation) `mod` fromIntegral (length $ replWorkerShards worker)
 
 expressionHash :: ExpressionId -> Word
-expressionHash (AttributeId attr applyExpr) = maybe base (hashString base) applyExpr
+expressionHash (AttributeId output attr applyExpr) = maybe base (hashString base) applyExpr
   where
-    base = hashString 1 attr
-expressionHash (ImpureId expr) = hashString 2 expr
+    base = hashString (case output of EvalJson -> 1; EvalRaw -> 2) attr
+expressionHash (ImpureId expr) = hashString 3 expr
 
 hashString :: Word -> String -> Word
 hashString = foldl' $ \hash c -> hash * 33 + fromIntegral (ord c)

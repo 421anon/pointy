@@ -36,7 +36,7 @@ import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import qualified Data.Text as T
-import RevisionEvaluator (EvalPriority (..), RepoExpression, defaultRevisionEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression, repoSource, rewarmRevision)
+import RevisionEvaluator (EvalPriority (..), RepoExpression, RepoSource, defaultRevisionEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, mutableRepoSource, rawExpression, repoSource, rewarmRevision)
 import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -61,14 +61,14 @@ newtype WriteRepoContext = WriteRepoContext
     }
 
 class RepoContext ctx where
-    nixInstallable :: ctx -> String
+    evaluatorSource :: ctx -> RepoSource
 
 instance RepoContext ReadRepoContext where
-    nixInstallable (ReadRepoContext repoPath commitHash) =
-        "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
+    evaluatorSource (ReadRepoContext repoPath commitHash) =
+        repoSource $ "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
 
 instance RepoContext WriteRepoContext where
-    nixInstallable (WriteRepoContext worktreePath) = worktreePath
+    evaluatorSource = mutableRepoSource . writeWorktreePath
 
 runNix :: [String] -> ExceptT String IO String
 runNix args = ExceptT $ runNixProcess args
@@ -89,11 +89,11 @@ runNixEvalImpureJsonExpr :: String -> ExceptT String IO String
 runNixEvalImpureJsonExpr = ExceptT . evaluateImpure defaultRevisionEvaluator
 
 runRepoExpression :: (RepoContext ctx) => EvalPriority -> ctx -> RepoExpression -> ExceptT String IO String
-runRepoExpression priority ctx expr = ExceptT $ evaluate defaultRevisionEvaluator priority (repoSource (nixInstallable ctx)) expr
+runRepoExpression priority ctx = ExceptT . evaluate defaultRevisionEvaluator priority (evaluatorSource ctx)
 
 rewarmRepoJsonExpressions :: (RepoContext ctx) => ctx -> IO (Either String (NonEmpty (key, String))) -> IO (Either String (NonEmpty (key, Either String String)))
 rewarmRepoJsonExpressions ctx resolveAttrs =
-    rewarmRevision defaultRevisionEvaluator (repoSource $ nixInstallable ctx) $
+    rewarmRevision defaultRevisionEvaluator (evaluatorSource ctx) $
         fmap (fmap $ fmap $ \(key, attr) -> (key, jsonExpression attr)) resolveAttrs
 
 runNixProcess :: [String] -> IO (Either String String)

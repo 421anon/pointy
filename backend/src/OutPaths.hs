@@ -9,22 +9,21 @@ module OutPaths (
     warmProjectOutPathsForCommit,
     scheduleProjectOutPathsWarm,
     withWriteRepoTransaction,
-    lookupCachedStepOutPath,
     ProjectDef (..),
     StepRef (..),
     StepDef (..),
 ) where
 
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, readMVar, tryPutMVar, tryReadMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 
 import Control.Concurrent (forkIO)
-import Control.Exception (SomeException, catch, handle)
+import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, void, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, genericParseJSON)
 import Data.Char (toLower)
-import Data.Either (isLeft, isRight)
+import Data.Either (isRight)
 import Data.List (stripPrefix)
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Map (Map)
@@ -71,86 +70,8 @@ prefixedFieldOptions prefix =
             map toLower (fromMaybe field (stripPrefix prefix field))
         }
 
-data OutPathCache = OutPathCache
-    { cacheEntries :: Map (Int, Text) (MVar (Either String (Map Int Text)))
-    , cacheOrder :: [(Int, Text)]
-    }
-
-maxOutPathCacheSize :: Int
-maxOutPathCacheSize = 32
-
-{-# NOINLINE outPathCacheRef #-}
-outPathCacheRef :: MVar OutPathCache
-outPathCacheRef = unsafePerformIO (newMVar (OutPathCache Map.empty []))
-
-pruneCache :: OutPathCache -> OutPathCache
-pruneCache cache
-    | length (cacheOrder cache) <= maxOutPathCacheSize = cache
-    | (oldest : rest) <- cacheOrder cache =
-        cache
-            { cacheEntries = Map.delete oldest (cacheEntries cache)
-            , cacheOrder = rest
-            }
-    | otherwise = cache
-
--- The Bool marks the caller responsible for completing a new cache entry.
-claimProjectOutPaths :: (Int, Text) -> IO (MVar (Either String (Map Int Text)), Bool)
-claimProjectOutPaths key = modifyMVar outPathCacheRef $ \cache ->
-    case Map.lookup key (cacheEntries cache) of
-        Just mv -> pure (cache, (mv, False))
-        Nothing -> do
-            mv <- newEmptyMVar
-            let cache' =
-                    pruneCache
-                        cache
-                            { cacheEntries = Map.insert key mv (cacheEntries cache)
-                            , cacheOrder = cacheOrder cache ++ [key]
-                            }
-            pure (cache', (mv, True))
-
-completeProjectOutPaths :: (Int, Text) -> MVar (Either String (Map Int Text)) -> Either String (Map Int Text) -> IO ()
-completeProjectOutPaths key mv result = do
-    completed <- tryPutMVar mv result
-    when (completed && isLeft result) $ discardFailedProjectOutPaths key mv
-
-lookupCachedStepOutPath :: Text -> Int -> IO (Maybe Text)
-lookupCachedStepOutPath commit stepId = do
-    cache <- readMVar outPathCacheRef
-    results <- mapM tryReadMVar [mv | ((_, c), mv) <- Map.toList (cacheEntries cache), c == commit]
-    let paths = [p | Just (Right m) <- results, Just p <- [Map.lookup stepId m]]
-    pure $ case paths of
-        [] -> Nothing
-        p : ps | all (== p) ps -> Just p
-        _ -> Nothing
-
 getProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
-getProjectOutPaths pid targetCommit = do
-    let key = (pid, targetCommit)
-    (mv, isNew) <- claimProjectOutPaths key
-    if isNew
-        then do
-            result <-
-                evalProjectOutPaths pid targetCommit
-                    `catch` \(err :: SomeException) ->
-                        pure $ Left $ "Project outPath evaluation crashed: " ++ show err
-            completeProjectOutPaths key mv result
-            pure result
-        else readMVar mv
-
--- Failed evaluations are removed after waking current waiters. A later caller
--- can retry once a transiently missing commit or repository fetch recovers.
-discardFailedProjectOutPaths :: (Int, Text) -> MVar (Either String (Map Int Text)) -> IO ()
-discardFailedProjectOutPaths key evaluatedMv =
-    modifyMVar_ outPathCacheRef $ \cache ->
-        case Map.lookup key (cacheEntries cache) of
-            Just cachedMv
-                | cachedMv == evaluatedMv ->
-                    pure
-                        cache
-                            { cacheEntries = Map.delete key (cacheEntries cache)
-                            , cacheOrder = filter (/= key) (cacheOrder cache)
-                            }
-            _ -> pure cache
+getProjectOutPaths = evalProjectOutPaths
 
 evalProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
 evalProjectOutPaths pid targetCommit = runExceptT $ do
@@ -168,17 +89,9 @@ evalProjectOutPaths pid targetCommit = runExceptT $ do
 
 scheduleProjectOutPathsWarm :: Int -> Text -> IO ()
 scheduleProjectOutPathsWarm pid commit = do
-    let key = (pid, commit)
-    (mv, isNew) <- claimProjectOutPaths key
-    when isNew $ do
-        repoPath <- userRepoPath
-        let attr = projectOutPathAttr pid
-            ctx = ReadRepoContext repoPath (unpack commit)
-            onError (err :: SomeException) =
-                completeProjectOutPaths key mv $ Left $ "Warm scheduling crashed: " ++ show err
-        void $ forkIO $ handle onError $ do
-            result <- runExceptT $ runNixEvalJsonInRepoBackground ctx attr
-            completeProjectOutPaths key mv $ decodeOutPathResult pid result
+    repoPath <- userRepoPath
+    let ctx = ReadRepoContext repoPath $ unpack commit
+    void $ forkIO $ void $ runExceptT $ runNixEvalJsonInRepoBackground ctx $ projectOutPathAttr pid
 
 warmProjectOutPaths :: IO ()
 warmProjectOutPaths = do
@@ -194,22 +107,13 @@ scheduleHeadOutPathsWarm = warmProjectOutPaths
 
 warmProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
 warmProjectOutPathsForCommit ctx = do
-    let commitText = pack $ readCommitHash ctx
     warmed <- liftIO $ rewarmRepoJsonExpressions ctx $ revisionProjectExpressions ctx
     results <- either throwError pure warmed
     forM_ results $ \case
         (Nothing, result) ->
             either (throwError . ("Failed to warm #pointy.projects: " ++)) (const $ pure ()) result
-        (Just pid, result) -> do
-            value <- either throwError pure $ decodeOutPathResult pid result
-            (mv, isNew) <- liftIO $ claimProjectOutPaths (pid, commitText)
-            if isNew
-                then liftIO $ completeProjectOutPaths (pid, commitText) mv $ Right value
-                else
-                    liftIO (readMVar mv)
-                        >>= either
-                            (throwError . (("Project " ++ show pid ++ " outPath evaluation failed: ") ++))
-                            (const $ pure ())
+        (Just pid, result) ->
+            void $ either throwError pure $ decodeOutPathResult pid result
 
 revisionProjectExpressions :: ReadRepoContext -> IO (Either String (NonEmpty.NonEmpty (Maybe Int, String)))
 revisionProjectExpressions ctx = runExceptT $ do
