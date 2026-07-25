@@ -806,6 +806,35 @@ $delimited-grid-row-height: 28px;
   border-radius: var(--radius-sm);
 }
 
+.molstar-viewer__canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.molstar-viewer__loading {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.molstar-viewer__loading-icon {
+  font-size: 2rem;
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .molstar-viewer__loading-icon {
+    animation: none;
+  }
+}
+
 @media (max-width: 600px) {
   .file-molstar-viewer {
     height: 716px;

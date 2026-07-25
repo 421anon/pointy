@@ -17,6 +17,7 @@ class MolstarViewer extends HTMLElement {
     this._viewer = null;
     this._initialized = false;
     this._generation = 0;
+    this._loadingLabel = null;
   }
 
   connectedCallback() {
@@ -25,11 +26,36 @@ class MolstarViewer extends HTMLElement {
     const generation = ++this._generation;
 
     const container = document.createElement("div");
-    container.style.width = "100%";
-    container.style.height = "100%";
-    this.appendChild(container);
+    container.className = "molstar-viewer__canvas";
+
+    const loadingIndicator = document.createElement("div");
+    loadingIndicator.className = "molstar-viewer__loading";
+    loadingIndicator.setAttribute("role", "status");
+
+    const loadingIcon = document.createElement("span");
+    loadingIcon.className =
+      "molstar-viewer__loading-icon material-symbols-outlined";
+    loadingIcon.setAttribute("aria-hidden", "true");
+    loadingIcon.textContent = "progress_activity";
+
+    const loadingLabel = document.createElement("span");
+    loadingLabel.textContent = "Loading viewer…";
+    this._loadingLabel = loadingLabel;
+
+    loadingIndicator.append(loadingIcon, loadingLabel);
+    this.append(container, loadingIndicator);
 
     this._initViewer(container, generation);
+  }
+
+  _setLoadingLabel(label) {
+    if (this._loadingLabel) this._loadingLabel.textContent = label;
+  }
+
+  _hideLoadingIndicator() {
+    if (!this._loadingLabel) return;
+    this._loadingLabel.parentElement?.remove();
+    this._loadingLabel = null;
   }
 
   async _initViewer(container, generation) {
@@ -55,7 +81,12 @@ class MolstarViewer extends HTMLElement {
 
       const src = this.getAttribute("src");
       if (src) {
+        this._setLoadingLabel("Loading structure…");
         await viewer.loadStructureFromUrl(src, "pdb", false);
+      }
+
+      if (generation === this._generation && this.isConnected) {
+        this._hideLoadingIndicator();
       }
     } catch (_err) {
       if (generation === this._generation && this._viewer) {
@@ -65,6 +96,7 @@ class MolstarViewer extends HTMLElement {
 
       if (generation === this._generation && this.isConnected) {
         this.innerHTML = "";
+        this._loadingLabel = null;
         const message = document.createElement("div");
         message.textContent = "Failed to load structure";
         message.style.padding = "1rem";
@@ -83,6 +115,7 @@ class MolstarViewer extends HTMLElement {
     }
 
     this.innerHTML = "";
+    this._loadingLabel = null;
   }
 }
 
