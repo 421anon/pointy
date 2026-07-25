@@ -243,7 +243,7 @@ replaceShardIfOverLimit worker shard =
                         logWarning $ replacementPrefix ++ "failed to warm: " ++ err
                         pure $ Just oldSession
                     Right () -> do
-                        adjustBootloopLimit standby
+                        growLimitForStandby standby
                         closeQuietly oldSession
                         logWarning $ replacementPrefix ++ "replaced at " ++ formatMiB oldMemoryBytes
                         pure $ Just standby
@@ -252,7 +252,7 @@ replaceShardIfOverLimit worker shard =
         runRequest standby (evaluationRequest evaluation)
             `catch` \(err :: SomeException) -> pure (ReplDied $ show err)
 
-    adjustBootloopLimit standby =
+    growLimitForStandby standby =
         readSessionMemoryBytes standby >>= mapM_ adjust
       where
         adjust standbyMemoryBytes =
@@ -260,16 +260,16 @@ replaceShardIfOverLimit worker shard =
                 if standbyMemoryBytes <= memoryLimit
                     then pure memoryLimit
                     else do
-                        let doubledLimit = memoryLimit * 2
+                        let grownLimit = until (> standbyMemoryBytes) (* 2) memoryLimit
                         logWarning $
                             replacementPrefix
-                                ++ "would bootloop at "
+                                ++ "warmed replacement uses "
                                 ++ formatMiB standbyMemoryBytes
-                                ++ "; doubling limit from "
+                                ++ "; growing limit from "
                                 ++ formatMiB memoryLimit
                                 ++ " to "
-                                ++ formatMiB doubledLimit
-                        pure doubledLimit
+                                ++ formatMiB grownLimit
+                        pure grownLimit
 
     replacementPrefix =
         show (replWorkerKind worker)
