@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -17,12 +18,15 @@ module OutPaths (
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, readMVar, tryPutMVar, tryReadMVar)
 
 import Control.Concurrent (forkIO)
-import Control.Exception (SomeException, catch)
-import Control.Monad (void, when)
-import Control.Monad.Except (ExceptT, runExceptT)
+import Control.Exception (SomeException, catch, handle)
+import Control.Monad (forM, forM_, void, when)
+import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
+import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, genericParseJSON)
 import Data.Char (toLower)
+import Data.Either (isLeft, isRight)
 import Data.List (stripPrefix)
+import qualified Data.List.NonEmpty as NonEmpty
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
@@ -30,11 +34,8 @@ import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
-import NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), scheduleNixReplWarmRotation, scheduleNixReplWarmRotationWithResult)
 import System.IO.Unsafe (unsafePerformIO)
-import UserRepo (ReadRepoContext (..), WriteRepoContext, ensureRepoCommit, runNixEvalJsonInRepo, runNixEvalJsonInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
-
--- Types
+import UserRepo (ReadRepoContext (..), WriteRepoContext, ensureRepoCommit, rewarmRepoJsonExpressions, runNixEvalJsonInRepo, runNixEvalJsonInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
 
 data ProjectDef = ProjectDef
     { projectDefId :: Int
@@ -70,8 +71,6 @@ prefixedFieldOptions prefix =
             map toLower (fromMaybe field (stripPrefix prefix field))
         }
 
--- OutPath evaluation cache with singleflight
-
 data OutPathCache = OutPathCache
     { cacheEntries :: Map (Int, Text) (MVar (Either String (Map Int Text)))
     , cacheOrder :: [(Int, Text)]
@@ -94,15 +93,11 @@ pruneCache cache
             }
     | otherwise = cache
 
-{- | Claim a slot in the outPath cache for a (projectId, commit) key.
-Returns (mv, True) when the caller is the producer and MUST eventually
-call 'completeProjectOutPaths'; returns (mv, False) when the slot is
-already claimed and the caller should 'readMVar' the result.
--}
+-- The Bool marks the caller responsible for completing a new cache entry.
 claimProjectOutPaths :: (Int, Text) -> IO (MVar (Either String (Map Int Text)), Bool)
 claimProjectOutPaths key = modifyMVar outPathCacheRef $ \cache ->
     case Map.lookup key (cacheEntries cache) of
-        Just mv -> return (cache, (mv, False))
+        Just mv -> pure (cache, (mv, False))
         Nothing -> do
             mv <- newEmptyMVar
             let cache' =
@@ -111,40 +106,23 @@ claimProjectOutPaths key = modifyMVar outPathCacheRef $ \cache ->
                             { cacheEntries = Map.insert key mv (cacheEntries cache)
                             , cacheOrder = cacheOrder cache ++ [key]
                             }
-            return (cache', (mv, True))
+            pure (cache', (mv, True))
 
-{- | Complete a claimed outPath cache slot. Uses 'tryPutMVar' so the
-completing thread never blocks. On failure the slot is evicted from
-the cache (identity-checked as today) so waiters can retry.
--}
 completeProjectOutPaths :: (Int, Text) -> MVar (Either String (Map Int Text)) -> Either String (Map Int Text) -> IO ()
 completeProjectOutPaths key mv result = do
-    ok <- tryPutMVar mv result
-    when ok $
-        case result of
-            Left _ -> discardFailedProjectOutPaths key mv
-            Right _ -> return ()
+    completed <- tryPutMVar mv result
+    when (completed && isLeft result) $ discardFailedProjectOutPaths key mv
 
-{- | Read-only projection over the bounded project cache: look up a step's
-store path for a given commit without blocking on in-flight evaluations.
-Snaps same-commit MVars, inspects via 'tryReadMVar', skips in-flight /
-error slots, and only returns a path when every completed hit agrees.
--}
 lookupCachedStepOutPath :: Text -> Int -> IO (Maybe Text)
 lookupCachedStepOutPath commit stepId = do
     cache <- readMVar outPathCacheRef
-    let matching = [mv | ((_, c), mv) <- Map.toList (cacheEntries cache), c == commit]
-    results <- mapM tryReadMVar matching
+    results <- mapM tryReadMVar [mv | ((_, c), mv) <- Map.toList (cacheEntries cache), c == commit]
     let paths = [p | Just (Right m) <- results, Just p <- [Map.lookup stepId m]]
-    case paths of
-        [] -> return Nothing
-        (p : ps)
-            | all (== p) ps -> return (Just p)
-            | otherwise -> return Nothing
+    pure $ case paths of
+        [] -> Nothing
+        p : ps | all (== p) ps -> Just p
+        _ -> Nothing
 
-{- | Resolve and cache project outPaths. Concurrent callers for the same
-(projectId, commit) key share one evaluation (singleflight).
--}
 getProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
 getProjectOutPaths pid targetCommit = do
     let key = (pid, targetCommit)
@@ -154,9 +132,9 @@ getProjectOutPaths pid targetCommit = do
             result <-
                 evalProjectOutPaths pid targetCommit
                     `catch` \(err :: SomeException) ->
-                        return $ Left $ "Project outPath evaluation crashed: " ++ show err
+                        pure $ Left $ "Project outPath evaluation crashed: " ++ show err
             completeProjectOutPaths key mv result
-            return result
+            pure result
         else readMVar mv
 
 -- Failed evaluations are removed after waking current waiters. A later caller
@@ -167,105 +145,98 @@ discardFailedProjectOutPaths key evaluatedMv =
         case Map.lookup key (cacheEntries cache) of
             Just cachedMv
                 | cachedMv == evaluatedMv ->
-                    return
+                    pure
                         cache
                             { cacheEntries = Map.delete key (cacheEntries cache)
                             , cacheOrder = filter (/= key) (cacheOrder cache)
                             }
-            _ -> return cache
+            _ -> pure cache
 
 evalProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
-evalProjectOutPaths pid targetCommit = do
-    commitResult <- runExceptT $ ensureRepoCommit (unpack targetCommit)
-    case commitResult of
-        Left err -> return $ Left $ "Failed to prepare project commit: " ++ err
-        Right () -> do
-            repoPath <- userRepoPath
-            result <-
-                runExceptT $
-                    runNixEvalJsonInRepo
-                        (ReadRepoContext repoPath (unpack targetCommit))
-                        ("#pointy.projectOutPaths." ++ show pid)
-            return $ case result of
-                Left err -> Left $ "Failed to evaluate #pointy.projectOutPaths." ++ show pid ++ ": " ++ err
-                Right output ->
-                    case decode (TLE.encodeUtf8 (TL.pack output)) of
-                        Nothing -> Left $ "Failed to parse #pointy.projectOutPaths." ++ show pid
-                        Just paths -> Right paths
+evalProjectOutPaths pid targetCommit = runExceptT $ do
+    let attr = projectOutPathAttr pid
+    withExceptT ("Failed to prepare project commit: " ++) $
+        ensureRepoCommit $
+            unpack targetCommit
+    repoPath <- liftIO userRepoPath
+    output <-
+        withExceptT (("Failed to evaluate " ++ attr ++ ": ") ++) $
+            runNixEvalJsonInRepo
+                (ReadRepoContext repoPath $ unpack targetCommit)
+                attr
+    maybe (throwError $ "Failed to parse " ++ attr) pure $ decodeJson output
 
-{- | Schedule a warmed REPL rotation for a project's outPaths attribute.
-Claims the cache slot first: if another caller already claimed it this is
-a no-op.  When we are the producer the warm REPL callback decodes the
-JSON result and completes the slot, removing the duplicate active
-evaluation that the old implementation forked.
--}
 scheduleProjectOutPathsWarm :: Int -> Text -> IO ()
 scheduleProjectOutPathsWarm pid commit = do
     let key = (pid, commit)
     (mv, isNew) <- claimProjectOutPaths key
-    when isNew $
-        ( do
-            repoPath <- userRepoPath
-            let installable = "git+file://" ++ repoPath ++ "?rev=" ++ unpack commit ++ "&allRefs=true"
-                attr = "#pointy.projectOutPaths." ++ show pid
-                req = NixEvalRequest False EvalJson Nothing (EvalInstallable installable attr)
-                decodeResult (Left err) = Left $ "Failed to evaluate " ++ attr ++ ": " ++ err
-                decodeResult (Right output) =
-                    case decode (TLE.encodeUtf8 (TL.pack output)) of
-                        Nothing -> Left $ "Failed to parse " ++ attr
-                        Just paths -> Right paths
-            scheduleNixReplWarmRotationWithResult req (\result -> completeProjectOutPaths key mv (decodeResult result))
-        )
-            `catch` \(err :: SomeException) ->
-                completeProjectOutPaths key mv (Left $ "Warm scheduling crashed: " ++ show err)
-
--- REPL warming (no cold restart — uses warm REPL rotation)
+    when isNew $ do
+        repoPath <- userRepoPath
+        let attr = projectOutPathAttr pid
+            ctx = ReadRepoContext repoPath (unpack commit)
+            onError (err :: SomeException) =
+                completeProjectOutPaths key mv $ Left $ "Warm scheduling crashed: " ++ show err
+        void $ forkIO $ handle onError $ do
+            result <- runExceptT $ runNixEvalJsonInRepoBackground ctx attr
+            completeProjectOutPaths key mv $ decodeOutPathResult pid result
 
 warmProjectOutPaths :: IO ()
 warmProjectOutPaths = do
     repoPath <- userRepoPath
-    mTargetCommit <- withReadRepoTransaction $ \(ReadRepoContext _ hash) ->
-        return $ pack hash
-    case mTargetCommit of
+    withReadRepoTransaction (pure . pack . readCommitHash) >>= \case
         Left err -> putStrLn $ "Project outPath warm skipped: " ++ err
-        Right targetCommit -> do
-            let targetCommitString = unpack targetCommit
-                installable = "git+file://" ++ repoPath ++ "?rev=" ++ targetCommitString ++ "&allRefs=true"
-                attr = "#pointy.projectOutPaths"
-                req = NixEvalRequest False EvalJson Nothing (EvalInstallable installable attr)
-            scheduleNixReplWarmRotation [req]
-            result <- runExceptT $ warmProjectOutPathsForCommit (ReadRepoContext repoPath targetCommitString)
-            case result of
-                Left err -> putStrLn $ "Project outPath warm failed: " ++ err
-                Right () -> return ()
+        Right commit ->
+            runExceptT (warmProjectOutPathsForCommit $ ReadRepoContext repoPath $ unpack commit)
+                >>= either (putStrLn . ("Project outPath warm failed: " ++)) pure
 
 scheduleHeadOutPathsWarm :: IO ()
-scheduleHeadOutPathsWarm = do
-    repoPath <- userRepoPath
-    mTargetCommit <- withReadRepoTransaction $ \(ReadRepoContext _ hash) ->
-        return $ pack hash
-    case mTargetCommit of
-        Left err -> putStrLn $ "Project outPath warm skipped: " ++ err
-        Right targetCommit -> do
-            let targetCommitString = unpack targetCommit
-                installable = "git+file://" ++ repoPath ++ "?rev=" ++ targetCommitString ++ "&allRefs=true"
-                attr = "#pointy.projectOutPaths"
-                req = NixEvalRequest False EvalJson Nothing (EvalInstallable installable attr)
-            scheduleNixReplWarmRotation [req]
+scheduleHeadOutPathsWarm = warmProjectOutPaths
 
 warmProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
 warmProjectOutPathsForCommit ctx = do
-    _ <- runNixEvalJsonInRepoBackground ctx "#pointy.projectOutPaths"
-    return ()
+    let commit = readCommitHash ctx
+        commitText = pack commit
+    projectsRaw <- runNixEvalJsonInRepo ctx "#pointy.projects"
+    projectDefs <-
+        maybe (throwError "Failed to parse #pointy.projects") pure (decodeJson projectsRaw :: Maybe (Map String ProjectDef))
+    claims <- liftIO $ forM (map projectDefId $ Map.elems projectDefs) $ \pid -> do
+        (mv, isNew) <- claimProjectOutPaths (pid, commitText)
+        pure (pid, mv, isNew)
 
--- Coalesced background warming
+    let newClaims = [(pid, mv) | (pid, mv, True) <- claims]
+    forM_ [(pid, mv) | (pid, mv, False) <- claims] $ \(pid, mv) ->
+        liftIO (readMVar mv)
+            >>= either
+                (throwError . (("Project " ++ show pid ++ " outPath evaluation failed: ") ++))
+                (const $ pure ())
 
-{- | At most one background warm runs at a time. Writes that arrive while a
-warm is in flight set 'warmPending' so the worker re-reads the latest HEAD
-and warms again once the current eval finishes. This collapses bursts of
-rapid commits into a single warm of the latest HEAD instead of queuing one
-stale warm per commit behind the REPL session lock.
--}
+    case NonEmpty.nonEmpty newClaims of
+        Nothing -> pure ()
+        Just pending -> do
+            results <-
+                liftIO $
+                    rewarmRepoJsonExpressions ctx $
+                        fmap (projectOutPathAttr . fst) pending
+            decoded <- liftIO $ forM (zip (NonEmpty.toList pending) results) $ \((pid, mv), result) -> do
+                let value = decodeOutPathResult pid result
+                completeProjectOutPaths (pid, commitText) mv value
+                pure value
+            mapM_ (either throwError $ const $ pure ()) decoded
+
+projectOutPathAttr :: Int -> String
+projectOutPathAttr pid = "#pointy.projectOutPaths." ++ show pid
+
+decodeOutPathResult :: Int -> Either String String -> Either String (Map Int Text)
+decodeOutPathResult pid =
+    either (Left . (("Failed to evaluate " ++ attr ++ ": ") ++)) $
+        maybe (Left $ "Failed to parse " ++ attr) Right . decodeJson
+  where
+    attr = projectOutPathAttr pid
+
+decodeJson :: (FromJSON a) => String -> Maybe a
+decodeJson = decode . TLE.encodeUtf8 . TL.pack
+
+-- Coalesce commit bursts so only the latest pending HEAD is rewarmed.
 data WarmState = WarmState
     { warmRunning :: Bool
     , warmPending :: Bool
@@ -275,15 +246,14 @@ data WarmState = WarmState
 warmStateRef :: MVar WarmState
 warmStateRef = unsafePerformIO (newMVar (WarmState False False))
 
--- | Mark a warm as pending, forking a worker if none is running.
 scheduleWarm :: IO ()
 scheduleWarm =
     modifyMVar_ warmStateRef $ \st ->
         if warmRunning st
-            then return st{warmPending = True}
+            then pure st{warmPending = True}
             else do
                 void $ forkIO warmWorker
-                return st{warmRunning = True, warmPending = False}
+                pure st{warmRunning = True, warmPending = False}
 
 runWarmSafely :: IO ()
 runWarmSafely =
@@ -293,22 +263,17 @@ handleWarmException :: SomeException -> IO ()
 handleWarmException err =
     putStrLn $ "Project outPath warm crashed: " ++ show err
 
--- | Run one warm, then loop once more if another write landed during it.
 warmWorker :: IO ()
 warmWorker = do
     runWarmSafely
     again <- modifyMVar warmStateRef $ \st ->
         if warmPending st
-            then return (st{warmRunning = True, warmPending = False}, True)
-            else return (st{warmRunning = False, warmPending = False}, False)
+            then pure (st{warmRunning = True, warmPending = False}, True)
+            else pure (st{warmRunning = False, warmPending = False}, False)
     when again warmWorker
-
--- Write transaction with post-write REPL warming
 
 withWriteRepoTransaction :: (WriteRepoContext -> ExceptT String IO a) -> IO (Either String a)
 withWriteRepoTransaction action = do
     result <- withWriteRepoTransactionRaw action
-    case result of
-        Right _ -> scheduleWarm
-        Left _ -> return ()
-    return result
+    when (isRight result) scheduleWarm
+    pure result

@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Revision evaluator cache subsystem</title>
+  <desc id="desc">Repository expressions are assigned stable expression IDs, routed to warm evaluator shards, and replaced only when a shard exceeds its RAM limit.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
+    </marker>
+    <style>
+      text { font-family: ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .title { font-size: 24px; font-weight: 700; }
+      .label { font-size: 16px; font-weight: 650; }
+      .small { font-size: 13px; }
+      .box { fill: #f8fafc; stroke: #64748b; stroke-width: 2; rx: 10; }
+      .accent { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 10; }
+      .warm { fill: #ecfdf5; stroke: #059669; stroke-width: 2; rx: 8; }
+      .standby { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; rx: 8; }
+      .line { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
+      .dash { fill: none; stroke: #ea580c; stroke-width: 2; stroke-dasharray: 7 5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="650" fill="#ffffff"/>
+  <text x="40" y="42" class="title">Revision evaluator cache</text>
+
+  <rect x="40" y="85" width="155" height="65" class="box"/>
+  <text x="117" y="112" text-anchor="middle" class="label">UserRepo</text>
+  <text x="117" y="134" text-anchor="middle" class="small">OutPaths / handlers</text>
+
+  <rect x="245" y="75" width="230" height="85" class="accent"/>
+  <text x="360" y="107" text-anchor="middle" class="label">RevisionEvaluator</text>
+  <text x="360" y="131" text-anchor="middle" class="small">evaluate · rewarmRevision</text>
+
+  <rect x="525" y="75" width="205" height="85" class="box"/>
+  <text x="627" y="105" text-anchor="middle" class="label">ExpressionId</text>
+  <text x="627" y="129" text-anchor="middle" class="small">attribute + apply</text>
+  <text x="627" y="147" text-anchor="middle" class="small">revision excluded</text>
+
+  <rect x="780" y="75" width="165" height="85" class="box"/>
+  <text x="862" y="108" text-anchor="middle" class="label">Stable hash</text>
+  <text x="862" y="134" text-anchor="middle" class="small">mod shard count</text>
+
+  <path d="M195 117 H245" class="line"/>
+  <path d="M475 117 H525" class="line"/>
+  <path d="M730 117 H780" class="line"/>
+  <path d="M862 160 V205" class="line"/>
+
+  <rect x="95" y="205" width="1010" height="300" class="box"/>
+  <text x="120" y="238" class="label">Pure evaluator shards</text>
+  <text x="1080" y="238" text-anchor="end" class="small">commit rewarm: evaluate in place</text>
+
+  <g transform="translate(125 265)">
+    <rect width="205" height="205" class="accent"/>
+    <text x="102" y="29" text-anchor="middle" class="label">Shard 0</text>
+    <rect x="20" y="48" width="165" height="43" class="box"/>
+    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
+    <rect x="20" y="105" width="165" height="58" class="warm"/>
+    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
+    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
+    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
+  </g>
+
+  <g transform="translate(375 265)">
+    <rect width="205" height="205" class="accent"/>
+    <text x="102" y="29" text-anchor="middle" class="label">Shard 1</text>
+    <rect x="20" y="48" width="165" height="43" class="box"/>
+    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
+    <rect x="20" y="105" width="165" height="58" class="warm"/>
+    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
+    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
+    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
+  </g>
+
+  <g transform="translate(625 265)">
+    <rect width="205" height="205" class="accent"/>
+    <text x="102" y="29" text-anchor="middle" class="label">Shard 2</text>
+    <rect x="20" y="48" width="165" height="43" class="box"/>
+    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
+    <rect x="20" y="105" width="165" height="58" class="warm"/>
+    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
+    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
+    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
+  </g>
+
+  <g transform="translate(875 265)">
+    <rect width="205" height="205" class="accent"/>
+    <text x="102" y="29" text-anchor="middle" class="label">Shard 3</text>
+    <rect x="20" y="48" width="165" height="43" class="box"/>
+    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
+    <rect x="20" y="105" width="165" height="58" class="warm"/>
+    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
+    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
+    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
+  </g>
+
+  <rect x="120" y="555" width="250" height="55" class="box"/>
+  <text x="245" y="588" text-anchor="middle" class="label">NixRepl protocol backend</text>
+
+  <rect x="790" y="545" width="285" height="75" class="standby"/>
+  <text x="932" y="573" text-anchor="middle" class="label">Warm standby</text>
+  <text x="932" y="596" text-anchor="middle" class="small">RAM limit → warm → atomic swap</text>
+
+  <path d="M245 555 V505" class="line"/>
+  <path d="M977 470 V545" class="dash"/>
+  <path d="M790 582 H620 V470" class="dash"/>
+  <text x="690" y="570" text-anchor="middle" class="small">replacement only</text>
+  <text x="690" y="589" text-anchor="middle" class="small">limit doubles on bootloop</text>
+</svg>

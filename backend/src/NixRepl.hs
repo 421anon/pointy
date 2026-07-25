@@ -4,33 +4,35 @@
 
 module NixRepl (
     NixEvalOutput (..),
-    NixEvalPriority (..),
     NixEvalRequest (..),
     NixEvalTarget (..),
-    runNixEval,
-    runNixEvalWithPriority,
-    restartNixReplSessions,
-    scheduleNixReplWarmRotation,
-    scheduleNixReplWarmRotationWithResult,
+    ReplKind (..),
+    ReplOutcome (..),
+    ReplSession,
+    openSession,
+    runRequest,
+    readSessionMemoryBytes,
+    closeSession,
+    outcomeResult,
 ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
-import Control.Concurrent.STM (TMVar, TQueue, atomically, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, takeTMVar, writeTQueue)
-import Control.Exception (SomeException, catch, evaluate, mask, try)
-import Control.Monad (forM, forever, unless, void, when)
+import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
+import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
+import Control.Exception (SomeException, catch, evaluate, try)
+import Control.Monad (void)
 import Data.Aeson (Value (..), eitherDecode)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isAlphaNum, isSpace)
-import Data.List (intercalate, isInfixOf, partition)
+import Data.List (isInfixOf)
+import Data.Maybe (listToMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsClosed, hPutStrLn, hSetBuffering)
 import System.IO.Error (isEOFError)
-import System.IO.Unsafe (unsafePerformIO)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, proc, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, proc, terminateProcess, waitForProcess)
+import Text.Read (readMaybe)
 
--- | The subset of nix eval output modes used by the backend.
 data NixEvalOutput = EvalJson | EvalRaw
     deriving (Eq, Show)
 
@@ -50,14 +52,12 @@ data NixEvalRequest = NixEvalRequest
     }
     deriving (Eq, Show)
 
-data NixEvalPriority = ForegroundEval | BackgroundEval
-    deriving (Eq, Show)
-
 data ReplKind = PureRepl | ImpureRepl
     deriving (Eq, Show)
 
 data ReplSession = ReplSession
     { replName :: String
+    , replPid :: Maybe Int
     , replInput :: Handle
     , replEvents :: TQueue ReplEvent
     , replCounter :: MVar Int
@@ -79,256 +79,10 @@ data ReplOutcome
     | ReplDied String
     deriving (Eq, Show)
 
-{- | Per-worker warm-rotation coordination. At most one rotation runs per worker.
-When a rotation is requested while one is active, the latest non-empty request
-list is kept as pending and run once the current attempt finishes.
--}
-data RotationState = RotationState
-    { rotationActive :: Bool
-    , rotationPending :: Maybe [WarmRequest]
-    }
-
-data ReplWorker = ReplWorker
-    { replWorkerKind :: ReplKind
-    , replWorkerSession :: MVar (Maybe ReplSession)
-    , replWorkerForeground :: TQueue QueuedEval
-    , replWorkerBackground :: TQueue QueuedEval
-    , replWorkerRotation :: MVar RotationState
-    }
-
-data QueuedEval = QueuedEval NixEvalRequest (TMVar (Either String String))
-
-data WarmRequest = WarmRequest
-    { warmRequest :: NixEvalRequest
-    , warmCallback :: Maybe (Either String String -> IO ())
-    }
-
-{-# NOINLINE pureWorker #-}
-pureWorker :: ReplWorker
-pureWorker = unsafePerformIO (newWorker PureRepl)
-
-{-# NOINLINE impureWorker #-}
-impureWorker :: ReplWorker
-impureWorker = unsafePerformIO (newWorker ImpureRepl)
-
-newWorker :: ReplKind -> IO ReplWorker
-newWorker kind = do
-    session <- newMVar Nothing
-    foreground <- newTQueueIO
-    background <- newTQueueIO
-    rotation <- newMVar (RotationState False Nothing)
-    let worker = ReplWorker kind session foreground background rotation
-    void $ forkIO $ replWorkerLoop worker
-    return worker
-
-replWorkerLoop :: ReplWorker -> IO ()
-replWorkerLoop worker =
-    forever $ do
-        QueuedEval req response <-
-            atomically $
-                readTQueue (replWorkerForeground worker)
-                    `orElse` readTQueue (replWorkerBackground worker)
-        result <-
-            runWithSession True (replWorkerKind worker) (replWorkerSession worker) req
-                `catch` \(err :: SomeException) -> return (Left $ "nix repl worker failed: " ++ show err)
-        atomically $ putTMVar response result
-        -- Check binding pressure after successful foreground/background evals.
-        -- Warm-path evals bypass this by calling runRequest directly on a
-        -- standby session, avoiding recursive scheduling.
-        case result of
-            Right _ -> checkBindingPressure worker req
-            Left _ -> return ()
-
-runNixEval :: NixEvalRequest -> IO (Either String String)
-runNixEval =
-    runNixEvalWithPriority ForegroundEval
-
-runNixEvalWithPriority :: NixEvalPriority -> NixEvalRequest -> IO (Either String String)
-runNixEvalWithPriority priority req = do
-    let worker = if evalImpure req then impureWorker else pureWorker
-    response <- newEmptyTMVarIO
-    atomically $ writeTQueue (replQueue priority worker) (QueuedEval req response)
-    atomically $ takeTMVar response
-
-replQueue :: NixEvalPriority -> ReplWorker -> TQueue QueuedEval
-replQueue ForegroundEval = replWorkerForeground
-replQueue BackgroundEval = replWorkerBackground
-
-{- | Compatibility shim. The old implementation swapped in blank cold REPLs
-which was destructive to warmed sessions. This version is a deliberate
-no-op: warm rotations MUST carry non-empty request lists so they can
-pre-populate flake bindings before promotion. Use
-'scheduleNixReplWarmRotation' with real requests to rotate safely.
--}
-restartNixReplSessions :: IO ()
-restartNixReplSessions =
-    putStrLn "restartNixReplSessions: no-op (blank REPL rotation refused; use scheduleNixReplWarmRotation)"
-
-{- | Binding count at which a successful foreground/background eval triggers
-an automatic warm rotation carrying that request, keeping the REPL from
-accumulating unbounded flake references.
--}
-replFlakeVarBindingLimit :: Int
-replFlakeVarBindingLimit = 10
-
-{- | Schedule a warmed rotation on every worker whose kind matches at least
-one request. Requests are partitioned by 'evalImpure'. Workers without
-requests are left alone.
--}
-scheduleNixReplWarmRotation :: [NixEvalRequest] -> IO ()
-scheduleNixReplWarmRotation reqs = do
-    let (pureReqs, impureReqs) = partition (not . evalImpure) reqs
-        toWarm req = WarmRequest req Nothing
-    unless (null pureReqs) $ scheduleWorkerWarmRotation pureWorker (map toWarm pureReqs)
-    unless (null impureReqs) $ scheduleWorkerWarmRotation impureWorker (map toWarm impureReqs)
-
-{- | Schedule a warm rotation on the appropriate worker for a single
-request, delivering the standby result (or failure) through the callback.
-The callback runs outside any worker MVar; successful results arrive
-before the standby is promoted to the active session.
--}
-scheduleNixReplWarmRotationWithResult :: NixEvalRequest -> (Either String String -> IO ()) -> IO ()
-scheduleNixReplWarmRotationWithResult req cb = do
-    let worker = if evalImpure req then impureWorker else pureWorker
-    scheduleWorkerWarmRotation worker [WarmRequest req (Just cb)]
-
-{- | Enqueue a warm rotation for a single worker, forking a worker thread
-if none is currently active. When a rotation is already in flight the
-latest (non-empty) request list replaces any previously-stored pending
-list; displaced callbacks receive @Left "warm rotation superseded"@
-after the rotation-state MVar is released.
--}
-scheduleWorkerWarmRotation :: ReplWorker -> [WarmRequest] -> IO ()
-scheduleWorkerWarmRotation worker reqs
-    | null reqs = return ()
-    | otherwise = mask $ \restore -> do
-        (shouldStart, superseded) <- modifyMVar (replWorkerRotation worker) $ \st ->
-            if rotationActive st
-                then return (st{rotationPending = Just reqs}, (False, maybe [] id (rotationPending st)))
-                else return (st{rotationActive = True, rotationPending = Nothing}, (True, []))
-        notifyWarmRequests superseded (Left "warm rotation superseded")
-        when shouldStart $
-            void $
-                forkIO $
-                    restore (warmRotateWorker worker reqs)
-
-{- | Warm a standby session, publish successful evaluation results, then
-promote it without holding the active-session MVar during evaluation.
--}
-warmRotateWorker :: ReplWorker -> [WarmRequest] -> IO ()
-warmRotateWorker worker reqs = mask $ \restore -> do
-    eStandby <- try (restore $ openSession (replWorkerKind worker))
-    case eStandby of
-        Left (err :: SomeException) ->
-            notifyWarmRequests reqs (Left $ "warm rotation error: " ++ show err)
-        Right standbySession -> do
-            eOutcomes <-
-                try (restore $ forM reqs $ \wr -> outcomeResult <$> runRequest standbySession (warmRequest wr))
-            case eOutcomes of
-                Left (err :: SomeException) -> do
-                    closeSessionQuietly standbySession
-                    notifyWarmRequests reqs (Left $ "warm rotation crashed: " ++ show err)
-                Right outcomes ->
-                    case [err | Left err <- outcomes] of
-                        [] -> do
-                            notifyWarmResults reqs outcomes
-                            eOldSession <-
-                                try $
-                                    modifyMVar (replWorkerSession worker) $ \mOldSession ->
-                                        return (Just standbySession, mOldSession)
-                            case eOldSession of
-                                Left (err :: SomeException) -> do
-                                    closeSessionQuietly standbySession
-                                    logWarmRotation $ "Warm rotation promotion failed for " ++ show (replWorkerKind worker) ++ ": " ++ show err
-                                Right mOldSession -> do
-                                    mapM_ closeSessionQuietly mOldSession
-                                    logWarmRotation $ "Warm rotation completed for " ++ show (replWorkerKind worker)
-                        failures -> do
-                            closeSessionQuietly standbySession
-                            notifyWarmRequests reqs (Left $ "warm rotation failed: " ++ intercalate "; " failures)
-    pendingReqs <- modifyMVar (replWorkerRotation worker) $ \st ->
-        case rotationPending st of
-            Just pending -> return (st{rotationActive = True, rotationPending = Nothing}, Just pending)
-            Nothing -> return (st{rotationActive = False}, Nothing)
-    case pendingReqs of
-        Just nextReqs -> restore (warmRotateWorker worker nextReqs)
-        Nothing -> return ()
-
 outcomeResult :: ReplOutcome -> Either String String
-outcomeResult outcome =
-    case outcome of
-        ReplSucceeded output -> Right output
-        ReplFailed err -> Left err
-        ReplDied err -> Left err
-
-notifyWarmResults :: [WarmRequest] -> [Either String String] -> IO ()
-notifyWarmResults reqs outcomes =
-    mapM_ (uncurry notifyWarmRequest) (zip reqs outcomes)
-
-notifyWarmRequests :: [WarmRequest] -> Either String String -> IO ()
-notifyWarmRequests reqs result =
-    mapM_ (`notifyWarmRequest` result) reqs
-
-notifyWarmRequest :: WarmRequest -> Either String String -> IO ()
-notifyWarmRequest req result =
-    case warmCallback req of
-        Just callback -> callback result `catch` \(_ :: SomeException) -> return ()
-        Nothing -> return ()
-
-closeSessionQuietly :: ReplSession -> IO ()
-closeSessionQuietly session =
-    closeSession session `catch` \(_ :: SomeException) -> return ()
-
-logWarmRotation :: String -> IO ()
-logWarmRotation message =
-    putStrLn message `catch` \(_ :: SomeException) -> return ()
-
-{- | After a successful foreground/background eval on the active session,
-check whether the number of flake bindings has crossed the limit. If so,
-schedule a warm rotation carrying the same request so the standby is
-pre-warmed with the same flake, keeping the active session compact.
-
-This is called from the worker loop only; the warm rotation path calls
-'runRequest' directly on a standby session and never enters this function,
-so recursive warm scheduling is impossible.
--}
-checkBindingPressure :: ReplWorker -> NixEvalRequest -> IO ()
-checkBindingPressure worker req = do
-    mBindings <- modifyMVar (replWorkerSession worker) $ \mSession ->
-        case mSession of
-            Just session -> do
-                bs <- readMVar (replFlakeVars session)
-                return (mSession, Just bs)
-            Nothing -> return (mSession, Nothing)
-    case mBindings of
-        Just bindings
-            | length bindings > replFlakeVarBindingLimit ->
-                scheduleWorkerWarmRotation worker [WarmRequest req Nothing]
-        _ -> return ()
-
-runWithSession :: Bool -> ReplKind -> MVar (Maybe ReplSession) -> NixEvalRequest -> IO (Either String String)
-runWithSession mayRetry kind ref req = do
-    outcome <- modifyMVar ref $ \mSession -> do
-        eSession <- case mSession of
-            Just session -> return $ Right session
-            Nothing -> try $ openSession kind
-        case eSession of
-            Left (err :: SomeException) -> return (Nothing, ReplDied $ "failed to start " ++ show kind ++ " nix repl: " ++ show err)
-            Right session -> do
-                outcome <-
-                    runRequest session req
-                        `catch` \(err :: SomeException) -> do
-                            logReplInteraction session ("eval exception " ++ describeRequest req ++ ": " ++ show err)
-                            return (ReplDied $ replName session ++ " failed: " ++ show err)
-                case outcome of
-                    ReplDied _ -> closeSession session >> return (Nothing, outcome)
-                    _ -> return (Just session, outcome)
-    case outcome of
-        ReplSucceeded output -> return $ Right output
-        ReplFailed err -> return $ Left err
-        ReplDied err
-            | mayRetry -> runWithSession False kind ref req
-            | otherwise -> return $ Left err
+outcomeResult (ReplSucceeded output) = Right output
+outcomeResult (ReplFailed err) = Left err
+outcomeResult (ReplDied err) = Left err
 
 openSession :: ReplKind -> IO ReplSession
 openSession kind = do
@@ -341,6 +95,7 @@ openSession kind = do
                 , std_err = CreatePipe
                 }
     (Just stdinH, Just stdoutH, Just stderrH, ph) <- createProcess cp
+    pid <- fmap fromIntegral <$> getPid ph
     hSetBuffering stdinH LineBuffering
     void $ forkIO $ readLoop ReplStdout stdoutH events
     void $ forkIO $ readLoop ReplStderr stderrH events
@@ -349,6 +104,7 @@ openSession kind = do
     let session =
             ReplSession
                 { replName = show kind ++ " nix repl"
+                , replPid = pid
                 , replInput = stdinH
                 , replEvents = events
                 , replCounter = counter
@@ -358,23 +114,22 @@ openSession kind = do
     initializeSession session `catch` \(err :: SomeException) -> do
         closeSession session
         fail $ "nix repl initialization failed for " ++ replName session ++ ": " ++ show err
-    return session
+    pure session
 
 initializeSession :: ReplSession -> IO ()
 initializeSession session = do
     marker <- nextMarker session "ready"
     sendCommands session [":p " ++ nixString marker]
     result <- collectUntilMarker session marker
-    logReplInteraction session "initialize"
     case result of
         ReplDied err -> fail err
-        _ -> return ()
+        _ -> pure ()
 
 runRequest :: ReplSession -> NixEvalRequest -> IO ReplOutcome
 runRequest session req = do
     eExpr <- renderRequestExpression session req
     outcome <- case eExpr of
-        Left outcome -> return outcome
+        Left outcome -> pure outcome
         Right expr -> do
             begin <- nextMarker session "begin"
             end <- nextMarker session "end"
@@ -385,78 +140,29 @@ runRequest session req = do
                 , ":p " ++ nixString end
                 ]
             collectUntilMarker session end >>= \case
-                ReplSucceeded _ -> return $ ReplDied "internal protocol error: collectUntilMarker returned success before parsing"
-                ReplDied err -> return $ ReplDied err
+                ReplSucceeded _ -> pure $ ReplDied "internal protocol error: collectUntilMarker returned success before parsing"
+                ReplDied err -> pure $ ReplDied err
                 ReplFailed raw -> parseReplOutput begin req raw
-    logReplInteraction session ("eval " ++ describeRequest req)
-    return outcome
+    pure outcome
 
-logReplInteraction :: ReplSession -> String -> IO ()
-logReplInteraction session interaction = do
-    memoryUsage <- readProcessMemoryUsage
-    putStrLn $
-        "nix repl interaction: session="
-            ++ show (replName session)
-            ++ " interaction="
-            ++ show interaction
-            ++ " memory="
-            ++ memoryUsage
-
-readProcessMemoryUsage :: IO String
-readProcessMemoryUsage = do
-    eStatus <- readProcStatus
-    return $ case eStatus of
-        Left err -> "unavailable (" ++ show err ++ ")"
-        Right status ->
-            let fields = memoryStatusFields status
-             in if null fields
-                    then "unavailable (no memory fields in /proc/self/status)"
-                    else intercalate ", " fields
+readSessionMemoryBytes :: ReplSession -> IO (Maybe Integer)
+readSessionMemoryBytes session =
+    maybe (pure Nothing) readStatus $ replPid session
   where
-    readProcStatus :: IO (Either SomeException String)
-    readProcStatus =
-        try $ do
-            status <- readFile "/proc/self/status"
-            _ <- evaluate (length status)
-            return status
+    readStatus pid = do
+        status <- try $ do
+            contents <- readFile $ "/proc/" ++ show pid ++ "/status"
+            evaluate (length contents) >> pure contents
+        pure $ either (const Nothing) parseVmRss (status :: Either SomeException String)
 
-memoryStatusFields :: String -> [String]
-memoryStatusFields status =
-    [ key ++ "=" ++ dropWhile isSpace rawValue
-    | key <- ["VmRSS", "VmHWM", "VmSize"]
-    , line <- lines status
-    , Just rawValue <- [stripPrefix (key ++ ":") line]
-    ]
-
-describeRequest :: NixEvalRequest -> String
-describeRequest req =
-    "impure="
-        ++ show (evalImpure req)
-        ++ " output="
-        ++ show (evalOutput req)
-        ++ " target="
-        ++ describeTarget (evalTarget req)
-        ++ " apply="
-        ++ maybe "none" abbreviate (evalApply req)
-
-describeTarget :: NixEvalTarget -> String
-describeTarget (EvalExpr expr) = "expr:" ++ abbreviate expr
-describeTarget (EvalInstallable installable attr) =
-    "installable:" ++ abbreviate installable ++ " attr:" ++ attr
-
-abbreviate :: String -> String
-abbreviate value =
-    let oneLine = singleLine value
-     in if length oneLine <= 240
-            then oneLine
-            else take 237 oneLine ++ "..."
-
-singleLine :: String -> String
-singleLine = map $ \case
-    '\n' -> ' '
-    '\r' -> ' '
-    '\t' -> ' '
-    c -> c
+    parseVmRss status =
+        listToMaybe
+            [ value * 1024
+            | line <- lines status
+            , Just raw <- [stripPrefix "VmRSS:" line]
+            , rawValue : _ <- [words raw]
+            , Just value <- [readMaybe rawValue]
+            ]
 
 collectUntilMarker :: ReplSession -> String -> IO ReplOutcome
 collectUntilMarker session marker = go []
@@ -464,8 +170,8 @@ collectUntilMarker session marker = go []
     go acc = do
         event <- atomically $ readTQueue (replEvents session)
         case event of
-            ReplLine ReplStdout line | line == marker -> return $ ReplFailed (formatEvents $ reverse acc)
-            ReplClosed ReplStdout err -> return $ ReplDied $ replName session ++ " closed stdout before marker " ++ marker ++ formatClosed err
+            ReplLine ReplStdout line | line == marker -> pure $ ReplFailed (formatEvents $ reverse acc)
+            ReplClosed ReplStdout err -> pure $ ReplDied $ replName session ++ " closed stdout before marker " ++ marker ++ formatClosed err
             _ -> go (event : acc)
 
 parseReplOutput :: String -> NixEvalRequest -> String -> IO ReplOutcome
@@ -473,11 +179,12 @@ parseReplOutput begin req raw = do
     let events = parseFormattedEvents raw
         (preBegin, atBegin) = break isBegin events
     case atBegin of
-        [] -> return $ ReplDied $ "nix repl response did not include begin marker " ++ begin ++ ":\n" ++ raw
+        [] -> pure $ ReplDied $ "nix repl response did not include begin marker " ++ begin ++ ":\n" ++ raw
         (_ : body) ->
-            if hasNixError preBegin
-                then return $ ReplFailed $ stripTrailingNewlines $ formatEvents preBegin
-                else return $ parseBody req body
+            pure $
+                if hasNixError preBegin
+                    then ReplFailed $ stripTrailingNewlines $ formatEvents preBegin
+                    else parseBody req body
   where
     isBegin (ReplLine ReplStdout line) = line == begin
     isBegin _ = False
@@ -503,24 +210,20 @@ parseBody req body =
             _ -> ReplFailed $ "nix repl --raw emulation expected a string result, got JSON: " ++ line
 
 renderRequestExpression :: ReplSession -> NixEvalRequest -> IO (Either ReplOutcome String)
-renderRequestExpression session req = do
-    eTargetExpr <- case evalTarget req of
-        EvalExpr expr -> return $ Right ("(" ++ expr ++ ")")
-        EvalInstallable installable attr -> do
-            eFlakeVar <- ensureFlakeBinding session installable
-            return $ fmap (`renderFlakeInstallableExpression` attr) eFlakeVar
-    return $ case eTargetExpr of
-        Left outcome -> Left outcome
-        Right targetExpr ->
-            Right $ case evalApply req of
-                Nothing -> targetExpr
-                Just applyExpr -> "(" ++ applyExpr ++ ") (" ++ targetExpr ++ ")"
+renderRequestExpression session req =
+    fmap apply <$> case evalTarget req of
+        EvalExpr expr -> pure $ Right $ "(" ++ expr ++ ")"
+        EvalInstallable installable attr ->
+            fmap (`renderFlakeInstallableExpression` attr) <$> ensureFlakeBinding session installable
+  where
+    apply targetExpr =
+        maybe targetExpr (\applyExpr -> "(" ++ applyExpr ++ ") (" ++ targetExpr ++ ")") $ evalApply req
 
 ensureFlakeBinding :: ReplSession -> String -> IO (Either ReplOutcome String)
 ensureFlakeBinding session installable =
     modifyMVar (replFlakeVars session) $ \bindings ->
         case lookup installable bindings of
-            Just varName -> return (bindings, Right varName)
+            Just varName -> pure (bindings, Right varName)
             Nothing -> do
                 let varName = "pointyFlake" ++ show (length bindings + 1)
                 marker <- nextMarker session "flake"
@@ -530,14 +233,13 @@ ensureFlakeBinding session installable =
                     , ":p " ++ nixString marker
                     ]
                 outcome <- collectUntilMarker session marker
-                logReplInteraction session ("bind flake " ++ abbreviate installable)
                 case outcome of
-                    ReplSucceeded _ -> return (bindings, Left $ ReplDied "internal protocol error while binding flake")
-                    ReplDied err -> return (bindings, Left $ ReplDied err)
+                    ReplSucceeded _ -> pure (bindings, Left $ ReplDied "internal protocol error while binding flake")
+                    ReplDied err -> pure (bindings, Left $ ReplDied err)
                     ReplFailed raw ->
                         if hasNixError (parseFormattedEvents raw)
-                            then return (bindings, Left $ ReplFailed $ stripTrailingNewlines raw)
-                            else return ((installable, varName) : bindings, Right varName)
+                            then pure (bindings, Left $ ReplFailed $ stripTrailingNewlines raw)
+                            else pure ((installable, varName) : bindings, Right varName)
 
 renderFlakeInstallableExpression :: String -> String -> String
 renderFlakeInstallableExpression flakeVar attr =
@@ -576,8 +278,8 @@ nextMarker :: ReplSession -> String -> IO String
 nextMarker session label = do
     n <- modifyMVar (replCounter session) $ \current -> do
         let next = current + 1
-        return (next, next)
-    return $ "__pointy_nix_repl_" ++ sanitize label ++ "_" ++ show n ++ "__"
+        pure (next, next)
+    pure $ "__pointy_nix_repl_" ++ sanitize label ++ "_" ++ show n ++ "__"
 
 sendCommands :: ReplSession -> [String] -> IO ()
 sendCommands session commands = do
@@ -598,20 +300,20 @@ readLoop stream handle events = loop
                 | otherwise -> atomically $ writeTQueue events (ReplClosed stream (show err))
 
 closeSession :: ReplSession -> IO ()
-closeSession session = replClose session `catch` \(_ :: SomeException) -> return ()
+closeSession session = replClose session `catch` \(_ :: SomeException) -> pure ()
 
 closeLocalSession :: Handle -> Handle -> Handle -> ProcessHandle -> IO ()
 closeLocalSession stdinH stdoutH stderrH ph = do
     hCloseIfOpen stdinH
     hCloseIfOpen stdoutH
     hCloseIfOpen stderrH
-    terminateProcess ph `catch` \(_ :: SomeException) -> return ()
-    void (waitForProcess ph) `catch` \(_ :: SomeException) -> return ()
+    terminateProcess ph `catch` \(_ :: SomeException) -> pure ()
+    void (waitForProcess ph) `catch` \(_ :: SomeException) -> pure ()
 
 hCloseIfOpen :: Handle -> IO ()
 hCloseIfOpen handle = do
     closed <- hIsClosed handle
-    if closed then return () else hClose handle
+    if closed then pure () else hClose handle
 
 formatClosed :: String -> String
 formatClosed "" = ""

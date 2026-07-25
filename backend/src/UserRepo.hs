@@ -10,6 +10,7 @@ module UserRepo (
     runNixEvalRawInRepo,
     runNixEvalJsonApplyInRepo,
     runNixEvalImpureJsonExpr,
+    rewarmRepoJsonExpressions,
     runGit,
     runGitIn,
     runGitWithSshKey,
@@ -32,9 +33,10 @@ import Control.Monad (when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isInfixOf)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import qualified Data.Text as T
-import NixRepl (NixEvalOutput (..), NixEvalPriority (..), NixEvalRequest (..), NixEvalTarget (..), runNixEval, runNixEvalWithPriority)
+import RevisionEvaluator (EvalPriority (..), RepoExpression, defaultRevisionEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression, repoSource, rewarmRevision)
 import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -72,34 +74,25 @@ runNix :: [String] -> ExceptT String IO String
 runNix args = ExceptT $ runNixProcess args
 
 runNixEvalJsonInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
-runNixEvalJsonInRepo ctx = runNixEvalInRepo ctx EvalJson Nothing
+runNixEvalJsonInRepo ctx = runRepoExpression Interactive ctx . jsonExpression
 
 runNixEvalJsonInRepoBackground :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
-runNixEvalJsonInRepoBackground ctx = runNixEvalInRepoWithPriority BackgroundEval ctx EvalJson Nothing
+runNixEvalJsonInRepoBackground ctx = runRepoExpression Background ctx . jsonExpression
 
 runNixEvalRawInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
-runNixEvalRawInRepo ctx = runNixEvalInRepo ctx EvalRaw Nothing
+runNixEvalRawInRepo ctx = runRepoExpression Interactive ctx . rawExpression
 
 runNixEvalJsonApplyInRepo :: (RepoContext ctx) => ctx -> String -> String -> ExceptT String IO String
-runNixEvalJsonApplyInRepo ctx applyExpr = runNixEvalInRepo ctx EvalJson (Just applyExpr)
+runNixEvalJsonApplyInRepo ctx applyExpr = runRepoExpression Interactive ctx . jsonAppliedExpression applyExpr
 
 runNixEvalImpureJsonExpr :: String -> ExceptT String IO String
-runNixEvalImpureJsonExpr expr =
-    ExceptT $ runNixEval $ NixEvalRequest True EvalJson Nothing (EvalExpr expr)
+runNixEvalImpureJsonExpr = ExceptT . evaluateImpure defaultRevisionEvaluator
 
-runNixEvalInRepo :: (RepoContext ctx) => ctx -> NixEvalOutput -> Maybe String -> String -> ExceptT String IO String
-runNixEvalInRepo =
-    runNixEvalInRepoWithPriority ForegroundEval
+runRepoExpression :: (RepoContext ctx) => EvalPriority -> ctx -> RepoExpression -> ExceptT String IO String
+runRepoExpression priority ctx expr = ExceptT $ evaluate defaultRevisionEvaluator priority (repoSource (nixInstallable ctx)) expr
 
-runNixEvalInRepoWithPriority :: (RepoContext ctx) => NixEvalPriority -> ctx -> NixEvalOutput -> Maybe String -> String -> ExceptT String IO String
-runNixEvalInRepoWithPriority priority ctx output applyExpr attr =
-    ExceptT $
-        runNixEvalWithPriority priority $
-            NixEvalRequest
-                False
-                output
-                applyExpr
-                (EvalInstallable (nixInstallable ctx) attr)
+rewarmRepoJsonExpressions :: (RepoContext ctx) => ctx -> NonEmpty String -> IO [Either String String]
+rewarmRepoJsonExpressions ctx attrs = rewarmRevision defaultRevisionEvaluator (repoSource (nixInstallable ctx)) (fmap jsonExpression attrs)
 
 runNixProcess :: [String] -> IO (Either String String)
 runNixProcess args = do
