@@ -36,7 +36,7 @@ import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import qualified Data.Text as T
-import RevisionEvaluator (EvalPriority (..), RepoExpression, RepoSource, defaultRevisionEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, mutableRepoSource, rawExpression, repoSource, rewarmRevision)
+import NixEvaluator (EvalPriority (..), RepoExpression, RepoSource, defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, mutableRepoSource, rawExpression, repoSource, rewarmRevision)
 import System.Directory (doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -86,14 +86,14 @@ runNixEvalJsonApplyInRepo :: (RepoContext ctx) => ctx -> String -> String -> Exc
 runNixEvalJsonApplyInRepo ctx applyExpr = runRepoExpression Interactive ctx . jsonAppliedExpression applyExpr
 
 runNixEvalImpureJsonExpr :: String -> ExceptT String IO String
-runNixEvalImpureJsonExpr = ExceptT . evaluateImpure defaultRevisionEvaluator
+runNixEvalImpureJsonExpr = ExceptT . evaluateImpure defaultNixEvaluator
 
 runRepoExpression :: (RepoContext ctx) => EvalPriority -> ctx -> RepoExpression -> ExceptT String IO String
-runRepoExpression priority ctx = ExceptT . evaluate defaultRevisionEvaluator priority (evaluatorSource ctx)
+runRepoExpression priority ctx = ExceptT . evaluate defaultNixEvaluator priority (evaluatorSource ctx)
 
 rewarmRepoJsonExpressions :: (RepoContext ctx) => ctx -> IO (Either String (NonEmpty (key, String))) -> IO (Either String (NonEmpty (key, Either String String)))
 rewarmRepoJsonExpressions ctx resolveAttrs =
-    rewarmRevision defaultRevisionEvaluator (evaluatorSource ctx) $
+    rewarmRevision defaultNixEvaluator (evaluatorSource ctx) $
         fmap (fmap $ fmap $ \(key, attr) -> (key, jsonExpression attr)) resolveAttrs
 
 runNixProcess :: [String] -> IO (Either String String)

@@ -40,13 +40,13 @@ library
     Handlers.Store
     Handlers.Upload
     Handlers.Zip
-    RevisionEvaluator
+    NixEvaluator
     NixUtils
     OutPaths
     UserRepo
 
   other-modules:
-    RevisionEvaluator.NixRepl
+    NixEvaluator.NixRepl
 
   build-depends:
     , aeson

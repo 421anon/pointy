@@ -1,12 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module RevisionEvaluator (
-    RevisionEvaluator,
+module NixEvaluator (
+    NixEvaluator,
     EvalPriority (..),
     RepoSource,
     RepoExpression,
-    defaultRevisionEvaluator,
+    defaultNixEvaluator,
     repoSource,
     mutableRepoSource,
     jsonExpression,
@@ -30,7 +30,7 @@ import Data.List (find, foldl')
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map.Strict as Map
-import RevisionEvaluator.NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), ReplKind (..), ReplOutcome (..), ReplSession, closeSession, openSession, outcomeResult, readSessionMemoryBytes, runRequest)
+import NixEvaluator.NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), ReplKind (..), ReplOutcome (..), ReplSession, closeSession, openSession, outcomeResult, readSessionMemoryBytes, runRequest)
 import System.IO.Unsafe (unsafePerformIO)
 
 data RepoSource = RepoSource Bool String
@@ -56,7 +56,7 @@ data Evaluation = Evaluation
 data EvalPriority = Interactive | Background
     deriving (Eq, Show)
 
-data RevisionEvaluator = RevisionEvaluator
+data NixEvaluator = NixEvaluator
     { pureWorker :: ReplWorker
     , impureWorker :: ReplWorker
     , revisionResults :: MVar RevisionResultCache
@@ -110,13 +110,13 @@ initialReplMemoryLimitBytes = 512 * 1024 * 1024
 maxCachedRevisionCount :: Int
 maxCachedRevisionCount = 8
 
-{-# NOINLINE defaultRevisionEvaluator #-}
-defaultRevisionEvaluator :: RevisionEvaluator
-defaultRevisionEvaluator = unsafePerformIO newRevisionEvaluator
+{-# NOINLINE defaultNixEvaluator #-}
+defaultNixEvaluator :: NixEvaluator
+defaultNixEvaluator = unsafePerformIO newNixEvaluator
 
-newRevisionEvaluator :: IO RevisionEvaluator
-newRevisionEvaluator =
-    RevisionEvaluator
+newNixEvaluator :: IO NixEvaluator
+newNixEvaluator =
+    NixEvaluator
         <$> newWorker PureRepl pureReplShardCount
         <*> newWorker ImpureRepl 1
         <*> newMVar (RevisionResultCache Nothing [] Map.empty)
@@ -140,7 +140,7 @@ expression :: NixEvalOutput -> Maybe String -> String -> RepoExpression
 expression output applyExpr attr =
     RepoExpression (AttributeId output attr applyExpr) output applyExpr attr
 
-evaluate :: RevisionEvaluator -> EvalPriority -> RepoSource -> RepoExpression -> IO (Either String String)
+evaluate :: NixEvaluator -> EvalPriority -> RepoSource -> RepoExpression -> IO (Either String String)
 evaluate evaluator priority source@(RepoSource cacheable _) repoExpr
     | not cacheable = evaluateRequest evaluator priority evaluation
     | otherwise = do
@@ -156,12 +156,12 @@ evaluate evaluator priority source@(RepoSource cacheable _) repoExpr
   where
     evaluation = repoEvaluation source repoExpr
 
-evaluateImpure :: RevisionEvaluator -> String -> IO (Either String String)
+evaluateImpure :: NixEvaluator -> String -> IO (Either String String)
 evaluateImpure evaluator expr =
     evaluateRequest evaluator Interactive $
         Evaluation (ImpureId expr) (NixEvalRequest True EvalJson Nothing $ EvalExpr expr)
 
-rewarmRevision :: RevisionEvaluator -> RepoSource -> IO (Either String (NonEmpty (key, RepoExpression))) -> IO (Either String (NonEmpty (key, Either String String)))
+rewarmRevision :: NixEvaluator -> RepoSource -> IO (Either String (NonEmpty (key, RepoExpression))) -> IO (Either String (NonEmpty (key, Either String String)))
 rewarmRevision evaluator source resolveExpressions = do
     let worker = pureWorker evaluator
         revision = WarmRevision source $ fmap (fmap $ fmap snd) resolveExpressions
@@ -185,14 +185,14 @@ rewarmRevision evaluator source resolveExpressions = do
             when (initialWarm && warmed && all (isRight . snd) results) $ finishInitialWarm worker
             pure $ Right results
 
-activateRevisionResults :: RevisionEvaluator -> RepoSource -> IO ()
+activateRevisionResults :: NixEvaluator -> RepoSource -> IO ()
 activateRevisionResults evaluator source =
     modifyMVar_ (revisionResults evaluator) $ \cache ->
         pure $
             pruneRevisionResults $
                 (touchResultRevision source cache){resultCurrentRevision = Just source}
 
-claimRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> IO (ResultSlot, Bool)
+claimRevisionResult :: NixEvaluator -> RepoSource -> ExpressionId -> IO (ResultSlot, Bool)
 claimRevisionResult evaluator source exprId =
     modifyMVar (revisionResults evaluator) $ \cache -> do
         let cache' = pruneRevisionResults $ touchResultRevision source cache
@@ -204,13 +204,13 @@ claimRevisionResult evaluator source exprId =
                 let revisions = Map.insert source (Map.insert exprId result results) $ resultRevisions cache'
                 pure (cache'{resultRevisions = revisions}, (result, True))
 
-completeRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> ResultSlot -> Either String String -> IO ()
+completeRevisionResult :: NixEvaluator -> RepoSource -> ExpressionId -> ResultSlot -> Either String String -> IO ()
 completeRevisionResult evaluator source exprId resultSlot result = do
     completed <- tryPutMVar resultSlot result
     when (completed && isLeft result) $
         discardRevisionResult evaluator source exprId resultSlot
 
-discardRevisionResult :: RevisionEvaluator -> RepoSource -> ExpressionId -> ResultSlot -> IO ()
+discardRevisionResult :: NixEvaluator -> RepoSource -> ExpressionId -> ResultSlot -> IO ()
 discardRevisionResult evaluator source exprId resultSlot =
     modifyMVar_ (revisionResults evaluator) $ \cache ->
         let revisions = Map.update discard source $ resultRevisions cache
@@ -285,7 +285,7 @@ replShardLoop worker shard = forever $ do
             `catch` \(err :: SomeException) -> pure $ Left $ "revision evaluator shard failed: " ++ show err
     atomically $ putTMVar response result
 
-evaluateRequest :: RevisionEvaluator -> EvalPriority -> Evaluation -> IO (Either String String)
+evaluateRequest :: NixEvaluator -> EvalPriority -> Evaluation -> IO (Either String String)
 evaluateRequest evaluator priority evaluation = do
     let worker = workerForEvaluation evaluator evaluation
         shard = evaluationShard worker evaluation
@@ -293,7 +293,7 @@ evaluateRequest evaluator priority evaluation = do
     atomically $ writeTQueue (shardQueue priority shard) $ QueuedEval evaluation response
     atomically $ takeTMVar response
 
-workerForEvaluation :: RevisionEvaluator -> Evaluation -> ReplWorker
+workerForEvaluation :: NixEvaluator -> Evaluation -> ReplWorker
 workerForEvaluation evaluator evaluation
     | evalImpure $ evaluationRequest evaluation = impureWorker evaluator
     | otherwise = pureWorker evaluator

@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1110" viewBox="0 0 1200 1110" role="img" aria-labelledby="title desc">
-  <title id="title">Revision evaluator worker rack and RAM lifecycle</title>
+  <title id="title">Nix evaluator worker rack and RAM lifecycle</title>
   <desc id="desc">Expressions first check revision-scoped completed results owned by the evaluator. Cache misses route to four Nix workers by stable request ID. The current revision stays cached while old revisions are evicted as whole slices. Startup raises an undersized memory limit without restarting; later memory pressure prepares a replacement beside the serving worker, then switches over briefly.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">

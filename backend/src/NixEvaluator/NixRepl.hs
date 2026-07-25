@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module RevisionEvaluator.NixRepl (
+module NixEvaluator.NixRepl (
     NixEvalOutput (..),
     NixEvalRequest (..),
     NixEvalTarget (..),
