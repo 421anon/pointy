@@ -27,6 +27,10 @@ module.exports = {
         test: /\.s[ac]ss$/i,
         use: ["style-loader", "css-loader", "sass-loader"],
       },
+      {
+        test: /\.(png|jpe?g|gif|svg)$/i,
+        type: "asset/resource",
+      },
     ],
   },
   plugins: [
@@ -56,6 +60,7 @@ module.exports = {
 
   resolve: {
     modules: nodePath.split(":"),
+    fallback: { path: false, fs: false, crypto: false },
   },
 
   resolveLoader: {

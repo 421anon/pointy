@@ -25,6 +25,10 @@
     "@codemirror/legacy-modes": "^6.5.2",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.41.1",
-    "codemirror": "^6.0.2"
+    "codemirror": "^6.0.2",
+    "fp-ts": "^2.16.11",
+    "molstar": "^5.11.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

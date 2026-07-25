@@ -256,6 +256,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 isHtml =
                     has (mimeType << just << where_ (String.startsWith "text/html")) file
 
+                isPdb =
+                    has (mimeType << just << where_ ((==) "chemical/x-pdb")) file
+
                 mCompareSelection =
                     if file.viewable || isImage then
                         Maybe.map2 (\pid ctx -> compareSelectionFor pid itemName file.mimeType path ctx)
@@ -285,7 +288,10 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         Nothing
 
                 fileIcon =
-                    if isImage then
+                    if isPdb then
+                        "biotech"
+
+                    else if isImage then
                         "image"
 
                     else
@@ -349,7 +355,19 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 , Html.viewIfLazy file.view.isViewing <|
                     \() ->
                         Html.div [ class "file-content-viewer" ]
-                            [ if isImage then
+                            [ if isPdb then
+                                case mDirCtx of
+                                    Just (OutputDir stepId_ commit_) ->
+                                        Html.node "molstar-viewer"
+                                            [ Html.Attributes.class "file-molstar-viewer"
+                                            , Html.Attributes.attribute "src" (Api.stepFileBundleUrl stepId_ commit_ path)
+                                            ]
+                                            []
+
+                                    _ ->
+                                        Html.nothing
+
+                              else if isImage then
                                 case mDirCtx of
                                     Just (OutputDir stepId_ commit_) ->
                                         Html.img
@@ -482,6 +500,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
             let
                 isSrcDir =
                     has (just << srcDir) mDirCtx
+
+                isZip =
+                    String.endsWith ".zip" (String.toLower itemName)
             in
             Html.div [ class "directory-folder", id anchor ]
                 [ Html.map (Flow.map (always ())) <|
@@ -509,7 +530,10 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         ]
                         [ Html.button [ class "folder-header-btn" ]
                             [ icon True
-                                (if folder.expanded then
+                                (if isZip then
+                                    "folder_zip"
+
+                                 else if folder.expanded then
                                     "folder_open"
 
                                  else

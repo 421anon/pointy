@@ -1208,6 +1208,7 @@ shouldSkipFileContents : { r | mimeType : Maybe String } -> Bool
 shouldSkipFileContents file_ =
     has (mimeType << just << where_ (String.startsWith "image/")) file_
         || has (mimeType << just << where_ (String.startsWith "text/html")) file_
+        || has (mimeType << just << where_ ((==) "chemical/x-pdb")) file_
 
 
 decodeTableMeta : Decode.Value -> Maybe Model.TableMeta
