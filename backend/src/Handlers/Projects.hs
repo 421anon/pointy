@@ -164,11 +164,4 @@ renderMultilineNix = renderStrict . layoutPretty defaultLayoutOptions . getDoc .
     renderNode node = exprFNixDoc node
 
 escapeIndented :: T.Text -> T.Text
-escapeIndented = preserveCommonIndent . T.replace "${" "''${" . T.replace "''" "'''"
-
-preserveCommonIndent :: T.Text -> T.Text
-preserveCommonIndent text
-    | not (null contentLines) && all (T.isPrefixOf " ") contentLines = "${\"\"}" <> text
-    | otherwise = text
-  where
-    contentLines = filter (not . T.null) $ T.splitOn "\n" text
+escapeIndented = T.replace "${" "''${" . T.replace "''" "'''"
