@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850" role="img" aria-labelledby="title desc">
-  <title id="title">Revision evaluator routing and RAM lifecycle</title>
-  <desc id="desc">Expressions route by semantic identity to warm Nix evaluator shards. Commit changes rewarm existing sessions. After each successful evaluation the shard is locked and its RSS is checked. An over-limit shard pauses while a standby warms, then closes the old session and publishes the new one.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1110" viewBox="0 0 1200 1110" role="img" aria-labelledby="title desc">
+  <title id="title">Revision evaluator worker rack and RAM lifecycle</title>
+  <desc id="desc">Expressions route to a rack of warm evaluator workers. Each worker owns priority inboxes, one active Nix REPL cartridge, a local RSS gauge, its latest expression card, and a temporary standby bay. Commit changes rewarm the same cartridge. After successful evaluations an over-limit worker pauses while a replacement cartridge warms and is promoted.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
@@ -17,138 +17,209 @@
       .section { font-size: 18px; font-weight: 700; }
       .label { font-size: 15px; font-weight: 650; }
       .small { font-size: 13px; }
+      .tiny { font-size: 11px; }
       .panel { fill: #ffffff; stroke: #94a3b8; stroke-width: 2; rx: 12; }
       .box { fill: #f8fafc; stroke: #64748b; stroke-width: 2; rx: 9; }
       .api { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 9; }
-      .active { fill: #ecfdf5; stroke: #059669; stroke-width: 2; rx: 9; }
-      .paused { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; rx: 9; }
-      .standby { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; stroke-dasharray: 7 4; rx: 9; }
-      .error { fill: #fef2f2; stroke: #dc2626; stroke-width: 2; rx: 9; }
+      .worker { fill: #f8fafc; stroke: #64748b; stroke-width: 2; rx: 8; }
+      .worker-selected { fill: #f8fafc; stroke: #2563eb; stroke-width: 3; rx: 10; }
+      .tray { fill: #ffffff; stroke: #64748b; stroke-width: 1.5; rx: 5; }
+      .active { fill: #ecfdf5; stroke: #059669; stroke-width: 2; rx: 8; }
+      .paused { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; rx: 8; }
+      .standby { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; stroke-dasharray: 7 4; rx: 8; }
+      .error { fill: #fef2f2; stroke: #dc2626; stroke-width: 2; rx: 8; }
       .decision { fill: #ffffff; stroke: #64748b; stroke-width: 2; }
+      .gauge { fill: #e2e8f0; stroke: #64748b; stroke-width: 1.5; rx: 5; }
+      .gauge-fill { fill: #10b981; }
       .line { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
       .blue-line { fill: none; stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: 7 5; marker-end: url(#blue-arrow); }
+      .blue-bus { fill: none; stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: 7 5; }
       .orange-line { fill: none; stroke: #ea580c; stroke-width: 2.5; marker-end: url(#orange-arrow); }
+      .limit { stroke: #ea580c; stroke-width: 3; }
+      .led { fill: #10b981; stroke: #047857; stroke-width: 1; }
     </style>
   </defs>
 
-  <rect width="1200" height="850" fill="#ffffff"/>
+  <rect width="1200" height="1110" fill="#ffffff"/>
   <text x="40" y="40" class="title">Revision evaluator</text>
   <text x="1160" y="40" text-anchor="end" class="small">warm evaluator state · OutPaths owns result caching</text>
 
-  <rect x="35" y="65" width="1130" height="245" class="panel"/>
-  <text x="60" y="98" class="section">Routing</text>
+  <rect x="35" y="65" width="1130" height="280" class="panel"/>
+  <text x="60" y="98" class="section">Worker rack</text>
 
-  <rect x="60" y="125" width="155" height="70" class="box"/>
-  <text x="137" y="154" text-anchor="middle" class="label">UserRepo</text>
-  <text x="137" y="178" text-anchor="middle" class="small">OutPaths / handlers</text>
+  <rect x="55" y="130" width="150" height="70" class="box"/>
+  <text x="130" y="158" text-anchor="middle" class="label">UserRepo</text>
+  <text x="130" y="181" text-anchor="middle" class="small">OutPaths / handlers</text>
 
-  <rect x="265" y="115" width="200" height="90" class="api"/>
-  <text x="365" y="143" text-anchor="middle" class="label">RepoExpression</text>
-  <text x="365" y="166" text-anchor="middle" class="small">ExpressionId</text>
-  <text x="365" y="187" text-anchor="middle" class="small">attribute + apply</text>
-  <text x="365" y="202" text-anchor="middle" class="small">revision excluded</text>
+  <rect x="245" y="120" width="190" height="90" class="api"/>
+  <text x="340" y="148" text-anchor="middle" class="label">RepoExpression</text>
+  <text x="340" y="171" text-anchor="middle" class="small">ExpressionId</text>
+  <text x="340" y="192" text-anchor="middle" class="small">attribute + apply</text>
+  <text x="340" y="207" text-anchor="middle" class="tiny">revision excluded</text>
 
-  <rect x="515" y="125" width="145" height="70" class="box"/>
-  <text x="587" y="153" text-anchor="middle" class="label">Stable hash</text>
-  <text x="587" y="178" text-anchor="middle" class="small">mod shard count</text>
+  <rect x="475" y="130" width="120" height="70" class="box"/>
+  <text x="535" y="158" text-anchor="middle" class="label">Stable hash</text>
+  <text x="535" y="181" text-anchor="middle" class="small">mod 4</text>
 
-  <rect x="715" y="105" width="415" height="125" class="box"/>
-  <text x="735" y="132" class="label">Selected warm shard</text>
-  <rect x="745" y="150" width="155" height="53" class="box"/>
-  <text x="822" y="172" text-anchor="middle" class="label">Priority queues</text>
-  <text x="822" y="191" text-anchor="middle" class="small">interactive first</text>
-  <rect x="945" y="145" width="155" height="63" class="active"/>
-  <text x="1022" y="171" text-anchor="middle" class="label">Active session</text>
-  <text x="1022" y="192" text-anchor="middle" class="small">private NixRepl</text>
+  <path d="M205 165 H245" class="line"/>
+  <path d="M435 165 H475" class="line"/>
+  <path d="M595 165 H645" class="line"/>
 
-  <path d="M215 160 H265" class="line"/>
-  <path d="M465 160 H515" class="line"/>
-  <path d="M660 160 H745" class="line"/>
-  <path d="M900 176 H945" class="line"/>
-  <path d="M1100 176 H1140 V292 H137 V195" class="line"/>
-  <text x="790" y="306" text-anchor="middle" class="small">result</text>
+  <rect x="645" y="100" width="490" height="165" class="box"/>
+  <text x="665" y="125" class="label">Four pure cache workers</text>
 
-  <rect x="265" y="235" width="250" height="48" class="api"/>
-  <text x="390" y="257" text-anchor="middle" class="label">rewarmRevision · new commit</text>
-  <text x="390" y="275" text-anchor="middle" class="small">partition expressions + fallback</text>
-  <path d="M515 259 H700 V225 H715" class="blue-line"/>
-  <text x="610" y="248" text-anchor="middle" class="small">same active sessions</text>
-  <text x="1125" y="274" text-anchor="end" class="small">commit itself does not replace a worker</text>
+  <g transform="translate(670 137)">
+    <rect width="95" height="105" class="worker"/>
+    <text x="14" y="21" class="label">W0</text><circle cx="78" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">inbox</text>
+    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">ACTIVE REPL</text>
+    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="39" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  </g>
+  <g transform="translate(785 137)">
+    <rect width="95" height="105" class="worker-selected"/>
+    <text x="14" y="21" class="label">W1</text><circle cx="78" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">inbox</text>
+    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">ACTIVE REPL</text>
+    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="45" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  </g>
+  <g transform="translate(900 137)">
+    <rect width="95" height="105" class="worker"/>
+    <text x="14" y="21" class="label">W2</text><circle cx="78" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">inbox</text>
+    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">ACTIVE REPL</text>
+    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="32" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  </g>
+  <g transform="translate(1015 137)">
+    <rect width="95" height="105" class="worker"/>
+    <text x="14" y="21" class="label">W3</text><circle cx="78" cy="17" r="6" class="led"/>
+    <rect x="12" y="31" width="71" height="18" class="tray"/><text x="47" y="44" text-anchor="middle" class="tiny">inbox</text>
+    <rect x="12" y="55" width="71" height="28" class="active"/><text x="47" y="73" text-anchor="middle" class="tiny">ACTIVE REPL</text>
+    <rect x="12" y="90" width="71" height="7" class="gauge"/><rect x="13" y="91" width="51" height="5" class="gauge-fill"/><line x1="66" y1="87" x2="66" y2="100" class="limit"/>
+  </g>
 
-  <rect x="35" y="335" width="1130" height="480" class="panel"/>
-  <text x="60" y="370" class="section">Evaluation completion and RAM replacement</text>
+  <rect x="245" y="270" width="230" height="48" class="api"/>
+  <text x="360" y="291" text-anchor="middle" class="label">Commit B revision bus</text>
+  <text x="360" y="309" text-anchor="middle" class="small">rewarm same cartridges</text>
+  <path d="M475 294 H1062" class="blue-bus"/>
+  <path d="M717 294 V245" class="blue-line"/>
+  <path d="M832 294 V245" class="blue-line"/>
+  <path d="M947 294 V245" class="blue-line"/>
+  <path d="M1062 294 V245" class="blue-line"/>
+  <text x="760" y="325" class="small">same process IDs · commit itself does not replace</text>
 
-  <rect x="55" y="405" width="145" height="48" class="box"/>
-  <text x="127" y="435" text-anchor="middle" class="label">Normal evaluation</text>
-  <rect x="55" y="485" width="145" height="58" class="api"/>
-  <text x="127" y="510" text-anchor="middle" class="label">Commit change</text>
-  <text x="127" y="531" text-anchor="middle" class="small">rewarm in place</text>
+  <rect x="35" y="365" width="1130" height="220" class="panel"/>
+  <text x="60" y="398" class="section">Worker W1 · physical ownership</text>
+  <rect x="65" y="410" width="1070" height="145" class="worker-selected"/>
+  <text x="88" y="437" class="label">W1</text><circle cx="122" cy="431" r="7" class="led"/>
 
-  <rect x="250" y="425" width="180" height="90" class="active"/>
-  <text x="340" y="457" text-anchor="middle" class="label">Current session</text>
-  <text x="340" y="480" text-anchor="middle" class="small">evaluate expression</text>
-  <text x="340" y="501" text-anchor="middle" class="small">same process for rewarm</text>
+  <rect x="150" y="425" width="150" height="43" class="tray"/>
+  <text x="225" y="444" text-anchor="middle" class="label">Interactive inbox</text>
+  <text x="225" y="461" text-anchor="middle" class="tiny">served first</text>
+  <rect x="150" y="485" width="150" height="43" class="tray"/>
+  <text x="225" y="511" text-anchor="middle" class="label">Background inbox</text>
 
-  <polygon points="505,420 575,470 505,520 435,470" class="decision"/>
-  <text x="505" y="465" text-anchor="middle" class="label">success?</text>
-  <text x="505" y="485" text-anchor="middle" class="small">evaluation result</text>
+  <rect x="345" y="450" width="115" height="55" class="box"/>
+  <text x="402" y="473" text-anchor="middle" class="label">Serial gate</text>
+  <text x="402" y="493" text-anchor="middle" class="tiny">one evaluation</text>
+  <path d="M300 447 H330 V466 H345" class="line"/>
+  <path d="M300 507 H330 V489 H345" class="line"/>
 
-  <rect x="625" y="425" width="175" height="90" class="box"/>
-  <text x="712" y="452" text-anchor="middle" class="label">Remember latest</text>
-  <text x="712" y="474" text-anchor="middle" class="small">lock shard</text>
-  <text x="712" y="495" text-anchor="middle" class="small">read VmRSS</text>
+  <rect x="500" y="425" width="190" height="88" class="active"/>
+  <text x="595" y="451" text-anchor="middle" class="label">Active REPL cartridge</text>
+  <text x="595" y="474" text-anchor="middle" class="small">private NixRepl session</text>
+  <text x="595" y="495" text-anchor="middle" class="tiny">green LED = ready / serving</text>
+  <path d="M460 478 H500" class="line"/>
+  <rect x="515" y="522" width="160" height="23" class="api"/>
+  <text x="595" y="538" text-anchor="middle" class="tiny">latest expression card</text>
 
-  <polygon points="885,420 955,470 885,520 815,470" class="decision"/>
-  <text x="885" y="464" text-anchor="middle" class="label">RSS &gt; limit?</text>
-  <text x="885" y="485" text-anchor="middle" class="small">after success only</text>
+  <text x="770" y="433" text-anchor="middle" class="label">Local RSS gauge</text>
+  <rect x="725" y="450" width="170" height="24" class="gauge"/>
+  <rect x="727" y="452" width="104" height="20" class="gauge-fill"/>
+  <line x1="855" y1="442" x2="855" y2="482" class="limit"/>
+  <text x="855" y="500" text-anchor="middle" class="tiny">worker limit</text>
 
-  <rect x="1000" y="425" width="125" height="90" class="active"/>
-  <text x="1062" y="458" text-anchor="middle" class="label">Unlock</text>
-  <text x="1062" y="480" text-anchor="middle" class="small">return result</text>
+  <rect x="945" y="420" width="160" height="105" class="standby"/>
+  <text x="1025" y="450" text-anchor="middle" class="label">Standby bay</text>
+  <text x="1025" y="474" text-anchor="middle" class="small">normally empty</text>
+  <text x="1025" y="497" text-anchor="middle" class="tiny">replacement cartridge</text>
+  <text x="1025" y="514" text-anchor="middle" class="tiny">warms here while locked</text>
 
-  <rect x="442" y="555" width="126" height="55" class="error"/>
-  <text x="505" y="578" text-anchor="middle" class="label">Return error</text>
-  <text x="505" y="598" text-anchor="middle" class="small">no RSS check</text>
+  <text x="90" y="575" class="tiny">enclosure owns queues, active process, warm card, RSS limit, lock, and temporary standby</text>
 
-  <path d="M200 429 H250" class="line"/>
-  <path d="M200 514 H225 V490 H250" class="blue-line"/>
-  <path d="M430 470 H435" class="line"/>
-  <path d="M575 470 H625" class="line"/>
-  <text x="598" y="454" text-anchor="middle" class="small">yes</text>
-  <path d="M505 520 V555" class="line"/>
-  <text x="518" y="542" class="small">no</text>
-  <path d="M800 470 H815" class="line"/>
-  <path d="M955 470 H1000" class="line"/>
-  <text x="978" y="454" text-anchor="middle" class="small">no</text>
+  <rect x="35" y="605" width="1130" height="490" class="panel"/>
+  <text x="60" y="640" class="section">Evaluation completion and RAM replacement</text>
 
-  <rect x="640" y="570" width="200" height="68" class="paused"/>
-  <text x="740" y="595" text-anchor="middle" class="label">Shard remains locked</text>
-  <text x="740" y="616" text-anchor="middle" class="small">queue paused · old retained</text>
-  <path d="M885 520 V548 H740 V570" class="orange-line"/>
-  <text x="898" y="543" class="small">yes</text>
+  <rect x="55" y="675" width="145" height="48" class="box"/>
+  <text x="127" y="705" text-anchor="middle" class="label">Normal evaluation</text>
+  <rect x="55" y="755" width="145" height="58" class="api"/>
+  <text x="127" y="780" text-anchor="middle" class="label">Commit change</text>
+  <text x="127" y="801" text-anchor="middle" class="small">rewarm in place</text>
 
-  <rect x="640" y="670" width="200" height="68" class="standby"/>
-  <text x="740" y="695" text-anchor="middle" class="label">Warm standby</text>
-  <text x="740" y="716" text-anchor="middle" class="small">open · replay latest</text>
-  <path d="M740 638 V670" class="orange-line"/>
+  <rect x="250" y="695" width="180" height="90" class="active"/>
+  <text x="340" y="727" text-anchor="middle" class="label">Current cartridge</text>
+  <text x="340" y="750" text-anchor="middle" class="small">evaluate expression</text>
+  <text x="340" y="771" text-anchor="middle" class="small">same process for rewarm</text>
 
-  <polygon points="920,660 990,704 920,748 850,704" class="decision"/>
-  <text x="920" y="698" text-anchor="middle" class="label">standby RSS</text>
-  <text x="920" y="719" text-anchor="middle" class="small">over limit?</text>
-  <path d="M830 704 H850" class="orange-line"/>
+  <polygon points="505,690 575,740 505,790 435,740" class="decision"/>
+  <text x="505" y="735" text-anchor="middle" class="label">success?</text>
+  <text x="505" y="755" text-anchor="middle" class="small">evaluation result</text>
 
-  <rect x="995" y="655" width="145" height="90" class="paused"/>
-  <text x="1067" y="680" text-anchor="middle" class="label">If over</text>
-  <text x="1067" y="702" text-anchor="middle" class="small">grow limit ×2</text>
-  <text x="1067" y="721" text-anchor="middle" class="small">until &gt; RSS</text>
-  <text x="1067" y="739" text-anchor="middle" class="small">warn once</text>
-  <path d="M990 704 H995" class="orange-line"/>
+  <rect x="625" y="695" width="175" height="90" class="box"/>
+  <text x="712" y="722" text-anchor="middle" class="label">Remember latest</text>
+  <text x="712" y="744" text-anchor="middle" class="small">lock worker</text>
+  <text x="712" y="765" text-anchor="middle" class="small">read VmRSS</text>
 
-  <rect x="870" y="770" width="270" height="38" class="active"/>
-  <text x="1005" y="794" text-anchor="middle" class="label">Close old · publish standby · unlock</text>
-  <path d="M920 748 V770" class="orange-line"/>
-  <text x="903" y="763" text-anchor="end" class="small">no</text>
-  <path d="M1067 745 V755 H1045 V770" class="orange-line"/>
+  <polygon points="885,690 955,740 885,790 815,740" class="decision"/>
+  <text x="885" y="734" text-anchor="middle" class="label">RSS &gt; limit?</text>
+  <text x="885" y="755" text-anchor="middle" class="small">after success only</text>
 
-  <text x="60" y="792" class="small">Other shards continue serving while this shard is paused.</text>
+  <rect x="1000" y="695" width="125" height="90" class="active"/>
+  <text x="1062" y="728" text-anchor="middle" class="label">Unlock</text>
+  <text x="1062" y="750" text-anchor="middle" class="small">return result</text>
+
+  <rect x="442" y="825" width="126" height="55" class="error"/>
+  <text x="505" y="848" text-anchor="middle" class="label">Return error</text>
+  <text x="505" y="868" text-anchor="middle" class="small">no RSS check</text>
+
+  <path d="M200 699 H250" class="line"/>
+  <path d="M200 784 H225 V760 H250" class="blue-line"/>
+  <path d="M430 740 H435" class="line"/>
+  <path d="M575 740 H625" class="line"/>
+  <text x="598" y="724" text-anchor="middle" class="small">yes</text>
+  <path d="M505 790 V825" class="line"/>
+  <text x="518" y="812" class="small">no</text>
+  <path d="M800 740 H815" class="line"/>
+  <path d="M955 740 H1000" class="line"/>
+  <text x="978" y="724" text-anchor="middle" class="small">no</text>
+
+  <rect x="640" y="835" width="200" height="65" class="paused"/>
+  <text x="740" y="860" text-anchor="middle" class="label">Worker remains locked</text>
+  <text x="740" y="881" text-anchor="middle" class="small">queue paused · old retained</text>
+  <path d="M885 790 V813 H740 V835" class="orange-line"/>
+  <text x="898" y="812" class="small">yes</text>
+
+  <rect x="640" y="930" width="200" height="65" class="standby"/>
+  <text x="740" y="955" text-anchor="middle" class="label">Warm standby bay</text>
+  <text x="740" y="976" text-anchor="middle" class="small">open · replay latest card</text>
+  <path d="M740 900 V930" class="orange-line"/>
+
+  <polygon points="920,920 990,962 920,1004 850,962" class="decision"/>
+  <text x="920" y="956" text-anchor="middle" class="label">standby RSS</text>
+  <text x="920" y="977" text-anchor="middle" class="small">over limit?</text>
+  <path d="M840 962 H850" class="orange-line"/>
+
+  <rect x="995" y="915" width="145" height="88" class="paused"/>
+  <text x="1067" y="938" text-anchor="middle" class="label">If over</text>
+  <text x="1067" y="960" text-anchor="middle" class="small">grow limit ×2</text>
+  <text x="1067" y="979" text-anchor="middle" class="small">until &gt; RSS</text>
+  <text x="1067" y="997" text-anchor="middle" class="small">warn once</text>
+  <path d="M990 962 H995" class="orange-line"/>
+
+  <rect x="870" y="1040" width="270" height="35" class="active"/>
+  <text x="1005" y="1063" text-anchor="middle" class="label">Eject old · publish standby · unlock</text>
+  <path d="M920 1004 V1040" class="orange-line"/>
+  <text x="903" y="1028" text-anchor="end" class="small">no</text>
+  <path d="M1067 1003 V1025 H1045 V1040" class="orange-line"/>
+
+  <text x="60" y="1070" class="small">Other workers continue serving while W1 is paused.</text>
 </svg>
