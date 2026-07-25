@@ -1,107 +1,139 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
-  <title id="title">Revision evaluator cache subsystem</title>
-  <desc id="desc">Repository expressions are assigned stable expression IDs, routed to warm evaluator shards, and replaced only when a shard exceeds its RAM limit.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Revision evaluator routing and lifecycle</title>
+  <desc id="desc">Expressions route by stable semantic identity to warm evaluator shards. Commit changes rewarm the same processes in place. RAM pressure warms a standby while the old process serves, then atomically swaps them.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
     </marker>
+    <marker id="blue-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+    </marker>
+    <marker id="orange-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#ea580c"/>
+    </marker>
     <style>
       text { font-family: ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
       .title { font-size: 24px; font-weight: 700; }
-      .label { font-size: 16px; font-weight: 650; }
+      .section { font-size: 18px; font-weight: 700; }
+      .label { font-size: 15px; font-weight: 650; }
       .small { font-size: 13px; }
-      .box { fill: #f8fafc; stroke: #64748b; stroke-width: 2; rx: 10; }
-      .accent { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 10; }
-      .warm { fill: #ecfdf5; stroke: #059669; stroke-width: 2; rx: 8; }
-      .standby { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; rx: 8; }
+      .tiny { font-size: 12px; }
+      .panel { fill: #ffffff; stroke: #94a3b8; stroke-width: 2; rx: 12; }
+      .box { fill: #f8fafc; stroke: #64748b; stroke-width: 2; rx: 9; }
+      .api { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 9; }
+      .active { fill: #ecfdf5; stroke: #059669; stroke-width: 2; rx: 9; }
+      .standby { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; stroke-dasharray: 7 4; rx: 9; }
+      .trigger-blue { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 22; }
+      .trigger-orange { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; rx: 22; }
       .line { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
-      .dash { fill: none; stroke: #ea580c; stroke-width: 2; stroke-dasharray: 7 5; marker-end: url(#arrow); }
+      .blue-line { fill: none; stroke: #2563eb; stroke-width: 2.5; stroke-dasharray: 7 5; marker-end: url(#blue-arrow); }
+      .orange-line { fill: none; stroke: #ea580c; stroke-width: 2.5; marker-end: url(#orange-arrow); }
+      .identity { fill: none; stroke: #059669; stroke-width: 4; }
+      .swap { stroke: #0f172a; stroke-width: 5; }
     </style>
   </defs>
 
-  <rect width="1200" height="650" fill="#ffffff"/>
-  <text x="40" y="42" class="title">Revision evaluator cache</text>
+  <rect width="1200" height="800" fill="#ffffff"/>
+  <text x="40" y="40" class="title">Revision evaluator cache</text>
 
-  <rect x="40" y="85" width="155" height="65" class="box"/>
-  <text x="117" y="112" text-anchor="middle" class="label">UserRepo</text>
-  <text x="117" y="134" text-anchor="middle" class="small">OutPaths / handlers</text>
+  <rect x="35" y="65" width="1130" height="300" class="panel"/>
+  <text x="60" y="98" class="section">Routing</text>
 
-  <rect x="245" y="75" width="230" height="85" class="accent"/>
-  <text x="360" y="107" text-anchor="middle" class="label">RevisionEvaluator</text>
-  <text x="360" y="131" text-anchor="middle" class="small">evaluate · rewarmRevision</text>
+  <rect x="60" y="125" width="160" height="78" class="box"/>
+  <text x="140" y="154" text-anchor="middle" class="label">UserRepo</text>
+  <text x="140" y="178" text-anchor="middle" class="small">handlers</text>
+  <text x="140" y="195" text-anchor="middle" class="tiny">OutPaths caches results</text>
 
-  <rect x="525" y="75" width="205" height="85" class="box"/>
-  <text x="627" y="105" text-anchor="middle" class="label">ExpressionId</text>
-  <text x="627" y="129" text-anchor="middle" class="small">attribute + apply</text>
-  <text x="627" y="147" text-anchor="middle" class="small">revision excluded</text>
+  <rect x="270" y="115" width="195" height="98" class="api"/>
+  <text x="367" y="145" text-anchor="middle" class="label">RepoExpression</text>
+  <text x="367" y="169" text-anchor="middle" class="small">ExpressionId</text>
+  <text x="367" y="190" text-anchor="middle" class="tiny">attribute + apply</text>
+  <text x="367" y="206" text-anchor="middle" class="tiny">revision excluded</text>
 
-  <rect x="780" y="75" width="165" height="85" class="box"/>
-  <text x="862" y="108" text-anchor="middle" class="label">Stable hash</text>
-  <text x="862" y="134" text-anchor="middle" class="small">mod shard count</text>
+  <rect x="515" y="125" width="145" height="78" class="box"/>
+  <text x="587" y="156" text-anchor="middle" class="label">Stable hash</text>
+  <text x="587" y="181" text-anchor="middle" class="small">mod shard count</text>
 
-  <path d="M195 117 H245" class="line"/>
-  <path d="M475 117 H525" class="line"/>
-  <path d="M730 117 H780" class="line"/>
-  <path d="M862 160 V205" class="line"/>
+  <path d="M220 164 H270" class="line"/>
+  <path d="M465 164 H515" class="line"/>
+  <path d="M660 164 H715" class="line"/>
+  <text x="690" y="150" text-anchor="middle" class="tiny">evaluate</text>
 
-  <rect x="95" y="205" width="1010" height="300" class="box"/>
-  <text x="120" y="238" class="label">Pure evaluator shards</text>
-  <text x="1080" y="238" text-anchor="end" class="small">commit rewarm: evaluate in place</text>
-
-  <g transform="translate(125 265)">
-    <rect width="205" height="205" class="accent"/>
-    <text x="102" y="29" text-anchor="middle" class="label">Shard 0</text>
-    <rect x="20" y="48" width="165" height="43" class="box"/>
-    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
-    <rect x="20" y="105" width="165" height="58" class="warm"/>
-    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
-    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
-    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
+  <rect x="715" y="105" width="415" height="142" class="box"/>
+  <text x="735" y="132" class="label">Warm pure shards</text>
+  <g transform="translate(740 150)">
+    <rect width="75" height="65" class="active"/>
+    <text x="37" y="26" text-anchor="middle" class="label">0</text>
+    <text x="37" y="48" text-anchor="middle" class="tiny">active</text>
   </g>
-
-  <g transform="translate(375 265)">
-    <rect width="205" height="205" class="accent"/>
-    <text x="102" y="29" text-anchor="middle" class="label">Shard 1</text>
-    <rect x="20" y="48" width="165" height="43" class="box"/>
-    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
-    <rect x="20" y="105" width="165" height="58" class="warm"/>
-    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
-    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
-    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
+  <g transform="translate(835 150)">
+    <rect width="75" height="65" class="active"/>
+    <text x="37" y="26" text-anchor="middle" class="label">1</text>
+    <text x="37" y="48" text-anchor="middle" class="tiny">active</text>
   </g>
-
-  <g transform="translate(625 265)">
-    <rect width="205" height="205" class="accent"/>
-    <text x="102" y="29" text-anchor="middle" class="label">Shard 2</text>
-    <rect x="20" y="48" width="165" height="43" class="box"/>
-    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
-    <rect x="20" y="105" width="165" height="58" class="warm"/>
-    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
-    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
-    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
+  <text x="944" y="189" text-anchor="middle" class="section">…</text>
+  <g transform="translate(995 150)">
+    <rect width="105" height="65" class="active"/>
+    <text x="52" y="26" text-anchor="middle" class="label">N−1</text>
+    <text x="52" y="48" text-anchor="middle" class="tiny">active</text>
   </g>
+  <text x="922" y="237" text-anchor="middle" class="tiny">interactive queue precedes background queue</text>
 
-  <g transform="translate(875 265)">
-    <rect width="205" height="205" class="accent"/>
-    <text x="102" y="29" text-anchor="middle" class="label">Shard 3</text>
-    <rect x="20" y="48" width="165" height="43" class="box"/>
-    <text x="102" y="74" text-anchor="middle" class="small">interactive / background</text>
-    <rect x="20" y="105" width="165" height="58" class="warm"/>
-    <text x="102" y="130" text-anchor="middle" class="label">Warm REPL</text>
-    <text x="102" y="151" text-anchor="middle" class="small">latest expression</text>
-    <text x="102" y="188" text-anchor="middle" class="small">per-shard RAM limit</text>
-  </g>
+  <rect x="270" y="270" width="240" height="55" class="trigger-blue"/>
+  <text x="390" y="294" text-anchor="middle" class="label">rewarmRevision · commit B</text>
+  <text x="390" y="314" text-anchor="middle" class="tiny">partition expressions + fallback</text>
+  <path d="M510 297 H690 V235 H715" class="blue-line"/>
+  <text x="605" y="285" text-anchor="middle" class="tiny">all active shards · no replacement</text>
 
-  <rect x="120" y="555" width="250" height="55" class="box"/>
-  <text x="245" y="588" text-anchor="middle" class="label">NixRepl protocol backend</text>
+  <rect x="760" y="280" width="170" height="50" class="box"/>
+  <text x="845" y="303" text-anchor="middle" class="label">Impure evaluator</text>
+  <text x="845" y="320" text-anchor="middle" class="tiny">single worker</text>
 
-  <rect x="790" y="545" width="285" height="75" class="standby"/>
-  <text x="932" y="573" text-anchor="middle" class="label">Warm standby</text>
-  <text x="932" y="596" text-anchor="middle" class="small">RAM limit → warm → atomic swap</text>
+  <rect x="960" y="280" width="170" height="50" class="box"/>
+  <text x="1045" y="303" text-anchor="middle" class="label">NixRepl</text>
+  <text x="1045" y="320" text-anchor="middle" class="tiny">private protocol backend</text>
 
-  <path d="M245 555 V505" class="line"/>
-  <path d="M977 470 V545" class="dash"/>
-  <path d="M790 582 H620 V470" class="dash"/>
-  <text x="690" y="570" text-anchor="middle" class="small">replacement only</text>
-  <text x="690" y="589" text-anchor="middle" class="small">limit doubles on bootloop</text>
+  <rect x="35" y="390" width="1130" height="370" class="panel"/>
+  <text x="60" y="425" class="section">Representative shard lifecycle</text>
+  <path d="M245 445 H1125" class="line"/>
+  <text x="225" y="450" text-anchor="end" class="small">time</text>
+
+  <text x="60" y="500" class="label">Commit change</text>
+  <rect x="60" y="518" width="155" height="44" class="trigger-blue"/>
+  <text x="137" y="545" text-anchor="middle" class="small">commit A → B</text>
+  <rect x="265" y="505" width="220" height="70" class="active"/>
+  <text x="375" y="533" text-anchor="middle" class="label">Active REPL · rev A</text>
+  <text x="375" y="556" text-anchor="middle" class="small">serving</text>
+  <path d="M485 540 H555" class="blue-line"/>
+  <text x="520" y="523" text-anchor="middle" class="tiny">rewarm</text>
+  <rect x="555" y="505" width="250" height="70" class="active"/>
+  <text x="680" y="533" text-anchor="middle" class="label">Same REPL · rev B</text>
+  <text x="680" y="556" text-anchor="middle" class="small">serving</text>
+  <path d="M285 589 H785" class="identity"/>
+  <text x="520" y="608" text-anchor="middle" class="small">same PID · in-place rewarm · no swap</text>
+
+  <text x="60" y="647" class="label">RAM pressure</text>
+  <rect x="60" y="665" width="155" height="44" class="trigger-orange"/>
+  <text x="137" y="692" text-anchor="middle" class="small">RSS &gt; limit</text>
+
+  <rect x="265" y="635" width="355" height="64" class="active"/>
+  <text x="442" y="661" text-anchor="middle" class="label">Old active REPL</text>
+  <text x="442" y="682" text-anchor="middle" class="small">continues serving until swap</text>
+
+  <rect x="390" y="711" width="270" height="42" class="standby"/>
+  <text x="525" y="737" text-anchor="middle" class="small">standby · open → replay latest → warm</text>
+  <path d="M215 687 H240 V732 H390" class="orange-line"/>
+  <path d="M620 667 H705" class="line"/>
+  <path d="M660 732 H705" class="orange-line"/>
+
+  <line x1="720" y1="625" x2="720" y2="752" class="swap"/>
+  <text x="720" y="620" text-anchor="middle" class="label">SWAP</text>
+  <text x="700" y="650" text-anchor="end" class="tiny">close old</text>
+
+  <path d="M725 667 H775" class="orange-line"/>
+  <rect x="775" y="635" width="285" height="64" class="active"/>
+  <text x="917" y="661" text-anchor="middle" class="label">New active REPL</text>
+  <text x="917" y="682" text-anchor="middle" class="small">ready before promotion</text>
+
+  <text x="917" y="733" text-anchor="middle" class="small">standby over limit → double limit + warn</text>
 </svg>
