@@ -918,6 +918,8 @@ type alias DirectoryFolder =
     { children : ApiData (Dict String DirectoryItem)
     , expanded : Bool
     , extras : ApiData (Dict String Value)
+    , size : Maybe Int
+    , mimeType : Maybe String
     }
 
 
@@ -975,12 +977,10 @@ updateDirectoryItemBase item baseItem =
         _ ->
             item
 
-
 extractDirectoryFolderBase : DirectoryFolder -> DirectoryFolder
 extractDirectoryFolderBase folder =
-    { children = ApiData.map (Dict.map (\_ -> extractDirectoryItemBase)) folder.children
-    , expanded = folder.expanded
-    , extras = folder.extras
+    { folder
+        | children = ApiData.map (Dict.map (\_ -> extractDirectoryItemBase)) folder.children
     }
 
 
@@ -1000,6 +1000,8 @@ updateDirectoryFolderBase folder base =
         | children = ApiData.update mergeDirectoryItems folder.children base.children
         , expanded = base.expanded
         , extras = base.extras
+        , size = base.size
+        , mimeType = base.mimeType
     }
 
 

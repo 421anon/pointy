@@ -222,6 +222,8 @@ stepValueOnly stepType_ =
                 { children = NotAsked
                 , expanded = False
                 , extras = NotAsked
+                , size = Nothing
+                , mimeType = Nothing
                 }
             }
         )
@@ -268,16 +270,25 @@ directoryItem fileView =
             (\isDir ->
                 if isDir then
                     Decode.succeed
-                        (\name ->
+                        (\name size mimeType ->
                             ( name
                             , Folder
                                 { children = NotAsked
                                 , expanded = False
                                 , extras = NotAsked
+                                , size =
+                                    if mimeType == Just "application/zip" then
+                                        Just size
+
+                                    else
+                                        Nothing
+                                , mimeType = mimeType
                                 }
                             )
                         )
                         |> required "name" Decode.string
+                        |> required "size" Decode.int
+                        |> required "mimeType" (Decode.nullable Decode.string)
 
                 else
                     Decode.succeed

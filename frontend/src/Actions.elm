@@ -292,7 +292,7 @@ applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiD
 applyStepStatus snapshotCommit status_ rs =
     let
         collapsedDirectoryView =
-            { children = NotAsked, expanded = False, extras = NotAsked }
+            { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
 
         current =
             ApiData.toMaybe rs

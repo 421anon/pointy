@@ -164,11 +164,13 @@ buildDirEntry absPath n = do
         else do
             isZipFile <- if isZipPath p then doesFileExist p else pure False
             if isZipFile
-                then pure $ DirEntry (T.pack n) True 0 False False (Just "application/zip")
+                then do
+                    sz <- getFileSize p
+                    pure $ DirEntry (T.pack n) True sz False False (Just "application/zip")
                 else do
                     sz <- getFileSize p
                     (isViewable, isSeekable, mime) <- checkViewableAndMime p sz
-                    pure $ DirEntry (T.pack n) False (fromIntegral sz) isViewable isSeekable mime
+                    pure $ DirEntry (T.pack n) False sz isViewable isSeekable mime
 
 isZipPath :: FilePath -> Bool
 isZipPath p = map toLower (takeExtension p) == ".zip"
@@ -215,19 +217,22 @@ downloadHandler outPathText rel = do
         filename = T.pack $ takeFileName rel
         disposition = "attachment; filename=\"" <> filename <> "\""
     assertInside absPath basePath
+    let serveFile path = do
+            fileSize <- liftIO $ getFileSize path
+            let source = readFileChunked path
+            return $ addHeader disposition $ addHeader fileSize source
     mZip <- liftIO $ resolveZipPath basePath rel
     case mZip of
-        Just (zipPath, internalPath) -> do
-            when (null internalPath) $ throwError err404
-            (size, lbs) <- liftZip err404 $ Zip.readZipFile zipPath internalPath
-            let source = S.source (LBS.toChunks lbs)
-            return $ addHeader disposition $ addHeader size source
+        Just (zipPath, internalPath)
+            | null internalPath -> serveFile zipPath
+            | otherwise -> do
+                (size, lbs) <- liftZip err404 $ Zip.readZipFile zipPath internalPath
+                let source = S.source (LBS.toChunks lbs)
+                return $ addHeader disposition $ addHeader size source
         Nothing -> do
             isFile <- liftIO $ doesFileExist absPath
             unless isFile $ throwError err404
-            fileSize <- liftIO $ getFileSize absPath
-            let source = readFileChunked absPath
-            return $ addHeader disposition $ addHeader fileSize source
+            serveFile absPath
 
 fileChunkSize :: Int
 fileChunkSize = 2 * 1024 * 1024

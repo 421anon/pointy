@@ -243,6 +243,17 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 , Html.Events.stopPropagationOn "click" (Decode.succeed ( shareAction, True ))
                 ]
                 [ icon True "share" ]
+
+        downloadAction =
+            case mDirCtx of
+                Just (OutputDir stepId_ commit_) ->
+                    Actions.downloadFile stepId_ commit_ path
+
+                Just (SrcDir id) ->
+                    Actions.downloadSrcFile id path
+
+                Nothing ->
+                    Flow.pure ()
     in
     case item of
         File file ->
@@ -336,17 +347,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         , Html.viewIf (canView && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
                         , Html.button
                             [ class "dir-item-icon-btn"
-                            , Html.Events.onClick
-                                (case mDirCtx of
-                                    Just (OutputDir stepId_ commit_) ->
-                                        Actions.downloadFile stepId_ commit_ path
-
-                                    Just (SrcDir id) ->
-                                        Actions.downloadSrcFile id path
-
-                                    Nothing ->
-                                        Flow.pure ()
-                                )
+                            , Html.Events.onClick downloadAction
                             ]
                             [ icon True "download" ]
                         , viewCompareButton model mCompareSelection
@@ -502,7 +503,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     has (just << srcDir) mDirCtx
 
                 isZip =
-                    String.endsWith ".zip" (String.toLower itemName)
+                    folder.mimeType == Just "application/zip"
             in
             Html.div [ class "directory-folder", id anchor ]
                 [ Html.map (Flow.map (always ())) <|
@@ -515,11 +516,11 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         (\recordId ->
                                             case mDirCtx of
                                                 Just (OutputDir _ _) ->
-                                                    Actions.toggleOutputEntry recordId Nothing (directoryPath ++ [ itemName ])
+                                                    Actions.toggleOutputEntry recordId Nothing path
                                                         |> Flow.return ()
 
                                                 Just (SrcDir _) ->
-                                                    Actions.toggleSrcEntry recordId Nothing (directoryPath ++ [ itemName ])
+                                                    Actions.toggleSrcEntry recordId Nothing path
                                                         |> Flow.return ()
 
                                                 Nothing ->
@@ -540,6 +541,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     "folder"
                                 )
                             , Html.span [ class "folder-name" ] [ Html.text itemName ]
+                            , folder.size
+                                |> Html.viewMaybe
+                                    (\size -> Html.span [ class "directory-item-meta" ] [ Html.text (Filesize.formatBase2 size) ])
                             , Html.span [ class "folder-expand-icon" ]
                                 [ icon True
                                     (if folder.expanded then
@@ -550,6 +554,12 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     )
                                 ]
                             ]
+                        , Html.viewIf isZip <|
+                            Html.button
+                                [ class "dir-item-icon-btn"
+                                , Html.Events.stopPropagationOn "click" (Decode.succeed ( downloadAction, True ))
+                                ]
+                                [ icon True "download" ]
                         , Html.viewIf (isLocked && not isSrcDir) shareButton
                         ]
                 , Html.viewIf folder.expanded <|
