@@ -16,8 +16,8 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON (..), Value (Object), eitherDecode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.List (intercalate, isPrefixOf)
 import Data.Char (toLower)
+import Data.List (intercalate, isPrefixOf)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
@@ -31,7 +31,6 @@ import Handlers.RunStep (buildExtras)
 import qualified Handlers.Zip as Zip
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
-import OutPaths (lookupCachedStepOutPath)
 import Servant (
     Handler,
     Header,
@@ -64,7 +63,6 @@ data DirEntry = DirEntry
     }
     deriving (Generic, Show, ToJSON)
 
--- | Resolve a step id + optional commit to a store output path.
 resolveStepOutPath :: Int -> Maybe Text -> Handler Text
 resolveStepOutPath stepId mCommit = do
     repoPath <- liftIO userRepoPath
@@ -75,16 +73,11 @@ resolveStepOutPath stepId mCommit = do
             case result of
                 Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveStepOutPath: " ++ err))}
                 Right h -> return h
-    -- Consult the project outPath cache first (read-only, non-blocking).
-    mCached <- liftIO $ lookupCachedStepOutPath (T.pack commitHash) stepId
-    case mCached of
-        Just path -> return path
-        Nothing -> do
-            let ctx = ReadRepoContext repoPath commitHash
-            result <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
-            case result of
-                Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
-                Right path -> return (T.pack path)
+    let ctx = ReadRepoContext repoPath commitHash
+    result <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
+    case result of
+        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
+        Right path -> return (T.pack path)
 
 stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler [DirEntry]
 stepListHandler stepId mCommit mRel = do

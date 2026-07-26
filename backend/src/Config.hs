@@ -6,6 +6,7 @@ module Config (
     UserRepoConfig (..),
     SlurmConfig (..),
     AgentConfig (..),
+    NixEvaluatorConfig (..),
     defaultAgentConfig,
     loadConfig,
     defaultConfigPath,
@@ -59,8 +60,16 @@ defaultAgentConfig =
         , agentBootstrapPrompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
         }
 
+data NixEvaluatorConfig = NixEvaluatorConfig
+    { nixEvaluatorInitialShardMemoryLimitMiB :: Int
+    }
+    deriving (Show)
+
+defaultNixEvaluatorConfig :: NixEvaluatorConfig
+defaultNixEvaluatorConfig = NixEvaluatorConfig 1024
+
 data Config where
-    Config :: {configUserRepo :: UserRepoConfig, configSlurm :: SlurmConfig, configAgent :: AgentConfig} -> Config
+    Config :: {configUserRepo :: UserRepoConfig, configSlurm :: SlurmConfig, configAgent :: AgentConfig, configNixEvaluator :: NixEvaluatorConfig} -> Config
     deriving (Show)
 
 userRepoCodec :: TomlCodec UserRepoConfig
@@ -113,14 +122,20 @@ agentCodec =
             , agentBootstrapPrompt = fromMaybe (agentBootstrapPrompt defaultAgentConfig) mbootstrap
             }
 
+nixEvaluatorCodec :: TomlCodec NixEvaluatorConfig
+nixEvaluatorCodec =
+    NixEvaluatorConfig . fromMaybe 1024
+        <$> Toml.dioptional (Toml.int "initial-shard-memory-limit-mib") .= (Just . nixEvaluatorInitialShardMemoryLimitMiB)
+
 configCodec :: TomlCodec Config
 configCodec =
     mkConfig
         <$> Toml.table userRepoCodec "user-repo" .= configUserRepo
         <*> Toml.dimap Just (fromMaybe defaultSlurmConfig) (Toml.dioptional (Toml.table slurmCodec "slurm")) .= configSlurm
         <*> Toml.dioptional (Toml.table agentCodec "agent") .= (Just . configAgent)
+        <*> Toml.dioptional (Toml.table nixEvaluatorCodec "nix-evaluator") .= (Just . configNixEvaluator)
   where
-    mkConfig userRepo slurm mAgent = Config userRepo slurm (fromMaybe defaultAgentConfig mAgent)
+    mkConfig userRepo slurm mAgent mNix = Config userRepo slurm (fromMaybe defaultAgentConfig mAgent) (fromMaybe defaultNixEvaluatorConfig mNix)
 
 defaultConfigPath :: FilePath
 defaultConfigPath = "/home/backend/config.toml"
@@ -133,4 +148,7 @@ loadConfig path = do
     result <- Toml.decodeFileEither configCodec path
     case result of
         Left errs -> error $ "Failed to parse config: " ++ show errs
-        Right config -> return config
+        Right config
+            | nixEvaluatorInitialShardMemoryLimitMiB (configNixEvaluator config) < 1 ->
+                error "nix-evaluator.initial-shard-memory-limit-mib must be >= 1"
+            | otherwise -> pure config
