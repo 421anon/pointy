@@ -34,3 +34,7 @@ runner-args = ["-p", "-c", "{prompt}"]
 timeout-seconds = 1800
 output-limit-bytes = 1048576
 session-retention-days = 7
+
+[nix-evaluator]
+# Per-shard memory limit in MiB; grows automatically when warmup or replacement requires more.
+# initial-shard-memory-limit-mib = 1024

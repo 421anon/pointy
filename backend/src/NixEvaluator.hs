@@ -17,6 +17,7 @@ module NixEvaluator (
     rewarmRevision,
 ) where
 
+import Config (NixEvaluatorConfig (..), configNixEvaluator, loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, readMVar, tryPutMVar)
@@ -104,21 +105,22 @@ data SwapResult
 pureReplShardCount :: Int
 pureReplShardCount = 4
 
-initialReplMemoryLimitBytes :: Integer
-initialReplMemoryLimitBytes = 512 * 1024 * 1024
-
 maxCachedRevisionCount :: Int
 maxCachedRevisionCount = 8
 
 {-# NOINLINE defaultNixEvaluator #-}
 defaultNixEvaluator :: NixEvaluator
-defaultNixEvaluator = unsafePerformIO newNixEvaluator
+defaultNixEvaluator = unsafePerformIO $ do
+    path <- resolveConfigPath
+    config <- loadConfig path
+    let bytes = fromIntegral (nixEvaluatorInitialShardMemoryLimitMiB $ configNixEvaluator config) * 1024 * 1024
+    newNixEvaluator bytes
 
-newNixEvaluator :: IO NixEvaluator
-newNixEvaluator =
+newNixEvaluator :: Integer -> IO NixEvaluator
+newNixEvaluator initialBytes =
     NixEvaluator
-        <$> newWorker PureRepl pureReplShardCount
-        <*> newWorker ImpureRepl 1
+        <$> newWorker PureRepl pureReplShardCount initialBytes
+        <*> newWorker ImpureRepl 1 initialBytes
         <*> newMVar (RevisionResultCache Nothing [] Map.empty)
 
 repoSource :: String -> RepoSource
@@ -256,8 +258,8 @@ repoEvaluation (RepoSource _ installable) repoExpr =
             , evalTarget = EvalInstallable installable $ expressionAttr repoExpr
             }
 
-newWorker :: ReplKind -> Int -> IO ReplWorker
-newWorker kind shardCount = do
+newWorker :: ReplKind -> Int -> Integer -> IO ReplWorker
+newWorker kind shardCount initialBytes = do
     shards <- mapM newShard [0 .. shardCount - 1]
     warmRevision <- newMVar (0, Nothing)
     initialWarm <- newMVar $ kind == PureRepl
@@ -270,10 +272,9 @@ newWorker kind shardCount = do
             <$> newMVar Nothing
             <*> newTQueueIO
             <*> newTQueueIO
-            <*> newMVar initialReplMemoryLimitBytes
+            <*> newMVar initialBytes
             <*> newMVar 0
             <*> newMVar False
-
 replShardLoop :: ReplWorker -> ReplShard -> IO ()
 replShardLoop worker shard = forever $ do
     QueuedEval evaluation response <-
