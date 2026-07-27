@@ -166,10 +166,10 @@ viewSrcFilesSection model stepType spec step =
                 step.id
 
         createButton =
-            Maybe.unwrap Html.nothing
+            Html.viewMaybe
                 (\recordId ->
                     Html.button
-                        [ class "icon-btn"
+                        [ class "dir-item-icon-btn"
                         , Html.Attributes.title "New file"
                         , Html.Events.onClick (Actions.setCreatingSrcFile recordId (not step.creatingSrcFile))
                         ]
@@ -551,19 +551,21 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                     viewEditor recordId text =
                                         Html.div [ class "src-file-editor" ]
-                                            [ Html.button
-                                                [ class "btn"
-                                                , Html.Events.onClick (Actions.saveSrcFile recordId path)
-                                                ]
-                                                [ Html.text "Save" ]
-                                            , Html.node "code-editor"
+                                            [ Html.node "code-editor"
                                                 [ Html.Attributes.value text
                                                 , Html.Events.onInput (Actions.updateSrcFileContent recordId path)
-                                                , Html.Attributes.attribute "language" (languageForFileName itemName)
+                                                , Html.Attributes.attribute "filename" itemName
                                                 , Html.Attributes.attribute "aria-label" ("Edit " ++ itemName)
                                                 , class "code-input"
                                                 ]
                                                 []
+                                            , Html.div [ class "src-file-actions" ]
+                                                [ Html.button
+                                                    [ class "btn"
+                                                    , Html.Events.onClick (Actions.saveSrcFile recordId path)
+                                                    ]
+                                                    [ Html.text "Save" ]
+                                                ]
                                             ]
                                 in
                                 Html.div [ class "file-viewer" ]
@@ -1015,63 +1017,3 @@ calculateViewerHeight lineCount =
     in
     String.fromInt finalHeight ++ "px"
 
-
-languageForFileName : String -> String
-languageForFileName fileName =
-    String.split "." fileName
-        |> List.last
-        |> Maybe.withDefault ""
-        |> String.toLower
-        |> (\extension -> Dict.get extension srcFileLanguages)
-        |> Maybe.withDefault ""
-
-
-{-| The `code-editor` element resolves highlighting from a language name, while
-a source file only carries a name, so map the extensions worth highlighting onto
-the names CodeMirror knows. Anything unlisted renders without highlighting.
--}
-srcFileLanguages : Dict String String
-srcFileLanguages =
-    Dict.fromList
-        [ ( "sh", "shell" )
-        , ( "bash", "shell" )
-        , ( "zsh", "shell" )
-        , ( "py", "python" )
-        , ( "pyw", "python" )
-        , ( "r", "r" )
-        , ( "jl", "julia" )
-        , ( "hs", "haskell" )
-        , ( "pl", "perl" )
-        , ( "rb", "ruby" )
-        , ( "lua", "lua" )
-        , ( "js", "javascript" )
-        , ( "mjs", "javascript" )
-        , ( "cjs", "javascript" )
-        , ( "jsx", "jsx" )
-        , ( "ts", "typescript" )
-        , ( "tsx", "tsx" )
-        , ( "json", "json" )
-        , ( "yaml", "yaml" )
-        , ( "yml", "yaml" )
-        , ( "toml", "toml" )
-        , ( "md", "markdown" )
-        , ( "sql", "sql" )
-        , ( "c", "c" )
-        , ( "h", "c" )
-        , ( "cpp", "c++" )
-        , ( "cxx", "c++" )
-        , ( "cc", "c++" )
-        , ( "hpp", "c++" )
-        , ( "rs", "rust" )
-        , ( "go", "go" )
-        , ( "java", "java" )
-        , ( "cs", "c#" )
-        , ( "php", "php" )
-        , ( "html", "html" )
-        , ( "htm", "html" )
-        , ( "css", "css" )
-        , ( "scss", "scss" )
-        , ( "xml", "xml" )
-        , ( "tex", "latex" )
-        , ( "f90", "fortran" )
-        ]

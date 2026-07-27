@@ -1771,9 +1771,8 @@ setCreatingSrcFile recordId open =
         |> Flow.seq (Flow.when open (Flow.attemptTask (Dom.focus "src-file-name-input")))
 
 
-{-| Mutate a source file, then refresh its parent listing.
-`callApi` already reports failures as a toast; toasting success is left to the
-caller so that follow-up steps are not delayed by the toast's dismissal timer.
+{-| Errors are already toasted by `callApi`; success toasts belong last in the
+chain because `addToast` blocks for its dismissal timer.
 -}
 srcFileMutation : Int -> List String -> FlowError Http.Error Model a -> FlowError Http.Error Model ()
 srcFileMutation recordId path apiCall =
@@ -1793,17 +1792,16 @@ srcFileMutation recordId path apiCall =
 
 createSrcFile : Int -> String -> Flow Model ()
 createSrcFile recordId rawName =
-    let
-        fileName =
-            String.trim rawName
-    in
-    Flow.when (not (String.isEmpty fileName)) <|
-        (srcFileMutation recordId [ fileName ] (Api.createSrcFile recordId [ fileName ])
-            |> FlowError.andThen (\_ -> setCreatingSrcFile recordId False)
-            |> FlowError.andThen (\_ -> toggleSrcEntry recordId (Just True) [ fileName ])
-            |> FlowError.andThen (\_ -> addToast True ("Created " ++ fileName))
-            |> Flow.return ()
-        )
+    case String.trim rawName of
+        "" ->
+            Flow.none
+
+        fileName ->
+            srcFileMutation recordId [ fileName ] (Api.createSrcFile recordId [ fileName ])
+                |> FlowError.andThen (\_ -> setCreatingSrcFile recordId False)
+                |> FlowError.andThen (\_ -> toggleSrcEntry recordId (Just True) [ fileName ])
+                |> FlowError.andThen (\_ -> addToast True ("Created " ++ fileName))
+                |> Flow.return ()
 
 
 deleteSrcFile : Int -> List String -> Flow Model ()

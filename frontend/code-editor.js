@@ -30,12 +30,14 @@ function shellLanguageSupport() {
   );
 }
 
-async function loadLanguageSupport(language) {
+async function loadLanguageSupport(language, filename) {
   if (SHELL_LANGUAGE_NAMES.has(language.toLowerCase())) {
     return shellLanguageSupport();
   }
 
-  const description = LanguageDescription.matchLanguageName(languages, language, true);
+  const description = language
+    ? LanguageDescription.matchLanguageName(languages, language, true)
+    : LanguageDescription.matchFilename(languages, filename);
   return description ? await description.load() : null;
 }
 
@@ -49,7 +51,7 @@ function highlightingExtension() {
 }
 
 class CodeEditorElement extends HTMLElement {
-  static observedAttributes = ["language", "readonly"];
+  static observedAttributes = ["filename", "language", "readonly"];
 
   constructor() {
     super();
@@ -95,7 +97,7 @@ class CodeEditorElement extends HTMLElement {
       if (e.target.closest(".cm-panel")) e.stopPropagation();
     });
 
-    this.configureLanguage(this.language);
+    this.configureLanguage();
     this.themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-theme"],
@@ -131,8 +133,12 @@ class CodeEditorElement extends HTMLElement {
     }
   }
 
+  get filename() {
+    return this.getAttribute("filename") || "";
+  }
+
   get language() {
-    return this.getAttribute("language") || "";
+    return (this.getAttribute("language") || "").trim();
   }
 
   set language(language) {
@@ -165,8 +171,8 @@ class CodeEditorElement extends HTMLElement {
   attributeChangedCallback(name, oldValue, newValue) {
     if (oldValue === newValue) return;
 
-    if (name === "language") {
-      this.configureLanguage(newValue || "");
+    if (name === "language" || name === "filename") {
+      this.configureLanguage();
       return;
     }
 
@@ -192,15 +198,12 @@ class CodeEditorElement extends HTMLElement {
     });
   }
 
-  async configureLanguage(language) {
+  async configureLanguage() {
+    const language = this.language;
     const request = ++this.languageLoadRequest;
-    const normalizedLanguage = language.trim();
 
     try {
-      const languageSupport = normalizedLanguage
-        ? await loadLanguageSupport(normalizedLanguage)
-        : null;
-
+      const languageSupport = await loadLanguageSupport(language, this.filename);
       if (request !== this.languageLoadRequest || !this.view) return;
 
       this.view.dispatch({

@@ -498,8 +498,7 @@ body {
 .src-files-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-xs);
 }
 
 .src-file-create {
@@ -512,11 +511,6 @@ body {
 .src-file-editor {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-xs);
-
-  .btn {
-    align-self: flex-end;
-  }
 
   .cm-editor {
     max-height: 70vh;
@@ -526,6 +520,15 @@ body {
     min-height: min(240px, 70vh);
     overflow: auto;
   }
+}
+
+.src-file-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--spacing-xs);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-top: none;
 }
 
 .file-view-mode-toggle {
