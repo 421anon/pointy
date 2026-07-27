@@ -25,6 +25,19 @@ module.exports = {
       },
       {
         test: /\.s[ac]ss$/i,
+        resourceQuery: /lazy/,
+        use: [
+          {
+            loader: "style-loader",
+            options: { injectType: "lazyStyleTag" },
+          },
+          "css-loader",
+          "sass-loader",
+        ],
+      },
+      {
+        test: /\.s[ac]ss$/i,
+        resourceQuery: { not: [/lazy/] },
         use: ["style-loader", "css-loader", "sass-loader"],
       },
       {

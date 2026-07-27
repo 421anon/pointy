@@ -5,9 +5,17 @@ function loadMolstar() {
     molstarPromise = Promise.all([
       import(/* webpackChunkName: "molstar" */ "molstar/lib/apps/viewer/app"),
       import(/* webpackChunkName: "molstar" */ "molstar/lib/mol-util/color/utils"),
-      import(/* webpackChunkName: "molstar" */ "./styles/molstar-dark.scss"),
-      import(/* webpackChunkName: "molstar" */ "./styles/molstar-light.scss"),
-    ]).then(([{ Viewer }, { decodeColor }]) => ({ Viewer, decodeColor }));
+      import(
+        /* webpackChunkName: "molstar-light" */ "molstar/lib/mol-plugin-ui/skin/light.scss?lazy"
+      ),
+      import(
+        /* webpackChunkName: "molstar-dark" */ "molstar/lib/mol-plugin-ui/skin/dark.scss?lazy"
+      ),
+    ]).then(([{ Viewer }, { decodeColor }, lightSkin, darkSkin]) => ({
+      Viewer,
+      decodeColor,
+      skins: { light: lightSkin.default, dark: darkSkin.default },
+    }));
   }
 
   return molstarPromise;
@@ -22,6 +30,8 @@ class MolstarViewer extends HTMLElement {
     this._loadingLabel = null;
     this._decodeColor = null;
     this._themeObserver = null;
+    this._skins = null;
+    this._activeSkin = null;
   }
 
   connectedCallback() {
@@ -69,6 +79,18 @@ class MolstarViewer extends HTMLElement {
   }
 
   _applyTheme() {
+    const theme =
+      document.documentElement.getAttribute("data-theme") === "light"
+        ? "light"
+        : "dark";
+    const skin = this._skins?.[theme];
+
+    if (skin && skin !== this._activeSkin) {
+      this._activeSkin?.unuse();
+      skin.use();
+      this._activeSkin = skin;
+    }
+
     const backgroundColor = this._decodeColor?.(
       this._themeColor("--bg-primary"),
     );
@@ -88,11 +110,21 @@ class MolstarViewer extends HTMLElement {
     });
   }
 
+  _releaseSkin() {
+    this._activeSkin?.unuse();
+    this._activeSkin = null;
+    this._skins = null;
+  }
+
+
   async _initViewer(container, generation) {
     try {
-      const { Viewer, decodeColor } = await loadMolstar();
+      const { Viewer, decodeColor, skins } = await loadMolstar();
       if (generation !== this._generation || !this.isConnected) return;
+
       this._decodeColor = decodeColor;
+      this._skins = skins;
+      this._applyTheme();
 
       const viewer = await Viewer.create(container, {
         layoutIsExpanded: false,
@@ -122,14 +154,18 @@ class MolstarViewer extends HTMLElement {
         this._hideLoadingIndicator();
       }
     } catch (_err) {
-      if (generation === this._generation && this._viewer) {
-        this._themeObserver?.disconnect();
-        this._themeObserver = null;
+      if (generation !== this._generation) return;
+
+      this._themeObserver?.disconnect();
+      this._themeObserver = null;
+
+      if (this._viewer) {
         this._viewer.dispose();
         this._viewer = null;
       }
+      this._releaseSkin();
 
-      if (generation === this._generation && this.isConnected) {
+      if (this.isConnected) {
         this.innerHTML = "";
         this._loadingLabel = null;
         const message = document.createElement("div");
@@ -154,6 +190,7 @@ class MolstarViewer extends HTMLElement {
 
     this.innerHTML = "";
     this._loadingLabel = null;
+    this._releaseSkin();
   }
 }
 
