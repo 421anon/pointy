@@ -418,11 +418,6 @@ body {
   }
 }
 
-.src-files-repo-note {
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-}
-
 .folder-contents {
   padding-left: var(--spacing-lg);
 }
@@ -498,6 +493,39 @@ body {
 .file-content-viewer {
   margin-top: var(--spacing-sm);
   padding-left: var(--spacing-lg);
+}
+
+.src-files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.src-file-create {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  max-width: 480px;
+}
+
+.src-file-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+
+  .btn {
+    align-self: flex-end;
+  }
+
+  .cm-editor {
+    max-height: 70vh;
+  }
+
+  .cm-scroller {
+    min-height: min(240px, 70vh);
+    overflow: auto;
+  }
 }
 
 .file-view-mode-toggle {

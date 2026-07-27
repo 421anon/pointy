@@ -225,6 +225,7 @@ stepValueOnly stepType_ =
                 , size = Nothing
                 , mimeType = Nothing
                 }
+            , creatingSrcFile = False
             }
         )
         |> required "id" Decode.int

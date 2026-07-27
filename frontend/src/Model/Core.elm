@@ -69,6 +69,7 @@ type alias StepRecord =
         , runState : ApiData StepRunState
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
+        , creatingSrcFile : Bool
         }
 
 
@@ -1003,6 +1004,38 @@ updateDirectoryFolderBase folder base =
         , size = base.size
         , mimeType = base.mimeType
     }
+
+
+{-| Overlay a freshly listed directory over the local one, keeping already
+loaded file contents and view state for entries that still exist.
+-}
+updateDirectoryChildren : Dict String DirectoryItem -> Dict String DirectoryItem -> Dict String DirectoryItem
+updateDirectoryChildren fetched previous =
+    Dict.map (\key item -> Maybe.unwrap item (keepLoadedDirectoryState item) (Dict.get key previous)) fetched
+
+
+keepLoadedDirectoryState : DirectoryItem -> DirectoryItem -> DirectoryItem
+keepLoadedDirectoryState fetched previous =
+    case ( fetched, previous ) of
+        ( File new, File old ) ->
+            File
+                { new
+                    | content = old.content
+                    , view = old.view
+                    , delimitedGrid = old.delimitedGrid
+                    , plainLineCount = old.plainLineCount
+                }
+
+        ( Folder new, Folder old ) ->
+            Folder
+                { new
+                    | children = old.children
+                    , expanded = old.expanded
+                    , extras = old.extras
+                }
+
+        _ ->
+            fetched
 
 
 type alias ColumnMeta =

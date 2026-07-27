@@ -1706,6 +1706,12 @@ toggleSrcEntry recordId mOpen path =
                         |> Flow.return ()
                 )
 
+        fetchContent =
+            callApi (allStepTables << srcFilesFileContentAt recordId path)
+                (Api.fetchSrcFileContents recordId path)
+                |> FlowError.andThen (setPlainFileLineCount Route.Source recordId path)
+                |> Flow.return ()
+
         fileAction =
             Flow.forAll (allStepTables << srcFilesItemAtPath recordId path << file)
                 (\file_ ->
@@ -1720,10 +1726,15 @@ toggleSrcEntry recordId mOpen path =
 
                     else
                         Flow.when (file_.viewable && not (shouldSkipFileContents file_))
-                            (callApi (allStepTables << srcFilesFileContentAt recordId path)
-                                (Api.fetchSrcFileContents recordId path)
-                                |> FlowError.andThen (setPlainFileLineCount Route.Source recordId path)
-                                |> Flow.return ()
+                            (case file_.content of
+                                NotAsked ->
+                                    fetchContent
+
+                                Error _ ->
+                                    fetchContent
+
+                                _ ->
+                                    Flow.none
                             )
                 )
     in
@@ -1738,6 +1749,68 @@ toggleSrcEntry recordId mOpen path =
                 |> Flow.seq (Flow.when newlyExpanded <| Flow.batchM [ folderAction, fileAction ])
                 |> Flow.return newlyExpanded
         )
+
+
+updateSrcFileContent : Int -> List String -> String -> Flow Model ()
+updateSrcFileContent recordId path content =
+    Flow.setAll (currentProject << success << tables << values << srcFilesFileContentAt recordId path) (Success content)
+
+
+saveSrcFile : Int -> List String -> Flow Model ()
+saveSrcFile recordId path =
+    Flow.forAll (currentProject << success << tables << values << srcFilesFileContentAt recordId path << success) <|
+        \content ->
+            srcFileMutation recordId path (Api.saveSrcFile recordId path content)
+                |> FlowError.andThen (\_ -> addToast True ("Saved " ++ String.join "/" path))
+                |> Flow.return ()
+
+
+setCreatingSrcFile : Int -> Bool -> Flow Model ()
+setCreatingSrcFile recordId open =
+    Flow.setAll (currentProject << success << tables << values << recordById recordId << creatingSrcFile) open
+        |> Flow.seq (Flow.when open (Flow.attemptTask (Dom.focus "src-file-name-input")))
+
+
+{-| Mutate a source file, then refresh its parent listing.
+`callApi` already reports failures as a toast; toasting success is left to the
+caller so that follow-up steps are not delayed by the toast's dismissal timer.
+-}
+srcFileMutation : Int -> List String -> FlowError Http.Error Model a -> FlowError Http.Error Model ()
+srcFileMutation recordId path apiCall =
+    let
+        dirPath =
+            Maybe.withDefault [] (List.init path)
+    in
+    callApi void apiCall
+        |> FlowError.andThen
+            (\_ ->
+                callApiMerge Model.updateDirectoryChildren
+                    (currentProject << success << tables << values << srcFilesChildrenAt recordId dirPath)
+                    (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId dirPath)
+            )
+        |> FlowError.andThen (\_ -> refetchCommitHash)
+
+
+createSrcFile : Int -> String -> Flow Model ()
+createSrcFile recordId rawName =
+    let
+        fileName =
+            String.trim rawName
+    in
+    Flow.when (not (String.isEmpty fileName)) <|
+        (srcFileMutation recordId [ fileName ] (Api.createSrcFile recordId [ fileName ])
+            |> FlowError.andThen (\_ -> setCreatingSrcFile recordId False)
+            |> FlowError.andThen (\_ -> toggleSrcEntry recordId (Just True) [ fileName ])
+            |> FlowError.andThen (\_ -> addToast True ("Created " ++ fileName))
+            |> Flow.return ()
+        )
+
+
+deleteSrcFile : Int -> List String -> Flow Model ()
+deleteSrcFile recordId path =
+    srcFileMutation recordId path (Api.deleteSrcFile recordId path)
+        |> FlowError.andThen (\_ -> addToast True ("Deleted " ++ String.join "/" path))
+        |> Flow.return ()
 
 
 registerStepStatusHook : Int -> Flow Model () -> Flow Model ()

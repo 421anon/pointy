@@ -11,14 +11,14 @@ import Filesize
 import Flow exposing (Flow)
 import Grid
 import Html exposing (Html)
-import Html.Attributes exposing (class, classList, href, id, rel, src, style, target)
+import Html.Attributes exposing (class, classList, href, id, name, placeholder, rel, required, src, style, target, type_)
 import Html.Events
 import Html.Extra as Html
 import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, getUserRepoInfo, plainLineHeight, windowLineCount, windowStartLine)
+import Model.Core as Model exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -44,6 +44,16 @@ srcDir =
                 other ->
                     Err other
         )
+
+
+isHistoricalProject : Model -> Bool
+isHistoricalProject model =
+    case Model.getRoute model of
+        Route.Project { mCommit } ->
+            Maybe.isJust mCommit
+
+        _ ->
+            False
 
 
 compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
@@ -148,32 +158,65 @@ viewSrcFilesSection model stepType spec step =
         hasSrcFiles =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
-        viewInstructions =
-            getUserRepoInfo model
-                |> ApiData.toMaybe
-                |> Html.viewMaybe
-                    (\info ->
-                        let
-                            dirName =
-                                "srcFiles/" ++ (step.id |> Maybe.map String.fromInt |> Maybe.withDefault "unknown")
-                        in
-                        case step.srcFiles.children of
-                            Success _ ->
-                                Html.div [ class "src-files-repo-note" ]
-                                    [ Html.text ("Edit the files in the user repository (" ++ info.url ++ ") on branch: " ++ info.branch ++ " in " ++ dirName) ]
+        mEditableId =
+            if isHistoricalProject model then
+                Nothing
 
-                            Error _ ->
-                                Html.div [ class "src-files-repo-note" ]
-                                    [ Html.text ("Create the directory " ++ dirName ++ " in the user repository (" ++ info.url ++ ") on branch: " ++ info.branch) ]
+            else
+                step.id
 
-                            _ ->
-                                Html.nothing
-                    )
+        createButton =
+            Maybe.unwrap Html.nothing
+                (\recordId ->
+                    Html.button
+                        [ class "icon-btn"
+                        , Html.Attributes.title "New file"
+                        , Html.Events.onClick (Actions.setCreatingSrcFile recordId (not step.creatingSrcFile))
+                        ]
+                        [ icon True "add" ]
+                )
+                mEditableId
+
+        createForm =
+            case ( mEditableId, step.creatingSrcFile ) of
+                ( Just recordId, True ) ->
+                    Html.form
+                        [ class "src-file-create"
+                        , Html.Events.preventDefaultOn "submit"
+                            (Decode.map
+                                (\fileName -> ( Actions.createSrcFile recordId fileName, True ))
+                                (Decode.at [ "target", "elements", "fileName", "value" ] Decode.string)
+                            )
+                        ]
+                        [ Html.input
+                            [ id "src-file-name-input"
+                            , name "fileName"
+                            , placeholder "File name"
+                            , required True
+                            , class "form-input"
+                            ]
+                            []
+                        , Html.div [ class "form-actions" ]
+                            [ Html.button [ type_ "submit", class "btn" ] [ Html.text "Create" ]
+                            , Html.button
+                                [ type_ "button"
+                                , class "btn"
+                                , Html.Events.onClick (Actions.setCreatingSrcFile recordId False)
+                                ]
+                                [ Html.text "Cancel" ]
+                            ]
+                        ]
+
+                _ ->
+                    Html.nothing
     in
     Html.viewIf hasSrcFiles <|
         Html.div [ class "src-files-section" ]
-            [ Html.h3 [] [ Html.text "Source Files" ]
-            , viewInstructions
+            [ Html.div [ class "src-files-header" ]
+                [ Html.h3 [] [ Html.text "Source Files" ]
+                , createButton
+                ]
+            , createForm
             , renderDirectoryContents model
                 spec
                 step.id
@@ -254,6 +297,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 Nothing ->
                     Flow.pure ()
+
+        isReadOnly =
+            isHistoricalProject model
     in
     case item of
         File file ->
@@ -351,6 +397,17 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                             ]
                             [ icon True "download" ]
                         , viewCompareButton model mCompareSelection
+                        , case ( mDirCtx, isReadOnly ) of
+                            ( Just (SrcDir recordId), False ) ->
+                                Html.button
+                                    [ class "dir-item-icon-btn"
+                                    , Html.Attributes.title "Delete"
+                                    , Html.Events.onClick (Actions.deleteSrcFile recordId path)
+                                    ]
+                                    [ icon True "delete" ]
+
+                            _ ->
+                                Html.nothing
                         ]
                     ]
                 , Html.viewIfLazy file.view.isViewing <|
@@ -458,6 +515,14 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             _ ->
                                                 Nothing
 
+                                    mEditRecordId =
+                                        case ( mDirCtx, isReadOnly, mSelectedRange ) of
+                                            ( Just (SrcDir recordId), False, Nothing ) ->
+                                                Just recordId
+
+                                            _ ->
+                                                Nothing
+
                                     viewContent text =
                                         let
                                             selectedFrom =
@@ -483,6 +548,23 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                             _ ->
                                                 viewPlainContent_ ()
+
+                                    viewEditor recordId text =
+                                        Html.div [ class "src-file-editor" ]
+                                            [ Html.button
+                                                [ class "btn"
+                                                , Html.Events.onClick (Actions.saveSrcFile recordId path)
+                                                ]
+                                                [ Html.text "Save" ]
+                                            , Html.node "code-editor"
+                                                [ Html.Attributes.value text
+                                                , Html.Events.onInput (Actions.updateSrcFileContent recordId path)
+                                                , Html.Attributes.attribute "language" (languageForFileName itemName)
+                                                , Html.Attributes.attribute "aria-label" ("Edit " ++ itemName)
+                                                , class "code-input"
+                                                ]
+                                                []
+                                            ]
                                 in
                                 Html.div [ class "file-viewer" ]
                                     [ ApiData.foldVisible
@@ -490,7 +572,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         (Maybe.map (viewLoading << viewContent)
                                             >> Maybe.withDefault (viewLoading <| Html.div [ class "file-content-loading" ] [])
                                         )
-                                        viewContent
+                                        (\text -> Maybe.unwrap (viewContent text) (flip viewEditor text) mEditRecordId)
                                         (always <| Html.span [ class "file-error" ] [ Html.text "Failed to load file" ])
                                         file.content
                                     ]
@@ -932,3 +1014,64 @@ calculateViewerHeight lineCount =
             max cappedHeight plainViewerMinHeight
     in
     String.fromInt finalHeight ++ "px"
+
+
+languageForFileName : String -> String
+languageForFileName fileName =
+    String.split "." fileName
+        |> List.last
+        |> Maybe.withDefault ""
+        |> String.toLower
+        |> (\extension -> Dict.get extension srcFileLanguages)
+        |> Maybe.withDefault ""
+
+
+{-| The `code-editor` element resolves highlighting from a language name, while
+a source file only carries a name, so map the extensions worth highlighting onto
+the names CodeMirror knows. Anything unlisted renders without highlighting.
+-}
+srcFileLanguages : Dict String String
+srcFileLanguages =
+    Dict.fromList
+        [ ( "sh", "shell" )
+        , ( "bash", "shell" )
+        , ( "zsh", "shell" )
+        , ( "py", "python" )
+        , ( "pyw", "python" )
+        , ( "r", "r" )
+        , ( "jl", "julia" )
+        , ( "hs", "haskell" )
+        , ( "pl", "perl" )
+        , ( "rb", "ruby" )
+        , ( "lua", "lua" )
+        , ( "js", "javascript" )
+        , ( "mjs", "javascript" )
+        , ( "cjs", "javascript" )
+        , ( "jsx", "jsx" )
+        , ( "ts", "typescript" )
+        , ( "tsx", "tsx" )
+        , ( "json", "json" )
+        , ( "yaml", "yaml" )
+        , ( "yml", "yaml" )
+        , ( "toml", "toml" )
+        , ( "md", "markdown" )
+        , ( "sql", "sql" )
+        , ( "c", "c" )
+        , ( "h", "c" )
+        , ( "cpp", "c++" )
+        , ( "cxx", "c++" )
+        , ( "cc", "c++" )
+        , ( "hpp", "c++" )
+        , ( "rs", "rust" )
+        , ( "go", "go" )
+        , ( "java", "java" )
+        , ( "cs", "c#" )
+        , ( "php", "php" )
+        , ( "html", "html" )
+        , ( "htm", "html" )
+        , ( "css", "css" )
+        , ( "scss", "scss" )
+        , ( "xml", "xml" )
+        , ( "tex", "latex" )
+        , ( "f90", "fortran" )
+        ]

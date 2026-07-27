@@ -270,6 +270,11 @@ srcFiles =
     lens "srcFiles" .srcFiles (\record srcFiles_ -> { record | srcFiles = srcFiles_ })
 
 
+creatingSrcFile : Lens ls { a | creatingSrcFile : b } b x y
+creatingSrcFile =
+    lens "creatingSrcFile" .creatingSrcFile (\record creatingSrcFile_ -> { record | creatingSrcFile = creatingSrcFile_ })
+
+
 folder : Prism pr DirectoryItem DirectoryFolder x y
 folder =
     let
