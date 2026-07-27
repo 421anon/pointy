@@ -1,10 +1,10 @@
 import { basicSetup } from "codemirror";
 import { EditorState, Compartment } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { LanguageDescription, LanguageSupport, StreamLanguage } from "@codemirror/language";
+import { LanguageDescription, LanguageSupport, StreamLanguage, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
-
+import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 
 function readOnlyExtensions(readOnly) {
   return [EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)];
@@ -39,6 +39,15 @@ async function loadLanguageSupport(language) {
   return description ? await description.load() : null;
 }
 
+const LIGHT_HIGHLIGHTING = syntaxHighlighting(defaultHighlightStyle);
+const DARK_HIGHLIGHTING = syntaxHighlighting(oneDarkHighlightStyle);
+
+function highlightingExtension() {
+  return document.documentElement.getAttribute("data-theme") === "light"
+    ? LIGHT_HIGHLIGHTING
+    : DARK_HIGHLIGHTING;
+}
+
 class CodeEditorElement extends HTMLElement {
   static observedAttributes = ["language", "readonly"];
 
@@ -48,8 +57,10 @@ class CodeEditorElement extends HTMLElement {
     this._readOnly = false;
     this.languageCompartment = new Compartment();
     this.readOnlyCompartment = new Compartment();
+    this.highlightingCompartment = new Compartment();
     this.languageLoadRequest = 0;
     this.suppressInput = false;
+    this.themeObserver = new MutationObserver(() => this.configureHighlighting());
   }
 
   connectedCallback() {
@@ -66,6 +77,7 @@ class CodeEditorElement extends HTMLElement {
         doc: this.value,
         extensions: [
           basicSetup,
+          this.highlightingCompartment.of(highlightingExtension()),
           EditorView.lineWrapping,
           this.languageCompartment.of([]),
           this.readOnlyCompartment.of(readOnlyExtensions(this.readOnly)),
@@ -83,11 +95,15 @@ class CodeEditorElement extends HTMLElement {
       if (e.target.closest(".cm-panel")) e.stopPropagation();
     });
 
-
     this.configureLanguage(this.language);
+    this.themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
   }
 
   disconnectedCallback() {
+    this.themeObserver.disconnect();
     this.view?.destroy();
     this.view = null;
   }
@@ -165,6 +181,14 @@ class CodeEditorElement extends HTMLElement {
 
     this.view.dispatch({
       effects: this.readOnlyCompartment.reconfigure(readOnlyExtensions(this.readOnly)),
+    });
+  }
+
+  configureHighlighting() {
+    if (!this.view) return;
+
+    this.view.dispatch({
+      effects: this.highlightingCompartment.reconfigure(highlightingExtension()),
     });
   }
 
