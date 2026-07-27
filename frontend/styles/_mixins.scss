@@ -39,7 +39,6 @@
 
 /* Readonly/disabled utilities */
 @mixin readonly-disabled {
-    opacity: 0.6;
     cursor: text;
     caret-color: transparent;
 }
