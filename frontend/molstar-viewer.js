@@ -4,8 +4,10 @@ function loadMolstar() {
   if (molstarPromise === null) {
     molstarPromise = Promise.all([
       import(/* webpackChunkName: "molstar" */ "molstar/lib/apps/viewer/app"),
-      import(/* webpackChunkName: "molstar" */ "molstar/lib/mol-plugin-ui/skin/light.scss"),
-    ]).then(([{ Viewer }]) => Viewer);
+      import(/* webpackChunkName: "molstar" */ "molstar/lib/mol-util/color/utils"),
+      import(/* webpackChunkName: "molstar" */ "./styles/molstar-dark.scss"),
+      import(/* webpackChunkName: "molstar" */ "./styles/molstar-light.scss"),
+    ]).then(([{ Viewer }, { decodeColor }]) => ({ Viewer, decodeColor }));
   }
 
   return molstarPromise;
@@ -18,6 +20,8 @@ class MolstarViewer extends HTMLElement {
     this._initialized = false;
     this._generation = 0;
     this._loadingLabel = null;
+    this._decodeColor = null;
+    this._themeObserver = null;
   }
 
   connectedCallback() {
@@ -58,10 +62,37 @@ class MolstarViewer extends HTMLElement {
     this._loadingLabel = null;
   }
 
+  _themeColor(name) {
+    return getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+  }
+
+  _applyTheme() {
+    const backgroundColor = this._decodeColor?.(
+      this._themeColor("--bg-primary"),
+    );
+    if (backgroundColor === undefined) return;
+
+    this._viewer?.plugin.canvas3d?.setProps({
+      renderer: { backgroundColor },
+    });
+  }
+
+  _observeTheme() {
+    this._applyTheme();
+    this._themeObserver = new MutationObserver(() => this._applyTheme());
+    this._themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+  }
+
   async _initViewer(container, generation) {
     try {
-      const Viewer = await loadMolstar();
+      const { Viewer, decodeColor } = await loadMolstar();
       if (generation !== this._generation || !this.isConnected) return;
+      this._decodeColor = decodeColor;
 
       const viewer = await Viewer.create(container, {
         layoutIsExpanded: false,
@@ -70,6 +101,7 @@ class MolstarViewer extends HTMLElement {
         viewportShowExpand: false,
         viewportShowToggleFullscreen: false,
         viewportShowAnimation: false,
+        viewportBackgroundColor: this._themeColor("--bg-primary"),
       });
 
       if (generation !== this._generation || !this.isConnected) {
@@ -78,6 +110,7 @@ class MolstarViewer extends HTMLElement {
       }
 
       this._viewer = viewer;
+      this._observeTheme();
 
       const src = this.getAttribute("src");
       if (src) {
@@ -90,6 +123,8 @@ class MolstarViewer extends HTMLElement {
       }
     } catch (_err) {
       if (generation === this._generation && this._viewer) {
+        this._themeObserver?.disconnect();
+        this._themeObserver = null;
         this._viewer.dispose();
         this._viewer = null;
       }
@@ -108,6 +143,9 @@ class MolstarViewer extends HTMLElement {
   disconnectedCallback() {
     this._generation += 1;
     this._initialized = false;
+    this._themeObserver?.disconnect();
+    this._themeObserver = null;
+    this._decodeColor = null;
 
     if (this._viewer) {
       this._viewer.dispose();
