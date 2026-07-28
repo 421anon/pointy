@@ -446,7 +446,12 @@ fetchSrcFileContents id filePath =
 
 srcFileRequest : String -> Int -> List String -> Http.Body -> Flow s (Result Http.Error ())
 srcFileRequest method id filePath =
-    request method (srcFileDownloadUrl id filePath)
+    request method <|
+        UrlBuilder.absolute
+            [ "backend", "src-files" ]
+            [ UrlBuilder.int "id" id
+            , UrlBuilder.string "path" (String.join "/" filePath)
+            ]
 
 
 saveSrcFile : Int -> List String -> String -> Flow s (Result Http.Error ())
