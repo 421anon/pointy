@@ -7,9 +7,9 @@ module Handlers.StatusStream (EventStream, stepStatusStreamHandler) where
 
 import Bus (ProjectSnapshot, subscribe)
 import qualified Bus
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
-import Control.Concurrent.STM (STM, TChan, atomically, newTChanIO, tryReadTChan, writeTChan)
+import Control.Concurrent.STM (STM, TChan, atomically, newTChanIO, orElse, readTChan, readTVar, registerDelay, retry, tryReadTChan, writeTChan)
 import Control.Monad (void, when)
 
 import Control.Monad.IO.Class (liftIO)
@@ -89,7 +89,7 @@ stepStatusStreamHandler projectId commit = do
                         padding
                         ( S.Yield
                             (sseEvent "snapshot" emptySnapshot)
-                            (S.Effect (streamLoop projectId commit 0 localChan busChan))
+                            (S.Effect (streamLoop projectId commit localChan busChan))
                         )
                     )
                 )
@@ -116,40 +116,54 @@ statusStreamCommitStillCurrent pinnedCommit targetCommit =
             latest <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
             return $ latest == Right targetCommit
 
-streamLoop :: Int -> Maybe Text -> Int -> TChan LocalStatusUpdate -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
-streamLoop projectId pinnedCommit heartbeatTick localChan busChan = do
-    return $ S.Effect $ do
-        threadDelay 500000
-        localUpdates <- atomically $ drainTChan localChan
-        busUpdates <- atomically $ drainTChan busChan
+heartbeatDelayMicros :: Int
+heartbeatDelayMicros = 30 * 1000000
 
-        let localErrors = [err | LocalError err <- localUpdates]
-        let localSnapshots = [snapshot | LocalSnapshot snapshot <- localUpdates]
-        let matchingSnapshots = filter matchesSnapshot (localSnapshots ++ busUpdates)
-
-        case localErrors of
-            (err : _) ->
-                return $ S.Yield (sseEvent "status-error" (encode err)) S.Stop
-            [] ->
-                case matchingSnapshots of
-                    [] -> do
-                        let nextHeartbeatTick = heartbeatTick + 1
-                        let (heartbeatEvents, finalTick) =
-                                if nextHeartbeatTick >= 10
-                                    then ([sseEvent "heartbeat" (encode (object ["projectId" .= projectId]))], 0)
-                                    else ([], nextHeartbeatTick)
-
-                        let tickComment = sseComment $ "tick-" <> pack (show nextHeartbeatTick) <> " " <> pack (replicate 64 ' ')
-                        let events =
-                                if null heartbeatEvents
-                                    then [tickComment]
-                                    else heartbeatEvents
-
-                        return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit finalTick localChan busChan))
-                    snapshots -> do
-                        let events = map snapshotEvent snapshots
-                        return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit 0 localChan busChan))
+streamLoop :: Int -> Maybe Text -> TChan LocalStatusUpdate -> TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
+streamLoop projectId pinnedCommit localChan busChan = do
+    heartbeatDue <- registerDelay heartbeatDelayMicros
+    waitForEvent heartbeatDue
   where
+    waitForEvent heartbeatDue = do
+        activity <-
+            atomically $
+                ( do
+                    firstLocal <- readTChan localChan
+                    localUpdates <- (firstLocal :) <$> drainTChan localChan
+                    busUpdates <- drainTChan busChan
+                    pure $ Just (localUpdates, busUpdates)
+                )
+                    `orElse` ( do
+                                firstBus <- readTChan busChan
+                                localUpdates <- drainTChan localChan
+                                busUpdates <- (firstBus :) <$> drainTChan busChan
+                                pure $ Just (localUpdates, busUpdates)
+                             )
+                    `orElse` ( do
+                                due <- readTVar heartbeatDue
+                                if due then pure Nothing else retry
+                             )
+
+        case activity of
+            Nothing ->
+                return $
+                    S.Yield
+                        (sseEvent "heartbeat" (encode (object ["projectId" .= projectId])))
+                        (S.Effect (streamLoop projectId pinnedCommit localChan busChan))
+            Just (localUpdates, busUpdates) -> do
+                let localErrors = [err | LocalError err <- localUpdates]
+                let localSnapshots = [snapshot | LocalSnapshot snapshot <- localUpdates]
+                let matchingSnapshots = filter matchesSnapshot (localSnapshots ++ busUpdates)
+
+                case localErrors of
+                    (err : _) ->
+                        return $ S.Yield (sseEvent "status-error" (encode err)) S.Stop
+                    [] ->
+                        case matchingSnapshots of
+                            [] -> waitForEvent heartbeatDue
+                            snapshots -> do
+                                let events = map snapshotEvent snapshots
+                                return $ yieldAll events (S.Effect (streamLoop projectId pinnedCommit localChan busChan))
     matchesSnapshot snapshot =
         Bus.projectId snapshot == projectId && maybe True (== Bus.commit snapshot) pinnedCommit
 
