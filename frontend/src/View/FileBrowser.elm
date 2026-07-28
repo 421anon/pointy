@@ -279,24 +279,20 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     else
                         Nothing
 
-                externalHtmlUrl =
-                    if isHtml then
-                        case ( try currentProjectId model, mDirCtx ) of
-                            ( Just projectId, Just (OutputDir stepId_ commit_) ) ->
-                                Just <|
-                                    Route.toString <|
-                                        Route.Artifact
-                                            { projectId = projectId
-                                            , stepId = stepId_
-                                            , commit = commit_
-                                            , path = path
-                                            }
+                externalArtifactUrl =
+                    case ( try currentProjectId model, mDirCtx ) of
+                        ( Just projectId, Just (OutputDir stepId_ commit_) ) ->
+                            Just <|
+                                Route.toString <|
+                                    Route.Artifact
+                                        { projectId = projectId
+                                        , stepId = stepId_
+                                        , commit = commit_
+                                        , path = path
+                                        }
 
-                            _ ->
-                                Nothing
-
-                    else
-                        Nothing
+                        _ ->
+                            Nothing
 
                 fileIcon =
                     if isPdb then
@@ -333,11 +329,12 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     )
                                 ]
                                 [ icon True "visibility" ]
-                        , externalHtmlUrl
+                        , externalArtifactUrl
                             |> Html.viewMaybe
                                 (\url ->
                                     Html.a
                                         [ class "dir-item-icon-btn"
+                                        , Html.Attributes.title "View external"
                                         , href url
                                         , target "_blank"
                                         , rel "noopener noreferrer"
