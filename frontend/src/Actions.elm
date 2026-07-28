@@ -1764,11 +1764,12 @@ saveSrcFile recordId path =
     in
     Flow.whenHas (allStepTables << srcFilesFileEditedContentAt recordId path << just) <|
         \content ->
-            persistSrcFileChange recordId path "Saved" (Api.saveSrcFile recordId path content)
-                |> Flow.assertOk
-                |> Flow.seq (Flow.setAll (allStepTables << srcFilesFileContentAt recordId path) (Success content))
-                |> Flow.seq (Flow.setAll (allStepTables << srcFilesFileEditedContentAt recordId path) Nothing)
-                |> Flow.seq (Flow.setAll (allStepTables << plainLineCountAt Route.Source recordId path) (Model.countLines content))
+            predictSrcFileChange recordId path "Saved"
+                (Flow.setAll (allStepTables << srcFilesFileContentAt recordId path) (Success content)
+                    |> Flow.seq (Flow.setAll (allStepTables << srcFilesFileEditedContentAt recordId path) Nothing)
+                    |> Flow.seq (Flow.setAll (allStepTables << plainLineCountAt Route.Source recordId path) (Model.countLines content))
+                )
+                (Api.saveSrcFile recordId path content)
 
 
 setSrcFileDraft : Int -> Maybe Model.SrcFileDraft -> Flow Model ()
@@ -1782,25 +1783,60 @@ openSrcFileDraft recordId =
         |> Flow.seq (Flow.attemptTask (Dom.focus "src-file-name-input"))
 
 
-persistSrcFileChange : Int -> List String -> String -> FlowError Http.Error Model a -> FlowError Http.Error Model ()
-persistSrcFileChange recordId path verb apiCall =
+predictSrcFileChange : Int -> List String -> String -> Flow Model () -> FlowError Http.Error Model a -> Flow Model ()
+predictSrcFileChange recordId path verb prediction apiCall =
     let
         allStepTables =
             currentProject << success << tables << values
 
+        stepRecord =
+            allStepTables << recordById recordId
+
         dirPath =
             Maybe.withDefault [] (List.init path)
     in
-    callApi void apiCall
-        |> FlowError.andThen
-            (\_ ->
-                callApiMerge Model.updateDirectoryChildren
-                    (allStepTables << srcFilesChildrenAt recordId dirPath)
-                    (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId dirPath)
-                    |> Flow.seq refetchCommitHash
-                    |> Flow.seq (Flow.async (addToast True (verb ++ " " ++ String.join "/" path)))
-            )
-        |> Flow.setting (allStepTables << recordById recordId << isUpdating)
+    Flow.forAll stepRecord <|
+        \snapshot ->
+            prediction
+                |> Flow.seq (callApi void apiCall)
+                |> FlowError.andThen
+                    (\_ ->
+                        callApiMerge Model.updateDirectoryChildren
+                            (allStepTables << srcFilesChildrenAt recordId dirPath)
+                            (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId dirPath)
+                            |> Flow.seq refetchCommitHash
+                            |> Flow.seq (Flow.async (addToast True (verb ++ " " ++ String.join "/" path)))
+                    )
+                |> FlowError.foldResult (\_ -> Flow.pure ())
+                    (\_ ->
+                        Flow.setAll (stepRecord << srcFiles) snapshot.srcFiles
+                            |> Flow.seq (Flow.setAll (stepRecord << srcFileDraft) snapshot.srcFileDraft)
+                    )
+
+
+setSrcFileEntry : Int -> List String -> Maybe Model.DirectoryItem -> Flow Model ()
+setSrcFileEntry recordId path entry =
+    Flow.fromMaybe (List.unconsLast path) <|
+        \( name, dirPath ) ->
+            Flow.over
+                (currentProject << success << tables << values << srcFilesChildrenAt recordId dirPath << success)
+                (Dict.update name (always entry))
+
+
+predictedSrcFile : String -> Model.DirectoryItem
+predictedSrcFile content =
+    Model.File
+        { content = Success content
+        , size = String.length content
+        , viewable = True
+        , seekable = False
+        , seekWindow = NotAsked
+        , mimeType = Nothing
+        , view = { isViewing = False, zoom = 1.0, plainScrollTop = 0 }
+        , delimitedGrid = Nothing
+        , plainLineCount = Model.countLines content
+        , editedContent = Nothing
+        }
 
 
 createSrcFile : Int -> String -> String -> Flow Model ()
@@ -1810,17 +1846,20 @@ createSrcFile recordId rawName content =
             Flow.none
 
         fileName ->
-            persistSrcFileChange recordId [ fileName ] "Created" (Api.createSrcFile recordId [ fileName ] content)
-                |> Flow.assertOk
-                |> Flow.seq (setSrcFileDraft recordId Nothing)
-                |> Flow.seq (toggleSrcEntry recordId (Just True) [ fileName ])
-                |> Flow.return ()
+            predictSrcFileChange recordId [ fileName ] "Created"
+                (setSrcFileEntry recordId [ fileName ] (Just (predictedSrcFile content))
+                    |> Flow.seq (setSrcFileDraft recordId Nothing)
+                    |> Flow.seq (toggleSrcEntry recordId (Just True) [ fileName ])
+                    |> Flow.return ()
+                )
+                (Api.createSrcFile recordId [ fileName ] content)
 
 
 deleteSrcFile : Int -> List String -> Flow Model ()
 deleteSrcFile recordId path =
-    persistSrcFileChange recordId path "Deleted" (Api.deleteSrcFile recordId path)
-        |> Flow.return ()
+    predictSrcFileChange recordId path "Deleted"
+        (setSrcFileEntry recordId path Nothing)
+        (Api.deleteSrcFile recordId path)
 
 
 registerStepStatusHook : Int -> Flow Model () -> Flow Model ()
