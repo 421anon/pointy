@@ -1791,8 +1791,8 @@ persistSrcFileChange recordId path verb apiCall =
         dirPath =
             Maybe.withDefault [] (List.init path)
     in
-    Flow.setting (allStepTables << recordById recordId << isUpdating)
-        (FlowError.andThen
+    callApi void apiCall
+        |> FlowError.andThen
             (\_ ->
                 callApiMerge Model.updateDirectoryChildren
                     (allStepTables << srcFilesChildrenAt recordId dirPath)
@@ -1800,8 +1800,7 @@ persistSrcFileChange recordId path verb apiCall =
                     |> Flow.seq refetchCommitHash
                     |> Flow.seq (Flow.async (addToast True (verb ++ " " ++ String.join "/" path)))
             )
-            (callApi void apiCall)
-        )
+        |> Flow.setting (allStepTables << recordById recordId << isUpdating)
 
 
 createSrcFile : Int -> String -> String -> Flow Model ()
@@ -3282,6 +3281,7 @@ updateStepStatus snapshotCommit stepId newStatus =
                     Flow.over stepStatusBuffer (Dict.insert stepId ( snapshotCommit, newStatus ))
             )
         |> Flow.seq (Flow.when (newStatus == StatusSuccess) (runAndClearStepStatusHook stepId))
+
 
 
 startClusterStatusStream : Flow Model Decode.Value

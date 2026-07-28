@@ -196,16 +196,6 @@ toLoading apiData =
             Loading Nothing
 
 
-settle : ApiData a -> ApiData a
-settle apiData =
-    case apiData of
-        Loading (Just value) ->
-            Success value
-
-        other ->
-            other
-
-
 foldVisible : b -> (Maybe a -> b) -> (a -> b) -> (Http.Error -> b) -> ApiData a -> b
 foldVisible onNotAsked onLoading onSuccess onError apiData =
     case apiData of

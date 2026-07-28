@@ -11,7 +11,7 @@ import Filesize
 import Flow exposing (Flow)
 import Grid
 import Html exposing (Html)
-import Html.Attributes exposing (class, classList, disabled, href, id, name, placeholder, rel, src, style, target, type_)
+import Html.Attributes exposing (class, classList, disabled, href, id, placeholder, rel, src, style, target, type_)
 import Html.Events
 import Html.Extra as Html
 import Html.Lazy
@@ -44,11 +44,6 @@ srcDir =
                 other ->
                     Err other
         )
-
-
-isHistoricalProject : Model -> Bool
-isHistoricalProject =
-    has (route << Route.project << mCommit << just)
 
 
 compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
@@ -153,35 +148,30 @@ viewSrcFilesSection model stepType spec step =
         hasSrcFiles =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
+        isLocked =
+            has (route << Route.project << mCommit << just) model
+
         mEditableId =
-            if isHistoricalProject model then
-                Nothing
+            Maybe.filter (always (not isLocked)) step.id
 
-            else
-                step.id
-
-        settledChildren =
-            ApiData.settle step.srcFiles.children
 
         createButton =
             Html.viewMaybe
                 (\recordId ->
-                    case step.srcFileDraft of
-                        Just _ ->
-                            Html.button
-                                [ class "dir-item-icon-btn"
-                                , Html.Attributes.title "Discard new file"
-                                , Html.Events.onClick (Actions.setSrcFileDraft recordId Nothing)
-                                ]
-                                [ icon True "close" ]
+                    let
+                        ( tooltip, symbol, action ) =
+                            if Maybe.isJust step.srcFileDraft then
+                                ( "Discard new file", "close", Actions.setSrcFileDraft recordId Nothing )
 
-                        Nothing ->
-                            Html.button
-                                [ class "dir-item-icon-btn"
-                                , Html.Attributes.title "New file"
-                                , Html.Events.onClick (Actions.openSrcFileDraft recordId)
-                                ]
-                                [ icon True "add" ]
+                            else
+                                ( "New file", "add", Actions.openSrcFileDraft recordId )
+                    in
+                    Html.button
+                        [ class "dir-item-icon-btn"
+                        , Html.Attributes.title tooltip
+                        , Html.Events.onClick action
+                        ]
+                        [ icon True symbol ]
                 )
                 mEditableId
 
@@ -189,43 +179,41 @@ viewSrcFilesSection model stepType spec step =
             case ( mEditableId, step.srcFileDraft ) of
                 ( Just recordId, Just draft ) ->
                     Html.form
-                        [ class "src-file-create"
+                        [ class "src-file-create src-file-editor"
                         , Html.Events.preventDefaultOn "submit"
                             (Decode.succeed ( Actions.createSrcFile recordId draft.name draft.content, True ))
                         ]
-                        [ Html.div [ class "src-file-editor" ]
-                            [ Html.div [ class "src-file-name-row" ]
-                                [ Html.input
-                                    [ id "src-file-name-input"
-                                    , Html.Attributes.value draft.name
-                                    , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | name = value }))
-                                    , placeholder "File name"
-                                    , class "form-input"
-                                    ]
-                                    []
-                                ]
-                            , Html.node "code-editor"
-                                [ Html.Attributes.value draft.content
-                                , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | content = value }))
-                                , Html.Attributes.attribute "filename" draft.name
-                                , Html.Attributes.attribute "aria-label" "New file contents"
-                                , class "code-input"
+                        [ Html.div [ class "src-file-name-row" ]
+                            [ Html.input
+                                [ id "src-file-name-input"
+                                , Html.Attributes.value draft.name
+                                , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | name = value }))
+                                , placeholder "File name"
+                                , class "form-input"
                                 ]
                                 []
-                            , Html.div [ class "src-file-actions" ]
-                                [ Html.button
-                                    [ type_ "submit"
-                                    , class "btn"
-                                    , disabled (String.trim draft.name == "")
-                                    ]
-                                    [ Html.text "Create" ]
-                                , Html.button
-                                    [ type_ "button"
-                                    , class "btn"
-                                    , Html.Events.onClick (Actions.setSrcFileDraft recordId Nothing)
-                                    ]
-                                    [ Html.text "Cancel" ]
+                            ]
+                        , Html.node "code-editor"
+                            [ Html.Attributes.value draft.content
+                            , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | content = value }))
+                            , Html.Attributes.attribute "filename" draft.name
+                            , Html.Attributes.attribute "aria-label" "New file contents"
+                            , class "code-input"
+                            ]
+                            []
+                        , Html.div [ class "src-file-actions" ]
+                            [ Html.button
+                                [ type_ "submit"
+                                , class "btn"
+                                , disabled (String.trim draft.name == "")
                                 ]
+                                [ Html.text "Create" ]
+                            , Html.button
+                                [ type_ "button"
+                                , class "btn"
+                                , Html.Events.onClick (Actions.setSrcFileDraft recordId Nothing)
+                                ]
+                                [ Html.text "Cancel" ]
                             ]
                         ]
 
@@ -243,10 +231,16 @@ viewSrcFilesSection model stepType spec step =
                     spec
                     step.id
                     (Maybe.map SrcDir step.id)
-                    False
+                    isLocked
                     []
                     "directory-view"
-                    settledChildren
+                    (case step.srcFiles.children of
+                        Loading (Just value) ->
+                            Success value
+
+                        other ->
+                            other
+                    )
                 ]
     in
     Html.viewIf hasSrcFiles <|
@@ -330,9 +324,6 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
     case item of
         File file ->
             let
-                isReadOnly =
-                    isHistoricalProject model
-
                 isImage =
                     has (mimeType << just << where_ (String.startsWith "image/")) file
 
@@ -426,7 +417,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                             ]
                             [ icon True "download" ]
                         , viewCompareButton model mCompareSelection
-                        , case ( mDirCtx, isReadOnly ) of
+                        , case ( mDirCtx, isLocked ) of
                             ( Just (SrcDir recordId), False ) ->
                                 Html.button
                                     [ class "dir-item-icon-btn"
@@ -545,12 +536,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 Nothing
 
                                     mEditRecordId =
-                                        case ( mDirCtx, isReadOnly, mSelectedRange ) of
-                                            ( Just (SrcDir recordId), False, Nothing ) ->
-                                                Just recordId
-
-                                            _ ->
-                                                Nothing
+                                        mDirCtx
+                                            |> Maybe.andThen (try srcDir)
+                                            |> Maybe.filter (always (not isLocked && Maybe.isNothing mSelectedRange))
 
                                     viewContent text =
                                         let

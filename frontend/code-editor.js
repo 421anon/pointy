@@ -97,7 +97,7 @@ class CodeEditorElement extends HTMLElement {
       if (e.target.closest(".cm-panel")) e.stopPropagation();
     });
 
-    this.configureLanguage();
+    this.configureLanguage(this.language);
     this.themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-theme"],
@@ -133,12 +133,8 @@ class CodeEditorElement extends HTMLElement {
     }
   }
 
-  get filename() {
-    return this.getAttribute("filename") || "";
-  }
-
   get language() {
-    return (this.getAttribute("language") || "").trim();
+    return this.getAttribute("language") || "";
   }
 
   set language(language) {
@@ -172,7 +168,7 @@ class CodeEditorElement extends HTMLElement {
     if (oldValue === newValue) return;
 
     if (name === "language" || name === "filename") {
-      this.configureLanguage();
+      this.configureLanguage(this.language);
       return;
     }
 
@@ -198,12 +194,12 @@ class CodeEditorElement extends HTMLElement {
     });
   }
 
-  async configureLanguage() {
-    const language = this.language;
+  async configureLanguage(language) {
+    const normalizedLanguage = language.trim();
     const request = ++this.languageLoadRequest;
 
     try {
-      const languageSupport = await loadLanguageSupport(language, this.filename);
+      const languageSupport = await loadLanguageSupport(normalizedLanguage, this.getAttribute("filename") || "");
       if (request !== this.languageLoadRequest || !this.view) return;
 
       this.view.dispatch({

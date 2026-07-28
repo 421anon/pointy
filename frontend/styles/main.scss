@@ -418,6 +418,11 @@ body {
   }
 }
 
+.src-files-repo-note {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
 .folder-contents {
   padding-left: var(--spacing-lg);
 }
@@ -525,9 +530,6 @@ body {
 }
 
 .src-file-editor {
-  display: flex;
-  flex-direction: column;
-
   .cm-editor {
     max-height: 70vh;
   }

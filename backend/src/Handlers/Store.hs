@@ -295,14 +295,12 @@ storeFilesHandler segments = Tagged $ \_ respond -> do
 
 checkViewableAndMime :: FilePath -> Integer -> IO (Bool, Bool, Maybe Text)
 checkViewableAndMime path sz = do
-    -- `file` reports zero-length files as inode/x-empty; treat them as empty text
-    -- so that a newly created source file can be opened and edited.
     mType <-
-        if sz == 0
-            then pure (Just "text/plain")
-            else case mimeTypeByExtension path of
-                Just mime -> pure (Just mime)
-                Nothing -> getMimeType path
+        if sz == 0 then
+            pure (Just "text/plain")
+
+        else
+            maybe (getMimeType path) (pure . Just) (mimeTypeByExtension path)
     let isReadable = maybe False isReadableMimeType mType
         isSeekable = isReadable && sz > maxViewableSize
         isViewable = isReadable && sz <= maxViewableSize
