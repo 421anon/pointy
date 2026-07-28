@@ -1764,7 +1764,8 @@ saveSrcFile recordId path =
     in
     Flow.whenHas (allStepTables << srcFilesFileEditedContentAt recordId path << just) <|
         \content ->
-            predictSrcFileChange recordId path "Saved"
+            predictSrcFileChange recordId
+                path
                 (Flow.setAll (allStepTables << srcFilesFileContentAt recordId path) (Success content)
                     |> Flow.seq (Flow.setAll (allStepTables << srcFilesFileEditedContentAt recordId path) Nothing)
                     |> Flow.seq (Flow.setAll (allStepTables << plainLineCountAt Route.Source recordId path) (Model.countLines content))
@@ -1783,8 +1784,8 @@ openSrcFileDraft recordId =
         |> Flow.seq (Flow.attemptTask (Dom.focus "src-file-name-input"))
 
 
-predictSrcFileChange : Int -> List String -> String -> Flow Model () -> FlowError Http.Error Model a -> Flow Model ()
-predictSrcFileChange recordId path verb prediction apiCall =
+predictSrcFileChange : Int -> List String -> Flow Model () -> FlowError Http.Error Model a -> Flow Model ()
+predictSrcFileChange recordId path prediction apiCall =
     let
         allStepTables =
             currentProject << success << tables << values
@@ -1805,7 +1806,6 @@ predictSrcFileChange recordId path verb prediction apiCall =
                             (allStepTables << srcFilesChildrenAt recordId dirPath)
                             (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId dirPath)
                             |> Flow.seq refetchCommitHash
-                            |> Flow.seq (Flow.async (addToast True (verb ++ " " ++ String.join "/" path)))
                     )
                 |> FlowError.foldResult (\_ -> Flow.pure ())
                     (\_ ->
@@ -1823,22 +1823,6 @@ setSrcFileEntry recordId path entry =
                 (Dict.update name (always entry))
 
 
-predictedSrcFile : String -> Model.DirectoryItem
-predictedSrcFile content =
-    Model.File
-        { content = Success content
-        , size = String.length content
-        , viewable = True
-        , seekable = False
-        , seekWindow = NotAsked
-        , mimeType = Nothing
-        , view = { isViewing = False, zoom = 1.0, plainScrollTop = 0 }
-        , delimitedGrid = Nothing
-        , plainLineCount = Model.countLines content
-        , editedContent = Nothing
-        }
-
-
 createSrcFile : Int -> String -> String -> Flow Model ()
 createSrcFile recordId rawName content =
     case String.trim rawName of
@@ -1846,8 +1830,24 @@ createSrcFile recordId rawName content =
             Flow.none
 
         fileName ->
-            predictSrcFileChange recordId [ fileName ] "Created"
-                (setSrcFileEntry recordId [ fileName ] (Just (predictedSrcFile content))
+            let
+                predictedSrcFile =
+                    Model.File
+                        { content = Success content
+                        , size = String.length content
+                        , viewable = True
+                        , seekable = False
+                        , seekWindow = NotAsked
+                        , mimeType = Nothing
+                        , view = { isViewing = False, zoom = 1.0, plainScrollTop = 0 }
+                        , delimitedGrid = Nothing
+                        , plainLineCount = Model.countLines content
+                        , editedContent = Nothing
+                        }
+            in
+            predictSrcFileChange recordId
+                [ fileName ]
+                (setSrcFileEntry recordId [ fileName ] (Just predictedSrcFile)
                     |> Flow.seq (setSrcFileDraft recordId Nothing)
                     |> Flow.seq (toggleSrcEntry recordId (Just True) [ fileName ])
                     |> Flow.return ()
@@ -1857,7 +1857,8 @@ createSrcFile recordId rawName content =
 
 deleteSrcFile : Int -> List String -> Flow Model ()
 deleteSrcFile recordId path =
-    predictSrcFileChange recordId path "Deleted"
+    predictSrcFileChange recordId
+        path
         (setSrcFileEntry recordId path Nothing)
         (Api.deleteSrcFile recordId path)
 
@@ -3320,7 +3321,6 @@ updateStepStatus snapshotCommit stepId newStatus =
                     Flow.over stepStatusBuffer (Dict.insert stepId ( snapshotCommit, newStatus ))
             )
         |> Flow.seq (Flow.when (newStatus == StatusSuccess) (runAndClearStepStatusHook stepId))
-
 
 
 startClusterStatusStream : Flow Model Decode.Value
