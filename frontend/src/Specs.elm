@@ -55,7 +55,7 @@ steps name entry =
                 , size = Nothing
                 , mimeType = Nothing
                 }
-            , creatingSrcFile = False
+            , srcFileDraft = Nothing
             }
         , displayName = Maybe.withDefault name entry.displayName
         , description = entry.description

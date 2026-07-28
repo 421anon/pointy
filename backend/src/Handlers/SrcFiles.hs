@@ -70,16 +70,15 @@ seekSrcFilesHandler stepId rel line byteOffset bytes = do
     seekHandler (T.pack fullBasePath) rel offset bytes
 
 
--- | Run a mutation on a step's source file inside a write transaction.
--- The action returns 'False' when the precondition fails, which maps to @falseErr@.
+-- | Mutate a step's source file inside a write transaction; a 'False' result raises @falseErr@.
 mutateSrcFile :: Int -> FilePath -> String -> ServerError -> (FilePath -> IO Bool) -> Handler NoContent
-mutateSrcFile stepId rel message falseErr action
+mutateSrcFile stepId rel verb falseErr action
     | isAbsolute rel || null segments || any (`elem` [".", ".."]) segments =
         throwError err400{errBody = "Invalid source file path"}
     | otherwise = do
         result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
-            done <- liftIO $ action (worktreePath </> "srcFiles" </> show stepId </> rel)
-            when done $ commitAndPushChanges ctx message
+            done <- liftIO $ action (worktreePath </> "srcFiles" </> relPath)
+            when done $ commitAndPushChanges ctx (verb ++ " source file " ++ relPath)
             pure done
         case result of
             Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
@@ -87,17 +86,18 @@ mutateSrcFile stepId rel message falseErr action
             Right False -> throwError falseErr
   where
     segments = splitDirectories rel
+    relPath = show stepId </> rel
 
 saveSrcFileHandler :: Int -> FilePath -> Text -> Handler NoContent
 saveSrcFileHandler stepId rel content =
-    mutateSrcFile stepId rel ("Update source file " ++ show stepId ++ "/" ++ rel) err404{errBody = "Source file does not exist"} $ \target -> do
+    mutateSrcFile stepId rel "Update" err404{errBody = "Source file does not exist"} $ \target -> do
         exists <- doesFileExist target
         when exists $ TIO.writeFile target content
         pure exists
 
 createSrcFileHandler :: Int -> FilePath -> Text -> Handler NoContent
 createSrcFileHandler stepId rel content =
-    mutateSrcFile stepId rel ("Create source file " ++ show stepId ++ "/" ++ rel) err409{errBody = "Source file already exists"} $ \target -> do
+    mutateSrcFile stepId rel "Create" err409{errBody = "Source file already exists"} $ \target -> do
         exists <- doesPathExist target
         unless exists $ do
             createDirectoryIfMissing True (takeDirectory target)
@@ -106,7 +106,7 @@ createSrcFileHandler stepId rel content =
 
 deleteSrcFileHandler :: Int -> FilePath -> Handler NoContent
 deleteSrcFileHandler stepId rel =
-    mutateSrcFile stepId rel ("Delete source file " ++ show stepId ++ "/" ++ rel) err404{errBody = "Source file does not exist"} $ \target -> do
+    mutateSrcFile stepId rel "Delete" err404{errBody = "Source file does not exist"} $ \target -> do
         exists <- doesFileExist target
         when exists $ removeFile target
         pure exists

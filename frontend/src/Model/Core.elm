@@ -62,6 +62,12 @@ type alias StepRunState =
     }
 
 
+type alias SrcFileDraft =
+    { name : String
+    , content : String
+    }
+
+
 type alias StepRecord =
     BaseRecord
         { type_ : String
@@ -69,7 +75,7 @@ type alias StepRecord =
         , runState : ApiData StepRunState
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
-        , creatingSrcFile : Bool
+        , srcFileDraft : Maybe SrcFileDraft
         }
 
 
@@ -912,6 +918,7 @@ type alias DirectoryFile =
     , view : FileView
     , delimitedGrid : Maybe DelimitedGrid
     , plainLineCount : Int
+    , editedContent : Maybe String
     }
 
 
@@ -943,6 +950,7 @@ extractDirectoryItemBase item =
                 , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, plainScrollTop = file.view.plainScrollTop }
                 , delimitedGrid = file.delimitedGrid
                 , plainLineCount = file.plainLineCount
+                , editedContent = file.editedContent
                 }
 
         Folder folder ->
@@ -1024,6 +1032,7 @@ keepLoadedDirectoryState fetched previous =
                     , view = old.view
                     , delimitedGrid = old.delimitedGrid
                     , plainLineCount = old.plainLineCount
+                    , editedContent = old.editedContent
                 }
 
         ( Folder new, Folder old ) ->

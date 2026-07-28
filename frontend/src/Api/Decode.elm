@@ -225,7 +225,7 @@ stepValueOnly stepType_ =
                 , size = Nothing
                 , mimeType = Nothing
                 }
-            , creatingSrcFile = False
+            , srcFileDraft = Nothing
             }
         )
         |> required "id" Decode.int
@@ -305,6 +305,7 @@ directoryItem fileView =
                                 , view = fileView
                                 , delimitedGrid = Nothing
                                 , plainLineCount = 1
+                                , editedContent = Nothing
                                 }
                             )
                         )

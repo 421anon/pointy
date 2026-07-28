@@ -11,15 +11,15 @@ import Filesize
 import Flow exposing (Flow)
 import Grid
 import Html exposing (Html)
-import Html.Attributes exposing (class, classList, href, id, name, placeholder, rel, required, src, style, target, type_)
+import Html.Attributes exposing (class, classList, disabled, href, id, name, placeholder, rel, src, style, target, type_)
 import Html.Events
 import Html.Extra as Html
 import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, route)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
+import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, route)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -47,13 +47,8 @@ srcDir =
 
 
 isHistoricalProject : Model -> Bool
-isHistoricalProject model =
-    case Model.getRoute model of
-        Route.Project { mCommit } ->
-            Maybe.isJust mCommit
-
-        _ ->
-            False
+isHistoricalProject =
+    has (route << Route.project << mCommit << just)
 
 
 compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
@@ -165,67 +160,101 @@ viewSrcFilesSection model stepType spec step =
             else
                 step.id
 
+        settledChildren =
+            ApiData.settle step.srcFiles.children
+
         createButton =
             Html.viewMaybe
                 (\recordId ->
-                    Html.button
-                        [ class "dir-item-icon-btn"
-                        , Html.Attributes.title "New file"
-                        , Html.Events.onClick (Actions.setCreatingSrcFile recordId (not step.creatingSrcFile))
-                        ]
-                        [ icon True "add" ]
+                    case step.srcFileDraft of
+                        Just _ ->
+                            Html.button
+                                [ class "dir-item-icon-btn"
+                                , Html.Attributes.title "Discard new file"
+                                , Html.Events.onClick (Actions.setSrcFileDraft recordId Nothing)
+                                ]
+                                [ icon True "close" ]
+
+                        Nothing ->
+                            Html.button
+                                [ class "dir-item-icon-btn"
+                                , Html.Attributes.title "New file"
+                                , Html.Events.onClick (Actions.openSrcFileDraft recordId)
+                                ]
+                                [ icon True "add" ]
                 )
                 mEditableId
 
         createForm =
-            case ( mEditableId, step.creatingSrcFile ) of
-                ( Just recordId, True ) ->
+            case ( mEditableId, step.srcFileDraft ) of
+                ( Just recordId, Just draft ) ->
                     Html.form
                         [ class "src-file-create"
                         , Html.Events.preventDefaultOn "submit"
-                            (Decode.map
-                                (\fileName -> ( Actions.createSrcFile recordId fileName, True ))
-                                (Decode.at [ "target", "elements", "fileName", "value" ] Decode.string)
-                            )
+                            (Decode.succeed ( Actions.createSrcFile recordId draft.name draft.content, True ))
                         ]
-                        [ Html.input
-                            [ id "src-file-name-input"
-                            , name "fileName"
-                            , placeholder "File name"
-                            , required True
-                            , class "form-input"
-                            ]
-                            []
-                        , Html.div [ class "form-actions" ]
-                            [ Html.button [ type_ "submit", class "btn" ] [ Html.text "Create" ]
-                            , Html.button
-                                [ type_ "button"
-                                , class "btn"
-                                , Html.Events.onClick (Actions.setCreatingSrcFile recordId False)
+                        [ Html.div [ class "src-file-editor" ]
+                            [ Html.div [ class "src-file-name-row" ]
+                                [ Html.input
+                                    [ id "src-file-name-input"
+                                    , Html.Attributes.value draft.name
+                                    , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | name = value }))
+                                    , placeholder "File name"
+                                    , class "form-input"
+                                    ]
+                                    []
                                 ]
-                                [ Html.text "Cancel" ]
+                            , Html.node "code-editor"
+                                [ Html.Attributes.value draft.content
+                                , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | content = value }))
+                                , Html.Attributes.attribute "filename" draft.name
+                                , Html.Attributes.attribute "aria-label" "New file contents"
+                                , class "code-input"
+                                ]
+                                []
+                            , Html.div [ class "src-file-actions" ]
+                                [ Html.button
+                                    [ type_ "submit"
+                                    , class "btn"
+                                    , disabled (String.trim draft.name == "")
+                                    ]
+                                    [ Html.text "Create" ]
+                                , Html.button
+                                    [ type_ "button"
+                                    , class "btn"
+                                    , Html.Events.onClick (Actions.setSrcFileDraft recordId Nothing)
+                                    ]
+                                    [ Html.text "Cancel" ]
+                                ]
                             ]
                         ]
 
                 _ ->
                     Html.nothing
+
+        section =
+            Html.div [ class "src-files-section" ]
+                [ Html.div [ class "src-files-header" ]
+                    [ Html.h3 [] [ Html.text "Source Files" ]
+                    , createButton
+                    ]
+                , createForm
+                , renderDirectoryContents model
+                    spec
+                    step.id
+                    (Maybe.map SrcDir step.id)
+                    False
+                    []
+                    "directory-view"
+                    settledChildren
+                ]
     in
     Html.viewIf hasSrcFiles <|
-        Html.div [ class "src-files-section" ]
-            [ Html.div [ class "src-files-header" ]
-                [ Html.h3 [] [ Html.text "Source Files" ]
-                , createButton
-                ]
-            , createForm
-            , renderDirectoryContents model
-                spec
-                step.id
-                (Maybe.map SrcDir step.id)
-                False
-                []
-                "directory-view"
-                step.srcFiles.children
-            ]
+        if step.isUpdating then
+            viewLoading section
+
+        else
+            section
 
 
 viewDirectoryItemWithPath :
@@ -297,13 +326,13 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 Nothing ->
                     Flow.pure ()
-
-        isReadOnly =
-            isHistoricalProject model
     in
     case item of
         File file ->
             let
+                isReadOnly =
+                    isHistoricalProject model
+
                 isImage =
                     has (mimeType << just << where_ (String.startsWith "image/")) file
 
@@ -550,22 +579,28 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 viewPlainContent_ ()
 
                                     viewEditor recordId text =
+                                        let
+                                            changed =
+                                                Maybe.unwrap False ((/=) text) file.editedContent
+                                        in
                                         Html.div [ class "src-file-editor" ]
                                             [ Html.node "code-editor"
-                                                [ Html.Attributes.value text
+                                                [ Html.Attributes.value (Maybe.withDefault text file.editedContent)
                                                 , Html.Events.onInput (Actions.updateSrcFileContent recordId path)
                                                 , Html.Attributes.attribute "filename" itemName
                                                 , Html.Attributes.attribute "aria-label" ("Edit " ++ itemName)
                                                 , class "code-input"
+                                                , classList [ ( "field-changed", changed ) ]
                                                 ]
                                                 []
-                                            , Html.div [ class "src-file-actions" ]
-                                                [ Html.button
-                                                    [ class "btn"
-                                                    , Html.Events.onClick (Actions.saveSrcFile recordId path)
+                                            , Html.viewIf changed <|
+                                                Html.div [ class "src-file-actions" ]
+                                                    [ Html.button
+                                                        [ class "btn"
+                                                        , Html.Events.onClick (Actions.saveSrcFile recordId path)
+                                                        ]
+                                                        [ Html.text "Save" ]
                                                     ]
-                                                    [ Html.text "Save" ]
-                                                ]
                                             ]
                                 in
                                 Html.div [ class "file-viewer" ]
@@ -1016,4 +1051,3 @@ calculateViewerHeight lineCount =
             max cappedHeight plainViewerMinHeight
     in
     String.fromInt finalHeight ++ "px"
-

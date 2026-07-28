@@ -197,6 +197,11 @@ fileContent =
     lens ".content" .content (\file_ content_ -> { file_ | content = content_ })
 
 
+fileEditedContent : Lens ls { a | editedContent : b } b x y
+fileEditedContent =
+    lens ".editedContent" .editedContent (\file_ editedContent_ -> { file_ | editedContent = editedContent_ })
+
+
 fileIsViewing : Lens ls { a | view : { b | isViewing : c } } c x y
 fileIsViewing =
     lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
@@ -270,9 +275,9 @@ srcFiles =
     lens "srcFiles" .srcFiles (\record srcFiles_ -> { record | srcFiles = srcFiles_ })
 
 
-creatingSrcFile : Lens ls { a | creatingSrcFile : b } b x y
-creatingSrcFile =
-    lens "creatingSrcFile" .creatingSrcFile (\record creatingSrcFile_ -> { record | creatingSrcFile = creatingSrcFile_ })
+srcFileDraft : Lens ls { a | srcFileDraft : b } b x y
+srcFileDraft =
+    lens "srcFileDraft" .srcFileDraft (\record srcFileDraft_ -> { record | srcFileDraft = srcFileDraft_ })
 
 
 folder : Prism pr DirectoryItem DirectoryFolder x y
@@ -413,6 +418,11 @@ srcFilesItemAtPath recordId_ path =
 srcFilesFileContentAt : Int -> List String -> Traversal (Table StepRecord) (ApiData String) x y
 srcFilesFileContentAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileContent
+
+
+srcFilesFileEditedContentAt : Int -> List String -> Traversal (Table StepRecord) (Maybe String) x y
+srcFilesFileEditedContentAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileEditedContent
 
 
 srcFilesFileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y

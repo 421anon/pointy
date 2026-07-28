@@ -462,9 +462,9 @@ saveSrcFile id filePath content =
     srcFileRequest "PUT" id filePath (Http.stringBody "text/plain; charset=utf-8" content)
 
 
-createSrcFile : Int -> List String -> Flow s (Result Http.Error ())
-createSrcFile id filePath =
-    srcFileRequest "POST" id filePath (Http.stringBody "text/plain; charset=utf-8" "")
+createSrcFile : Int -> List String -> String -> Flow s (Result Http.Error ())
+createSrcFile id filePath content =
+    srcFileRequest "POST" id filePath (Http.stringBody "text/plain; charset=utf-8" content)
 
 
 deleteSrcFile : Int -> List String -> Flow s (Result Http.Error ())
