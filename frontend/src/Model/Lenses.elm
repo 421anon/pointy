@@ -280,6 +280,11 @@ srcFileDraft =
     lens "srcFileDraft" .srcFileDraft (\record srcFileDraft_ -> { record | srcFileDraft = srcFileDraft_ })
 
 
+srcFileWriting : Lens ls { a | srcFileWriting : b } b x y
+srcFileWriting =
+    lens "srcFileWriting" .srcFileWriting (\record srcFileWriting_ -> { record | srcFileWriting = srcFileWriting_ })
+
+
 folder : Prism pr DirectoryItem DirectoryFolder x y
 folder =
     let
@@ -724,7 +729,6 @@ templatesSelect =
 hideOrphans : Lens ls { a | hideOrphans : Bool } Bool x y
 hideOrphans =
     lens ".hideOrphans" .hideOrphans (\p b -> { p | hideOrphans = b })
-
 
 
 clusterStatus : Lens ls Model ClusterStatus x y

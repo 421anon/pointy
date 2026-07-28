@@ -76,6 +76,7 @@ type alias StepRecord =
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
+        , srcFileWriting : Bool
         }
 
 
@@ -501,7 +502,6 @@ getRunningStepIds (Model model) =
 getStatusBarOpen : Model -> Bool
 getStatusBarOpen (Model model) =
     model.statusBarOpen
-
 
 
 getOrigin : Model -> String

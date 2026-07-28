@@ -1,9 +1,9 @@
 module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 
-import Accessors exposing (Prism, has, just, prism, snd, try)
+import Accessors exposing (Prism, has, just, prism, snd, try, values)
 import Actions
 import Api.Api as Api
-import Api.ApiData as ApiData exposing (ApiData(..))
+import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
@@ -11,7 +11,7 @@ import Filesize
 import Flow exposing (Flow)
 import Grid
 import Html exposing (Html)
-import Html.Attributes exposing (class, classList, disabled, href, id, placeholder, rel, src, style, target, type_)
+import Html.Attributes exposing (class, classList, disabled, href, id, placeholder, readonly, rel, src, style, target, type_)
 import Html.Events
 import Html.Extra as Html
 import Html.Lazy
@@ -19,7 +19,7 @@ import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, route)
+import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -44,6 +44,13 @@ srcDir =
                 other ->
                     Err other
         )
+
+
+srcWritePending : Model -> Maybe DirContext -> Bool
+srcWritePending model mDirCtx =
+    Maybe.andThen (try srcDir) mDirCtx
+        |> Maybe.andThen (\recordId -> try (currentProject << success << tables << values << recordById recordId << srcFileWriting) model)
+        |> Maybe.withDefault False
 
 
 compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
@@ -154,6 +161,8 @@ viewSrcFilesSection model stepType spec step =
         mEditableId =
             Maybe.filter (always (not isLocked)) step.id
 
+        writePending =
+            step.srcFileWriting
 
         createButton =
             Html.viewMaybe
@@ -169,6 +178,7 @@ viewSrcFilesSection model stepType spec step =
                     Html.button
                         [ class "dir-item-icon-btn"
                         , Html.Attributes.title tooltip
+                        , disabled writePending
                         , Html.Events.onClick action
                         ]
                         [ icon True symbol ]
@@ -189,6 +199,7 @@ viewSrcFilesSection model stepType spec step =
                                 , Html.Attributes.value draft.name
                                 , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | name = value }))
                                 , placeholder "File name"
+                                , disabled writePending
                                 , class "form-input"
                                 ]
                                 []
@@ -198,6 +209,8 @@ viewSrcFilesSection model stepType spec step =
                             , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | content = value }))
                             , Html.Attributes.attribute "filename" draft.name
                             , Html.Attributes.attribute "aria-label" "New file contents"
+                            , classList [ ( "disabled", writePending ) ]
+                            , readonly writePending
                             , class "code-input"
                             ]
                             []
@@ -205,12 +218,13 @@ viewSrcFilesSection model stepType spec step =
                             [ Html.button
                                 [ type_ "submit"
                                 , class "btn"
-                                , disabled (String.trim draft.name == "")
+                                , disabled (writePending || String.trim draft.name == "")
                                 ]
                                 [ Html.text "Create" ]
                             , Html.button
                                 [ type_ "button"
                                 , class "btn"
+                                , disabled writePending
                                 , Html.Events.onClick (Actions.setSrcFileDraft recordId Nothing)
                                 ]
                                 [ Html.text "Cancel" ]
@@ -243,12 +257,7 @@ viewSrcFilesSection model stepType spec step =
                     )
                 ]
     in
-    Html.viewIf hasSrcFiles <|
-        if step.isUpdating then
-            viewLoading section
-
-        else
-            section
+    Html.viewIf hasSrcFiles section
 
 
 viewDirectoryItemWithPath :
@@ -386,6 +395,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         [ Html.viewIf canView <|
                             Html.button
                                 [ class "dir-item-icon-btn"
+                                , disabled (srcWritePending model mDirCtx)
                                 , Html.Events.onClick
                                     (case mDirCtx of
                                         Just (OutputDir _ _) ->
@@ -422,6 +432,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 Html.button
                                     [ class "dir-item-icon-btn"
                                     , Html.Attributes.title "Delete"
+                                    , disabled (srcWritePending model mDirCtx)
                                     , Html.Events.onClick (Actions.deleteSrcFile recordId path)
                                     ]
                                     [ icon True "delete" ]
@@ -570,6 +581,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         let
                                             changed =
                                                 Maybe.unwrap False ((/=) text) file.editedContent
+
+                                            writePending =
+                                                srcWritePending model mDirCtx
                                         in
                                         Html.div [ class "src-file-editor" ]
                                             [ Html.node "code-editor"
@@ -578,13 +592,15 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 , Html.Attributes.attribute "filename" itemName
                                                 , Html.Attributes.attribute "aria-label" ("Edit " ++ itemName)
                                                 , class "code-input"
-                                                , classList [ ( "field-changed", changed ) ]
+                                                , classList [ ( "field-changed", changed ), ( "disabled", writePending ) ]
+                                                , readonly writePending
                                                 ]
                                                 []
                                             , Html.viewIf changed <|
                                                 Html.div [ class "src-file-actions" ]
                                                     [ Html.button
                                                         [ class "btn"
+                                                        , disabled writePending
                                                         , Html.Events.onClick (Actions.saveSrcFile recordId path)
                                                         ]
                                                         [ Html.text "Save" ]
