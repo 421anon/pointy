@@ -184,11 +184,17 @@ view config =
                                     if String.isEmpty (String.trim v) then
                                         config.onInput ""
 
-                                    else if config.allowFreeText then
-                                        config.onCreate (String.trim v)
-
                                     else
-                                        config.onInput v
+                                        case activeSuggestion of
+                                            Just item ->
+                                                config.onSelect item
+
+                                            Nothing ->
+                                                if config.allowFreeText then
+                                                    config.onCreate (String.trim v)
+
+                                                else
+                                                    config.onInput v
                                 )
                         )
                     ]
