@@ -33,7 +33,7 @@ import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler,
 import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
-import Handlers.SrcFiles (downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, seekSrcFilesHandler)
+import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler)
 import Handlers.StatusStream (stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
@@ -64,6 +64,9 @@ server =
         :<|> listSrcFilesHandler
         :<|> downloadSrcFilesHandler
         :<|> seekSrcFilesHandler
+        :<|> saveSrcFileHandler
+        :<|> createSrcFileHandler
+        :<|> deleteSrcFileHandler
         :<|> getProjectsHandler
         :<|> postProjectHandler
         :<|> patchProjectHandler
@@ -116,7 +119,7 @@ corsPolicy req = case pathInfo req of
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "OPTIONS"]
+                , corsMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     ["user-repo-info"] ->

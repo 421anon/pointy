@@ -4,8 +4,10 @@ module Api.Api exposing
     , assignRecordToProject
     , batchAssignRecordsToProject
     , createProject
+    , createSrcFile
     , createStep
     , deleteProject
+    , deleteSrcFile
     , fetchAutocomplete
     , fetchCommitHash
     , fetchDirectoryContents
@@ -24,6 +26,7 @@ module Api.Api exposing
     , runStep
     , saveProject
     , saveRecord
+    , saveSrcFile
     , srcFileDownloadUrl
     , stepFileBundleUrl
     , stepFileDownloadUrl
@@ -439,3 +442,28 @@ fetchSrcFileContents id filePath =
             { url = srcFileDownloadUrl id filePath
             , expect = Http.expectString identity
             }
+
+
+srcFileRequest : String -> Int -> List String -> Http.Body -> Flow s (Result Http.Error ())
+srcFileRequest method id filePath =
+    request method <|
+        UrlBuilder.absolute
+            [ "backend", "src-files" ]
+            [ UrlBuilder.int "id" id
+            , UrlBuilder.string "path" (String.join "/" filePath)
+            ]
+
+
+saveSrcFile : Int -> List String -> String -> Flow s (Result Http.Error ())
+saveSrcFile id filePath content =
+    srcFileRequest "PUT" id filePath (Http.stringBody "text/plain; charset=utf-8" content)
+
+
+createSrcFile : Int -> List String -> String -> Flow s (Result Http.Error ())
+createSrcFile id filePath content =
+    srcFileRequest "POST" id filePath (Http.stringBody "text/plain; charset=utf-8" content)
+
+
+deleteSrcFile : Int -> List String -> Flow s (Result Http.Error ())
+deleteSrcFile id filePath =
+    srcFileRequest "DELETE" id filePath Http.emptyBody

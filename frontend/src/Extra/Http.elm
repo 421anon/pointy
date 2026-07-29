@@ -18,6 +18,12 @@ errorMessage error =
         Http.BadStatus 400 ->
             "Invalid request."
 
+        Http.BadStatus 404 ->
+            "Not found."
+
+        Http.BadStatus 409 ->
+            "Already exists."
+
         Http.BadStatus 500 ->
             "Server error. Try again later."
 

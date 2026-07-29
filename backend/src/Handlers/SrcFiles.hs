@@ -3,23 +3,26 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.SrcFiles (listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
+module Handlers.SrcFiles (listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
+import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import Handlers.Store (DirEntry, FileChunk, downloadHandler, listHandler, parseSeekOffset, seekHandler)
-import Servant (Handler, Header, Headers, ServerError (..), err500, throwError)
+import OutPaths (withWriteRepoTransaction)
+import Servant (Handler, Header, Headers, NoContent (..), ServerError (..), err400, err404, err409, err500, throwError)
 import qualified Servant.Types.SourceT as S
-import System.Directory (doesDirectoryExist)
-import System.FilePath ((</>))
-import UserRepo (runNixEvalRawInRepo, withReadRepoTransaction)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)
+import System.FilePath (isAbsolute, splitDirectories, takeDirectory, (</>))
+import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNixEvalRawInRepo, withReadRepoTransaction)
 
 data UserRepoInfo = UserRepoInfo
     { url :: Text
@@ -65,3 +68,45 @@ seekSrcFilesHandler stepId rel line byteOffset bytes = do
     offset <- parseSeekOffset line byteOffset bytes
     fullBasePath <- getStepSrcFilesPath stepId
     seekHandler (T.pack fullBasePath) rel offset bytes
+
+
+-- | Mutate a step's source file inside a write transaction; a 'False' result raises @falseErr@.
+mutateSrcFile :: Int -> FilePath -> String -> ServerError -> (FilePath -> IO Bool) -> Handler NoContent
+mutateSrcFile stepId rel verb falseErr action
+    | isAbsolute rel || null segments || any (`elem` [".", ".."]) segments =
+        throwError err400{errBody = "Invalid source file path"}
+    | otherwise = do
+        result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+            done <- liftIO $ action (worktreePath </> "srcFiles" </> relPath)
+            when done $ commitAndPushChanges ctx (verb ++ " source file " ++ relPath)
+            pure done
+        case result of
+            Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+            Right True -> pure NoContent
+            Right False -> throwError falseErr
+  where
+    segments = splitDirectories rel
+    relPath = show stepId </> rel
+
+saveSrcFileHandler :: Int -> FilePath -> Text -> Handler NoContent
+saveSrcFileHandler stepId rel content =
+    mutateSrcFile stepId rel "Update" err404{errBody = "Source file does not exist"} $ \target -> do
+        exists <- doesFileExist target
+        when exists $ TIO.writeFile target content
+        pure exists
+
+createSrcFileHandler :: Int -> FilePath -> Text -> Handler NoContent
+createSrcFileHandler stepId rel content =
+    mutateSrcFile stepId rel "Create" err409{errBody = "Source file already exists"} $ \target -> do
+        exists <- doesPathExist target
+        unless exists $ do
+            createDirectoryIfMissing True (takeDirectory target)
+            TIO.writeFile target content
+        pure (not exists)
+
+deleteSrcFileHandler :: Int -> FilePath -> Handler NoContent
+deleteSrcFileHandler stepId rel =
+    mutateSrcFile stepId rel "Delete" err404{errBody = "Source file does not exist"} $ \target -> do
+        exists <- doesFileExist target
+        when exists $ removeFile target
+        pure exists

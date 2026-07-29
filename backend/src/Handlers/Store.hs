@@ -295,9 +295,12 @@ storeFilesHandler segments = Tagged $ \_ respond -> do
 
 checkViewableAndMime :: FilePath -> Integer -> IO (Bool, Bool, Maybe Text)
 checkViewableAndMime path sz = do
-    mType <- case mimeTypeByExtension path of
-        Just mime -> pure (Just mime)
-        Nothing -> getMimeType path
+    mType <-
+        if sz == 0 then
+            pure (Just "text/plain")
+
+        else
+            maybe (getMimeType path) (pure . Just) (mimeTypeByExtension path)
     let isReadable = maybe False isReadableMimeType mType
         isSeekable = isReadable && sz > maxViewableSize
         isViewable = isReadable && sz <= maxViewableSize

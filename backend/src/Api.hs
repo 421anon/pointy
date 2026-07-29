@@ -51,6 +51,29 @@ type ListSrcFiles =
         :> QueryParam "path" FilePath
         :> Get '[JSON] [DirEntry]
 
+type UpdateSrcFile =
+    "src-files"
+        :> Description "Updates a source file and commits it to the user repository."
+        :> ReqId
+        :> QueryParam' '[Required] "path" FilePath
+        :> ReqBody '[PlainText] Text
+        :> Put '[JSON] NoContent
+
+type CreateSrcFile =
+    "src-files"
+        :> Description "Creates a source file and commits it to the user repository."
+        :> ReqId
+        :> QueryParam' '[Required] "path" FilePath
+        :> ReqBody '[PlainText] Text
+        :> Post '[JSON] NoContent
+
+type DeleteSrcFile =
+    "src-files"
+        :> Description "Deletes a source file and commits it to the user repository."
+        :> ReqId
+        :> QueryParam' '[Required] "path" FilePath
+        :> Delete '[JSON] NoContent
+
 type DeleteProject =
     "projects"
         :> Description "Deletes a project record."
@@ -340,6 +363,9 @@ type API =
         :<|> ListSrcFiles
         :<|> DownloadSrcFile
         :<|> SrcFileSeek
+        :<|> UpdateSrcFile
+        :<|> CreateSrcFile
+        :<|> DeleteSrcFile
         :<|> GetProjects
         :<|> CreateProject
         :<|> UpdateProject

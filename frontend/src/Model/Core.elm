@@ -62,6 +62,12 @@ type alias StepRunState =
     }
 
 
+type alias SrcFileDraft =
+    { name : String
+    , content : String
+    }
+
+
 type alias StepRecord =
     BaseRecord
         { type_ : String
@@ -69,6 +75,8 @@ type alias StepRecord =
         , runState : ApiData StepRunState
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
+        , srcFileDraft : Maybe SrcFileDraft
+        , srcFileWriting : Bool
         }
 
 
@@ -496,7 +504,6 @@ getStatusBarOpen (Model model) =
     model.statusBarOpen
 
 
-
 getOrigin : Model -> String
 getOrigin (Model model) =
     model.origin
@@ -911,6 +918,7 @@ type alias DirectoryFile =
     , view : FileView
     , delimitedGrid : Maybe DelimitedGrid
     , plainLineCount : Int
+    , editedContent : Maybe String
     }
 
 
@@ -928,81 +936,33 @@ type DirectoryItem
     | Folder DirectoryFolder
 
 
-extractDirectoryItemBase : DirectoryItem -> DirectoryItem
-extractDirectoryItemBase item =
-    case item of
-        File file ->
-            File
-                { content = file.content
-                , size = file.size
-                , viewable = file.viewable
-                , seekable = file.seekable
-                , seekWindow = file.seekWindow
-                , mimeType = file.mimeType
-                , view = { isViewing = file.view.isViewing, zoom = file.view.zoom, plainScrollTop = file.view.plainScrollTop }
-                , delimitedGrid = file.delimitedGrid
-                , plainLineCount = file.plainLineCount
-                }
-
-        Folder folder ->
-            Folder <| extractDirectoryFolderBase folder
-
-
-updateDirectoryItemBase : DirectoryItem -> DirectoryItem -> DirectoryItem
-updateDirectoryItemBase item baseItem =
-    case ( item, baseItem ) of
-        ( File file, File base ) ->
-            File
-                { file
-                    | content = base.content
-                    , size = base.size
-                    , viewable = base.viewable
-                    , seekable = base.seekable
-                    , seekWindow = base.seekWindow
-                    , mimeType = base.mimeType
-                    , plainLineCount = base.plainLineCount
-                    , view =
-                        let
-                            view =
-                                file.view
-                        in
-                        { view
-                            | isViewing = base.view.isViewing
+updateDirectoryChildren : Dict String DirectoryItem -> Dict String DirectoryItem -> Dict String DirectoryItem
+updateDirectoryChildren fetched previous =
+    Dict.map
+        (\key fetchedItem ->
+            case ( fetchedItem, Dict.get key previous ) of
+                ( File new, Just (File old) ) ->
+                    File
+                        { new
+                            | content = old.content
+                            , view = old.view
+                            , delimitedGrid = old.delimitedGrid
+                            , plainLineCount = old.plainLineCount
+                            , editedContent = old.editedContent
                         }
-                }
 
-        ( Folder folder, Folder base ) ->
-            Folder <| updateDirectoryFolderBase folder base
+                ( Folder new, Just (Folder old) ) ->
+                    Folder
+                        { new
+                            | children = old.children
+                            , expanded = old.expanded
+                            , extras = old.extras
+                        }
 
-        _ ->
-            item
-
-extractDirectoryFolderBase : DirectoryFolder -> DirectoryFolder
-extractDirectoryFolderBase folder =
-    { folder
-        | children = ApiData.map (Dict.map (\_ -> extractDirectoryItemBase)) folder.children
-    }
-
-
-updateDirectoryFolderBase : DirectoryFolder -> DirectoryFolder -> DirectoryFolder
-updateDirectoryFolderBase folder base =
-    let
-        mergeDirectoryItems a b =
-            Dict.merge
-                Dict.insert
-                (\key old -> Dict.insert key << updateDirectoryItemBase old)
-                (\_ _ -> identity)
-                a
-                b
-                Dict.empty
-    in
-    { folder
-        | children = ApiData.update mergeDirectoryItems folder.children base.children
-        , expanded = base.expanded
-        , extras = base.extras
-        , size = base.size
-        , mimeType = base.mimeType
-    }
+                _ ->
+                    fetchedItem
+        )
+        fetched
 
 
 type alias ColumnMeta =

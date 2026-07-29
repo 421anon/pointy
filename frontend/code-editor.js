@@ -30,12 +30,14 @@ function shellLanguageSupport() {
   );
 }
 
-async function loadLanguageSupport(language) {
+async function loadLanguageSupport(language, filename) {
   if (SHELL_LANGUAGE_NAMES.has(language.toLowerCase())) {
     return shellLanguageSupport();
   }
 
-  const description = LanguageDescription.matchLanguageName(languages, language, true);
+  const description = language
+    ? LanguageDescription.matchLanguageName(languages, language, true)
+    : LanguageDescription.matchFilename(languages, filename);
   return description ? await description.load() : null;
 }
 
@@ -49,7 +51,7 @@ function highlightingExtension() {
 }
 
 class CodeEditorElement extends HTMLElement {
-  static observedAttributes = ["language", "readonly"];
+  static observedAttributes = ["filename", "language", "readonly"];
 
   constructor() {
     super();
@@ -165,8 +167,8 @@ class CodeEditorElement extends HTMLElement {
   attributeChangedCallback(name, oldValue, newValue) {
     if (oldValue === newValue) return;
 
-    if (name === "language") {
-      this.configureLanguage(newValue || "");
+    if (name === "language" || name === "filename") {
+      this.configureLanguage(this.language);
       return;
     }
 
@@ -193,14 +195,11 @@ class CodeEditorElement extends HTMLElement {
   }
 
   async configureLanguage(language) {
-    const request = ++this.languageLoadRequest;
     const normalizedLanguage = language.trim();
+    const request = ++this.languageLoadRequest;
 
     try {
-      const languageSupport = normalizedLanguage
-        ? await loadLanguageSupport(normalizedLanguage)
-        : null;
-
+      const languageSupport = await loadLanguageSupport(normalizedLanguage, this.getAttribute("filename") || "");
       if (request !== this.languageLoadRequest || !this.view) return;
 
       this.view.dispatch({
