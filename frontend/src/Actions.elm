@@ -890,8 +890,8 @@ runStep spec id =
                         try (route << Route.project << mCommit << just) model
                 in
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
-                    |> Flow.seq (toggleSrcEntry id (Just False) [])
-                    |> Flow.seq (toggleOutputEntry id (Just False) [])
+                    |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
+                    |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
                     |> Flow.seq (clearStepLog id mCommit_)
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq
