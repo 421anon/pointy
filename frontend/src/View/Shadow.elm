@@ -73,38 +73,15 @@ viewProject model proj =
     in
     viewPage
         { header =
-            [ Html.div [ Html.Attributes.class "project-header-container" ]
-                [ Html.div [ Html.Attributes.class "project-header" ]
-                    [ Html.a [ Route.href Route.Home, Html.Attributes.class "back-btn" ] [ iconCustom True "arrow_back" [ Html.Attributes.class "back-icon" ] ]
-                    , Html.h2 [] [ Html.text proj.name ]
-                    , Html.viewIf (not isReadOnly) <|
-                        Html.viewMaybe
-                            (\spec ->
-                                viewIconButtonWithTooltip "edit" True "Edit project" (Actions.toggleAddOrEditRecordForm False spec proj.id)
-                            )
-                            mProjectSpec
-                    ]
-                , Html.viewMaybe
-                    (\commit ->
-                        let
-                            currentVersionRoute =
-                                case Model.getRoute model of
-                                    Route.Project params ->
-                                        Route.Project { params | mCommit = Nothing }
-
-                                    other ->
-                                        other
-                        in
-                        Html.div [ Html.Attributes.class "read-only-badge" ]
-                            [ Html.text "Read-only view (Commit: "
-                            , Html.text commit
-                            , Html.text ") "
-                            , Html.a
-                                [ Route.href currentVersionRoute ]
-                                [ Html.text "View current version" ]
-                            ]
-                    )
-                    mCommit_
+            [ Html.div [ Html.Attributes.class "project-header" ]
+                [ Html.a [ Route.href Route.Home, Html.Attributes.class "back-btn" ] [ iconCustom True "arrow_back" [ Html.Attributes.class "back-icon" ] ]
+                , Html.h2 [] [ Html.text proj.name ]
+                , Html.viewIf (not isReadOnly) <|
+                    Html.viewMaybe
+                        (\spec ->
+                            viewIconButtonWithTooltip "edit" True "Edit project" (Actions.toggleAddOrEditRecordForm False spec proj.id)
+                        )
+                        mProjectSpec
                 ]
             , viewSearchBox model
             ]

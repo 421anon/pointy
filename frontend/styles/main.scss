@@ -1481,11 +1481,6 @@ $readonly-disabled-targets: (
 }
 
 
-.project-header-container {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-}
 
 .sections > .table-form-wrapper {
   padding: 0;
@@ -1504,10 +1499,6 @@ $readonly-disabled-targets: (
   font-size: 18px;
 }
 
-.read-only-badge {
-  font-size: var(--font-size-sm);
-  color: var(--text-muted);
-}
 
 // Icon styling
 .material-symbols-outlined {
@@ -2190,10 +2181,29 @@ body:has(dialog[open]) {
 }
 
 .status-bar__repo {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--spacing-sm);
   min-width: 0;
-  margin-inline-start: auto;
+  padding: 0 var(--spacing-md);
   color: var(--text-muted);
+  text-decoration: none;
 }
+
+.status-bar__control.status-bar__repo {
+  gap: var(--spacing-sm);
+}
+
+.status-bar__repo > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-bar__repo-state {
+  font-weight: 600;
+}
+
 
 .status-bar__expand-icon {
   flex: 0 0 auto;
@@ -2377,9 +2387,15 @@ body:has(dialog[open]) {
     padding-inline: var(--spacing-md);
   }
 
-  .status-bar__repo {
+  .status-bar__repo:not(.status-bar__repo--past) {
     display: none;
   }
+
+
+  .status-bar__repo--past > span:first-child {
+    display: none;
+  }
+
 
   .status-bar__agent span:not(.material-symbols-outlined),
   .status-bar__help span:not(.material-symbols-outlined) {

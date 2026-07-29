@@ -1,5 +1,6 @@
 module Components.StatusBar exposing (view)
 
+import Accessors exposing (just, set, try)
 import Actions
 import Api.ApiData as ApiData
 import Flow exposing (Flow)
@@ -8,6 +9,8 @@ import Html.Attributes exposing (attribute, class, classList, disabled, href, id
 import Html.Events as Events
 import Html.Extra as Html
 import Model.Core as Model exposing (ClusterStatus(..), Model, RunningStepSummary)
+import Model.Lenses exposing (mCommit, route)
+import Route
 import View.Icons exposing (iconCustom)
 
 
@@ -41,6 +44,7 @@ view model =
              )
                 ++ [ Html.div [ class "status-bar__surface" ]
                         [ viewMainControl model runningCount isOpen
+                        , viewRepoContext model
                         , viewIndependentControls model
                         ]
                    ]
@@ -92,7 +96,6 @@ viewMainControl model runningCount isOpen =
             , attribute "aria-live" "polite"
             ]
             [ Html.text (runningText runningCount) ]
-        , viewRepoContext model
         , if runningCount > 0 then
             iconCustom False
                 (if isOpen then
@@ -114,8 +117,33 @@ viewRepoContext : Model -> Html msg
 viewRepoContext model =
     Maybe.map2
         (\repo commit ->
-            Html.span [ class "status-bar__repo" ]
-                [ Html.text (repo.branch ++ " @ " ++ String.left 7 commit) ]
+            let
+                repoLabel =
+                    repo.branch ++ " @ " ++ String.left 7 commit
+            in
+            case try (route << Route.project << mCommit << just) model of
+                Just historicalCommit ->
+                    let
+                        switchLabel =
+                            "Read-only view of past commit "
+                                ++ historicalCommit
+                                ++ ". View current version"
+                    in
+                    Html.a
+                        [ class "status-bar__control status-bar__repo status-bar__repo--past"
+                        , Route.href (set (Route.project << mCommit) Nothing (Model.getRoute model))
+                        , title switchLabel
+                        , attribute "aria-label" switchLabel
+                        ]
+                        [ Html.span [] [ Html.text repoLabel ]
+                        , Html.span []
+                            [ Html.span [ class "status-bar__repo-state" ] [ Html.text "Past" ]
+                            , Html.text " · View current"
+                            ]
+                        ]
+
+                Nothing ->
+                    Html.span [ class "status-bar__repo" ] [ Html.text repoLabel ]
         )
         (ApiData.toMaybe (Model.getUserRepoInfo model))
         (ApiData.toMaybe (Model.getCommitHash model))
