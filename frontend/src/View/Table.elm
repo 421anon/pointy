@@ -29,7 +29,7 @@ import Markdown
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tEnumValue, tListValue, tRecordValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tEnumValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Scroll
@@ -490,34 +490,6 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dragEvents index) ) ]
                 )
 
-        viewRecordsSection =
-            let
-                viewContents records =
-                    records
-                        |> (if table.showHiddenRecords then
-                                identity
-
-                            else
-                                List.filter (not << .hidden)
-                           )
-                        |> (if Maybe.isJust (dndSystem.info table.dnd) then
-                                identity
-
-                            else
-                                List.sortBy getSortKey
-                           )
-                        |> List.indexedMap viewRecord
-                        |> Html.div [ class "table-records", Events.onMouseDown (Flow.modify (set (lens << dndAffected) [])) ]
-            in
-            ApiData.foldVisible
-                Html.nothing
-                (Maybe.map viewContents
-                    >> Maybe.withDefault (Html.div [ class "table-records-loading" ] [ Html.span [ class "shimmer-text shimmer-text--medium-contrast" ] [ Html.text "Loading records..." ] ])
-                )
-                viewContents
-                (always Html.nothing)
-                table.records
-
         viewContent =
             let
                 isEmpty =
@@ -533,6 +505,34 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             else
                                 [ Events.onClick (Actions.toggleTable lens) ]
                            )
+
+                viewRecordsSection =
+                    let
+                        viewContents records =
+                            records
+                                |> (if table.showHiddenRecords then
+                                        identity
+
+                                    else
+                                        List.filter (not << .hidden)
+                                   )
+                                |> (if Maybe.isJust (dndSystem.info table.dnd) then
+                                        identity
+
+                                    else
+                                        List.sortBy getSortKey
+                                   )
+                                |> List.indexedMap viewRecord
+                                |> Html.div [ class "table-records", Events.onMouseDown (Flow.modify (set (lens << dndAffected) [])) ]
+                    in
+                    ApiData.foldVisible
+                        Html.nothing
+                        (Maybe.map viewContents
+                            >> Maybe.withDefault (Html.div [ class "table-records-loading" ] [ Html.span [ class "shimmer-text shimmer-text--medium-contrast" ] [ Html.text "Loading records..." ] ])
+                        )
+                        viewContents
+                        (always Html.nothing)
+                        table.records
             in
             Html.div [ class "table", id ("table-" ++ TableSpec.getName spec) ]
                 [ Html.div headerAttrs
@@ -855,14 +855,6 @@ viewProjectExtraFormFields model readOnly =
                 presetStateLens =
                     projects << edited << just << presetSelect
 
-                currentPresetLabel =
-                    case source of
-                        FromPreset n ->
-                            presetLabel n
-
-                        CustomTemplates _ ->
-                            "Custom (no preset)"
-
                 rawPresetState =
                     try presetStateLens model |> Maybe.withDefault Select.initSelectState
 
@@ -871,6 +863,15 @@ viewProjectExtraFormFields model readOnly =
                         rawPresetState
 
                     else
+                        let
+                            currentPresetLabel =
+                                case source of
+                                    FromPreset n ->
+                                        presetLabel n
+
+                                    CustomTemplates _ ->
+                                        "Custom (no preset)"
+                        in
                         { rawPresetState | input = currentPresetLabel }
 
                 presetPicker =
@@ -1281,16 +1282,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                             strings =
                                 all (listLens << each << tStringValue) model
 
-                            tags =
-                                strings
-                                    |> List.map
-                                        (\str ->
-                                            { body = Html.text str
-                                            , route = Nothing
-                                            , backgroundColor = Nothing
-                                            }
-                                        )
-
                             addTag val =
                                 let
                                     trimmed =
@@ -1354,6 +1345,17 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     }
 
                             Nothing ->
+                                let
+                                    tags =
+                                        strings
+                                            |> List.map
+                                                (\str ->
+                                                    { body = Html.text str
+                                                    , route = Nothing
+                                                    , backgroundColor = Nothing
+                                                    }
+                                                )
+                                in
                                 buildListField listLens tags addTag
 
                     TList (TRecord fieldTypes) ->
@@ -1363,26 +1365,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                             recordValues =
                                 all (listLens << each) model
-
-                            defaultRecord =
-                                TRecordValue
-                                    (Dict.map
-                                        (\_ fieldArgType ->
-                                            case fieldArgType.type_ of
-                                                TList _ ->
-                                                    TListValue []
-
-                                                TEnum (first :: _) _ ->
-                                                    TEnumValue first
-
-                                                TEnum [] _ ->
-                                                    TEnumValue ""
-
-                                                _ ->
-                                                    TStringValue ""
-                                        )
-                                        fieldTypes
-                                    )
 
                             getDict rec =
                                 case rec of
@@ -1413,33 +1395,18 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                                     recordFieldLabel =
                                         Maybe.withDefault fieldName fieldArgType.displayName
-
-                                    strVal =
-                                        case currentVal of
-                                            Just (TStringValue s) ->
-                                                s
-
-                                            _ ->
-                                                ""
-
-                                    recordContext =
-                                        currentDict
-                                            |> Dict.foldl
-                                                (\k v acc ->
-                                                    case v of
-                                                        TEnumValue s ->
-                                                            Dict.insert k s acc
-
-                                                        TStringValue s ->
-                                                            Dict.insert k s acc
-
-                                                        _ ->
-                                                            acc
-                                                )
-                                                Dict.empty
                                 in
                                 case fieldArgType.type_ of
                                     TString display _ ->
+                                        let
+                                            strVal =
+                                                case currentVal of
+                                                    Just (TStringValue s) ->
+                                                        s
+
+                                                    _ ->
+                                                        ""
+                                        in
                                         case display of
                                             TextField ->
                                                 textField
@@ -1531,30 +1498,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     _ ->
                                                         []
 
-                                            packageStrings =
-                                                List.filterMap
-                                                    (\v ->
-                                                        case v of
-                                                            TStringValue s ->
-                                                                Just s
-
-                                                            _ ->
-                                                                Nothing
-                                                    )
-                                                    items
-
-                                            tags =
-                                                List.filterMap
-                                                    (\v ->
-                                                        case v of
-                                                            TStringValue s ->
-                                                                Just { body = Html.text s, route = Nothing, backgroundColor = Nothing }
-
-                                                            _ ->
-                                                                Nothing
-                                                    )
-                                                    items
-
                                             listId =
                                                 fieldId_ ++ "-list-input"
 
@@ -1577,6 +1520,22 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                         Dict.get autocompleteStateKey (Model.getAutocomplete model)
                                                             |> Maybe.withDefault Model.initAutocompleteState
 
+                                                    recordContext =
+                                                        currentDict
+                                                            |> Dict.foldl
+                                                                (\k v acc ->
+                                                                    case v of
+                                                                        TEnumValue s ->
+                                                                            Dict.insert k s acc
+
+                                                                        TStringValue s ->
+                                                                            Dict.insert k s acc
+
+                                                                        _ ->
+                                                                            acc
+                                                                )
+                                                                Dict.empty
+
                                                     autocompleteRequest query =
                                                         { template = tableId
                                                         , autocomplete = autocompleteKey
@@ -1584,6 +1543,18 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                         , query = query
                                                         , limit = 25
                                                         }
+
+                                                    packageStrings =
+                                                        List.filterMap
+                                                            (\v ->
+                                                                case v of
+                                                                    TStringValue s ->
+                                                                        Just s
+
+                                                                    _ ->
+                                                                        Nothing
+                                                            )
+                                                            items
                                                 in
                                                 autocompleteListField
                                                     { label = recordFieldLabel
@@ -1621,6 +1592,19 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     }
 
                                             Nothing ->
+                                                let
+                                                    tags =
+                                                        List.filterMap
+                                                            (\v ->
+                                                                case v of
+                                                                    TStringValue s ->
+                                                                        Just { body = Html.text s, route = Nothing, backgroundColor = Nothing }
+
+                                                                    _ ->
+                                                                        Nothing
+                                                            )
+                                                            items
+                                                in
                                                 listField
                                                     { label = recordFieldLabel
                                                     , mHint = Nothing
@@ -1643,13 +1627,12 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                             viewRecord idx _ =
                                 Html.div [ class "record-item" ]
-                                    ([ Html.div [ class "record-item-fields" ]
+                                    (Html.div [ class "record-item-fields" ]
                                         (List.map
                                             (\( fName, argType_ ) -> viewRecordField idx fName argType_)
                                             (Dict.toList fieldTypes)
                                         )
-                                     ]
-                                        ++ (if readOnly then
+                                        :: (if readOnly then
                                                 []
 
                                             else
@@ -1671,6 +1654,27 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                             []
 
                                         else
+                                            let
+                                                defaultRecord =
+                                                    TRecordValue
+                                                        (Dict.map
+                                                            (\_ fieldArgType ->
+                                                                case fieldArgType.type_ of
+                                                                    TList _ ->
+                                                                        TListValue []
+
+                                                                    TEnum (first :: _) _ ->
+                                                                        TEnumValue first
+
+                                                                    TEnum [] _ ->
+                                                                        TEnumValue ""
+
+                                                                    _ ->
+                                                                        TStringValue ""
+                                                            )
+                                                            fieldTypes
+                                                        )
+                                            in
                                             [ Html.button
                                                 [ Events.onClick (Flow.modify (over listLens (flip (++) [ defaultRecord ])))
                                                 , class "add-record-btn"
@@ -2234,14 +2238,14 @@ stepArgValueKey value =
         TListValue values ->
             values
                 |> List.map stepArgValueKey
-                |> String.join ""
+                |> String.concat
                 |> keyPart "list"
 
         TRecordValue fields ->
             fields
                 |> Dict.toList
                 |> List.map (\( name, fieldValue ) -> keyPart "field" name ++ stepArgValueKey fieldValue)
-                |> String.join ""
+                |> String.concat
                 |> keyPart "record"
 
         TEnumValue enumValue ->

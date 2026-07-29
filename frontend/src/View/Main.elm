@@ -43,23 +43,6 @@ view model =
                         , isSrcOpen = always False
                         }
                 }
-
-        viewCurrentPage =
-            case Model.getRoute model of
-                Route.Home ->
-                    Maybe.map2 viewHome
-                        (ApiData.toMaybe (Model.getPresets model))
-                        (ApiData.toMaybe (Model.getStepConfig model))
-                        |> Maybe.withDefault (Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading workspace..." ])
-
-                Route.Project _ ->
-                    viewCurrentProject model
-
-                Route.Artifact artifact ->
-                    viewArtifact artifact
-
-                Route.NotFound ->
-                    view404
     in
     { title = try (currentProject << success << name) model |> Maybe.map (\n -> n ++ " • " ++ "Pointy Notebook") |> Maybe.withDefault "Pointy Notebook"
     , body =
@@ -68,6 +51,24 @@ view model =
                 [ viewArtifact artifact ]
 
             _ ->
+                let
+                    viewCurrentPage =
+                        case Model.getRoute model of
+                            Route.Home ->
+                                Maybe.map2 viewHome
+                                    (ApiData.toMaybe (Model.getPresets model))
+                                    (ApiData.toMaybe (Model.getStepConfig model))
+                                    |> Maybe.withDefault (Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading workspace..." ])
+
+                            Route.Project _ ->
+                                viewCurrentProject model
+
+                            Route.Artifact artifact ->
+                                viewArtifact artifact
+
+                            Route.NotFound ->
+                                view404
+                in
                 [ Compare.viewCompareBanner model
                 , Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
                 , Html.div [ Html.Attributes.class "toast-container" ] <|
@@ -104,6 +105,7 @@ viewArtifact artifact =
             ]
             [ Html.text "View in Pointy" ]
         ]
+
 
 view404 : Html (Flow Model ())
 view404 =

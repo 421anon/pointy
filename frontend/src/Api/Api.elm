@@ -1,7 +1,6 @@
 module Api.Api exposing
     ( AutocompleteRequest
     , SeekAnchor(..)
-    , assignRecordToProject
     , batchAssignRecordsToProject
     , createProject
     , createSrcFile
@@ -287,17 +286,6 @@ fetchCommitHash =
 deleteProject : Int -> Flow s (Result Http.Error ())
 deleteProject projectId =
     request "DELETE" ("/backend/projects?id=" ++ String.fromInt projectId) Http.emptyBody
-
-
-assignRecordToProject : Int -> Int -> Flow s (Result Http.Error ())
-assignRecordToProject projectId recordId =
-    request "POST"
-        ("/backend/project-entities?project_id="
-            ++ String.fromInt projectId
-            ++ "&entity_id="
-            ++ String.fromInt recordId
-        )
-        Http.emptyBody
 
 
 batchAssignRecordsToProject : Int -> List Int -> Flow s (Result Http.Error ())

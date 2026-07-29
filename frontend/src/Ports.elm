@@ -25,7 +25,6 @@ port agentTurnIn : (Json.Decode.Value -> msg) -> Sub msg
 port gutterDragEnd : (Json.Decode.Value -> msg) -> Sub msg
 
 
-
 port openClusterStatusStream : {} -> Cmd msg
 
 

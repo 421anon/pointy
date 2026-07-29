@@ -2,8 +2,9 @@ module Model.Lenses exposing (..)
 
 import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData, success)
+import Browser.Navigation
 import Components.Select exposing (SelectState)
-import Debounce
+import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Dict.Accessors
 import Extra.Accessors exposing (by, remkT, where_)
@@ -11,7 +12,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, SeekWindow, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), ProjectParams, Route(..))
 import Time
@@ -177,7 +178,7 @@ suggestions =
     lens ".suggestions" .suggestions (\t suggestions_ -> { t | suggestions = suggestions_ })
 
 
-autocompleteDebounce : Lens ls Model (Debounce.Debounce Model.AutocompleteJob) x y
+autocompleteDebounce : Lens ls Model (Debounce Model.AutocompleteJob) x y
 autocompleteDebounce =
     lens ".autocompleteDebounce" Model.getAutocompleteDebounce (\(Model m) autocompleteDebounce_ -> Model { m | autocompleteDebounce = autocompleteDebounce_ })
 
@@ -233,11 +234,6 @@ filePlainLineCount =
 fileSeekWindow : Lens ls { a | seekWindow : b } b x y
 fileSeekWindow =
     lens ".seekWindow" .seekWindow (\file_ seekWindow_ -> { file_ | seekWindow = seekWindow_ })
-
-
-fileSeekable : Lens ls { a | seekable : b } b x y
-fileSeekable =
-    lens ".seekable" .seekable (\file_ seekable_ -> { file_ | seekable = seekable_ })
 
 
 children : Lens ls { a | children : b } b x y
@@ -445,11 +441,6 @@ srcFilesFileIsViewingAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileIsViewing
 
 
-srcFilesFileZoomAt : Int -> List String -> Traversal (Table StepRecord) Float x y
-srcFilesFileZoomAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileZoom
-
-
 srcFilesFilePlainScrollTopAt : Int -> List String -> Traversal (Table StepRecord) Float x y
 srcFilesFilePlainScrollTopAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << filePlainScrollTop
@@ -590,11 +581,6 @@ isUpdating =
     lens ".isUpdating" .isUpdating (\t isUpdating_ -> { t | isUpdating = isUpdating_ })
 
 
-clientId : Lens ls { a | clientId : b } b x y
-clientId =
-    lens ".clientId" .clientId (\t clientId_ -> { t | clientId = clientId_ })
-
-
 addMode : Lens ls { a | addMode : b } b x y
 addMode =
     lens ".addMode" .addMode (\t addMode_ -> { t | addMode = addMode_ })
@@ -698,10 +684,12 @@ compareRightInspect =
     lens ".rightInspect" .rightInspect (\d v -> { d | rightInspect = v })
 
 
+key : Lens ls Model Browser.Navigation.Key x y
 key =
     lens ".key" Model.getKey (\(Model m) key_ -> Model { m | key = key_ })
 
 
+origin : Lens ls Model String x y
 origin =
     lens ".origin" Model.getOrigin (\(Model m) origin_ -> Model { m | origin = origin_ })
 

@@ -13,7 +13,7 @@ import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
 import Model.Lenses exposing (commitHash, currentProject, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
 import Ports
-import Route
+import Route exposing (Route)
 import Specs
 import Time
 import Url exposing (Url)
@@ -68,7 +68,7 @@ applyRouteFromUrl forceRevealHighlight url =
     applyRoute forceRevealHighlight (Route.fromUrl url)
 
 
-applyRoute : Bool -> Route.Route -> Flow Model ()
+applyRoute : Bool -> Route -> Flow Model ()
 applyRoute forceRevealHighlight newRoute =
     Flow.get
         |> Flow.andThen
@@ -76,12 +76,6 @@ applyRoute forceRevealHighlight newRoute =
                 let
                     currentRoute =
                         get route model
-
-                    mOldCommit =
-                        try (route << Route.project << mCommit << just) model
-
-                    mNewCommit =
-                        try (Route.project << mCommit << just) newRoute
 
                     shouldRevealHighlight =
                         forceRevealHighlight
@@ -119,6 +113,13 @@ applyRoute forceRevealHighlight newRoute =
                             initializeWorkspace
 
                          else
+                            let
+                                mOldCommit =
+                                    try (route << Route.project << mCommit << just) model
+
+                                mNewCommit =
+                                    try (Route.project << mCommit << just) newRoute
+                            in
                             Flow.setAll
                                 (projects << records << success << each << projectStepRecords << runState)
                                 (Api.ApiData.loading Nothing)

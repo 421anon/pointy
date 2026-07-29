@@ -72,20 +72,6 @@ tListValue =
         )
 
 
-tRecordValue : Prism ls StepArgValue (Dict String StepArgValue) x y
-tRecordValue =
-    prism ">TRecordValue"
-        TRecordValue
-        (\stepArgVal ->
-            case stepArgVal of
-                TRecordValue val ->
-                    Ok val
-
-                _ ->
-                    Err stepArgVal
-        )
-
-
 tEnumValue : Prism ls StepArgValue String x y
 tEnumValue =
     prism ">TEnumValue"

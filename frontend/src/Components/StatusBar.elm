@@ -6,6 +6,7 @@ import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, disabled, href, id, rel, target, title, type_)
 import Html.Events as Events
+import Html.Extra as Html
 import Model.Core as Model exposing (ClusterStatus(..), Model, RunningStepSummary)
 import View.Icons exposing (iconCustom)
 
@@ -105,7 +106,7 @@ viewMainControl model runningCount isOpen =
                 ]
 
           else
-            Html.text ""
+            Html.nothing
         ]
 
 
@@ -118,7 +119,7 @@ viewRepoContext model =
         )
         (ApiData.toMaybe (Model.getUserRepoInfo model))
         (ApiData.toMaybe (Model.getCommitHash model))
-        |> Maybe.withDefault (Html.text "")
+        |> Maybe.withDefault Html.nothing
 
 
 viewIndependentControls : Model -> Html (Flow Model ())
@@ -174,11 +175,13 @@ viewIndependentControls model =
             , title "Toggle light/dark theme"
             , attribute "aria-label" "Toggle light/dark theme"
             ]
-            [ iconCustom False "light_mode"
+            [ iconCustom False
+                "light_mode"
                 [ class "status-bar__icon-dark"
                 , attribute "aria-hidden" "true"
                 ]
-            , iconCustom False "dark_mode"
+            , iconCustom False
+                "dark_mode"
                 [ class "status-bar__icon-light"
                 , attribute "aria-hidden" "true"
                 ]
@@ -224,7 +227,8 @@ viewRunningStep summary =
                 , Html.span [ class "status-bar__project-name" ]
                     [ Html.text summary.projectName ]
                 ]
-            , iconCustom False "chevron_right"
+            , iconCustom False
+                "chevron_right"
                 [ class "status-bar__chevron"
                 , attribute "aria-hidden" "true"
                 ]

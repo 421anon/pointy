@@ -1,9 +1,10 @@
-module Components.Combobox exposing (Config, view, viewChip, viewSuggestion)
+module Components.Combobox exposing (Config, view)
 
 import Extra.Decode as ExtraDecode
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, id, title, type_, value)
 import Html.Events as Events
+import Html.Extra as Html
 import Html.Keyed
 import Json.Decode as Decode
 import Keyboard
@@ -49,88 +50,9 @@ view config =
             else
                 clamp 0 (itemCount - 1) config.activeIndex
 
-        activeSuggestion : Maybe item
-        activeSuggestion =
-            config.availableItems
-                |> List.drop clampedIndex
-                |> List.head
-
-        inputVal =
-            Decode.at [ "target", "value" ] Decode.string
-
-        inputEmpty =
-            inputVal |> Decode.map (String.trim >> String.isEmpty)
-
-        arrowDownMsg =
-            if itemCount > 0 then
-                config.onActiveIndexChange (Basics.min (itemCount - 1) (clampedIndex + 1))
-
-            else
-                config.onActiveIndexChange 0
-
-        arrowUpMsg =
-            if itemCount > 0 then
-                config.onActiveIndexChange (Basics.max 0 (clampedIndex - 1))
-
-            else
-                config.onActiveIndexChange 0
-
-        enterSelectSuggestion =
-            case activeSuggestion of
-                Just item ->
-                    Decode.succeed (config.onSelect item)
-
-                Nothing ->
-                    Decode.fail "no suggestion active"
-
-        enterCreateFreeText =
-            if config.allowFreeText then
-                ExtraDecode.ifM (inputEmpty |> Decode.map not)
-                    (inputVal |> Decode.map (\v -> config.onCreate (String.trim v)))
-
-            else
-                Decode.fail "free text not allowed"
-
-        spaceCreateFreeText =
-            if config.allowFreeText then
-                ExtraDecode.ifM (inputEmpty |> Decode.map not)
-                    (inputVal |> Decode.map (\v -> config.onCreate (String.trim v)))
-
-            else
-                Decode.fail "free text not allowed"
-
-        backspaceRemoveLast =
-            if List.isEmpty config.selected then
-                Decode.fail "no selected items"
-
-            else
-                ExtraDecode.ifM inputEmpty
-                    (Decode.succeed (config.onRemove (List.length config.selected - 1)))
-
-        allKeyBindings =
-            [ ( Keyboard.arrowDown, Decode.succeed arrowDownMsg )
-            , ( Keyboard.arrowUp, Decode.succeed arrowUpMsg )
-            , ( Keyboard.escape, Decode.succeed (config.onInput "") )
-            , ( Keyboard.enter
-              , Decode.oneOf
-                    [ enterSelectSuggestion
-                    , enterCreateFreeText
-                    ]
-              )
-            , ( Keyboard.space
-              , spaceCreateFreeText
-              )
-            , ( Keyboard.backspace
-              , backspaceRemoveLast
-              )
-            ]
-
-        handleKey =
-            Keyboard.decodeCombinations allKeyBindings
-
         viewLabel =
             if String.isEmpty config.label then
-                Html.text ""
+                Html.nothing
 
             else
                 case config.mHint of
@@ -164,7 +86,7 @@ view config =
                         )
                         [ Html.text (config.toLabel item)
                         , if config.readOnly then
-                            Html.text ""
+                            Html.nothing
 
                           else
                             iconCustom True
@@ -181,9 +103,87 @@ view config =
         viewInput =
             ( config.id ++ "-input-pad"
             , if config.readOnly then
-                Html.text ""
+                Html.nothing
 
               else
+                let
+                    inputVal =
+                        Decode.at [ "target", "value" ] Decode.string
+
+                    activeSuggestion : Maybe item
+                    activeSuggestion =
+                        config.availableItems
+                            |> List.drop clampedIndex
+                            |> List.head
+
+                    inputEmpty =
+                        inputVal |> Decode.map (String.trim >> String.isEmpty)
+
+                    arrowDownMsg =
+                        if itemCount > 0 then
+                            config.onActiveIndexChange (Basics.min (itemCount - 1) (clampedIndex + 1))
+
+                        else
+                            config.onActiveIndexChange 0
+
+                    arrowUpMsg =
+                        if itemCount > 0 then
+                            config.onActiveIndexChange (Basics.max 0 (clampedIndex - 1))
+
+                        else
+                            config.onActiveIndexChange 0
+
+                    backspaceRemoveLast =
+                        if List.isEmpty config.selected then
+                            Decode.fail "no selected items"
+
+                        else
+                            ExtraDecode.ifM inputEmpty
+                                (Decode.succeed (config.onRemove (List.length config.selected - 1)))
+
+                    allKeyBindings =
+                        [ ( Keyboard.arrowDown, Decode.succeed arrowDownMsg )
+                        , ( Keyboard.arrowUp, Decode.succeed arrowUpMsg )
+                        , ( Keyboard.escape, Decode.succeed (config.onInput "") )
+                        , ( Keyboard.enter
+                          , let
+                                enterSelectSuggestion =
+                                    case activeSuggestion of
+                                        Just item ->
+                                            Decode.succeed (config.onSelect item)
+
+                                        Nothing ->
+                                            Decode.fail "no suggestion active"
+
+                                enterCreateFreeText =
+                                    if config.allowFreeText then
+                                        ExtraDecode.ifM (inputEmpty |> Decode.map not)
+                                            (inputVal |> Decode.map (\v -> config.onCreate (String.trim v)))
+
+                                    else
+                                        Decode.fail "free text not allowed"
+                            in
+                            Decode.oneOf
+                                [ enterSelectSuggestion
+                                , enterCreateFreeText
+                                ]
+                          )
+                        , ( Keyboard.space
+                          , if config.allowFreeText then
+                                ExtraDecode.ifM (inputEmpty |> Decode.map not)
+                                    (inputVal |> Decode.map (\v -> config.onCreate (String.trim v)))
+
+                            else
+                                Decode.fail "free text not allowed"
+                          )
+                        , ( Keyboard.backspace
+                          , backspaceRemoveLast
+                          )
+                        ]
+
+                    handleKey =
+                        Keyboard.decodeCombinations allKeyBindings
+                in
                 Html.input
                     [ id config.id
                     , type_ "text"
@@ -219,7 +219,7 @@ view config =
 
         dropdown =
             if String.isEmpty (String.trim config.inputValue) then
-                Html.text ""
+                Html.nothing
 
             else if config.loading then
                 Html.div [ class "list-field-suggestions" ]
@@ -233,7 +233,7 @@ view config =
 
                     Nothing ->
                         if List.isEmpty config.availableItems then
-                            Html.text ""
+                            Html.nothing
 
                         else
                             Html.div [ id (config.id ++ "-suggestions"), class "list-field-suggestions" ]
@@ -266,25 +266,3 @@ view config =
             , dropdown
             ]
         ]
-
-
-viewChip : (item -> String) -> (item -> msg) -> Bool -> item -> Html msg
-viewChip toLabel onRemove readOnly item =
-    Html.div (class "tag" :: [])
-        [ Html.text (toLabel item)
-        , if readOnly then
-            Html.text ""
-
-          else
-            iconCustom True
-                "close_small"
-                [ class "remove-selected-icon"
-                , Events.preventDefaultOn "click"
-                    (Decode.succeed ( onRemove item, True ))
-                ]
-        ]
-
-
-viewSuggestion : (item -> String) -> item -> Html msg
-viewSuggestion toLabel item =
-    Html.text (toLabel item)

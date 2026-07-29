@@ -340,7 +340,7 @@ stepArgType =
         [ Decode.field "string" <|
             Decode.map2 TString
                 (Decode.field "display" tStringDisplay)
-                (Decode.maybe (Decode.field "autocomplete" Decode.string))
+                (maybe (Decode.field "autocomplete" Decode.string))
         , Decode.map2 TEnum (Decode.field "enum" (Decode.list Decode.string)) (Decode.oneOf [ Decode.field "enumDisplayNames" (Decode.dict Decode.string), Decode.succeed Dict.empty ])
         , Decode.field "step" (Decode.map TStep <| maybe <| Decode.field "allowedTypes" (Decode.list Decode.string))
         , Decode.field "list" (Decode.map TList (Decode.lazy (\() -> stepArgType)))
@@ -459,7 +459,7 @@ stepArgs stepType_ =
                            )
                 )
                 (Decode.field "url" Decode.string)
-                (Decode.maybe (Decode.at [ "downloaded", "downloadedAt" ] Decode.string))
+                (maybe (Decode.at [ "downloaded", "downloadedAt" ] Decode.string))
 
 
 argType : Decoder ArgType

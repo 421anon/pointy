@@ -13,7 +13,7 @@ import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses as Lenses exposing (currentProject, mCommit, route)
 import Model.Shadow exposing (StepConfigEntry, StepType(..))
-import Model.TableSpec as TableSpec
+import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
 import Specs
 import View.FileBrowser as FileBrowser
@@ -22,7 +22,7 @@ import View.Lib exposing (viewLoading, viewPage, viewSearchBox)
 import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
-viewRunStop : TableSpec.TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
 viewRunStop spec r =
     case r.id of
         Just id ->

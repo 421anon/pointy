@@ -7,6 +7,7 @@ import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, rows, title, type_, value)
 import Html.Events as Events
+import Html.Extra as Html
 import Json.Decode as Decode
 import Keyboard
 import Markdown
@@ -199,13 +200,6 @@ viewSessionSidebarContent agent loaded =
                 []
             )
                 ++ List.map (viewSessionRow agent) active
-
-        archivedToShow =
-            if agent.showArchived then
-                archived
-
-            else
-                []
     in
     [ case listingStatus of
         Just ( isLoading, msg ) ->
@@ -219,17 +213,25 @@ viewSessionSidebarContent agent loaded =
                 [ Html.text msg ]
 
         Nothing ->
-            Html.text ""
+            Html.nothing
     , Html.ul [ class "agent-panel__session-list" ] activeRows
     , if List.isEmpty activeRows && listingStatus == Nothing then
         Html.p [ class "agent-panel__empty-hint" ] [ Html.text "No chats yet." ]
 
       else
-        Html.text ""
+        Html.nothing
     , if List.isEmpty archived then
-        Html.text ""
+        Html.nothing
 
       else
+        let
+            archivedToShow =
+                if agent.showArchived then
+                    archived
+
+                else
+                    []
+        in
         Html.div [ class "agent-panel__archive-section" ]
             [ Html.button
                 [ class "link-btn agent-panel__archive-toggle"
@@ -376,7 +378,7 @@ viewSessionRow agent sessionView =
                 Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ]
 
               else
-                Html.text ""
+                Html.nothing
             ]
         , Html.div [ class "agent-panel__session-row-actions" ]
             [ if isArchived then
@@ -408,7 +410,7 @@ viewSessionRow agent sessionView =
                     ]
 
               else
-                Html.text ""
+                Html.nothing
             ]
         ]
 
@@ -475,9 +477,6 @@ viewSession agent sessionView =
                 || (session.activeTurnId /= Nothing)
                 || (session.status == "running")
 
-        sendingPrompt =
-            agent.request == Just (Model.SendingAgentPrompt session.sessionId)
-
         detailBlocked =
             runnerActive || Model.agentInteractionsBlocked agent
 
@@ -492,6 +491,10 @@ viewSession agent sessionView =
             viewClosedChat session.status
 
           else
+            let
+                sendingPrompt =
+                    agent.request == Just (Model.SendingAgentPrompt session.sessionId)
+            in
             viewPrompt runnerActive sendingPrompt detailBlocked
         ]
 
@@ -501,9 +504,6 @@ viewSessionTitle agent sessionView =
     let
         session =
             sessionView.session
-
-        displayName =
-            sessionDisplayName sessionView
 
         renameBlocked =
             Model.agentInteractionsBlocked agent
@@ -528,6 +528,10 @@ viewSessionTitle agent sessionView =
                 viewSessionTitleEditor renameBlocked edit
 
             Nothing ->
+                let
+                    displayName =
+                        sessionDisplayName sessionView
+                in
                 Html.div [ class "agent-panel__session-title-row" ]
                     [ Html.div []
                         [ Html.h3 [ class "agent-panel__session-title" ] [ Html.text displayName ]
@@ -538,7 +542,7 @@ viewSessionTitle agent sessionView =
                                 Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ]
 
                               else
-                                Html.text ""
+                                Html.nothing
                             ]
                         ]
                     , Html.button
@@ -635,7 +639,7 @@ viewError session =
             Html.pre [ class "agent-panel__error" ] [ Html.text err ]
 
         Nothing ->
-            Html.text ""
+            Html.nothing
 
 
 viewPrompt : Bool -> Bool -> Bool -> Html (Flow Model ())
@@ -727,12 +731,13 @@ activeChangesetOperation agent sessionId =
 viewChatTurns : Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Html (Flow Model ())
 viewChatTurns agent sessionView runnerActive interactionsBlocked =
     let
-        activeOperation =
-            activeChangesetOperation agent sessionView.session.sessionId
-
         pendingChangesetNodes =
             case pendingChangeset sessionView of
                 Just changeset ->
+                    let
+                        activeOperation =
+                            activeChangesetOperation agent sessionView.session.sessionId
+                    in
                     [ viewChangesetBox interactionsBlocked activeOperation changeset ]
 
                 Nothing ->
@@ -863,27 +868,27 @@ viewAgentMessage turn =
                 Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "█" ]
 
               else
-                Html.text ""
+                Html.nothing
             ]
         , case failedMessage of
             Just err ->
                 Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ]
 
             Nothing ->
-                Html.text ""
+                Html.nothing
         ]
 
 
 pendingChangeset : Model.AgentSessionView -> Maybe Model.ChatChangeset
 pendingChangeset sessionView =
-    let
-        session =
-            sessionView.session
-
-        diff =
-            String.trim sessionView.gitState.branchDiff
-    in
     if sessionView.gitState.hasAgentCommits then
+        let
+            session =
+                sessionView.session
+
+            diff =
+                String.trim sessionView.gitState.branchDiff
+        in
         if session.status == "prepare_conflict" then
             let
                 err =
@@ -1042,7 +1047,7 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
                     Html.pre [ class "agent-panel__changeset-error" ] [ Html.text err ]
 
                 _ ->
-                    Html.text ""
+                    Html.nothing
     in
     Html.div
         [ classList
@@ -1060,7 +1065,7 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
             ]
         , Html.p [ class "agent-panel__changeset-description" ] [ Html.text description ]
         , if String.isEmpty diff then
-            Html.text ""
+            Html.nothing
 
           else
             Html.pre [ class "agent-panel__changeset-diff" ] [ Html.text diff ]

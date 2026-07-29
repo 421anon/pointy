@@ -74,15 +74,16 @@ viewCompareButton model =
                 isPicked =
                     has (compareState << compareSelecting << where_ ((==) sel)) model
 
-                pickedLabel =
-                    try (compareState << compareSelecting) model
-                        |> Maybe.unwrap "selected file" .fileName
-
                 ( tooltip, action, iconName ) =
                     if isPicked then
                         ( "Already picked", Flow.none, "check_circle" )
 
                     else if isPicking then
+                        let
+                            pickedLabel =
+                                try (compareState << compareSelecting) model
+                                    |> Maybe.unwrap "selected file" .fileName
+                        in
                         ( "Pick to compare with " ++ pickedLabel, Actions.selectCompareFile sel, "compare_arrows" )
 
                     else
@@ -347,7 +348,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 mCompareSelection =
                     if file.viewable || isImage then
-                        Maybe.map2 (\pid ctx -> compareSelectionFor pid itemName file.mimeType path ctx)
+                        Maybe.map2 (\pid -> compareSelectionFor pid itemName file.mimeType path)
                             (try currentProjectId model)
                             mDirCtx
 
@@ -445,7 +446,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 case mDirCtx of
                                     Just (OutputDir stepId_ commit_) ->
                                         Html.node "molstar-viewer"
-                                            [ Html.Attributes.class "file-molstar-viewer"
+                                            [ class "file-molstar-viewer"
                                             , Html.Attributes.attribute "src" (Api.stepFileBundleUrl stepId_ commit_ path)
                                             ]
                                             []
@@ -883,11 +884,12 @@ viewPlainContentBody mode gutterKeyValue hasGutterDrag selectedFrom selectedTo a
 
                         pointerDown =
                             Html.Events.on "pointerdown" (lineAction Actions.startGutterDrag)
-
-                        pointerEnter =
-                            Html.Events.on "pointerenter" (lineAction Actions.extendGutterDrag)
                     in
                     if hasGutterDrag then
+                        let
+                            pointerEnter =
+                                Html.Events.on "pointerenter" (lineAction Actions.extendGutterDrag)
+                        in
                         [ pointerDown, pointerEnter ]
 
                     else
@@ -909,22 +911,24 @@ viewPlainContentBody mode gutterKeyValue hasGutterDrag selectedFrom selectedTo a
 
         renderLineNumber lineIndex =
             let
-                lineNum =
-                    startLine + lineIndex
-
-                attrs =
-                    [ class "file-line-number"
-                    , style "height" (String.fromInt plainLineHeight ++ "px")
-                    , style "line-height" (String.fromInt plainLineHeight ++ "px")
-                    ]
-
                 isLoadingLine =
                     (loadingBefore && lineIndex == 0) || (loadingAfter && lineIndex == lineCount - 1)
             in
             if isLoadingLine then
+                let
+                    attrs =
+                        [ class "file-line-number"
+                        , style "height" (String.fromInt plainLineHeight ++ "px")
+                        , style "line-height" (String.fromInt plainLineHeight ++ "px")
+                        ]
+                in
                 Html.div attrs []
 
             else
+                let
+                    lineNum =
+                        startLine + lineIndex
+                in
                 Html.div
                     (classList
                         [ ( "file-line-number", True )

@@ -77,19 +77,6 @@ init columns rows =
         }
 
 
-columnTypeLabel : ColumnType -> String
-columnTypeLabel colType =
-    case colType of
-        Int ->
-            "int"
-
-        Float ->
-            "float"
-
-        Text ->
-            "string"
-
-
 filterHint : ColumnType -> String
 filterHint colType =
     case colType of

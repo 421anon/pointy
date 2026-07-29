@@ -5,7 +5,7 @@ import Array
 import Browser.Navigation
 import Components.Select exposing (SelectState, initSelectState)
 import Csv.Parser
-import Debounce
+import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import DnDList
 import Flow exposing (Flow)
@@ -384,7 +384,7 @@ type Model
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict Int ( String, Status )
         , autocomplete : Dict String AutocompleteState
-        , autocompleteDebounce : Debounce.Debounce AutocompleteJob
+        , autocompleteDebounce : Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
         , compareState : CompareState
         , now : Time.Posix
@@ -454,29 +454,31 @@ compareSelectionMode sel =
     let
         mime =
             Maybe.withDefault "" sel.mimeType
-
-        extension =
-            String.toLower sel.fileName
-                |> String.split "."
-                |> List.last
-                |> Maybe.withDefault ""
-
-        previewableHtml =
-            case sel.source of
-                FromOutput _ ->
-                    True
-
-                FromSrc ->
-                    False
     in
     if String.startsWith "image/" mime then
         CompareImage
 
-    else if previewableHtml && (mime == "text/html" || extension == "html" || extension == "htm") then
-        CompareHtml
-
     else
-        CompareText
+        let
+            extension =
+                String.toLower sel.fileName
+                    |> String.split "."
+                    |> List.last
+                    |> Maybe.withDefault ""
+
+            previewableHtml =
+                case sel.source of
+                    FromOutput _ ->
+                        True
+
+                    FromSrc ->
+                        False
+        in
+        if previewableHtml && (mime == "text/html" || extension == "html" || extension == "htm") then
+            CompareHtml
+
+        else
+            CompareText
 
 
 getProjects : Model -> Table ProjectRecord
@@ -676,7 +678,7 @@ getAutocomplete (Model model) =
     model.autocomplete
 
 
-getAutocompleteDebounce : Model -> Debounce.Debounce AutocompleteJob
+getAutocompleteDebounce : Model -> Debounce AutocompleteJob
 getAutocompleteDebounce (Model model) =
     model.autocompleteDebounce
 

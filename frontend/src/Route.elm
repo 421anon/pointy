@@ -1,4 +1,4 @@
-module Route exposing (ArtifactParams, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, parseLineRange, project, toString)
+module Route exposing (ArtifactParams, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, project, toString)
 
 import Accessors exposing (Prism, prism)
 import Html
@@ -174,12 +174,13 @@ compareTargetFromQuery mRef mCommit mMimeType =
 
             else
                 Just value
-
-        mimeType =
-            Maybe.andThen nonEmpty mMimeType
     in
     case mRef of
         Just ref ->
+            let
+                mimeType =
+                    Maybe.andThen nonEmpty mMimeType
+            in
             case ref.target of
                 Output ->
                     mCommit

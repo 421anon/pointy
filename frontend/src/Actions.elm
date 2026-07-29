@@ -108,7 +108,7 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
             (\mEdited ->
                 Flow.when (Maybe.isJust mEdited) (scrollAction |> Flow.seq focusAction)
                     |> Flow.seq
-                        (case ( TableSpec.getTag spec, mEdited |> Maybe.andThen .id ) of
+                        (case ( getTag spec, mEdited |> Maybe.andThen .id ) of
                             ( TagSteps _ _, Just stepId ) ->
                                 loadNotices stepId
 
@@ -1613,30 +1613,6 @@ toggleOutputEntry recordId mOpen path =
                                 parentExtrasLens =
                                     extrasLensFor parentPath
 
-                                -- Ensure extras has fully resolved before deciding column
-                                -- metadata. The folder action fires fetchExtras after the
-                                -- directory listing, so a fast click on a file races against
-                                -- that response; reading the lens at click-time would snapshot
-                                -- Loading and bake `Nothing` metadata into the grid.
-                                ensureExtras =
-                                    Flow.forAll parentExtrasLens
-                                        (\extras ->
-                                            case extras of
-                                                ApiData.Success _ ->
-                                                    Flow.pure (Ok ())
-
-                                                ApiData.Error _ ->
-                                                    -- Respect a prior failure rather than retrying
-                                                    -- on every file click; the grid degrades to
-                                                    -- string-typed columns.
-                                                    Flow.pure (Ok ())
-
-                                                _ ->
-                                                    callApi parentExtrasLens
-                                                        (Api.fetchExtras recordId (Just commit_) parentPath)
-                                                        |> Flow.map (Result.map (always ()))
-                                        )
-
                                 materializeFileContent content =
                                     setPlainFileLineCount Route.Output recordId path content
                                         |> Flow.seq
@@ -1674,6 +1650,31 @@ toggleOutputEntry recordId mOpen path =
                                         requestSeekWindow Route.Output recordId path (Api.AtLine initialLine)
 
                             else
+                                let
+                                    -- Ensure extras has fully resolved before deciding column
+                                    -- metadata. The folder action fires fetchExtras after the
+                                    -- directory listing, so a fast click on a file races against
+                                    -- that response; reading the lens at click-time would snapshot
+                                    -- Loading and bake `Nothing` metadata into the grid.
+                                    ensureExtras =
+                                        Flow.forAll parentExtrasLens
+                                            (\extras ->
+                                                case extras of
+                                                    ApiData.Success _ ->
+                                                        Flow.pure (Ok ())
+
+                                                    ApiData.Error _ ->
+                                                        -- Respect a prior failure rather than retrying
+                                                        -- on every file click; the grid degrades to
+                                                        -- string-typed columns.
+                                                        Flow.pure (Ok ())
+
+                                                    _ ->
+                                                        callApi parentExtrasLens
+                                                            (Api.fetchExtras recordId (Just commit_) parentPath)
+                                                            |> Flow.map (Result.map (always ()))
+                                            )
+                                in
                                 Flow.when (file_.viewable && not (shouldSkipFileContents file_))
                                     (ensureExtras
                                         |> Flow.andThen
@@ -1939,12 +1940,13 @@ deepOpenSourceEntry stepId path mRange =
 deepOpenEntryWith : Route.HighlightTarget -> (Int -> Maybe Bool -> List String -> Flow Model Bool) -> Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenEntryWith target toggleEntry stepId path mRange =
     let
-        allStepTables =
-            currentProject << success << tables << values
-
         scrollToRange =
             case mRange of
                 Just range ->
+                    let
+                        allStepTables =
+                            currentProject << success << tables << values
+                    in
                     Flow.forAll (allStepTables << directoryItemForTargetAt target stepId path << file)
                         (\file_ ->
                             if file_.seekable then
@@ -2127,14 +2129,6 @@ updateSortKeys mProjectId tableSpec records_ =
     let
         allUpdatedRecords =
             List.indexedMap (\i -> set sortKey (Just i)) records_
-
-        changedRecords =
-            computeChangedSortRecords records_ allUpdatedRecords
-
-        persistChangedRecords =
-            Flow.batchM (List.map (persistRecordChange Nothing tableSpec) changedRecords)
-                |> Flow.seq refetchCommitHash
-                |> Flow.return (Ok ())
     in
     Flow.setAll (TableSpec.getLens tableSpec << records << success) allUpdatedRecords
         |> Flow.seq
@@ -2143,7 +2137,13 @@ updateSortKeys mProjectId tableSpec records_ =
                     saveProject projectId
 
                 Nothing ->
-                    persistChangedRecords
+                    let
+                        changedRecords =
+                            computeChangedSortRecords records_ allUpdatedRecords
+                    in
+                    Flow.batchM (List.map (persistRecordChange Nothing tableSpec) changedRecords)
+                        |> Flow.seq refetchCommitHash
+                        |> Flow.return (Ok ())
             )
         |> Flow.return ()
 
@@ -2239,11 +2239,6 @@ saveProject projectId =
 closeStepStatusStream : Flow Model ()
 closeStepStatusStream =
     callJs "closeStepStatusStream" (\_ -> Encode.null) (Decode.succeed ()) ()
-
-
-closeAgentTurnStream : Flow Model ()
-closeAgentTurnStream =
-    callJs "closeAgentTurnStream" (\_ -> Encode.null) (Decode.succeed ()) ()
 
 
 agentChatId : String
@@ -3387,11 +3382,6 @@ onClusterStatusIn value =
 toggleStatusBar : Flow Model ()
 toggleStatusBar =
     Flow.over statusBarOpen not
-
-
-closeStatusBar : Flow Model ()
-closeStatusBar =
-    Flow.setAll statusBarOpen False
 
 
 openRunningStep : Int -> Flow Model ()
