@@ -1822,6 +1822,10 @@ body:has(dialog[open]) {
   line-height: 24px;
 }
 
+.tag.tag-invalid {
+  background: var(--color-error, #c0392b);
+}
+
 .tag:has(.remove-selected-icon) {
   padding: 0 2px 0 6px;
   display: flex;

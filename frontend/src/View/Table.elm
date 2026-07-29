@@ -1309,31 +1309,34 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     autocompleteState =
                                         Dict.get autocompleteStateKey (Model.getAutocomplete model)
                                             |> Maybe.withDefault Model.initAutocompleteState
+
+                                    autocompleteRequest query =
+                                        { template = tableId
+                                        , autocomplete = autocompleteKey
+                                        , context = Dict.empty
+                                        , query = query
+                                        , limit = 25
+                                        }
                                 in
                                 autocompleteListField
                                     { label = fieldLabel
                                     , mHint = fieldHint
                                     , selectedStrings = strings
+                                    , validity = Actions.autocompleteValueValidity autocompleteStateKey model
                                     , suggestions = autocompleteState.suggestions
                                     , activeIndex = autocompleteState.activeIndex
                                     , onQueryChange =
-                                        \input ->
-                                            Actions.fetchAutocomplete autocompleteStateKey
-                                                currentRouteCommit
-                                                { template = tableId
-                                                , autocomplete = autocompleteKey
-                                                , context = Dict.empty
-                                                , query = input
-                                                , limit = 25
-                                                }
+                                        Actions.fetchAutocomplete autocompleteStateKey currentRouteCommit
+                                            << autocompleteRequest
                                     , onSuggestionSelect =
                                         \suggestion ->
-                                            addTag suggestion
-                                                |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                            Actions.clearAutocomplete autocompleteStateKey
+                                                |> Flow.seq (addTag suggestion)
                                     , onAddItem =
                                         \val ->
-                                            addTag val
+                                            Flow.async (Actions.checkAutocompleteValue autocompleteStateKey currentRouteCommit (autocompleteRequest (String.trim val)))
                                                 |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                                |> Flow.seq (addTag val)
                                     , onRemoveIndex =
                                         \i ->
                                             Flow.modify (over listLens (List.removeAt i))
@@ -1573,31 +1576,34 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     autocompleteState =
                                                         Dict.get autocompleteStateKey (Model.getAutocomplete model)
                                                             |> Maybe.withDefault Model.initAutocompleteState
+
+                                                    autocompleteRequest query =
+                                                        { template = tableId
+                                                        , autocomplete = autocompleteKey
+                                                        , context = recordContext
+                                                        , query = query
+                                                        , limit = 25
+                                                        }
                                                 in
                                                 autocompleteListField
                                                     { label = recordFieldLabel
                                                     , mHint = Nothing
                                                     , selectedStrings = packageStrings
+                                                    , validity = Actions.autocompleteValueValidity autocompleteStateKey model
                                                     , suggestions = autocompleteState.suggestions
                                                     , activeIndex = autocompleteState.activeIndex
                                                     , onQueryChange =
-                                                        \input ->
-                                                            Actions.fetchAutocomplete autocompleteStateKey
-                                                                currentRouteCommit
-                                                                { template = tableId
-                                                                , autocomplete = autocompleteKey
-                                                                , context = recordContext
-                                                                , query = input
-                                                                , limit = 25
-                                                                }
+                                                        Actions.fetchAutocomplete autocompleteStateKey currentRouteCommit
+                                                            << autocompleteRequest
                                                     , onSuggestionSelect =
                                                         \suggestion ->
-                                                            addItem suggestion
-                                                                |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                                            Actions.clearAutocomplete autocompleteStateKey
+                                                                |> Flow.seq (addItem suggestion)
                                                     , onAddItem =
                                                         \val ->
-                                                            addItem val
+                                                            Flow.async (Actions.checkAutocompleteValue autocompleteStateKey currentRouteCommit (autocompleteRequest (String.trim val)))
                                                                 |> Flow.seq (Actions.clearAutocomplete autocompleteStateKey)
+                                                                |> Flow.seq (addItem val)
                                                     , onRemoveIndex =
                                                         \i ->
                                                             updateField idx fieldName (TListValue (List.removeAt i items))
@@ -1898,6 +1904,7 @@ autocompleteListField :
     { label : String
     , mHint : Maybe String
     , selectedStrings : List String
+    , validity : String -> ApiData Bool
     , suggestions : ApiData (List String)
     , activeIndex : Int
     , onQueryChange : String -> Flow Model ()
@@ -1944,6 +1951,8 @@ autocompleteListField config =
         , error = error
         , toKey = identity
         , toLabel = identity
+        , isInvalid = ApiData.unwrap False not << config.validity
+        , isPending = ApiData.foldVisible False (always True) (always False) (always False) << config.validity
         , onSelect = config.onSuggestionSelect
         , onRemove = config.onRemoveIndex
         , onCreate = config.onAddItem

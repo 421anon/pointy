@@ -794,6 +794,23 @@ applyAutocompleteResult job result =
             )
 
 
+autocompleteValueKey : String -> String -> String
+autocompleteValueKey fieldKey value =
+    fieldKey ++ ":value:" ++ value
+
+
+autocompleteValueValidity : String -> Model -> String -> ApiData Bool
+autocompleteValueValidity fieldKey model value =
+    try (autocomplete << Accessors.key (autocompleteValueKey fieldKey value) << just << suggestions) model
+        |> Maybe.withDefault NotAsked
+        |> ApiData.map (List.member value)
+
+
+checkAutocompleteValue : String -> Maybe String -> Api.AutocompleteRequest -> Flow Model ()
+checkAutocompleteValue fieldKey commit request =
+    fetchAutocomplete (autocompleteValueKey fieldKey request.query) commit request
+
+
 loadNotices : Int -> Flow Model ()
 loadNotices id =
     Flow.get

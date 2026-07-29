@@ -2,7 +2,7 @@ module Components.Combobox exposing (Config, view, viewChip, viewSuggestion)
 
 import Extra.Decode as ExtraDecode
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, class, classList, id, type_, value)
+import Html.Attributes exposing (attribute, class, classList, id, title, type_, value)
 import Html.Events as Events
 import Html.Keyed
 import Json.Decode as Decode
@@ -17,6 +17,8 @@ type alias Config item msg =
     , error : Maybe String
     , toKey : item -> String
     , toLabel : item -> String
+    , isInvalid : item -> Bool
+    , isPending : item -> Bool
     , onSelect : item -> msg
     , onRemove : Int -> msg
     , onCreate : String -> msg
@@ -145,7 +147,21 @@ view config =
             List.indexedMap
                 (\i item ->
                     ( "combobox-chip-" ++ String.fromInt i ++ "-" ++ config.toKey item
-                    , Html.div (class "tag" :: [])
+                    , Html.div
+                        ([ class "tag"
+                         , classList
+                            [ ( "tag-invalid", config.isInvalid item )
+                            , ( "shimmer-text", config.isPending item )
+                            , ( "shimmer-text--low-contrast", config.isPending item )
+                            ]
+                         ]
+                            ++ (if config.isInvalid item then
+                                    [ title "Not found in suggestions." ]
+
+                                else
+                                    []
+                               )
+                        )
                         [ Html.text (config.toLabel item)
                         , if config.readOnly then
                             Html.text ""

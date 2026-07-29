@@ -172,6 +172,11 @@ autocomplete =
     lens ".autocomplete" Model.getAutocomplete (\(Model m) autocomplete_ -> Model { m | autocomplete = autocomplete_ })
 
 
+suggestions : Lens ls { a | suggestions : b } b x y
+suggestions =
+    lens ".suggestions" .suggestions (\t suggestions_ -> { t | suggestions = suggestions_ })
+
+
 autocompleteDebounce : Lens ls Model (Debounce.Debounce Model.AutocompleteJob) x y
 autocompleteDebounce =
     lens ".autocompleteDebounce" Model.getAutocompleteDebounce (\(Model m) autocompleteDebounce_ -> Model { m | autocompleteDebounce = autocompleteDebounce_ })
