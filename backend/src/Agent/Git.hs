@@ -52,6 +52,7 @@ import Control.Monad (unless, void, when)
 import Control.Monad.Except (ExceptT (..), catchError, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
+import Data.Char (isControl)
 import Data.List (nub, sortOn)
 import Data.Maybe (isJust, mapMaybe)
 import Data.Ord (Down (..))
@@ -166,9 +167,46 @@ commitAgentTurnOutputs session_ turn = do
             if not staged
                 then return (Nothing, skippedPaths)
                 else do
-                    _ <- runGitChecked (worktreePath session_) ["commit", "-m", "Agent turn " ++ T.unpack (turnId turn)]
+                    _ <- runGitChecked (worktreePath session_) ["commit", "-m", turnCommitSubject session_ turn, "-m", "Turn " ++ T.unpack (turnId turn)]
                     head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
                     return (Just head_, skippedPaths)
+
+commitSubjectMaxLength :: Int
+commitSubjectMaxLength = 72
+
+turnCommitSubject :: AgentSession -> AgentTurn -> String
+turnCommitSubject session_ turn =
+    agentCommitSubject "Agent" session_ (Just (turnPrompt turn))
+
+applyCommitSubject :: AgentSession -> String
+applyCommitSubject session_ =
+    agentCommitSubject "Apply" session_ (sessionName session_)
+
+agentCommitSubject :: Text -> AgentSession -> Maybe Text -> String
+agentCommitSubject kind session_ rawSummary =
+    T.unpack $ maybe base withSummary (rawSummary >>= normalizeCommitSummary)
+  where
+    base = kind <> " " <> sessionId session_
+    prefix = base <> ": "
+    withSummary summary =
+        prefix <> truncateCommitSummary (commitSubjectMaxLength - T.length prefix) summary
+
+normalizeCommitSummary :: Text -> Maybe Text
+normalizeCommitSummary =
+    normalizeSessionName . T.map (\char -> if isControl char then ' ' else char)
+
+truncateCommitSummary :: Int -> Text -> Text
+truncateCommitSummary available summary
+    | T.length summary <= available = summary
+    | available <= 1 = T.take (max 0 available) "…"
+    | otherwise =
+        let window = T.take available summary
+            (wholeWords, _) = T.breakOnEnd " " window
+            shortened =
+                if T.null wholeWords
+                    then T.take (available - 1) summary
+                    else T.stripEnd wholeWords
+         in shortened <> "…"
 
 refreshSessionBase :: AgentSession -> ExceptT String IO (AgentSession, [Text])
 refreshSessionBase session_ = do
@@ -246,7 +284,7 @@ prepareApplyCandidate sid = do
     mergeResult <- liftIO $ runGitIn applyWorktree ["merge", "--squash", T.unpack (agentBranch session_)]
     case mergeResult of
         (ExitSuccess, _, _) -> do
-            _ <- runGitChecked applyWorktree ["commit", "-m", "Apply agent session " ++ T.unpack sid]
+            _ <- runGitChecked applyWorktree ["commit", "-m", applyCommitSubject session_]
             candidateHead_ <- stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
             saveSessionUpdate
                 session_
