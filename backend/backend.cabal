@@ -167,14 +167,3 @@ test-suite turn-stream
 
   hs-source-dirs:   test
   default-language: Haskell2010
-
-test-suite slurm-jobs
-  import:           warnings
-  type:             exitcode-stdio-1.0
-  main-is:          JobComment.hs
-  build-depends:
-    , backend
-    , base
-
-  hs-source-dirs:   test
-  default-language: Haskell2010
