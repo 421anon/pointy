@@ -610,12 +610,11 @@ onUrlRequest : Browser.UrlRequest -> Flow Model ()
 onUrlRequest urlRequest =
     case urlRequest of
         Browser.Internal url ->
-            Flow.get
-                |> Flow.andThen
-                    (\model ->
-                        Flow.forAll key
-                            (\k -> Flow.lift (Nav.pushUrl k (Route.urlToStringWithChat (currentChatRef model) url)))
-                    )
+            Flow.forAll agent
+                (\agentState ->
+                    Flow.forAll key
+                        (\k -> Flow.lift (Nav.pushUrl k (Route.urlToStringWithChat (currentChatRef agentState) url)))
+                )
 
         Browser.External href ->
             Flow.lift (Nav.load href)
@@ -623,20 +622,18 @@ onUrlRequest urlRequest =
 
 goToRoute : Route -> Flow Model ()
 goToRoute route =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Route.toStringWithChat (currentChatRef model) route)))
-            )
+    Flow.forAll agent
+        (\agentState ->
+            Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Route.toStringWithChat (currentChatRef agentState) route)))
+        )
 
 
 replaceRoute : Route -> Flow Model ()
 replaceRoute route =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.forAll key (\k -> Flow.lift (Nav.replaceUrl k (Route.toStringWithChat (currentChatRef model) route)))
-            )
+    Flow.forAll agent
+        (\agentState ->
+            Flow.forAll key (\k -> Flow.lift (Nav.replaceUrl k (Route.toStringWithChat (currentChatRef agentState) route)))
+        )
 
 
 clearStepLog : Int -> Maybe String -> Flow Model ()
@@ -2273,37 +2270,32 @@ agentTurnId turnId =
     "agent-turn-" ++ turnId
 
 
-currentChatRef : Model -> Maybe Route.ChatRef
-currentChatRef model =
-    let
-        agentState =
-            Model.getAgent model
-    in
+currentChatRef : Model.AgentState -> Maybe Route.ChatRef
+currentChatRef agentState =
     Maybe.map (\sessionId -> { sessionId = sessionId, mTurnId = agentState.highlightTurnId }) agentState.selectedSessionId
 
 
 shareAgentChat : String -> Flow Model ()
 shareAgentChat sessionId =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.forAll origin
-                    (\origin_ ->
-                        callJs "copyToClipboard"
-                            Encode.string
-                            (Decode.succeed ())
-                            (origin_ ++ Route.toStringWithChat (Just { sessionId = sessionId, mTurnId = Nothing }) (get route model))
-                    )
-            )
+    Flow.forAll origin
+        (\origin_ ->
+            Flow.forAll route
+                (\currentRoute ->
+                    callJs "copyToClipboard"
+                        Encode.string
+                        (Decode.succeed ())
+                        (origin_ ++ Route.toStringWithChat (Just { sessionId = sessionId, mTurnId = Nothing }) currentRoute)
+                )
+        )
         |> Flow.seq (addToast True "Share link copied to clipboard")
 
 
-agentSessionLoaded : Maybe String -> Model -> Bool
-agentSessionLoaded mSessionId model =
+agentSessionLoaded : Maybe String -> Model.AgentState -> Bool
+agentSessionLoaded mSessionId agentState =
     Maybe.map2
         (\sessionId -> List.any (\view -> view.session.sessionId == sessionId))
         mSessionId
-        (ApiData.toMaybe (Model.getAgent model).sessions)
+        (ApiData.toMaybe agentState.sessions)
         |> Maybe.withDefault False
 
 
@@ -2327,29 +2319,23 @@ applyAgentChatFromUrl openPanel mChat =
                 )
 
         Just chat ->
-            Flow.get
-                |> Flow.andThen
-                    (\model ->
-                        let
-                            agentState =
-                                Model.getAgent model
-                        in
-                        if agentState.selectedSessionId == Just chat.sessionId then
-                            Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel, highlightTurnId = chat.mTurnId })
-                                |> Flow.seq (scrollToAgentTurn chat.mTurnId)
+            Flow.forAll agent
+                (\agentState ->
+                    if agentState.selectedSessionId == Just chat.sessionId then
+                        Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel, highlightTurnId = chat.mTurnId })
+                            |> Flow.seq (scrollToAgentTurn chat.mTurnId)
 
-                        else
-                            Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel })
-                                |> Flow.seq (Flow.when (ApiData.toMaybe agentState.sessions == Nothing) loadAgentSessions)
-                                |> Flow.seq
-                                    (Flow.get
-                                        |> Flow.andThen
-                                            (\loaded ->
-                                                Flow.when (agentSessionLoaded (Just chat.sessionId) loaded)
-                                                    (selectAgentSessionAt chat.sessionId chat.mTurnId)
-                                            )
+                    else
+                        Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel })
+                            |> Flow.seq (Flow.when (ApiData.toMaybe agentState.sessions == Nothing) loadAgentSessions)
+                            |> Flow.seq
+                                (Flow.forAll agent
+                                    (\loadedAgentState ->
+                                        Flow.when (agentSessionLoaded (Just chat.sessionId) loadedAgentState)
+                                            (selectAgentSessionAt chat.sessionId chat.mTurnId)
                                     )
-                    )
+                                )
+                )
 
 
 scrollToAgentTurn : Maybe String -> Flow Model ()
@@ -2408,12 +2394,11 @@ clearRequestIfMatches expected =
 -- | onUrlChange closes the open chat.
 closeAgentChat : Flow Model ()
 closeAgentChat =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.forAll key
-                    (\k -> Flow.lift (Nav.replaceUrl k (Route.toString (get route model))))
-            )
+    Flow.forAll route
+        (\currentRoute ->
+            Flow.forAll key
+                (\k -> Flow.lift (Nav.replaceUrl k (Route.toString currentRoute)))
+        )
 
 
 mergeSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
@@ -2717,12 +2702,11 @@ selectAgentSession sessionId =
 -- | onUrlChange applies the selection.
 openAgentChat : String -> Flow Model ()
 openAgentChat sessionId =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.forAll key
-                    (\k -> Flow.lift (Nav.pushUrl k (Route.toStringWithChat (Just { sessionId = sessionId, mTurnId = Nothing }) (get route model))))
-            )
+    Flow.forAll route
+        (\currentRoute ->
+            Flow.forAll key
+                (\k -> Flow.lift (Nav.pushUrl k (Route.toStringWithChat (Just { sessionId = sessionId, mTurnId = Nothing }) currentRoute)))
+        )
 
 
 selectAgentSessionAt : String -> Maybe String -> Flow Model ()
@@ -2754,35 +2738,33 @@ selectAgentSessionAt sessionId mTurnId =
 
 toggleAgentPanel : Flow Model ()
 toggleAgentPanel =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                let
-                    agentState =
-                        Model.getAgent model
-
-                    nextOpen =
-                        not agentState.isPanelOpen
-                in
-                Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isSessionListOpen = False, isFocusMode = False })
-                    |> Flow.seq (Flow.when nextOpen loadAgentSessions)
-                    |> Flow.seq (Flow.when (nextOpen && agentState.selectedSessionId == Nothing) restoreLastChat)
-            )
+    Flow.forAll agent
+        (\agentState ->
+            let
+                nextOpen =
+                    not agentState.isPanelOpen
+            in
+            Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isSessionListOpen = False, isFocusMode = False })
+                |> Flow.seq (Flow.when nextOpen loadAgentSessions)
+                |> Flow.seq (Flow.when (nextOpen && agentState.selectedSessionId == Nothing) restoreLastChat)
+        )
 
 
 restoreLastChat : Flow Model ()
 restoreLastChat =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case (Model.getAgent model).lastChat of
-                    Just sessionId ->
-                        Flow.forAll key
-                            (\k -> Flow.lift (Nav.replaceUrl k (Route.toStringWithChat (Just { sessionId = sessionId, mTurnId = Nothing }) (get route model))))
+    Flow.forAll agent
+        (\agentState ->
+            case agentState.lastChat of
+                Just sessionId ->
+                    Flow.forAll route
+                        (\currentRoute ->
+                            Flow.forAll key
+                                (\k -> Flow.lift (Nav.replaceUrl k (Route.toStringWithChat (Just { sessionId = sessionId, mTurnId = Nothing }) currentRoute)))
+                        )
 
-                    Nothing ->
-                        Flow.pure ()
-            )
+                Nothing ->
+                    Flow.pure ()
+        )
 
 
 toggleAgentFocusMode : Flow Model ()
@@ -2908,11 +2890,10 @@ archiveAgentSession sessionId =
                         Ok view ->
                             handleAgentSessionResult (Ok view)
                                 |> Flow.seq
-                                    (Flow.get
-                                        |> Flow.andThen
-                                            (\model ->
-                                                Flow.when ((Model.getAgent model).selectedSessionId == Just sessionId) closeAgentChat
-                                            )
+                                    (Flow.forAll agent
+                                        (\agentState ->
+                                            Flow.when (agentState.selectedSessionId == Just sessionId) closeAgentChat
+                                        )
                                     )
 
                         Err err ->
@@ -2941,11 +2922,10 @@ deleteAgentSession sessionId =
                                     { s | sessions = Success remaining }
                                 )
                                 |> Flow.seq
-                                    (Flow.get
-                                        |> Flow.andThen
-                                            (\model ->
-                                                Flow.when ((Model.getAgent model).selectedSessionId == Just sessionId) closeAgentChat
-                                            )
+                                    (Flow.forAll agent
+                                        (\agentState ->
+                                            Flow.when (agentState.selectedSessionId == Just sessionId) closeAgentChat
+                                        )
                                     )
 
                         Err err ->
