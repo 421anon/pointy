@@ -14,6 +14,7 @@ library
     Agent.Runner
     Agent.Sandbox
     Agent.Session
+    Agent.TurnSignal
     Agent.WarmSession
     Api
     ApiTypes
@@ -142,6 +143,27 @@ test-suite download-metadata
     , backend
     , base
     , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite turn-stream
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          TurnStream.hs
+  -- registerDelay (used by the stream heartbeat) requires -threaded.
+  ghc-options:      -threaded
+  build-depends:
+    , backend
+    , base
+    , bytestring
+    , directory
+    , filepath
+    , servant
+    , stm
+    , temporary
+    , text
+    , time
 
   hs-source-dirs:   test
   default-language: Haskell2010

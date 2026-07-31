@@ -5,6 +5,7 @@
 module Agent.Runner (
     startAgentTurn,
     turnLogStreamHandler,
+    streamLoop,
 ) where
 
 import Agent.Git (commitAgentTurnOutputs, refreshSessionBase, sessionHasActiveRunner)
@@ -24,10 +25,12 @@ import Agent.Session (
     turnLogFilePath,
     turnLogHasFinalizationFailure,
  )
+import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (async, wait)
+import Control.Concurrent.STM (TChan, atomically, orElse, readTChan, readTVar, registerDelay, retry)
 import Control.Exception (IOException, SomeException, try)
 import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
@@ -107,12 +110,13 @@ turnLogStreamHandler tid = do
     turn <- case mTurn of
         Nothing -> throwError err404{errBody = "turn not found"}
         Just t -> return t
+    signal <- liftIO $ registerTurnSignal (turnLogPath turn)
     let padding = sseComment $ "padding " <> T.pack (replicate 4096 ' ')
         source =
             S.fromStepT
                 ( S.Yield
                     (sseComment "connected")
-                    (S.Yield padding (S.Effect (streamLoop turn 0 0)))
+                    (S.Yield padding (S.Effect (streamLoop turn 0 signal)))
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
 
@@ -324,6 +328,8 @@ finishTurn cfg _session turn exitCode = do
     case saveResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Turn finalization error: " <> T.pack (show ex))
         Right _ -> return ()
+    -- Drop the registry entry so abandoned streams do not leak it.
+    unregisterTurnSignal (turnLogPath turn)
 
 combineErrorMessages :: [Maybe Text] -> Maybe Text
 combineErrorMessages messages =
@@ -347,6 +353,7 @@ appendLogLine cfg path label line = do
     when (size < fromIntegral (agentOutputLimitBytes cfg)) $ do
         let rendered = "[" <> label <> "] " <> line <> "\n"
         TIO.appendFile path rendered
+        signalTurnLog path
 
 safeFileSize :: FilePath -> IO Integer
 safeFileSize path = do
@@ -366,44 +373,52 @@ expandArg session_ promptText arg =
                         T.replace "{sessionRoot}" sessionRoot $
                             T.replace "{sessionId}" (sessionId session_) arg
 
-streamLoop :: AgentTurn -> Int -> Int -> IO (S.StepT IO BS.ByteString)
-streamLoop turn offset heartbeatTick = do
-    threadDelay 500000
+{- | Block on the turn log wakeup channel, racing against a 5-second
+heartbeat.  A log append (or a turn state save) fires a wakeup; the
+heartbeat keeps the connection alive during idle stretches.  The log
+file is re-read from the current offset on every wake.
+-}
+heartbeatDelayMicros :: Int
+heartbeatDelayMicros = 5 * 1000000
+
+streamLoop :: AgentTurn -> Int -> TChan () -> IO (S.StepT IO BS.ByteString)
+streamLoop turn offset signal = return $ S.Effect $ do
+    heartbeatDue <- registerDelay heartbeatDelayMicros
+    _ <-
+        atomically $
+            (Just <$> readTChan signal)
+                `orElse` (readTVar heartbeatDue >>= \b -> if b then pure Nothing else retry)
     exists <- doesFileExist (turnLogPath turn)
     content <- if exists then TIO.readFile (turnLogPath turn) else return ""
     let contentLength = T.length content
         chunk = T.drop offset content
         newOffset = contentLength
-    mTurn <- findTurn (turnId turn)
-    let finalizationFailed = turnLogHasFinalizationFailure content
-        turnDone =
-            maybe
-                True
-                (\savedTurn -> not (turnIsUnfinished savedTurn) || finalizationFailed)
-                mTurn
-        done = turnDone
     if not (T.null chunk)
         then
             return $
                 S.Yield
                     (sseEvent "chunk" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn, "chunk" Aeson..= chunk])))
-                    (S.Effect (streamLoop turn newOffset 0))
-        else
+                    (S.Effect (streamLoop turn newOffset signal))
+        else do
+            mTurn <- findTurn (turnId turn)
+            let finalizationFailed = turnLogHasFinalizationFailure content
+                done =
+                    maybe
+                        True
+                        (\savedTurn -> not (turnIsUnfinished savedTurn) || finalizationFailed)
+                        mTurn
             if done
-                then
+                then do
+                    unregisterTurnSignal (turnLogPath turn)
                     return $
                         S.Yield
                             (sseEvent "done" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn])))
                             S.Stop
-                else do
-                    let nextTick = heartbeatTick + 1
-                    if nextTick >= 10
-                        then
-                            return $
-                                S.Yield
-                                    (sseEvent "heartbeat" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn])))
-                                    (S.Effect (streamLoop turn newOffset 0))
-                        else return $ S.Yield (sseComment ("tick-" <> T.pack (show nextTick))) (S.Effect (streamLoop turn newOffset nextTick))
+                else
+                    return $
+                        S.Yield
+                            (sseEvent "heartbeat" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn])))
+                            (S.Effect (streamLoop turn newOffset signal))
 
 sseEvent :: Text -> LBS.ByteString -> BS.ByteString
 sseEvent eventName payload =

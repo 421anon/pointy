@@ -32,6 +32,7 @@ module Agent.Session (
     touchSession,
 ) where
 
+import Agent.TurnSignal (signalTurnLog)
 import Control.Monad (filterM)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.ByteString.Lazy as LBS
@@ -258,6 +259,9 @@ saveTurn turn = do
     path <- turnMetadataPath (turnSessionId turn) (turnId turn)
     createDirectoryIfMissing True (takeDirectory path)
     LBS.writeFile path (encode turn{turnLog = ""})
+    -- Wake any connected turn log stream; the saved state (e.g. a finished
+    -- turn) may matter to it even though no log line was appended.
+    signalTurnLog (turnLogPath turn)
 
 loadTurn :: FilePath -> IO (Either String AgentTurn)
 loadTurn path = do
