@@ -2798,6 +2798,7 @@ toggleAgentPanel =
             Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isSessionListOpen = False, isFocusMode = False })
                 |> Flow.seq (Flow.when nextOpen loadAgentSessions)
                 |> Flow.seq (Flow.when (nextOpen && agentState.selectedSessionId == Nothing) restoreLastChat)
+                |> Flow.seq (Flow.when (not nextOpen) closeAgentChat)
         )
 
 
