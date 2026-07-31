@@ -285,6 +285,7 @@ type alias AgentState =
     , request : Maybe AgentRequest
     , sessionNameEdit : Maybe AgentSessionNameEdit
     , highlightTurnId : Maybe String
+    , lastChat : Maybe String
     }
 
 
@@ -303,6 +304,7 @@ initAgentState =
     , request = Nothing
     , sessionNameEdit = Nothing
     , highlightTurnId = Nothing
+    , lastChat = Nothing
     }
 
 
@@ -789,7 +791,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
-        , agent = { initAgentState | selectedSessionId = flags.lastChat }
+        , agent = { initAgentState | lastChat = flags.lastChat }
         , clusterStatus = ClusterUnknown
         , runningStepIds = []
         , statusBarOpen = False

@@ -1,4 +1,4 @@
-module Route exposing (ArtifactParams, ChatRef, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), chatFromUrl, chatHref, formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, project, toString, toStringWithChat)
+module Route exposing (ArtifactParams, ChatRef, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), chatFromUrl, chatHref, formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, project, toString, toStringWithChat, urlToStringWithChat)
 
 import Accessors exposing (Prism, prism)
 import Html
@@ -291,23 +291,35 @@ chatHref chat =
 
 toStringWithChat : Maybe ChatRef -> Route -> String
 toStringWithChat mChat route =
-    let
-        base =
-            toString route
+    appendChat mChat (toString route)
 
-        separator =
-            if String.contains "?" base then
-                "&"
 
-            else
-                "?"
-    in
-    case mChat of
-        Just chat ->
-            base ++ separator ++ String.join "&" (chatParts chat)
+urlToStringWithChat : Maybe ChatRef -> Url -> String
+urlToStringWithChat mChat url =
+    appendChat mChat (Url.toString url)
 
-        Nothing ->
-            base
+
+appendChat : Maybe ChatRef -> String -> String
+appendChat mChat base =
+    -- A URL that already names a chat is authoritative; never stack a second one.
+    if String.contains "chat=" base then
+        base
+
+    else
+        case mChat of
+            Just chat ->
+                let
+                    separator =
+                        if String.contains "?" base then
+                            "&"
+
+                        else
+                            "?"
+                in
+                base ++ separator ++ String.join "&" (chatParts chat)
+
+            Nothing ->
+                base
 
 
 href : Route -> Html.Attribute msg
