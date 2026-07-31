@@ -1,19 +1,65 @@
-module Route exposing (ArtifactParams, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, project, toString)
+module Route exposing
+    ( ArtifactParams
+    , ChatRef
+    , CompareTarget
+    , Comparison
+    , Highlight
+    , HighlightTarget(..)
+    , LineRange
+    , Page(..)
+    , ProjectParams
+    , Route
+    , chat
+    , chatHref
+    , formatLineRange
+    , fromPage
+    , fromUrl
+    , highlightAnchor
+    , highlightMatches
+    , href
+    , navigationTarget
+    , page
+    , project
+    , routeUrlIso
+    , toString
+    )
 
-import Accessors exposing (Prism, prism)
+{-| `Route` is a full, lawful model of the URL: `fromUrl` and `toUrl` are
+inverses (`routeUrlIso`). The page-specific part is `Page`; `chat` is the
+first cross-cutting URL widget; every other query parameter is preserved
+verbatim in `extraQuery` so nothing the URL carries is ever dropped.
+
+Lawfulness: `fromUrl (toUrl r) == r` for every `r`; `toUrl (fromUrl u) == u`
+for every URL in the app's own canonical rendering (parameters the app
+renders are percent-encoded; hand-typed non-canonical encodings are
+normalized on first navigation).
+
+-}
+
+import Accessors exposing (Iso, Lens, Prism, iso, lens, prism)
 import Html
 import Html.Attributes as Attr
 import Url exposing (Url)
-import Url.Builder as UrlBuilder
 import Url.Parser as Parser exposing ((</>), (<?>), Parser)
 import Url.Parser.Query as Query
 
 
-type Route
+type alias Route =
+    { page : Page
+    , chat : Maybe ChatRef
+    , protocol : Url.Protocol
+    , host : String
+    , port_ : Maybe Int
+    , extraQuery : Maybe String
+    , fragment : Maybe String
+    }
+
+
+type Page
     = Home
     | Project ProjectParams
     | Artifact ArtifactParams
-    | NotFound
+    | NotFound { path : String, query : Maybe String }
 
 
 type alias ProjectParams =
@@ -29,6 +75,12 @@ type alias ArtifactParams =
     , stepId : Int
     , commit : String
     , path : List String
+    }
+
+
+type alias ChatRef =
+    { sessionId : String
+    , mTurnId : Maybe String
     }
 
 
@@ -73,22 +125,164 @@ type alias CompareTargetRef =
     }
 
 
-project : Prism ls Route ProjectParams x y
+page : Lens ls Route Page x y
+page =
+    lens ".page" .page (\r p -> { r | page = p })
+
+
+chat : Lens ls Route (Maybe ChatRef) x y
+chat =
+    lens ".chat" .chat (\r c -> { r | chat = c })
+
+
+{-| The lawful `Url` <-> `Route` pair: `get routeUrlIso` is `fromUrl`,
+`set routeUrlIso` is `toUrl`. See the module docs for the exact laws.
+-}
+routeUrlIso : Iso pr ls Url Route x y
+routeUrlIso =
+    iso "route-url" fromUrl toUrl
+
+
+project : Prism pr Page ProjectParams x y
 project =
     prism ">Project"
         Project
-        (\route ->
-            case route of
+        (\page_ ->
+            case page_ of
                 Project params ->
                     Ok params
 
                 _ ->
-                    Err route
+                    Err page_
         )
 
 
-parser : Parser (Route -> a) a
-parser =
+{-| A bare route with no chat and no extra URL state; used to build
+navigation targets. `host` is empty, so `toString` renders it relative.
+-}
+fromPage : Page -> Route
+fromPage page_ =
+    { page = page_
+    , chat = Nothing
+    , protocol = Url.Https
+    , host = ""
+    , port_ = Nothing
+    , extraQuery = Nothing
+    , fragment = Nothing
+    }
+
+
+fromUrl : Url -> Route
+fromUrl url =
+    let
+        mChat =
+            chatFromQuery url.query
+
+        queryWithoutChat =
+            stripQueryKeys [ "chat", "turn" ] url.query
+
+        ( page_, extraQuery ) =
+            case Parser.parse pageParser url of
+                Just parsedPage ->
+                    ( parsedPage, stripQueryKeys (pageQueryKeys parsedPage) queryWithoutChat )
+
+                Nothing ->
+                    ( NotFound { path = url.path, query = queryWithoutChat }, Nothing )
+    in
+    { page = page_
+    , chat = mChat
+    , protocol = url.protocol
+    , host = url.host
+    , port_ = url.port_
+    , extraQuery = extraQuery
+    , fragment = url.fragment
+    }
+
+
+toUrl : Route -> Url
+toUrl route =
+    let
+        ( pagePath, pageQueryParts ) =
+            case route.page of
+                Home ->
+                    ( "/", [] )
+
+                Project params ->
+                    projectUrlParts params
+
+                Artifact params ->
+                    artifactUrlParts params
+
+                NotFound { path, query } ->
+                    ( path
+                    , case query of
+                        Just rawQuery ->
+                            [ rawQuery ]
+
+                        Nothing ->
+                            []
+                    )
+    in
+    { protocol = route.protocol
+    , host = route.host
+    , port_ = route.port_
+    , path = pagePath
+    , query = joinQueryParts pageQueryParts route.extraQuery (chatQueryParts route.chat)
+    , fragment = route.fragment
+    }
+
+
+toString : Route -> String
+toString route =
+    let
+        url =
+            toUrl route
+    in
+    url.path
+        ++ (case url.query of
+                Just q ->
+                    "?" ++ q
+
+                Nothing ->
+                    ""
+           )
+        ++ (case url.fragment of
+                Just f ->
+                    "#" ++ f
+
+                Nothing ->
+                    ""
+           )
+
+
+href : Route -> Html.Attribute msg
+href targetRoute =
+    Attr.href (toString targetRoute)
+
+
+chatHref : ChatRef -> String
+chatHref chatRef =
+    "?" ++ String.join "&" (chatQueryParts (Just chatRef))
+
+
+navigationTarget : Route -> Route
+navigationTarget route =
+    { route
+        | chat = Nothing
+        , extraQuery = Nothing
+        , fragment = Nothing
+        , page =
+            case route.page of
+                Project params ->
+                    Project { params | mHighlight = Maybe.map (\highlight -> { highlight | range = Nothing }) params.mHighlight, mCompare = Nothing }
+
+                other ->
+                    other
+    }
+
+
+pageParser : Parser (Page -> a) a
+pageParser =
     Parser.oneOf
         [ Parser.map Home Parser.top
         , Parser.map
@@ -132,6 +326,31 @@ parser =
                 <?> Query.string "path"
             )
         ]
+
+
+pageQueryKeys : Page -> List String
+pageQueryKeys page_ =
+    case page_ of
+        Project _ ->
+            [ "hi"
+            , "commit"
+            , "lines"
+            , "compareLeft"
+            , "compareLeftCommit"
+            , "compareLeftMime"
+            , "compareRight"
+            , "compareRightCommit"
+            , "compareRightMime"
+            ]
+
+        Artifact _ ->
+            [ "path" ]
+
+        Home ->
+            []
+
+        NotFound _ ->
+            []
 
 
 highlightParser : List String -> Maybe Highlight
@@ -237,29 +456,55 @@ highlightMatches target recordId path highlight =
     highlight.target == target && highlight.id == recordId && highlight.path == path
 
 
-navigationTarget : Route -> Route
-navigationTarget route =
-    case route of
-        Project params ->
-            Project { params | mHighlight = Maybe.map (\highlight -> { highlight | range = Nothing }) params.mHighlight, mCompare = Nothing }
+projectUrlParts : ProjectParams -> ( String, List String )
+projectUrlParts { projectId, mHighlight, mCommit, mCompare } =
+    let
+        baseUrl =
+            "/project/" ++ String.fromInt projectId
 
-        other ->
-            other
+        hiStr =
+            Maybe.map
+                (\{ id, target, path } ->
+                    let
+                        hiPath =
+                            case target of
+                                Output ->
+                                    String.fromInt id :: path
+
+                                Source ->
+                                    "src" :: String.fromInt id :: path
+                    in
+                    "hi=" ++ String.join "/" (List.map Url.percentEncode hiPath)
+                )
+                mHighlight
+
+        commitStr =
+            Maybe.map (\c -> "commit=" ++ Url.percentEncode c) mCommit
+
+        linesStr =
+            mHighlight
+                |> Maybe.andThen .range
+                |> Maybe.map (\r -> "lines=" ++ formatLineRange r)
+
+        compareStrs =
+            case mCompare of
+                Just compare_ ->
+                    compareTargetQueryParts "compareLeft" compare_.left
+                        ++ compareTargetQueryParts "compareRight" compare_.right
+
+                Nothing ->
+                    []
+    in
+    ( baseUrl
+    , List.filterMap identity ([ hiStr, commitStr, linesStr ] ++ compareStrs)
+    )
 
 
-fromUrl : Url -> Route
-fromUrl url =
-    case Parser.parse parser url of
-        Just route ->
-            route
-
-        Nothing ->
-            NotFound
-
-
-href : Route -> Html.Attribute msg
-href targetRoute =
-    Attr.href (toString targetRoute)
+artifactUrlParts : ArtifactParams -> ( String, List String )
+artifactUrlParts { projectId, stepId, commit, path } =
+    ( "/artifact/" ++ String.fromInt projectId ++ "/" ++ String.fromInt stepId ++ "/" ++ commit
+    , [ "path=" ++ Url.percentEncode (String.join "/" path) ]
+    )
 
 
 compareTargetRef : CompareTarget -> String
@@ -273,74 +518,119 @@ compareTargetRef compareTarget =
                 Source ->
                     "src"
     in
-    String.join "/" (targetPrefix :: String.fromInt compareTarget.id :: compareTarget.path)
+    String.join "/" (List.map Url.percentEncode (targetPrefix :: String.fromInt compareTarget.id :: compareTarget.path))
 
 
 compareTargetQueryParts : String -> CompareTarget -> List (Maybe String)
 compareTargetQueryParts prefix compareTarget =
     [ Just (prefix ++ "=" ++ compareTargetRef compareTarget)
-    , Maybe.map (\commit -> prefix ++ "Commit=" ++ commit) compareTarget.commit
-    , Maybe.map (\mimeType -> prefix ++ "Mime=" ++ mimeType) compareTarget.mimeType
+    , Maybe.map (\commit -> prefix ++ "Commit=" ++ Url.percentEncode commit) compareTarget.commit
+    , Maybe.map (\mimeType -> prefix ++ "Mime=" ++ Url.percentEncode mimeType) compareTarget.mimeType
     ]
 
 
-toString : Route -> String
-toString route =
-    case route of
-        Home ->
-            "/"
 
-        Project { projectId, mHighlight, mCommit, mCompare } ->
-            let
-                baseUrl =
-                    "/project/" ++ String.fromInt projectId
+-- Chat widget: query pair surgery on the raw query string, so every other
+-- parameter round-trips byte-for-byte.
 
-                hiStr =
-                    Maybe.map
-                        (\{ id, target, path } ->
-                            let
-                                hiPath =
-                                    case target of
-                                        Output ->
-                                            String.fromInt id :: path
 
-                                        Source ->
-                                            "src" :: String.fromInt id :: path
-                            in
-                            "hi=" ++ String.join "/" hiPath
-                        )
-                        mHighlight
+chatFromQuery : Maybe String -> Maybe ChatRef
+chatFromQuery mQuery =
+    let
+        pairs =
+            queryPairs mQuery
+    in
+    Maybe.map
+        (\sessionId -> { sessionId = sessionId, mTurnId = findQueryValue "turn" pairs })
+        (findQueryValue "chat" pairs)
 
-                commitStr =
-                    Maybe.map (\c -> "commit=" ++ c) mCommit
 
-                linesStr =
-                    mHighlight
-                        |> Maybe.andThen .range
-                        |> Maybe.map (\r -> "lines=" ++ formatLineRange r)
-
-                compareStrs =
-                    case mCompare of
-                        Just compare_ ->
-                            compareTargetQueryParts "compareLeft" compare_.left
-                                ++ compareTargetQueryParts "compareRight" compare_.right
+chatQueryParts : Maybe ChatRef -> List String
+chatQueryParts mChat =
+    case mChat of
+        Just chatRef ->
+            ("chat=" ++ Url.percentEncode chatRef.sessionId)
+                :: (case chatRef.mTurnId of
+                        Just turnId ->
+                            [ "turn=" ++ Url.percentEncode turnId ]
 
                         Nothing ->
                             []
+                   )
 
-                queryParts =
-                    List.filterMap identity ([ hiStr, commitStr, linesStr ] ++ compareStrs)
-            in
-            if List.isEmpty queryParts then
-                baseUrl
+        Nothing ->
+            []
 
-            else
-                baseUrl ++ "?" ++ String.join "&" queryParts
 
-        Artifact { projectId, stepId, commit, path } ->
-            UrlBuilder.absolute
-                [ "artifact", String.fromInt projectId, String.fromInt stepId, commit ]
-                [ UrlBuilder.string "path" (String.join "/" path) ]
+queryPairs : Maybe String -> List String
+queryPairs mQuery =
+    Maybe.withDefault "" mQuery |> String.split "&"
 
-        NotFound ->
-            "/404"
+
+pairKey : String -> String
+pairKey pair =
+    case String.split "=" pair of
+        key :: _ ->
+            key
+
+        [] ->
+            ""
+
+
+findQueryValue : String -> List String -> Maybe String
+findQueryValue key pairs =
+    pairs
+        |> List.filter (\p -> pairKey p == key)
+        |> List.head
+        |> Maybe.andThen pairValue
+
+
+pairValue : String -> Maybe String
+pairValue pair =
+    let
+        rawValue =
+            String.dropLeft (String.length (pairKey pair) + 1) pair
+    in
+    if String.isEmpty rawValue then
+        Nothing
+
+    else
+        Url.percentDecode rawValue
+
+
+stripQueryKeys : List String -> Maybe String -> Maybe String
+stripQueryKeys keys mQuery =
+    let
+        remaining =
+            queryPairs mQuery
+                |> List.filter (\p -> not (List.member (pairKey p) keys))
+                |> List.filter (\p -> p /= "")
+    in
+    case remaining of
+        [] ->
+            Nothing
+
+        _ ->
+            Just (String.join "&" remaining)
+
+
+joinQueryParts : List String -> Maybe String -> List String -> Maybe String
+joinQueryParts pageParts mExtra chatParts =
+    let
+        all =
+            pageParts
+                ++ (case mExtra of
+                        Just extra ->
+                            [ extra ]
+
+                        Nothing ->
+                            []
+                   )
+                ++ chatParts
+    in
+    case all of
+        [] ->
+            Nothing
+
+        _ ->
+            Just (String.join "&" all)

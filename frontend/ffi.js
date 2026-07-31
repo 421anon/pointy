@@ -229,6 +229,10 @@ export function connectPorts(app) {
     };
   }
 
+  function storeLastChat(sessionId) {
+    localStorage.setItem("agent:lastChat", sessionId);
+  }
+
   const ffiFns = {
     openDialog,
     closeDialog,
@@ -239,6 +243,7 @@ export function connectPorts(app) {
     zoomIframe,
     toggleTheme,
     agentPrompt,
+    storeLastChat,
   };
 
   installGutterDragListeners(app);

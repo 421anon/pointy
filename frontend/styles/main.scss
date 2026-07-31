@@ -10,7 +10,7 @@
 
 body {
   margin: 0;
-  padding: var(--spacing-xl);
+  padding: var(--spacing-sm);
   font:
     14px/1.5 system-ui,
     -apple-system,
@@ -24,6 +24,26 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+.workspace {
+  display: flex;
+  align-items: flex-start;
+}
+
+.workspace > .app {
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace > .app:has(~ .agent-panel.is-focus-mode) {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .workspace > .app:has(~ .agent-panel:not(.is-minimized)) {
+    display: none;
+  }
 }
 
 .app {
@@ -982,13 +1002,14 @@ $delimited-grid-row-height: 28px;
 }
 
 // Button components
-.btn {
+.btn,
+.small-btn {
   @include mixins.button-base;
   @include mixins.interactive-element;
 
   background: none;
   border: 1px solid var(--text-secondary);
-  color: var(--text-secondary);
+  color: var(--text-primary);
 
   padding: var(--spacing-xs) var(--spacing-md);
   font-size: 13px;
@@ -1003,6 +1024,12 @@ $delimited-grid-row-height: 28px;
     color: var(--text-muted);
     border-color: var(--text-muted);
   }
+}
+
+.small-btn {
+  padding: 0 var(--spacing-sm);
+  height: 24px;
+  font-size: var(--font-size-sm);
 }
 
 .icon-btn {

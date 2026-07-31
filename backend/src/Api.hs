@@ -156,6 +156,13 @@ type AgentTurnEndpoint =
         :> ReqBody '[JSON] TurnRequest
         :> Post '[JSON] AgentTurn
 
+type StopTurn =
+    "agent"
+        :> "stop"
+        :> Description "Stops the agent turn running in a session."
+        :> ReqBody '[JSON] SessionRequest
+        :> Post '[JSON] AgentSessionView
+
 type PrepareApply =
     "agent"
         :> "prepare-apply"
@@ -389,6 +396,7 @@ type API =
         :<|> ListAgentSessions
         :<|> GetAgentSession
         :<|> AgentTurnEndpoint
+        :<|> StopTurn
         :<|> AgentTurnStream
         :<|> PrepareApply
         :<|> ConfirmApply

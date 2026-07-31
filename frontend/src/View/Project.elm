@@ -40,5 +40,5 @@ viewProjectNotFound =
     Html.div []
         [ Html.h2 [] [ Html.text "Project not found" ]
         , Html.p [] [ Html.text "The project ID you entered does not exist." ]
-        , Html.a [ Route.href Route.Home ] [ Html.text "Go home" ]
+        , Html.a [ Route.href (Route.fromPage Route.Home) ] [ Html.text "Go home" ]
         ]

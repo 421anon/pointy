@@ -23,6 +23,7 @@ import Handlers.Agent (
     prepareApplyHandler,
     purgeSessionHandler,
     renameSessionHandler,
+    stopTurnHandler,
     turnLogStreamHandler,
     usageHandler,
  )
@@ -31,7 +32,7 @@ import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
-import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
+import Handlers.RunStep (restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler)
 import Handlers.StatusStream (stepStatusStreamHandler)
@@ -90,6 +91,7 @@ server =
         :<|> listSessionsHandler
         :<|> getSessionHandler
         :<|> postTurnHandler
+        :<|> stopTurnHandler
         :<|> turnLogStreamHandler
         :<|> prepareApplyHandler
         :<|> confirmApplyHandler
@@ -279,6 +281,9 @@ main = do
                 putStrLn "Warming project out paths..."
                 warmProjectOutPaths
                 putStrLn "Project out paths warmed."
+                putStrLn "Restoring slurm jobs..."
+                restoreJobsFromSlurm
+                putStrLn "Slurm jobs restored."
                 putStrLn "Restoring running statuses..."
                 restoreRunningStatuses
                 putStrLn "Running statuses restored."

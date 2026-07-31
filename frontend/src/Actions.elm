@@ -31,12 +31,11 @@ import Model.Lib exposing (sortProjects)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
 import Ports
 import Process
-import Route exposing (Route(..))
+import Route exposing (Route)
 import Scroll
 import Set
 import Task
 import Toast exposing (Toast)
-import Url
 
 
 toggleTable : A_Traversal Model (Table a) -> Flow Model ()
@@ -259,7 +258,7 @@ loadProjects =
                             (\model ->
                                 let
                                     mCommit_ =
-                                        try (route << Route.project << mCommit << just) model
+                                        try (route << Route.page << Route.project << mCommit << just) model
                                 in
                                 callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
                                     |> FlowError.foldResult (\_ -> Flow.async replayStepStatusBuffer) (\_ -> Flow.pure ())
@@ -351,7 +350,7 @@ loadStepConfig =
             (\model ->
                 let
                     mCommit_ =
-                        try (route << Route.project << mCommit << just) model
+                        try (route << Route.page << Route.project << mCommit << just) model
                 in
                 callApi stepConfig (Api.fetchStepConfig mCommit_)
                     |> Flow.seq
@@ -368,7 +367,7 @@ loadStepConfig =
 
 loadPresets : Flow Model ()
 loadPresets =
-    Flow.try (route << Route.project << mCommit << just)
+    Flow.try (route << Route.page << Route.project << mCommit << just)
         (callApi presets << Api.fetchPresets)
         |> Flow.return ()
 
@@ -611,20 +610,51 @@ onUrlRequest : Browser.UrlRequest -> Flow Model ()
 onUrlRequest urlRequest =
     case urlRequest of
         Browser.Internal url ->
-            Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Url.toString url)))
+            Flow.forAll route
+                (\currentRoute ->
+                    let
+                        targetRoute =
+                            Route.fromUrl url
+                    in
+                    Flow.forAll key
+                        (\k -> Flow.lift (Nav.pushUrl k (Route.toString (inheritChat currentRoute targetRoute))))
+                )
 
         Browser.External href ->
             Flow.lift (Nav.load href)
 
 
 goToRoute : Route -> Flow Model ()
-goToRoute route =
-    Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Route.toString route)))
+goToRoute targetRoute =
+    Flow.forAll route
+        (\currentRoute ->
+            Flow.forAll key
+                (\k -> Flow.lift (Nav.pushUrl k (Route.toString (inheritChat currentRoute targetRoute))))
+        )
 
 
 replaceRoute : Route -> Flow Model ()
-replaceRoute route =
-    Flow.forAll key (\k -> Flow.lift (Nav.replaceUrl k (Route.toString route)))
+replaceRoute targetRoute =
+    Flow.forAll route
+        (\currentRoute ->
+            Flow.forAll key
+                (\k -> Flow.lift (Nav.replaceUrl k (Route.toString (inheritChat currentRoute targetRoute))))
+        )
+
+
+
+-- | A target that already names a chat (e.g. a permalink) is authoritative;
+-- | otherwise the open chat rides along across page navigations.
+
+
+inheritChat : Route -> Route -> Route
+inheritChat currentRoute targetRoute =
+    case targetRoute.chat of
+        Just _ ->
+            targetRoute
+
+        Nothing ->
+            { targetRoute | chat = currentRoute.chat }
 
 
 clearStepLog : Int -> Maybe String -> Flow Model ()
@@ -818,7 +848,7 @@ loadNotices id =
             (\model ->
                 let
                     mCommit_ =
-                        try (route << Route.project << mCommit << just) model
+                        try (route << Route.page << Route.project << mCommit << just) model
 
                     key =
                         Model.stepLogKey id mCommit_
@@ -849,7 +879,7 @@ loadStepLog id =
             (\model ->
                 let
                     mCommit_ =
-                        try (route << Route.project << mCommit << just) model
+                        try (route << Route.page << Route.project << mCommit << just) model
 
                     key =
                         Model.stepLogKey id mCommit_
@@ -887,7 +917,7 @@ runStep spec id =
             (\model ->
                 let
                     mCommit_ =
-                        try (route << Route.project << mCommit << just) model
+                        try (route << Route.page << Route.project << mCommit << just) model
                 in
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
@@ -927,7 +957,7 @@ stopStep spec id =
             (\model ->
                 let
                     mCommit_ =
-                        try (route << Route.project << mCommit << just) model
+                        try (route << Route.page << Route.project << mCommit << just) model
                 in
                 setStatus (Success StatusRunning)
                     |> Flow.seq (callApi void (Api.stopStep id mCommit_))
@@ -992,12 +1022,14 @@ shareEntity projectId entityId target pathSegments mRange =
                 (\origin_ ->
                     let
                         route_ =
-                            Route.Project
-                                { projectId = projectId
-                                , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
-                                , mCommit = mCommit_
-                                , mCompare = Nothing
-                                }
+                            Route.fromPage
+                                (Route.Project
+                                    { projectId = projectId
+                                    , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
+                                    , mCommit = mCommit_
+                                    , mCompare = Nothing
+                                    }
+                                )
                     in
                     callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString route_)
                 )
@@ -1055,12 +1087,12 @@ clearCompareRoute : Flow Model ()
 clearCompareRoute =
     overRouteReplace <|
         \currentRoute ->
-            case currentRoute of
-                Project params ->
-                    Project { params | mCompare = Nothing }
+            case currentRoute.page of
+                Route.Project params ->
+                    { currentRoute | page = Route.Project { params | mCompare = Nothing } }
 
-                other ->
-                    other
+                _ ->
+                    currentRoute
 
 
 selectCompareFile : CompareSelection -> Flow Model ()
@@ -1076,25 +1108,27 @@ selectCompareFile right =
                             }
 
                         nextRoute =
-                            case currentRoute of
-                                Project params ->
-                                    Project { params | projectId = left.projectId, mCompare = Just comparison }
+                            case currentRoute.page of
+                                Route.Project params ->
+                                    { currentRoute | page = Route.Project { params | projectId = left.projectId, mCompare = Just comparison } }
 
                                 _ ->
-                                    Project
-                                        { projectId = left.projectId
-                                        , mHighlight = Nothing
-                                        , mCommit = Nothing
-                                        , mCompare = Just comparison
-                                        }
+                                    Route.fromPage
+                                        (Route.Project
+                                            { projectId = left.projectId
+                                            , mHighlight = Nothing
+                                            , mCommit = Nothing
+                                            , mCompare = Just comparison
+                                            }
+                                        )
                     in
                     goToRoute nextRoute
 
 
 syncCompareFromRoute : Route -> Flow Model ()
 syncCompareFromRoute route_ =
-    case route_ of
-        Project { projectId, mCompare } ->
+    case route_.page of
+        Route.Project { projectId, mCompare } ->
             case Maybe.andThen (compareSelectionsFromRoute projectId) mCompare of
                 Just ( left, right ) ->
                     activateCompare left right
@@ -1397,7 +1431,7 @@ scrollPlainFileToHighlightedRange : Route.HighlightTarget -> Int -> List String 
 scrollPlainFileToHighlightedRange target recordId path =
     Flow.forAll route
         (\route_ ->
-            try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+            try (Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
                 |> Maybe.andThen .range
                 |> Maybe.unwrap (Flow.pure ()) (.from >> scrollPlainFileToLine target recordId path)
         )
@@ -1415,7 +1449,7 @@ setPlainFileLineCount target recordId path content =
 
 highlightStartLine : Route.HighlightTarget -> Int -> List String -> Route -> Int
 highlightStartLine target recordId path route_ =
-    try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+    try (Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
         |> Maybe.andThen .range
         |> Maybe.map .from
         |> Maybe.withDefault 1
@@ -1542,7 +1576,7 @@ onSeekScroll target recordId path metrics =
 
 openHighlightedGridInPlainMode : Route.HighlightTarget -> Int -> List String -> Route -> Model.DelimitedGrid -> Model.DelimitedGrid
 openHighlightedGridInPlainMode target recordId path route_ delimitedGrid =
-    try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+    try (Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
         |> Maybe.andThen .range
         |> Maybe.unwrap delimitedGrid (\_ -> { delimitedGrid | grid = Grid.showPlain delimitedGrid.grid })
 
@@ -1975,7 +2009,7 @@ startGutterDrag target recordId path line =
         (\route_ ->
             let
                 clearOnClick =
-                    try (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
+                    try (Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) route_
                         |> Maybe.andThen .range
                         |> Maybe.map (\range -> range.from == line && range.to == line)
                         |> Maybe.withDefault False
@@ -2027,7 +2061,7 @@ clearHighlightedRange : Route.HighlightTarget -> Int -> List String -> Flow Mode
 clearHighlightedRange target recordId path =
     overRouteReplace
         (over
-            (Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path))
+            (Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path))
             (\highlight -> { highlight | range = Nothing })
         )
 
@@ -2039,13 +2073,13 @@ clearHighlightedFileOnClose target recordId path =
             Route.highlightMatches target recordId path highlight && Maybe.isJust highlight.range
     in
     overRouteReplace
-        (over (Route.project << mHighlight) (Maybe.filter (not << shouldClear)))
+        (over (Route.page << Route.project << mHighlight) (Maybe.filter (not << shouldClear)))
 
 
 updateGutterRange : Route.HighlightTarget -> Int -> List String -> Route.LineRange -> Flow Model ()
 updateGutterRange target recordId path range =
     overRouteReplace
-        (set (Route.project << mHighlight)
+        (set (Route.page << Route.project << mHighlight)
             (Just { id = recordId, target = target, path = path, range = Just range })
         )
 
@@ -2155,13 +2189,13 @@ onSelectSearch mProjectId stepId =
             (\model ->
                 let
                     mCommit_ =
-                        try (route << Route.project << mCommit << just) model
+                        try (route << Route.page << Route.project << mCommit << just) model
 
                     pickedProjectId =
                         mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
                 in
                 pickedProjectId
-                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = mCommit_, mCompare = Nothing }))
+                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Route.fromPage (Route.Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = mCommit_, mCompare = Nothing })))
             )
 
 
@@ -2251,6 +2285,88 @@ agentChatEndId =
     "agent-chat-end"
 
 
+agentSessionNameInputId : String
+agentSessionNameInputId =
+    "agent-session-name-input"
+
+
+agentTurnId : String -> String
+agentTurnId turnId =
+    "agent-turn-" ++ turnId
+
+
+shareAgentChat : String -> Flow Model ()
+shareAgentChat sessionId =
+    Flow.forAll route
+        (\currentRoute ->
+            Flow.forAll origin
+                (\origin_ ->
+                    callJs "copyToClipboard"
+                        Encode.string
+                        (Decode.succeed ())
+                        (origin_ ++ Route.toString { currentRoute | chat = Just { sessionId = sessionId, mTurnId = Nothing } })
+                )
+        )
+        |> Flow.seq (addToast True "Share link copied to clipboard")
+
+
+agentSessionLoaded : Maybe String -> Model.AgentState -> Bool
+agentSessionLoaded mSessionId agentState =
+    Maybe.map2
+        (\sessionId -> List.any (\view -> view.session.sessionId == sessionId))
+        mSessionId
+        (ApiData.toMaybe agentState.sessions)
+        |> Maybe.withDefault False
+
+
+applyAgentChatFromUrl : Bool -> Flow Model ()
+applyAgentChatFromUrl openPanel =
+    Flow.forAll (route << Route.chat)
+        (\mChat ->
+            case mChat of
+                Nothing ->
+                    -- The URL no longer names a chat, so the chat it selected is closed.
+                    Flow.over agent
+                        (\s ->
+                            if s.selectedSessionId == Nothing then
+                                s
+
+                            else
+                                { s
+                                    | selectedSessionId = Nothing
+                                    , activeTurnStream = Nothing
+                                    , chatEntries = []
+                                    , highlightTurnId = Nothing
+                                }
+                        )
+
+                Just chat ->
+                    Flow.forAll agent
+                        (\agentState ->
+                            if agentState.selectedSessionId == Just chat.sessionId then
+                                Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel, highlightTurnId = chat.mTurnId })
+                                    |> Flow.seq (scrollToAgentTurn chat.mTurnId)
+
+                            else
+                                Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel })
+                                    |> Flow.seq (Flow.when (ApiData.toMaybe agentState.sessions == Nothing) loadAgentSessions)
+                                    |> Flow.seq
+                                        (Flow.forAll agent
+                                            (\loadedAgentState ->
+                                                Flow.when (agentSessionLoaded (Just chat.sessionId) loadedAgentState)
+                                                    (selectAgentSessionAt chat.sessionId chat.mTurnId)
+                                            )
+                                        )
+                        )
+        )
+
+
+scrollToAgentTurn : Maybe String -> Flow Model ()
+scrollToAgentTurn =
+    Maybe.unwrap (Flow.pure ())
+        (\turnId -> Flow.attemptTask (Scroll.scrollElementY agentChatId (agentTurnId turnId) 0 0))
+
+
 scrollAgentChatToBottom : Flow Model ()
 scrollAgentChatToBottom =
     Flow.attemptTask (Scroll.scrollElementY agentChatId agentChatEndId 1 1)
@@ -2297,14 +2413,42 @@ clearRequestIfMatches expected =
         )
 
 
-clearAgentSelection : Model.AgentState -> Model.AgentState
-clearAgentSelection s =
-    { s
-        | selectedSessionId = Nothing
-        , chatEntries = []
-        , chunkBuffer = ""
-        , sessionNameEdit = Nothing
-    }
+
+-- | Drop the chat from the current URL; the resulting onUrlChange closes
+-- | the open chat.
+
+
+closeAgentChat : Flow Model ()
+closeAgentChat =
+    Flow.over (route << Route.chat) (\_ -> Nothing)
+        |> Flow.seq replaceCurrentUrl
+
+
+
+-- | Push the current route's rendered URL (used after the route's chat
+-- | widget changed).
+
+
+pushCurrentUrl : Flow Model ()
+pushCurrentUrl =
+    Flow.forAll route
+        (\currentRoute ->
+            Flow.forAll key
+                (\k -> Flow.lift (Nav.pushUrl k (Route.toString currentRoute)))
+        )
+
+
+
+-- | Replace the current URL with the current route's rendered form.
+
+
+replaceCurrentUrl : Flow Model ()
+replaceCurrentUrl =
+    Flow.forAll route
+        (\currentRoute ->
+            Flow.forAll key
+                (\k -> Flow.lift (Nav.replaceUrl k (Route.toString currentRoute)))
+        )
 
 
 mergeSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
@@ -2376,7 +2520,7 @@ appendPersistedTurn turn entries =
                     turn.turnPrompt
 
             seeded =
-                entries ++ [ Model.ChatTurnEntry { prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+                entries ++ [ Model.ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
 
             logLines =
                 turn.turnLog
@@ -2559,11 +2703,8 @@ resumeSelectedAgentTurn =
             )
 
 
-handleAgentSessionResult :
-    Bool
-    -> Result Http.Error Model.AgentSessionView
-    -> Flow Model ()
-handleAgentSessionResult selectOnSuccess result =
+handleAgentSessionResult : Result Http.Error Model.AgentSessionView -> Flow Model ()
+handleAgentSessionResult result =
     case result of
         Ok view ->
             Flow.over agent
@@ -2571,22 +2712,12 @@ handleAgentSessionResult selectOnSuccess result =
                     let
                         withView =
                             mergeSessionView view agentState
-
-                        selectedState =
-                            if selectOnSuccess then
-                                { withView
-                                    | selectedSessionId = Just view.session.sessionId
-                                    , isMobileSidebarOpen = False
-                                }
-
-                            else
-                                withView
                     in
-                    if selectedState.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
-                        applyPersistedTranscript view selectedState
+                    if withView.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
+                        applyPersistedTranscript view withView
 
                     else
-                        selectedState
+                        withView
                 )
                 |> Flow.seq scrollAgentChatToBottom
 
@@ -2603,28 +2734,6 @@ loadAgentSessions =
                 case result of
                     Ok views ->
                         setAgentSessions (Success views)
-                            |> Flow.seq
-                                (Flow.get
-                                    |> Flow.andThen
-                                        (\model ->
-                                            let
-                                                agentState =
-                                                    Model.getAgent model
-                                            in
-                                            case agentState.selectedSessionId of
-                                                Just _ ->
-                                                    Flow.pure ()
-
-                                                Nothing ->
-                                                    case List.head views of
-                                                        Just first ->
-                                                            Flow.over agent
-                                                                (\s -> { s | selectedSessionId = Just first.session.sessionId })
-
-                                                        Nothing ->
-                                                            Flow.pure ()
-                                        )
-                                )
                             |> Flow.seq hydrateSelectedAgentSession
                             |> Flow.seq resumeSelectedAgentTurn
 
@@ -2636,6 +2745,23 @@ loadAgentSessions =
 
 selectAgentSession : String -> Flow Model ()
 selectAgentSession sessionId =
+    openAgentChat sessionId
+
+
+
+-- | The single way to open a chat: set the chat widget in the current
+-- | route and navigate to the rendered URL. The resulting onUrlChange
+-- | applies the selection.
+
+
+openAgentChat : String -> Flow Model ()
+openAgentChat sessionId =
+    Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing })
+        |> Flow.seq pushCurrentUrl
+
+
+selectAgentSessionAt : String -> Maybe String -> Flow Model ()
+selectAgentSessionAt sessionId mTurnId =
     Flow.over agent
         (\s ->
             { s
@@ -2648,42 +2774,61 @@ selectAgentSession sessionId =
                         |> Maybe.map persistedTranscript
                         |> Maybe.withDefault []
                 , chunkBuffer = ""
-                , isMobileSidebarOpen = False
+                , isSessionListOpen = False
                 , sessionNameEdit = Nothing
+                , highlightTurnId = mTurnId
             }
         )
         |> Flow.seq scrollAgentChatToBottom
         |> Flow.seq (loadAgentSession sessionId)
         |> Flow.seq resumeSelectedAgentTurn
+        |> Flow.seq (scrollToAgentTurn mTurnId)
+        |> Flow.seq (Flow.over agent (\s -> { s | lastChat = Just sessionId }))
+        |> Flow.seq (callJs "storeLastChat" Encode.string (Decode.succeed ()) sessionId)
 
 
 toggleAgentPanel : Flow Model ()
 toggleAgentPanel =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                let
-                    nextOpen =
-                        not (Model.getAgent model).isPanelOpen
-                in
-                Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isMobileSidebarOpen = False })
-                    |> Flow.seq (Flow.when nextOpen loadAgentSessions)
-            )
+    Flow.forAll agent
+        (\agentState ->
+            let
+                nextOpen =
+                    not agentState.isPanelOpen
+            in
+            Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isSessionListOpen = False, isFocusMode = False })
+                |> Flow.seq (Flow.when nextOpen loadAgentSessions)
+                |> Flow.seq (Flow.when (nextOpen && agentState.selectedSessionId == Nothing) restoreLastChat)
+                |> Flow.seq (Flow.when (not nextOpen) closeAgentChat)
+        )
 
 
-toggleAgentMobileSidebar : Flow Model ()
-toggleAgentMobileSidebar =
-    Flow.over agent (\s -> { s | isMobileSidebarOpen = not s.isMobileSidebarOpen })
+restoreLastChat : Flow Model ()
+restoreLastChat =
+    Flow.forAll agent
+        (\agentState ->
+            case agentState.lastChat of
+                Just sessionId ->
+                    Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing })
+                        |> Flow.seq replaceCurrentUrl
+
+                Nothing ->
+                    Flow.pure ()
+        )
 
 
-toggleAgentMaximized : Flow Model ()
-toggleAgentMaximized =
-    Flow.over agent (\s -> { s | isMaximized = not s.isMaximized })
+toggleAgentFocusMode : Flow Model ()
+toggleAgentFocusMode =
+    Flow.over agent (\s -> { s | isFocusMode = not s.isFocusMode })
 
 
-toggleAgentDesktopSidebarCollapsed : Flow Model ()
-toggleAgentDesktopSidebarCollapsed =
-    Flow.over agent (\s -> { s | isDesktopSidebarCollapsed = not s.isDesktopSidebarCollapsed })
+exitAgentFocusMode : Flow Model ()
+exitAgentFocusMode =
+    Flow.over agent (\s -> { s | isFocusMode = False })
+
+
+toggleAgentSessionList : Flow Model ()
+toggleAgentSessionList =
+    Flow.over agent (\s -> { s | isSessionListOpen = not s.isSessionListOpen })
 
 
 startAgentSessionNameEdit : String -> String -> Flow Model ()
@@ -2699,6 +2844,7 @@ startAgentSessionNameEdit sessionId currentName =
                         }
             }
         )
+        |> Flow.seq (Flow.attemptTask (Dom.focus agentSessionNameInputId))
 
 
 updateAgentSessionNameEdit : String -> Flow Model ()
@@ -2742,7 +2888,7 @@ saveAgentSessionName =
                                             (\result ->
                                                 case result of
                                                     Ok view ->
-                                                        handleAgentSessionResult False (Ok view)
+                                                        handleAgentSessionResult (Ok view)
                                                             |> Flow.seq (Flow.over agent (clearSessionNameEdit edit.sessionId))
 
                                                     Err err ->
@@ -2791,15 +2937,11 @@ archiveAgentSession sessionId =
                 (\result ->
                     case result of
                         Ok view ->
-                            handleAgentSessionResult False (Ok view)
+                            handleAgentSessionResult (Ok view)
                                 |> Flow.seq
-                                    (Flow.over agent
-                                        (\s ->
-                                            if s.selectedSessionId == Just sessionId then
-                                                clearAgentSelection s
-
-                                            else
-                                                s
+                                    (Flow.forAll agent
+                                        (\agentState ->
+                                            Flow.when (agentState.selectedSessionId == Just sessionId) closeAgentChat
                                         )
                                     )
 
@@ -2825,16 +2967,15 @@ deleteAgentSession sessionId =
                                         remaining =
                                             ApiData.withDefault [] s.sessions
                                                 |> List.filter (\v -> v.session.sessionId /= sessionId)
-
-                                        withRemaining =
-                                            { s | sessions = Success remaining }
                                     in
-                                    if s.selectedSessionId == Just sessionId then
-                                        clearAgentSelection withRemaining
-
-                                    else
-                                        withRemaining
+                                    { s | sessions = Success remaining }
                                 )
+                                |> Flow.seq
+                                    (Flow.forAll agent
+                                        (\agentState ->
+                                            Flow.when (agentState.selectedSessionId == Just sessionId) closeAgentChat
+                                        )
+                                    )
 
                         Err err ->
                             clearRequestIfMatches (Model.DeletingAgentSession sessionId)
@@ -2900,43 +3041,26 @@ clearChangesetOperation sessionId =
 
 createAgentSession : Flow Model ()
 createAgentSession =
-    Flow.forAll agent
-        (\previousAgentState ->
-            withAgentRequest Model.CreatingAgentSession
-                (Flow.over agent
-                    (\agentState ->
-                        { agentState
-                            | selectedSessionId = Nothing
-                            , activeTurnStream = Nothing
-                            , chatEntries = []
-                            , chunkBuffer = ""
-                            , isMobileSidebarOpen = False
-                            , sessionNameEdit = Nothing
-                        }
-                    )
-                    |> Flow.seq
-                        (AgentApi.createSession
-                            |> Flow.andThen
-                                (\result ->
-                                    case result of
-                                        Ok view ->
-                                            handleAgentSessionResult True (Ok view)
+    withAgentRequest Model.CreatingAgentSession
+        (Flow.over agent
+            (\agentState ->
+                { agentState
+                    | activeTurnStream = Nothing
+                    , isSessionListOpen = False
+                    , sessionNameEdit = Nothing
+                }
+            )
+            |> Flow.seq
+                (AgentApi.createSession
+                    |> Flow.andThen
+                        (\result ->
+                            case result of
+                                Ok view ->
+                                    handleAgentSessionResult (Ok view)
+                                        |> Flow.seq (openAgentChat view.session.sessionId)
 
-                                        Err err ->
-                                            Flow.over agent
-                                                (\current ->
-                                                    { current
-                                                        | selectedSessionId = previousAgentState.selectedSessionId
-                                                        , chatEntries = previousAgentState.chatEntries
-                                                        , chunkBuffer = previousAgentState.chunkBuffer
-                                                        , isMobileSidebarOpen = previousAgentState.isMobileSidebarOpen
-                                                        , sessionNameEdit = previousAgentState.sessionNameEdit
-                                                    }
-                                                )
-                                                |> Flow.seq resumeSelectedAgentTurn
-                                                |> Flow.seq (clearRequestIfMatches Model.CreatingAgentSession)
-                                                |> Flow.seq (addToast False (Http.errorMessage err))
-                                )
+                                Err err ->
+                                    addToast False (Http.errorMessage err)
                         )
                 )
         )
@@ -2945,7 +3069,7 @@ createAgentSession =
 loadAgentSession : String -> Flow Model ()
 loadAgentSession sessionId =
     AgentApi.fetchSession sessionId
-        |> Flow.andThen (handleAgentSessionResult False)
+        |> Flow.andThen handleAgentSessionResult
 
 
 withSelectedAgentSession : (Model.AgentSessionView -> Flow Model ()) -> Flow Model ()
@@ -2977,6 +3101,26 @@ failLatestPendingChatTurn error entries =
             entries
 
 
+stopAgentTurn : Flow Model ()
+stopAgentTurn =
+    withSelectedAgentSession
+        (\view ->
+            let
+                request =
+                    Model.StoppingAgentTurn view.session.sessionId
+            in
+            Flow.over agent (\s -> { s | request = Just request })
+                |> Flow.seq (AgentApi.stop view.session.sessionId)
+                |> FlowError.foldResult
+                    (\stoppedView ->
+                        Flow.over agent (\s -> finalizeChatTurn Nothing { s | activeTurnStream = Nothing })
+                            |> Flow.seq (handleAgentSessionResult (Ok stoppedView))
+                    )
+                    (\err -> addToast False (Http.errorMessage err))
+                |> Flow.seq (clearRequestIfMatches request)
+        )
+
+
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
     withSelectedAgentSession
@@ -3000,7 +3144,7 @@ submitAgentPrompt =
                                             | chunkBuffer = ""
                                             , chatEntries =
                                                 agentState.chatEntries
-                                                    ++ [ Model.ChatTurnEntry { prompt = prompt, assistant = "", status = Model.ChatPending } ]
+                                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = Model.ChatPending } ]
                                         }
                                     )
                                     |> Flow.seq clearAgentPrompt
@@ -3059,7 +3203,7 @@ applyAgentChanges =
                                                         (\confirmResult ->
                                                             case confirmResult of
                                                                 Ok applyView ->
-                                                                    handleAgentSessionResult False (Ok applyView.sessionView)
+                                                                    handleAgentSessionResult (Ok applyView.sessionView)
                                                                         |> Flow.seq (markInvalidatedStatusesLoading applyView)
                                                                         |> Flow.seq reloadWorkspaceData
                                                                         |> Flow.seq loadAgentSessions
@@ -3073,7 +3217,7 @@ applyAgentChanges =
                                             Nothing ->
                                                 -- prepare_conflict: conflict details are in session.lastError,
                                                 -- shown in the changeset box.
-                                                handleAgentSessionResult False (Ok preparedView)
+                                                handleAgentSessionResult (Ok preparedView)
                                                     |> Flow.seq (clearChangesetOperation view.session.sessionId)
 
                                     Err err ->
@@ -3108,7 +3252,7 @@ discardAgentSession =
                             (\result ->
                                 case result of
                                     Ok discardedView ->
-                                        handleAgentSessionResult False (Ok discardedView)
+                                        handleAgentSessionResult (Ok discardedView)
                                             |> Flow.seq loadAgentSessions
                                             |> Flow.seq (clearChangesetOperation view.session.sessionId)
 
@@ -3397,6 +3541,6 @@ openRunningStep stepId =
                     |> Maybe.unwrap (Flow.pure ())
                         (\pId ->
                             Flow.setAll statusBarOpen False
-                                |> Flow.seq (goToRoute (Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = Nothing, mCompare = Nothing }))
+                                |> Flow.seq (goToRoute (Route.fromPage (Route.Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = Nothing, mCompare = Nothing })))
                         )
             )

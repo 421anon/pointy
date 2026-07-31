@@ -316,12 +316,14 @@ sourceRoute sel =
                 FromSrc ->
                     ( Route.Source, Nothing )
     in
-    Route.Project
-        { projectId = sel.projectId
-        , mHighlight = Just { id = sel.recordId, target = target, path = sel.path, range = Nothing }
-        , mCommit = mCommit
-        , mCompare = Nothing
-        }
+    Route.fromPage
+        (Route.Project
+            { projectId = sel.projectId
+            , mHighlight = Just { id = sel.recordId, target = target, path = sel.path, range = Nothing }
+            , mCommit = mCommit
+            , mCompare = Nothing
+            }
+        )
 
 
 viewPaneBody : CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Html (Flow Model ())

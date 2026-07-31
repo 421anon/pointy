@@ -4,11 +4,12 @@
 
 module Agent.Runner (
     startAgentTurn,
+    stopAgentTurn,
     turnLogStreamHandler,
     streamLoop,
 ) where
 
-import Agent.Git (commitAgentTurnOutputs, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Git (AgentSessionView, commitAgentTurnOutputs, loadAgentSessionView, refreshSessionBase, sessionHasActiveRunner)
 import Agent.Sandbox (nixDaemonBindArgs)
 import Agent.Session (
     AgentSession (..),
@@ -28,10 +29,10 @@ import Agent.Session (
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait)
-import Control.Concurrent.STM (TChan, atomically, orElse, readTChan, readTVar, registerDelay, retry)
-import Control.Exception (IOException, SomeException, try)
+import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, writeTVar)
+import Control.Exception (IOException, SomeException, finally, try)
 import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
@@ -39,7 +40,9 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -52,9 +55,19 @@ import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsEOF, hPutStr, hSetBuffering)
-import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, terminateProcess, waitForProcess)
+import System.IO.Unsafe (unsafePerformIO)
+import System.Posix.Signals (sigKILL, signalProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 import UserRepo (userRepoPath, withUserRepoExclusive)
+
+{-# NOINLINE activeRunners #-}
+activeRunners :: TVar (Map.Map Text (Text, ProcessHandle))
+activeRunners = unsafePerformIO $ newTVarIO Map.empty
+
+{-# NOINLINE stoppedTurns #-}
+stoppedTurns :: TVar (Set.Set Text)
+stoppedTurns = unsafePerformIO $ newTVarIO Set.empty
 
 startAgentTurn :: Text -> Text -> ExceptT String IO AgentTurn
 startAgentTurn sid prompt = do
@@ -104,6 +117,39 @@ startAgentTurn sid prompt = do
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
     return turn
 
+stopAgentTurn :: Text -> ExceptT String IO AgentSessionView
+stopAgentTurn sid = do
+    mRunner <- liftIO $ atomically $ Map.lookup sid <$> readTVar activeRunners
+    case mRunner of
+        Nothing -> return ()
+        Just (tid, ph) -> liftIO $ do
+            atomically $ modifyTVar' stoppedTurns (Set.insert tid)
+            cfg <- resolveConfigPath >>= loadConfig
+            logPath <- turnLogFilePath sid tid
+            appendLogLine (configAgent cfg) logPath "system" "Stopped by user"
+            void (try (terminateProcess ph) :: IO (Either SomeException ()))
+            terminated <- awaitRunnerExit sid 40
+            unless terminated $ do
+                appendLogLine (configAgent cfg) logPath "system" "Runner ignored termination; killing it"
+                void (try (killRunner ph) :: IO (Either SomeException ()))
+                void $ awaitRunnerExit sid 60
+    loadAgentSessionView sid
+
+awaitRunnerExit :: Text -> Int -> IO Bool
+awaitRunnerExit sid ticks = do
+    live <- atomically $ Map.member sid <$> readTVar activeRunners
+    if not live
+        then return True
+        else
+            if ticks <= 0
+                then return False
+                else threadDelay 100000 >> awaitRunnerExit sid (ticks - 1)
+
+killRunner :: ProcessHandle -> IO ()
+killRunner ph = do
+    mPid <- getPid ph
+    mapM_ (signalProcess sigKILL) mPid
+
 turnLogStreamHandler :: Text -> Handler (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (S.SourceT IO BS.ByteString))
 turnLogStreamHandler tid = do
     mTurn <- liftIO $ findTurn tid
@@ -143,6 +189,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn = do
             return $ ExitFailure 127
         Right code -> return code
     finishTurn cfg session_ turn exitCode
+        `finally` atomically (modifyTVar' activeRunners (Map.delete (sessionId session_)))
 
 runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> IO ExitCode
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
@@ -228,6 +275,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (mIn, mOut, mErr, ph) <- createProcess process
+    atomically $ modifyTVar' activeRunners (Map.insert (sessionId session_) (turnId turn, ph))
     case mIn of
         Nothing -> return ()
         Just hin -> do
@@ -283,10 +331,18 @@ streamHandle cfg logPath outputMarker visibleLabel handle = do
 
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
 finishTurn cfg _session turn exitCode = do
+    stopped <- atomically $ do
+        pending <- readTVar stoppedTurns
+        let wasStopped = Set.member (turnId turn) pending
+        when wasStopped $ writeTVar stoppedTurns (Set.delete (turnId turn) pending)
+        return wasStopped
     let exitCodeInt = case exitCode of
             ExitSuccess -> 0
             ExitFailure code -> code
-        finalStatus = if exitCode == ExitSuccess then "succeeded" else "failed"
+        finalStatus
+            | stopped = "stopped"
+            | exitCode == ExitSuccess = "succeeded"
+            | otherwise = "failed"
     appendLogLine cfg (turnLogPath turn) "system" ("Agent turn finished with exit code " <> T.pack (show exitCodeInt))
     finishResult <-
         ( try
@@ -310,7 +366,7 @@ finishTurn cfg _session turn exitCode = do
                                 Nothing -> return ()
                             return skippedError
                     let nextStatus = if status loaded == "running" then "open" else status loaded
-                        runnerError = if exitCode == ExitSuccess then Nothing else Just "runner_failed"
+                        runnerError = if stopped || exitCode == ExitSuccess then Nothing else Just "runner_failed"
                         nextError = combineErrorMessages [runnerError, autoCommitError]
                         updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
                     touched <- liftIO $ touchSession updated

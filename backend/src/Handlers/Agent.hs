@@ -11,6 +11,7 @@ module Handlers.Agent (
     getSessionHandler,
     listSessionsHandler,
     postTurnHandler,
+    stopTurnHandler,
     turnLogStreamHandler,
     prepareApplyHandler,
     confirmApplyHandler,
@@ -36,7 +37,7 @@ import Agent.Git (
     purgeAgentSession,
     renameAgentSession,
  )
-import Agent.Runner (startAgentTurn, turnLogStreamHandler)
+import Agent.Runner (startAgentTurn, stopAgentTurn, turnLogStreamHandler)
 import Agent.Session (AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -107,6 +108,10 @@ getSessionHandler sid = runAgentAction $ loadAgentSessionView sid
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
     runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req)
+
+stopTurnHandler :: SessionRequest -> Handler AgentSessionView
+stopTurnHandler req =
+    runAgentAction $ stopAgentTurn (sessionRequestSessionId req)
 
 prepareApplyHandler :: SessionRequest -> Handler AgentSessionView
 prepareApplyHandler req =

@@ -61,7 +61,7 @@ viewProject : Model -> ProjectRecord -> Html (Flow Model ())
 viewProject model proj =
     let
         mCommit_ =
-            try (route << Route.project << mCommit << just) model
+            try (route << Route.page << Route.project << mCommit << just) model
 
         isReadOnly =
             Maybe.isJust mCommit_
@@ -74,7 +74,7 @@ viewProject model proj =
     viewPage
         { header =
             [ Html.div [ Html.Attributes.class "project-header" ]
-                [ Html.a [ Route.href Route.Home, Html.Attributes.class "back-btn" ] [ iconCustom True "arrow_back" [ Html.Attributes.class "back-icon" ] ]
+                [ Html.a [ Route.href (Route.fromPage Route.Home), Html.Attributes.class "back-btn" ] [ iconCustom True "arrow_back" [ Html.Attributes.class "back-icon" ] ]
                 , Html.h2 [] [ Html.text proj.name ]
                 , Html.viewIf (not isReadOnly) <|
                     Html.viewMaybe
@@ -176,7 +176,7 @@ viewSection model sectionName entry steps =
             Specs.steps sectionName entry
 
         isReadOnly =
-            has (route << Route.project << mCommit << just) model
+            has (route << Route.page << Route.project << mCommit << just) model
     in
     viewTable
         { model = model

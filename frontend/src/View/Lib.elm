@@ -59,3 +59,12 @@ viewSearchBox model =
         , alignRight = True
         , inputItemStyle = \_ -> []
         }
+
+
+boolText : Bool -> String
+boolText value =
+    if value then
+        "true"
+
+    else
+        "false"

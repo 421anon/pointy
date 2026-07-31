@@ -1,22 +1,26 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Handlers.RunStep (
     buildExtras,
+    restoreJobsFromSlurm,
     runStepHandler,
     stepLogHandler,
     stopStepHandler,
 ) where
 
 import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
-import BuildRunner (BuildKey, JobId, StepRequirements (..), buildKeyForOutPath, cancel, queryJobIds, submitAndWait, submitJob, waitForCompletion)
-import Control.Concurrent (forkIO)
+import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
+import ClusterBus (restoreRunningStepIds)
+import Control.Concurrent (forkIO, forkIOWithUnmask)
 import Control.Concurrent.Async (mapConcurrently_)
-import Control.Monad (foldM)
+import Control.Exception (SomeException, catch)
+import Control.Monad (foldM, void, when)
 
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (eitherDecode)
-import Data.List (foldl', nub, partition)
+import Data.List (foldl', isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
@@ -30,7 +34,7 @@ import Servant (Handler, NoContent (..), err404, err500, errBody)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
-import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
 runStepHandler :: Int -> Maybe T.Text -> Handler NoContent
 runStepHandler eid commit = do
@@ -145,6 +149,7 @@ submitStep ctx outcomes deps sid
                                         requirements
                                         buildKey
                                         depJobIds
+                                        (encodeJobComment (JobComment "step" sid (readCommitHash ctx) outPath))
                                         ["nix", "build", "--no-link", "--no-eval-cache", stepInstallable ctx sid]
                             case submitted of
                                 Left err -> throwError err
@@ -205,6 +210,7 @@ buildExtras ctx eid = do
                                 submitAndWait
                                     requirements
                                     buildKey
+                                    (encodeJobComment (JobComment "extras" eid (readCommitHash ctx) extrasPath))
                                     ["nix", "build", "--no-link", "--no-eval-cache", extrasInstallable ctx eid]
                         case exitCode of
                             ExitSuccess -> do
@@ -353,3 +359,103 @@ stopStepSync eid commit = do
     case result of
         Left err -> putStrLn $ "stopStep error: " ++ err
         Right _ -> return ()
+
+{- | Re-attach completion watchers to slurm jobs that were submitted before a
+backend restart.  Job identity comes from the @--comment@ payload written at
+submission time (kind, step, commit, outPath); the job name is validated
+against the outPath so a stale or mismatched comment is ignored.
+
+Watchers broadcast at the job's own commit, not HEAD, so views pinned to the
+commit the job was submitted for (including past commits) observe the correct
+status and completion.  Jobs for past commits are intentionally not cancelled:
+the frontend routes to past commits' steps, so such a job may still be the
+build the user is watching.
+
+The scan's step ids are passed through 'restoreRunningStepIds' so the cluster
+dock's running set survives the restart without clobbering live updates.
+-}
+restoreJobsFromSlurm :: IO ()
+restoreJobsFromSlurm = do
+    eRepo <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> return repoPath
+    case eRepo of
+        Left err -> putStrLn $ "restoreJobsFromSlurm: cannot access repo: " ++ err
+        Right repoPath ->
+            restoreRunningStepIds $
+                scanJobs repoPath
+                    `catch` \e -> do
+                        putStrLn $ "restoreJobsFromSlurm failed: " ++ show (e :: SomeException)
+                        return Set.empty
+  where
+    scanJobs repoPath = do
+        jobs <- querySlurmJobs
+        let pointyJobs = [job | job <- jobs, isPointyJob (slurmJobName job)]
+        attachWatchers repoPath pointyJobs
+
+    attachWatchers repoPath = go Set.empty
+      where
+        go _ [] = return Set.empty
+        go seen (job : rest)
+            | Set.member (slurmJobName job) seen = go seen rest
+            | otherwise = do
+                recovered <- attachOne repoPath job
+                restRecovered <- go (Set.insert (slurmJobName job) seen) rest
+                return (Set.union recovered restRecovered)
+
+    attachOne repoPath job = case decodeJobComment =<< slurmJobComment job of
+        Nothing -> do
+            putStrLn $ "restoreJobsFromSlurm: no job comment on " ++ slurmJobName job ++ ", skipping"
+            return Set.empty
+        Just comment
+            | jobCommentKind comment /= "step" -> return Set.empty
+            | buildKeyForOutPath (jobCommentOutPath comment) /= BuildKey (slurmJobName job) -> do
+                putStrLn $
+                    "restoreJobsFromSlurm: job name mismatch for step "
+                        ++ show (jobCommentStep comment)
+                        ++ ", skipping"
+                return Set.empty
+            | otherwise -> do
+                eReady <- runExceptT $ ensureRepoCommit (jobCommentCommit comment)
+                case eReady of
+                    Left err -> do
+                        putStrLn $
+                            "restoreJobsFromSlurm: commit "
+                                ++ jobCommentCommit comment
+                                ++ " unavailable for step "
+                                ++ show (jobCommentStep comment)
+                                ++ ": "
+                                ++ err
+                        return Set.empty
+                    Right () -> do
+                        let ctx = ReadRepoContext repoPath (jobCommentCommit comment)
+                        -- forkIOWithUnmask: 'restoreRunningStepIds' runs its
+                        -- scan under mask, and forkIO children inherit the
+                        -- parent's masked state; the watcher waits for hours
+                        -- and must stay interruptible.
+                        void $ forkIOWithUnmask $ \unmask -> unmask $ watchRestoredJob ctx comment job
+                        return $
+                            if isRunningState (slurmJobState job)
+                                then Set.singleton (jobCommentStep comment)
+                                else Set.empty
+
+-- | Wait for a restored job and broadcast its outcome at the job's own
+-- commit.  Mirror of 'finishStep' for the live path.  squeue only reports
+-- pending/running/completing jobs, so every enumerated job is expected to be
+-- active; the state guard is defensive against squeue behavior drift.
+watchRestoredJob :: ReadRepoContext -> JobComment -> SlurmJob -> IO ()
+watchRestoredJob ctx comment job = do
+    let commitText = T.pack (jobCommentCommit comment)
+        outPath = jobCommentOutPath comment
+        buildKey = buildKeyForOutPath outPath
+    when (isRunningState (slurmJobState job)) $ do
+        broadcastKnownStepStatus (jobCommentStep comment) commitText ("running", Nothing)
+        waitForCompletion buildKey
+    nowBuilt <- isBuilt outPath
+    if nowBuilt
+        then do
+            registerGcRootForOutPath outPath
+            broadcastSingleStepForProjects (jobCommentStep comment) commitText outPath
+            buildExtras ctx (jobCommentStep comment)
+        else broadcastFailedStepForProjects (jobCommentStep comment) commitText
+
+isPointyJob :: String -> Bool
+isPointyJob name = "pointy-nix-build-" `isPrefixOf` name
