@@ -219,7 +219,8 @@ type ChatTurnStatus
 
 
 type alias ChatTurn =
-    { prompt : String
+    { turnId : String
+    , prompt : String
     , assistant : String
     , status : ChatTurnStatus
     }
@@ -267,15 +268,15 @@ type AgentRequest
     | SendingAgentPrompt String
     | ArchivingAgentSession String
     | DeletingAgentSession String
+    | StoppingAgentTurn String
 
 
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
     , selectedSessionId : Maybe String
     , isPanelOpen : Bool
-    , isMobileSidebarOpen : Bool
-    , isMaximized : Bool
-    , isDesktopSidebarCollapsed : Bool
+    , isSessionListOpen : Bool
+    , isFocusMode : Bool
     , activeTurnStream : Maybe String
     , chatEntries : List ChatEntry
     , chunkBuffer : String
@@ -283,6 +284,7 @@ type alias AgentState =
     , changesetOperation : Maybe ChangesetOperation
     , request : Maybe AgentRequest
     , sessionNameEdit : Maybe AgentSessionNameEdit
+    , highlightTurnId : Maybe String
     }
 
 
@@ -291,9 +293,8 @@ initAgentState =
     { sessions = NotAsked
     , selectedSessionId = Nothing
     , isPanelOpen = False
-    , isMobileSidebarOpen = False
-    , isMaximized = False
-    , isDesktopSidebarCollapsed = False
+    , isSessionListOpen = False
+    , isFocusMode = False
     , activeTurnStream = Nothing
     , chatEntries = []
     , chunkBuffer = ""
@@ -301,6 +302,7 @@ initAgentState =
     , changesetOperation = Nothing
     , request = Nothing
     , sessionNameEdit = Nothing
+    , highlightTurnId = Nothing
     }
 
 
@@ -325,6 +327,12 @@ agentInteractionsBlocked agentState =
                 _ ->
                     False
            )
+
+
+agentSessionArchived : String -> Bool
+agentSessionArchived status =
+    status == "archived" || status == "discarded" || status == "applied"
+
 
 
 selectedSessionView : AgentState -> Maybe AgentSessionView
@@ -736,7 +744,9 @@ initialTable =
 
 
 type alias Flags =
-    { origin : String }
+    { origin : String
+    , lastChat : Maybe String
+    }
 
 
 type StepStatusEvent
@@ -779,7 +789,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
-        , agent = initAgentState
+        , agent = { initAgentState | selectedSessionId = flags.lastChat }
         , clusterStatus = ClusterUnknown
         , runningStepIds = []
         , statusBarOpen = False

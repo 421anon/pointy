@@ -12,6 +12,7 @@ import Model.Core as Model exposing (ClusterStatus(..), Model, RunningStepSummar
 import Model.Lenses exposing (mCommit, route)
 import Route
 import View.Icons exposing (iconCustom)
+import View.Lib exposing (boolText)
 
 
 view : Model -> Html (Flow Model ())
@@ -291,12 +292,3 @@ runningText count =
 
         _ ->
             String.fromInt count ++ " running"
-
-
-boolText : Bool -> String
-boolText value =
-    if value then
-        "true"
-
-    else
-        "false"

@@ -8,7 +8,10 @@ import "./grid-resize.js";
 // Initialize the Elm app
 const app = Elm.Main.init({
   node: document.getElementById("app"),
-  flags: { origin: window.location.origin },
+  flags: {
+    origin: window.location.origin,
+    lastChat: localStorage.getItem("agent:lastChat"),
+  },
 });
 
 connectPorts(app);

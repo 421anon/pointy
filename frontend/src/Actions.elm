@@ -619,7 +619,11 @@ onUrlRequest urlRequest =
 
 goToRoute : Route -> Flow Model ()
 goToRoute route =
-    Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Route.toString route)))
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Flow.forAll key (\k -> Flow.lift (Nav.pushUrl k (Route.toStringWithChat (openAgentChatRef model) route)))
+            )
 
 
 replaceRoute : Route -> Flow Model ()
@@ -2251,6 +2255,99 @@ agentChatEndId =
     "agent-chat-end"
 
 
+agentSessionNameInputId : String
+agentSessionNameInputId =
+    "agent-session-name-input"
+
+
+agentTurnId : String -> String
+agentTurnId turnId =
+    "agent-turn-" ++ turnId
+
+
+openAgentChatRef : Model -> Maybe Route.ChatRef
+openAgentChatRef model =
+    let
+        agentState =
+            Model.getAgent model
+    in
+    if agentState.isPanelOpen then
+        Maybe.map (\sessionId -> { sessionId = sessionId, mTurnId = agentState.highlightTurnId }) agentState.selectedSessionId
+
+    else
+        Nothing
+
+
+syncAgentChatUrl : Flow Model ()
+syncAgentChatUrl =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Flow.forAll key
+                    (\k -> Flow.lift (Nav.replaceUrl k (Route.toStringWithChat (openAgentChatRef model) (get route model))))
+            )
+
+
+shareAgentChat : String -> Flow Model ()
+shareAgentChat sessionId =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Flow.forAll origin
+                    (\origin_ ->
+                        callJs "copyToClipboard"
+                            Encode.string
+                            (Decode.succeed ())
+                            (origin_ ++ Route.toStringWithChat (Just { sessionId = sessionId, mTurnId = Nothing }) (get route model))
+                    )
+            )
+        |> Flow.seq (addToast True "Share link copied to clipboard")
+
+
+agentSessionLoaded : Maybe String -> Model -> Bool
+agentSessionLoaded mSessionId model =
+    Maybe.map2 (\sessionId views -> List.any (\view -> view.session.sessionId == sessionId) views)
+        mSessionId
+        (ApiData.toMaybe (Model.getAgent model).sessions)
+        |> Maybe.withDefault False
+
+
+applyAgentChatFromUrl : Maybe Route.ChatRef -> Flow Model ()
+applyAgentChatFromUrl =
+    Maybe.unwrap (Flow.pure ())
+        (\chat ->
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        let
+                            agentState =
+                                Model.getAgent model
+                        in
+                        if agentState.isPanelOpen && agentState.selectedSessionId == Just chat.sessionId then
+                            Flow.over agent (\s -> { s | highlightTurnId = chat.mTurnId })
+                                |> Flow.seq (scrollToAgentTurn chat.mTurnId)
+
+                        else
+                            Flow.over agent (\s -> { s | isPanelOpen = True })
+                                |> Flow.seq (Flow.when (ApiData.toMaybe agentState.sessions == Nothing) loadAgentSessions)
+                                |> Flow.seq
+                                    (Flow.get
+                                        |> Flow.andThen
+                                            (\loaded ->
+                                                Flow.when (agentSessionLoaded (Just chat.sessionId) loaded)
+                                                    (selectAgentSessionAt chat.sessionId chat.mTurnId)
+                                            )
+                                    )
+                    )
+        )
+
+
+scrollToAgentTurn : Maybe String -> Flow Model ()
+scrollToAgentTurn =
+    Maybe.unwrap (Flow.pure ())
+        (\turnId -> Flow.attemptTask (Scroll.scrollElementY agentChatId (agentTurnId turnId) 0 0))
+
+
 scrollAgentChatToBottom : Flow Model ()
 scrollAgentChatToBottom =
     Flow.attemptTask (Scroll.scrollElementY agentChatId agentChatEndId 1 1)
@@ -2376,7 +2473,7 @@ appendPersistedTurn turn entries =
                     turn.turnPrompt
 
             seeded =
-                entries ++ [ Model.ChatTurnEntry { prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+                entries ++ [ Model.ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
 
             logLines =
                 turn.turnLog
@@ -2576,7 +2673,7 @@ handleAgentSessionResult selectOnSuccess result =
                             if selectOnSuccess then
                                 { withView
                                     | selectedSessionId = Just view.session.sessionId
-                                    , isMobileSidebarOpen = False
+                                    , isSessionListOpen = False
                                 }
 
                             else
@@ -2607,22 +2704,19 @@ loadAgentSessions =
                                 (Flow.get
                                     |> Flow.andThen
                                         (\model ->
-                                            let
-                                                agentState =
-                                                    Model.getAgent model
-                                            in
-                                            case agentState.selectedSessionId of
-                                                Just _ ->
-                                                    Flow.pure ()
+                                            if agentSessionLoaded (Model.getAgent model).selectedSessionId model then
+                                                Flow.pure ()
 
-                                                Nothing ->
-                                                    case List.head views of
-                                                        Just first ->
-                                                            Flow.over agent
-                                                                (\s -> { s | selectedSessionId = Just first.session.sessionId })
-
-                                                        Nothing ->
-                                                            Flow.pure ()
+                                            else
+                                                Flow.over agent
+                                                    (\s ->
+                                                        { s
+                                                            | selectedSessionId =
+                                                                views
+                                                                    |> List.find (\view -> not (Model.agentSessionArchived view.session.status))
+                                                                    |> Maybe.map (.session >> .sessionId)
+                                                        }
+                                                    )
                                         )
                                 )
                             |> Flow.seq hydrateSelectedAgentSession
@@ -2636,6 +2730,12 @@ loadAgentSessions =
 
 selectAgentSession : String -> Flow Model ()
 selectAgentSession sessionId =
+    selectAgentSessionAt sessionId Nothing
+        |> Flow.seq syncAgentChatUrl
+
+
+selectAgentSessionAt : String -> Maybe String -> Flow Model ()
+selectAgentSessionAt sessionId mTurnId =
     Flow.over agent
         (\s ->
             { s
@@ -2648,13 +2748,16 @@ selectAgentSession sessionId =
                         |> Maybe.map persistedTranscript
                         |> Maybe.withDefault []
                 , chunkBuffer = ""
-                , isMobileSidebarOpen = False
+                , isSessionListOpen = False
                 , sessionNameEdit = Nothing
+                , highlightTurnId = mTurnId
             }
         )
         |> Flow.seq scrollAgentChatToBottom
         |> Flow.seq (loadAgentSession sessionId)
         |> Flow.seq resumeSelectedAgentTurn
+        |> Flow.seq (scrollToAgentTurn mTurnId)
+        |> Flow.seq (callJs "storeLastChat" Encode.string (Decode.succeed ()) sessionId)
 
 
 toggleAgentPanel : Flow Model ()
@@ -2666,24 +2769,25 @@ toggleAgentPanel =
                     nextOpen =
                         not (Model.getAgent model).isPanelOpen
                 in
-                Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isMobileSidebarOpen = False })
+                Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isSessionListOpen = False, isFocusMode = False })
                     |> Flow.seq (Flow.when nextOpen loadAgentSessions)
+                    |> Flow.seq syncAgentChatUrl
             )
 
 
-toggleAgentMobileSidebar : Flow Model ()
-toggleAgentMobileSidebar =
-    Flow.over agent (\s -> { s | isMobileSidebarOpen = not s.isMobileSidebarOpen })
+toggleAgentFocusMode : Flow Model ()
+toggleAgentFocusMode =
+    Flow.over agent (\s -> { s | isFocusMode = not s.isFocusMode })
 
 
-toggleAgentMaximized : Flow Model ()
-toggleAgentMaximized =
-    Flow.over agent (\s -> { s | isMaximized = not s.isMaximized })
+exitAgentFocusMode : Flow Model ()
+exitAgentFocusMode =
+    Flow.over agent (\s -> { s | isFocusMode = False })
 
 
-toggleAgentDesktopSidebarCollapsed : Flow Model ()
-toggleAgentDesktopSidebarCollapsed =
-    Flow.over agent (\s -> { s | isDesktopSidebarCollapsed = not s.isDesktopSidebarCollapsed })
+toggleAgentSessionList : Flow Model ()
+toggleAgentSessionList =
+    Flow.over agent (\s -> { s | isSessionListOpen = not s.isSessionListOpen })
 
 
 startAgentSessionNameEdit : String -> String -> Flow Model ()
@@ -2699,6 +2803,7 @@ startAgentSessionNameEdit sessionId currentName =
                         }
             }
         )
+        |> Flow.seq (Flow.attemptTask (Dom.focus agentSessionNameInputId))
 
 
 updateAgentSessionNameEdit : String -> Flow Model ()
@@ -2910,7 +3015,7 @@ createAgentSession =
                             , activeTurnStream = Nothing
                             , chatEntries = []
                             , chunkBuffer = ""
-                            , isMobileSidebarOpen = False
+                            , isSessionListOpen = False
                             , sessionNameEdit = Nothing
                         }
                     )
@@ -2921,6 +3026,9 @@ createAgentSession =
                                     case result of
                                         Ok view ->
                                             handleAgentSessionResult True (Ok view)
+                                                |> Flow.seq (callJs "storeLastChat" Encode.string (Decode.succeed ()) view.session.sessionId)
+                                                |> Flow.seq (clearRequestIfMatches Model.CreatingAgentSession)
+                                                |> Flow.seq syncAgentChatUrl
 
                                         Err err ->
                                             Flow.over agent
@@ -2929,7 +3037,7 @@ createAgentSession =
                                                         | selectedSessionId = previousAgentState.selectedSessionId
                                                         , chatEntries = previousAgentState.chatEntries
                                                         , chunkBuffer = previousAgentState.chunkBuffer
-                                                        , isMobileSidebarOpen = previousAgentState.isMobileSidebarOpen
+                                                        , isSessionListOpen = previousAgentState.isSessionListOpen
                                                         , sessionNameEdit = previousAgentState.sessionNameEdit
                                                     }
                                                 )
@@ -2977,6 +3085,26 @@ failLatestPendingChatTurn error entries =
             entries
 
 
+stopAgentTurn : Flow Model ()
+stopAgentTurn =
+    withSelectedAgentSession
+        (\view ->
+            let
+                request =
+                    Model.StoppingAgentTurn view.session.sessionId
+            in
+            Flow.over agent (\s -> { s | request = Just request })
+                |> Flow.seq (AgentApi.stop view.session.sessionId)
+                |> FlowError.foldResult
+                    (\stoppedView ->
+                        Flow.over agent (\s -> finalizeChatTurn Nothing { s | activeTurnStream = Nothing })
+                            |> Flow.seq (handleAgentSessionResult False (Ok stoppedView))
+                    )
+                    (\err -> addToast False (Http.errorMessage err))
+                |> Flow.seq (clearRequestIfMatches request)
+        )
+
+
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
     withSelectedAgentSession
@@ -3000,7 +3128,7 @@ submitAgentPrompt =
                                             | chunkBuffer = ""
                                             , chatEntries =
                                                 agentState.chatEntries
-                                                    ++ [ Model.ChatTurnEntry { prompt = prompt, assistant = "", status = Model.ChatPending } ]
+                                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = Model.ChatPending } ]
                                         }
                                     )
                                     |> Flow.seq clearAgentPrompt

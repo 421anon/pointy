@@ -23,6 +23,7 @@ import Handlers.Agent (
     prepareApplyHandler,
     purgeSessionHandler,
     renameSessionHandler,
+    stopTurnHandler,
     turnLogStreamHandler,
     usageHandler,
  )
@@ -90,6 +91,7 @@ server =
         :<|> listSessionsHandler
         :<|> getSessionHandler
         :<|> postTurnHandler
+        :<|> stopTurnHandler
         :<|> turnLogStreamHandler
         :<|> prepareApplyHandler
         :<|> confirmApplyHandler

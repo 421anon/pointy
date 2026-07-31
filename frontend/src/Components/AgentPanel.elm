@@ -12,7 +12,9 @@ import Json.Decode as Decode
 import Keyboard
 import Markdown
 import Model.Core as Model exposing (Model)
+import Route
 import View.Icons
+import View.Lib exposing (boolText, viewLoading)
 
 
 view : Model -> Html (Flow Model ())
@@ -25,40 +27,102 @@ viewPanel agent =
     Html.div
         [ classList
             [ ( "agent-panel", True )
-            , ( "is-maximized", agent.isMaximized )
             , ( "is-minimized", not agent.isPanelOpen )
+            , ( "is-focus-mode", agent.isFocusMode )
             ]
         , id "agent-panel"
+        , Events.on "keydown" <|
+            Keyboard.decodeCombinations
+                [ ( Keyboard.escape, Decode.succeed Actions.exitAgentFocusMode ) ]
         ]
-        [ Html.div [ class "agent-panel__header" ]
-            [ Html.div []
-                [ Html.h2 [] [ Html.text "AI agent" ]
+        [ viewHeader agent
+        , viewSessionBody agent
+        ]
+
+
+viewHeader : Model.AgentState -> Html (Flow Model ())
+viewHeader agent =
+    let
+        ( sessionsLabel, sessionsIcon ) =
+            if agent.isSessionListOpen then
+                ( "Return to current chat", "arrow_back" )
+
+            else
+                ( "Open chat history", "history" )
+
+        ( focusLabel, focusIcon ) =
+            if agent.isFocusMode then
+                ( "Exit focus mode (Esc)", "close_fullscreen" )
+
+            else
+                ( "Focus agent panel", "open_in_full" )
+    in
+    Html.div [ class "agent-panel__header" ]
+        [ Html.h2 []
+            [ Html.text
+                (if agent.isSessionListOpen then
+                    "Chats"
+
+                 else
+                    "AI agent"
+                )
+            ]
+        , Html.div [ class "agent-panel__header-actions" ]
+            [ viewIconButton sessionsLabel
+                sessionsIcon
+                [ class "icon-btn agent-panel__sessions-button"
+                , Events.onClick Actions.toggleAgentSessionList
+                , attribute "aria-controls" "agent-panel-sidebar"
+                , attribute "aria-expanded" (boolText agent.isSessionListOpen)
                 ]
-            , Html.div [ class "agent-panel__header-actions" ]
-                [ Html.button [ class "icon-btn", Events.onClick Actions.toggleAgentPanel, title "Minimize agent panel" ] [ View.Icons.icon False "minimize" ]
-                , Html.button
-                    [ class "icon-btn"
-                    , Events.onClick Actions.toggleAgentMaximized
-                    , title
-                        (if agent.isMaximized then
-                            "Restore agent panel"
+            , Html.button
+                [ class "icon-btn"
+                , disabled (Model.agentInteractionsBlocked agent)
+                , Events.onClick Actions.createAgentSession
+                , title "New chat"
+                , attribute "aria-label" "New chat"
+                ]
+                [ if isCreatingAgentSession agent then
+                    viewButtonSpinner
 
-                         else
-                            "Maximize agent panel"
-                        )
-                    ]
-                    [ View.Icons.icon False
-                        (if agent.isMaximized then
-                            "close_fullscreen"
-
-                         else
-                            "open_in_full"
-                        )
-                    ]
-                , Html.button [ class "icon-btn", Events.onClick Actions.toggleAgentPanel, title "Close agent panel" ] [ View.Icons.icon False "close" ]
+                  else
+                    View.Icons.icon False "add"
+                ]
+            , viewIconButton focusLabel
+                focusIcon
+                [ class "icon-btn agent-panel__focus-button"
+                , Events.onClick Actions.toggleAgentFocusMode
+                , attribute "aria-pressed" (boolText agent.isFocusMode)
+                ]
+            , viewIconButton "Close agent panel"
+                "close"
+                [ class "icon-btn"
+                , Events.onClick Actions.toggleAgentPanel
                 ]
             ]
-        , viewSessionBody agent
+        ]
+
+
+viewIconButton : String -> String -> List (Html.Attribute (Flow Model ())) -> Html (Flow Model ())
+viewIconButton label iconName attrs =
+    Html.button (title label :: attribute "aria-label" label :: attrs)
+        [ View.Icons.icon False iconName ]
+
+
+viewRowAction : Bool -> Bool -> String -> String -> Flow Model () -> Html (Flow Model ())
+viewRowAction busy blocked label iconName action =
+    Html.button
+        [ class "icon-btn"
+        , title label
+        , attribute "aria-label" label
+        , disabled blocked
+        , Events.stopPropagationOn "click" (Decode.succeed ( action, True ))
+        ]
+        [ if busy then
+            viewButtonSpinner
+
+          else
+            View.Icons.icon False iconName
         ]
 
 
@@ -68,7 +132,12 @@ viewSessionBody agent =
         loaded =
             Maybe.withDefault [] (ApiData.toMaybe agent.sessions)
     in
-    Html.div [ classList [ ( "agent-panel__split", True ), ( "is-desktop-sidebar-collapsed", agent.isDesktopSidebarCollapsed ) ] ]
+    Html.div
+        [ classList
+            [ ( "agent-panel__split", True )
+            , ( "is-session-list-open", agent.isSessionListOpen )
+            ]
+        ]
         [ viewSessionSidebar agent loaded
         , case agent.sessions of
             Loading Nothing ->
@@ -82,7 +151,7 @@ viewSessionBody agent =
 
 isCreatingAgentSession : Model.AgentState -> Bool
 isCreatingAgentSession agent =
-    agent.request == Just Model.CreatingAgentSession
+    agent.request == Just Model.CreatingAgentSession && agent.selectedSessionId == Nothing
 
 
 viewButtonSpinner : Html msg
@@ -117,59 +186,10 @@ viewNewChatButtonContents agent =
 viewSessionSidebar : Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
 viewSessionSidebar agent loaded =
     Html.div
-        [ classList
-            [ ( "agent-panel__sidebar", True )
-            , ( "is-mobile-sidebar-open", agent.isMobileSidebarOpen )
-            ]
+        [ class "agent-panel__sidebar"
+        , id "agent-panel-sidebar"
         ]
-        [ Html.div [ class "agent-panel__sidebar-header" ]
-            [ Html.h3 [] [ Html.text "Chats" ]
-            , Html.button
-                [ class "agent-panel__new-chat"
-                , disabled (Model.agentInteractionsBlocked agent)
-                , Events.onClick Actions.createAgentSession
-                , title "New chat"
-                ]
-                (viewNewChatButtonContents agent)
-            ]
-        , Html.button
-            [ class "agent-panel__sidebar-toggle"
-            , Events.onClick Actions.toggleAgentMobileSidebar
-            , attribute "aria-controls" "agent-panel-sidebar-content"
-            , attribute "aria-expanded"
-                (if agent.isMobileSidebarOpen then
-                    "true"
-
-                 else
-                    "false"
-                )
-            ]
-            [ Html.span [] [ Html.text "Chats" ] ]
-        , Html.div
-            [ class "agent-panel__sidebar-content"
-            , id "agent-panel-sidebar-content"
-            ]
-            (viewSessionSidebarContent agent loaded)
-        , Html.button
-            [ class "icon-btn agent-panel__sidebar-collapse"
-            , Events.onClick Actions.toggleAgentDesktopSidebarCollapsed
-            , title
-                (if agent.isDesktopSidebarCollapsed then
-                    "Show chats"
-
-                 else
-                    "Hide chats"
-                )
-            ]
-            [ View.Icons.icon False
-                (if agent.isDesktopSidebarCollapsed then
-                    "left_panel_open"
-
-                 else
-                    "left_panel_close"
-                )
-            ]
-        ]
+        (viewSessionSidebarContent agent loaded)
 
 
 viewSessionSidebarContent : Model.AgentState -> List Model.AgentSessionView -> List (Html (Flow Model ()))
@@ -190,7 +210,7 @@ viewSessionSidebarContent agent loaded =
                     Nothing
 
         ( active, archived ) =
-            List.partition (\v -> not (isArchivedStatus v.session.status)) loaded
+            List.partition (\v -> not (Model.agentSessionArchived v.session.status)) loaded
 
         activeRows =
             (if isCreatingAgentSession agent then
@@ -201,8 +221,8 @@ viewSessionSidebarContent agent loaded =
             )
                 ++ List.map (viewSessionRow agent) active
     in
-    [ case listingStatus of
-        Just ( isLoading, msg ) ->
+    [ Html.viewMaybe
+        (\( isLoading, msg ) ->
             Html.p
                 [ classList
                     [ ( "agent-panel__loading", True )
@@ -211,27 +231,12 @@ viewSessionSidebarContent agent loaded =
                     ]
                 ]
                 [ Html.text msg ]
-
-        Nothing ->
-            Html.nothing
+        )
+        listingStatus
     , Html.ul [ class "agent-panel__session-list" ] activeRows
-    , if List.isEmpty activeRows && listingStatus == Nothing then
-        Html.p [ class "agent-panel__empty-hint" ] [ Html.text "No chats yet." ]
-
-      else
-        Html.nothing
-    , if List.isEmpty archived then
-        Html.nothing
-
-      else
-        let
-            archivedToShow =
-                if agent.showArchived then
-                    archived
-
-                else
-                    []
-        in
+    , Html.viewIf (List.isEmpty activeRows && listingStatus == Nothing)
+        (Html.p [ class "agent-panel__empty-hint" ] [ Html.text "No chats yet." ])
+    , Html.viewIf (not (List.isEmpty archived)) <|
         Html.div [ class "agent-panel__archive-section" ]
             [ Html.button
                 [ class "link-btn agent-panel__archive-toggle"
@@ -249,7 +254,12 @@ viewSessionSidebarContent agent loaded =
                     )
                 ]
             , Html.ul [ class "agent-panel__session-list" ]
-                (List.map (viewSessionRow agent) archivedToShow)
+                (if agent.showArchived then
+                    List.map (viewSessionRow agent) archived
+
+                 else
+                    []
+                )
             ]
     ]
 
@@ -293,11 +303,6 @@ chatNameMaxLength =
     80
 
 
-isArchivedStatus : String -> Bool
-isArchivedStatus s =
-    s == "archived" || s == "discarded" || s == "applied"
-
-
 viewCreatingSessionRow : Html msg
 viewCreatingSessionRow =
     Html.li
@@ -321,7 +326,7 @@ viewSessionRow agent sessionView =
             agent.selectedSessionId == Just session.sessionId
 
         isArchived =
-            isArchivedStatus session.status
+            Model.agentSessionArchived session.status
 
         displayName =
             sessionDisplayName sessionView
@@ -335,79 +340,52 @@ viewSessionRow agent sessionView =
         isDeleting =
             agent.request == Just (Model.DeletingAgentSession session.sessionId)
 
-        rowMainAttrs =
-            if isArchived || interactionActive then
-                [ class "agent-panel__session-row-main" ]
+        statusLabel =
+            if isArchiving then
+                "Archiving..."
+
+            else if isDeleting then
+                "Deleting..."
 
             else
-                [ class "agent-panel__session-row-main"
-                , Events.onClick (Actions.selectAgentSession session.sessionId)
+                chatStatusLabel session.status
+
+        rowAttrs =
+            [ classList
+                [ ( "agent-panel__session-row", True )
+                , ( "is-selected", isSelected )
+                , ( "is-archived", isArchived )
+                , ( "is-updating", isArchiving || isDeleting )
                 ]
+            , title ("#" ++ session.sessionId)
+            , attribute "aria-busy" (boolText (isArchiving || isDeleting))
+            ]
     in
     Html.li
-        [ classList
-            [ ( "agent-panel__session-row", True )
-            , ( "is-selected", isSelected )
-            , ( "is-archived", isArchived )
-            , ( "is-updating", isArchiving || isDeleting )
-            ]
-        , attribute "aria-busy"
-            (if isArchiving || isDeleting then
-                "true"
+        (if isArchiving || isDeleting then
+            rowAttrs
 
-             else
-                "false"
-            )
-        ]
-        [ Html.div
-            rowMainAttrs
-            [ Html.div [ class "agent-panel__session-name", title session.sessionId ] [ Html.text displayName ]
-            , Html.div [ class "agent-panel__session-meta" ]
-                [ Html.text
-                    (if isArchiving then
-                        "Archiving..."
-
-                     else if isDeleting then
-                        "Deleting..."
-
-                     else
-                        chatStatusLabel session.status
-                    )
-                ]
-            , if sessionView.gitState.hasAgentCommits then
-                Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ]
-
-              else
-                Html.nothing
+         else
+            Events.onClick (Actions.selectAgentSession session.sessionId) :: rowAttrs
+        )
+        [ Html.div [ class "agent-panel__session-row-main" ]
+            [ Html.div [ class "agent-panel__session-name" ] [ Html.text displayName ]
+            , Html.viewIf (statusLabel /= "Ready" && statusLabel /= "Archived")
+                (Html.div [ class "agent-panel__session-meta" ] [ Html.text statusLabel ])
+            , Html.viewIf sessionView.gitState.hasAgentCommits
+                (Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ])
             ]
         , Html.div [ class "agent-panel__session-row-actions" ]
-            [ if isArchived then
-                Html.button
-                    [ class "icon-btn"
-                    , title "Delete permanently"
-                    , disabled interactionActive
-                    , Events.onClick (Actions.confirmDeleteAgentSession session.sessionId)
-                    ]
-                    [ if isDeleting then
-                        viewButtonSpinner
-
-                      else
-                        View.Icons.icon False "delete_forever"
-                    ]
+            [ viewIconButton "Copy link to chat"
+                "share"
+                [ class "icon-btn"
+                , Events.stopPropagationOn "click" (Decode.succeed ( Actions.shareAgentChat session.sessionId, True ))
+                ]
+            , if isArchived then
+                viewRowAction isDeleting interactionActive "Delete permanently" "delete_forever" (Actions.confirmDeleteAgentSession session.sessionId)
 
               else if session.status /= "running" then
-                Html.button
-                    [ class "icon-btn"
-                    , title "Archive"
-                    , disabled interactionActive
-                    , Events.onClick (Actions.archiveAgentSession session.sessionId)
-                    ]
-                    [ if isArchiving then
-                        viewButtonSpinner
-
-                      else
-                        View.Icons.icon False "archive"
-                    ]
+                viewRowAction isArchiving interactionActive "Archive" "archive" (Actions.archiveAgentSession session.sessionId)
 
               else
                 Html.nothing
@@ -432,11 +410,11 @@ viewSessionDetail agent loaded =
                             "No chat is open."
 
                          else
-                            "Pick a chat on the left or start a new one."
+                            "Choose a chat above or start a new one."
                         )
                     ]
                 , Html.button
-                    [ class "primary-btn"
+                    [ class "btn"
                     , disabled (Model.agentInteractionsBlocked agent)
                     , Events.onClick Actions.createAgentSession
                     ]
@@ -452,15 +430,18 @@ viewCreatingSession =
         , attribute "aria-live" "polite"
         ]
         [ Html.div [ class "agent-panel__session-title-card" ]
-            [ Html.h3 [ class "agent-panel__session-title shimmer-text shimmer-text--low-contrast" ] [ Html.text "New chat" ]
-            , Html.div [ class "agent-panel__session-title-meta shimmer-text shimmer-text--low-contrast" ] [ Html.text "Creating..." ]
-            ]
-        , Html.div [ class "agent-panel__section agent-panel__conversation" ]
-            [ Html.div [ class "agent-panel__chat agent-panel__chat--empty" ]
-                [ Html.div [ class "agent-panel__empty-state" ]
-                    [ Html.strong [ class "shimmer-text shimmer-text--low-contrast" ] [ Html.text "Creating chat..." ]
-                    , Html.p [] [ Html.text "Preparing agent workspace." ]
+            [ Html.div [ class "agent-panel__session-title-row" ]
+                [ Html.div [ class "agent-panel__session-title-main" ]
+                    [ Html.h3 [ class "agent-panel__session-title shimmer-text shimmer-text--low-contrast" ] [ Html.text "New chat" ]
+                    , Html.div [ class "agent-panel__session-title-meta shimmer-text shimmer-text--low-contrast" ]
+                        [ Html.span [] [ Html.text "Creating..." ] ]
                     ]
+                ]
+            ]
+        , Html.div [ class "agent-panel__chat agent-panel__chat--empty" ]
+            [ Html.div [ class "agent-panel__empty-state" ]
+                [ Html.strong [ class "shimmer-text shimmer-text--low-contrast" ] [ Html.text "Creating chat..." ]
+                , Html.p [] [ Html.text "Preparing agent workspace." ]
                 ]
             ]
         ]
@@ -481,12 +462,12 @@ viewSession agent sessionView =
             runnerActive || Model.agentInteractionsBlocked agent
 
         closedChat =
-            isArchivedStatus session.status
+            Model.agentSessionArchived session.status
     in
     Html.div [ class "agent-panel__body" ]
         [ viewSessionTitle agent sessionView
         , viewError session
-        , viewChat agent sessionView runnerActive detailBlocked
+        , viewChatTurns agent sessionView runnerActive detailBlocked
         , if closedChat then
             viewClosedChat session.status
 
@@ -494,8 +475,11 @@ viewSession agent sessionView =
             let
                 sendingPrompt =
                     agent.request == Just (Model.SendingAgentPrompt session.sessionId)
+
+                stopping =
+                    agent.request == Just (Model.StoppingAgentTurn session.sessionId)
             in
-            viewPrompt runnerActive sendingPrompt detailBlocked
+            viewPrompt runnerActive sendingPrompt stopping detailBlocked
         ]
 
 
@@ -533,25 +517,26 @@ viewSessionTitle agent sessionView =
                         sessionDisplayName sessionView
                 in
                 Html.div [ class "agent-panel__session-title-row" ]
-                    [ Html.div []
+                    [ Html.div [ class "agent-panel__session-title-main" ]
                         [ Html.h3 [ class "agent-panel__session-title" ] [ Html.text displayName ]
                         , Html.div [ class "agent-panel__session-title-meta" ]
                             [ Html.span [] [ Html.text (chatStatusLabel session.status) ]
                             , Html.span [ title session.sessionId ] [ Html.text ("#" ++ shortSha session.sessionId) ]
-                            , if sessionView.gitState.hasAgentCommits then
-                                Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ]
-
-                              else
-                                Html.nothing
+                            , Html.viewIf sessionView.gitState.hasAgentCommits
+                                (Html.span [] [ Html.text "changes" ])
                             ]
                         ]
-                    , Html.button
+                    , viewIconButton "Copy link to chat"
+                        "share"
                         [ class "icon-btn"
-                        , title "Rename chat"
+                        , Events.onClick (Actions.shareAgentChat session.sessionId)
+                        ]
+                    , viewIconButton "Rename chat"
+                        "edit"
+                        [ class "icon-btn"
                         , disabled renameBlocked
                         , Events.onClick (Actions.startAgentSessionNameEdit session.sessionId displayName)
                         ]
-                        [ View.Icons.icon False "edit" ]
                     ]
         ]
 
@@ -561,10 +546,19 @@ viewSessionTitleEditor renameBlocked edit =
     let
         trimmed =
             String.trim edit.value
+
+        saveButton =
+            Html.button
+                [ class "small-btn"
+                , disabled (renameBlocked || edit.saving || String.isEmpty trimmed)
+                , Events.onClick Actions.saveAgentSessionName
+                ]
+                [ Html.text "Save" ]
     in
     Html.div [ class "agent-panel__session-title-editor" ]
         [ Html.input
             [ class "agent-panel__session-name-input"
+            , id Actions.agentSessionNameInputId
             , type_ "text"
             , value edit.value
             , disabled (renameBlocked || edit.saving)
@@ -579,21 +573,13 @@ viewSessionTitleEditor renameBlocked edit =
             ]
             []
         , Html.div [ class "agent-panel__session-title-actions" ]
-            [ Html.button
-                [ class "primary-btn"
-                , disabled (renameBlocked || edit.saving || String.isEmpty trimmed)
-                , Events.onClick Actions.saveAgentSessionName
-                ]
-                [ viewButtonContent edit.saving
-                    (if edit.saving then
-                        "Saving..."
+            [ if edit.saving then
+                viewLoading saveButton
 
-                     else
-                        "Save"
-                    )
-                ]
+              else
+                saveButton
             , Html.button
-                [ class "secondary-btn"
+                [ class "small-btn"
                 , disabled edit.saving
                 , Events.onClick Actions.cancelAgentSessionNameEdit
                 ]
@@ -604,7 +590,7 @@ viewSessionTitleEditor renameBlocked edit =
 
 viewClosedChat : String -> Html msg
 viewClosedChat status =
-    Html.div [ class "agent-panel__section" ]
+    Html.div [ class "agent-panel__closed" ]
         [ Html.h3 [] [ Html.text (chatStatusLabel status) ]
         , Html.p [] [ Html.text "This chat is closed." ]
         ]
@@ -634,28 +620,12 @@ chatStatusLabel status =
 
 viewError : Model.AgentSession -> Html msg
 viewError session =
-    case session.lastError of
-        Just err ->
-            Html.pre [ class "agent-panel__error" ] [ Html.text err ]
-
-        Nothing ->
-            Html.nothing
+    Html.viewMaybe (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text err ]) session.lastError
 
 
-viewPrompt : Bool -> Bool -> Bool -> Html (Flow Model ())
-viewPrompt runnerActive sendingPrompt composerBusy =
-    let
-        buttonText =
-            if sendingPrompt then
-                "Sending..."
-
-            else if runnerActive then
-                "Working..."
-
-            else
-                "Send"
-    in
-    Html.div [ class "agent-panel__section agent-panel__composer" ]
+viewPrompt : Bool -> Bool -> Bool -> Bool -> Html (Flow Model ())
+viewPrompt runnerActive sendingPrompt stopping composerBusy =
+    Html.div [ class "agent-panel__composer" ]
         [ Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
                 [ class "agent-panel__prompt"
@@ -667,22 +637,48 @@ viewPrompt runnerActive sendingPrompt composerBusy =
                 , submitShortcut composerBusy
                 ]
                 []
-            , Html.button
-                [ class "primary-btn agent-panel__run-button"
-                , disabled composerBusy
-                , attribute "aria-busy"
-                    (if sendingPrompt then
-                        "true"
+            , if runnerActive || stopping then
+                Html.button
+                    [ class "btn agent-panel__run-button agent-panel__stop-button"
+                    , disabled stopping
+                    , Events.onClick Actions.stopAgentTurn
+                    , title "Stop the agent"
+                    ]
+                    [ viewButtonContent False
+                        (if stopping then
+                            "Stopping..."
 
-                     else
-                        "false"
-                    )
-                , Events.onClick Actions.submitAgentPrompt
-                , title "Send message (Ctrl/⌘+Enter)"
-                ]
-                [ viewButtonContent sendingPrompt buttonText
-                , Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
-                ]
+                         else
+                            "Stop"
+                        )
+                    , if stopping then
+                        viewButtonSpinner
+
+                      else
+                        View.Icons.icon False "stop_circle"
+                    ]
+
+              else
+                Html.button
+                    [ class "btn agent-panel__run-button"
+                    , disabled composerBusy
+                    , attribute "aria-busy" (boolText sendingPrompt)
+                    , Events.onClick Actions.submitAgentPrompt
+                    , title "Send message (Ctrl/⌘+Enter)"
+                    ]
+                    [ viewButtonContent False
+                        (if sendingPrompt then
+                            "Sending..."
+
+                         else
+                            "Send"
+                        )
+                    , if sendingPrompt then
+                        viewButtonSpinner
+
+                      else
+                        Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
+                    ]
             ]
         ]
 
@@ -706,12 +702,6 @@ submitShortcut runnerActive =
                     )
     in
     Events.preventDefaultOn "keydown" decoder
-
-
-viewChat : Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Html (Flow Model ())
-viewChat agent sessionView runnerActive interactionsBlocked =
-    Html.div [ class "agent-panel__section agent-panel__conversation" ]
-        [ viewChatTurns agent sessionView runnerActive interactionsBlocked ]
 
 
 activeChangesetOperation : Model.AgentState -> String -> Maybe Model.ChangesetOperationKind
@@ -744,7 +734,7 @@ viewChatTurns agent sessionView runnerActive interactionsBlocked =
                     []
 
         content =
-            List.map (viewChatEntry interactionsBlocked) agent.chatEntries ++ pendingChangesetNodes
+            List.map (viewChatEntry interactionsBlocked sessionView.session.sessionId agent.highlightTurnId) agent.chatEntries ++ pendingChangesetNodes
     in
     if List.isEmpty content then
         Html.div [ class "agent-panel__chat agent-panel__chat--empty", id Actions.agentChatId ]
@@ -776,21 +766,38 @@ viewChatTurns agent sessionView runnerActive interactionsBlocked =
             (content ++ [ Html.div [ id Actions.agentChatEndId ] [] ])
 
 
-viewChatEntry : Bool -> Model.ChatEntry -> Html (Flow Model ())
-viewChatEntry interactionsBlocked entry =
+viewChatEntry : Bool -> String -> Maybe String -> Model.ChatEntry -> Html (Flow Model ())
+viewChatEntry interactionsBlocked sessionId highlightTurnId entry =
     case entry of
         Model.ChatTurnEntry turn ->
-            viewChatTurn turn
+            viewChatTurn sessionId (highlightTurnId == Just turn.turnId) turn
 
         Model.ChatChangesetEntry changeset ->
             viewChangesetBox interactionsBlocked Nothing changeset
 
 
-viewChatTurn : Model.ChatTurn -> Html msg
-viewChatTurn turn =
-    Html.div [ class "agent-panel__chat-turn" ]
+viewChatTurn : String -> Bool -> Model.ChatTurn -> Html msg
+viewChatTurn sessionId isHighlighted turn =
+    Html.div
+        [ classList
+            [ ( "agent-panel__chat-turn", True )
+            , ( "is-highlighted", isHighlighted )
+            ]
+        , id (Actions.agentTurnId turn.turnId)
+        ]
         [ Html.div [ class "agent-panel__chat-message agent-panel__chat-message--user" ]
-            [ Html.div [ class "agent-panel__chat-label" ] [ Html.text "You" ]
+            [ Html.div [ class "agent-panel__chat-label" ]
+                [ if String.isEmpty turn.turnId then
+                    Html.text "You"
+
+                  else
+                    Html.a
+                        [ class "agent-panel__chat-permalink"
+                        , Html.Attributes.href (Route.chatHref { sessionId = sessionId, mTurnId = Just turn.turnId })
+                        , title "Link to this message"
+                        ]
+                        [ Html.text "You" ]
+                ]
             , Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ]
                 [ Html.text turn.prompt ]
             ]
@@ -864,24 +871,18 @@ viewAgentMessage turn =
                     ]
                 ]
                 (Markdown.toHtml Nothing body)
-            , if turn.status == Model.ChatPending then
-                Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "█" ]
-
-              else
-                Html.nothing
+            , Html.viewIf (turn.status == Model.ChatPending)
+                (Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "█" ])
             ]
-        , case failedMessage of
-            Just err ->
-                Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ]
-
-            Nothing ->
-                Html.nothing
+        , Html.viewMaybe
+            (\err -> Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ])
+            failedMessage
         ]
 
 
 pendingChangeset : Model.AgentSessionView -> Maybe Model.ChatChangeset
 pendingChangeset sessionView =
-    if sessionView.gitState.hasAgentCommits then
+    if sessionView.gitState.hasAgentCommits && not (Model.agentSessionArchived sessionView.session.status) then
         let
             session =
                 sessionView.session
@@ -1064,26 +1065,25 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
             , Html.span [ class "agent-panel__changeset-status" ] [ Html.text statusLabel ]
             ]
         , Html.p [ class "agent-panel__changeset-description" ] [ Html.text description ]
-        , if String.isEmpty diff then
-            Html.nothing
-
-          else
-            Html.pre [ class "agent-panel__changeset-diff" ] [ Html.text diff ]
+        , Html.viewIf (not (String.isEmpty diff))
+            (Html.pre [ class "agent-panel__changeset-diff" ] [ Html.text diff ])
         , errorNode
-        , Html.div [ class "agent-panel__changeset-actions" ]
-            [ Html.button
-                [ class "primary-btn"
-                , disabled (not canApply)
-                , Events.onClick Actions.applyAgentChanges
+        , Html.viewIf (isProposed || isNeedsReview) <|
+            Html.div [ class "agent-panel__changeset-actions" ]
+                [ Html.viewIf isProposed <|
+                    Html.button
+                        [ class "small-btn"
+                        , disabled (not canApply)
+                        , Events.onClick Actions.applyAgentChanges
+                        ]
+                        [ viewButtonContent isApplying applyLabel ]
+                , Html.button
+                    [ class "small-btn"
+                    , disabled (not canDiscard)
+                    , Events.onClick Actions.discardAgentSession
+                    ]
+                    [ viewButtonContent isDiscarding discardLabel ]
                 ]
-                [ viewButtonContent isApplying applyLabel ]
-            , Html.button
-                [ class "danger-btn"
-                , disabled (not canDiscard)
-                , Events.onClick Actions.discardAgentSession
-                ]
-                [ viewButtonContent isDiscarding discardLabel ]
-            ]
         ]
 
 

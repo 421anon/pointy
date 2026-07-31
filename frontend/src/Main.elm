@@ -43,11 +43,12 @@ init flags url key =
             Flow.pure ()
 
         _ ->
-            initializeWorkspace
+            Flow.async (Actions.applyAgentChatFromUrl (Route.chatFromUrl url))
+                |> Flow.seq initializeWorkspace
                 |> Flow.seq
                     (Flow.forAll route
                         (\currentRoute ->
-                            Flow.when (currentRoute == initialRoute) (applyRoute True initialRoute)
+                            Flow.when (currentRoute == initialRoute) (applyRouteFromUrl True url)
                         )
                     )
     )
@@ -65,7 +66,8 @@ initializeWorkspace =
 
 applyRouteFromUrl : Bool -> Url -> Flow Model ()
 applyRouteFromUrl forceRevealHighlight url =
-    applyRoute forceRevealHighlight (Route.fromUrl url)
+    Actions.applyAgentChatFromUrl (Route.chatFromUrl url)
+        |> Flow.seq (applyRoute forceRevealHighlight (Route.fromUrl url))
 
 
 applyRoute : Bool -> Route -> Flow Model ()

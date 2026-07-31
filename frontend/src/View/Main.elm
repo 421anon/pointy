@@ -70,12 +70,14 @@ view model =
                                 view404
                 in
                 [ Compare.viewCompareBanner model
-                , Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
+                , Html.div [ Html.Attributes.class "workspace" ]
+                    [ Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
+                    , AgentPanel.view model
+                    ]
                 , Html.div [ Html.Attributes.class "toast-container" ] <|
                     List.map Toast.view (Model.getToasts model)
                 , Dialog.viewConfirm (Model.getModalConfirm model)
                 , Compare.viewCompareDialog model
-                , AgentPanel.view model
                 , StatusBar.view model
                 ]
     }

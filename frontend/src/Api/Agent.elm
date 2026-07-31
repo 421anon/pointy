@@ -9,6 +9,7 @@ module Api.Agent exposing
     , prepareApply
     , renameSession
     , sendTurn
+    , stop
     , turnEvent
     )
 
@@ -211,6 +212,11 @@ turnEvent =
 archive : String -> Flow s (Result Http.Error Model.AgentSessionView)
 archive sessionId =
     postSessionView "/archive" (sessionIdBody sessionId)
+
+
+stop : String -> Flow s (Result Http.Error Model.AgentSessionView)
+stop sessionId =
+    postSessionView "/stop" (sessionIdBody sessionId)
 
 
 delete_ : String -> Flow s (Result Http.Error ())

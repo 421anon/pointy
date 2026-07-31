@@ -1,4 +1,4 @@
-module Route exposing (ArtifactParams, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, project, toString)
+module Route exposing (ArtifactParams, ChatRef, CompareTarget, Comparison, Highlight, HighlightTarget(..), LineRange, ProjectParams, Route(..), chatFromUrl, chatHref, formatLineRange, fromUrl, highlightAnchor, highlightMatches, href, navigationTarget, project, toString, toStringWithChat)
 
 import Accessors exposing (Prism, prism)
 import Html
@@ -29,6 +29,12 @@ type alias ArtifactParams =
     , stepId : Int
     , commit : String
     , path : List String
+    }
+
+
+type alias ChatRef =
+    { sessionId : String
+    , mTurnId : Maybe String
     }
 
 
@@ -255,6 +261,53 @@ fromUrl url =
 
         Nothing ->
             NotFound
+
+
+chatFromUrl : Url -> Maybe ChatRef
+chatFromUrl url =
+    Parser.parse (Parser.top <?> chatQuery) { url | path = "/", fragment = Nothing }
+        |> Maybe.andThen identity
+
+
+chatQuery : Query.Parser (Maybe ChatRef)
+chatQuery =
+    Query.map2 (\mSessionId mTurnId -> Maybe.map (\sessionId -> ChatRef sessionId mTurnId) mSessionId)
+        (Query.string "chat")
+        (Query.string "turn")
+
+
+chatParts : ChatRef -> List String
+chatParts chat =
+    List.filterMap identity
+        [ Just ("chat=" ++ chat.sessionId)
+        , Maybe.map (\turnId -> "turn=" ++ turnId) chat.mTurnId
+        ]
+
+
+chatHref : ChatRef -> String
+chatHref chat =
+    "?" ++ String.join "&" (chatParts chat)
+
+
+toStringWithChat : Maybe ChatRef -> Route -> String
+toStringWithChat mChat route =
+    let
+        base =
+            toString route
+
+        separator =
+            if String.contains "?" base then
+                "&"
+
+            else
+                "?"
+    in
+    case mChat of
+        Just chat ->
+            base ++ separator ++ String.join "&" (chatParts chat)
+
+        Nothing ->
+            base
 
 
 href : Route -> Html.Attribute msg
