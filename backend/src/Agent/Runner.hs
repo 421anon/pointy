@@ -29,7 +29,7 @@ import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait)
 import Control.Exception (IOException, SomeException, try)
-import Control.Monad (unless, void, when)
+import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
 import Control.Monad.IO.Class (liftIO)
@@ -44,7 +44,7 @@ import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
-import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getFileSize, getHomeDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
@@ -219,6 +219,9 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 , std_err = CreatePipe
                 }
     createDirectoryIfMissing True runnerHome
+    -- Seed the per-session pi config; without it pi falls back to its built-in
+    -- registry, whose deepseek default is deepseek-v4-pro.
+    seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (mIn, mOut, mErr, ph) <- createProcess process
     case mIn of
@@ -239,6 +242,20 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     _ <- wait outReader
     _ <- wait errReader
     return exitCode
+
+-- | Copy the operator-provided pi agent config into a session's sandbox HOME.
+seedPiConfig :: FilePath -> IO ()
+seedPiConfig runnerHome = do
+    realHome <- getHomeDirectory
+    let srcDir = realHome </> ".pi" </> "agent"
+        dstDir = runnerHome </> ".pi" </> "agent"
+    forM_ ["models.json", "settings.json"] $ \name -> do
+        let src = srcDir </> name
+            dst = dstDir </> name
+        exists <- doesFileExist src
+        when exists $ do
+            createDirectoryIfMissing True dstDir
+            copyFile src dst
 
 streamHandle :: AgentConfig -> FilePath -> Text -> Text -> Handle -> IO ()
 streamHandle cfg logPath outputMarker visibleLabel handle = do
