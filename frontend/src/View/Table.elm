@@ -97,7 +97,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
             TableSpec.getLens spec
 
         currentRouteCommit =
-            case Model.getRoute model of
+            case (Model.getRoute model).page of
                 Route.Project { mCommit } ->
                     mCommit
 
@@ -105,7 +105,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                     Nothing
 
         ( highlightedEntityId, isReadOnly ) =
-            case Model.getRoute model of
+            case (Model.getRoute model).page of
                 Route.Project { mHighlight, mCommit } ->
                     ( mHighlight, Maybe.isJust mCommit )
 
@@ -995,7 +995,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 |> Maybe.withDefault typeName
 
         currentRouteCommit =
-            case Model.getRoute model of
+            case (Model.getRoute model).page of
                 Route.Project { mCommit } ->
                     mCommit
 
@@ -1107,14 +1107,16 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     (\projectId ->
                                         let
                                             mCommit_ =
-                                                try (route << Route.project << mCommit << just) model
+                                                try (route << Route.page << Route.project << mCommit << just) model
                                         in
-                                        Route.Project
-                                            { projectId = projectId
-                                            , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                                            , mCommit = mCommit_
-                                            , mCompare = Nothing
-                                            }
+                                        Route.fromPage
+                                            (Route.Project
+                                                { projectId = projectId
+                                                , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                                                , mCommit = mCommit_
+                                                , mCompare = Nothing
+                                                }
+                                            )
                                     )
                     in
                     Select.view

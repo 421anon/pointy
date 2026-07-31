@@ -14,7 +14,7 @@ import Json.Decode exposing (Value)
 import List.Extra as List
 import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
-import Route exposing (HighlightTarget(..), ProjectParams, Route(..))
+import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Time
 import Toast exposing (Toast)
 
@@ -38,7 +38,7 @@ currentProject : Lens ls Model (ApiData ProjectRecord) x y
 currentProject =
     let
         tryProjectId =
-            try (route << projectRoute << projectId)
+            try (route << Route.page << projectRoute << projectId)
 
         get_ m =
             get (projects << records) m
@@ -69,17 +69,17 @@ route =
     lens ".route" Model.getRoute (\(Model m) route_ -> Model { m | route = route_ })
 
 
-projectRoute : Prism pr Route ProjectParams x y
+projectRoute : Prism pr Page ProjectParams x y
 projectRoute =
     prism ">Project"
         Project
-        (\route_ ->
-            case route_ of
+        (\page_ ->
+            case page_ of
                 Project params ->
                     Ok params
 
                 _ ->
-                    Err route_
+                    Err page_
         )
 
 

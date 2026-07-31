@@ -157,7 +157,7 @@ viewSrcFilesSection model stepType spec step =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
         isLocked =
-            has (route << Route.project << mCommit << just) model
+            has (route << Route.page << Route.project << mCommit << just) model
 
         mEditableId =
             Maybe.filter (always (not isLocked)) step.id
@@ -296,7 +296,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
             mGutter
                 |> Maybe.andThen
                     (\{ recordId, target } ->
-                        try (route << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) model
+                        try (route << Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches target recordId path)) model
                             |> Maybe.andThen .range
                     )
 
@@ -360,12 +360,13 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         ( Just projectId, Just (OutputDir stepId_ commit_) ) ->
                             Just <|
                                 Route.toString <|
-                                    Route.Artifact
-                                        { projectId = projectId
-                                        , stepId = stepId_
-                                        , commit = commit_
-                                        , path = path
-                                        }
+                                    Route.fromPage <|
+                                        Route.Artifact
+                                            { projectId = projectId
+                                            , stepId = stepId_
+                                            , commit = commit_
+                                            , path = path
+                                            }
 
                         _ ->
                             Nothing

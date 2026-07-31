@@ -122,7 +122,7 @@ viewRepoContext model =
                 repoLabel =
                     repo.branch ++ " @ " ++ String.left 7 commit
             in
-            case try (route << Route.project << mCommit << just) model of
+            case try (route << Route.page << Route.project << mCommit << just) model of
                 Just historicalCommit ->
                     let
                         switchLabel =
@@ -132,7 +132,7 @@ viewRepoContext model =
                     in
                     Html.a
                         [ class "status-bar__control status-bar__repo status-bar__repo--past"
-                        , Route.href (set (Route.project << mCommit) Nothing (Model.getRoute model))
+                        , Route.href (set (Route.page << Route.project << mCommit) Nothing (Model.getRoute model))
                         , title switchLabel
                         , attribute "aria-label" switchLabel
                         ]

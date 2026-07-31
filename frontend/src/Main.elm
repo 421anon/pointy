@@ -38,12 +38,12 @@ init flags url key =
             Route.fromUrl url
     in
     ( initialModel key initialRoute flags
-    , case initialRoute of
+    , case initialRoute.page of
         Route.Artifact _ ->
             Flow.pure ()
 
         _ ->
-            Flow.async (Actions.applyAgentChatFromUrl True (Route.chatFromUrl url))
+            Flow.async (Actions.applyAgentChatFromUrl True)
                 |> Flow.seq initializeWorkspace
                 |> Flow.seq
                     (Flow.forAll route
@@ -66,8 +66,8 @@ initializeWorkspace =
 
 applyRouteFromUrl : Bool -> Url -> Flow Model ()
 applyRouteFromUrl forceRevealHighlight url =
-    Actions.applyAgentChatFromUrl True (Route.chatFromUrl url)
-        |> Flow.seq (applyRoute forceRevealHighlight (Route.fromUrl url))
+    applyRoute forceRevealHighlight (get Route.routeUrlIso url)
+        |> Flow.seq (Actions.applyAgentChatFromUrl True)
 
 
 applyRoute : Bool -> Route -> Flow Model ()
@@ -93,7 +93,7 @@ applyRoute forceRevealHighlight newRoute =
                                 False
 
                     routeNeedsWorkspace =
-                        case newRoute of
+                        case newRoute.page of
                             Route.Home ->
                                 True
 
@@ -117,10 +117,10 @@ applyRoute forceRevealHighlight newRoute =
                          else
                             let
                                 mOldCommit =
-                                    try (route << Route.project << mCommit << just) model
+                                    try (route << Route.page << Route.project << mCommit << just) model
 
                                 mNewCommit =
-                                    try (Route.project << mCommit << just) newRoute
+                                    try (Route.page << Route.project << mCommit << just) newRoute
                             in
                             Flow.setAll
                                 (projects << records << success << each << projectStepRecords << runState)
@@ -136,7 +136,7 @@ applyRoute forceRevealHighlight newRoute =
                         (Flow.forAll route
                             (\currentRoute_ ->
                                 Flow.when (currentRoute_ == newRoute) <|
-                                    case newRoute of
+                                    case newRoute.page of
                                         Route.Project { projectId, mHighlight, mCommit } ->
                                             Flow.ifHas
                                                 (currentProject << success)
@@ -164,7 +164,7 @@ applyRoute forceRevealHighlight newRoute =
                                             Actions.closeStepStatusStream
                                                 |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
-                                        Route.NotFound ->
+                                        Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute
                             )
                         )
