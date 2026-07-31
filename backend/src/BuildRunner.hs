@@ -5,21 +5,30 @@ module BuildRunner (
     StepRequirements (..),
     BuildKey (..),
     JobId (..),
+    SlurmJob (..),
+    JobComment (..),
     buildKeyForOutPath,
     submitAndWait,
     submitJob,
     queryJobIds,
     queryState,
+    querySlurmJobs,
+    parseSlurmJobLine,
+    encodeJobComment,
+    decodeJobComment,
     waitForCompletion,
     cancel,
+    isRunningState,
 ) where
 
 import Config (Config (..), SlurmConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (threadDelay)
-import Data.Aeson (FromJSON (..), withObject, (.:))
+import Data.Aeson (FromJSON (..), ToJSON (..), decode, encode, object, withObject, (.:), (.=))
 import Data.Bits (xor)
+import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.Char (isAlphaNum)
 import Data.List (foldl', intercalate)
+import Data.Maybe (mapMaybe)
 import qualified Data.Text as T
 import Data.Word (Word64)
 import Numeric (showHex)
@@ -48,6 +57,51 @@ newtype BuildKey = BuildKey {unBuildKey :: String} deriving (Eq, Show)
 
 -- | A slurm job id, as printed by @sbatch --parsable@ and @squeue -o %i@.
 newtype JobId = JobId {unJobId :: String} deriving (Eq, Show)
+
+-- | A slurm job as listed by @squeue@: id, name, comment and state.
+data SlurmJob = SlurmJob
+    { slurmJobId :: JobId
+    , slurmJobName :: String
+    , slurmJobComment :: Maybe String
+    , slurmJobState :: String
+    }
+    deriving (Eq, Show)
+
+{- | JSON payload stored in the job comment at submission time so a restarted
+backend can map an in-flight job back to the step, commit and outPath it was
+submitted for. @kind@ is @"step"@ for main step builds and @"extras"@ for
+supplementary extras builds.
+-}
+data JobComment = JobComment
+    { jobCommentKind :: String
+    , jobCommentStep :: Int
+    , jobCommentCommit :: String
+    , jobCommentOutPath :: String
+    }
+    deriving (Eq, Show)
+
+instance FromJSON JobComment where
+    parseJSON = withObject "JobComment" $ \obj ->
+        JobComment
+            <$> obj .: "kind"
+            <*> obj .: "step"
+            <*> obj .: "commit"
+            <*> obj .: "outPath"
+
+instance ToJSON JobComment where
+    toJSON (JobComment kind step commit outPath) =
+        object
+            [ "kind" .= kind
+            , "step" .= step
+            , "commit" .= commit
+            , "outPath" .= outPath
+            ]
+
+encodeJobComment :: JobComment -> String
+encodeJobComment = LBS.unpack . encode
+
+decodeJobComment :: String -> Maybe JobComment
+decodeJobComment = decode . LBS.pack
 
 buildKeyForOutPath :: FilePath -> BuildKey
 buildKeyForOutPath outPath =
@@ -80,14 +134,14 @@ sanitizeJobNameChar c
     | c == '.' = c
     | otherwise = '-'
 
-submitAndWait :: StepRequirements -> BuildKey -> [String] -> IO ExitCode
-submitAndWait requirements key command = do
+submitAndWait :: StepRequirements -> BuildKey -> String -> [String] -> IO ExitCode
+submitAndWait requirements key comment command = do
     state <- queryState key
     case state of
         BRunning -> ExitSuccess <$ waitForCompletion key
         BSucceeded -> pure ExitSuccess
         BFailed -> pure $ ExitFailure 1
-        BAbsent -> submitNewJob requirements key command
+        BAbsent -> submitNewJob requirements key comment command
 
 queryState :: BuildKey -> IO BuildState
 queryState (BuildKey key) = do
@@ -107,13 +161,44 @@ queryJobIds (BuildKey key) = do
         ExitSuccess -> map JobId (filter (not . null) (lines stdout))
         ExitFailure _ -> []
 
+{- | Every job currently visible in the queue, unfiltered, as
+(id, name, comment, state).  Used on backend restart to discover jobs that
+were submitted before the restart without knowing their names in advance.
+-}
+querySlurmJobs :: IO [SlurmJob]
+querySlurmJobs = do
+    (exitCode, stdout, _) <- readProcessWithExitCode "squeue" ["-h", "-o", "%i|%j|%k|%T"] ""
+    pure $ case exitCode of
+        ExitSuccess -> mapMaybe parseSlurmJobLine (lines stdout)
+        ExitFailure _ -> []
+
+-- | Parse one @squeue -o "%i|%j|%k|%T"@ line.  Jobs without a comment print
+-- @(null)@ for the comment field.
+parseSlurmJobLine :: String -> Maybe SlurmJob
+parseSlurmJobLine line = case splitOn '|' line of
+    [jobId, name, comment, state] | not (null jobId) && not (null name) ->
+        Just $ SlurmJob (JobId jobId) name (parseComment comment) state
+    _ -> Nothing
+  where
+    parseComment c
+        | null c || c == "(null)" = Nothing
+        | otherwise = Just c
+
+splitOn :: Char -> String -> [String]
+splitOn sep = go []
+  where
+    go acc [] = [reverse acc]
+    go acc (c : rest)
+        | c == sep = reverse acc : go [] rest
+        | otherwise = go (c : acc) rest
+
 cancel :: BuildKey -> IO ()
 cancel (BuildKey key) = do
     _ <- readProcessWithExitCode "scancel" ["--name=" ++ key] ""
     pure ()
 
-submitNewJob :: StepRequirements -> BuildKey -> [String] -> IO ExitCode
-submitNewJob requirements (BuildKey key) command = do
+submitNewJob :: StepRequirements -> BuildKey -> String -> [String] -> IO ExitCode
+submitNewJob requirements (BuildKey key) comment command = do
     slurm <- configSlurm <$> (resolveConfigPath >>= loadConfig)
     (exitCode, _, _) <-
         readProcessWithExitCode
@@ -121,6 +206,7 @@ submitNewJob requirements (BuildKey key) command = do
             ( [ "--wait"
               , "--parsable"
               , "--job-name=" ++ key
+              , "--comment=" ++ comment
               , "--output=/dev/null"
               , "--error=/dev/null"
               ]
@@ -134,14 +220,15 @@ submitNewJob requirements (BuildKey key) command = do
 {- | Submit a job without waiting for completion. Non-empty @depJobIds@
 become @afterok@ dependency edges; the job is killed if any of them fails.
 -}
-submitJob :: StepRequirements -> BuildKey -> [JobId] -> [String] -> IO (Either String JobId)
-submitJob requirements (BuildKey key) depJobIds command = do
+submitJob :: StepRequirements -> BuildKey -> [JobId] -> String -> [String] -> IO (Either String JobId)
+submitJob requirements (BuildKey key) depJobIds comment command = do
     slurm <- configSlurm <$> (resolveConfigPath >>= loadConfig)
     (exitCode, stdout, stderr) <-
         readProcessWithExitCode
             "sbatch"
             ( [ "--parsable"
               , "--job-name=" ++ key
+              , "--comment=" ++ comment
               , "--output=/dev/null"
               , "--error=/dev/null"
               ]
