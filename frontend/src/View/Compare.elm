@@ -256,6 +256,9 @@ viewArgValue model projectId argType mValue =
         ( TString _ _, Just (TStringValue s) ) ->
             orEmptyValue s (Html.text s)
 
+        ( TInt _ _, Just (TIntValue n) ) ->
+            Html.text (String.fromInt n)
+
         ( TStep _, Just (TStepValue stepId) ) ->
             Html.text (stepNameOf model projectId stepId)
 

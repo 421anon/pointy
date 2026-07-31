@@ -341,6 +341,10 @@ stepArgType =
             Decode.map2 TString
                 (Decode.field "display" tStringDisplay)
                 (maybe (Decode.field "autocomplete" Decode.string))
+        , Decode.field "int" <|
+            Decode.map2 TInt
+                (Decode.field "display" tStringDisplay)
+                (maybe (Decode.field "autocomplete" Decode.string))
         , Decode.map2 TEnum (Decode.field "enum" (Decode.list Decode.string)) (Decode.oneOf [ Decode.field "enumDisplayNames" (Decode.dict Decode.string), Decode.succeed Dict.empty ])
         , Decode.field "step" (Decode.map TStep <| maybe <| Decode.field "allowedTypes" (Decode.list Decode.string))
         , Decode.field "list" (Decode.map TList (Decode.lazy (\() -> stepArgType)))
@@ -376,6 +380,9 @@ stepArgValue argType_ =
     case argType_ of
         TString _ _ ->
             Decode.string |> Decode.map TStringValue
+
+        TInt _ _ ->
+            Decode.int |> Decode.map TIntValue
 
         TStep _ ->
             Decode.field "step" Decode.int |> Decode.map TStepValue

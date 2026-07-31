@@ -14,6 +14,9 @@ stepArgValue argType arg =
         ( TString _ _, TStringValue str ) ->
             Just (Encode.string str)
 
+        ( TInt _ _, TIntValue n ) ->
+            Just (Encode.int n)
+
         ( TStep _, TStepValue id ) ->
             Just (Encode.object [ ( "step", Encode.int id ) ])
 

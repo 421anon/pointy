@@ -29,7 +29,7 @@ import Markdown
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tEnumValue, tListValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Scroll
@@ -1212,6 +1212,33 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 )
                             )
 
+                    TInt _ _ ->
+                        let
+                            intField value =
+                                textField
+                                    { label = fieldLabel
+                                    , mHint = fieldHint
+                                    , placeholder = fieldLabel
+                                    , value = value
+                                    , onInput = \s ->
+                                        case String.toInt s of
+                                            Just n ->
+                                                Flow.modify (set paramLens (Just (TIntValue n)))
+
+                                            Nothing ->
+                                                Flow.none
+                                    , hasChanged = fieldHasChanged
+                                    , readOnly = readOnly
+                                    , id = paramName ++ "-input"
+                                    }
+                        in
+                        case try (paramLens << just << tIntValue) model of
+                            Just n ->
+                                intField (String.fromInt n)
+
+                            Nothing ->
+                                intField ""
+
                     TString display _ ->
                         case display of
                             TextField ->
@@ -1458,6 +1485,33 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     , id = fieldId_ ++ "-input"
                                                     , language = language
                                                     }
+
+                                    TInt _ _ ->
+                                        let
+                                            intVal =
+                                                case currentVal of
+                                                    Just (TIntValue n) ->
+                                                        String.fromInt n
+
+                                                    _ ->
+                                                        ""
+                                        in
+                                        textField
+                                            { label = recordFieldLabel
+                                            , mHint = Nothing
+                                            , placeholder = fieldName
+                                            , value = intVal
+                                            , onInput = \s ->
+                                                case String.toInt s of
+                                                    Just n ->
+                                                        updateField idx fieldName (TIntValue n)
+
+                                                    Nothing ->
+                                                        Flow.none
+                                            , hasChanged = False
+                                            , readOnly = readOnly
+                                            , id = fieldId_ ++ "-input"
+                                            }
 
                                     TEnum enumValues enumDisplayNames ->
                                         formField
@@ -2230,6 +2284,9 @@ stepArgValueKey value =
     case value of
         TStringValue str ->
             keyPart "string" str
+
+        TIntValue n ->
+            keyPart "int" (String.fromInt n)
 
         TStepValue stepId ->
             keyPart "step" (String.fromInt stepId)
