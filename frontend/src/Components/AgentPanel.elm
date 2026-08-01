@@ -478,8 +478,18 @@ viewSession agent sessionView =
 
                 stopping =
                     agent.request == Just (Model.StoppingAgentTurn session.sessionId)
+
+                -- The textarea is uncontrolled, so its content survives re-renders.
+                -- Keep it editable while the agent works so the next prompt can be
+                -- pre-composed; lock it only while its content is being consumed
+                -- by a send. Submit stays gated on the broad busy state.
+                canCompose =
+                    sendingPrompt
+
+                canSubmit =
+                    detailBlocked
             in
-            viewPrompt runnerActive sendingPrompt stopping detailBlocked
+            viewPrompt runnerActive sendingPrompt stopping canCompose canSubmit
         ]
 
 
@@ -623,8 +633,8 @@ viewError session =
     Html.viewMaybe (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text err ]) session.lastError
 
 
-viewPrompt : Bool -> Bool -> Bool -> Bool -> Html (Flow Model ())
-viewPrompt runnerActive sendingPrompt stopping composerBusy =
+viewPrompt : Bool -> Bool -> Bool -> Bool -> Bool -> Html (Flow Model ())
+viewPrompt runnerActive sendingPrompt stopping canCompose canSubmit =
     Html.div [ class "agent-panel__composer" ]
         [ Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
@@ -632,9 +642,9 @@ viewPrompt runnerActive sendingPrompt stopping composerBusy =
                 , id "agent-prompt"
                 , rows 3
                 , placeholder "Ask for a change..."
-                , disabled composerBusy
+                , disabled canCompose
                 , attribute "aria-label" "Agent prompt"
-                , submitShortcut composerBusy
+                , submitShortcut canSubmit
                 ]
                 []
             , if runnerActive || stopping then
@@ -661,7 +671,7 @@ viewPrompt runnerActive sendingPrompt stopping composerBusy =
               else
                 Html.button
                     [ class "btn agent-panel__run-button"
-                    , disabled composerBusy
+                    , disabled canSubmit
                     , attribute "aria-busy" (boolText sendingPrompt)
                     , Events.onClick Actions.submitAgentPrompt
                     , title "Send message (Ctrl/⌘+Enter)"
@@ -684,7 +694,7 @@ viewPrompt runnerActive sendingPrompt stopping composerBusy =
 
 
 submitShortcut : Bool -> Html.Attribute (Flow Model ())
-submitShortcut runnerActive =
+submitShortcut canSubmit =
     let
         decoder =
             Decode.map3
@@ -694,7 +704,7 @@ submitShortcut runnerActive =
                 (Decode.field "metaKey" Decode.bool)
                 |> Decode.andThen
                     (\( key, ctrl, meta ) ->
-                        if not runnerActive && key == "Enter" && (ctrl || meta) then
+                        if not canSubmit && key == "Enter" && (ctrl || meta) then
                             Decode.succeed ( Actions.submitAgentPrompt, True )
 
                         else
