@@ -11,7 +11,7 @@ import Browser.Navigation as Nav
 import Channels
 import Components.Select exposing (selected)
 import Debounce
-import Dict
+import Dict exposing (Dict)
 import DnDList
 import Extra.Accessors exposing (A_Traversal, by, orElseT, remkT, where_)
 import Extra.FlowError as FlowError exposing (FlowError)
@@ -28,6 +28,7 @@ import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
+import Time
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
 import Ports
 import Process
@@ -2374,7 +2375,18 @@ scrollAgentChatToBottom =
 
 setAgentSessions : ApiData (List Model.AgentSessionView) -> Flow Model ()
 setAgentSessions data =
-    Flow.over agent (\agentState -> { agentState | sessions = data })
+    Flow.over agent
+        (\agentState ->
+            { agentState
+                | sessions =
+                    case data of
+                        Success views ->
+                            Success (List.map (applySessionRenameOverride agentState.sessionRenames) views)
+
+                        other ->
+                            other
+            }
+        )
 
 
 setAgentSessionsLoading : Flow Model ()
@@ -2472,7 +2484,10 @@ mergeSessionView view agentState =
             else
                 view :: currentList
     in
-    { agentState | sessions = Success merged }
+    { agentState
+        | sessions =
+            Success (List.map (applySessionRenameOverride agentState.sessionRenames) merged)
+    }
 
 
 applyPersistedTranscript : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
@@ -2865,38 +2880,36 @@ cancelAgentSessionNameEdit =
 
 saveAgentSessionName : Flow Model ()
 saveAgentSessionName =
-    whenAgentInteractionsAllowed
-        (Flow.forAll agent
-            (\agentState ->
-                case agentState.sessionNameEdit of
-                    Nothing ->
-                        Flow.pure ()
+    Flow.forAll agent
+        (\agentState ->
+            case agentState.sessionNameEdit of
+                Nothing ->
+                    Flow.pure ()
 
-                    Just edit ->
-                        let
-                            name =
-                                String.trim edit.value
-                        in
-                        if String.isEmpty name then
-                            addToast False "Enter a chat name first."
+                Just edit ->
+                    let
+                        name =
+                            String.trim edit.value
+                    in
+                    if String.isEmpty name then
+                        addToast False "Enter a chat name first."
 
-                        else
-                            Flow.over agent (setSessionNameEditSaving edit.sessionId True)
-                                |> Flow.seq
-                                    (AgentApi.renameSession edit.sessionId name
-                                        |> Flow.andThen
-                                            (\result ->
-                                                case result of
-                                                    Ok view ->
-                                                        handleAgentSessionResult (Ok view)
-                                                            |> Flow.seq (Flow.over agent (clearSessionNameEdit edit.sessionId))
+                    else
+                        Flow.over agent (setSessionNameEditSaving edit.sessionId True)
+                            |> Flow.seq
+                                (AgentApi.renameSession edit.sessionId name
+                                    |> Flow.andThen
+                                        (\result ->
+                                            case result of
+                                                Ok view ->
+                                                    Flow.over agent (applyAgentSessionRename edit.sessionId view)
+                                                        |> Flow.seq (Flow.over agent (clearSessionNameEdit edit.sessionId))
 
-                                                    Err err ->
-                                                        Flow.over agent (setSessionNameEditSaving edit.sessionId False)
-                                                            |> Flow.seq (addToast False (Http.errorMessage err))
-                                            )
-                                    )
-            )
+                                                Err err ->
+                                                    Flow.over agent (setSessionNameEditSaving edit.sessionId False)
+                                                        |> Flow.seq (addToast False (Http.errorMessage err))
+                                        )
+                                )
         )
 
 
@@ -2912,6 +2925,60 @@ setSessionNameEditSaving sessionId saving agentState =
 
         Nothing ->
             agentState
+
+
+-- | Metadata-only rename merge: record the stored name so full-view responses
+-- | that started before the rename cannot restore the old one; the response's
+-- | runtime fields may be stale, so it never goes through handleAgentSessionResult.
+
+
+applyAgentSessionRename : String -> Model.AgentSessionView -> Model.AgentState -> Model.AgentState
+applyAgentSessionRename sessionId renamedView agentState =
+    let
+        updateView view =
+            if view.session.sessionId == sessionId then
+                let
+                    session =
+                        view.session
+                in
+                { view | session = { session | sessionName = renamedView.session.sessionName } }
+
+            else
+                view
+
+        renames =
+            case renamedView.session.sessionName of
+                Just name ->
+                    Dict.insert sessionId ( name, renamedView.session.updatedAt ) agentState.sessionRenames
+
+                Nothing ->
+                    agentState.sessionRenames
+    in
+    { agentState
+        | sessions = ApiData.map (List.map updateView) agentState.sessions
+        , sessionRenames = renames
+    }
+
+
+-- | Override the recorded name only when the view is not newer than the rename.
+
+
+applySessionRenameOverride : Dict String ( String, Model.SessionTimestamp ) -> Model.AgentSessionView -> Model.AgentSessionView
+applySessionRenameOverride renames view =
+    case Dict.get view.session.sessionId renames of
+        Just ( name, renamedAt ) ->
+            if Model.sessionTimestampAtLeast renamedAt view.session.updatedAt then
+                let
+                    session =
+                        view.session
+                in
+                { view | session = { session | sessionName = Just name } }
+
+            else
+                view
+
+        Nothing ->
+            view
 
 
 clearSessionNameEdit : String -> Model.AgentState -> Model.AgentState

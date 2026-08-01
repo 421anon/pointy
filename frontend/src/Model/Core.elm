@@ -165,6 +165,23 @@ type alias AgentPreparedApply =
     }
 
 
+-- | RFC3339 "updatedAt" with the nanosecond fraction kept, so renames that
+-- | land within the same millisecond still order correctly.
+
+
+type alias SessionTimestamp =
+    { posix : Time.Posix
+    , nanos : Int
+    }
+
+
+sessionTimestampAtLeast : SessionTimestamp -> SessionTimestamp -> Bool
+sessionTimestampAtLeast a b =
+    -- Compare millis directly (// wraps at 2^31); the fraction lives in nanos.
+    Time.posixToMillis a.posix > Time.posixToMillis b.posix
+        || (Time.posixToMillis a.posix == Time.posixToMillis b.posix && a.nanos >= b.nanos)
+
+
 type alias AgentSession =
     { sessionId : String
     , sessionName : Maybe String
@@ -176,6 +193,7 @@ type alias AgentSession =
     , preparedApply : Maybe AgentPreparedApply
     , activeTurnId : Maybe String
     , lastError : Maybe String
+    , updatedAt : SessionTimestamp
     }
 
 
@@ -284,6 +302,7 @@ type alias AgentState =
     , changesetOperation : Maybe ChangesetOperation
     , request : Maybe AgentRequest
     , sessionNameEdit : Maybe AgentSessionNameEdit
+    , sessionRenames : Dict String ( String, SessionTimestamp )
     , highlightTurnId : Maybe String
     , lastChat : Maybe String
     }
@@ -303,6 +322,7 @@ initAgentState =
     , changesetOperation = Nothing
     , request = Nothing
     , sessionNameEdit = Nothing
+    , sessionRenames = Dict.empty
     , highlightTurnId = Nothing
     , lastChat = Nothing
     }

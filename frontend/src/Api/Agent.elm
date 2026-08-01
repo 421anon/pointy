@@ -15,6 +15,7 @@ module Api.Agent exposing
 
 import Flow exposing (Flow)
 import Http
+import Iso8601
 import Json.Decode as Decode exposing (Decoder)
 import Json.Decode.Pipeline exposing (optional, required)
 import Json.Encode as Encode
@@ -149,6 +150,47 @@ sessionDecoder =
         |> optional "preparedApply" (Decode.maybe preparedApplyDecoder) Nothing
         |> optional "activeTurnId" (Decode.maybe Decode.string) Nothing
         |> optional "lastError" (Decode.maybe Decode.string) Nothing
+        |> required "updatedAt" updatedAtDecoder
+
+
+-- | Backend "updatedAt" is RFC3339 with a fractional part; parse the fraction
+-- | separately so renames that land within the same millisecond stay ordered.
+
+
+updatedAtDecoder : Decoder Model.SessionTimestamp
+updatedAtDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\raw ->
+                case decodeSessionTimestamp raw of
+                    Just timestamp ->
+                        Decode.succeed timestamp
+
+                    Nothing ->
+                        Decode.fail ("Invalid session updatedAt: " ++ raw)
+            )
+
+
+decodeSessionTimestamp : String -> Maybe Model.SessionTimestamp
+decodeSessionTimestamp raw =
+    let
+        ( basePart, fraction ) =
+            case String.indexes "." raw of
+                dotIdx :: _ ->
+                    -- Iso8601.toTime requires the timezone, so keep the "Z".
+                    ( String.left dotIdx raw ++ "Z", String.dropLeft (dotIdx + 1) (String.dropRight 1 raw) )
+
+                [] ->
+                    ( raw, "" )
+    in
+    case Iso8601.toTime basePart of
+        Ok posix ->
+            -- Normalize fractions to Aeson's picosecond width (12 digits) so
+            -- different digit counts compare on one scale.
+            Maybe.map (Model.SessionTimestamp posix) (String.toInt (String.padRight 12 '0' (String.left 12 fraction)))
+
+        Err _ ->
+            Nothing
 
 
 preparedApplyDecoder : Decoder Model.AgentPreparedApply

@@ -499,10 +499,11 @@ viewSessionTitle agent sessionView =
         session =
             sessionView.session
 
+        -- Rename is metadata-only and allowed in every session state; block
+        -- only a pending delete of this session (the rename would queue
+        -- behind the delete's lock and fail).
         renameBlocked =
-            Model.agentInteractionsBlocked agent
-                || (session.activeTurnId /= Nothing)
-                || (session.status == "running")
+            agent.request == Just (Model.DeletingAgentSession session.sessionId)
 
         editing =
             case agent.sessionNameEdit of
