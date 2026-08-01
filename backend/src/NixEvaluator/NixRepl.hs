@@ -119,8 +119,8 @@ openSession kind = do
 initializeSession :: ReplSession -> IO ()
 initializeSession session = do
     marker <- nextMarker session "ready"
-    sendCommands session [":p " ++ nixString marker]
-    result <- collectUntilMarker session marker
+    sendCommands session [syncCommand marker]
+    result <- collectUntilMarkers session marker
     case result of
         ReplDied err -> fail err
         _ -> pure ()
@@ -137,10 +137,10 @@ runRequest session req = do
                 session
                 [ ":p " ++ nixString begin
                 , ":p builtins.toJSON (" ++ expr ++ ")"
-                , ":p " ++ nixString end
+                , syncCommand end
                 ]
-            collectUntilMarker session end >>= \case
-                ReplSucceeded _ -> pure $ ReplDied "internal protocol error: collectUntilMarker returned success before parsing"
+            collectUntilMarkers session end >>= \case
+                ReplSucceeded _ -> pure $ ReplDied "internal protocol error: collectUntilMarkers returned success before parsing"
                 ReplDied err -> pure $ ReplDied err
                 ReplFailed raw -> parseReplOutput begin req raw
     pure outcome
@@ -164,15 +164,19 @@ readSessionMemoryBytes session =
             , Just value <- [readMaybe rawValue]
             ]
 
-collectUntilMarker :: ReplSession -> String -> IO ReplOutcome
-collectUntilMarker session marker = go []
+collectUntilMarkers :: ReplSession -> String -> IO ReplOutcome
+collectUntilMarkers session marker = go False False []
   where
-    go acc = do
+    go True True acc = pure $ ReplFailed (formatEvents $ reverse acc)
+    go sawStdout sawStderr acc = do
         event <- atomically $ readTQueue (replEvents session)
         case event of
-            ReplLine ReplStdout line | line == marker -> pure $ ReplFailed (formatEvents $ reverse acc)
-            ReplClosed ReplStdout err -> pure $ ReplDied $ replName session ++ " closed stdout before marker " ++ marker ++ formatClosed err
-            _ -> go (event : acc)
+            ReplLine ReplStdout line
+                | line == marker -> go True sawStderr acc
+            ReplLine ReplStderr line
+                | line == "trace: " ++ marker -> go sawStdout True acc
+            ReplClosed stream err -> pure $ ReplDied $ replName session ++ " closed " ++ show stream ++ " before marker " ++ marker ++ formatClosed err
+            _ -> go sawStdout sawStderr (event : acc)
 
 parseReplOutput :: String -> NixEvalRequest -> String -> IO ReplOutcome
 parseReplOutput begin req raw = do
@@ -230,9 +234,9 @@ ensureFlakeBinding session installable =
                 sendCommands
                     session
                     [ varName ++ " = builtins.getFlake " ++ nixString installable
-                    , ":p " ++ nixString marker
+                    , syncCommand marker
                     ]
-                outcome <- collectUntilMarker session marker
+                outcome <- collectUntilMarkers session marker
                 case outcome of
                     ReplSucceeded _ -> pure (bindings, Left $ ReplDied "internal protocol error while binding flake")
                     ReplDied err -> pure (bindings, Left $ ReplDied err)
@@ -280,6 +284,9 @@ nextMarker session label = do
         let next = current + 1
         pure (next, next)
     pure $ "__pointy_nix_repl_" ++ sanitize label ++ "_" ++ show n ++ "__"
+
+syncCommand :: String -> String
+syncCommand marker = ":p builtins.trace " ++ nixString marker ++ " " ++ nixString marker
 
 sendCommands :: ReplSession -> [String] -> IO ()
 sendCommands session commands = do
