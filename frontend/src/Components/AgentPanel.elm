@@ -139,14 +139,31 @@ viewSessionBody agent =
             ]
         ]
         [ viewSessionSidebar agent loaded
-        , case agent.sessions of
-            Loading Nothing ->
-                Html.div [ class "agent-panel__empty" ]
-                    [ Html.span [ class "agent-panel__loading shimmer-text shimmer-text--low-contrast" ] [ Html.text "Loading chat..." ] ]
+        , if agent.isRestoringChat then
+            viewSessionsLoading
 
-            _ ->
-                viewSessionDetail agent loaded
+          else
+            case agent.sessions of
+                NotAsked ->
+                    viewSessionsBlank
+
+                Loading Nothing ->
+                    viewSessionsLoading
+
+                _ ->
+                    viewSessionDetail agent loaded
         ]
+
+
+viewSessionsBlank : Html msg
+viewSessionsBlank =
+    Html.div [ class "agent-panel__empty" ] []
+
+
+viewSessionsLoading : Html msg
+viewSessionsLoading =
+    Html.div [ class "agent-panel__empty agent-panel__empty--delayed" ]
+        [ Html.span [ class "agent-panel__loading shimmer-text shimmer-text--low-contrast" ] [ Html.text "Loading chat..." ] ]
 
 
 isCreatingAgentSession : Model.AgentState -> Bool

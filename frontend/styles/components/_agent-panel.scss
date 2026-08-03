@@ -110,6 +110,20 @@
   }
 }
 
+.agent-panel__empty--delayed {
+  animation: agent-delayed-in 0s var(--loader-delay) both;
+}
+
+@keyframes agent-delayed-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 .agent-panel__loading {
   padding: var(--spacing-xs);
   color: var(--text-secondary);

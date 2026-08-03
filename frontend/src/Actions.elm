@@ -2311,13 +2311,11 @@ shareAgentChat sessionId =
         |> Flow.seq (addToast True "Share link copied to clipboard")
 
 
-agentSessionLoaded : Maybe String -> Model.AgentState -> Bool
-agentSessionLoaded mSessionId agentState =
-    Maybe.map2
-        (\sessionId -> List.any (\view -> view.session.sessionId == sessionId))
-        mSessionId
-        (ApiData.toMaybe agentState.sessions)
-        |> Maybe.withDefault False
+agentSessionLoaded : String -> Model.AgentState -> Bool
+agentSessionLoaded sessionId agentState =
+    agentState.sessions
+        |> ApiData.toMaybe
+        |> Maybe.unwrap False (List.any (\view -> view.session.sessionId == sessionId))
 
 
 applyAgentChatFromUrl : Bool -> Flow Model ()
@@ -2354,7 +2352,7 @@ applyAgentChatFromUrl openPanel =
                                     |> Flow.seq
                                         (Flow.forAll agent
                                             (\loadedAgentState ->
-                                                Flow.when (agentSessionLoaded (Just chat.sessionId) loadedAgentState)
+                                                Flow.when (agentSessionLoaded chat.sessionId loadedAgentState)
                                                     (selectAgentSessionAt chat.sessionId chat.mTurnId)
                                             )
                                         )
@@ -2446,7 +2444,7 @@ pushCurrentUrl =
     Flow.forAll route
         (\currentRoute ->
             Flow.forAll key
-                (\k -> Flow.lift (Nav.pushUrl k (Route.toString currentRoute)))
+                (\k -> Flow.async (Flow.lift (Nav.pushUrl k (Route.toString currentRoute))))
         )
 
 
@@ -2459,7 +2457,7 @@ replaceCurrentUrl =
     Flow.forAll route
         (\currentRoute ->
             Flow.forAll key
-                (\k -> Flow.lift (Nav.replaceUrl k (Route.toString currentRoute)))
+                (\k -> Flow.async (Flow.lift (Nav.replaceUrl k (Route.toString currentRoute))))
         )
 
 
@@ -2771,7 +2769,8 @@ selectAgentSession sessionId =
 
 openAgentChat : String -> Flow Model ()
 openAgentChat sessionId =
-    Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing })
+    Flow.over agent (\s -> { s | isSessionListOpen = False })
+        |> Flow.seq (Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing }))
         |> Flow.seq pushCurrentUrl
 
 
@@ -2792,6 +2791,7 @@ selectAgentSessionAt sessionId mTurnId =
                 , isSessionListOpen = False
                 , sessionNameEdit = Nothing
                 , highlightTurnId = mTurnId
+                , isRestoringChat = False
             }
         )
         |> Flow.seq scrollAgentChatToBottom
@@ -2809,10 +2809,21 @@ toggleAgentPanel =
             let
                 nextOpen =
                     not agentState.isPanelOpen
+
+                needsRestore =
+                    nextOpen && agentState.selectedSessionId == Nothing
             in
-            Flow.over agent (\s -> { s | isPanelOpen = nextOpen, isSessionListOpen = False, isFocusMode = False })
+            Flow.over agent
+                (\s ->
+                    { s
+                        | isPanelOpen = nextOpen
+                        , isSessionListOpen = False
+                        , isFocusMode = False
+                        , isRestoringChat = needsRestore
+                    }
+                )
                 |> Flow.seq (Flow.when nextOpen loadAgentSessions)
-                |> Flow.seq (Flow.when (nextOpen && agentState.selectedSessionId == Nothing) restoreLastChat)
+                |> Flow.seq (Flow.when needsRestore restoreLastChat)
                 |> Flow.seq (Flow.when (not nextOpen) closeAgentChat)
         )
 
@@ -2821,13 +2832,13 @@ restoreLastChat : Flow Model ()
 restoreLastChat =
     Flow.forAll agent
         (\agentState ->
-            case agentState.lastChat of
+            case Maybe.filter (\sessionId -> agentSessionLoaded sessionId agentState) agentState.lastChat of
                 Just sessionId ->
                     Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing })
                         |> Flow.seq replaceCurrentUrl
 
                 Nothing ->
-                    Flow.pure ()
+                    Flow.over agent (\s -> { s | isRestoringChat = False })
         )
 
 

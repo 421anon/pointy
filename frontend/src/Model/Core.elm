@@ -305,6 +305,7 @@ type alias AgentState =
     , sessionRenames : Dict String ( String, SessionTimestamp )
     , highlightTurnId : Maybe String
     , lastChat : Maybe String
+    , isRestoringChat : Bool
     }
 
 
@@ -325,6 +326,7 @@ initAgentState =
     , sessionRenames = Dict.empty
     , highlightTurnId = Nothing
     , lastChat = Nothing
+    , isRestoringChat = False
     }
 
 
