@@ -967,7 +967,7 @@ $delimited-grid-row-height: 28px;
 .artifact-pointy-link {
   position: absolute;
   top: var(--spacing-md);
-  left: var(--spacing-md);
+  right: var(--spacing-md);
   z-index: 1;
   display: inline-flex;
   align-items: center;
