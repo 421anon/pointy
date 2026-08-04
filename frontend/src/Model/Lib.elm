@@ -1,11 +1,11 @@
 module Model.Lib exposing (..)
 
-import Accessors exposing (all, each, over, values)
-import Api.ApiData exposing (success)
+import Accessors exposing (all, each, has, over, values)
+import Api.ApiData as ApiData exposing (success)
 import Components.Select exposing (Item)
 import Dict exposing (Dict)
 import Model.Core exposing (Model, ProjectRecord, getSortKey)
-import Model.Lenses exposing (projectStepRecords, projects, records, tables)
+import Model.Lenses exposing (commitHash, presets, projectStepRecords, projects, records, stepConfig, tables)
 
 
 sortProjects : Dict String ProjectRecord -> List ProjectRecord
@@ -34,3 +34,11 @@ getSearchItems model =
                             }
                         )
             )
+
+
+isWorkspaceReloading : Model -> Bool
+isWorkspaceReloading model =
+    has (projects << records << ApiData.reloading) model
+        || has (commitHash << ApiData.reloading) model
+        || has (stepConfig << ApiData.reloading) model
+        || has (presets << ApiData.reloading) model

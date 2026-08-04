@@ -196,6 +196,20 @@ toLoading apiData =
             Loading Nothing
 
 
+reloading : Prism pr (ApiData a) a x y
+reloading =
+    prism ">Loading(Just)"
+        (Just >> Loading)
+        (\apiData ->
+            case apiData of
+                Loading (Just value) ->
+                    Ok value
+
+                _ ->
+                    Err apiData
+        )
+
+
 foldVisible : b -> (Maybe a -> b) -> (a -> b) -> (Http.Error -> b) -> ApiData a -> b
 foldVisible onNotAsked onLoading onSuccess onError apiData =
     case apiData of

@@ -2057,13 +2057,43 @@ body:has(dialog[open]) {
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
+.loading-bar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 1000;
+  height: 3px;
+  pointer-events: none;
+  animation: loading-bar-in 160ms var(--loader-delay) both;
+}
+
+.loading-bar::after {
+  content: "";
+  display: block;
+  width: 30%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0,
+    var(--state-info) 20% 80%,
+    transparent 100%
+  );
+  animation: loading-bar-sweep var(--loader-sweep) var(--loader-delay) linear
+    infinite;
+}
+
+@keyframes loading-bar-in {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+  }
+}
+
+@keyframes loading-bar-sweep {
+  from {
+    transform: translateX(-100%);
   }
 
   to {
-    transform: rotate(360deg);
+    transform: translateX(100vw);
   }
 }
 

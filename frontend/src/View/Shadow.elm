@@ -18,7 +18,7 @@ import Route
 import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
-import View.Lib exposing (viewLoading, viewPage, viewSearchBox)
+import View.Lib exposing (viewPage, viewSearchBox)
 import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
@@ -154,15 +154,7 @@ viewProject model proj =
                                )
                         )
             in
-            case ( Model.getCommitHash model, get currentProject model ) of
-                ( ApiData.Loading _, _ ) ->
-                    viewLoading sections
-
-                ( _, ApiData.Loading _ ) ->
-                    viewLoading sections
-
-                _ ->
-                    sections
+            sections
         }
 
 
