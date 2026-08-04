@@ -406,11 +406,11 @@ finishTurn cfg _session turn exitCode = do
                         runnerError = if stopped || exitCode == ExitSuccess then Nothing else Just "runner_failed"
                         nextError = combineErrorMessages [runnerError, autoCommitError]
                         updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
-                    touched <- liftIO $ touchSession updated
-                    liftIO $ saveSession touched
                     -- Pick up an agent-side conflict resolution in the apply
-                    -- worktree: commit the squash merge once the markers are
-                    -- gone, so the apply becomes confirmable.
+                    -- worktree FIRST: the git commit is the important part, and
+                    -- it must survive even if the metadata writes below fail
+                    -- (observed: intermittent EBUSY on session.json writes). A
+                    -- later finalize pass converges on the committed resolution.
                     applyResolution <- liftIO $ Except.runExceptT $ finalizeApplyResolution updated
                     case applyResolution of
                         Left err ->
@@ -420,6 +420,8 @@ finishTurn cfg _session turn exitCode = do
                             forM_ mResolved $ \candidateHead_ ->
                                 liftIO $
                                     appendLogLine cfg (turnLogPath turn) "system" ("Committed apply conflict resolution " <> T.take 12 candidateHead_)
+                    touched <- liftIO $ touchSession updated
+                    liftIO $ saveSession touched
                 ) ::
                 IO (Either SomeException (Either String ()))
             )

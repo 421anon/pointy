@@ -394,10 +394,12 @@ finalizeApplyResolution session_ =
                                         then do
                                             _ <- runGitChecked applyWorktree ["commit", "-m", applyCommitSubject session_]
                                             stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
-                                        else
-                                            -- Everything resolved back to the
-                                            -- target state; nothing to commit.
-                                            return (targetHead candidate)
+                                        else do
+                                            -- Nothing staged: either everything was resolved back to the
+                                            -- target state, or a previous finalize already committed the
+                                            -- resolution (e.g. after a failed metadata write). Use the
+                                            -- actual worktree head so a stale retry converges.
+                                            stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
                                 saveSessionUpdate
                                     session_
                                         { status = "open"
