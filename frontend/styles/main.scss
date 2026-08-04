@@ -2059,7 +2059,7 @@ body:has(dialog[open]) {
 
 .loading-bar {
   position: fixed;
-  inset: 0 0 auto;
+  inset: auto 0 var(--spacing-5xl);
   z-index: 1000;
   height: 3px;
   pointer-events: none;
