@@ -658,6 +658,11 @@ inheritChat currentRoute targetRoute =
             { targetRoute | chat = currentRoute.chat }
 
 
+resetPageScroll : Flow Model ()
+resetPageScroll =
+    Flow.attemptTask (Dom.setViewport 0 0)
+
+
 clearStepLog : Int -> Maybe String -> Flow Model ()
 clearStepLog id commit =
     Flow.over stepLogs (Dict.remove (Model.stepLogKey id commit))

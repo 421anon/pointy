@@ -11,7 +11,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProject, currentProjectId, gutterDrag, mCommit, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
+import Model.Lenses exposing (commitHash, currentProject, currentProjectId, gutterDrag, mCommit, mHighlight, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
 import Ports
 import Route exposing (Route)
 import Specs
@@ -84,6 +84,9 @@ applyRoute forceRevealHighlight newRoute =
                             || Route.navigationTarget currentRoute
                             /= Route.navigationTarget newRoute
 
+                    pageTarget route_ =
+                        set (Route.page << Route.project << mHighlight) Nothing (Route.navigationTarget route_)
+
                     workspaceNotStarted =
                         case get userRepoInfo model of
                             NotAsked ->
@@ -110,6 +113,7 @@ applyRoute forceRevealHighlight newRoute =
                         has (gutterDrag << just) model
                 in
                 Flow.modify (set route newRoute)
+                    |> Flow.seq (Flow.when (pageTarget currentRoute /= pageTarget newRoute) Actions.resetPageScroll)
                     |> Flow.seq
                         (if shouldInitializeWorkspace then
                             initializeWorkspace
