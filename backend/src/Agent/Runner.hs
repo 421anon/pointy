@@ -271,7 +271,10 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 }
     createDirectoryIfMissing True runnerHome
     -- Seed the per-session pi config; without it pi falls back to its built-in
-    -- registry, whose deepseek default is deepseek-v4-pro.
+    -- registry, whose deepseek default is deepseek-v4-pro. Note that models.json
+    -- alone cannot change that default (built-in models are always present);
+    -- settings.json carries the default model, and the runner args pass an
+    -- explicit --model that also overrides models recorded in session files.
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (mIn, mOut, mErr, ph) <- createProcess process
