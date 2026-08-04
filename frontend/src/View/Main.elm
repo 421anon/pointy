@@ -53,9 +53,6 @@ view model =
 
             _ ->
                 let
-                    isReloading =
-                        Lib.isWorkspaceReloading model
-
                     viewCurrentPage =
                         case (Model.getRoute model).page of
                             Route.Home ->
@@ -73,7 +70,7 @@ view model =
                             Route.NotFound _ ->
                                 view404
                 in
-                [ Html.viewIf isReloading (Html.div [ Html.Attributes.class "loading-bar" ] [])
+                [ Html.viewIf (Lib.isWorkspaceReloading model) (Html.div [ Html.Attributes.class "loading-bar" ] [])
                 , Compare.viewCompareBanner model
                 , Html.div [ Html.Attributes.class "workspace" ]
                     [ Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
