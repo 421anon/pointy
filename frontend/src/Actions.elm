@@ -3184,7 +3184,13 @@ createAgentSession =
 loadAgentSession : String -> Flow Model ()
 loadAgentSession sessionId =
     AgentApi.fetchSession sessionId
-        |> Flow.andThen handleAgentSessionResult
+        |> Flow.andThen
+            (\result ->
+                Flow.forAll agent
+                    (\agentState ->
+                        Flow.when (agentState.selectedSessionId == Just sessionId) (handleAgentSessionResult result)
+                    )
+            )
 
 
 -- | The panel can go stale when the server changes session state without the
@@ -3260,10 +3266,15 @@ stopAgentTurn =
 
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
+    submitAgentPromptFrom readAgentPrompt
+
+
+submitAgentPromptFrom : Flow Model String -> Flow Model ()
+submitAgentPromptFrom promptSource =
     withSelectedAgentSession
         (\view ->
             withAgentRequest (Model.SendingAgentPrompt view.session.sessionId)
-                (readAgentPrompt
+                (promptSource
                     |> Flow.andThen
                         (\rawPrompt ->
                             let
@@ -3317,6 +3328,26 @@ submitAgentPrompt =
                         )
                 )
         )
+
+
+investigateStepWithAgent : Int -> String -> Flow Model ()
+investigateStepWithAgent stepId log =
+    Flow.over agent (\s -> { s | isPanelOpen = True })
+        |> Flow.seq loadAgentSessions
+        |> Flow.seq AgentApi.createSession
+        |> FlowError.foldResult
+            (\view ->
+                handleAgentSessionResult (Ok view)
+                    |> Flow.seq (openAgentChat view.session.sessionId)
+                    |> Flow.seq (applyAgentChatFromUrl True)
+                    |> Flow.seq (submitAgentPromptFrom (Flow.pure (investigateStepPrompt stepId log)))
+            )
+            (\err -> addToast False (Http.errorMessage err))
+
+
+investigateStepPrompt : Int -> String -> String
+investigateStepPrompt stepId log =
+    "Investigate why step " ++ String.fromInt stepId ++ " failed:\n\n" ++ log
 
 
 applyAgentChanges : Flow Model ()
