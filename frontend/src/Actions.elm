@@ -2325,6 +2325,41 @@ agentSessionLoaded sessionId agentState =
 
 applyAgentChatFromUrl : Bool -> Flow Model ()
 applyAgentChatFromUrl openPanel =
+    deleteBlankAgentChat
+        |> Flow.seq (selectAgentChatFromUrl openPanel)
+
+
+abandonedAgentChat : Maybe String -> Model.AgentState -> Maybe Model.AgentSessionView
+abandonedAgentChat keptSessionId agentState =
+    Model.selectedSessionView agentState
+        |> Maybe.filter
+            (\view ->
+                (Just view.session.sessionId /= keptSessionId)
+                    && List.isEmpty view.turns
+                    && List.isEmpty agentState.chatEntries
+                    && Maybe.isNothing view.session.sessionName
+                    && not (Model.agentSessionArchived view.session.status)
+            )
+
+
+deleteBlankAgentChat : Flow Model ()
+deleteBlankAgentChat =
+    Flow.forAll (route << Route.chat)
+        (\mChat ->
+            Flow.forAll agent
+                (\agentState ->
+                    abandonedAgentChat (Maybe.map .sessionId mChat) agentState
+                        |> Maybe.unwrap (Flow.pure ())
+                            (\view ->
+                                Flow.over agent (removeAgentSessionView view.session.sessionId)
+                                    |> Flow.seq (Flow.async (AgentApi.delete_ view.session.sessionId))
+                            )
+                )
+        )
+
+
+selectAgentChatFromUrl : Bool -> Flow Model ()
+selectAgentChatFromUrl openPanel =
     Flow.forAll (route << Route.chat)
         (\mChat ->
             case mChat of
@@ -2426,6 +2461,11 @@ clearRequestIfMatches expected =
             else
                 agentState
         )
+
+
+removeAgentSessionView : String -> Model.AgentState -> Model.AgentState
+removeAgentSessionView sessionId agentState =
+    { agentState | sessions = ApiData.map (List.filter (\view -> view.session.sessionId /= sessionId)) agentState.sessions }
 
 
 
@@ -3044,15 +3084,7 @@ deleteAgentSession sessionId =
                 (\result ->
                     case result of
                         Ok () ->
-                            Flow.over agent
-                                (\s ->
-                                    let
-                                        remaining =
-                                            ApiData.withDefault [] s.sessions
-                                                |> List.filter (\v -> v.session.sessionId /= sessionId)
-                                    in
-                                    { s | sessions = Success remaining }
-                                )
+                            Flow.over agent (removeAgentSessionView sessionId)
                                 |> Flow.seq
                                     (Flow.forAll agent
                                         (\agentState ->
