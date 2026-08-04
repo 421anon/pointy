@@ -254,12 +254,24 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                     ]
                                     [ Html.div [ class "step-log-popover-header" ]
                                         [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
-                                        , Html.button
-                                            [ class "icon-btn"
-                                            , title "Close"
-                                            , Events.onClick (Actions.hidePopover popoverId)
+                                        , Html.span []
+                                            [ Html.viewMaybe
+                                                (\log ->
+                                                    Html.button
+                                                        [ class "icon-btn"
+                                                        , title "Investigate with agent"
+                                                        , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
+                                                        ]
+                                                        [ icon False "smart_toy" ]
+                                                )
+                                                (ApiData.toMaybe logState)
+                                            , Html.button
+                                                [ class "icon-btn"
+                                                , title "Close"
+                                                , Events.onClick (Actions.hidePopover popoverId)
+                                                ]
+                                                [ icon True "close" ]
                                             ]
-                                            [ icon True "close" ]
                                         ]
                                     , Html.div [ class "step-log-popover-body" ]
                                         [ case logState of
