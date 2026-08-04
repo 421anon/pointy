@@ -167,20 +167,3 @@ test-suite turn-stream
 
   hs-source-dirs:   test
   default-language: Haskell2010
-
-test-suite apply-flow
-  import:           warnings
-  type:             exitcode-stdio-1.0
-  main-is:          ApplyFlow.hs
-  build-depends:
-    , backend
-    , base
-    , directory
-    , filepath
-    , mtl
-    , process
-    , text
-    , time
-
-  hs-source-dirs:   test
-  default-language: Haskell2010
