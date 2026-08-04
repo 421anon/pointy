@@ -758,7 +758,7 @@ viewAddOrEditRecordForm model spec table record =
                     Html.div [ class "form-group" ] extraFields
                 , Html.div [ class "form-actions" ]
                     [ Html.viewIf (not readOnly) <| Html.button [ id "save-button", Events.onClick (TableSpec.getUpsertRecord spec), class "btn", disabled table.isUpdating ] [ Html.text "Save" ]
-                    , Html.button [ Events.onClick (Actions.endRecordEdit (TableSpec.getLens spec)), class "btn", disabled table.isUpdating ] [ Html.text "Cancel" ]
+                    , Html.button [ Events.onClick (Actions.endRecordEdit (TableSpec.getLens spec)), class "btn" ] [ Html.text "Cancel" ]
                     ]
                 ]
             ]
