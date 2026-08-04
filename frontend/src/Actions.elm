@@ -3155,6 +3155,28 @@ loadAgentSession sessionId =
         |> Flow.andThen handleAgentSessionResult
 
 
+-- | The panel can go stale when the server changes session state without the
+-- browser's involvement (a conflict resolution committed at turn end, a turn
+-- started from another client, a prepare/confirm from elsewhere). The periodic
+-- clock tick calls this so the presentation converges on the current state.
+refreshSelectedAgentSession : Flow Model ()
+refreshSelectedAgentSession =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case Model.selectedSessionView (Model.getAgent model) of
+                    Just view ->
+                        if Model.agentSessionArchived view.session.status then
+                            Flow.pure ()
+
+                        else
+                            loadAgentSession view.session.sessionId
+
+                    Nothing ->
+                        Flow.pure ()
+            )
+
+
 withSelectedAgentSession : (Model.AgentSessionView -> Flow Model ()) -> Flow Model ()
 withSelectedAgentSession fn =
     Flow.get
