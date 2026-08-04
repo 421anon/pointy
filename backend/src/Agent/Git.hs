@@ -432,47 +432,64 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
     candidate <- case preparedApply session_ of
         Nothing -> throwError "candidate_missing"
         Just c -> return c
-    when (targetHead candidate /= requestedTarget || candidateHead candidate /= requestedCandidate) $ throwError "candidate_mismatch"
-
-    fetchRepoStrict
-    repoPath <- liftIO userRepoPath
-    cfg <- liftIO $ resolveConfigPath >>= loadConfig
-    let userRepo = configUserRepo cfg
-        branchName = T.unpack (targetBranch session_)
-        candidateSha = T.unpack (candidateHead candidate)
-    currentTarget <- stripOutput <$> runGitChecked repoPath ["rev-parse", branchName]
-    when (currentTarget /= targetHead candidate) $ throwError "target_moved"
-
-    worktreeHead <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
-    when (worktreeHead /= candidateHead candidate) $ throwError "candidate_mismatch"
-    changesetDiff <- runGitChecked (candidateWorktree candidate) ["diff", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-    pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile userRepo) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
-    case pushResult of
-        (ExitSuccess, _, _) -> do
-            _ <- runGitChecked repoPath ["update-ref", "refs/heads/" ++ branchName, candidateSha]
-            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
-            _ <- runGitChecked (worktreePath session_) ["reset", "--hard", candidateSha]
-            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
-            liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
-            changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-            let projectIds = nub (mapMaybe appliedProjectId changedPaths)
-                stepIds = nub (mapMaybe appliedStepId changedPaths)
-            liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) projectIds stepIds
-            appendLifecycleTurn
-                sid
-                "Apply proposed changeset"
-                ("Applied changes to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ". You can continue from the applied state in this chat.")
-                changesetDiff
+    -- An apply stuck on squash-merge conflicts has no confirmable candidate
+    -- yet: the agent resolves the conflict markers in the apply worktree
+    -- during a turn, and finalizeApplyResolution commits the resolution.
+    -- Return the conflict state with the merge error instead of failing the
+    -- request, so the UI shows what went wrong rather than a bare mismatch.
+    if applyConflictsPending candidate
+        then do
+            conflictSummary <- collectConflictSummary (candidateWorktree candidate) "" ""
             saveSessionUpdate
                 session_
-                    { status = "open"
-                    , baseCommit = candidateHead candidate
-                    , preparedApply = Nothing
-                    , lastError = Nothing
+                    { status = "prepare_conflict"
+                    , preparedApply = Just candidate
+                    , lastError = Just conflictSummary
                     }
             view_ <- loadAgentSessionView sid
-            return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
-        (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
+            return AgentApplyView{sessionView = view_, invalidatedProjectIds = [], invalidatedStepIds = []}
+        else do
+            when (targetHead candidate /= requestedTarget || candidateHead candidate /= requestedCandidate) $ throwError "candidate_mismatch"
+
+            fetchRepoStrict
+            repoPath <- liftIO userRepoPath
+            cfg <- liftIO $ resolveConfigPath >>= loadConfig
+            let userRepo = configUserRepo cfg
+                branchName = T.unpack (targetBranch session_)
+                candidateSha = T.unpack (candidateHead candidate)
+            currentTarget <- stripOutput <$> runGitChecked repoPath ["rev-parse", branchName]
+            when (currentTarget /= targetHead candidate) $ throwError "target_moved"
+
+            worktreeHead <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
+            when (worktreeHead /= candidateHead candidate) $ throwError "candidate_mismatch"
+            changesetDiff <- runGitChecked (candidateWorktree candidate) ["diff", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
+            pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile userRepo) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
+            case pushResult of
+                (ExitSuccess, _, _) -> do
+                    _ <- runGitChecked repoPath ["update-ref", "refs/heads/" ++ branchName, candidateSha]
+                    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+                    _ <- runGitChecked (worktreePath session_) ["reset", "--hard", candidateSha]
+                    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+                    liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
+                    changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
+                    let projectIds = nub (mapMaybe appliedProjectId changedPaths)
+                        stepIds = nub (mapMaybe appliedStepId changedPaths)
+                    liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) projectIds stepIds
+                    appendLifecycleTurn
+                        sid
+                        "Apply proposed changeset"
+                        ("Applied changes to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ". You can continue from the applied state in this chat.")
+                        changesetDiff
+                    saveSessionUpdate
+                        session_
+                            { status = "open"
+                            , baseCommit = candidateHead candidate
+                            , preparedApply = Nothing
+                            , lastError = Nothing
+                            }
+                    view_ <- loadAgentSessionView sid
+                    return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
+                (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
 discardAgentSession :: Text -> ExceptT String IO AgentSessionView
 discardAgentSession sid = do
