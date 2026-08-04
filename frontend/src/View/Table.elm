@@ -36,7 +36,6 @@ import Scroll
 import Set
 import Time.Distance
 import View.Icons exposing (icon, iconCustom)
-import View.Lib exposing (viewLoading)
 
 
 viewStatusCountBadge : TableSpec (BaseRecord a) -> List (BaseRecord a) -> Html msg
@@ -591,11 +590,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                 , Html.viewIf table.isOpen viewRecordsSection
                 ]
     in
-    if table.isUpdating then
-        viewLoading viewContent
-
-    else
-        viewContent
+    viewContent
 
 
 viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> BaseRecord a -> Html (Flow Model ())
@@ -762,7 +757,7 @@ viewAddOrEditRecordForm model spec table record =
                 , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|
                     Html.div [ class "form-group" ] extraFields
                 , Html.div [ class "form-actions" ]
-                    [ Html.viewIf (not readOnly) <| Html.button [ id "save-button", Events.onClick (TableSpec.getUpsertRecord spec), class "btn" ] [ Html.text "Save" ]
+                    [ Html.viewIf (not readOnly) <| Html.button [ id "save-button", Events.onClick (TableSpec.getUpsertRecord spec), class "btn", disabled table.isUpdating ] [ Html.text "Save" ]
                     , Html.button [ Events.onClick (Actions.endRecordEdit (TableSpec.getLens spec)), class "btn" ] [ Html.text "Cancel" ]
                     ]
                 ]

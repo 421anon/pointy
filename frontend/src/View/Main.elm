@@ -13,6 +13,7 @@ import Html.Attributes
 import Html.Extra as Html
 import Model.Core as Model exposing (Model)
 import Model.Lenses exposing (currentProject, name)
+import Model.Lib as Lib
 import Route
 import Specs
 import Toast
@@ -69,7 +70,8 @@ view model =
                             Route.NotFound _ ->
                                 view404
                 in
-                [ Compare.viewCompareBanner model
+                [ Html.viewIf (Lib.isWorkspaceReloading model) (Html.div [ Html.Attributes.class "loading-bar" ] [])
+                , Compare.viewCompareBanner model
                 , Html.div [ Html.Attributes.class "workspace" ]
                     [ Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
                     , AgentPanel.view model
