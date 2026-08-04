@@ -9,11 +9,13 @@ module Agent.Runner (
     streamLoop,
 ) where
 
-import Agent.Git (AgentSessionView, commitAgentTurnOutputs, loadAgentSessionView, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, refreshSessionBase, sessionHasActiveRunner)
 import Agent.Sandbox (nixDaemonBindArgs)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
+    PreparedApply (..),
+    applyConflictsPending,
     findTurn,
     listTurns,
     loadSessionById,
@@ -109,11 +111,34 @@ startAgentTurn sid prompt = do
                     else
                         freshSession
         saveTurn turn
-        touched <- touchSession namedSession{status = "open", activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
+        -- A conflict-pending apply must survive the turn boundary: the turn is
+        -- how the agent resolves the conflict markers in the apply worktree.
+        -- Keep the pending apply (and its conflict summary) and stay in
+        -- "prepare_conflict" so the UI keeps showing the review state.
+        let pendingApply =
+                case preparedApply namedSession of
+                    Just p | applyConflictsPending p -> Just p
+                    _ -> Nothing
+            turnStatus =
+                if pendingApply /= Nothing
+                    then "prepare_conflict"
+                    else "open"
+            turnError =
+                if pendingApply /= Nothing
+                    then lastError namedSession
+                    else Nothing
+        touched <- touchSession namedSession{status = turnStatus, activeTurnId = Nothing, preparedApply = pendingApply, lastError = turnError}
         startSaveResult <- try (saveSession touched) :: IO (Either SomeException ())
         case startSaveResult of
             Left ex -> appendLogLine (configAgent cfg) logPath "system" ("Session start metadata warning: " <> T.pack (show ex))
             Right _ -> return ()
+        case pendingApply of
+            Just pending ->
+                appendLogLine (configAgent cfg) logPath "system" $
+                    "An apply merge is waiting for conflict resolution. Resolve the conflict markers in "
+                        <> T.pack (candidateWorktree pending)
+                        <> " (the apply worktree is bound into your sandbox); the backend stages and commits your resolution automatically when this turn ends."
+            Nothing -> return ()
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
     return turn
 
@@ -254,10 +279,19 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             Just warmFile -> ["--ro-bind", warmFile, warmFile]
             Nothing -> []
         gitDirBind = ["--ro-bind", repoPath, repoPath]
+        -- When an apply is waiting for conflict resolution, expose the apply
+        -- worktree read-write so the agent can edit the conflict markers there.
+        applyBindArgs =
+            case preparedApply session_ of
+                Just pending
+                    | applyConflictsPending pending ->
+                        ["--bind", candidateWorktree pending, candidateWorktree pending]
+                _ -> []
         args =
             map (expandArg session_ promptText) (agentSboxArgs cfg)
                 ++ warmBindArgs
                 ++ gitDirBind
+                ++ applyBindArgs
                 ++ nixBind
                 ++ ["--", "bash", "-lc", wrapperScript, "pointy-agent-runner"]
                 ++ runnerArgs
@@ -374,6 +408,18 @@ finishTurn cfg _session turn exitCode = do
                         updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
                     touched <- liftIO $ touchSession updated
                     liftIO $ saveSession touched
+                    -- Pick up an agent-side conflict resolution in the apply
+                    -- worktree: commit the squash merge once the markers are
+                    -- gone, so the apply becomes confirmable.
+                    applyResolution <- liftIO $ Except.runExceptT $ finalizeApplyResolution updated
+                    case applyResolution of
+                        Left err ->
+                            liftIO $
+                                appendLogLine cfg (turnLogPath turn) "system" ("Apply resolution finalize failed: " <> T.pack err)
+                        Right mResolved ->
+                            forM_ mResolved $ \candidateHead_ ->
+                                liftIO $
+                                    appendLogLine cfg (turnLogPath turn) "system" ("Committed apply conflict resolution " <> T.take 12 candidateHead_)
                 ) ::
                 IO (Either SomeException (Either String ()))
             )

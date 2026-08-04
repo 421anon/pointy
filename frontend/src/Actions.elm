@@ -3271,32 +3271,40 @@ applyAgentChanges =
                             (\prepareResult ->
                                 case prepareResult of
                                     Ok preparedView ->
-                                        case preparedView.session.preparedApply of
-                                            Just candidate ->
-                                                AgentApi.confirmApply
-                                                    preparedView.session.sessionId
-                                                    candidate.targetHead
-                                                    candidate.candidateHead
-                                                    |> Flow.andThen
-                                                        (\confirmResult ->
-                                                            case confirmResult of
-                                                                Ok applyView ->
-                                                                    handleAgentSessionResult (Ok applyView.sessionView)
-                                                                        |> Flow.seq (markInvalidatedStatusesLoading applyView)
-                                                                        |> Flow.seq reloadWorkspaceData
-                                                                        |> Flow.seq loadAgentSessions
-                                                                        |> Flow.seq (clearChangesetOperation view.session.sessionId)
+                                        if preparedView.session.status == "prepare_conflict" then
+                                            -- The squash merge conflicted; the apply worktree is kept and the
+                                            -- agent resolves the markers in a turn. Conflict details are in
+                                            -- session.lastError, shown in the changeset box.
+                                            handleAgentSessionResult (Ok preparedView)
+                                                |> Flow.seq (clearChangesetOperation view.session.sessionId)
 
-                                                                Err err ->
-                                                                    clearChangesetOperation view.session.sessionId
-                                                                        |> Flow.seq (addToast False (Http.errorMessage err))
-                                                        )
+                                        else
+                                            case preparedView.session.preparedApply of
+                                                Just candidate ->
+                                                    AgentApi.confirmApply
+                                                        preparedView.session.sessionId
+                                                        candidate.targetHead
+                                                        candidate.candidateHead
+                                                        |> Flow.andThen
+                                                            (\confirmResult ->
+                                                                case confirmResult of
+                                                                    Ok applyView ->
+                                                                        handleAgentSessionResult (Ok applyView.sessionView)
+                                                                            |> Flow.seq (markInvalidatedStatusesLoading applyView)
+                                                                            |> Flow.seq reloadWorkspaceData
+                                                                            |> Flow.seq loadAgentSessions
+                                                                            |> Flow.seq (clearChangesetOperation view.session.sessionId)
 
-                                            Nothing ->
-                                                -- prepare_conflict: conflict details are in session.lastError,
-                                                -- shown in the changeset box.
-                                                handleAgentSessionResult (Ok preparedView)
-                                                    |> Flow.seq (clearChangesetOperation view.session.sessionId)
+                                                                    Err err ->
+                                                                        clearChangesetOperation view.session.sessionId
+                                                                            |> Flow.seq (addToast False (Http.errorMessage err))
+                                                            )
+
+                                                Nothing ->
+                                                    -- Defensive: without a prepared apply there is nothing to
+                                                    -- confirm; show the session state as-is.
+                                                    handleAgentSessionResult (Ok preparedView)
+                                                        |> Flow.seq (clearChangesetOperation view.session.sessionId)
 
                                     Err err ->
                                         clearChangesetOperation view.session.sessionId

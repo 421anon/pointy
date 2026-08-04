@@ -18,6 +18,7 @@ module Agent.Git (
     refreshSessionBase,
     prepareApplyCandidate,
     confirmApplyCandidate,
+    finalizeApplyResolution,
     discardAgentSession,
     getAgentUsage,
     sweepStaleRunningSessions,
@@ -28,6 +29,7 @@ import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
     PreparedApply (..),
+    applyConflictsPending,
     freshSessionLayout,
     inferTurnExitCode,
     latestUnfinishedTurn,
@@ -48,7 +50,7 @@ import Agent.Session (
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
-import Control.Monad (unless, void, when)
+import Control.Monad (filterM, unless, void, when)
 import Control.Monad.Except (ExceptT (..), catchError, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
@@ -56,13 +58,14 @@ import Data.Char (isControl)
 import Data.List (nub, sortOn)
 import Data.Maybe (isJust, mapMaybe)
 import Data.Ord (Down (..))
+import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getModificationTime, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import UserRepo (fetchRepoStrict, runGitIn, runGitWithSshKey, userRepoPath)
@@ -273,38 +276,155 @@ prepareApplyCandidate sid = do
     repoPath <- liftIO userRepoPath
     let targetBranchName = T.unpack (targetBranch session_)
     targetHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", targetBranchName]
-    agentHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (agentBranch session_)]
-    sessionRoot <- liftIO $ sessionDir sid
-    let applyWorktree = sessionRoot </> "apply-worktree"
+    -- A pending apply (either awaiting conflict resolution or ready to
+    -- confirm) survives across turns; if it is still current, return it
+    -- unchanged so the UI can confirm the resolved candidate without
+    -- re-merging (which would discard the agent's resolution).
+    stillCurrent <-
+        maybe (return False) (\candidate -> applyCandidateCurrent candidate targetHead_) (preparedApply session_)
+    if stillCurrent
+        then loadAgentSessionView sid
+        else do
+            agentHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (agentBranch session_)]
+            sessionRoot <- liftIO $ sessionDir sid
+            let applyWorktree = sessionRoot </> "apply-worktree"
 
-    liftIO $ removeWorktreeIfExists repoPath applyWorktree
-    _ <- runGitChecked repoPath ["worktree", "add", "--detach", applyWorktree, T.unpack targetHead_]
-    _ <- runGitChecked applyWorktree ["config", "user.email", "agent@invalid.local"]
-    _ <- runGitChecked applyWorktree ["config", "user.name", "agent"]
-    mergeResult <- liftIO $ runGitIn applyWorktree ["merge", "--squash", T.unpack (agentBranch session_)]
-    case mergeResult of
-        (ExitSuccess, _, _) -> do
-            _ <- runGitChecked applyWorktree ["commit", "-m", applyCommitSubject session_]
-            candidateHead_ <- stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
-            saveSessionUpdate
-                session_
-                    { status = "open"
-                    , preparedApply =
-                        Just
-                            PreparedApply
-                                { targetHead = targetHead_
-                                , agentHead = agentHead_
-                                , candidateHead = candidateHead_
-                                , candidateWorktree = applyWorktree
-                                }
-                    , lastError = Nothing
-                    }
-            loadAgentSessionView sid
-        (ExitFailure _, mergeOut, mergeErr) -> do
-            conflictSummary <- collectConflictSummary applyWorktree mergeOut mergeErr
             liftIO $ removeWorktreeIfExists repoPath applyWorktree
-            saveSessionUpdate session_{status = "prepare_conflict", preparedApply = Nothing, lastError = Just conflictSummary}
-            loadAgentSessionView sid
+            _ <- runGitChecked repoPath ["worktree", "add", "--detach", applyWorktree, T.unpack targetHead_]
+            _ <- runGitChecked applyWorktree ["config", "user.email", "agent@invalid.local"]
+            _ <- runGitChecked applyWorktree ["config", "user.name", "agent"]
+            mergeResult <- liftIO $ runGitIn applyWorktree ["merge", "--squash", T.unpack (agentBranch session_)]
+            case mergeResult of
+                (ExitSuccess, _, _) -> do
+                    _ <- runGitChecked applyWorktree ["commit", "-m", applyCommitSubject session_]
+                    candidateHead_ <- stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
+                    saveSessionUpdate
+                        session_
+                            { status = "open"
+                            , preparedApply =
+                                Just
+                                    PreparedApply
+                                        { targetHead = targetHead_
+                                        , agentHead = agentHead_
+                                        , candidateHead = candidateHead_
+                                        , candidateWorktree = applyWorktree
+                                        }
+                            , lastError = Nothing
+                            }
+                    loadAgentSessionView sid
+                (ExitFailure _, mergeOut, mergeErr) -> do
+                    conflictSummary <- collectConflictSummary applyWorktree mergeOut mergeErr
+                    -- Keep the apply worktree: the agent resolves the conflict
+                    -- markers there during a turn, and finalizeApplyResolution
+                    -- commits the squash merge once the markers are gone.
+                    -- candidateHead stays empty until that commit exists.
+                    saveSessionUpdate
+                        session_
+                            { status = "prepare_conflict"
+                            , preparedApply =
+                                Just
+                                    PreparedApply
+                                        { targetHead = targetHead_
+                                        , agentHead = agentHead_
+                                        , candidateHead = ""
+                                        , candidateWorktree = applyWorktree
+                                        }
+                            , lastError = Just conflictSummary
+                            }
+                    loadAgentSessionView sid
+  where
+    applyCandidateCurrent candidate targetHead_ = do
+        if targetHead candidate /= targetHead_
+            then return False
+            else do
+                worktreeExists <- liftIO $ doesDirectoryExist (candidateWorktree candidate)
+                if not worktreeExists
+                    then return False
+                    else
+                        if applyConflictsPending candidate
+                            then return True
+                            else do
+                                head_ <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
+                                return (head_ == candidateHead candidate)
+
+-- | After an agent turn, check whether a conflict-pending apply has been
+-- resolved. The agent edits the conflict markers in the apply worktree (kept
+-- by prepareApplyCandidate) but cannot stage its resolution: the git dir is
+-- read-only inside its sandbox. Once no conflicted path still contains marker
+-- lines, stage the paths and commit the squash merge so the apply becomes
+-- confirmable; the session base then advances when the candidate is confirmed.
+-- Returns the new candidate head when a resolution was committed, Nothing
+-- otherwise.
+finalizeApplyResolution :: AgentSession -> ExceptT String IO (Maybe Text)
+finalizeApplyResolution session_ =
+    case preparedApply session_ of
+        Just candidate
+            | applyConflictsPending candidate -> do
+                let applyWorktree = candidateWorktree candidate
+                worktreeExists <- liftIO $ doesDirectoryExist applyWorktree
+                if not worktreeExists
+                    then do
+                        -- The apply worktree is gone (purged, or a stale
+                        -- prepare); drop the pending apply.
+                        saveSessionUpdate session_{preparedApply = Nothing, lastError = Nothing}
+                        return Nothing
+                    else do
+                        unmerged <- worktreeUnmergedPaths applyWorktree
+                        markers <- liftIO $ filterM (fileHasConflictMarkers applyWorktree) unmerged
+                        if not (null markers)
+                            then do
+                                -- Conflicts remain; keep the apply pending and
+                                -- refresh the conflict summary for the UI.
+                                conflictSummary <- collectConflictSummary applyWorktree "" ""
+                                saveSessionUpdate
+                                    session_
+                                        { status = "prepare_conflict"
+                                        , lastError = Just conflictSummary
+                                        }
+                                return Nothing
+                            else do
+                                -- All marker lines are gone: stage the conflicted
+                                -- paths exactly as the agent left them and commit.
+                                unless (null unmerged) $
+                                    void $
+                                        runGitChecked applyWorktree (["add", "-A", "--"] ++ map T.unpack unmerged)
+                                staged <- hasStagedChanges applyWorktree
+                                candidateHead_ <-
+                                    if staged
+                                        then do
+                                            _ <- runGitChecked applyWorktree ["commit", "-m", applyCommitSubject session_]
+                                            stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
+                                        else
+                                            -- Everything resolved back to the
+                                            -- target state; nothing to commit.
+                                            return (targetHead candidate)
+                                saveSessionUpdate
+                                    session_
+                                        { status = "open"
+                                        , preparedApply = Just candidate{candidateHead = candidateHead_}
+                                        , lastError = Nothing
+                                        }
+                                return (Just candidateHead_)
+        _ -> return Nothing
+
+-- | Unmerged (conflicted) paths in the index of a worktree.
+worktreeUnmergedPaths :: FilePath -> ExceptT String IO [Text]
+worktreeUnmergedPaths worktree = do
+    output <- runGitChecked worktree ["diff", "--name-only", "--diff-filter=U"]
+    return $ nub $ filter (not . T.null) $ T.lines output
+
+-- | True if the working-tree file still contains git conflict marker lines.
+fileHasConflictMarkers :: FilePath -> Text -> IO Bool
+fileHasConflictMarkers worktree path = do
+    let fullPath = worktree </> T.unpack path
+    exists <- doesFileExist fullPath
+    if not exists
+        then return False
+        else do
+            content <- BS.readFile fullPath
+            return $ any (`BS.isInfixOf` content) conflictMarkerBytes
+  where
+    conflictMarkerBytes = ["<<<<<<<", "=======", ">>>>>>>"] :: [BS.ByteString]
 
 confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO AgentApplyView
 confirmApplyCandidate sid requestedTarget requestedCandidate = do

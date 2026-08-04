@@ -5,6 +5,7 @@
 module Agent.Session (
     AgentSession (..),
     PreparedApply (..),
+    applyConflictsPending,
     AgentTurn (..),
     turnIsUnfinished,
     latestUnfinishedTurn,
@@ -50,10 +51,20 @@ import System.Posix.Process (getProcessID)
 data PreparedApply = PreparedApply
     { targetHead :: Text
     , agentHead :: Text
+    -- Empty until the conflict resolution is committed: prepareApplyCandidate
+    -- keeps the apply worktree with the squash-merge conflicts and records
+    -- candidateHead = ""; finalizeApplyResolution commits the agent's marker
+    -- resolution and fills in the real head.
     , candidateHead :: Text
     , candidateWorktree :: FilePath
     }
     deriving (Show, Eq, Generic, ToJSON, FromJSON)
+
+-- | True while an apply is stuck on squash-merge conflicts that the agent has
+-- not resolved yet. Such applies must survive turn boundaries (a turn is how
+-- the agent resolves them) and must never be confirmed.
+applyConflictsPending :: PreparedApply -> Bool
+applyConflictsPending = T.null . candidateHead
 
 data AgentSession = AgentSession
     { sessionId :: Text
