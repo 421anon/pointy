@@ -1,15 +1,31 @@
 # Multi-Repo Pointy: Single-Repo Variant
 
-How the multi-repo design (see `multi-repo-design.md`) is realized in the
-single-repo-variant deployment. **The backend is unchanged**: each running
-instance serves exactly **one** user repo via the existing `[user-repo]`
-config; repo-scoped reads/writes and the agent sandbox stay within that repo.
-There is no repo registry — no `repos` map, no default-repo pointer, no
-in-server multi-repo machinery.
+How the multi-repo design (see `../multi-repo-design.md`, tracked at the repo
+root) is realized in the single-repo-variant deployment. **The backend is
+unchanged**: each running instance serves exactly **one** user repo via the
+existing `[user-repo]` config; repo-scoped reads/writes and the agent sandbox
+stay within that repo. There is no repo registry — no `repos` map, no
+default-repo pointer, no in-server multi-repo machinery.
 
 Multi-repo capability is expressed at the *deployment* level: one instance (and
 one NixOS config) per user repo, plus a stdlib-side `deps`/namespace import
 contract for repo-to-repo dependencies.
+
+## Deployment status
+
+This document describes the **intended** topology after the change set lands.
+Current state (as written):
+
+- All work is on `multi-repo` branches with **open PR/MRs against each repo's
+  base** (pointy-stdlib PR #4, pointy PR #117, trotter MR !124,
+  trotter-tenant MR !1, pointy-welker MR !5). Nothing is merged.
+- The live host currently tracks welker **`prod-backend`**, which does **not**
+  yet declare `deps = { }` or pin the `multi-repo` stdlib — that lands when the
+  welker MR merges. Until then the stdlib contract does not exist in the
+  deployed repos.
+- trotter's `config/pointy.nix` and the `pointy-c-instance` incusTenants entry
+  are on the trotter MR and are **not yet activated**: the c-instance container
+  is provisioned only on first `nixos-rebuild` of that branch.
 
 ## Deployed topology
 
@@ -99,13 +115,15 @@ support. A repo declares dependencies in its flake:
 - `#pointy.deps` exposes `{ namespace = { input, repo? }; }` — the backend
   contract for the future multi-repo backend; pure metadata of the repo's own
   committed state (evaluating it does not force dependency content).
-- `#pointy.namespaces.<ns>` (and per-system
-  `packages.<system>.pointy.namespaces.<ns>`) mounts the dependency's full
-  `pointy` output — stepDefs, stepConfig, templates, projects, presets,
-  srcFiles, and (per-system) built `steps` — so a dependent repo can reach the
-  dependency's domain objects under a namespace.
-- Unknown input / non-pointy input namespaces fail with a descriptive error
-  when forced.
+- `#pointy.namespaces.<ns>` mounts the dependency's full pointy surface —
+  stepDefs, stepConfig, templates, projects, presets, srcFiles, deps — plus,
+  resolving through the per-system package view, its built `steps`,
+  `projectOutPaths` and `autocomplete`. Both of these reach a dependency's
+  built steps:
+  - `#pointy.namespaces.<ns>.steps.<id>`
+  - `#packages.<system>.pointy.namespaces.<ns>.steps.<id>`
+- Unknown / non-pointy / `self` input namespaces fail with a descriptive
+  error when forced.
 
 In the single-repo variant the dependency resolves at flake-evaluation time
 from the dependent's committed `flake.lock` (normal Nix input resolution), so
@@ -116,7 +134,7 @@ the backend evaluates the dependent exactly as today. `pointy-welker` and
 
 - stdlib: `nix flake check`; two-flake harness (`#pointy.deps`,
   `#pointy.namespaces`, per-system steps; error case).
-- pointy: diff vs `main` is docs-only (no backend source changes).
+- pointy: no backend source changes (diff is `docs/` + `backend/example-config.toml` comments).
 - pointy-welker: `#pointy.deps`, `#pointy.namespaces`, `#pointy.stepConfig`
   (16 template types), `#pointy.projects` all evaluate under the new stdlib.
 - pointy-welker-c: `#pointy.*` evaluate; sample `report` step builds.
