@@ -1,7 +1,6 @@
 # Multi-Repo Pointy: Single-Repo Variant
 
-How the multi-repo design (see `../multi-repo-design.md`, tracked at the repo
-root) is realized in the single-repo-variant deployment. **The backend is
+How the multi-repo design (see `../multi-repo-design.md`) is realized in the single-repo-variant deployment. **The backend is
 unchanged**: each running instance serves exactly **one** user repo via the
 existing `[user-repo]` config; repo-scoped reads/writes and the agent sandbox
 stay within that repo. There is no repo registry — no `repos` map, no
@@ -23,9 +22,10 @@ Current state (as written):
   yet declare `deps = { }` or pin the `multi-repo` stdlib — that lands when the
   welker MR merges. Until then the stdlib contract does not exist in the
   deployed repos.
-- trotter's `config/pointy.nix` and the `pointy-c-instance` incusTenants entry
-  are on the trotter MR and are **not yet activated**: the c-instance container
-  is provisioned only on first `nixos-rebuild` of that branch.
+- trotter's `config/pointy.nix` and the `pointy-c-instance` tenant registration
+  (in trotter's `modules/host.nix`) are on the trotter MR and are **not yet
+  activated**: the c-instance container is provisioned only on first
+  `nixos-rebuild` of that branch.
 
 ## Deployed topology
 
@@ -49,9 +49,12 @@ Confidentiality is **LLM isolation by instance separation**, enforced two ways:
    Interactive evaluation and the web UI remain fully functional.
 
 The pointy-c-instance is a trotter tenant registered in trotter's
-`modules/host.nix`: hostnames `pointy-c.pointy.cloud`, deploy SSH port `2795`,
-host web-proxy port `28084` (DNS A record + host `authorized_keys.d/deploy`
-provisioning documented in the tenant repo's README).
+`modules/host.nix` (hostnames `pointy-c.pointy.cloud`, deploy SSH port `2795`,
+host web-proxy port `28084`). Provisioning, documented in the tenant repo's
+README:
+
+- DNS A record for `pointy-c.pointy.cloud` → the host's public IPv4.
+- Tenant deploy key in `/etc/trotter/tenants/pointy-c-instance/authorized_keys.d/deploy`.
 
 ## Operator config lives in the deployment repos, not the backend
 
@@ -92,49 +95,25 @@ Both are age-encrypted for recipients `ggpeti` + `trotter` (see each repo's
 ## Importing one user repo as a dependency of another (stdlib)
 
 The pointy stdlib provides the cross-repo import machinery with no backend
-support. A repo declares dependencies in its flake:
+support: a repo declares dependencies under `pointy.deps`
+(`namespace → { input, repo? }`), and each dependency's full pointy surface is
+mounted at `#pointy.namespaces.<ns>` — its built steps under
+`#pointy.namespaces.<ns>.steps.<id>` (or the explicit per-system path
+`#packages.<system>.pointy.namespaces.<ns>.steps.<id>`). `#pointy.deps` is the
+backend contract, pure metadata of the repo's own committed state, and unknown
+/non-pointy / `self` inputs fail with a descriptive error once forced.
 
-```nix
-{
-  inputs = {
-    a.url = "git@example.com:org/edit-tooling.git";   # flake wiring
-    pointy-stdlib.url = "github:421anon/pointy-stdlib";
-  };
-  outputs = { pointy-stdlib, ... }@inputs:
-    pointy-stdlib.lib.mkFlake { inherit inputs; } {
-      pointy = {
-        # ...
-        deps = {
-          edit-tooling = { input = "a"; repo = "edit-tooling"; }; # -> pointy.namespaces.edit-tooling
-        };
-      };
-    };
-}
-```
-
-- `#pointy.deps` exposes `{ namespace = { input, repo? }; }` — the backend
-  contract for the future multi-repo backend; pure metadata of the repo's own
-  committed state (evaluating it does not force dependency content).
-- `#pointy.namespaces.<ns>` mounts the dependency's full pointy surface —
-  stepDefs, stepConfig, templates, projects, presets, srcFiles, deps — plus,
-  resolving through the per-system package view, its built `steps`,
-  `projectOutPaths` and `autocomplete`. Both of these reach a dependency's
-  built steps:
-  - `#pointy.namespaces.<ns>.steps.<id>`
-  - `#packages.<system>.pointy.namespaces.<ns>.steps.<id>`
-- Unknown / non-pointy / `self` input namespaces fail with a descriptive
-  error when forced.
-
-In the single-repo variant the dependency resolves at flake-evaluation time
-from the dependent's committed `flake.lock` (normal Nix input resolution), so
-the backend evaluates the dependent exactly as today. `pointy-welker` and
-`pointy-welker-c` both declare `deps = { }`.
+The complete contract, example, and evaluation semantics live in the
+[pointy-stdlib README](https://github.com/421anon/pointy-stdlib/blob/main/README.md)
+under *Depending on another pointy repo*; this doc keeps only the summary. In
+the single-repo variant `pointy-welker` and `pointy-welker-c` each declare
+`deps = { }`.
 
 ## Verification performed
 
 - stdlib: `nix flake check`; two-flake harness (`#pointy.deps`,
   `#pointy.namespaces`, per-system steps; error case).
-- pointy: no backend source changes (diff is `docs/` + `backend/example-config.toml` comments).
+- pointy: no backend source changes.
 - pointy-welker: `#pointy.deps`, `#pointy.namespaces`, `#pointy.stepConfig`
   (16 template types), `#pointy.projects` all evaluate under the new stdlib.
 - pointy-welker-c: `#pointy.*` evaluate; sample `report` step builds.
