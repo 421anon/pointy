@@ -1,3 +1,20 @@
+# Pointy backend deployment configuration.
+#
+# A running instance serves exactly ONE user repo (the single-repo variant):
+# `[user-repo]` is the repo that repo-scoped reads/writes and the agent session
+# worktree target. Deployments that need more than one repo run one instance
+# per repo (e.g. a dedicated confidential instance for data the LLM agent must
+# not see), each with its own config.toml and its own tracked repo.
+#
+# In production the file is generated from the operator deployment config
+# (trotter's unencrypted pointy config), not hand-written or encrypted:
+#   - `[user-repo]`  the instance's repo binding (url/keyfile/branch)
+#   - `[agent]`      agent runner settings -- supplied by the deployment config,
+#                    not baked into backend defaults
+#   - `[nix-evaluator]` optional evaluation tunables
+# Runtime secrets (the repo SSH deploy key, agent API keys) stay out of this
+# file and are provisioned separately.
+
 [user-repo]
 url = "git@example.com:your-org/user-repo.git"
 keyfile = "/home/backend/.ssh/id_ed25519_deploy"
@@ -13,6 +30,10 @@ extra = []
 enforcement = "scheduler"
 
 [agent]
+# Agent runner settings. In production the deployment config (trotter's
+# unencrypted pointy config) writes this table explicitly; the backend falls
+# back to these values when the table is absent.
+#
 # The backend invokes runner-command through sbox-command from the session worktree.
 # Argument templates expand the following placeholders:
 #   {worktree}    absolute path to the session worktree (the sandbox CWD)
