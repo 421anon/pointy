@@ -1,46 +1,81 @@
 # Multi-Repo Pointy: Single-Repo Variant
 
-This documents how the multi-repo design (see `multi-repo-design.md`) is
-realized in the single-repo-variant deployment. The backend itself unchanged:
-**each running instance serves exactly one user repo** via the existing
-`[user-repo]` config, and reads/writes stay scoped to that repo.
+How the multi-repo design (see `multi-repo-design.md`) is realized in the
+single-repo-variant deployment. **The backend is unchanged**: each running
+instance serves exactly **one** user repo via the existing `[user-repo]`
+config; repo-scoped reads/writes and the agent sandbox stay within that repo.
+There is no repo registry — no `repos` map, no default-repo pointer, no
+in-server multi-repo machinery.
 
-## Why single-repo per instance
+Multi-repo capability is expressed at the *deployment* level: one instance (and
+one NixOS config) per user repo, plus a stdlib-side `deps`/namespace import
+contract for repo-to-repo dependencies.
 
-The single-repo variant keeps the backend simple and unchanged while still
-delivering the design's key property — LLM isolation for confidential data —
-through **physical tenant separation** instead of in-server multi-repo
-machinery:
+## Deployed topology
 
-- The **host instance** (`seqdb.ggpeti.com`) serves the regular user repo
-  (`pointy-welker`). Its LLM agent's sandbox is a worktree of that one repo.
-- The **confidential instance** (`pointy-c-instance`, a trotter tenant) serves
-  the confidential user repo (`pointy-welker-c`) running inside its own Incus
-  container. The host's agent has no mount, no network path, and no worktree
-  into that container, so it cannot see the confidential data.
+All work is on `multi-repo` branches in the five existing repos (pushed to
+their remotes); `pointy-welker-c` and `pointy-c-instance` are new repos on
+`main` (local; push to GitLab pending project creation).
 
-Confidential repo marking is deployment metadata kept in the operator config
-(`repos.<name>.confidential` in trotter), which routes each repo to the right
-instance. No code-level access control is required.
+| Instance | Repo served | Tracked branch | Config source (unencrypted) | Agent |
+|---|---|---|---|---|
+| **trotter host** (`seqdb.ggpeti.com`) | `pointy-welker` | `prod-backend` | trotter `config/pointy.nix` → `/home/backend/config.toml` | enabled (API key in `pointy-agent-env.age`) |
+| **pointy-c-instance** (tenant container, `pointy-c.pointy.cloud`) | `pointy-welker-c` (confidential) | `main` | `pointy-c-instance/config/pointy-config.toml` → `/home/backend/config.toml` | **disabled** (no API key provisioned) |
 
-## Operator config lives in the deployment repo, not the backend
+Confidentiality is **LLM isolation by instance separation**, enforced two ways:
 
-The instance's `config.toml` is generated from an **unencrypted** operator
-config that lives in the trotter repo:
+1. The host instance's agent sandbox is a worktree of `pointy-welker` only; it
+   never mounts the c-instance container (no bind, no network path, no
+   worktree) — `pointy-welker-c` is not reachable by the host's LLM agent.
+2. The c-instance hosts `pointy-welker-c` but has **no agent credentials**: its
+   `services.pointy-backend.agentEnvFile` is null and no agent API key is
+   provisioned, so the configured LLM agent cannot run there either.
+   Interactive evaluation and the web UI remain fully functional.
 
-- `[user-repo]` — the repo binding (url, keyfile, branch); unencrypted.
-- `[agent]` — agent runner settings (runner args, model, bootstrap prompt,
-  timeouts). These migrated out of backend code defaults into the deployment
-  config; the backend falls back to defaults only when the table is absent.
-- `[nix-evaluator]` — optional tuning.
+The pointy-c-instance is a trotter tenant registered in trotter's
+`modules/host.nix`: hostnames `pointy-c.pointy.cloud`, deploy SSH port `2795`,
+host web-proxy port `28084` (DNS A record + host `authorized_keys.d/deploy`
+provisioning documented in the tenant repo's README).
 
-Runtime secrets stay encrypted/provisioned separately: the repo SSH deploy key
-(`pointy-backend-deploy-key.age`) and the agent API key
-(`pointy-agent-env.age`).
+## Operator config lives in the deployment repos, not the backend
 
-## Importing one user repo as a dependency of another
+Each instance's `/home/backend/config.toml` is generated (via `pkgs.writeText`
++ an `ExecStartPre` `install` in the backend systemd unit, running as
+`backend`) from an **unencrypted** config file checked into the deployment
+repo — not from an encrypted secret and not from backend code defaults:
 
-The pointy stdlib provides the cross-repo import machinery without any backend
+- **trotter** `config/pointy.nix` (host instance) — mirrors the TOML:
+  `user-repo` (url `git@gitlab.com:ggpeti/pointy-welker`, keyfile
+  `/home/backend/.ssh/id_ed25519_deploy`, branch `prod-backend`), `agent`, and
+  `nix-evaluator` (2048 MiB). Rendered by `modules/pointy-backend.nix`; the
+  old `secrets/pointy-backend-config.age` was deleted.
+- **pointy-c-instance** `config/pointy-config.toml` — same shape for
+  `pointy-welker-c` (branch `main`).
+
+`[agent]` settings (sbox/runner commands, `--model`, bootstrap prompt,
+timeouts) **migrated from backend code defaults** (`Config.hs`/`example-config.toml`)
+into these deployment configs; the backend falls back to defaults only when the
+table is absent (e.g. local dev).
+
+## What stays encrypted
+
+Only runtime secrets, in `secrets/` alongside the unencrypted config:
+
+- Repo SSH **deploy key** — trotter `pointy-backend-deploy-key.age` →
+  `/home/backend/.ssh/id_ed25519_deploy` (host, for `pointy-welker`);
+  pointy-c-instance `pointy-backend-deploy-key.age` (a fresh
+  `pointy-c-instance@trotter` keypair, to be added as a GitLab deploy key with
+  write access on `pointy-welker-c`).
+- Agent **API key** — trotter `pointy-agent-env.age` →
+  `/home/backend/agent-env`, consumed as a systemd `EnvironmentFile`
+  (`DEEPSEEK_API_KEY`). Not present on the confidential instance.
+
+Both are age-encrypted for recipients `ggpeti` + `trotter` (see each repo's
+`secrets/secrets.nix`); decryptable with `/root/.ssh/id_ed25519`.
+
+## Importing one user repo as a dependency of another (stdlib)
+
+The pointy stdlib provides the cross-repo import machinery with no backend
 support. A repo declares dependencies in its flake:
 
 ```nix
@@ -61,14 +96,33 @@ support. A repo declares dependencies in its flake:
 }
 ```
 
-- `#pointy.deps` exposes `{ namespace = { input, repo? }; }` — the registry
-  contract for the (future) multi-repo backend.
+- `#pointy.deps` exposes `{ namespace = { input, repo? }; }` — the backend
+  contract for the future multi-repo backend; pure metadata of the repo's own
+  committed state (evaluating it does not force dependency content).
 - `#pointy.namespaces.<ns>` (and per-system
   `packages.<system>.pointy.namespaces.<ns>`) mounts the dependency's full
   `pointy` output — stepDefs, stepConfig, templates, projects, presets,
   srcFiles, and (per-system) built `steps` — so a dependent repo can reach the
   dependency's domain objects under a namespace.
+- Unknown input / non-pointy input namespaces fail with a descriptive error
+  when forced.
 
-In the single-repo variant the dependency is resolved at flake-evaluation time
-from the dependent's committed flake.lock (normal Nix input resolution), so the
-backend evaluates the dependent exactly as today.
+In the single-repo variant the dependency resolves at flake-evaluation time
+from the dependent's committed `flake.lock` (normal Nix input resolution), so
+the backend evaluates the dependent exactly as today. `pointy-welker` and
+`pointy-welker-c` both declare `deps = { }`.
+
+## Verification performed
+
+- stdlib: `nix flake check`; two-flake harness (`#pointy.deps`,
+  `#pointy.namespaces`, per-system steps; error case).
+- pointy: diff vs `main` is docs-only (no backend source changes).
+- pointy-welker: `#pointy.deps`, `#pointy.namespaces`, `#pointy.stepConfig`
+  (16 template types), `#pointy.projects` all evaluate under the new stdlib.
+- pointy-welker-c: `#pointy.*` evaluate; sample `report` step builds.
+- trotter: `nix flake check` (full `nixosConfigurations.trotter`); rendered
+  `/home/backend/config.toml` verified; only `pointy-agent-env` +
+  `pointy-backend-deploy-key` remain as age secrets.
+- pointy-c-instance: `nix flake check` (full NixOS config); config installed to
+  `/home/backend/config.toml` in preStart; deploy node `seqdb.ggpeti.com:2795`.
+- trotter-tenant: `nix flake check`.

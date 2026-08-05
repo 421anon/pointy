@@ -6,8 +6,10 @@
 # per repo (e.g. a dedicated confidential instance for data the LLM agent must
 # not see), each with its own config.toml and its own tracked repo.
 #
-# In production the file is generated from the operator deployment config
-# (trotter's unencrypted pointy config), not hand-written or encrypted:
+# In production the file is generated from the deployment repo's unencrypted
+# pointy config (trotter config/pointy.nix for the host instance;
+# pointy-c-instance config/pointy-config.toml for the confidential tenant), not
+# hand-written or encrypted:
 #   - `[user-repo]`  the instance's repo binding (url/keyfile/branch)
 #   - `[agent]`      agent runner settings -- supplied by the deployment config,
 #                    not baked into backend defaults
@@ -30,9 +32,9 @@ extra = []
 enforcement = "scheduler"
 
 [agent]
-# Agent runner settings. In production the deployment config (trotter's
-# unencrypted pointy config) writes this table explicitly; the backend falls
-# back to these values when the table is absent.
+# Agent runner settings. In production the deployment repo's unencrypted
+# pointy config writes this table explicitly; the backend falls back to these
+# values when the table is absent (e.g. local dev).
 #
 # The backend invokes runner-command through sbox-command from the session worktree.
 # Argument templates expand the following placeholders:
