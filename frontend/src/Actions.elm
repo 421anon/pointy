@@ -2765,19 +2765,42 @@ handleAgentSessionResult : Result Http.Error Model.AgentSessionView -> Flow Mode
 handleAgentSessionResult result =
     case result of
         Ok view ->
-            Flow.over agent
-                (\agentState ->
+            Flow.forAll agent
+                (\agentStateBefore ->
                     let
-                        withView =
-                            mergeSessionView view agentState
+                        entriesBefore =
+                            agentStateBefore.chatEntries
                     in
-                    if withView.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
-                        applyPersistedTranscript view withView
+                    Flow.over agent
+                        (\agentState ->
+                            let
+                                withView =
+                                    mergeSessionView view agentState
+                            in
+                            if withView.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
+                                applyPersistedTranscript view withView
 
-                    else
-                        withView
+                            else
+                                withView
+                        )
+                        |> Flow.seq
+                            (Flow.forAll agent
+                                (\agentStateAfter ->
+                                    let
+                                        contentChanged =
+                                            entriesBefore /= agentStateAfter.chatEntries
+
+                                        turnActive =
+                                            shouldKeepLiveTranscript view agentStateAfter
+                                    in
+                                    -- Scroll to the bottom only when this update actually brought new
+                                    -- content or a turn is streaming. An idle poll (e.g. the periodic
+                                    -- clock tick) that returned an unchanged transcript must not yank
+                                    -- the reader back to the bottom.
+                                    Flow.when (contentChanged || turnActive) scrollAgentChatToBottom
+                                )
+                            )
                 )
-                |> Flow.seq scrollAgentChatToBottom
 
         Err err ->
             addToast False (Http.errorMessage err)
