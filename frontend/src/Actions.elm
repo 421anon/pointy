@@ -909,6 +909,23 @@ loadStepLog id =
             )
 
 
+loadFileSearchPaths : Route.HighlightTarget -> Int -> Flow Model ()
+loadFileSearchPaths target stepId =
+    Flow.forAll (route << Route.page << Route.project << mCommit)
+        (\mCommit_ ->
+            (case target of
+                Route.Output ->
+                    Api.filePaths "step-files" stepId mCommit_
+
+                Route.Source ->
+                    Api.filePaths "src-files" stepId Nothing
+            )
+                |> FlowError.foldResult
+                    (Flow.setAll (fileSearchAt target stepId << paths))
+                    (\err -> addToast False (Http.errorMessage err))
+        )
+
+
 runStep : StepSpec -> Int -> Flow Model ()
 runStep spec id =
     let
@@ -1739,6 +1756,7 @@ toggleOutputEntry recordId mOpen path =
             Flow.setAll (allStepTables << childrenAt recordId path) NotAsked
                 |> Flow.seq (Flow.setAll isExpanded newlyExpanded)
                 |> Flow.seq (Flow.when newlyExpanded <| Flow.batchM [ folderAction, fileAction ])
+                |> Flow.seq (Flow.when (newlyExpanded && List.isEmpty path) (loadFileSearchPaths Route.Output recordId))
                 |> Flow.return newlyExpanded
         )
 
@@ -1807,6 +1825,7 @@ toggleSrcEntry recordId mOpen path =
                 (Flow.setAll (allStepTables << srcFilesChildrenAt recordId path) NotAsked
                     |> Flow.seq (Flow.setAll isExpanded newlyExpanded)
                     |> Flow.seq (Flow.when newlyExpanded <| Flow.batchM [ folderAction, fileAction ])
+                    |> Flow.seq (Flow.when (newlyExpanded && List.isEmpty path) (loadFileSearchPaths Route.Source recordId))
                     |> Flow.return newlyExpanded
                 )
         )

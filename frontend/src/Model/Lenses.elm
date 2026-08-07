@@ -7,7 +7,7 @@ import Components.Select exposing (SelectState)
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Dict.Accessors
-import Extra.Accessors exposing (by, remkT, where_)
+import Extra.Accessors exposing (by, orDefault, remkT, where_)
 import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
@@ -161,6 +161,26 @@ userRepoInfo =
 stepLogs : Lens ls Model (Dict String (ApiData String)) x y
 stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
+
+
+fileSearches : Lens ls Model (Dict String Model.FileSearch) x y
+fileSearches =
+    lens ".fileSearches" Model.getFileSearches (\(Model m) fileSearches_ -> Model { m | fileSearches = fileSearches_ })
+
+
+fileSearchAt : HighlightTarget -> Int -> Lens ls Model Model.FileSearch x y
+fileSearchAt target stepId =
+    fileSearches << Dict.Accessors.at (Route.highlightAnchor target stepId []) << orDefault Model.initFileSearch
+
+
+select : Lens ls { a | select : b } b x y
+select =
+    lens ".select" .select (\t select_ -> { t | select = select_ })
+
+
+paths : Lens ls { a | paths : b } b x y
+paths =
+    lens ".paths" .paths (\t paths_ -> { t | paths = paths_ })
 
 
 notices : Lens ls Model (Dict String (ApiData (List Model.Notice))) x y

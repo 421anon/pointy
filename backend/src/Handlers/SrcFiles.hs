@@ -3,7 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.SrcFiles (listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
+module Handlers.SrcFiles (listSrcFilesHandler, srcFilePathsHandler, downloadSrcFilesHandler, seekSrcFilesHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Monad (unless, when)
@@ -16,7 +16,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
-import Handlers.Store (DirEntry, FileChunk, downloadHandler, listHandler, parseSeekOffset, seekHandler)
+import Handlers.Store (DirEntry, FileChunk, downloadHandler, filePathsHandler, listHandler, parseSeekOffset, seekHandler)
 import OutPaths (withWriteRepoTransaction)
 import Servant (Handler, Header, Headers, NoContent (..), ServerError (..), err400, err404, err409, err500, throwError)
 import qualified Servant.Types.SourceT as S
@@ -56,6 +56,14 @@ listSrcFilesHandler stepId mRel = do
     exists <- liftIO $ doesDirectoryExist fullBasePath
     if exists
         then listHandler (T.pack fullBasePath) mRel
+        else return []
+
+srcFilePathsHandler :: Int -> Handler [FilePath]
+srcFilePathsHandler stepId = do
+    fullBasePath <- getStepSrcFilesPath stepId
+    exists <- liftIO $ doesDirectoryExist fullBasePath
+    if exists
+        then filePathsHandler (T.pack fullBasePath)
         else return []
 
 downloadSrcFilesHandler :: Int -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))

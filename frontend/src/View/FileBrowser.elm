@@ -1,10 +1,11 @@
 module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
 
-import Accessors exposing (Prism, has, just, prism, snd, try, values)
+import Accessors exposing (Prism, get, has, just, prism, snd, try, values)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Basics.Extra exposing (flip)
+import Components.Select as Select
 import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
 import Filesize
@@ -19,7 +20,7 @@ import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
+import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileSearchAt, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, select, srcFileWriting, tables)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -126,6 +127,38 @@ renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssC
         ]
 
 
+viewFileSearch : Model -> Route.HighlightTarget -> Int -> Html (Flow Model ())
+viewFileSearch model target stepId =
+    let
+        search =
+            get (fileSearchAt target stepId) model
+    in
+    Select.view
+        { optic = fileSearchAt target stepId << select
+        , selectState = search.select
+        , selected_ = []
+        , availableItems = List.map (\path -> { id = Nothing, name = path, mProjectId = Nothing }) search.paths
+        , readOnly = False
+        , hasChanged = False
+        , label = ""
+        , mHint = Nothing
+        , placeholder = "Search files"
+        , inputIcon = Just "search"
+        , toInputItemName = .name
+        , toInputItemTooltip = \_ -> []
+        , onInputItemClick = \_ -> Nothing
+        , toMenuItemName = .name
+        , toMenuItemTooltip = \_ -> []
+        , onChange = Flow.pure ()
+        , onRemove = \_ -> Flow.pure ()
+        , activeAfterSelect = False
+        , clearInputAfterSelect = False
+        , onSelect = \item -> Actions.openHighlightedEntry { id = stepId, target = target, path = String.split "/" item.name, range = Nothing }
+        , alignRight = False
+        , inputItemStyle = \_ -> []
+        }
+
+
 viewDirectorySection : Model -> StepSpec -> StepRecord -> Html (Flow Model ())
 viewDirectorySection model spec step =
     case step.id of
@@ -138,6 +171,7 @@ viewDirectorySection model spec step =
                     (\rs ->
                         Html.div [ class "output-files-section" ]
                             [ Html.h3 [] [ Html.text "Output Files" ]
+                            , viewFileSearch model Route.Output stepId
                             , renderDirectoryContents model
                                 spec
                                 (Just stepId)
@@ -241,6 +275,7 @@ viewSrcFilesSection model stepType spec step =
                     [ Html.h3 [] [ Html.text "Source Files" ]
                     , createButton
                     ]
+                , Html.viewMaybe (viewFileSearch model Route.Source) step.id
                 , createForm
                 , renderDirectoryContents model
                     spec

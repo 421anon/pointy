@@ -44,12 +44,27 @@ type ListStepFiles =
         :> QueryParam "path" FilePath
         :> Get '[JSON] [DirEntry]
 
+type ListStepFilePaths =
+    "step-files"
+        :> "paths"
+        :> Description "Lists every file path under a step's output directory, recursively."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> Get '[JSON] [FilePath]
+
 type ListSrcFiles =
     "src-files"
         :> Description "Lists source files available to a step."
         :> ReqId
         :> QueryParam "path" FilePath
         :> Get '[JSON] [DirEntry]
+
+type ListSrcFilePaths =
+    "src-files"
+        :> "paths"
+        :> Description "Lists every source file path available to a step, recursively."
+        :> ReqId
+        :> Get '[JSON] [FilePath]
 
 type UpdateSrcFile =
     "src-files"
@@ -362,12 +377,14 @@ type API =
     GetCommitHash
         :<|> GetUserRepoInfo
         :<|> ListStepFiles
+        :<|> ListStepFilePaths
         :<|> DownloadStepFile
         :<|> StepFileSeek
         :<|> RawStepFile
         :<|> BundleStepFile
         :<|> StepFileExtras
         :<|> ListSrcFiles
+        :<|> ListSrcFilePaths
         :<|> DownloadSrcFile
         :<|> SrcFileSeek
         :<|> UpdateSrcFile

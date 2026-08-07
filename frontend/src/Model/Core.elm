@@ -394,6 +394,17 @@ initAutocompleteState =
     { query = "", suggestions = NotAsked, activeIndex = 0, activeRequest = Nothing }
 
 
+type alias FileSearch =
+    { select : SelectState
+    , paths : List String
+    }
+
+
+initFileSearch : FileSearch
+initFileSearch =
+    { select = initSelectState, paths = [] }
+
+
 type Model
     = Model
         { projects : Table ProjectRecord
@@ -412,6 +423,7 @@ type Model
         , userRepoInfo : ApiData UserRepoInfo
         , uploadProgress : Dict Int UploadProgress
         , stepLogs : Dict String (ApiData String)
+        , fileSearches : Dict String FileSearch
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict Int ( String, Status )
@@ -672,6 +684,11 @@ getStepLogs (Model model) =
     model.stepLogs
 
 
+getFileSearches : Model -> Dict String FileSearch
+getFileSearches (Model model) =
+    model.fileSearches
+
+
 getNotices : Model -> Dict String (ApiData (List Notice))
 getNotices (Model model) =
     model.notices
@@ -804,6 +821,7 @@ initialModel key route flags =
         , commitHash = NotAsked
         , userRepoInfo = NotAsked
         , stepLogs = Dict.empty
+        , fileSearches = Dict.empty
         , notices = Dict.empty
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty

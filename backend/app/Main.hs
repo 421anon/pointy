@@ -34,12 +34,12 @@ import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler,
 import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
-import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler)
+import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcFilePathsHandler)
 import Handlers.StatusStream (stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
-import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
+import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepFilePathsHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
 import Network.Wai (Request, pathInfo)
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
@@ -57,12 +57,14 @@ server =
     getCommitHashHandler
         :<|> getUserRepoInfoHandler
         :<|> stepListHandler
+        :<|> stepFilePathsHandler
         :<|> stepDownloadHandler
         :<|> stepSeekHandler
         :<|> stepRawHandler
         :<|> stepBundleHandler
         :<|> stepExtrasHandler
         :<|> listSrcFilesHandler
+        :<|> srcFilePathsHandler
         :<|> downloadSrcFilesHandler
         :<|> seekSrcFilesHandler
         :<|> saveSrcFileHandler

@@ -22,6 +22,7 @@ module Api.Api exposing
     , fetchStepConfig
     , fetchStepLog
     , fetchUserRepoInfo
+    , filePaths
     , runStep
     , saveProject
     , saveRecord
@@ -343,6 +344,15 @@ fetchDirectoryContents itemDecoder stepId commit folderPath =
         Http.get
             { url = UrlBuilder.absolute [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
+            }
+
+
+filePaths : String -> Int -> Maybe String -> Flow s (Result Http.Error (List String))
+filePaths resource stepId commit =
+    Flow.lift <|
+        Http.get
+            { url = UrlBuilder.absolute [ "backend", resource, "paths" ] (stepFileQuery stepId commit)
+            , expect = Http.expectJson identity (Json.Decode.list Json.Decode.string)
             }
 
 

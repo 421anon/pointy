@@ -4,20 +4,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
+module Handlers.Store (listHandler, filePathsHandler, stepFilePathsHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
 
 import ApiTypes (DynamicJson (..))
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Monad (unless, void, when)
+import Control.Monad (forM, unless, void, when)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON (..), Value (Object), eitherDecode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (toLower)
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate, isInfixOf, isPrefixOf, sort)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
@@ -45,7 +45,7 @@ import Servant (
     throwError,
  )
 import qualified Servant.Types.SourceT as S
-import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory, pathIsSymbolicLink)
 import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitDirectories, splitPath, takeExtension, takeFileName, (</>))
 import System.Process (readProcessWithExitCode)
@@ -83,6 +83,11 @@ stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler [DirEntry]
 stepListHandler stepId mCommit mRel = do
     outPath <- resolveStepOutPath stepId mCommit
     listHandler outPath mRel
+
+stepFilePathsHandler :: Int -> Maybe Text -> Handler [FilePath]
+stepFilePathsHandler stepId mCommit = do
+    outPath <- resolveStepOutPath stepId mCommit
+    filePathsHandler outPath
 
 stepDownloadHandler :: Int -> Maybe Text -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 stepDownloadHandler stepId mCommit rel = do
@@ -164,6 +169,22 @@ buildDirEntry absPath n = do
                     sz <- getFileSize p
                     (isViewable, isSeekable, mime) <- checkViewableAndMime p sz
                     pure $ DirEntry (T.pack n) False sz isViewable isSeekable mime
+
+filePathsHandler :: Text -> Handler [FilePath]
+filePathsHandler basePathText = do
+    let basePath = T.unpack basePathText
+    assertNixStorePath basePath
+    sort <$> liftIO (collectFilePaths basePath "")
+
+collectFilePaths :: FilePath -> FilePath -> IO [FilePath]
+collectFilePaths absDir relDir = do
+    names <- listDirectory absDir
+    fmap concat $ forM names $ \n -> do
+        let p = absDir </> n
+            rel = if null relDir then n else relDir </> n
+        isSym <- pathIsSymbolicLink p
+        isD <- if isSym || isZipPath p then pure False else doesDirectoryExist p
+        if isD then collectFilePaths p rel else pure [rel]
 
 isZipPath :: FilePath -> Bool
 isZipPath p = map toLower (takeExtension p) == ".zip"
