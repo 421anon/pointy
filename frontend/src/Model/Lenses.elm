@@ -1,13 +1,13 @@
 module Model.Lenses exposing (..)
 
-import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
+import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, set, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData, success)
 import Browser.Navigation
 import Components.Select exposing (SelectState)
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Dict.Accessors
-import Extra.Accessors exposing (by, orDefault, remkT, where_)
+import Extra.Accessors exposing (by, remkT, where_)
 import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
@@ -170,7 +170,13 @@ fileSearches =
 
 fileSearchAt : HighlightTarget -> Int -> Lens ls Model Model.FileSearch x y
 fileSearchAt target stepId =
-    fileSearches << Dict.Accessors.at (Route.highlightAnchor target stepId []) << orDefault Model.initFileSearch
+    let
+        entry =
+            fileSearches << Dict.Accessors.at (Route.highlightAnchor target stepId [])
+    in
+    lens ".fileSearch"
+        (get entry >> Maybe.withDefault Model.initFileSearch)
+        (\model search -> set entry (Just search) model)
 
 
 select : Lens ls { a | select : b } b x y

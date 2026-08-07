@@ -37,11 +37,6 @@ orElseT t1 t2 =
         )
 
 
-orDefault : a -> Lens ls (Maybe a) a x y
-orDefault fallback =
-    lens "orDefault" (Maybe.withDefault fallback) (\_ value -> Just value)
-
-
 by : (a -> b) -> b -> Traversal (List a) a x y
 by getkey key =
     each << where_ (getkey >> (==) key)
