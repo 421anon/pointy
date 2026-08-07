@@ -1756,7 +1756,7 @@ toggleOutputEntry recordId mOpen path =
             Flow.setAll (allStepTables << childrenAt recordId path) NotAsked
                 |> Flow.seq (Flow.setAll isExpanded newlyExpanded)
                 |> Flow.seq (Flow.when newlyExpanded <| Flow.batchM [ folderAction, fileAction ])
-                |> Flow.seq (Flow.when (newlyExpanded && List.isEmpty path) (loadFileSearchPaths Route.Output recordId))
+                |> Flow.seq (Flow.when (newlyExpanded && not wasExpanded && List.isEmpty path) (loadFileSearchPaths Route.Output recordId))
                 |> Flow.return newlyExpanded
         )
 
@@ -1825,7 +1825,7 @@ toggleSrcEntry recordId mOpen path =
                 (Flow.setAll (allStepTables << srcFilesChildrenAt recordId path) NotAsked
                     |> Flow.seq (Flow.setAll isExpanded newlyExpanded)
                     |> Flow.seq (Flow.when newlyExpanded <| Flow.batchM [ folderAction, fileAction ])
-                    |> Flow.seq (Flow.when (newlyExpanded && List.isEmpty path) (loadFileSearchPaths Route.Source recordId))
+                    |> Flow.seq (Flow.when (newlyExpanded && not wasExpanded && List.isEmpty path) (loadFileSearchPaths Route.Source recordId))
                     |> Flow.return newlyExpanded
                 )
         )
