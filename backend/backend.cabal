@@ -29,6 +29,7 @@ library
     Handlers.CommitHash
     Handlers.ClusterStream
     Handlers.Download
+    Handlers.FileIndex
     Handlers.Presets
     Handlers.ProjectEntities
     Handlers.Projects

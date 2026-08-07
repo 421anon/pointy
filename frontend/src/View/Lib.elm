@@ -40,7 +40,7 @@ viewSearchBox model =
         , hasChanged = False
         , label = ""
         , mHint = Nothing
-        , placeholder = "Search for steps"
+        , placeholder = "Search for steps and files"
         , inputIcon = Just "search"
         , toInputItemName = .name
         , toInputItemTooltip = \_ -> []
@@ -55,7 +55,7 @@ viewSearchBox model =
             \item ->
                 Maybe.unwrap (Flow.pure ())
                     (Actions.onSelectSearch item.mProjectId)
-                    item.id
+                    item.mHighlight
         , alignRight = True
         , inputItemStyle = \_ -> []
         }

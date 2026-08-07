@@ -344,6 +344,13 @@ loadUserRepoInfo =
     callApi userRepoInfo Api.fetchUserRepoInfo |> Flow.return ()
 
 
+loadFileIndex : Flow Model ()
+loadFileIndex =
+    Flow.try (route << Route.page << Route.project << mCommit << just)
+        (callApi fileIndex << Api.fetchFileIndex)
+        |> Flow.return ()
+
+
 loadStepConfig : Flow Model ()
 loadStepConfig =
     Flow.get
@@ -361,6 +368,7 @@ loadStepConfig =
 
                             Just c ->
                                 Flow.setAll commitHash (ApiData.Success c)
+                                    |> Flow.seq (Flow.async loadFileIndex)
                         )
             )
         |> Flow.return ()
@@ -429,7 +437,7 @@ removeProjectTemplate template =
 
 refetchCommitHash : Flow Model ()
 refetchCommitHash =
-    callApi commitHash Api.fetchCommitHash |> Flow.map (always ())
+    callApi commitHash Api.fetchCommitHash |> Flow.seq (Flow.async loadFileIndex)
 
 
 removeRecord : TableSpec (BaseRecord a) -> Int -> Flow Model ()
@@ -940,6 +948,7 @@ runStep spec id =
                                     Nothing ->
                                         "Step completed"
                                 )
+                                |> Flow.seq loadFileIndex
                             )
                         )
                     |> Flow.seq (callApi void (Api.runStep id mCommit_))
@@ -2188,8 +2197,8 @@ updateSortKeys mProjectId tableSpec records_ =
         |> Flow.return ()
 
 
-onSelectSearch : Maybe Int -> Int -> Flow Model ()
-onSelectSearch mProjectId stepId =
+onSelectSearch : Maybe Int -> Route.Highlight -> Flow Model ()
+onSelectSearch mProjectId highlight =
     Flow.get
         |> Flow.andThen
             (\model ->
@@ -2198,10 +2207,10 @@ onSelectSearch mProjectId stepId =
                         try (route << Route.page << Route.project << mCommit << just) model
 
                     pickedProjectId =
-                        mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
+                        mProjectId |> Maybe.orElse (try (projectsContainingEntity highlight.id << recordId << just) model)
                 in
                 pickedProjectId
-                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Route.fromPage (Route.Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = mCommit_, mCompare = Nothing })))
+                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Route.fromPage (Route.Project { projectId = pId, mHighlight = Just highlight, mCommit = mCommit_, mCompare = Nothing })))
             )
 
 

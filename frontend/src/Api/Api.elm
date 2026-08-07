@@ -12,6 +12,7 @@ module Api.Api exposing
     , fetchDirectoryContents
     , fetchExtras
     , fetchFileContents
+    , fetchFileIndex
     , fetchFileSeek
     , fetchNotices
     , fetchPresets
@@ -43,7 +44,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, FileIndexEntry, Notice, ProjectRecord, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -403,6 +404,15 @@ fetchUserRepoInfo =
         Http.get
             { url = "/backend/user-repo-info"
             , expect = Http.expectJson identity Decode.userRepoInfo
+            }
+
+
+fetchFileIndex : Maybe String -> Flow s (Result Http.Error (List FileIndexEntry))
+fetchFileIndex commit =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery "/backend/file-index" commit
+            , expect = Http.expectJson identity (Json.Decode.list Decode.fileIndexEntry)
             }
 
 

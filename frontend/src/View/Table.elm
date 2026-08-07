@@ -678,7 +678,7 @@ viewAddOrEditRecordForm model spec table record =
                     try currentProjectId model
 
                 availableItems =
-                    List.map (\{ id, name } -> { id = id, name = name, mProjectId = Nothing })
+                    List.map (\{ id, name } -> { id = id, name = name, mProjectId = Nothing, mHighlight = Nothing })
                         (all (allEntities (where_ (\{ id } -> id /= mProjectId) << tables << key (TableSpec.getName spec) << just)) model
                             |> List.filter
                                 (\r -> r.id |> Maybe.unwrap True (\id -> not (List.member id (ApiData.withDefault [] table.records |> List.filterMap .id))))
@@ -810,6 +810,7 @@ viewProjectExtraFormFields model readOnly =
                     { id = Dict.get name_ templateIdMap
                     , name = name_
                     , mProjectId = Nothing
+                    , mHighlight = Nothing
                     }
 
                 templateLabel name_ =
@@ -838,6 +839,7 @@ viewProjectExtraFormFields model readOnly =
                     { id = Dict.get name_ presetIdMap
                     , name = name_
                     , mProjectId = Nothing
+                    , mHighlight = Nothing
                     }
 
                 presetMenuLabel name_ =
@@ -1085,6 +1087,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     else
                                                         step.name ++ " (not in project)"
                                         , mProjectId = Nothing
+                                        , mHighlight = Nothing
                                         }
                                     )
 
@@ -1093,7 +1096,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
 
                         availableItems =
                             allSteps mAllowedStepTypes
-                                |> List.filterMap (\step -> step.id |> Maybe.map (\id -> { id = Just id, name = step.name, mProjectId = Nothing }))
+                                |> List.filterMap (\step -> step.id |> Maybe.map (\id -> { id = Just id, name = step.name, mProjectId = Nothing, mHighlight = Nothing }))
                                 |> List.filter (\item -> not (List.member item.id selectedIds))
 
                         toTooltip =

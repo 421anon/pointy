@@ -15,6 +15,7 @@ import Json.Decode as Decode
 import Keyboard
 import List.Extra as List
 import Maybe.Extra as Maybe
+import Route
 import Task
 import View.Icons exposing (iconCustom)
 
@@ -32,6 +33,7 @@ type alias Item =
     { id : Maybe Int
     , name : String
     , mProjectId : Maybe Int
+    , mHighlight : Maybe Route.Highlight
     }
 
 
