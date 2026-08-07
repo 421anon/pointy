@@ -64,10 +64,6 @@ projectEntries ctx srcFilesBase project = do
         putStrLn $ "File index skipped the outputs of project " ++ show pid ++ ": " ++ err
         pure Map.empty
 
-{- | Symlinked directories are followed as they are when browsing a step, so an
-aliased directory is indexed under every alias; one already on the current
-branch is a cycle and yields nothing.
--}
 entriesUnder :: Int -> Int -> Text -> FilePath -> IO [FileIndexEntry]
 entriesUnder pid sid entryTarget = go Set.empty []
   where
