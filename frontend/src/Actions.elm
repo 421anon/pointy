@@ -63,7 +63,8 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
                             t
 
                 mRecordToEdit =
-                    try (success << by .id mRecordId) t.records
+                    mRecordId
+                        |> Maybe.andThen (\recordId -> try (success << by .id (Just recordId)) t.records)
 
                 formIsOpen =
                     t.edited /= Nothing && not t.nameEditOnly
