@@ -17,7 +17,7 @@ stepArgValue argType arg =
         ( TInt _ _, TIntValue n ) ->
             Just (Encode.int n)
 
-        ( TStep _, TStepValue id ) ->
+        ( TStep _ _, TStepValue id ) ->
             Just (Encode.object [ ( "step", Encode.int id ) ])
 
         ( TList itemType, TListValue items ) ->

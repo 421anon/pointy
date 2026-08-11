@@ -259,7 +259,7 @@ viewArgValue model projectId argType mValue =
         ( TInt _ _, Just (TIntValue n) ) ->
             Html.text (String.fromInt n)
 
-        ( TStep _, Just (TStepValue stepId) ) ->
+        ( TStep _ _, Just (TStepValue stepId) ) ->
             Html.text (stepNameOf model projectId stepId)
 
         ( TUploadHash, Just (TUploadHashValue h) ) ->
