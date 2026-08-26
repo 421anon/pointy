@@ -62,6 +62,10 @@ let stepStatusTargetKey = null;
 let stepStatusApplicationError = false;
 let agentTurnSource = null;
 let agentTurnTargetKey = null;
+const AGENT_TURN_INITIAL_RETRY_DELAY = 1000;
+const AGENT_TURN_MAX_RETRY_DELAY = 30000;
+let agentTurnDeliveredLength = 0;
+let agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
 
 function closeStepStatusStream() {
   if (stepStatusSource) {
@@ -78,6 +82,8 @@ function closeAgentTurnStream() {
     agentTurnSource = null;
   }
   agentTurnTargetKey = null;
+  agentTurnDeliveredLength = 0;
+  agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
 }
 
 function toggleTheme() {
@@ -185,31 +191,27 @@ export function connectPorts(app) {
     };
   }
 
-  function openAgentTurnStream({ turnId }) {
-    const url = `/backend/agent/turn/${encodeURIComponent(turnId)}/stream`;
+  function connectAgentTurnStream(turnId) {
+    const source = new EventSource(
+      `/backend/agent/turn/${encodeURIComponent(turnId)}/stream`,
+    );
+    let replayLength = agentTurnDeliveredLength;
+    agentTurnSource = source;
 
-    if (
-      agentTurnSource &&
-      agentTurnTargetKey === url &&
-      agentTurnSource.readyState !== EventSource.CLOSED
-    ) {
-      return;
-    }
-
-    closeAgentTurnStream();
-
-    agentTurnSource = new EventSource(url);
-    agentTurnTargetKey = url;
-
-    agentTurnSource.addEventListener("chunk", (event) => {
+    source.addEventListener("chunk", (event) => {
       try {
-        emitAgentTurn("chunk", JSON.parse(event.data));
+        const data = JSON.parse(event.data);
+        data.chunk = data.chunk.slice(replayLength);
+        replayLength = 0;
+        agentTurnDeliveredLength += data.chunk.length;
+        agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
+        if (data.chunk) emitAgentTurn("chunk", data);
       } catch (err) {
         emitAgentTurn("error", `Failed to parse agent log chunk: ${String(err)}`);
       }
     });
 
-    agentTurnSource.addEventListener("done", (event) => {
+    source.addEventListener("done", (event) => {
       try {
         emitAgentTurn("done", JSON.parse(event.data));
       } catch {
@@ -218,15 +220,35 @@ export function connectPorts(app) {
       closeAgentTurnStream();
     });
 
-    agentTurnSource.addEventListener("heartbeat", (event) => {
+    source.addEventListener("heartbeat", (event) => {
+      agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
       try {
         emitAgentTurn("heartbeat", JSON.parse(event.data));
       } catch {}
     });
 
-    agentTurnSource.onerror = () => {
-      emitAgentTurn("error", "Agent turn stream connection issue");
+    source.onerror = () => {
+      source.close();
+      if (source !== agentTurnSource || agentTurnTargetKey !== turnId) return;
+
+      agentTurnSource = null;
+      const delay = agentTurnRetryDelay;
+      if (delay === AGENT_TURN_INITIAL_RETRY_DELAY) {
+        emitAgentTurn("error", "Agent turn stream connection issue");
+      }
+      agentTurnRetryDelay = Math.min(delay * 2, AGENT_TURN_MAX_RETRY_DELAY);
+      setTimeout(() => {
+        if (agentTurnTargetKey === turnId && !agentTurnSource) {
+          connectAgentTurnStream(turnId);
+        }
+      }, delay);
     };
+  }
+
+  function openAgentTurnStream({ turnId }) {
+    closeAgentTurnStream();
+    agentTurnTargetKey = turnId;
+    connectAgentTurnStream(turnId);
   }
 
   function storeLastChat(sessionId) {

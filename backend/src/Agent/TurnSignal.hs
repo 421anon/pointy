@@ -11,7 +11,7 @@ module Agent.TurnSignal (
     signalTurnLog,
 ) where
 
-import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTChan, newTVarIO, readTVar, writeTChan, writeTVar)
+import Control.Concurrent.STM (TChan, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChan, newTVarIO, readTVar, writeTChan, writeTVar)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import System.FilePath (normalise)
@@ -21,19 +21,19 @@ import System.IO.Unsafe (unsafePerformIO)
 signals :: TVar (Map FilePath (TChan ()))
 signals = unsafePerformIO $ newTVarIO Map.empty
 
-{- | Get (or create) the wakeup channel for a turn log.  Concurrent
-streams for the same turn share one channel.
+{- | Get a private wakeup channel for a turn log.
 -}
 registerTurnSignal :: FilePath -> IO (TChan ())
 registerTurnSignal path = atomically $ do
     let key = normalise path
     m <- readTVar signals
-    case Map.lookup key m of
+    broadcast <- case Map.lookup key m of
         Just ch -> pure ch
         Nothing -> do
-            ch <- newTChan
+            ch <- newBroadcastTChan
             writeTVar signals (Map.insert key ch m)
             pure ch
+    dupTChan broadcast
 
 {- | Stop tracking a turn log.  Idempotent; safe to call when the turn
 finishes even if no stream ever connected.
