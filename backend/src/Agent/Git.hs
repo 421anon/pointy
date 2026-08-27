@@ -582,8 +582,8 @@ getAgentUsage = do
 
 collectGitState :: AgentSession -> ExceptT String IO AgentGitState
 collectGitState session_ = do
-    exists <- liftIO $ doesDirectoryExist (worktreePath session_)
-    if not exists
+    usable <- liftIO $ isWorktreeCheckout (worktreePath session_)
+    if not usable
         then
             return
                 AgentGitState
@@ -614,6 +614,13 @@ collectGitState session_ = do
                     , branchDiff = diff_
                     , hasAgentCommits = hasCommits
                     }
+
+
+isWorktreeCheckout :: FilePath -> IO Bool
+isWorktreeCheckout path = do
+    (exitCode, out, _) <- runGitIn path ["rev-parse", "--is-inside-work-tree"]
+    return $ exitCode == ExitSuccess && T.strip (T.pack out) == "true"
+
 
 baseCommitReachable :: FilePath -> Text -> ExceptT String IO Bool
 baseCommitReachable worktree base = ExceptT $ do
