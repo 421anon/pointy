@@ -346,7 +346,10 @@ stepArgType =
                 (Decode.field "display" tStringDisplay)
                 (maybe (Decode.field "autocomplete" Decode.string))
         , Decode.map2 TEnum (Decode.field "enum" (Decode.list Decode.string)) (Decode.oneOf [ Decode.field "enumDisplayNames" (Decode.dict Decode.string), Decode.succeed Dict.empty ])
-        , Decode.field "step" (Decode.map TStep <| maybe <| Decode.field "allowedTypes" (Decode.list Decode.string))
+        , Decode.field "step" <|
+            Decode.map2 TStep
+                (maybe (Decode.field "allowedTypes" (Decode.list Decode.string)))
+                (Decode.oneOf [ Decode.field "quickCreate" Decode.bool, Decode.succeed False ])
         , Decode.field "list" (Decode.map TList (Decode.lazy (\() -> stepArgType)))
         , Decode.field "record" (Decode.map TRecord (Decode.field "fields" (Decode.dict (Decode.lazy (\() -> argType)))))
         ]
@@ -384,7 +387,7 @@ stepArgValue argType_ =
         TInt _ _ ->
             Decode.int |> Decode.map TIntValue
 
-        TStep _ ->
+        TStep _ _ ->
             Decode.field "step" Decode.int |> Decode.map TStepValue
 
         TList itemType ->
@@ -513,6 +516,7 @@ stepConfigEntry =
         |> optional "sortKey" (maybe Decode.int) Nothing
         |> optional "displayName" (maybe Decode.string) Nothing
         |> optional "description" (maybe Decode.string) Nothing
+        |> optional "icon" (maybe Decode.string) Nothing
 
 
 stepConfig : Decoder StepConfig

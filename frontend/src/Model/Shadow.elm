@@ -8,7 +8,7 @@ import Dict exposing (Dict)
 type StepArgType
     = TString TStringDisplay (Maybe String)
     | TInt TStringDisplay (Maybe String)
-    | TStep (Maybe (List String))
+    | TStep (Maybe (List String)) Bool
     | TUploadHash
     | TList StepArgType
     | TRecord (Dict String ArgType)
@@ -154,6 +154,7 @@ type alias StepConfigEntry =
     , sortKey : Maybe Int
     , displayName : Maybe String
     , description : Maybe String
+    , icon : Maybe String
     }
 
 

@@ -1,6 +1,6 @@
 module View.Shadow exposing (viewProject)
 
-import Accessors exposing (get, has, just, try)
+import Accessors exposing (fst, get, has, just, try)
 import Actions
 import Api.ApiData as ApiData
 import Dict
@@ -12,14 +12,14 @@ import Html.Extra as Html
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses as Lenses exposing (currentProject, mCommit, route)
-import Model.Shadow exposing (StepConfigEntry, StepType(..))
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfigEntry, StepType(..), derivation)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
 import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
 viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
@@ -169,6 +169,10 @@ viewSection model sectionName entry steps =
 
         isReadOnly =
             has (route << Route.page << Route.project << mCommit << just) model
+
+        stepConfig_ =
+            try (Lenses.stepConfig << ApiData.success) model
+                |> Maybe.unwrap [] Dict.toList
     in
     viewTable
         { model = model
@@ -223,8 +227,54 @@ viewSection model sectionName entry steps =
 
                                 Download ->
                                     []
+
+                    prefill argType =
+                        let
+                            wire allowedTypes toValue =
+                                if Maybe.unwrap True (List.member r.type_) allowedTypes then
+                                    Maybe.map toValue r.id
+
+                                else
+                                    Nothing
+                        in
+                        case argType of
+                            TStep allowedTypes True ->
+                                wire allowedTypes TStepValue
+
+                            TList (TStep allowedTypes True) ->
+                                wire allowedTypes (TListValue << List.singleton << TStepValue)
+
+                            _ ->
+                                Nothing
+
+                    quickCreateActions =
+                        if isReadOnly then
+                            []
+
+                        else
+                            stepConfig_
+                                |> List.filter (\( targetType, _ ) -> has (Lenses.currentTableOf targetType) model)
+                                |> List.concatMap
+                                    (\( targetType, targetEntry ) ->
+                                        let
+                                            targetSpec =
+                                                Specs.steps targetType targetEntry
+                                        in
+                                        try (derivation << fst) targetEntry.stepType
+                                            |> Maybe.unwrap [] Dict.toList
+                                            |> List.filterMap
+                                                (\( argName, arg ) ->
+                                                    prefill arg.type_
+                                                        |> Maybe.map
+                                                            (\value ->
+                                                                viewQuickCreateButton targetEntry.icon
+                                                                    ("Create " ++ TableSpec.getDisplayName targetSpec)
+                                                                    (Actions.addStepWithArg targetSpec argName value)
+                                                            )
+                                                )
+                                    )
                 in
-                uploadActions ++ runActions
+                uploadActions ++ runActions ++ quickCreateActions
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
         , onRecordClick =

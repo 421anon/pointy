@@ -28,6 +28,7 @@ import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
+import Model.Shadow exposing (StepArgValue)
 import Time
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
 import Ports
@@ -977,6 +978,17 @@ stopStep spec id =
 setAddMode : A_Traversal s (Table (BaseRecord a)) -> BaseRecord a -> AddMode -> Flow s ()
 setAddMode lens defaultRecord mode =
     Flow.over lens (\t -> { t | addMode = mode, edited = Just defaultRecord })
+
+
+addStepWithArg : StepSpec -> String -> StepArgValue -> Flow Model ()
+addStepWithArg spec argName value =
+    let
+        editedDraft =
+            TableSpec.getLens spec << where_ (not << .nameEditOnly) << edited << just
+    in
+    Flow.unlessHas (editedDraft << where_ (.id >> Maybe.isNothing))
+        (toggleAddOrEditRecordForm False spec Nothing)
+        |> Flow.seq (Flow.setAll (editedDraft << args << Accessors.key argName) (Just value))
 
 
 cloneStep : StepSpec -> StepRecord -> Flow Model ()

@@ -286,6 +286,25 @@ body {
   display: none;
 }
 
+.quick-create-btn {
+  padding: 0 var(--spacing-xs);
+}
+
+.quick-create-glyph {
+  position: relative;
+  display: inline-flex;
+  margin-right: 2px;
+}
+
+.quick-create-btn .quick-create-add-icon {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  font-size: 11px;
+}
+
 @media (max-width: 600px) {
   .icon-btn.hamburger-icon-btn-mobile {
     display: inline-flex;
@@ -317,6 +336,11 @@ body {
     max-height: 50vh;
     overflow-y: auto;
     pointer-events: auto;
+  }
+
+  .table-record-actions:popover-open:has(.quick-create-btn) {
+    width: max-content;
+    max-width: calc(100vw - var(--spacing-2xl));
   }
 
   .table-record-actions::backdrop {

@@ -1,4 +1,4 @@
-module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 import Accessors exposing (all, each, just, key, lens, over, set, try)
 import Actions
@@ -1172,7 +1172,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
             in
             withFieldNotices <|
                 case type_ of
-                    TStep mAllowedStepTypes ->
+                    TStep mAllowedStepTypes _ ->
                         buildStepSelect
                             { selectedStepIds =
                                 case try (paramLens << just << tStepId) model of
@@ -1297,7 +1297,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     , language = language
                                     }
 
-                    TList (TStep mAllowedStepTypes) ->
+                    TList (TStep mAllowedStepTypes _) ->
                         let
                             listLens =
                                 paramLens << lens "withDefault" (Maybe.withDefault (TListValue [])) (\_ -> Just) << tListValue
@@ -2190,6 +2190,26 @@ viewIconButtonWithTooltip iconName filled tooltip action =
         , title tooltip
         ]
         [ icon filled iconName
+        , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
+        ]
+
+
+viewQuickCreateButton : Maybe String -> String -> Flow Model () -> Html (Flow Model ())
+viewQuickCreateButton mIcon tooltip action =
+    Html.button
+        [ Events.onClick action
+        , class "icon-btn quick-create-btn"
+        , title tooltip
+        ]
+        [ Maybe.unwrap
+            (icon False "add")
+            (\iconName ->
+                Html.span [ class "quick-create-glyph" ]
+                    [ icon True iconName
+                    , iconCustom False "add" [ class "quick-create-add-icon" ]
+                    ]
+            )
+            mIcon
         , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
         ]
 
