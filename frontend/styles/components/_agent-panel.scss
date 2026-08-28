@@ -770,6 +770,10 @@
   text-decoration: none;
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 
+  &:only-child {
+    border-radius: var(--radius-sm);
+  }
+
   &:hover {
     background: var(--bg-hover);
   }
