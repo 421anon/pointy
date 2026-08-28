@@ -1,6 +1,6 @@
 module Specs exposing (..)
 
-import Accessors exposing (has, snd)
+import Accessors exposing (has, snd, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Api.Decode as Decode
@@ -12,7 +12,7 @@ import Flow
 import Model.Core as Model exposing (ProjectRecord, StepRecord, TableTag(..))
 import Model.Lenses as Lenses exposing (currentTableOf)
 import Model.Shadow as Shadow exposing (Presets, StepConfig, StepConfigEntry, WithSrcFiles(..))
-import Model.TableSpec exposing (TableSpec(..))
+import Model.TableSpec as TableSpec exposing (TableSpec(..))
 
 
 steps : String -> StepConfigEntry -> TableSpec StepRecord
@@ -100,3 +100,43 @@ projects presets stepConfig =
         , upsertRecord = Actions.upsertProject
         , cloneRecord = \_ _ -> Flow.none
         }
+
+
+type StepRunControl
+    = Runnable (Flow.Flow Model.Model ())
+    | Stoppable (Flow.Flow Model.Model ())
+
+
+stepRunControl : Model.Model -> Int -> Maybe StepRunControl
+stepRunControl model stepId =
+    try (Lenses.currentProject << ApiData.success << Lenses.projectStepRecords << where_ (.id >> (==) (Just stepId))) model
+        |> Maybe.andThen
+            (\step ->
+                try (Lenses.stepConfig << ApiData.success) model
+                    |> Maybe.andThen (Dict.get step.type_)
+                    |> Maybe.andThen (runControl step)
+            )
+
+
+runControl : StepRecord -> StepConfigEntry -> Maybe StepRunControl
+runControl step entry =
+    if Shadow.hasRunControl entry.stepType then
+        let
+            spec =
+                steps step.type_ entry
+        in
+        step.id
+            |> Maybe.andThen
+                (\stepId ->
+                    if TableSpec.getRunning spec step then
+                        Just (Stoppable (Actions.stopStep spec stepId))
+
+                    else if TableSpec.getRunnable spec step then
+                        Just (Runnable (Actions.runStep spec stepId))
+
+                    else
+                        Nothing
+                )
+
+    else
+        Nothing

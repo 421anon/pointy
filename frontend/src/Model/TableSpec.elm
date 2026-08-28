@@ -10,6 +10,8 @@ module Model.TableSpec exposing
     , getEncodeRecord
     , getLens
     , getName
+    , getRunnable
+    , getRunning
     , getShareable
     , getSrcFilesView
     , getStatus
@@ -92,6 +94,27 @@ getShareable (TableSpec spec) =
         >> ApiData.toMaybe
         >> Maybe.map (\status_ -> status_ == StatusSuccess || status_ == StatusRunning)
         >> Maybe.withDefault False
+
+
+getRunnable : TableSpec a -> a -> Bool
+getRunnable (TableSpec spec) record =
+    case spec.status record of
+        ApiData.Loading _ ->
+            False
+
+        ApiData.Success StatusSuccess ->
+            False
+
+        ApiData.Success StatusRunning ->
+            False
+
+        _ ->
+            True
+
+
+getRunning : TableSpec a -> a -> Bool
+getRunning (TableSpec spec) record =
+    ApiData.toMaybe (spec.status record) == Just StatusRunning
 
 
 getDirectoryView : TableSpec a -> a -> Maybe DirectoryFolder

@@ -13,48 +13,13 @@ import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses as Lenses exposing (currentProject, mCommit, route)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfigEntry, StepType(..), derivation)
-import Model.TableSpec as TableSpec exposing (TableSpec)
+import Model.TableSpec as TableSpec
 import Route
 import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
-
-
-viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewRunStop spec r =
-    case r.id of
-        Just id ->
-            let
-                status =
-                    TableSpec.getStatus spec r
-
-                isRunning =
-                    status
-                        |> ApiData.toMaybe
-                        |> (==) (Just Model.StatusRunning)
-
-                canRun =
-                    case status of
-                        ApiData.Loading _ ->
-                            False
-
-                        ApiData.Success Model.StatusSuccess ->
-                            False
-
-                        ApiData.Success Model.StatusRunning ->
-                            False
-
-                        _ ->
-                            True
-            in
-            [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-            , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
-            ]
-
-        Nothing ->
-            []
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
@@ -198,14 +163,14 @@ viewSection model sectionName entry steps =
             \r ->
                 let
                     runActions =
-                        case stepType of
-                            Derivation _ _ ->
-                                viewRunStop spec r
+                        case Specs.runControl r entry of
+                            Just (Specs.Runnable run) ->
+                                [ viewRunButton "Run" run ]
 
-                            Download ->
-                                viewRunStop spec r
+                            Just (Specs.Stoppable stop) ->
+                                [ viewStopButton "Stop" stop ]
 
-                            FileUpload _ ->
+                            Nothing ->
                                 []
 
                     uploadActions =

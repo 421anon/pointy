@@ -2314,19 +2314,21 @@ agentTurnId turnId =
     "agent-turn-" ++ turnId
 
 
+shareLink : Route -> Flow Model ()
+shareLink linkRoute =
+    Flow.forAll origin
+        (\origin_ ->
+            callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString linkRoute)
+        )
+        |> Flow.seq (addToast True "Share link copied to clipboard")
+
+
 shareAgentChat : String -> Flow Model ()
 shareAgentChat sessionId =
     Flow.forAll route
         (\currentRoute ->
-            Flow.forAll origin
-                (\origin_ ->
-                    callJs "copyToClipboard"
-                        Encode.string
-                        (Decode.succeed ())
-                        (origin_ ++ Route.toString { currentRoute | chat = Just { sessionId = sessionId, mTurnId = Nothing } })
-                )
+            shareLink { currentRoute | chat = Just { sessionId = sessionId, mTurnId = Nothing } }
         )
-        |> Flow.seq (addToast True "Share link copied to clipboard")
 
 
 agentSessionLoaded : String -> Model.AgentState -> Bool
@@ -3740,19 +3742,53 @@ toggleStatusBar =
     Flow.over statusBarOpen not
 
 
+stepOutputRoute : Model -> Int -> Maybe Route
+stepOutputRoute model stepId =
+    let
+        containing =
+            projectsContainingEntity stepId
+
+        openProjectId =
+            try currentProjectId model
+    in
+    try (containing << where_ (.id >> (==) openProjectId) << recordId << just) model
+        |> Maybe.orElse (try (containing << recordId << just) model)
+        |> Maybe.map
+            (\projectId ->
+                Route.fromPage
+                    (Route.Project
+                        { projectId = projectId
+                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                        , mCommit = Nothing
+                        , mCompare = Nothing
+                        }
+                    )
+            )
+
+
+knownProjectRoute : Model -> Int -> Maybe Route
+knownProjectRoute model projectId =
+    if has (projects << records << success << by .id (Just projectId)) model then
+        Just
+            (Route.fromPage
+                (Route.Project
+                    { projectId = projectId, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing }
+                )
+            )
+
+    else
+        Nothing
+
+
 openRunningStep : Int -> Flow Model ()
 openRunningStep stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    pickedProjectId =
-                        try (projectsContainingEntity stepId << recordId << just) model
-                in
-                pickedProjectId
+                stepOutputRoute model stepId
                     |> Maybe.unwrap (Flow.pure ())
-                        (\pId ->
+                        (\route ->
                             Flow.setAll statusBarOpen False
-                                |> Flow.seq (goToRoute (Route.fromPage (Route.Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = Nothing, mCompare = Nothing })))
+                                |> Flow.seq (goToRoute route)
                         )
             )

@@ -2,6 +2,7 @@ module Components.AgentPanel exposing (view)
 
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
+import Components.AgentMentions as AgentMentions
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
@@ -10,7 +11,6 @@ import Html.Events as Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Keyboard
-import Markdown
 import Model.Core as Model exposing (Model)
 import Route
 import View.Icons
@@ -19,11 +19,15 @@ import View.Lib exposing (boolText, viewLoading)
 
 view : Model -> Html (Flow Model ())
 view model =
-    viewPanel (Model.getAgent model)
+    let
+        resolveMention =
+            AgentMentions.mentionTarget model
+    in
+    viewPanel resolveMention (Model.getAgent model)
 
 
-viewPanel : Model.AgentState -> Html (Flow Model ())
-viewPanel agent =
+viewPanel : AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
+viewPanel resolveMention agent =
     Html.div
         [ classList
             [ ( "agent-panel", True )
@@ -36,7 +40,7 @@ viewPanel agent =
                 [ ( Keyboard.escape, Decode.succeed Actions.exitAgentFocusMode ) ]
         ]
         [ viewHeader agent
-        , viewSessionBody agent
+        , viewSessionBody resolveMention agent
         ]
 
 
@@ -126,8 +130,8 @@ viewRowAction busy blocked label iconName action =
         ]
 
 
-viewSessionBody : Model.AgentState -> Html (Flow Model ())
-viewSessionBody agent =
+viewSessionBody : AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
+viewSessionBody resolveMention agent =
     let
         loaded =
             Maybe.withDefault [] (ApiData.toMaybe agent.sessions)
@@ -151,7 +155,7 @@ viewSessionBody agent =
                     viewSessionsLoading
 
                 _ ->
-                    viewSessionDetail agent loaded
+                    viewSessionDetail resolveMention agent loaded
         ]
 
 
@@ -410,14 +414,14 @@ viewSessionRow agent sessionView =
         ]
 
 
-viewSessionDetail : Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
-viewSessionDetail agent loaded =
+viewSessionDetail : AgentMentions.Resolver -> Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
+viewSessionDetail resolveMention agent loaded =
     case ( isCreatingAgentSession agent, Model.selectedSessionView agent ) of
         ( True, _ ) ->
             viewCreatingSession
 
         ( False, Just sessionView ) ->
-            viewSession agent sessionView
+            viewSession resolveMention agent sessionView
 
         ( False, Nothing ) ->
             Html.div [ class "agent-panel__empty" ]
@@ -464,8 +468,8 @@ viewCreatingSession =
         ]
 
 
-viewSession : Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
-viewSession agent sessionView =
+viewSession : AgentMentions.Resolver -> Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
+viewSession resolveMention agent sessionView =
     let
         session =
             sessionView.session
@@ -484,7 +488,7 @@ viewSession agent sessionView =
     Html.div [ class "agent-panel__body" ]
         [ viewSessionTitle agent sessionView
         , viewError session
-        , viewChatTurns agent sessionView runnerActive detailBlocked
+        , viewChatTurns resolveMention agent sessionView runnerActive detailBlocked
         , if closedChat then
             viewClosedChat session.status
 
@@ -746,8 +750,8 @@ activeChangesetOperation agent sessionId =
             Nothing
 
 
-viewChatTurns : Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Html (Flow Model ())
-viewChatTurns agent sessionView runnerActive interactionsBlocked =
+viewChatTurns : AgentMentions.Resolver -> Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Html (Flow Model ())
+viewChatTurns resolveMention agent sessionView runnerActive interactionsBlocked =
     let
         pendingChangesetNodes =
             case pendingChangeset sessionView of
@@ -762,7 +766,7 @@ viewChatTurns agent sessionView runnerActive interactionsBlocked =
                     []
 
         content =
-            List.map (viewChatEntry interactionsBlocked sessionView.session.sessionId agent.highlightTurnId) agent.chatEntries ++ pendingChangesetNodes
+            List.map (viewChatEntry resolveMention interactionsBlocked sessionView.session.sessionId agent.highlightTurnId) agent.chatEntries ++ pendingChangesetNodes
     in
     if List.isEmpty content then
         Html.div [ class "agent-panel__chat agent-panel__chat--empty", id Actions.agentChatId ]
@@ -794,18 +798,18 @@ viewChatTurns agent sessionView runnerActive interactionsBlocked =
             (content ++ [ Html.div [ id Actions.agentChatEndId ] [] ])
 
 
-viewChatEntry : Bool -> String -> Maybe String -> Model.ChatEntry -> Html (Flow Model ())
-viewChatEntry interactionsBlocked sessionId highlightTurnId entry =
+viewChatEntry : AgentMentions.Resolver -> Bool -> String -> Maybe String -> Model.ChatEntry -> Html (Flow Model ())
+viewChatEntry resolveMention interactionsBlocked sessionId highlightTurnId entry =
     case entry of
         Model.ChatTurnEntry turn ->
-            viewChatTurn sessionId (highlightTurnId == Just turn.turnId) turn
+            viewChatTurn resolveMention sessionId (highlightTurnId == Just turn.turnId) turn
 
         Model.ChatChangesetEntry changeset ->
             viewChangesetBox interactionsBlocked Nothing changeset
 
 
-viewChatTurn : String -> Bool -> Model.ChatTurn -> Html msg
-viewChatTurn sessionId isHighlighted turn =
+viewChatTurn : AgentMentions.Resolver -> String -> Bool -> Model.ChatTurn -> Html (Flow Model ())
+viewChatTurn resolveMention sessionId isHighlighted turn =
     Html.div
         [ classList
             [ ( "agent-panel__chat-turn", True )
@@ -829,12 +833,12 @@ viewChatTurn sessionId isHighlighted turn =
             , Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ]
                 [ Html.text turn.prompt ]
             ]
-        , viewAgentMessage turn
+        , viewAgentMessage resolveMention turn
         ]
 
 
-viewAgentMessage : Model.ChatTurn -> Html msg
-viewAgentMessage turn =
+viewAgentMessage : AgentMentions.Resolver -> Model.ChatTurn -> Html (Flow Model ())
+viewAgentMessage resolveMention turn =
     let
         isEmptyAssistant =
             String.isEmpty (String.trim turn.assistant)
@@ -898,7 +902,7 @@ viewAgentMessage turn =
                     , ( "shimmer-text--low-contrast", turn.status == Model.ChatPending && isEmptyAssistant )
                     ]
                 ]
-                (Markdown.toHtml Nothing body)
+                (AgentMentions.toHtml resolveMention body)
             , Html.viewIf (turn.status == Model.ChatPending)
                 (Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "█" ])
             ]
