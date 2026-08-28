@@ -34,7 +34,18 @@ mentionTarget model entityId =
     case entityId of
         StepId stepId ->
             Actions.stepOutputRoute model stepId
-                |> Maybe.map (\route -> { route = route, runControl = Specs.stepRunControl model stepId })
+                |> Maybe.map
+                    (\route ->
+                        { route = route
+                        , runControl =
+                            case route.page of
+                                Route.Project params ->
+                                    Specs.stepRunControl model params.projectId stepId
+
+                                _ ->
+                                    Nothing
+                        }
+                    )
 
         ProjectId projectId ->
             Actions.knownProjectRoute model projectId
@@ -206,10 +217,10 @@ viewMentionActions : EntityId -> MentionTarget -> List (Html (Flow Model ()))
 viewMentionActions entityId target =
     case target.runControl of
         Just control ->
-            [ viewRunControl entityId control, viewShareAction entityId target.route ]
+            [ viewRunControl entityId control ]
 
         Nothing ->
-            [ viewShareAction entityId target.route ]
+            []
 
 
 viewRunControl : EntityId -> Specs.StepRunControl -> Html (Flow Model ())
@@ -224,11 +235,6 @@ viewRunControl entityId control =
                     ( "Stop", "stop", stop )
     in
     viewAction (tooltip ++ " " ++ entityIdText entityId) tooltip iconName action
-
-
-viewShareAction : EntityId -> Route -> Html (Flow Model ())
-viewShareAction entityId linkRoute =
-    viewAction ("Copy link to " ++ entityIdText entityId) "Copy link" "share" (Actions.shareLink linkRoute)
 
 
 viewAction : String -> String -> String -> Flow Model () -> Html (Flow Model ())

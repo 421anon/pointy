@@ -7,7 +7,7 @@ import Api.Decode as Decode
 import Api.Encode as Encode
 import Components.Select as Select
 import Dict
-import Extra.Accessors exposing (where_)
+import Extra.Accessors exposing (by, where_)
 import Flow
 import Model.Core as Model exposing (ProjectRecord, StepRecord, TableTag(..))
 import Model.Lenses as Lenses exposing (currentTableOf)
@@ -66,6 +66,21 @@ steps name entry =
         }
 
 
+stepsInProject : Int -> String -> StepConfigEntry -> TableSpec StepRecord
+stepsInProject projectId name entry =
+    case steps name entry of
+        TableSpec spec ->
+            TableSpec
+                { spec
+                    | lens =
+                        Lenses.projects
+                            << Lenses.records
+                            << ApiData.success
+                            << by .id (Just projectId)
+                            << Lenses.tableInProject name
+                }
+
+
 projects : Presets -> StepConfig -> TableSpec ProjectRecord
 projects presets stepConfig =
     TableSpec
@@ -107,36 +122,32 @@ type StepRunControl
     | Stoppable (Flow.Flow Model.Model ())
 
 
-stepRunControl : Model.Model -> Int -> Maybe StepRunControl
-stepRunControl model stepId =
-    try (Lenses.currentProject << ApiData.success << Lenses.projectStepRecords << where_ (.id >> (==) (Just stepId))) model
+stepRunControl : Model.Model -> Int -> Int -> Maybe StepRunControl
+stepRunControl model projectId stepId =
+    try (Lenses.projectStep (Just projectId) (Just stepId)) model
         |> Maybe.andThen
             (\step ->
                 try (Lenses.stepConfig << ApiData.success) model
                     |> Maybe.andThen (Dict.get step.type_)
-                    |> Maybe.andThen (runControl step)
+                    |> Maybe.andThen
+                        (\entry ->
+                            runControl (stepsInProject projectId step.type_ entry) step
+                        )
             )
 
 
-runControl : StepRecord -> StepConfigEntry -> Maybe StepRunControl
-runControl step entry =
-    if Shadow.hasRunControl entry.stepType then
-        let
-            spec =
-                steps step.type_ entry
-        in
-        step.id
-            |> Maybe.andThen
-                (\stepId ->
-                    if TableSpec.getRunning spec step then
+runControl : TableSpec StepRecord -> StepRecord -> Maybe StepRunControl
+runControl spec step =
+    step.id
+        |> Maybe.andThen
+            (\stepId ->
+                case TableSpec.getStatus spec step |> ApiData.toMaybe of
+                    Just Model.StatusSuccess ->
+                        Nothing
+
+                    Just Model.StatusRunning ->
                         Just (Stoppable (Actions.stopStep spec stepId))
 
-                    else if TableSpec.getRunnable spec step then
+                    _ ->
                         Just (Runnable (Actions.runStep spec stepId))
-
-                    else
-                        Nothing
-                )
-
-    else
-        Nothing
+            )

@@ -163,7 +163,7 @@ viewSection model sectionName entry steps =
             \r ->
                 let
                     runActions =
-                        case Specs.runControl r entry of
+                        case Specs.runControl spec r of
                             Just (Specs.Runnable run) ->
                                 [ viewRunButton "Run" run ]
 

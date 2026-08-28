@@ -117,19 +117,6 @@ type WithSrcFiles
     | WithoutSrcFiles
 
 
-hasRunControl : StepType -> Bool
-hasRunControl stepType =
-    case stepType of
-        FileUpload _ ->
-            False
-
-        Derivation _ _ ->
-            True
-
-        Download ->
-            True
-
-
 downloadArgs : Dict String ArgType
 downloadArgs =
     Dict.fromList
