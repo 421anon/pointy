@@ -1,13 +1,18 @@
 module Components.AgentMentions exposing (Resolver, mentionTarget, toHtml)
 
+import Accessors exposing (try)
 import Actions
+import Api.ApiData as ApiData
+import Dict
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, title, type_)
 import Html.Events as Events
 import Markdown.Block as Block
 import Markdown.Inline as Inline exposing (Inline)
-import Model.Core exposing (Model)
+import Model.Core as Model exposing (Model)
+import Model.Lenses as Lenses
+import Model.TableSpec as TableSpec
 import Regex exposing (Regex)
 import Route exposing (Route)
 import Specs
@@ -21,7 +26,7 @@ type EntityId
 
 type alias MentionTarget =
     { route : Route
-    , runControl : Maybe Specs.StepRunControl
+    , runAction : Maybe (Flow Model ())
     }
 
 
@@ -37,10 +42,10 @@ mentionTarget model entityId =
                 |> Maybe.map
                     (\route ->
                         { route = route
-                        , runControl =
+                        , runAction =
                             case route.page of
                                 Route.Project params ->
-                                    Specs.stepRunControl model params.projectId stepId
+                                    mentionRunAction model params.projectId stepId
 
                                 _ ->
                                     Nothing
@@ -49,7 +54,30 @@ mentionTarget model entityId =
 
         ProjectId projectId ->
             Actions.knownProjectRoute model projectId
-                |> Maybe.map (\route -> { route = route, runControl = Nothing })
+                |> Maybe.map (\route -> { route = route, runAction = Nothing })
+
+
+mentionRunAction : Model -> Int -> Int -> Maybe (Flow Model ())
+mentionRunAction model projectId stepId =
+    try (Lenses.projectStep (Just projectId) (Just stepId)) model
+        |> Maybe.andThen
+            (\step ->
+                try (Lenses.stepConfig << ApiData.success) model
+                    |> Maybe.andThen (Dict.get step.type_)
+                    |> Maybe.andThen
+                        (\entry ->
+                            let
+                                spec =
+                                    Specs.stepsInProject projectId step.type_ entry
+                            in
+                            case TableSpec.getStatus spec step |> ApiData.toMaybe of
+                                Just Model.StatusSuccess ->
+                                    Nothing
+
+                                _ ->
+                                    Just (Actions.runStep spec stepId)
+                        )
+            )
 
 
 toHtml : Resolver -> String -> List (Html (Flow Model ()))
@@ -245,26 +273,17 @@ viewMention entityId label target =
 
 viewMentionActions : EntityId -> MentionTarget -> List (Html (Flow Model ()))
 viewMentionActions entityId target =
-    case target.runControl of
-        Just control ->
-            [ viewRunControl entityId control ]
+    case target.runAction of
+        Just runAction ->
+            [ viewRunAction entityId runAction ]
 
         Nothing ->
             []
 
 
-viewRunControl : EntityId -> Specs.StepRunControl -> Html (Flow Model ())
-viewRunControl entityId control =
-    let
-        ( tooltip, iconName, action ) =
-            case control of
-                Specs.Runnable run ->
-                    ( "Run", "play_arrow", run )
-
-                Specs.Stoppable stop ->
-                    ( "Stop", "stop", stop )
-    in
-    viewAction (tooltip ++ " " ++ entityIdText entityId) tooltip iconName action
+viewRunAction : EntityId -> Flow Model () -> Html (Flow Model ())
+viewRunAction entityId runAction =
+    viewAction ("Run " ++ entityIdText entityId) "Run" "play_arrow" runAction
 
 
 viewAction : String -> String -> String -> Flow Model () -> Html (Flow Model ())
