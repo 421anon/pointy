@@ -4,6 +4,7 @@ import Accessors exposing (try)
 import Actions
 import Api.ApiData as ApiData
 import Dict
+import Extra.Accessors exposing (by)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, title, type_)
@@ -24,37 +25,117 @@ type EntityId
     | ProjectId Int
 
 
-type alias MentionTarget =
+type alias ResolvedMention =
     { route : Route
     , runAction : Maybe (Flow Model ())
+    , label : String
+    , suffixText : String
     }
 
 
 type alias Resolver =
-    EntityId -> Maybe MentionTarget
+    EntityId -> Bool -> List String -> Maybe ResolvedMention
 
 
-mentionTarget : Model -> EntityId -> Maybe MentionTarget
-mentionTarget model entityId =
+mentionTarget : Model -> EntityId -> Bool -> List String -> Maybe ResolvedMention
+mentionTarget model entityId fixed candidates =
     case entityId of
         StepId stepId ->
             Actions.stepOutputRoute model stepId
-                |> Maybe.map
+                |> Maybe.andThen
                     (\route ->
-                        { route = route
-                        , runAction =
-                            case route.page of
-                                Route.Project params ->
-                                    mentionRunAction model params.projectId stepId
+                        case route.page of
+                            Route.Project params ->
+                                let
+                                    mName =
+                                        try (Lenses.projectStep (Just params.projectId) (Just stepId)) model
+                                            |> Maybe.map .name
 
-                                _ ->
-                                    Nothing
-                        }
+                                    ( label, suffixText ) =
+                                        resolveLabel fixed mName candidates
+                                in
+                                Just
+                                    { route = route
+                                    , runAction = mentionRunAction model params.projectId stepId
+                                    , label = label
+                                    , suffixText = suffixText
+                                    }
+
+                            _ ->
+                                Just
+                                    { route = route
+                                    , runAction = Nothing
+                                    , label = ""
+                                    , suffixText = ""
+                                    }
                     )
 
         ProjectId projectId ->
             Actions.knownProjectRoute model projectId
-                |> Maybe.map (\route -> { route = route, runAction = Nothing })
+                |> Maybe.map
+                    (\route ->
+                        let
+                            mName =
+                                try (Lenses.projects << Lenses.records << ApiData.success << by .id (Just projectId)) model
+                                    |> Maybe.map .name
+
+                            ( label, suffixText ) =
+                                resolveLabel fixed mName candidates
+                        in
+                        { route = route
+                        , runAction = Nothing
+                        , label = label
+                        , suffixText = suffixText
+                        }
+                    )
+
+
+resolveLabel : Bool -> Maybe String -> List String -> ( String, String )
+resolveLabel fixed mName candidates =
+    if fixed then
+        ( String.join " " candidates, "" )
+
+    else
+        case ( mName, candidates ) of
+            ( Just name, first :: _ ) ->
+                let
+                    used =
+                        namePrefixLength (String.words name) candidates
+                in
+                if used > 0 then
+                    ( String.join " " (List.take used candidates), suffixFrom (List.drop used candidates) )
+
+                else
+                    ( first, suffixFrom (List.drop 1 candidates) )
+
+            ( _, first :: _ ) ->
+                ( first, suffixFrom (List.drop 1 candidates) )
+
+            ( _, [] ) ->
+                ( "", "" )
+
+
+suffixFrom : List String -> String
+suffixFrom words =
+    if List.isEmpty words then
+        ""
+
+    else
+        " " ++ String.join " " words
+
+
+namePrefixLength : List String -> List String -> Int
+namePrefixLength nameTokens candidates =
+    case ( List.map String.toLower nameTokens, List.map String.toLower candidates ) of
+        ( token :: restName, candidate :: restCandidates ) ->
+            if token == candidate then
+                1 + namePrefixLength restName restCandidates
+
+            else
+                0
+
+        _ ->
+            0
 
 
 mentionRunAction : Model -> Int -> Int -> Maybe (Flow Model ())
@@ -85,25 +166,180 @@ toHtml resolve body =
     Block.parse Nothing body
         |> List.concatMap (Block.defaultHtml Nothing (Just (inlineToHtml resolve)))
 
-mentionRegex : Regex
-mentionRegex =
+
+nameToken : String
+nameToken =
+    "[^\\s\",.;:!?()\\[\\]{}\\u2014\\u2013-]+"
+
+
+wholeQuotedRegex : Regex
+wholeQuotedRegex =
+    fromRegex ("\"@\\[(step|project):([0-9]+)\\]\\s+([^\"]+)\"")
+
+
+structuredRegex : Regex
+structuredRegex =
+    fromRegex ("@\\[(step|project):([0-9]+)\\]\\s*(\"[^\"]+\"|" ++ nameToken ++ "(?:\\s+" ++ nameToken ++ "){0,4})")
+
+
+legacyRegex : Regex
+legacyRegex =
+    fromRegex ("\\b(step|project)\\s+([0-9]+)\\b")
+
+
+fromRegex : String -> Regex
+fromRegex pattern =
     Maybe.withDefault Regex.never
-        (Regex.fromStringWith
-            { caseInsensitive = True, multiline = False }
-            "\"@\\[(step|project):([0-9]+)\\]\\s+([^\"]+)\"|@\\[(step|project):([0-9]+)\\]\\s*(\"[^\"]+\"|[^\\s\",.;:!?()\\[\\]{}]+)|\\b(step|project)\\s+([0-9]+)\\b"
-        )
+        (Regex.fromStringWith { caseInsensitive = True, multiline = False } pattern)
 
 
-
-type alias MentionDetails =
-    { label : String
+type alias ParsedMention =
+    { candidates : List String
+    , fixedLabel : Bool
     , entityId : EntityId
     }
 
 
+toEntityId : String -> Int -> EntityId
+toEntityId keyword id_ =
+    if String.toLower keyword == "step" then
+        StepId id_
+
+    else
+        ProjectId id_
+
+
+unquote : String -> String
+unquote label =
+    if String.startsWith "\"" label && String.endsWith "\"" label && String.length label >= 2 then
+        String.slice 1 -1 label
+
+    else
+        label
+
+
+parseWholeQuoted : Regex.Match -> Maybe ParsedMention
+parseWholeQuoted match =
+    decodeCommon match
+        (\keyword digits label ->
+            { candidates = String.words label
+            , fixedLabel = False
+            , entityId = toEntityId keyword digits
+            }
+        )
+
+
+parseStructured : Regex.Match -> Maybe ParsedMention
+parseStructured match =
+    decodeCommon match
+        (\keyword digits label ->
+            { candidates = String.words (unquote label)
+            , fixedLabel = False
+            , entityId = toEntityId keyword digits
+            }
+        )
+
+
+decodeCommon : Regex.Match -> (String -> Int -> String -> ParsedMention) -> Maybe ParsedMention
+decodeCommon match build =
+    case match.submatches of
+        [ Just keyword, Just digits, Just label ] ->
+            String.toInt digits
+                |> Maybe.map (\id_ -> build keyword id_ label)
+
+        _ ->
+            Nothing
+
+
+parseLegacy : Regex.Match -> Maybe ParsedMention
+parseLegacy match =
+    case match.submatches of
+        [ Just keyword, Just digits ] ->
+            String.toInt digits
+                |> Maybe.map
+                    (\id_ ->
+                        { candidates = String.words match.match
+                        , fixedLabel = True
+                        , entityId = toEntityId keyword id_
+                        }
+                    )
+
+        _ ->
+            Nothing
+
+
+type alias MentionSpan =
+    { index : Int
+    , end : Int
+    , rawText : String
+    , parsed : ParsedMention
+    }
+
+
+mentionSpans : String -> List MentionSpan
+mentionSpans text =
+    List.sortBy .index
+        (spansOf parseWholeQuoted wholeQuotedRegex text
+            ++ spansOf parseStructured structuredRegex text
+            ++ spansOf parseLegacy legacyRegex text
+        )
+
+
+spansOf : (Regex.Match -> Maybe ParsedMention) -> Regex -> String -> List MentionSpan
+spansOf parseFor regex text =
+    List.filterMap (toSpan parseFor) (Regex.find regex text)
+
+
+toSpan : (Regex.Match -> Maybe ParsedMention) -> Regex.Match -> Maybe MentionSpan
+toSpan parseFor match =
+    parseFor match
+        |> Maybe.map
+            (\parsed ->
+                { index = match.index
+                , end = match.index + String.length match.match
+                , rawText = match.match
+                , parsed = parsed
+                }
+            )
+
+
 type Segment
     = Plain String
-    | Mention { rawText : String, label : String, entityId : EntityId }
+    | Mention { rawText : String, candidates : List String, fixedLabel : Bool, entityId : EntityId }
+
+
+toSegments : String -> List Segment
+toSegments text =
+    collectSpans text 0 (mentionSpans text) []
+        |> List.reverse
+
+
+collectSpans : String -> Int -> List MentionSpan -> List Segment -> List Segment
+collectSpans text cursor spans segments =
+    case spans of
+        [] ->
+            consPlain (String.dropLeft cursor text) segments
+
+        span :: rest ->
+            if span.index < cursor then
+                collectSpans text cursor rest segments
+
+            else
+                collectSpans text
+                    span.end
+                    rest
+                    (Mention { rawText = span.rawText, candidates = span.parsed.candidates, fixedLabel = span.parsed.fixedLabel, entityId = span.parsed.entityId }
+                        :: consPlain (String.slice cursor span.index text) segments
+                    )
+
+
+consPlain : String -> List Segment -> List Segment
+consPlain text segments =
+    if String.isEmpty text then
+        segments
+
+    else
+        Plain text :: segments
 
 
 isMention : Segment -> Bool
@@ -114,84 +350,6 @@ isMention segment =
 
         Plain _ ->
             False
-
-
-
-mentionFromMatch : Regex.Match -> Maybe MentionDetails
-mentionFromMatch match =
-    let
-        unquote label =
-            if String.startsWith "\"" label && String.endsWith "\"" label && String.length label >= 2 then
-                String.slice 1 -1 label
-
-            else
-                label
-
-        fromParts keyword digits label =
-            String.toInt digits
-                |> Maybe.map
-                    (\id_ ->
-                        { label = unquote label
-                        , entityId =
-                            if String.toLower keyword == "step" then
-                                StepId id_
-
-                            else
-                                ProjectId id_
-                        }
-                    )
-    in
-    case match.submatches of
-        [ Just keyword, Just digits, Just label, _, _, _, _, _ ] ->
-            fromParts keyword digits label
-
-        [ _, _, _, Just keyword, Just digits, Just label, _, _ ] ->
-            fromParts keyword digits label
-
-        [ _, _, _, _, _, _, Just keyword, Just digits ] ->
-            fromParts keyword digits match.match
-
-        _ ->
-            Nothing
-
-
-toSegments : String -> List Segment
-toSegments text =
-    collectSegments text 0 (Regex.find mentionRegex text) []
-        |> List.reverse
-
-
-collectSegments : String -> Int -> List Regex.Match -> List Segment -> List Segment
-collectSegments text cursor matches segments =
-    case matches of
-        [] ->
-            consPlain (String.dropLeft cursor text) segments
-
-        match :: rest ->
-            let
-                end =
-                    match.index + String.length match.match
-            in
-            case mentionFromMatch match of
-                Nothing ->
-                    collectSegments text end rest (consPlain (String.slice cursor end text) segments)
-
-                Just details ->
-                    collectSegments text
-                        end
-                        rest
-                        (Mention { rawText = match.match, label = details.label, entityId = details.entityId }
-                            :: consPlain (String.slice cursor match.index text) segments
-                        )
-
-
-consPlain : String -> List Segment -> List Segment
-consPlain text segments =
-    if String.isEmpty text then
-        segments
-
-    else
-        Plain text :: segments
 
 
 inlineToHtml : Resolver -> Inline i -> Html (Flow Model ())
@@ -229,18 +387,30 @@ viewSegment resolve segment =
         Plain text ->
             Html.text text
 
-        Mention { rawText, label, entityId } ->
-            case resolve entityId of
+        Mention { rawText, candidates, fixedLabel, entityId } ->
+            case resolve entityId fixedLabel candidates of
                 Nothing ->
                     Html.text rawText
 
                 Just target ->
-                    viewMention entityId label target
+                    Html.span []
+                        (viewMention entityId target
+                            :: suffixNode target.suffixText
+                        )
+
+
+suffixNode : String -> List (Html (Flow Model ()))
+suffixNode suffixText =
+    if String.isEmpty suffixText then
+        []
+
+    else
+        [ Html.text suffixText ]
 
 
 entityIdText : EntityId -> String
-entityIdText entityId =
-    case entityId of
+entityIdText entity =
+    case entity of
         StepId id_ ->
             "step " ++ String.fromInt id_
 
@@ -249,41 +419,41 @@ entityIdText entityId =
 
 
 mentionTitle : EntityId -> Route -> String
-mentionTitle entityId linkRoute =
-    case ( entityId, linkRoute.page ) of
+mentionTitle entity linkRoute =
+    case ( entity, linkRoute.page ) of
         ( StepId _, Route.Project params ) ->
-            "Open " ++ entityIdText entityId ++ " in project " ++ String.fromInt params.projectId
+            "Open " ++ entityIdText entity ++ " in project " ++ String.fromInt params.projectId
 
         _ ->
-            "Open " ++ entityIdText entityId
+            "Open " ++ entityIdText entity
 
 
-viewMention : EntityId -> String -> MentionTarget -> Html (Flow Model ())
-viewMention entityId label target =
+viewMention : EntityId -> ResolvedMention -> Html (Flow Model ())
+viewMention entity target =
     Html.span [ class "agent-panel__mention" ]
         (Html.a
             [ class "agent-panel__mention-link"
             , Route.href target.route
-            , title (mentionTitle entityId target.route)
+            , title (mentionTitle entity target.route)
             ]
-            [ Html.text label ]
-            :: viewMentionActions entityId target
+            [ Html.text target.label ]
+            :: viewMentionActions entity target
         )
 
 
-viewMentionActions : EntityId -> MentionTarget -> List (Html (Flow Model ()))
-viewMentionActions entityId target =
+viewMentionActions : EntityId -> ResolvedMention -> List (Html (Flow Model ()))
+viewMentionActions entity target =
     case target.runAction of
         Just runAction ->
-            [ viewRunAction entityId runAction ]
+            [ viewRunAction entity runAction ]
 
         Nothing ->
             []
 
 
 viewRunAction : EntityId -> Flow Model () -> Html (Flow Model ())
-viewRunAction entityId runAction =
-    viewAction ("Run " ++ entityIdText entityId) "Run" "play_arrow" runAction
+viewRunAction entity runAction =
+    viewAction ("Run " ++ entityIdText entity) "Run" "play_arrow" runAction
 
 
 viewAction : String -> String -> String -> Flow Model () -> Html (Flow Model ())
