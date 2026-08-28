@@ -34,7 +34,18 @@ mentionTarget model entityId =
     case entityId of
         StepId stepId ->
             Actions.stepOutputRoute model stepId
-                |> Maybe.map (\route -> { route = route, runControl = Specs.stepRunControl model stepId })
+                |> Maybe.map
+                    (\route ->
+                        { route = route
+                        , runControl =
+                            case route.page of
+                                Route.Project params ->
+                                    Specs.stepRunControl model params.projectId stepId
+
+                                _ ->
+                                    Nothing
+                        }
+                    )
 
         ProjectId projectId ->
             Actions.knownProjectRoute model projectId
