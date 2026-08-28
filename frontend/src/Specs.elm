@@ -120,23 +120,20 @@ stepRunControl model stepId =
 
 runControl : StepRecord -> StepConfigEntry -> Maybe StepRunControl
 runControl step entry =
-    if Shadow.hasRunControl entry.stepType then
-        let
-            spec =
-                steps step.type_ entry
-        in
-        step.id
-            |> Maybe.andThen
-                (\stepId ->
-                    if TableSpec.getRunning spec step then
+    let
+        spec =
+            steps step.type_ entry
+    in
+    step.id
+        |> Maybe.andThen
+            (\stepId ->
+                case TableSpec.getStatus spec step |> ApiData.toMaybe of
+                    Just Model.StatusSuccess ->
+                        Nothing
+
+                    Just Model.StatusRunning ->
                         Just (Stoppable (Actions.stopStep spec stepId))
 
-                    else if TableSpec.getRunnable spec step then
+                    _ ->
                         Just (Runnable (Actions.runStep spec stepId))
-
-                    else
-                        Nothing
-                )
-
-    else
-        Nothing
+            )
