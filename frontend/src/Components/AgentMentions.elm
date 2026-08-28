@@ -57,16 +57,25 @@ toHtml resolve body =
     Block.parse Nothing body
         |> List.concatMap (Block.defaultHtml Nothing (Just (inlineToHtml resolve)))
 
-
 mentionRegex : Regex
 mentionRegex =
     Maybe.withDefault Regex.never
-        (Regex.fromStringWith { caseInsensitive = True, multiline = False } "\\b(step|project)\\s+([0-9]+)\\b")
+        (Regex.fromStringWith
+            { caseInsensitive = True, multiline = False }
+            "\"@\\[(step|project):([0-9]+)\\]\\s+([^\"]+)\"|@\\[(step|project):([0-9]+)\\]\\s*(\"[^\"]+\"|[^\\s\",.;:!?()\\[\\]{}]+)|\\b(step|project)\\s+([0-9]+)\\b"
+        )
+
+
+
+type alias MentionDetails =
+    { label : String
+    , entityId : EntityId
+    }
 
 
 type Segment
     = Plain String
-    | Mention { rawText : String, entityId : EntityId }
+    | Mention { rawText : String, label : String, entityId : EntityId }
 
 
 isMention : Segment -> Bool
@@ -79,19 +88,40 @@ isMention segment =
             False
 
 
-entityIdFromMatch : Regex.Match -> Maybe EntityId
-entityIdFromMatch match =
-    case match.submatches of
-        [ Just keyword, Just digits ] ->
+
+mentionFromMatch : Regex.Match -> Maybe MentionDetails
+mentionFromMatch match =
+    let
+        unquote label =
+            if String.startsWith "\"" label && String.endsWith "\"" label && String.length label >= 2 then
+                String.slice 1 -1 label
+
+            else
+                label
+
+        fromParts keyword digits label =
             String.toInt digits
                 |> Maybe.map
                     (\id_ ->
-                        if String.toLower keyword == "step" then
-                            StepId id_
+                        { label = unquote label
+                        , entityId =
+                            if String.toLower keyword == "step" then
+                                StepId id_
 
-                        else
-                            ProjectId id_
+                            else
+                                ProjectId id_
+                        }
                     )
+    in
+    case match.submatches of
+        [ Just keyword, Just digits, Just label, _, _, _, _, _ ] ->
+            fromParts keyword digits label
+
+        [ _, _, _, Just keyword, Just digits, Just label, _, _ ] ->
+            fromParts keyword digits label
+
+        [ _, _, _, _, _, _, Just keyword, Just digits ] ->
+            fromParts keyword digits match.match
 
         _ ->
             Nothing
@@ -114,15 +144,15 @@ collectSegments text cursor matches segments =
                 end =
                     match.index + String.length match.match
             in
-            case entityIdFromMatch match of
+            case mentionFromMatch match of
                 Nothing ->
                     collectSegments text end rest (consPlain (String.slice cursor end text) segments)
 
-                Just entityId ->
+                Just details ->
                     collectSegments text
                         end
                         rest
-                        (Mention { rawText = match.match, entityId = entityId }
+                        (Mention { rawText = match.match, label = details.label, entityId = details.entityId }
                             :: consPlain (String.slice cursor match.index text) segments
                         )
 
@@ -171,13 +201,13 @@ viewSegment resolve segment =
         Plain text ->
             Html.text text
 
-        Mention { rawText, entityId } ->
+        Mention { rawText, label, entityId } ->
             case resolve entityId of
                 Nothing ->
                     Html.text rawText
 
                 Just target ->
-                    viewMention entityId rawText target
+                    viewMention entityId label target
 
 
 entityIdText : EntityId -> String
@@ -201,14 +231,14 @@ mentionTitle entityId linkRoute =
 
 
 viewMention : EntityId -> String -> MentionTarget -> Html (Flow Model ())
-viewMention entityId rawText target =
+viewMention entityId label target =
     Html.span [ class "agent-panel__mention" ]
         (Html.a
             [ class "agent-panel__mention-link"
             , Route.href target.route
             , title (mentionTitle entityId target.route)
             ]
-            [ Html.text rawText ]
+            [ Html.text label ]
             :: viewMentionActions entityId target
         )
 

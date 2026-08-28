@@ -148,6 +148,13 @@ runControl spec step =
                     Just Model.StatusRunning ->
                         Just (Stoppable (Actions.stopStep spec stepId))
 
-                    _ ->
+                    Just (Model.StatusFailure _) ->
                         Just (Runnable (Actions.runStep spec stepId))
+
+                    Just Model.StatusNotStarted ->
+                        Just (Runnable (Actions.runStep spec stepId))
+
+                    Nothing ->
+                        Just (Runnable (Actions.runStep spec stepId))
+
             )
