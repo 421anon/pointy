@@ -1,6 +1,6 @@
 module Specs exposing (..)
 
-import Accessors exposing (has, snd, try)
+import Accessors exposing (has, snd)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Api.Decode as Decode
@@ -115,39 +115,3 @@ projects presets stepConfig =
         , upsertRecord = Actions.upsertProject
         , cloneRecord = \_ _ -> Flow.none
         }
-
-
-type StepRunControl
-    = Runnable (Flow.Flow Model.Model ())
-    | Stoppable (Flow.Flow Model.Model ())
-
-
-stepRunControl : Model.Model -> Int -> Int -> Maybe StepRunControl
-stepRunControl model projectId stepId =
-    try (Lenses.projectStep (Just projectId) (Just stepId)) model
-        |> Maybe.andThen
-            (\step ->
-                try (Lenses.stepConfig << ApiData.success) model
-                    |> Maybe.andThen (Dict.get step.type_)
-                    |> Maybe.andThen
-                        (\entry ->
-                            runControl (stepsInProject projectId step.type_ entry) step
-                        )
-            )
-
-
-runControl : TableSpec StepRecord -> StepRecord -> Maybe StepRunControl
-runControl spec step =
-    step.id
-        |> Maybe.andThen
-            (\stepId ->
-                case TableSpec.getStatus spec step |> ApiData.toMaybe of
-                    Just Model.StatusSuccess ->
-                        Nothing
-
-                    Just Model.StatusRunning ->
-                        Just (Stoppable (Actions.stopStep spec stepId))
-
-                    _ ->
-                        Just (Runnable (Actions.runStep spec stepId))
-            )

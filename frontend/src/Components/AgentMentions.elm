@@ -1,13 +1,18 @@
 module Components.AgentMentions exposing (Resolver, mentionTarget, toHtml)
 
+import Accessors exposing (try)
 import Actions
+import Api.ApiData as ApiData
+import Dict
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, title, type_)
 import Html.Events as Events
 import Markdown.Block as Block
 import Markdown.Inline as Inline exposing (Inline)
-import Model.Core exposing (Model)
+import Model.Core as Model exposing (Model)
+import Model.Lenses as Lenses
+import Model.TableSpec as TableSpec
 import Regex exposing (Regex)
 import Route exposing (Route)
 import Specs
@@ -21,7 +26,7 @@ type EntityId
 
 type alias MentionTarget =
     { route : Route
-    , runControl : Maybe Specs.StepRunControl
+    , runAction : Maybe (Flow Model ())
     }
 
 
@@ -37,10 +42,10 @@ mentionTarget model entityId =
                 |> Maybe.map
                     (\route ->
                         { route = route
-                        , runControl =
+                        , runAction =
                             case route.page of
                                 Route.Project params ->
-                                    Specs.stepRunControl model params.projectId stepId
+                                    mentionRunAction model params.projectId stepId
 
                                 _ ->
                                     Nothing
@@ -49,7 +54,30 @@ mentionTarget model entityId =
 
         ProjectId projectId ->
             Actions.knownProjectRoute model projectId
-                |> Maybe.map (\route -> { route = route, runControl = Nothing })
+                |> Maybe.map (\route -> { route = route, runAction = Nothing })
+
+
+mentionRunAction : Model -> Int -> Int -> Maybe (Flow Model ())
+mentionRunAction model projectId stepId =
+    try (Lenses.projectStep (Just projectId) (Just stepId)) model
+        |> Maybe.andThen
+            (\step ->
+                try (Lenses.stepConfig << ApiData.success) model
+                    |> Maybe.andThen (Dict.get step.type_)
+                    |> Maybe.andThen
+                        (\entry ->
+                            let
+                                spec =
+                                    Specs.stepsInProject projectId step.type_ entry
+                            in
+                            case TableSpec.getStatus spec step |> ApiData.toMaybe of
+                                Just Model.StatusSuccess ->
+                                    Nothing
+
+                                _ ->
+                                    Just (Actions.runStep spec stepId)
+                        )
+            )
 
 
 toHtml : Resolver -> String -> List (Html (Flow Model ()))
@@ -57,16 +85,25 @@ toHtml resolve body =
     Block.parse Nothing body
         |> List.concatMap (Block.defaultHtml Nothing (Just (inlineToHtml resolve)))
 
-
 mentionRegex : Regex
 mentionRegex =
     Maybe.withDefault Regex.never
-        (Regex.fromStringWith { caseInsensitive = True, multiline = False } "\\b(step|project)\\s+([0-9]+)\\b")
+        (Regex.fromStringWith
+            { caseInsensitive = True, multiline = False }
+            "\"@\\[(step|project):([0-9]+)\\]\\s+([^\"]+)\"|@\\[(step|project):([0-9]+)\\]\\s*(\"[^\"]+\"|[^\\s\",.;:!?()\\[\\]{}]+)|\\b(step|project)\\s+([0-9]+)\\b"
+        )
+
+
+
+type alias MentionDetails =
+    { label : String
+    , entityId : EntityId
+    }
 
 
 type Segment
     = Plain String
-    | Mention { rawText : String, entityId : EntityId }
+    | Mention { rawText : String, label : String, entityId : EntityId }
 
 
 isMention : Segment -> Bool
@@ -79,19 +116,40 @@ isMention segment =
             False
 
 
-entityIdFromMatch : Regex.Match -> Maybe EntityId
-entityIdFromMatch match =
-    case match.submatches of
-        [ Just keyword, Just digits ] ->
+
+mentionFromMatch : Regex.Match -> Maybe MentionDetails
+mentionFromMatch match =
+    let
+        unquote label =
+            if String.startsWith "\"" label && String.endsWith "\"" label && String.length label >= 2 then
+                String.slice 1 -1 label
+
+            else
+                label
+
+        fromParts keyword digits label =
             String.toInt digits
                 |> Maybe.map
                     (\id_ ->
-                        if String.toLower keyword == "step" then
-                            StepId id_
+                        { label = unquote label
+                        , entityId =
+                            if String.toLower keyword == "step" then
+                                StepId id_
 
-                        else
-                            ProjectId id_
+                            else
+                                ProjectId id_
+                        }
                     )
+    in
+    case match.submatches of
+        [ Just keyword, Just digits, Just label, _, _, _, _, _ ] ->
+            fromParts keyword digits label
+
+        [ _, _, _, Just keyword, Just digits, Just label, _, _ ] ->
+            fromParts keyword digits label
+
+        [ _, _, _, _, _, _, Just keyword, Just digits ] ->
+            fromParts keyword digits match.match
 
         _ ->
             Nothing
@@ -114,15 +172,15 @@ collectSegments text cursor matches segments =
                 end =
                     match.index + String.length match.match
             in
-            case entityIdFromMatch match of
+            case mentionFromMatch match of
                 Nothing ->
                     collectSegments text end rest (consPlain (String.slice cursor end text) segments)
 
-                Just entityId ->
+                Just details ->
                     collectSegments text
                         end
                         rest
-                        (Mention { rawText = match.match, entityId = entityId }
+                        (Mention { rawText = match.match, label = details.label, entityId = details.entityId }
                             :: consPlain (String.slice cursor match.index text) segments
                         )
 
@@ -171,13 +229,13 @@ viewSegment resolve segment =
         Plain text ->
             Html.text text
 
-        Mention { rawText, entityId } ->
+        Mention { rawText, label, entityId } ->
             case resolve entityId of
                 Nothing ->
                     Html.text rawText
 
                 Just target ->
-                    viewMention entityId rawText target
+                    viewMention entityId label target
 
 
 entityIdText : EntityId -> String
@@ -201,40 +259,31 @@ mentionTitle entityId linkRoute =
 
 
 viewMention : EntityId -> String -> MentionTarget -> Html (Flow Model ())
-viewMention entityId rawText target =
+viewMention entityId label target =
     Html.span [ class "agent-panel__mention" ]
         (Html.a
             [ class "agent-panel__mention-link"
             , Route.href target.route
             , title (mentionTitle entityId target.route)
             ]
-            [ Html.text rawText ]
+            [ Html.text label ]
             :: viewMentionActions entityId target
         )
 
 
 viewMentionActions : EntityId -> MentionTarget -> List (Html (Flow Model ()))
 viewMentionActions entityId target =
-    case target.runControl of
-        Just control ->
-            [ viewRunControl entityId control ]
+    case target.runAction of
+        Just runAction ->
+            [ viewRunAction entityId runAction ]
 
         Nothing ->
             []
 
 
-viewRunControl : EntityId -> Specs.StepRunControl -> Html (Flow Model ())
-viewRunControl entityId control =
-    let
-        ( tooltip, iconName, action ) =
-            case control of
-                Specs.Runnable run ->
-                    ( "Run", "play_arrow", run )
-
-                Specs.Stoppable stop ->
-                    ( "Stop", "stop", stop )
-    in
-    viewAction (tooltip ++ " " ++ entityIdText entityId) tooltip iconName action
+viewRunAction : EntityId -> Flow Model () -> Html (Flow Model ())
+viewRunAction entityId runAction =
+    viewAction ("Run " ++ entityIdText entityId) "Run" "play_arrow" runAction
 
 
 viewAction : String -> String -> String -> Flow Model () -> Html (Flow Model ())
