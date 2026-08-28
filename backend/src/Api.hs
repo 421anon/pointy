@@ -11,6 +11,7 @@ import qualified Data.ByteString as BS
 import Data.Text (Text)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
+import Handlers.FileIndex (FileIndexEntry)
 import Handlers.Projects (RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
@@ -73,6 +74,12 @@ type DeleteSrcFile =
         :> ReqId
         :> QueryParam' '[Required] "path" FilePath
         :> Delete '[JSON] NoContent
+
+type GetFileIndex =
+    "file-index"
+        :> Description "Returns the global index of filenames across all project steps."
+        :> QueryParam "commit" Text
+        :> Get '[JSON] [FileIndexEntry]
 
 type DeleteProject =
     "projects"
@@ -373,6 +380,7 @@ type API =
         :<|> UpdateSrcFile
         :<|> CreateSrcFile
         :<|> DeleteSrcFile
+        :<|> GetFileIndex
         :<|> GetProjects
         :<|> CreateProject
         :<|> UpdateProject

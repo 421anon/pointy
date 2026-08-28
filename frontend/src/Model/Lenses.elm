@@ -158,6 +158,11 @@ userRepoInfo =
     lens ".userRepoInfo" Model.getUserRepoInfo (\(Model m) userRepoInfo_ -> Model { m | userRepoInfo = userRepoInfo_ })
 
 
+fileIndex : Lens ls Model (ApiData (List Model.FileIndexEntry)) x y
+fileIndex =
+    lens ".fileIndex" Model.getFileIndex (\(Model m) fileIndex_ -> Model { m | fileIndex = fileIndex_ })
+
+
 stepLogs : Lens ls Model (Dict String (ApiData String)) x y
 stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })

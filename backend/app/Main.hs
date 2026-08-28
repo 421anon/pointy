@@ -29,6 +29,7 @@ import Handlers.Agent (
  )
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.CommitHash (getCommitHashHandler)
+import Handlers.FileIndex (fileIndexHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
@@ -68,6 +69,7 @@ server =
         :<|> saveSrcFileHandler
         :<|> createSrcFileHandler
         :<|> deleteSrcFileHandler
+        :<|> fileIndexHandler
         :<|> getProjectsHandler
         :<|> postProjectHandler
         :<|> patchProjectHandler
@@ -188,6 +190,13 @@ corsPolicy req = case pathInfo req of
                 , corsOrigins = Nothing
                 }
     ["presets"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["GET", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["file-index"] ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]

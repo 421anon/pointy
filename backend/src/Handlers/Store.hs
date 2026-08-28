@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
+module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset, resolveCommitHash) where
 
 import ApiTypes (DynamicJson (..))
 

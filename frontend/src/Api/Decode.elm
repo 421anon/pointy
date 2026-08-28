@@ -9,6 +9,7 @@ import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (optional, required)
 import Model.Core as Model exposing (DirectoryItem(..), FileView, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), initialTable)
 import Model.Shadow exposing (ArgType, Preset, Presets, StepArgType(..), StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), TStringDisplay(..), WithSrcFiles(..))
+import Route exposing (HighlightTarget(..))
 
 
 stepStatusEvent : Decoder StepStatusEvent
@@ -36,6 +37,32 @@ userRepoInfo =
     Decode.succeed Model.UserRepoInfo
         |> required "url" Decode.string
         |> required "branch" Decode.string
+
+
+fileIndexTarget : Decoder HighlightTarget
+fileIndexTarget =
+    Decode.string
+        |> Decode.andThen
+            (\str ->
+                case str of
+                    "output" ->
+                        Decode.succeed Output
+
+                    "source" ->
+                        Decode.succeed Source
+
+                    _ ->
+                        Decode.fail ("Unknown file-index target: " ++ str)
+            )
+
+
+fileIndexEntry : Decoder Model.FileIndexEntry
+fileIndexEntry =
+    Decode.succeed Model.FileIndexEntry
+        |> required "projectId" Decode.int
+        |> required "stepId" Decode.int
+        |> required "target" fileIndexTarget
+        |> required "path" (Decode.list Decode.string)
 
 
 snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status } }

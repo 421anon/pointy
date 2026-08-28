@@ -157,6 +157,14 @@ type alias UserRepoInfo =
     }
 
 
+type alias FileIndexEntry =
+    { projectId : Int
+    , stepId : Int
+    , target : Route.HighlightTarget
+    , path : List String
+    }
+
+
 type alias AgentPreparedApply =
     { targetHead : String
     , agentHead : String
@@ -410,6 +418,7 @@ type Model
         , presets : ApiData Presets
         , commitHash : ApiData String
         , userRepoInfo : ApiData UserRepoInfo
+        , fileIndex : ApiData (List FileIndexEntry)
         , uploadProgress : Dict Int UploadProgress
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
@@ -667,6 +676,11 @@ getUserRepoInfo (Model model) =
     model.userRepoInfo
 
 
+getFileIndex : Model -> ApiData (List FileIndexEntry)
+getFileIndex (Model model) =
+    model.fileIndex
+
+
 getStepLogs : Model -> Dict String (ApiData String)
 getStepLogs (Model model) =
     model.stepLogs
@@ -803,6 +817,7 @@ initialModel key route flags =
         , presets = NotAsked
         , commitHash = NotAsked
         , userRepoInfo = NotAsked
+        , fileIndex = NotAsked
         , stepLogs = Dict.empty
         , notices = Dict.empty
         , uploadProgress = Dict.empty

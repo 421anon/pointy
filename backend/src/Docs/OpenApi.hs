@@ -29,6 +29,7 @@ import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
+import Handlers.FileIndex (FileIndexEntry)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
@@ -135,6 +136,7 @@ instance ToSchema ByteOffset where
 
 instance ToSchema DirEntry
 instance ToSchema FileChunk
+instance ToSchema FileIndexEntry
 instance ToSchema UserRepoInfo
 instance ToSchema AutocompleteRequest
 instance ToSchema PreparedApply
