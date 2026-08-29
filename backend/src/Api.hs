@@ -11,7 +11,7 @@ import qualified Data.ByteString as BS
 import Data.Text (Text)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.Projects (RawJSON)
+import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
 import Handlers.Store (DirEntry, FileChunk)
@@ -296,6 +296,13 @@ type UpdateProject =
         :> ReqBody '[RawJSON] DynamicJson
         :> Patch '[JSON] NoContent
 
+type BatchUpdateProjects =
+    "projects"
+        :> "batch"
+        :> Description "Saves multiple project records in one request, committing them to the user repository as a single commit."
+        :> ReqBody '[JSON] [ProjectUpdate]
+        :> Post '[JSON] NoContent
+
 type StepStatusStream =
     "step-status-stream"
         :> Description "Streams snapshot and heartbeat SSE events for a project's steps. Emits status-error and closes when status evaluation fails."
@@ -376,6 +383,7 @@ type API =
         :<|> GetProjects
         :<|> CreateProject
         :<|> UpdateProject
+        :<|> BatchUpdateProjects
         :<|> DeleteProject
         :<|> AssignRecord
         :<|> BatchAssignRecords

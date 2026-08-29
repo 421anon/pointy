@@ -1,17 +1,19 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.Projects (getProjectsHandler, patchProjectHandler, postProjectHandler, deleteProjectHandler, jsonToNix, RawJSON) where
+module Handlers.Projects (getProjectsHandler, patchProjectHandler, batchUpdateProjectsHandler, postProjectHandler, deleteProjectHandler, jsonToNix, RawJSON, ProjectUpdate (..)) where
 
 import ApiTypes (DynamicJson (..))
+import Control.Monad (mapM_)
 import Control.Monad.Except (ExceptT (..), catchError, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-
-import Data.Aeson (Result (..), Value (..), eitherDecode, encode, fromJSON)
+import Data.Aeson (FromJSON (..), Options (..), Result (..), Value (..), defaultOptions, eitherDecode, encode, fromJSON, genericParseJSON)
+import GHC.Generics (Generic)
 import Data.Aeson.Key (toText)
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Fix (foldFix)
@@ -89,6 +91,28 @@ patchProjectHandler projectId (DynamicJson jsonBody) = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
         _ <- saveProject ctx (Just projectId) jsonBody
         commitAndPushChanges ctx $ "Update project " ++ show projectId
+    case result of
+        Right _ -> return NoContent
+        Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+
+-- | A single project record update within a batch request.
+data ProjectUpdate = ProjectUpdate
+    { projectUpdateId :: Int
+    , projectUpdateRecord :: Value
+    }
+    deriving (Generic, Show)
+
+instance FromJSON ProjectUpdate where
+    parseJSON = genericParseJSON $ defaultOptions { fieldLabelModifier = \label -> if label == "projectUpdateRecord" then "record" else "id" }
+
+batchUpdateProjectsHandler :: [ProjectUpdate] -> Handler NoContent
+batchUpdateProjectsHandler [] =
+    throwError $ err400{errBody = "Empty project update batch"}
+batchUpdateProjectsHandler updates = do
+    result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
+        mapM_ (\(ProjectUpdate projectId record) -> saveProject ctx (Just projectId) (encode record)) updates
+        let plural = if null (tail updates) then "project" else "projects"
+        commitAndPushChanges ctx $ "Update " ++ show (length updates) ++ " " ++ plural
     case result of
         Right _ -> return NoContent
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}

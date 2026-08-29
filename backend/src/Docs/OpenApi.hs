@@ -28,6 +28,7 @@ import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.Projects (ProjectUpdate)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
@@ -40,6 +41,22 @@ import Servant.Types.SourceT (SourceT)
 -- | Free-form JSON whose schema is defined in the user repository.
 instance ToSchema DynamicJson where
     declareNamedSchema _ = pure (NamedSchema (Just "DynamicJson") (mempty & example ?~ object []))
+
+instance ToSchema ProjectUpdate where
+    declareNamedSchema _ =
+        pure
+            ( NamedSchema
+                (Just "ProjectUpdate")
+                ( mempty
+                    & type_ ?~ OpenApiObject
+                    & required .~ ["id", "record"]
+                    & properties
+                        .~ fromList
+                            [ ("id", Inline (mempty & type_ ?~ OpenApiInteger))
+                            , ("record", Inline (mempty & type_ ?~ OpenApiObject))
+                            ]
+                )
+            )
 
 instance {-# OVERLAPPING #-} ToSchema (SourceT IO BS.ByteString) where
     declareNamedSchema _ =

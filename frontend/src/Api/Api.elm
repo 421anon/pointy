@@ -24,6 +24,7 @@ module Api.Api exposing
     , fetchUserRepoInfo
     , runStep
     , saveProject
+    , saveProjectsBatch
     , saveRecord
     , saveSrcFile
     , srcFileDownloadUrl
@@ -214,6 +215,17 @@ saveProject : Int -> ProjectRecord -> Flow s (Result Http.Error ())
 saveProject projectId project =
     request "PATCH" ("/backend/projects?id=" ++ String.fromInt projectId) (Http.jsonBody (Encode.projectRecord project))
 
+
+saveProjectsBatch : List ( Int, Json.Encode.Value ) -> Flow s (Result Http.Error ())
+saveProjectsBatch projects =
+    let
+        encodeItem ( id, record ) =
+            Json.Encode.object
+                [ ( "id", Json.Encode.int id )
+                , ( "record", record )
+                ]
+    in
+    request "POST" "/backend/projects/batch" (Http.jsonBody (Json.Encode.list encodeItem projects))
 
 uploadFiles : Int -> List File -> Flow s (Result Http.Error ())
 uploadFiles stepId files =

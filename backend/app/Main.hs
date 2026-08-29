@@ -31,7 +31,7 @@ import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
-import Handlers.Projects (deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
+import Handlers.Projects (batchUpdateProjectsHandler, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler)
@@ -71,6 +71,7 @@ server =
         :<|> getProjectsHandler
         :<|> postProjectHandler
         :<|> patchProjectHandler
+        :<|> batchUpdateProjectsHandler
         :<|> deleteProjectHandler
         :<|> assignRecordHandler
         :<|> batchAssignRecordsHandler

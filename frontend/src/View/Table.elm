@@ -364,10 +364,12 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 ]
                             ]
 
-                viewUnmovedRecord attrs mkTargetAttrs =
+                viewUnmovedRecord attrs mkDragAttrs mkDropAttrs =
                     let
                         itemId =
                             Maybe.unwrap (TableSpec.getName spec ++ "-new") String.fromInt record.id
+                        cmap =
+                            List.map (map (Actions.dndMsgToIO mProjectId spec))
 
                         actionsContainerClass =
                             "table-record-actions-container"
@@ -389,7 +391,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 record.lastModifiedAt
                     in
                     Html.div
-                        ([ class "table-record", id itemId ] ++ attrs)
+                        ([ class "table-record", id itemId ] ++ attrs ++ cmap (mkDropAttrs itemId))
                         [ Html.div
                             ([ class "table-record-header"
                              , classList
@@ -466,7 +468,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                     )
                                 , Html.div [] (alwaysVisibleRecordActions record)
                                 , Html.viewIf (not isReadOnly) <|
-                                    Html.div (class "table-record-drag-target" :: List.map (map (Actions.dndMsgToIO mProjectId spec)) (mkTargetAttrs itemId))
+                                    Html.div (class "table-record-drag-target" :: cmap (mkDragAttrs itemId))
                                         [ icon True "drag_indicator" ]
                                 , mtimeBadge
                                 ]
@@ -490,15 +492,15 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                 (case dndSystem.info table.dnd of
                     Just { dragIndex } ->
                         if dragIndex /= index then
-                            [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dropEvents index) ) ]
+                            [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (always []) (dndSystem.dropEvents index) ) ]
 
                         else
-                            [ ( "placeholder", viewUnmovedRecord [ class "zero-opacity" ] (always []) )
-                            , ( "ghost", viewUnmovedRecord (class "dnd-ghost" :: (List.map (map (always Flow.none)) <| dndSystem.ghostStyles table.dnd)) (always []) )
+                            [ ( "placeholder", viewUnmovedRecord [ class "zero-opacity" ] (always []) (always []) )
+                            , ( "ghost", viewUnmovedRecord (class "dnd-ghost" :: (List.map (map (always Flow.none)) <| dndSystem.ghostStyles table.dnd)) (always []) (always []) )
                             ]
 
                     Nothing ->
-                        [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dragEvents index) ) ]
+                        [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dragEvents index) (dndSystem.dropEvents index) ) ]
                 )
 
         viewContent =

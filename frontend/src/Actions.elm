@@ -2194,9 +2194,23 @@ updateSortKeys mProjectId tableSpec records_ =
                         changedRecords =
                             computeChangedSortRecords records_ allUpdatedRecords
                     in
-                    Flow.batchM (List.map (persistRecordChange Nothing tableSpec) changedRecords)
-                        |> Flow.seq refetchCommitHash
-                        |> Flow.return (Ok ())
+                    if getTag tableSpec == TagProjects then
+                        changedRecords
+                            |> List.filterMap (\record -> Maybe.map (\id -> ( id, TableSpec.getEncodeRecord tableSpec record )) record.id)
+                            |> (\updated ->
+                                    if List.isEmpty updated then
+                                        Flow.pure (Ok ())
+
+                                    else
+                                        callApi void (Api.saveProjectsBatch updated)
+                               )
+                            |> Flow.seq refetchCommitHash
+                            |> Flow.return (Ok ())
+
+                    else
+                        Flow.batchM (List.map (persistRecordChange Nothing tableSpec) changedRecords)
+                            |> Flow.seq refetchCommitHash
+                            |> Flow.return (Ok ())
             )
         |> Flow.return ()
 
