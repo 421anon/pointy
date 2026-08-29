@@ -3,6 +3,7 @@ module Components.AgentMentions exposing (Resolver, mentionTarget, toHtml)
 import Accessors exposing (try)
 import Actions
 import Api.ApiData as ApiData
+import Browser.Dom as Dom
 import Dict
 import Extra.Accessors exposing (by)
 import Flow exposing (Flow)
@@ -413,6 +414,13 @@ viewMention entity target =
             [ class "agent-panel__mention-link"
             , Route.href target.route
             , title (mentionTitle entity target.route)
+            , Events.onClick
+                (Flow.performTask Dom.getViewport
+                    |> Flow.andThen
+                        (\viewport ->
+                            Flow.when (viewport.viewport.width <= 900) Actions.toggleAgentPanel
+                        )
+                )
             ]
             [ Html.text target.label ]
             :: viewMentionActions entity target
