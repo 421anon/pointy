@@ -22,12 +22,29 @@ view model =
     let
         resolveMention =
             AgentMentions.mentionTarget model
+
+        mentionResolutionPending =
+            case ( Model.getStepConfig model, Model.getPresets model, (Model.getProjects model).records ) of
+                ( Error _, _, _ ) ->
+                    False
+
+                ( _, Error _, _ ) ->
+                    False
+
+                ( _, _, Error _ ) ->
+                    False
+
+                ( Success _, Success _, Success _ ) ->
+                    False
+
+                _ ->
+                    True
     in
-    viewPanel resolveMention (Model.getAgent model)
+    viewPanel mentionResolutionPending resolveMention (Model.getAgent model)
 
 
-viewPanel : AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
-viewPanel resolveMention agent =
+viewPanel : Bool -> AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
+viewPanel mentionResolutionPending resolveMention agent =
     Html.div
         [ classList
             [ ( "agent-panel", True )
@@ -40,7 +57,7 @@ viewPanel resolveMention agent =
                 [ ( Keyboard.escape, Decode.succeed Actions.exitAgentFocusMode ) ]
         ]
         [ viewHeader agent
-        , viewSessionBody resolveMention agent
+        , viewSessionBody mentionResolutionPending resolveMention agent
         ]
 
 
@@ -130,8 +147,8 @@ viewRowAction busy blocked label iconName action =
         ]
 
 
-viewSessionBody : AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
-viewSessionBody resolveMention agent =
+viewSessionBody : Bool -> AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
+viewSessionBody mentionResolutionPending resolveMention agent =
     let
         loaded =
             Maybe.withDefault [] (ApiData.toMaybe agent.sessions)
@@ -155,7 +172,7 @@ viewSessionBody resolveMention agent =
                     viewSessionsLoading
 
                 _ ->
-                    viewSessionDetail resolveMention agent loaded
+                    viewSessionDetail mentionResolutionPending resolveMention agent loaded
         ]
 
 
@@ -414,14 +431,18 @@ viewSessionRow agent sessionView =
         ]
 
 
-viewSessionDetail : AgentMentions.Resolver -> Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
-viewSessionDetail resolveMention agent loaded =
+viewSessionDetail : Bool -> AgentMentions.Resolver -> Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
+viewSessionDetail mentionResolutionPending resolveMention agent loaded =
     case ( isCreatingAgentSession agent, Model.selectedSessionView agent ) of
         ( True, _ ) ->
             viewCreatingSession
 
         ( False, Just sessionView ) ->
-            viewSession resolveMention agent sessionView
+            if mentionResolutionPending then
+                viewSessionsLoading
+
+            else
+                viewSession resolveMention agent sessionView
 
         ( False, Nothing ) ->
             Html.div [ class "agent-panel__empty" ]
