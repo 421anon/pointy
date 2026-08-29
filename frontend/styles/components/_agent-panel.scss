@@ -13,6 +13,7 @@
   min-width: 320px;
   max-width: calc(100vw - 2 * var(--spacing-sm) - var(--workspace-min-width));
   height: calc(100vh - var(--spacing-sm) - var(--spacing-5xl) - var(--spacing-sm));
+  height: calc(100dvh - var(--spacing-sm) - var(--spacing-5xl) - var(--spacing-sm));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -912,6 +913,7 @@
   .agent-panel {
     top: 0;
     height: calc(100vh - var(--spacing-5xl) - var(--spacing-sm));
+    height: calc(100dvh - var(--spacing-5xl) - var(--spacing-sm));
     border-inline: 0;
     border-radius: 0;
   }

@@ -683,7 +683,7 @@ viewPrompt runnerActive sendingPrompt stopping canCompose canSubmit =
             [ Html.textarea
                 [ class "agent-panel__prompt"
                 , id "agent-prompt"
-                , rows 3
+                , rows 1
                 , placeholder "Ask for a change..."
                 , disabled canCompose
                 , attribute "aria-label" "Agent prompt"
