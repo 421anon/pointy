@@ -31,7 +31,7 @@ import Agent.Session (
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, writeTVar)
 import Control.Exception (IOException, SomeException, finally, try)
@@ -43,7 +43,7 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -64,12 +64,13 @@ import System.Timeout (timeout)
 import UserRepo (userRepoPath, withUserRepoExclusive)
 
 {-# NOINLINE activeRunners #-}
-activeRunners :: TVar (Map.Map Text (Text, ProcessHandle))
+-- Nothing reserves an accepted turn before its process exists.
+activeRunners :: TVar (Map.Map Text (Text, Maybe ProcessHandle))
 activeRunners = unsafePerformIO $ newTVarIO Map.empty
 
-{-# NOINLINE stoppedTurns #-}
-stoppedTurns :: TVar (Set.Set Text)
-stoppedTurns = unsafePerformIO $ newTVarIO Set.empty
+{-# NOINLINE stopRequestedTurns #-}
+stopRequestedTurns :: TVar (Set.Set Text)
+stopRequestedTurns = unsafePerformIO $ newTVarIO Set.empty
 
 startAgentTurn :: Text -> Text -> ExceptT String IO AgentTurn
 startAgentTurn sid prompt = do
@@ -139,36 +140,55 @@ startAgentTurn sid prompt = do
                         <> T.pack (candidateWorktree pending)
                         <> " (the apply worktree is bound into your sandbox); the backend stages and commits your resolution automatically when this turn ends."
             Nothing -> return ()
+        atomically $ modifyTVar' activeRunners $ Map.insert sid (tid, Nothing)
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
     return turn
 
 stopAgentTurn :: Text -> ExceptT String IO AgentSessionView
 stopAgentTurn sid = do
-    mRunner <- liftIO $ atomically $ Map.lookup sid <$> readTVar activeRunners
+    mRunner <- liftIO $ atomically $ do
+        runners <- readTVar activeRunners
+        case Map.lookup sid runners of
+            Nothing -> return Nothing
+            runner@(Just (tid, _)) -> do
+                modifyTVar' stopRequestedTurns (Set.insert tid)
+                return runner
     case mRunner of
         Nothing -> return ()
-        Just (tid, ph) -> liftIO $ do
-            atomically $ modifyTVar' stoppedTurns (Set.insert tid)
-            cfg <- resolveConfigPath >>= loadConfig
-            logPath <- turnLogFilePath sid tid
-            appendLogLine (configAgent cfg) logPath "system" "Stopped by user"
-            void (try (terminateProcess ph) :: IO (Either SomeException ()))
-            terminated <- awaitRunnerExit sid 40
+        Just (tid, mProcess) -> liftIO $ do
+            forM_ mProcess $ \ph ->
+                void (try (terminateProcess ph) :: IO (Either SomeException ()))
+            terminated <- awaitRunnerCleanup sid 4
             unless terminated $ do
-                appendLogLine (configAgent cfg) logPath "system" "Runner ignored termination; killing it"
-                void (try (killRunner ph) :: IO (Either SomeException ()))
-                void $ awaitRunnerExit sid 60
+                latestRunner <- atomically $ Map.lookup sid <$> readTVar activeRunners
+                let latestProcess = do
+                        (latestTid, process) <- latestRunner
+                        if latestTid == tid then process else Nothing
+                case latestProcess of
+                    Nothing -> return ()
+                    Just ph -> do
+                        void (try (killRunner ph) :: IO (Either SomeException ()))
+                        void $ awaitRunnerCleanup sid 6
     loadAgentSessionView sid
 
-awaitRunnerExit :: Text -> Int -> IO Bool
-awaitRunnerExit sid ticks = do
-    live <- atomically $ Map.member sid <$> readTVar activeRunners
-    if not live
-        then return True
-        else
-            if ticks <= 0
-                then return False
-                else threadDelay 100000 >> awaitRunnerExit sid (ticks - 1)
+awaitRunnerCleanup :: Text -> Int -> IO Bool
+awaitRunnerCleanup sid timeoutSeconds =
+    isJust <$> timeout (timeoutSeconds * 1000000) (atomically waitUntilGone)
+  where
+    waitUntilGone = do
+        live <- Map.member sid <$> readTVar activeRunners
+        when live retry
+
+turnStopRequested :: Text -> IO Bool
+turnStopRequested tid = atomically $ Set.member tid <$> readTVar stopRequestedTurns
+
+attachRunnerProcess :: Text -> Text -> ProcessHandle -> IO Bool
+attachRunnerProcess sid tid ph = do
+    stopped <- atomically $ do
+        modifyTVar' activeRunners $ Map.insert sid (tid, Just ph)
+        Set.member tid <$> readTVar stopRequestedTurns
+    when stopped $ terminateProcess ph
+    return stopped
 
 killRunner :: ProcessHandle -> IO ()
 killRunner ph = do
@@ -192,29 +212,40 @@ turnLogStreamHandler tid = do
     pure $ addHeader "no-transform" $ addHeader "no" source
 
 runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> IO ()
-runTurnProcess cfg session_ turn prompt isFirstTurn = do
-    appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> turnId turn)
-    mWarmResult <-
-        if isFirstTurn
-            then do
-                appendLogLine cfg (turnLogPath turn) "system" "Warming up agent context..."
-                getOrBuildWarmSession cfg (baseCommit session_)
-            else return Nothing
-    case mWarmResult of
-        Just (Left err) ->
-            appendLogLine cfg (turnLogPath turn) "system" ("Warm session unavailable, starting cold: " <> T.pack err)
-        _ -> return ()
-    let mWarmFile = case mWarmResult of
-            Just (Right meta) -> Just (warmSessionFile meta)
-            _ -> Nothing
-    result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either IOException ExitCode)
-    exitCode <- case result of
-        Left err -> do
-            appendLogLine cfg (turnLogPath turn) "system" ("Runner failed to start: " <> T.pack (show err))
-            return $ ExitFailure 127
-        Right code -> return code
-    finishTurn cfg session_ turn exitCode
-        `finally` atomically (modifyTVar' activeRunners (Map.delete (sessionId session_)))
+runTurnProcess cfg session_ turn prompt isFirstTurn =
+    continueUnlessStopped run
+        `finally` atomically (modifyTVar' activeRunners (Map.delete sid))
+  where
+    sid = sessionId session_
+    tid = turnId turn
+    continueUnlessStopped action = do
+        stopped <- turnStopRequested tid
+        if stopped
+            then finishTurn cfg session_ turn (ExitFailure (-15))
+            else action
+    run = do
+        appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> tid)
+        mWarmResult <-
+            if isFirstTurn
+                then do
+                    appendLogLine cfg (turnLogPath turn) "system" "Warming up agent context..."
+                    getOrBuildWarmSession cfg (baseCommit session_) (void . attachRunnerProcess sid tid)
+                else return Nothing
+        case mWarmResult of
+            Just (Left err) ->
+                appendLogLine cfg (turnLogPath turn) "system" ("Warm session unavailable, starting cold: " <> T.pack err)
+            _ -> return ()
+        continueUnlessStopped $ do
+            let mWarmFile = case mWarmResult of
+                    Just (Right meta) -> Just (warmSessionFile meta)
+                    _ -> Nothing
+            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either IOException ExitCode)
+            exitCode <- case result of
+                Left err -> do
+                    appendLogLine cfg (turnLogPath turn) "system" ("Runner failed to start: " <> T.pack (show err))
+                    return $ ExitFailure 127
+                Right code -> return code
+            finishTurn cfg session_ turn exitCode
 
 runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> IO ExitCode
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
@@ -312,12 +343,13 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (mIn, mOut, mErr, ph) <- createProcess process
-    atomically $ modifyTVar' activeRunners (Map.insert (sessionId session_) (turnId turn, ph))
+    stopRequested <- attachRunnerProcess (sessionId session_) (turnId turn) ph
     case mIn of
         Nothing -> return ()
         Just hin -> do
-            hPutStr hin (T.unpack promptText)
-            hFlush hin
+            unless stopRequested $ do
+                hPutStr hin (T.unpack promptText)
+                hFlush hin
             hClose hin
     outReader <- maybe (async (return ())) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout") mOut
     errReader <- maybe (async (return ())) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr") mErr
@@ -369,9 +401,9 @@ streamHandle cfg logPath outputMarker visibleLabel handle = do
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
 finishTurn cfg _session turn exitCode = do
     stopped <- atomically $ do
-        pending <- readTVar stoppedTurns
+        pending <- readTVar stopRequestedTurns
         let wasStopped = Set.member (turnId turn) pending
-        when wasStopped $ writeTVar stoppedTurns (Set.delete (turnId turn) pending)
+        when wasStopped $ writeTVar stopRequestedTurns (Set.delete (turnId turn) pending)
         return wasStopped
     let exitCodeInt = case exitCode of
             ExitSuccess -> 0
@@ -380,6 +412,7 @@ finishTurn cfg _session turn exitCode = do
             | stopped = "stopped"
             | exitCode == ExitSuccess = "succeeded"
             | otherwise = "failed"
+    when stopped $ appendLogLine cfg (turnLogPath turn) "system" "Stopped by user"
     appendLogLine cfg (turnLogPath turn) "system" ("Agent turn finished with exit code " <> T.pack (show exitCodeInt))
     finishResult <-
         ( try

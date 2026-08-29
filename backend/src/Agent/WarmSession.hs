@@ -39,6 +39,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO (Handle, hClose)
 import System.Process (
     CreateProcess (..),
+    ProcessHandle,
     StdStream (..),
     createProcess,
     proc,
@@ -86,8 +87,8 @@ saveWarmMeta meta = do
 Returns Just (Right meta) when a valid warm session is ready.
 Returns Just (Left err) when the build failed.
 -}
-getOrBuildWarmSession :: AgentConfig -> Text -> IO (Maybe (Either String WarmSessionMeta))
-getOrBuildWarmSession cfg baseCommit = do
+getOrBuildWarmSession :: AgentConfig -> Text -> (ProcessHandle -> IO ()) -> IO (Maybe (Either String WarmSessionMeta))
+getOrBuildWarmSession cfg baseCommit onProcessStarted = do
     let configuredPrompt = agentBootstrapPrompt cfg
     if T.null configuredPrompt
         then return Nothing
@@ -99,8 +100,8 @@ getOrBuildWarmSession cfg baseCommit = do
                     valid <- isValidSessionFile (warmSessionFile meta)
                     if valid
                         then return $ Just $ Right meta
-                        else Just <$> buildWarmSession cfg baseCommit bootstrapPrompt
-                _ -> Just <$> buildWarmSession cfg baseCommit bootstrapPrompt
+                        else Just <$> buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted
+                _ -> Just <$> buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted
 
 isValidSessionFile :: FilePath -> IO Bool
 isValidSessionFile path = do
@@ -109,8 +110,8 @@ isValidSessionFile path = do
         then return False
         else (> 0) <$> getFileSize path
 
-buildWarmSession :: AgentConfig -> Text -> Text -> IO (Either String WarmSessionMeta)
-buildWarmSession cfg baseCommit bootstrapPrompt = do
+buildWarmSession :: AgentConfig -> Text -> Text -> (ProcessHandle -> IO ()) -> IO (Either String WarmSessionMeta)
+buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted = do
     repoPath <- userRepoPath
     templateDir <- warmTemplateDir
     let worktreeDir = templateDir </> "worktree"
@@ -131,7 +132,7 @@ buildWarmSession cfg baseCommit bootstrapPrompt = do
             case worktreeResult of
                 Left err -> return $ Left err
                 Right () -> do
-                    exitCode <- runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir
+                    exitCode <- runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessStarted
                     case exitCode of
                         ExitFailure code ->
                             return $ Left $ "Bootstrap runner exited with code " ++ show code
@@ -162,8 +163,8 @@ createBootstrapWorktree repoPath worktreeDir baseCommit = do
         ExitFailure code ->
             Left $ "git worktree add failed (" ++ show code ++ "): " ++ stderr
 
-runBootstrapProcess :: AgentConfig -> Text -> FilePath -> FilePath -> FilePath -> IO ExitCode
-runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir = do
+runBootstrapProcess :: AgentConfig -> Text -> FilePath -> FilePath -> FilePath -> (ProcessHandle -> IO ()) -> IO ExitCode
+runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessStarted = do
     baseEnv <- getEnvironment
     realHome <- getHomeDirectory
     repoPath <- userRepoPath
@@ -220,6 +221,7 @@ runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir = do
                 , std_err = CreatePipe
                 }
     (mIn, mOut, mErr, ph) <- createProcess process
+    onProcessStarted ph
     case mIn of
         Nothing -> return ()
         Just hin -> hClose hin
