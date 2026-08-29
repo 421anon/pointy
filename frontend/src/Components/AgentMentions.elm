@@ -397,15 +397,6 @@ entityIdText entity =
             "project " ++ String.fromInt id_
 
 
-mentionTitle : EntityId -> Route -> String
-mentionTitle entity linkRoute =
-    case ( entity, linkRoute.page ) of
-        ( StepId _, Route.Project params ) ->
-            "Open " ++ entityIdText entity ++ " in project " ++ String.fromInt params.projectId
-
-        _ ->
-            "Open " ++ entityIdText entity
-
 
 viewMention : EntityId -> ResolvedMention -> Html (Flow Model ())
 viewMention entity target =
@@ -413,7 +404,7 @@ viewMention entity target =
         (Html.a
             [ class "agent-panel__mention-link"
             , Route.href target.route
-            , title (mentionTitle entity target.route)
+            , title target.label
             , Events.onClick
                 (Flow.performTask Dom.getViewport
                     |> Flow.andThen
