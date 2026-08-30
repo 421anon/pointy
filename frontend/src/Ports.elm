@@ -10,7 +10,7 @@ port ffiOut : { key : String, fn : String, value : Json.Encode.Value } -> Cmd ms
 port ffiIn : ({ key : String, value : Json.Decode.Value } -> msg) -> Sub msg
 
 
-port openStepStatusStream : { projectId : Int, commit : Maybe String } -> Cmd msg
+port openStepStatusStream : {} -> Cmd msg
 
 
 port stepStatusIn : (Json.Decode.Value -> msg) -> Sub msg

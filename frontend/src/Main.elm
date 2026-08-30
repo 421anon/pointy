@@ -11,7 +11,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProject, currentProjectId, gutterDrag, mCommit, mHighlight, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
+import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, mHighlight, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
 import Ports
 import Route exposing (Route)
 import Specs
@@ -62,6 +62,7 @@ initializeWorkspace =
         |> Flow.seq Actions.loadProjects
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
         |> Flow.seq (Flow.async Actions.startClusterStatusStream)
+        |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
 
 
 applyRouteFromUrl : Bool -> Url -> Flow Model ()
@@ -142,10 +143,7 @@ applyRoute forceRevealHighlight newRoute =
                                 Flow.when (currentRoute_ == newRoute) <|
                                     case newRoute.page of
                                         Route.Project { projectId, mHighlight, mCommit } ->
-                                            Flow.ifHas
-                                                (currentProject << success)
-                                                (\_ -> Flow.async <| Actions.listenAndProcessStepStatus projectId mCommit)
-                                                Actions.closeStepStatusStream
+                                            Actions.requestProjectStatus projectId mCommit
                                                 |> Flow.seq
                                                     (case mHighlight of
                                                         Just highlight ->
@@ -161,12 +159,10 @@ applyRoute forceRevealHighlight newRoute =
                                                 |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
                                         Route.Artifact _ ->
-                                            Actions.closeStepStatusStream
-                                                |> Flow.seq (Actions.syncCompareFromRoute newRoute)
+                                            Actions.syncCompareFromRoute newRoute
 
                                         Route.Home ->
-                                            Actions.closeStepStatusStream
-                                                |> Flow.seq (Actions.syncCompareFromRoute newRoute)
+                                            Actions.syncCompareFromRoute newRoute
 
                                         Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute

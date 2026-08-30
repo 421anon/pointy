@@ -28,14 +28,14 @@ import Handlers.Agent (
     usageHandler,
  )
 import Handlers.Autocomplete (autocompleteHandler)
+import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (batchUpdateProjectsHandler, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
-import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler)
-import Handlers.StatusStream (stepStatusStreamHandler)
+import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
@@ -50,7 +50,6 @@ import Servant hiding (runHandler)
 import Servant.Multipart
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo, fetchRepo)
-
 
 server :: Server API
 server =
@@ -77,6 +76,7 @@ server =
         :<|> batchAssignRecordsHandler
         :<|> unassignRecordHandler
         :<|> stepStatusStreamHandler
+        :<|> projectStatusHandler
         :<|> getStepConfigHandler
         :<|> getPresetsHandler
         :<|> autocompleteHandler

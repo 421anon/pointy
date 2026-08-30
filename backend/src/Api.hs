@@ -305,10 +305,15 @@ type BatchUpdateProjects =
 
 type StepStatusStream =
     "step-status-stream"
-        :> Description "Streams snapshot and heartbeat SSE events for a project's steps. Emits status-error and closes when status evaluation fails."
+        :> Description "Streams snapshot and heartbeat SSE events for every project's steps."
+        :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+
+type ProjectStatus =
+    "project-status"
+        :> Description "Re-evaluates a project's step statuses and broadcasts them on the step status stream."
         :> ReqProjectId
         :> QueryParam "commit" Text
-        :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+        :> Post '[PlainText] NoContent
 
 type GetStepConfig =
     "step-config"
@@ -389,6 +394,7 @@ type API =
         :<|> BatchAssignRecords
         :<|> UnassignRecord
         :<|> StepStatusStream
+        :<|> ProjectStatus
         :<|> GetStepConfig
         :<|> GetPresets
         :<|> Autocomplete

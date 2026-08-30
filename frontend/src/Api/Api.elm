@@ -22,6 +22,7 @@ module Api.Api exposing
     , fetchStepConfig
     , fetchStepLog
     , fetchUserRepoInfo
+    , refreshProjectStatus
     , runStep
     , saveProject
     , saveProjectsBatch
@@ -324,6 +325,11 @@ unassignRecordFromProject projectId recordId =
 runStep : Int -> Maybe String -> Flow s (Result Http.Error ())
 runStep id commit =
     stepAction "run-step" id commit
+
+
+refreshProjectStatus : Int -> Maybe String -> Flow s (Result Http.Error ())
+refreshProjectStatus projectId commit =
+    request "POST" (appendCommitQuery ("/backend/project-status?project_id=" ++ String.fromInt projectId) commit) Http.emptyBody
 
 
 stopStep : Int -> Maybe String -> Flow s (Result Http.Error ())

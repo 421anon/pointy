@@ -17,10 +17,27 @@ data ProjectSnapshot = ProjectSnapshot
 statusBus :: TChan ProjectSnapshot
 statusBus = unsafePerformIO newBroadcastTChanIO
 
+{- | Bounded history of the most recent snapshots.  @subscribe@ replays it
+onto each new channel so a client that connects (or the global status
+stream reconnecting) just after a broadcast does not lose it: broadcast
+channels hold no history of their own.
+-}
+{-# NOINLINE recentSnapshots #-}
+recentSnapshots :: TVar [ProjectSnapshot]
+recentSnapshots = unsafePerformIO $ newTVarIO []
+
+replayLimit :: Int
+replayLimit = 256
+
 broadcastSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
 broadcastSnapshot pid c stats = atomically $ do
     writeTChan statusBus (ProjectSnapshot pid c stats)
+    modifyTVar' recentSnapshots (take replayLimit . (ProjectSnapshot pid c stats :))
     updateRunningSteps stats
 
 subscribe :: IO (TChan ProjectSnapshot)
-subscribe = atomically $ dupTChan statusBus
+subscribe = atomically $ do
+    chan <- dupTChan statusBus
+    recent <- readTVar recentSnapshots
+    mapM_ (writeTChan chan) (reverse recent)
+    pure chan

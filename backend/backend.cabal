@@ -167,3 +167,20 @@ test-suite turn-stream
 
   hs-source-dirs:   test
   default-language: Haskell2010
+
+test-suite status-stream
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          StatusStreamTest.hs
+  -- registerDelay (used by the stream heartbeat) requires -threaded.
+  ghc-options:      -threaded
+  build-depends:
+    , backend
+    , base
+    , bytestring
+    , containers
+    , servant
+    , stm
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
