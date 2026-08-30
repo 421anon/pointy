@@ -44,7 +44,7 @@ stepStatusStreamHandler :: Handler (Headers '[Header "Cache-Control" Text, Heade
 stepStatusStreamHandler = do
     busChan <- liftIO subscribe
     let padding = Sse.sseComment $ "padding " <> pack (replicate 4096 ' ')
-    let source =
+        source =
             S.fromStepT
                 ( S.Yield
                     (Sse.sseComment "connected")
@@ -66,10 +66,8 @@ projectStatusHandler projectId commit = do
         case commit of
             Just c -> pure c
             Nothing -> do
-                result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
-                case result of
-                    Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-                    Right c -> pure c
+                result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> pure (pack hash)
+                either (\err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}) pure result
     liftIO $ void $ forkIO $ broadcastProjectStatus projectId targetCommit Nothing
     pure NoContent
 
@@ -77,10 +75,7 @@ streamLoop :: TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
 streamLoop busChan =
     Sse.broadcastLoop snapshotEvent busChan
   where
-    snapshotEvent snapshot =
-        ( "snapshot"
-        , encodeSnapshot (Bus.projectId snapshot) (Bus.commit snapshot) (Bus.statuses snapshot)
-        )
+    snapshotEvent snapshot = ("snapshot", encodeSnapshot (Bus.projectId snapshot) (Bus.commit snapshot) (Bus.statuses snapshot))
 
 encodeSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> LBS.ByteString
 encodeSnapshot projectId targetCommit statuses =

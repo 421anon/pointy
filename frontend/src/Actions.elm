@@ -3706,18 +3706,12 @@ onStepStatusIn value =
 stateUpdateVisible : Model -> Int -> String -> Bool
 stateUpdateVisible model snapshotProjectId snapshotCommit =
     let
-        openProjectId =
-            try (route << Route.page << projectRoute << projectId) model
-
-        pinned =
-            try (route << Route.page << Route.project << mCommit << just) model
-
         head =
             try (commitHash << success) model
 
         viewCommit =
-            if openProjectId == Just snapshotProjectId then
-                Maybe.orElse head pinned
+            if try (route << Route.page << projectRoute << projectId) model == Just snapshotProjectId then
+                Maybe.orElse head (try (route << Route.page << Route.project << mCommit << just) model)
 
             else
                 head

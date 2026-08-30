@@ -35,6 +35,8 @@ broadcastLoop render chan = do
     heartbeatDue <- registerDelay heartbeatDelayMicros
     waitForEvent heartbeatDue
   where
+    loop = S.Effect (broadcastLoop render chan)
+
     waitForEvent heartbeatDue = do
         batch <-
             atomically $
@@ -49,13 +51,10 @@ broadcastLoop render chan = do
                              )
         case batch of
             Nothing ->
-                return $
-                    S.Yield
-                        (sseEvent "heartbeat" (encode (object [])))
-                        (S.Effect (broadcastLoop render chan))
-            Just values -> do
-                let events = map (uncurry sseEvent . render) values
-                return $ foldr S.Yield (S.Effect (broadcastLoop render chan)) events
+                return $ S.Yield (sseEvent "heartbeat" (encode (object []))) loop
+            Just values ->
+                return $ foldr S.Yield loop (map (uncurry sseEvent . render) values)
+
     drain chan = do
         mItem <- tryReadTChan chan
         case mItem of
