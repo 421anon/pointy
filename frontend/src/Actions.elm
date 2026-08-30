@@ -264,7 +264,7 @@ loadProjects =
                                         try (route << Route.page << Route.project << mCommit << just) model
                                 in
                                 callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
-                                    |> FlowError.foldResult (\_ -> Flow.pure ()) (\_ -> Flow.pure ())
+                                    |> ignoreResult
                                     |> Flow.seq (Flow.async replayStepStatusBuffer)
                             )
                 )
@@ -277,16 +277,9 @@ replayStepStatusBuffer =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    applyOne ( stepId, ( commit, status ) ) =
-                        Flow.over
-                            (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState)
-                            (applyStatusSnapshot commit status)
-                            |> Flow.seq (Flow.when (status == StatusSuccess) (runAndClearStepStatusHook stepId))
-                in
                 get stepStatusBuffer model
                     |> Dict.toList
-                    |> List.map applyOne
+                    |> List.map (\( stepId, ( commit, status ) ) -> updateStepStatus commit stepId status)
                     |> Flow.batchM
                     |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
             )
@@ -1082,6 +1075,13 @@ callApiMerge merge lens apiCall =
                         )
             )
 
+
+{-| Run a call for its side effects: keep @callApi@'s error toast, then
+discard the result on both branches.
+-}
+ignoreResult : FlowError Http.Error Model a -> Flow Model ()
+ignoreResult =
+    FlowError.foldResult (\_ -> Flow.pure ()) (\_ -> Flow.pure ())
 
 downloadFile : Int -> String -> List String -> Flow Model ()
 downloadFile stepId commit filePath =
@@ -3673,9 +3673,7 @@ finalizeChatTurn mError agentState =
 requestProjectStatus : Int -> Maybe String -> Flow Model ()
 requestProjectStatus projectId commit =
     callApi void (Api.refreshProjectStatus projectId commit)
-        |> FlowError.foldResult
-            (\_ -> Flow.pure ())
-            (\_ -> Flow.pure ())
+        |> ignoreResult
 
 
 listenAndProcessStepStatus : Flow Model Decode.Value

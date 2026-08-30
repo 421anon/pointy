@@ -71,8 +71,7 @@ clusterStatusStreamHandler = do
     pure $ addHeader "no-transform" $ addHeader "no" source
 
 streamLoop :: TChan ClusterSnapshot -> IO (S.StepT IO BS.ByteString)
-streamLoop chan =
-    Sse.broadcastLoop (\snapshot -> ("cluster-status", encodeSnapshot snapshot)) chan
+streamLoop = Sse.broadcastLoop ((,) "cluster-status" . encodeSnapshot)
 
 encodeSnapshot :: ClusterSnapshot -> LBS.ByteString
 encodeSnapshot snapshot =
