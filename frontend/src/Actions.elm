@@ -264,7 +264,8 @@ loadProjects =
                                         try (route << Route.page << Route.project << mCommit << just) model
                                 in
                                 callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
-                                    |> FlowError.foldResult (\_ -> Flow.async replayStepStatusBuffer) (\_ -> Flow.pure ())
+                                    |> ignoreResult
+                                    |> Flow.seq (Flow.async replayStepStatusBuffer)
                             )
                 )
         )
@@ -276,15 +277,9 @@ replayStepStatusBuffer =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    applyOne ( stepId, ( commit, status ) ) =
-                        Flow.over
-                            (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState)
-                            (applyStatusSnapshot commit status)
-                in
                 get stepStatusBuffer model
                     |> Dict.toList
-                    |> List.map applyOne
+                    |> List.map (\( stepId, ( commit, status ) ) -> updateStepStatus commit stepId status)
                     |> Flow.batchM
                     |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
             )
@@ -1080,6 +1075,13 @@ callApiMerge merge lens apiCall =
                         )
             )
 
+
+{-| Run a call for its side effects: keep @callApi@'s error toast, then
+discard the result on both branches.
+-}
+ignoreResult : FlowError Http.Error Model a -> Flow Model ()
+ignoreResult =
+    FlowError.foldResult (\_ -> Flow.pure ()) (\_ -> Flow.pure ())
 
 downloadFile : Int -> String -> List String -> Flow Model ()
 downloadFile stepId commit filePath =
@@ -2301,11 +2303,6 @@ saveProject projectId =
         |> Flow.assertJust
         |> Flow.andThen (Api.saveProject projectId >> callApi void)
         |> FlowError.andThen (\_ -> refetchCommitHash |> Flow.return ())
-
-
-closeStepStatusStream : Flow Model ()
-closeStepStatusStream =
-    callJs "closeStepStatusStream" (\_ -> Encode.null) (Decode.succeed ()) ()
 
 
 agentChatId : String
@@ -3673,16 +3670,26 @@ finalizeChatTurn mError agentState =
             flushed
 
 
-listenAndProcessStepStatus : Int -> Maybe String -> Flow Model Decode.Value
-listenAndProcessStepStatus projectId commit =
-    Flow.subscribe onStepStatusIn (Channels.stepStatus projectId commit)
+requestProjectStatus : Int -> Maybe String -> Flow Model ()
+requestProjectStatus projectId commit =
+    callApi void (Api.refreshProjectStatus projectId commit)
+        |> ignoreResult
+
+
+listenAndProcessStepStatus : Flow Model Decode.Value
+listenAndProcessStepStatus =
+    Flow.subscribe onStepStatusIn Channels.stepStatus
 
 
 onStepStatusIn : Decode.Value -> Flow Model ()
 onStepStatusIn value =
     case Decode.decodeValue ApiDecode.stepStatusEvent value of
-        Ok (SSESnapshot { commit, steps }) ->
-            Flow.batchM (List.map (\s -> updateStepStatus commit s.stepId s.status) steps)
+        Ok (SSESnapshot { projectId, commit, steps }) ->
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        applySnapshot (stateUpdateVisible model projectId commit) commit steps
+                    )
 
         Ok SSEHeartbeat ->
             Flow.pure ()
@@ -3692,6 +3699,31 @@ onStepStatusIn value =
 
         Err err ->
             addToast False ("SSE Decode Error: " ++ Decode.errorToString err)
+
+
+stateUpdateVisible : Model -> Int -> String -> Bool
+stateUpdateVisible model snapshotProjectId snapshotCommit =
+    let
+        head =
+            try (commitHash << success) model
+
+        viewCommit =
+            if try (route << Route.page << projectRoute << projectId) model == Just snapshotProjectId then
+                Maybe.orElse head (try (route << Route.page << Route.project << mCommit << just) model)
+
+            else
+                head
+    in
+    Maybe.unwrap True ((==) snapshotCommit) viewCommit
+
+
+applySnapshot : Bool -> String -> List { stepId : Int, status : Status } -> Flow Model ()
+applySnapshot stateVisible commit steps =
+    if stateVisible then
+        Flow.batchM (List.map (\s -> updateStepStatus commit s.stepId s.status) steps)
+
+    else
+        Flow.batchM (List.filterMap (\s -> if s.status == StatusSuccess then Just (runAndClearStepStatusHook s.stepId) else Nothing) steps)
 
 
 updateStepStatus : String -> Int -> Status -> Flow Model ()

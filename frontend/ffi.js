@@ -58,8 +58,6 @@ function openClusterStatusStream(app) {
 }
 
 let stepStatusSource = null;
-let stepStatusTargetKey = null;
-let stepStatusApplicationError = false;
 let agentTurnSource = null;
 let agentTurnTargetKey = null;
 const AGENT_TURN_INITIAL_RETRY_DELAY = 1000;
@@ -72,8 +70,6 @@ function closeStepStatusStream() {
     stepStatusSource.close();
     stepStatusSource = null;
   }
-  stepStatusTargetKey = null;
-  stepStatusApplicationError = false;
 }
 
 function closeAgentTurnStream() {
@@ -138,26 +134,11 @@ export function connectPorts(app) {
     }
   }
 
-  function openStepStatusStream({ projectId, commit }) {
-    const params = new URLSearchParams({ project_id: String(projectId) });
-    if (commit) {
-      params.set("commit", commit);
-    }
-
-    const url = `/backend/step-status-stream?${params.toString()}`;
-
-    if (
-      stepStatusSource &&
-      stepStatusTargetKey === url &&
-      stepStatusSource.readyState !== EventSource.CLOSED
-    ) {
+  function openStepStatusStream() {
+    if (stepStatusSource && stepStatusSource.readyState !== EventSource.CLOSED) {
       return;
     }
-
-    closeStepStatusStream();
-
-    stepStatusSource = new EventSource(url);
-    stepStatusTargetKey = url;
+    stepStatusSource = new EventSource("/backend/step-status-stream");
 
     stepStatusSource.addEventListener("snapshot", (event) => {
       try {
@@ -173,20 +154,7 @@ export function connectPorts(app) {
       } catch {}
     });
 
-    stepStatusSource.addEventListener("status-error", (event) => {
-      stepStatusApplicationError = true;
-      try {
-        emitToElm("error", JSON.parse(event.data));
-      } catch (err) {
-        emitToElm("error", `Failed to parse status error event: ${String(err)}`);
-      }
-    });
-
     stepStatusSource.onerror = () => {
-      if (stepStatusApplicationError) {
-        stepStatusApplicationError = false;
-        return;
-      }
       emitToElm("error", "Step status stream connection issue");
     };
   }
@@ -260,7 +228,6 @@ export function connectPorts(app) {
     closeDialog,
     hidePopover,
     copyToClipboard,
-    closeStepStatusStream,
     closeAgentTurnStream,
     zoomIframe,
     toggleTheme,
@@ -278,7 +245,7 @@ export function connectPorts(app) {
   }
 
   if (app.ports && app.ports.openStepStatusStream) {
-    app.ports.openStepStatusStream.subscribe(openStepStatusStream);
+    app.ports.openStepStatusStream.subscribe(() => openStepStatusStream());
   }
 
   if (app.ports && app.ports.openAgentTurnStream) {

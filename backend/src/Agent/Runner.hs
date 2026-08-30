@@ -41,17 +41,16 @@ import qualified Control.Monad.Except as Except
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
+import Sse (sseComment, sseEvent)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getFileSize, getHomeDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -559,14 +558,3 @@ streamLoop turn offset signal = return $ S.Effect $ do
                         S.Yield
                             (sseEvent "heartbeat" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn])))
                             (S.Effect (streamLoop turn newOffset signal))
-
-sseEvent :: Text -> LBS.ByteString -> BS.ByteString
-sseEvent eventName payload =
-    TE.encodeUtf8 ("event: " <> eventName <> "\n")
-        <> "data: "
-        <> LBS.toStrict payload
-        <> "\n\n"
-
-sseComment :: Text -> BS.ByteString
-sseComment text_ =
-    TE.encodeUtf8 (": " <> text_ <> "\n\n")
