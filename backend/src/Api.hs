@@ -26,6 +26,12 @@ type ReqProjectId = QueryParam' '[Required, Strict] "project_id" Int
 
 type ReqEntityId = QueryParam' '[Required, Strict] "entity_id" Int
 
+{- | Standard SSE endpoint: unframed @text\/event-stream@ with the two
+headers that stop proxies from buffering or transforming events.
+-}
+type SseStream =
+    StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+
 type GetCommitHash =
     "commit-hash"
         :> Description "Returns the commit hash the user repository is currently checked out at."
@@ -306,7 +312,7 @@ type BatchUpdateProjects =
 type StepStatusStream =
     "step-status-stream"
         :> Description "Streams snapshot and heartbeat SSE events for every project's steps."
-        :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+        :> SseStream
 
 type ProjectStatus =
     "project-status"
@@ -359,7 +365,7 @@ type Upload =
 type ClusterStatusStream =
     "cluster-status-stream"
         :> Description "Streams the current SLURM cluster availability and subsequent status changes."
-        :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+        :> SseStream
 
 type AgentTurnStream =
     "agent"
@@ -367,7 +373,7 @@ type AgentTurnStream =
         :> Capture "id" Text
         :> "stream"
         :> Description "Streams output of an agent turn as server-sent events."
-        :> StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+        :> SseStream
 
 -- | The full served API, in handler order (matches @Main.server@).
 type API =

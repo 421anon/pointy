@@ -44,6 +44,7 @@ library
     NixEvaluator
     NixUtils
     OutPaths
+    Sse
     UserRepo
 
   other-modules:
