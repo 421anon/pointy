@@ -79,7 +79,7 @@ viewProject model proj =
                 , Html.viewIf (not isReadOnly) <|
                     Html.viewMaybe
                         (\spec ->
-                            viewIconButtonWithTooltip "edit" True "Edit project" (Actions.toggleAddOrEditRecordForm False spec proj.id)
+                            viewIconButtonWithTooltip "edit" True "Edit project" (Actions.toggleAddOrEditRecordForm spec proj.id)
                         )
                         mProjectSpec
                 ]

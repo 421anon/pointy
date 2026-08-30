@@ -133,12 +133,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
               }
             , -- Edit button
               { shouldShow = \record -> not isReadOnly && record.id /= Nothing
-              , render = \record -> viewIconButtonWithTooltip "edit" True "Edit" <| Actions.toggleAddOrEditRecordForm False spec record.id
-              }
-            , -- Inspect Parameters button (shareable only)
-              { shouldShow = \record -> TableSpec.getShareable spec record && record.id /= Nothing
-              , render =
-                    \record -> viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm True spec record.id)
+              , render = \record -> viewIconButtonWithTooltip "edit" True "Edit" <| Actions.toggleAddOrEditRecordForm spec record.id
               }
             , -- Share button (shareable only)
               { shouldShow = \record -> TableSpec.getShareable spec record && record.id /= Nothing
@@ -581,7 +576,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 )
                                 "btn"
                                 [ Html.text "Unhide All" ]
-                        , Html.viewIf (not isReadOnly) <| tableActionBtn (Actions.toggleAddOrEditRecordForm False spec Nothing) "icon-btn" [ icon True "add" ]
+                        , Html.viewIf (not isReadOnly) <| tableActionBtn (Actions.toggleAddOrEditRecordForm spec Nothing) "icon-btn" [ icon True "add" ]
                         ]
                     ]
                 , table.edited
@@ -613,21 +608,18 @@ viewAddOrEditRecordForm model spec table record =
         editing =
             record.id /= Nothing && (table.addMode /= AddFromOtherProject)
 
-        readOnly =
-            table.inspected
-
         extraFields =
             case TableSpec.getTag spec of
                 TagSteps key stepDef ->
-                    [ viewStepExtraFormFields model readOnly key stepDef ]
+                    [ viewStepExtraFormFields model key stepDef ]
 
                 TagProjects ->
-                    viewProjectExtraFormFields model readOnly
+                    viewProjectExtraFormFields model
 
         noteInput =
             case TableSpec.getTag spec of
                 TagSteps tableId _ ->
-                    viewStepNoteField model readOnly tableId
+                    viewStepNoteField model tableId
 
                 TagProjects ->
                     Html.nothing
@@ -643,8 +635,8 @@ viewAddOrEditRecordForm model spec table record =
                 , placeholder = TableSpec.getDisplayName spec ++ " name"
                 , value = record.name
                 , onInput = Actions.editRecordName (TableSpec.getLens spec)
-                , hasChanged = not readOnly && fieldChanged .name record.name originalRecord
-                , readOnly = readOnly
+                , hasChanged = fieldChanged .name record.name originalRecord
+                , readOnly = False
                 , id = TableSpec.getName spec ++ "-name-input"
                 }
 
@@ -653,7 +645,6 @@ viewAddOrEditRecordForm model spec table record =
                 [ ( "form", True )
                 , ( "form-adding", not editing )
                 , ( "form-editing", editing )
-                , ( "form-read-only", readOnly )
                 ]
 
         radioButton mode label =
@@ -721,18 +712,15 @@ viewAddOrEditRecordForm model spec table record =
                 displayName =
                     TableSpec.getDisplayName spec
             in
-            case ( readOnly, editing, table.addMode ) of
-                ( False, False, AddNew ) ->
+            case ( editing, table.addMode ) of
+                ( False, AddNew ) ->
                     "Create new " ++ displayName
 
-                ( False, False, AddFromOtherProject ) ->
+                ( False, AddFromOtherProject ) ->
                     "Add from other project: " ++ displayName
 
-                ( False, True, _ ) ->
+                ( True, _ ) ->
                     "Edit " ++ displayName
-
-                ( True, _, _ ) ->
-                    "Inspect Parameters"
 
         handleEnter =
             let
@@ -771,7 +759,7 @@ viewAddOrEditRecordForm model spec table record =
                 , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|
                     Html.div [ class "form-group" ] extraFields
                 , Html.div [ class "form-actions" ]
-                    [ Html.viewIf (not readOnly) <| Html.button [ id "save-button", Events.onClick (TableSpec.getUpsertRecord spec), class "btn", disabled table.isUpdating ] [ Html.text "Save" ]
+                    [ Html.button [ id "save-button", Events.onClick (TableSpec.getUpsertRecord spec), class "btn", disabled table.isUpdating ] [ Html.text "Save" ]
                     , Html.button [ Events.onClick (Actions.endRecordEdit (TableSpec.getLens spec)), class "btn" ] [ Html.text "Cancel" ]
                     ]
                 ]
@@ -779,8 +767,8 @@ viewAddOrEditRecordForm model spec table record =
         ]
 
 
-viewProjectExtraFormFields : Model -> Bool -> List (Html (Flow Model ()))
-viewProjectExtraFormFields model readOnly =
+viewProjectExtraFormFields : Model -> List (Html (Flow Model ()))
+viewProjectExtraFormFields model =
     let
         mEdited =
             try (projects << edited << just) model
@@ -889,7 +877,7 @@ viewProjectExtraFormFields model readOnly =
                         , selectState = presetDisplayState
                         , selected_ = []
                         , availableItems = availablePresets
-                        , readOnly = readOnly
+                        , readOnly = False
                         , hasChanged = False
                         , label = "Preset"
                         , mHint = Nothing
@@ -926,7 +914,7 @@ viewProjectExtraFormFields model readOnly =
                         , selectState = try stateLens model |> Maybe.withDefault Select.initSelectState
                         , selected_ = selectedItems
                         , availableItems = availableItems
-                        , readOnly = readOnly
+                        , readOnly = False
                         , hasChanged = False
                         , label = "Templates"
                         , mHint = Nothing
@@ -957,8 +945,8 @@ viewProjectExtraFormFields model readOnly =
             [ Html.span [ class "shimmer-text shimmer-text--medium-contrast" ] [ Html.text "Loading presets..." ] ]
 
 
-viewStepExtraFormFields : Model -> Bool -> String -> StepType -> Html (Flow Model ())
-viewStepExtraFormFields model readOnly tableId stepDef =
+viewStepExtraFormFields : Model -> String -> StepType -> Html (Flow Model ())
+viewStepExtraFormFields model tableId stepDef =
     let
         argsLens =
             currentTableOf tableId << edited << just << args
@@ -1048,7 +1036,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                            )
 
                 fieldHasChanged =
-                    not readOnly && paramName /= "downloadedAt" && fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
+                    paramName /= "downloadedAt" && fieldChanged (try (args << key paramName)) (try paramLens model) originalRecord
 
                 buildListField listLens tagStrings addTag =
                     listField
@@ -1058,7 +1046,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , onAdd = addTag
                         , onRemoveLast = Flow.modify (over listLens (\xs -> List.take (List.length xs - 1) xs)) |> Flow.seq (focus fieldId)
                         , onRemoveIndex = \idx -> Flow.modify (over listLens (List.removeAt idx)) |> Flow.seq (focus fieldId)
-                        , readOnly = readOnly
                         , id = fieldId
                         , hasChanged = fieldHasChanged
                         }
@@ -1133,7 +1120,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , selectState = try stateLens model |> Maybe.withDefault Select.initSelectState
                         , selected_ = selectedItems
                         , availableItems = availableItems
-                        , readOnly = readOnly
+                        , readOnly = False
                         , hasChanged = fieldHasChanged
                         , label = fieldLabel
                         , mHint = fieldHint
@@ -1199,7 +1186,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                 [ id fieldId
                                 , class "form-input"
                                 , classList [ ( "field-changed", fieldHasChanged ) ]
-                                , disabled readOnly
                                 , Events.onInput (\v -> Flow.modify (set paramLens (Just (TEnumValue v))))
                                 ]
                                 (List.map
@@ -1237,7 +1223,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                             Nothing ->
                                                 Flow.none
                                     , hasChanged = fieldHasChanged
-                                    , readOnly = readOnly
+                                    , readOnly = False
                                     , id = paramName ++ "-input"
                                     }
                         in
@@ -1258,7 +1244,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                     , onInput = Flow.modify << set paramLens << Just << TStringValue
                                     , hasChanged = fieldHasChanged
-                                    , readOnly = readOnly || paramName == "downloadedAt"
+                                    , readOnly = paramName == "downloadedAt"
                                     , id = paramName ++ "-input"
                                     }
 
@@ -1270,7 +1256,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                     , onInput = Flow.modify << set paramLens << Just << TStringValue
                                     , hasChanged = fieldHasChanged
-                                    , readOnly = readOnly
                                     , id = paramName ++ "-input"
                                     }
 
@@ -1282,7 +1267,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                     , onInput = Flow.modify << set paramLens << Just << TStringValue
                                     , hasChanged = fieldHasChanged
-                                    , readOnly = readOnly
                                     , id = paramName ++ "-input"
                                     , commandPrefix = cmdPrefix
                                     }
@@ -1294,7 +1278,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     , value = Maybe.withDefault "" <| try (paramLens << just << tStringValue) model
                                     , onInput = Flow.modify << set paramLens << Just << TStringValue
                                     , hasChanged = fieldHasChanged
-                                    , readOnly = readOnly
                                     , id = paramName ++ "-input"
                                     , language = language
                                     }
@@ -1376,7 +1359,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                 (Dict.insert autocompleteStateKey
                                                     { autocompleteState | activeIndex = newIndex }
                                                 )
-                                    , readOnly = readOnly
                                     , id = fieldId
                                     , hasChanged = fieldHasChanged
                                     , query = autocompleteState.query
@@ -1454,7 +1436,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     , value = strVal
                                                     , onInput = \s -> updateField idx fieldName (TStringValue s)
                                                     , hasChanged = False
-                                                    , readOnly = readOnly
+                                                    , readOnly = False
                                                     , id = fieldId_ ++ "-input"
                                                     }
 
@@ -1466,7 +1448,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     , value = strVal
                                                     , onInput = \s -> updateField idx fieldName (TStringValue s)
                                                     , hasChanged = False
-                                                    , readOnly = readOnly
                                                     , id = fieldId_ ++ "-input"
                                                     }
 
@@ -1478,7 +1459,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     , value = strVal
                                                     , onInput = \s -> updateField idx fieldName (TStringValue s)
                                                     , hasChanged = False
-                                                    , readOnly = readOnly
                                                     , id = fieldId_ ++ "-input"
                                                     , commandPrefix = cmdPrefix
                                                     }
@@ -1490,7 +1470,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     , value = strVal
                                                     , onInput = \s -> updateField idx fieldName (TStringValue s)
                                                     , hasChanged = False
-                                                    , readOnly = readOnly
                                                     , id = fieldId_ ++ "-input"
                                                     , language = language
                                                     }
@@ -1518,7 +1497,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                     Nothing ->
                                                         Flow.none
                                             , hasChanged = False
-                                            , readOnly = readOnly
+                                            , readOnly = False
                                             , id = fieldId_ ++ "-input"
                                             }
 
@@ -1531,7 +1510,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                             (Html.select
                                                 [ id (fieldId_ ++ "-input")
                                                 , class "form-input"
-                                                , disabled readOnly
                                                 , Events.onInput (\v -> updateField idx fieldName (TEnumValue v))
                                                 ]
                                                 (List.map
@@ -1650,7 +1628,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                                 (Dict.insert autocompleteStateKey
                                                                     { autocompleteState | activeIndex = newIndex }
                                                                 )
-                                                    , readOnly = readOnly
                                                     , id = listId
                                                     , hasChanged = False
                                                     , query = autocompleteState.query
@@ -1682,7 +1659,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                         \i ->
                                                             updateField idx fieldName (TListValue (List.removeAt i items))
                                                                 |> Flow.seq (focus listId)
-                                                    , readOnly = readOnly
                                                     , id = listId
                                                     , hasChanged = False
                                                     }
@@ -1690,64 +1666,53 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     _ ->
                                         Html.nothing
 
+                            defaultRecord =
+                                TRecordValue
+                                    (Dict.map
+                                        (\_ fieldArgType ->
+                                            case fieldArgType.type_ of
+                                                TList _ ->
+                                                    TListValue []
+
+                                                TEnum (first :: _) _ ->
+                                                    TEnumValue first
+
+                                                TEnum [] _ ->
+                                                    TEnumValue ""
+
+                                                _ ->
+                                                    TStringValue ""
+                                        )
+                                        fieldTypes
+                                    )
+
                             viewRecord idx _ =
                                 Html.div [ class "record-item" ]
-                                    (Html.div [ class "record-item-fields" ]
+                                    ([ Html.div [ class "record-item-fields" ]
                                         (List.map
                                             (\( fName, argType_ ) -> viewRecordField idx fName argType_)
                                             (Dict.toList fieldTypes)
                                         )
-                                        :: (if readOnly then
-                                                []
-
-                                            else
-                                                [ Html.button
-                                                    [ Events.onClick (Flow.modify (over listLens (List.removeAt idx)))
-                                                    , class "remove-record-btn"
-                                                    , attribute "type" "button"
-                                                    ]
-                                                    [ icon True "remove" ]
+                                        ,  Html.button
+                                                [ Events.onClick (Flow.modify (over listLens (List.removeAt idx)))
+                                                , class "remove-record-btn"
+                                                , attribute "type" "button"
                                                 ]
-                                           )
+                                                [ icon True "remove" ]
+                                           ]
                                     )
                         in
                         Html.div [ class "form-field" ]
                             [ Html.label [ class "form-label" ] [ Html.text fieldLabel ]
                             , Html.div [ class "record-list" ]
                                 (List.indexedMap viewRecord recordValues
-                                    ++ (if readOnly then
-                                            []
-
-                                        else
-                                            let
-                                                defaultRecord =
-                                                    TRecordValue
-                                                        (Dict.map
-                                                            (\_ fieldArgType ->
-                                                                case fieldArgType.type_ of
-                                                                    TList _ ->
-                                                                        TListValue []
-
-                                                                    TEnum (first :: _) _ ->
-                                                                        TEnumValue first
-
-                                                                    TEnum [] _ ->
-                                                                        TEnumValue ""
-
-                                                                    _ ->
-                                                                        TStringValue ""
-                                                            )
-                                                            fieldTypes
-                                                        )
-                                            in
-                                            [ Html.button
-                                                [ Events.onClick (Flow.modify (over listLens (flip (++) [ defaultRecord ])))
-                                                , class "add-record-btn"
-                                                , attribute "type" "button"
-                                                ]
-                                                [ Html.text ("Add " ++ fieldLabel) ]
+                                    ++ [ Html.button
+                                            [ Events.onClick (Flow.modify (over listLens (flip (++) [ defaultRecord ])))
+                                            , class "add-record-btn"
+                                            , attribute "type" "button"
                                             ]
-                                       )
+                                            [ Html.text ("Add " ++ fieldLabel) ]
+                                       ]
                                 )
                             ]
 
@@ -1779,8 +1744,8 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                     |> List.map viewField
 
 
-viewStepNoteField : Model -> Bool -> String -> Html (Flow Model ())
-viewStepNoteField model readOnly tableId =
+viewStepNoteField : Model -> String -> Html (Flow Model ())
+viewStepNoteField model tableId =
     let
         noteLens =
             currentTableOf tableId << edited << just << note
@@ -1801,8 +1766,7 @@ viewStepNoteField model readOnly tableId =
             , placeholder "Notes about this step..."
             , class "form-input"
             , class "form-input-note"
-            , classList [ ( "field-changed", not readOnly && fieldChanged .note currentNote originalRecord ) ]
-            , readonly readOnly
+            , classList [ ( "field-changed", fieldChanged .note currentNote originalRecord ) ]
             , id (tableId ++ "-note-input")
             ]
             []
@@ -1864,7 +1828,6 @@ commandField :
     , value : String
     , onInput : String -> Flow Model ()
     , hasChanged : Bool
-    , readOnly : Bool
     , id : String
     , commandPrefix : String
     }
@@ -1873,7 +1836,7 @@ commandField config =
     formField config
         (Html.div
             [ class "command-input"
-            , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
+            , classList [ ( "field-changed", config.hasChanged ) ]
             ]
             [ Html.span [ class "command-input-prefix" ] [ Html.text config.commandPrefix ]
             , Html.textarea
@@ -1884,7 +1847,6 @@ commandField config =
                 , rows 1
                 , attribute "data-auto-resize" "true"
                 , spellcheck False
-                , readonly config.readOnly
                 , id config.id
                 ]
                 []
@@ -1899,7 +1861,6 @@ textArea :
     , value : String
     , onInput : String -> Flow Model ()
     , hasChanged : Bool
-    , readOnly : Bool
     , id : String
     }
     -> Html (Flow Model ())
@@ -1912,7 +1873,6 @@ textArea config =
             , class "form-input"
             , class "form-input-textarea"
             , classList [ ( "field-changed", config.hasChanged ) ]
-            , readonly config.readOnly
             , id config.id
             , rows 1
             , attribute "data-auto-resize" "true"
@@ -1927,7 +1887,6 @@ codeField :
     , value : String
     , onInput : String -> Flow Model ()
     , hasChanged : Bool
-    , readOnly : Bool
     , id : String
     , language : String
     }
@@ -1938,8 +1897,7 @@ codeField config =
             [ value config.value
             , Events.onInput config.onInput
             , class "code-input"
-            , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
-            , readonly config.readOnly
+            , classList [ ( "field-changed", config.hasChanged ) ]
             , id config.id
             , attribute "language" config.language
             , attribute "aria-label" config.label
@@ -1960,7 +1918,6 @@ listField :
     , onAdd : String -> Flow Model ()
     , onRemoveLast : Flow Model ()
     , onRemoveIndex : Int -> Flow Model ()
-    , readOnly : Bool
     , id : String
     , hasChanged : Bool
     }
@@ -1981,7 +1938,6 @@ autocompleteListField :
     , onAddItem : String -> Flow Model ()
     , onRemoveIndex : Int -> Flow Model ()
     , onActiveIndexChange : Int -> Flow Model ()
-    , readOnly : Bool
     , id : String
     , hasChanged : Bool
     , query : String
@@ -2033,7 +1989,7 @@ autocompleteListField config =
         , inputValue = config.query
         , activeIndex = config.activeIndex
         , allowFreeText = True
-        , readOnly = config.readOnly
+        , readOnly = False
         , placeholder = ""
         , id = config.id
         , hasChanged = config.hasChanged
@@ -2056,7 +2012,6 @@ listFieldTagWrapper :
             , onAdd : String -> Flow Model ()
             , onRemoveLast : Flow Model ()
             , onRemoveIndex : Int -> Flow Model ()
-            , readOnly : Bool
             , id : String
             , hasChanged : Bool
         }
@@ -2066,7 +2021,6 @@ listFieldTagWrapper mOnInput mExtraKeyBindings config =
         [ class "tag-wrapper"
         , class "form-input"
         , classList [ ( "field-changed", config.hasChanged ) ]
-        , classList [ ( "disabled", config.readOnly ) ]
         ]
         (List.indexedMap
             (\i t ->
@@ -2087,29 +2041,21 @@ listFieldTagWrapper mOnInput mExtraKeyBindings config =
                                         ++ colorStyle
                                     )
                                     [ t.body
-                                    , if config.readOnly then
-                                        Html.nothing
-
-                                      else
-                                        iconCustom True
-                                            "close_small"
-                                            [ class "remove-selected-icon"
-                                            , Events.preventDefaultOn "click" (Decode.succeed ( config.onRemoveIndex i, True ))
-                                            ]
+                                    , iconCustom True
+                                        "close_small"
+                                        [ class "remove-selected-icon"
+                                        , Events.preventDefaultOn "click" (Decode.succeed ( config.onRemoveIndex i, True ))
+                                        ]
                                     ]
 
                             Nothing ->
                                 Html.div (class "tag" :: colorStyle)
                                     [ t.body
-                                    , if config.readOnly then
-                                        Html.nothing
-
-                                      else
-                                        iconCustom True
-                                            "close_small"
-                                            [ class "remove-selected-icon"
-                                            , Events.onClick (config.onRemoveIndex i)
-                                            ]
+                                    , iconCustom True
+                                        "close_small"
+                                        [ class "remove-selected-icon"
+                                        , Events.onClick (config.onRemoveIndex i)
+                                        ]
                                     ]
                 in
                 ( "tag-" ++ String.fromInt i
@@ -2118,60 +2064,56 @@ listFieldTagWrapper mOnInput mExtraKeyBindings config =
             )
             config.tags
             ++ [ ( config.id ++ "-" ++ String.fromInt (List.length config.tags)
-                 , if config.readOnly then
-                    Html.nothing
+                 , let
+                    handleKey =
+                        let
+                            inputVal =
+                                Decode.at [ "target", "value" ] Decode.string
 
-                   else
-                    let
-                        handleKey =
-                            let
-                                inputVal =
-                                    Decode.at [ "target", "value" ] Decode.string
+                            inputEmpty =
+                                inputVal |> Decode.map (String.trim >> String.isEmpty)
 
-                                inputEmpty =
-                                    inputVal |> Decode.map (String.trim >> String.isEmpty)
+                            autocompleteBindings =
+                                Maybe.withDefault [] mExtraKeyBindings
 
-                                autocompleteBindings =
-                                    Maybe.withDefault [] mExtraKeyBindings
+                            baseBindings =
+                                [ ( Keyboard.space
+                                  , Decode.ifM (inputEmpty |> Decode.map not) (inputVal |> Decode.map (\v -> ( config.onAdd (String.trim v), True )))
+                                  )
+                                , ( Keyboard.enter
+                                  , Decode.ifM (inputEmpty |> Decode.map not) (inputVal |> Decode.map (\v -> ( config.onAdd (String.trim v), True )))
+                                  )
+                                , ( Keyboard.backspace
+                                  , Decode.ifM inputEmpty (Decode.succeed ( config.onRemoveLast, False ))
+                                  )
+                                ]
+                        in
+                        Keyboard.decodeCombinations (autocompleteBindings ++ baseBindings)
+                   in
+                   Html.input
+                    ([ id config.id
+                     , type_ "text"
+                     , Events.preventDefaultOn "keydown" handleKey
+                     , Events.on "blur"
+                        (Decode.at [ "target", "value" ] Decode.string
+                            |> Decode.map
+                                (\v ->
+                                    if String.isEmpty (String.trim v) then
+                                        Flow.none
 
-                                baseBindings =
-                                    [ ( Keyboard.space
-                                      , Decode.ifM (inputEmpty |> Decode.map not) (inputVal |> Decode.map (\v -> ( config.onAdd (String.trim v), True )))
-                                      )
-                                    , ( Keyboard.enter
-                                      , Decode.ifM (inputEmpty |> Decode.map not) (inputVal |> Decode.map (\v -> ( config.onAdd (String.trim v), True )))
-                                      )
-                                    , ( Keyboard.backspace
-                                      , Decode.ifM inputEmpty (Decode.succeed ( config.onRemoveLast, False ))
-                                      )
-                                    ]
-                            in
-                            Keyboard.decodeCombinations (autocompleteBindings ++ baseBindings)
-                    in
-                    Html.input
-                        ([ id config.id
-                         , type_ "text"
-                         , Events.preventDefaultOn "keydown" handleKey
-                         , Events.on "blur"
-                            (Decode.at [ "target", "value" ] Decode.string
-                                |> Decode.map
-                                    (\v ->
-                                        if String.isEmpty (String.trim v) then
-                                            Flow.none
-
-                                        else
-                                            config.onAdd (String.trim v)
-                                    )
-                            )
-                         , class "list-field-input"
-                         , attribute "autocomplete" "off"
-                         ]
-                            ++ (mOnInput
-                                    |> Maybe.map (\inputConfig -> [ Events.onInput inputConfig.onInput, value inputConfig.value ])
-                                    |> Maybe.withDefault []
-                               )
+                                    else
+                                        config.onAdd (String.trim v)
+                                )
                         )
-                        []
+                     , class "list-field-input"
+                     , attribute "autocomplete" "off"
+                     ]
+                        ++ (mOnInput
+                                |> Maybe.map (\inputConfig -> [ Events.onInput inputConfig.onInput, value inputConfig.value ])
+                                |> Maybe.withDefault []
+                           )
+                    )
+                    []
                  )
                ]
         )

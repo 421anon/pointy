@@ -112,7 +112,6 @@ type alias Table a =
     , newDraft : Maybe a
     , addMode : AddMode
     , nameEditOnly : Bool
-    , inspected : Bool
     , dnd : DnDList.Model
     , dndAffected : List Int
     , selectExistingSteps : SelectState
@@ -758,7 +757,6 @@ initialTable =
     , newDraft = Nothing
     , addMode = AddNew
     , nameEditOnly = False
-    , inspected = False
     , dnd = dndSystem.model
     , dndAffected = []
     , selectExistingSteps = initSelectState
@@ -1160,26 +1158,8 @@ updateStepRecordTable new old =
 
         mergedRecords =
             ApiData.update mergeRecords new.records old.records
-
-        refreshedEdited =
-            if old.inspected then
-                old.edited
-                    |> Maybe.andThen .id
-                    |> Maybe.andThen
-                        (\editedId ->
-                            mergedRecords
-                                |> ApiData.toMaybe
-                                |> Maybe.andThen (List.find (\record -> record.id == Just editedId))
-                        )
-
-            else
-                old.edited
     in
-    { old
-        | records = mergedRecords
-        , edited = refreshedEdited
-        , inspected = old.inspected && Maybe.isJust refreshedEdited
-    }
+    { old | records = mergedRecords }
 
 
 updateProjectRecordList : List ProjectRecord -> List ProjectRecord -> List ProjectRecord

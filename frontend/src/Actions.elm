@@ -50,17 +50,17 @@ toggleShowHiddenRecords lens =
     Flow.over (remkT lens << showHiddenRecords) not
 
 
-toggleAddOrEditRecordForm : Bool -> TableSpec (BaseRecord a) -> Maybe Int -> Flow Model ()
-toggleAddOrEditRecordForm inspected spec mRecordId =
+toggleAddOrEditRecordForm : TableSpec (BaseRecord a) -> Maybe Int -> Flow Model ()
+toggleAddOrEditRecordForm spec mRecordId =
     let
         updateTable t =
             let
                 stashed =
-                    case ( t.inspected, t.edited ) of
-                        ( False, Just r ) ->
+                    case t.edited of
+                        Just r ->
                             set (draftAt r.id) (Just r) t
 
-                        _ ->
+                        Nothing ->
                             t
 
                 mRecordToEdit =
@@ -79,15 +79,9 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
                 clickedNewRecord =
                     mRecordToEdit == Nothing
 
-                switchingMode =
-                    togglingCurrentRecord && inspected /= t.inspected
-
-                newedited =
-                    if formIsOpen && not switchingMode && (togglingCurrentRecord || (clickedNewRecord && notEditingExistingRecord)) then
+                newEdited =
+                    if formIsOpen && (togglingCurrentRecord || (clickedNewRecord && notEditingExistingRecord)) then
                         Nothing
-
-                    else if inspected then
-                        Just (Maybe.withDefault (TableSpec.getDefaultRecord spec) mRecordToEdit)
 
                     else
                         get (draftAt mRecordId) stashed
@@ -95,7 +89,7 @@ toggleAddOrEditRecordForm inspected spec mRecordId =
                             |> Maybe.withDefault (TableSpec.getDefaultRecord spec)
                             |> Just
             in
-            { stashed | nameEditOnly = False, inspected = inspected, edited = newedited }
+            { stashed | nameEditOnly = False, edited = newEdited }
 
         scrollAction =
             Flow.attemptTask (Scroll.scrollY (Maybe.unwrap ("table-" ++ TableSpec.getName spec) String.fromInt mRecordId) 0 0)
@@ -565,11 +559,11 @@ endRecordEdit lens =
         (\t ->
             let
                 cleared =
-                    case ( t.inspected, t.edited ) of
-                        ( False, Just r ) ->
+                    case t.edited of
+                        Just r ->
                             set (draftAt r.id) Nothing t
 
-                        _ ->
+                        Nothing ->
                             t
             in
             { cleared | edited = Nothing, addMode = AddNew }
@@ -982,7 +976,7 @@ addStepWithArg spec argName value =
             TableSpec.getLens spec << where_ (not << .nameEditOnly) << edited << just
     in
     Flow.unlessHas (editedDraft << where_ (.id >> Maybe.isNothing))
-        (toggleAddOrEditRecordForm False spec Nothing)
+        (toggleAddOrEditRecordForm spec Nothing)
         |> Flow.seq (Flow.setAll (editedDraft << args << Accessors.key argName) (Just value))
 
 
