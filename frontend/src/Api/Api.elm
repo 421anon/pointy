@@ -29,6 +29,7 @@ module Api.Api exposing
     , saveRecord
     , saveSrcFile
     , srcFileDownloadUrl
+    , srcFileRawUrl
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
@@ -119,6 +120,12 @@ stepFileDownloadUrl : Int -> Maybe String -> List String -> String
 stepFileDownloadUrl stepId commit filePath =
     UrlBuilder.absolute [ "backend", "step-files", "download" ]
         (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
+
+
+srcFileRawUrl : Int -> List String -> String
+srcFileRawUrl id filePath =
+    "/backend/src-files/raw?id=" ++ String.fromInt id ++ "&path=" ++ String.join "/" filePath
+
 
 
 stepFileBundleUrl : Int -> String -> List String -> String

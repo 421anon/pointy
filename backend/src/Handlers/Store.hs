@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
+module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, fromRawBase, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
 
 import ApiTypes (DynamicJson (..))
 
@@ -28,6 +28,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Text.Encoding.Error (lenientDecode)
 import GHC.Generics (Generic)
 import Handlers.RunStep (buildExtras)
+
 import qualified Handlers.Zip as Zip
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
@@ -89,15 +90,22 @@ stepDownloadHandler stepId mCommit rel = do
     outPath <- resolveStepOutPath stepId mCommit
     downloadHandler outPath rel
 
-stepRawHandler :: Int -> Maybe Text -> [String] -> Tagged Handler Application
-stepRawHandler stepId mCommit segments = Tagged $ \_ respond -> do
-    result <- runHandler $ resolveStepOutPath stepId mCommit
+-- | Resolves a base directory and serves the file reached by appending
+-- @segments@ to it, validating that the result stays inside the base.
+fromRawBase :: Handler FilePath -> [String] -> Tagged Handler Application
+fromRawBase resolveBase segments = Tagged $ \_ respond -> do
+    result <- runHandler resolveBase
     case result of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
-        Right outPathText -> do
-            let outPathSegments = drop 1 (splitPath (T.unpack outPathText))
-                allSegments = outPathSegments ++ segments
+        Right basePath -> do
+            let baseSegments = drop 1 (splitPath basePath)
+                allSegments = baseSegments ++ segments
             storeFilesHandler' allSegments respond
+
+
+stepRawHandler :: Int -> Maybe Text -> [String] -> Tagged Handler Application
+stepRawHandler stepId mCommit segments =
+    fromRawBase (T.unpack <$> resolveStepOutPath stepId mCommit) segments
 
 stepBundleHandler :: Int -> Text -> [String] -> Tagged Handler Application
 stepBundleHandler stepId commit = stepRawHandler stepId (Just commit)

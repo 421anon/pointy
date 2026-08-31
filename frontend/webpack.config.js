@@ -67,6 +67,7 @@ module.exports = {
         target: process.env.PROXY_TARGET || "http://localhost:8080",
         secure: !process.env.PROXY_TARGET, // disable SSL for local dev
         changeOrigin: true,
+        pathRewrite: { "^/backend": "" },
       },
     ],
   },

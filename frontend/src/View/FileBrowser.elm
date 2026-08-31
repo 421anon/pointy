@@ -468,20 +468,31 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         Html.nothing
 
                               else if isHtml && not file.seekable then
-                                case mDirCtx of
-                                    Just (OutputDir stepId_ commit_) ->
-                                        let
-                                            iframeId =
-                                                "iframe-" ++ anchor
+                                let
+                                    mHtmlSrc =
+                                        case mDirCtx of
+                                            Just (OutputDir stepId_ commit_) ->
+                                                Just (Api.stepFileBundleUrl stepId_ commit_ path)
 
-                                            zoomAction factor =
-                                                mRecordId
-                                                    |> Maybe.map (\recordId -> Actions.zoomHtmlFileBy (fileZoomAt recordId path) iframeId factor)
-                                                    |> Maybe.withDefault Flow.none
-                                        in
+                                            Just (SrcDir recordId) ->
+                                                Just (Api.srcFileRawUrl recordId path)
+
+                                            Nothing ->
+                                                Nothing
+
+                                    iframeId =
+                                        "iframe-" ++ anchor
+
+                                    zoomAction factor =
+                                        mRecordId
+                                            |> Maybe.map (\recordId -> Actions.zoomHtmlFileBy (fileZoomAt recordId path) iframeId factor)
+                                            |> Maybe.withDefault Flow.none
+                                in
+                                Html.viewMaybe
+                                    (\htmlSrc ->
                                         Html.div [ class "iframe-zoom-wrapper" ]
                                             [ Html.node "iframe"
-                                                [ src (Api.stepFileBundleUrl stepId_ commit_ path)
+                                                [ src htmlSrc
                                                 , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
                                                 , class "file-html-viewer"
                                                 , id iframeId
@@ -498,9 +509,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 ]
                                                 [ icon True "zoom_out" ]
                                             ]
-
-                                    _ ->
-                                        Html.nothing
+                                    )
+                                    mHtmlSrc
 
                               else if file.seekable then
                                 let

@@ -3,7 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.SrcFiles (listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
+module Handlers.SrcFiles (getStepSrcFilesPath, listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, srcRawHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Monad (unless, when)
@@ -16,9 +16,10 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
-import Handlers.Store (DirEntry, FileChunk, downloadHandler, listHandler, parseSeekOffset, seekHandler)
+import Handlers.Store (DirEntry, FileChunk, downloadHandler, fromRawBase, listHandler, parseSeekOffset, seekHandler)
 import OutPaths (withWriteRepoTransaction)
-import Servant (Handler, Header, Headers, NoContent (..), ServerError (..), err400, err404, err409, err500, throwError)
+import Network.Wai (Application)
+import Servant (Handler, Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, (</>))
@@ -62,6 +63,15 @@ downloadSrcFilesHandler :: Int -> FilePath -> Handler (Headers '[Header "Content
 downloadSrcFilesHandler stepId rel = do
     fullBasePath <- getStepSrcFilesPath stepId
     downloadHandler (T.pack fullBasePath) rel
+
+
+-- | Serves a source file inline (no download disposition) so HTML and other
+-- renderable sources can be shown in preview iframes.
+srcRawHandler :: Int -> FilePath -> Tagged Handler Application
+srcRawHandler stepId rel =
+    fromRawBase (getStepSrcFilesPath stepId) (splitDirectories rel)
+
+
 
 seekSrcFilesHandler :: Int -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
 seekSrcFilesHandler stepId rel line byteOffset bytes = do

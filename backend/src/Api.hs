@@ -283,6 +283,15 @@ type SrcFileSeek =
         :> QueryParam' '[Required] "bytes" Int
         :> Get '[JSON] FileChunk
 
+
+type RawSrcFile =
+    "src-files"
+        :> "raw"
+        :> Description "Serves the raw bytes of a source file (inline, no download disposition) for preview rendering."
+        :> ReqId
+        :> QueryParam' '[Required] "path" FilePath
+        :> Raw
+
 type GetProjects =
     "projects"
         :> Description "Returns all project records, optionally at a specific user-repo commit."
@@ -388,6 +397,7 @@ type API =
         :<|> ListSrcFiles
         :<|> DownloadSrcFile
         :<|> SrcFileSeek
+        :<|> RawSrcFile
         :<|> UpdateSrcFile
         :<|> CreateSrcFile
         :<|> DeleteSrcFile

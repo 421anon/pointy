@@ -485,31 +485,21 @@ compareSelectionMode sel =
     let
         mime =
             Maybe.withDefault "" sel.mimeType
+
+        extension =
+            String.toLower sel.fileName
+                |> String.split "."
+                |> List.last
+                |> Maybe.withDefault ""
     in
     if String.startsWith "image/" mime then
         CompareImage
 
+    else if mime == "text/html" || extension == "html" || extension == "htm" then
+        CompareHtml
+
     else
-        let
-            extension =
-                String.toLower sel.fileName
-                    |> String.split "."
-                    |> List.last
-                    |> Maybe.withDefault ""
-
-            previewableHtml =
-                case sel.source of
-                    FromOutput _ ->
-                        True
-
-                    FromSrc ->
-                        False
-        in
-        if previewableHtml && (mime == "text/html" || extension == "html" || extension == "htm") then
-            CompareHtml
-
-        else
-            CompareText
+        CompareText
 
 
 getProjects : Model -> Table ProjectRecord

@@ -378,7 +378,7 @@ rawUrl sel =
             Api.stepFileBundleUrl sel.recordId commit_ sel.path
 
         FromSrc ->
-            Api.srcFileDownloadUrl sel.recordId sel.path
+            Api.srcFileRawUrl sel.recordId sel.path
 
 
 viewTextDiff : Model -> CompareActiveData -> String -> String -> Html (Flow Model ())
