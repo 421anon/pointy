@@ -87,10 +87,9 @@ viewTable :
     , srcFilesSection : BaseRecord a -> Html (Flow Model ())
     , onRecordClick : BaseRecord a -> Maybe (Flow Model ())
     , isOpen : BaseRecord a -> Bool
-    , isSrcOpen : BaseRecord a -> Bool
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen, isSrcOpen } =
+viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen } =
     let
         lens =
             TableSpec.getLens spec
@@ -122,18 +121,44 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
         mProjectId =
             try currentProjectId model
 
+        recordIsEditing record =
+            Maybe.unwrap False
+                (\editedRecord -> editedRecord.id == record.id && record.id /= Nothing)
+                table.edited
+
+        sourceFilesNeedLoading record =
+            case Maybe.map .children (TableSpec.getSrcFilesView spec record) of
+                Just NotAsked ->
+                    True
+
+                Just (Error _) ->
+                    True
+
+                _ ->
+                    False
+
+        toggleRecordEditor record =
+            let
+                loadSourceFiles =
+                    if sourceFilesNeedLoading record then
+                        Maybe.unwrap (Flow.pure ())
+                            (\recordId -> Actions.toggleSrcEntry recordId (Just True) [] |> Flow.return ())
+                            record.id
+
+                    else
+                        Flow.pure ()
+            in
+            Actions.toggleAddOrEditRecordForm spec record.id
+                |> Flow.seq loadSourceFiles
+
         recordActions =
             [ -- Directory button
               { shouldShow = \record -> TableSpec.getStatus spec record == Success StatusSuccess
               , render = \record -> Html.viewMaybe (dirButton (isOpen record) []) record.id
               }
-            , -- Source directory button
-              { shouldShow = \record -> TableSpec.getSrcFilesView spec record /= Nothing
-              , render = \record -> Html.viewMaybe (dirCodeButton (isSrcOpen record) []) record.id
-              }
             , -- Edit button
               { shouldShow = \record -> not isReadOnly && record.id /= Nothing
-              , render = \record -> viewIconButtonWithTooltip "edit" True "Edit" <| Actions.toggleAddOrEditRecordForm spec record.id
+              , render = \record -> viewIconButtonWithTooltip "edit" True "Edit" <| toggleRecordEditor record
               }
             , -- Share button (shareable only)
               { shouldShow = \record -> TableSpec.getShareable spec record && record.id /= Nothing
@@ -319,13 +344,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         aStatus
 
                 recordNameEditable =
-                    let
-                        editing =
-                            Maybe.unwrap False
-                                (\r -> r.id == record.id && record.id /= Nothing)
-                                table.edited
-                    in
-                    if editing && table.nameEditOnly then
+                    if recordIsEditing record && table.nameEditOnly then
                         Html.input
                             [ type_ "text"
                             , value (Maybe.map .name table.edited |> Maybe.withDefault record.name)
@@ -426,7 +445,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
                                 , mtimeBadge
-                                , Html.viewIf (record.id == Nothing) <|
+                                , Html.viewIf (record.id == Nothing || record.isUpdating) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
                                         [ iconCustom True "progress_activity" [ class "pending-record-icon" ]
                                         ]
@@ -468,15 +487,13 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 , mtimeBadge
                                 ]
                             ]
-                        , Html.viewIf (TableSpec.getSrcFilesView spec record |> Maybe.map .expanded |> Maybe.withDefault False) (srcFilesSection record)
                         , let
                             editing =
-                                Maybe.unwrap False
-                                    (\r -> r.id == record.id && record.id /= Nothing)
-                                    table.edited
+                                recordIsEditing record
                           in
                           Html.viewIf (editing && not table.nameEditOnly)
-                            (Html.viewMaybe (viewAddOrEditRecordForm model spec table)
+                            (Html.viewMaybe
+                                (\editedRecord -> viewAddOrEditRecordForm model spec table (srcFilesSection record) editedRecord)
                                 table.edited
                             )
                         , Html.viewIf (TableSpec.getDirectoryView spec record |> Maybe.map .expanded |> Maybe.withDefault False) (directorySection record)
@@ -594,7 +611,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 -- This would be editing an existing record (handled elsewhere)
                                 Nothing
                         )
-                    |> Maybe.map (viewAddOrEditRecordForm model spec table)
+                    |> Maybe.map (viewAddOrEditRecordForm model spec table Html.nothing)
                     |> Maybe.withDefault Html.nothing
                 , Html.viewIf table.isOpen viewRecordsSection
                 ]
@@ -602,11 +619,15 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
     viewContent
 
 
-viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> BaseRecord a -> Html (Flow Model ())
-viewAddOrEditRecordForm model spec table record =
+viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
+viewAddOrEditRecordForm model spec table extraSection record =
     let
         editing =
             record.id /= Nothing && (table.addMode /= AddFromOtherProject)
+
+        savingInFlight =
+            try (records << success << by .id record.id) table
+                |> Maybe.unwrap False .isUpdating
 
         extraFields =
             case TableSpec.getTag spec of
@@ -722,6 +743,19 @@ viewAddOrEditRecordForm model spec table record =
                 ( True, _ ) ->
                     "Edit " ++ displayName
 
+        cancelAction =
+            let
+                endEdit =
+                    Actions.endRecordEdit (TableSpec.getLens spec)
+            in
+            case record.id of
+                Just recordId ->
+                    Actions.discardSrcFileChanges recordId
+                        |> Flow.seq endEdit
+
+                Nothing ->
+                    endEdit
+
         handleEnter =
             let
                 targetDecoder =
@@ -742,26 +776,32 @@ viewAddOrEditRecordForm model spec table record =
     in
     Html.div [ class "table-form-wrapper" ]
         [ Html.div [ formClasses, Events.on "keydown" handleEnter ]
-            [ Html.header [ class "form-header" ] [ Html.text headerTitle ]
-            , Html.viewMaybe
-                (\d -> Html.p [ class "form-intro" ] [ Html.text d ])
-                (if editing || table.addMode == AddNew then
-                    TableSpec.getDescription spec
+            [ Html.div [ class "loading-wrapper" ]
+                [ Html.header [ class "form-header" ] [ Html.text headerTitle ]
+                , Html.viewMaybe
+                    (\d -> Html.p [ class "form-intro" ] [ Html.text d ])
+                    (if editing || table.addMode == AddNew then
+                        TableSpec.getDescription spec
 
-                 else
-                    Nothing
-                )
-            , Html.div [ class "form-body" ]
-                [ Html.viewIf (not editing && TableSpec.getTag spec /= TagProjects) modeSelector
-                , Html.viewIf (not editing && table.addMode == AddFromOtherProject && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
-                , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
-                , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
-                , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|
-                    Html.div [ class "form-group" ] extraFields
-                , Html.div [ class "form-actions" ]
-                    [ Html.button [ id "save-button", Events.onClick (TableSpec.getUpsertRecord spec), class "btn", disabled table.isUpdating ] [ Html.text "Save" ]
-                    , Html.button [ Events.onClick (Actions.endRecordEdit (TableSpec.getLens spec)), class "btn" ] [ Html.text "Cancel" ]
+                     else
+                        Nothing
+                    )
+                , Html.div [ class "form-body" ]
+                    [ Html.viewIf (not editing && TableSpec.getTag spec /= TagProjects) modeSelector
+                    , Html.viewIf (not editing && table.addMode == AddFromOtherProject && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
+                    , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
+                    , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
+                    , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|
+                        Html.div [ class "form-group" ] extraFields
+                    , extraSection
+                    , Html.div [ class "form-actions" ]
+                        [ Html.button [ id "save-button", Events.onClick (TableSpec.getUpsertRecord spec), class "btn", disabled table.isUpdating ]
+                            [ Html.text "Save" ]
+                        , Html.button [ Events.onClick cancelAction, class "btn" ] [ Html.text "Cancel" ]
+                        ]
                     ]
+                , Html.viewIf savingInFlight <|
+                    Html.div [ class "loading-overlay" ] [ iconCustom True "progress_activity" [ class "loading-icon" ] ]
                 ]
             ]
         ]
@@ -2212,18 +2252,6 @@ dirButton isOpen dirPath recordId =
         (Actions.toggleOutputEntry recordId Nothing dirPath |> Flow.map (always ()))
 
 
-dirCodeButton : Bool -> List String -> Int -> Html (Flow Model ())
-dirCodeButton isOpen dirPath recordId =
-    viewIconButtonWithTooltip
-        (if isOpen then
-            "folder_open"
-
-         else
-            "folder_code"
-        )
-        True
-        "Browse source files"
-        (Actions.toggleSrcEntry recordId Nothing dirPath |> Flow.map (always ()))
 
 
 recordAutocompleteStateKey : String -> String -> String -> List StepArgValue -> Int -> StepArgValue -> String

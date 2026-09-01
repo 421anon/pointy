@@ -249,6 +249,7 @@ getMimeType path = do
 
 mimeTypeByExtension :: FilePath -> Maybe Text
 mimeTypeByExtension path = case map toLower (takeExtension path) of
+    ".txt" -> Just "text/plain"
     ".css" -> Just "text/css"
     ".js" -> Just "application/javascript"
     ".mjs" -> Just "application/javascript"

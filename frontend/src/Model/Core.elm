@@ -953,6 +953,8 @@ type alias DirectoryFile =
     , delimitedGrid : Maybe DelimitedGrid
     , plainLineCount : Int
     , editedContent : Maybe String
+    , isNew : Bool
+    , isDeleted : Bool
     }
 
 
@@ -970,33 +972,123 @@ type DirectoryItem
     | Folder DirectoryFolder
 
 
+hasFileChanges : DirectoryFile -> Bool
+hasFileChanges file_ =
+    file_.isNew || file_.isDeleted || Maybe.isJust file_.editedContent
+
+
+srcFileChangePaths : List String -> DirectoryFolder -> List (List String)
+srcFileChangePaths parent folder_ =
+    folder_.children
+        |> ApiData.toMaybe
+        |> Maybe.unwrap []
+            (Dict.toList
+                >> List.concatMap
+                    (\( name, item ) ->
+                        let
+                            path =
+                                parent ++ [ name ]
+                        in
+                        case item of
+                            File file_ ->
+                                if hasFileChanges file_ then
+                                    [ path ]
+
+                                else
+                                    []
+
+                            Folder child ->
+                                srcFileChangePaths path child
+                    )
+            )
+
+
+closeDirectoryFileViews : DirectoryFolder -> DirectoryFolder
+closeDirectoryFileViews folder_ =
+    { folder_ | children = ApiData.map (Dict.map (always closeDirectoryFileView)) folder_.children }
+
+
+closeDirectoryFileView : DirectoryItem -> DirectoryItem
+closeDirectoryFileView item =
+    case item of
+        File file_ ->
+            File { file_ | view = closeFileView file_.view }
+
+        Folder child ->
+            Folder (closeDirectoryFileViews child)
+
+
+closeFileView : FileView -> FileView
+closeFileView view_ =
+    { view_ | isViewing = False }
+
+
+discardDirectoryFileChanges : DirectoryFolder -> DirectoryFolder
+discardDirectoryFileChanges folder_ =
+    { folder_
+        | children =
+            ApiData.map
+                (Dict.toList
+                    >> List.filterMap
+                        (\( name, item ) ->
+                            case item of
+                                File file_ ->
+                                    if file_.isNew then
+                                        Nothing
+
+                                    else
+                                        Just ( name, File { file_ | editedContent = Nothing, isDeleted = False, view = closeFileView file_.view } )
+
+                                Folder child ->
+                                    Just ( name, Folder (discardDirectoryFileChanges child) )
+                        )
+                    >> Dict.fromList
+                )
+                folder_.children
+    }
+
+
 updateDirectoryChildren : Dict String DirectoryItem -> Dict String DirectoryItem -> Dict String DirectoryItem
 updateDirectoryChildren fetched previous =
-    Dict.map
-        (\key fetchedItem ->
-            case ( fetchedItem, Dict.get key previous ) of
-                ( File new, Just (File old) ) ->
-                    File
-                        { new
-                            | content = old.content
-                            , view = old.view
-                            , delimitedGrid = old.delimitedGrid
-                            , plainLineCount = old.plainLineCount
-                            , editedContent = old.editedContent
-                        }
+    Dict.union
+        (Dict.map
+            (\key fetchedItem ->
+                case ( fetchedItem, Dict.get key previous ) of
+                    ( File new, Just (File old) ) ->
+                        File
+                            { new
+                                | content = old.content
+                                , view = old.view
+                                , delimitedGrid = old.delimitedGrid
+                                , plainLineCount = old.plainLineCount
+                                , editedContent = old.editedContent
+                                , isDeleted = old.isDeleted
+                            }
 
-                ( Folder new, Just (Folder old) ) ->
-                    Folder
-                        { new
-                            | children = old.children
-                            , expanded = old.expanded
-                            , extras = old.extras
-                        }
+                    ( Folder new, Just (Folder old) ) ->
+                        Folder
+                            { new
+                                | children = old.children
+                                , expanded = old.expanded
+                                , extras = old.extras
+                            }
 
-                _ ->
-                    fetchedItem
+                    _ ->
+                        fetchedItem
+            )
+            fetched
         )
-        fetched
+        (Dict.filter (always directoryItemIsNew) previous)
+
+
+directoryItemIsNew : DirectoryItem -> Bool
+directoryItemIsNew item =
+    case item of
+        File file_ ->
+            file_.isNew
+
+        Folder _ ->
+            False
 
 
 type alias ColumnMeta =

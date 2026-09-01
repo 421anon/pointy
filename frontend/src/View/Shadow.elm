@@ -94,7 +94,7 @@ viewProject model proj =
                                 |> Maybe.filter (.id >> (==) proj.id)
                     in
                     Html.viewIf (not isReadOnly)
-                        (Maybe.map2 (\spec -> viewAddOrEditRecordForm model spec (get Lenses.projects model))
+                        (Maybe.map2 (\spec -> viewAddOrEditRecordForm model spec (get Lenses.projects model) Html.nothing)
                             mProjectSpec
                             mEditedProject
                             |> Maybe.withDefault Html.nothing
@@ -282,5 +282,4 @@ viewSection model sectionName entry steps =
                 record.id
                     |> Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ()))
         , isOpen = \r -> TableSpec.getDirectoryView spec r |> Maybe.map .expanded |> Maybe.withDefault False
-        , isSrcOpen = \r -> TableSpec.getSrcFilesView spec r |> Maybe.map .expanded |> Maybe.withDefault False
         }
