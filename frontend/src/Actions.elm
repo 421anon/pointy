@@ -530,6 +530,11 @@ upsertStep spec =
                                                 |> Flow.seq loadProjects
 
                                         ( Just stepId, _ ) ->
+                                            let
+                                                srcFilePaths =
+                                                    try (lens << recordById stepId << srcFiles) model
+                                                        |> Maybe.unwrap [] (Model.srcFileChangePaths [])
+                                            in
                                             Flow.try (lens << recordById stepId << args)
                                                 (\originalArgs ->
                                                     let
@@ -544,9 +549,16 @@ upsertStep spec =
 
                                                                     else
                                                                         r.runState
+                                                                , srcFiles = Model.closeDirectoryFileViews r.srcFiles
+                                                                , srcFileDraft = r.srcFileDraft
+                                                                , srcFileWriting = r.srcFileWriting
                                                             }
+
+                                                        saveSrcFiles =
+                                                            saveSrcFileChanges stepId srcFilePaths
+                                                                |> Flow.return ()
                                                     in
-                                                    saveExistingRecord lens edited_ mergeFn spec
+                                                    saveExistingRecordWith saveSrcFiles lens edited_ mergeFn spec
                                                 )
                                 )
                         )
@@ -571,7 +583,12 @@ endRecordEdit lens =
 
 
 saveExistingRecord : A_Traversal Model (Table (BaseRecord a)) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model ()
-saveExistingRecord lens record mergeFn spec =
+saveExistingRecord =
+    saveExistingRecordWith (Flow.pure ())
+
+
+saveExistingRecordWith : Flow Model () -> A_Traversal Model (Table (BaseRecord a)) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model ()
+saveExistingRecordWith beforeRequest lens record mergeFn spec =
     let
         clearUpdating =
             Flow.forAll now
@@ -592,6 +609,7 @@ saveExistingRecord lens record mergeFn spec =
             )
         )
         |> Flow.seq (endRecordEdit lens)
+        |> Flow.seq beforeRequest
         |> Flow.seq
             (callApi void (Api.saveRecord spec record)
                 |> FlowError.foldResult (always clearUpdating) (always clearUpdating)
@@ -1823,25 +1841,107 @@ toggleSrcEntry recordId mOpen path =
 
 updateSrcFileContent : Int -> List String -> String -> Flow Model ()
 updateSrcFileContent recordId path content =
-    Flow.setAll (currentProject << success << tables << values << srcFilesFileEditedContentAt recordId path) (Just content)
-
-
-saveSrcFile : Int -> List String -> Flow Model ()
-saveSrcFile recordId path =
     let
         allStepTables =
             currentProject << success << tables << values
     in
-    Flow.whenHas (allStepTables << srcFilesFileEditedContentAt recordId path << just) <|
-        \content ->
+    Flow.forAll (allStepTables << srcFilesFileContentAt recordId path << success) <|
+        \savedContent ->
+            Flow.setAll (allStepTables << srcFilesFileEditedContentAt recordId path)
+                (if content == savedContent then
+                    Nothing
+
+                 else
+                    Just content
+                )
+
+
+saveSrcFileChange : Int -> List String -> Flow Model ()
+saveSrcFileChange recordId path =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+
+        fileTraversal =
+            allStepTables << srcFilesItemAtPath recordId path << file
+
+        saveContent isNew content =
             predictSrcFileChange recordId
                 path
-                (Flow.setAll (allStepTables << srcFilesFileContentAt recordId path) (Success content)
-                    |> Flow.seq (Flow.setAll (allStepTables << srcFilesFileEditedContentAt recordId path) Nothing)
-                    |> Flow.seq (Flow.setAll (allStepTables << plainLineCountAt Route.Source recordId path) (Model.countLines content))
-                    |> Flow.seq (Flow.setAll (allStepTables << srcFilesFileIsViewingAt recordId path) False)
+                (Flow.over fileTraversal
+                    (\file_ ->
+                        { file_
+                            | content = Success content
+                            , size = String.length content
+                            , plainLineCount = Model.countLines content
+                            , editedContent = Nothing
+                            , isNew = False
+                        }
+                    )
                 )
-                (Api.saveSrcFile recordId path content)
+                (if isNew then
+                    Api.createSrcFile recordId path content
+
+                 else
+                    Api.saveSrcFile recordId path content
+                )
+    in
+    Flow.forAll fileTraversal <|
+        \file_ ->
+            if file_.isDeleted then
+                predictSrcFileChange recordId
+                    path
+                    (setSrcFileEntry recordId path Nothing)
+                    (Api.deleteSrcFile recordId path)
+
+            else
+                let
+                    contentToSave =
+                        if file_.isNew then
+                            Maybe.orElse file_.editedContent (ApiData.toMaybe file_.content)
+
+                        else
+                            file_.editedContent
+                in
+                Maybe.unwrap (Flow.pure ()) (saveContent file_.isNew) contentToSave
+
+
+saveSrcFileChanges : Int -> List (List String) -> Flow Model Bool
+saveSrcFileChanges recordId paths =
+    case paths of
+        [] ->
+            Flow.pure True
+
+        path :: remaining ->
+            let
+                allStepTables =
+                    currentProject << success << tables << values
+
+                unsavedFile =
+                    allStepTables
+                        << srcFilesItemAtPath recordId path
+                        << file
+                        << where_ Model.hasFileChanges
+            in
+            Flow.ifHas (allStepTables << recordById recordId << where_ .srcFileWriting)
+                (\_ -> Flow.pure False)
+                (saveSrcFileChange recordId path
+                    |> Flow.seq
+                        (Flow.ifHas unsavedFile
+                            (\_ -> Flow.pure False)
+                            (saveSrcFileChanges recordId remaining)
+                        )
+                )
+
+
+discardSrcFileChanges : Int -> Flow Model ()
+discardSrcFileChanges recordId =
+    let
+        stepRecord =
+            currentProject << success << tables << values << recordById recordId
+    in
+    Flow.over (stepRecord << srcFiles) Model.discardDirectoryFileChanges
+        |> Flow.seq (Flow.setAll (stepRecord << srcFileDraft) Nothing)
 
 
 setSrcFileDraft : Int -> Maybe Model.SrcFileDraft -> Flow Model ()
@@ -1898,14 +1998,17 @@ setSrcFileEntry recordId path entry =
                 (Dict.update name (always entry))
 
 
-createSrcFile : Int -> String -> String -> Flow Model ()
-createSrcFile recordId rawName content =
+stageSrcFile : Int -> String -> String -> Flow Model ()
+stageSrcFile recordId rawName content =
     case String.trim rawName of
         "" ->
             Flow.none
 
         fileName ->
             let
+                path =
+                    [ fileName ]
+
                 predictedSrcFile =
                     Model.File
                         { content = Success content
@@ -1918,22 +2021,50 @@ createSrcFile recordId rawName content =
                         , delimitedGrid = Nothing
                         , plainLineCount = Model.countLines content
                         , editedContent = Nothing
+                        , isNew = True
+                        , isDeleted = False
                         }
+
+                stagedItem =
+                    currentProject << success << tables << values << srcFilesItemAtPath recordId path
+
+                rootChildren =
+                    currentProject << success << tables << values << srcFilesChildrenAt recordId [] << success
             in
-            predictSrcFileChange recordId
-                [ fileName ]
-                (setSrcFileEntry recordId [ fileName ] (Just predictedSrcFile)
-                    |> Flow.seq (setSrcFileDraft recordId Nothing)
+            Flow.ifHas rootChildren
+                (\_ ->
+                    Flow.ifHas stagedItem
+                        (\_ -> Flow.pure ())
+                        (setSrcFileEntry recordId path (Just predictedSrcFile)
+                            |> Flow.seq (setSrcFileDraft recordId Nothing)
+                        )
                 )
-                (Api.createSrcFile recordId [ fileName ] content)
+                (Flow.pure ())
 
 
-deleteSrcFile : Int -> List String -> Flow Model ()
-deleteSrcFile recordId path =
-    predictSrcFileChange recordId
-        path
-        (setSrcFileEntry recordId path Nothing)
-        (Api.deleteSrcFile recordId path)
+stageSrcFileDeletion : Int -> List String -> Flow Model ()
+stageSrcFileDeletion recordId path =
+    let
+        allStepTables =
+            currentProject << success << tables << values
+
+        fileTraversal =
+            allStepTables << srcFilesItemAtPath recordId path << file
+    in
+    Flow.forAll fileTraversal <|
+        \file_ ->
+            if file_.isNew then
+                setSrcFileEntry recordId path Nothing
+
+            else
+                Flow.over fileTraversal (\current -> { current | isDeleted = True, view = Model.closeFileView current.view })
+
+
+restoreSrcFile : Int -> List String -> Flow Model ()
+restoreSrcFile recordId path =
+    Flow.over
+        (currentProject << success << tables << values << srcFilesItemAtPath recordId path << file)
+        (\file_ -> { file_ | isDeleted = False })
 
 
 registerStepStatusHook : Int -> Flow Model () -> Flow Model ()

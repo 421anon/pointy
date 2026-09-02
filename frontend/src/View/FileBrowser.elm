@@ -19,7 +19,7 @@ import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
+import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -156,11 +156,6 @@ viewSrcFilesSection model stepType spec step =
         hasSrcFiles =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
-        isLocked =
-            has (route << Route.page << Route.project << mCommit << just) model
-
-        mEditableId =
-            Maybe.filter (always (not isLocked)) step.id
 
         writePending =
             step.srcFileWriting
@@ -184,15 +179,15 @@ viewSrcFilesSection model stepType spec step =
                         ]
                         [ icon True symbol ]
                 )
-                mEditableId
+                step.id
 
         createForm =
-            case ( mEditableId, step.srcFileDraft ) of
+            case ( step.id, step.srcFileDraft ) of
                 ( Just recordId, Just draft ) ->
                     Html.form
                         [ class "src-file-create src-file-editor"
                         , Html.Events.preventDefaultOn "submit"
-                            (Decode.succeed ( Actions.createSrcFile recordId draft.name draft.content, True ))
+                            (Decode.succeed ( Actions.stageSrcFile recordId draft.name draft.content, True ))
                         ]
                         [ Html.div [ class "src-file-name-row" ]
                             [ Html.input
@@ -246,7 +241,7 @@ viewSrcFilesSection model stepType spec step =
                     spec
                     step.id
                     (Maybe.map SrcDir step.id)
-                    isLocked
+                    False
                     []
                     "directory-view"
                     (case step.srcFiles.children of
@@ -338,7 +333,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     has (mimeType << just << where_ (String.startsWith "image/")) file
 
                 canView =
-                    file.viewable || file.seekable || isImage
+                    not file.isDeleted && (file.viewable || file.seekable || isImage)
 
                 isHtml =
                     has (mimeType << just << where_ (String.startsWith "text/html")) file
@@ -347,7 +342,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     has (mimeType << just << where_ ((==) "chemical/x-pdb")) file
 
                 mCompareSelection =
-                    if file.viewable || isImage then
+                    if not file.isDeleted && (file.viewable || isImage) then
                         Maybe.map2 (\pid -> compareSelectionFor pid itemName file.mimeType path)
                             (try currentProjectId model)
                             mDirCtx
@@ -380,19 +375,41 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                     else
                         "description"
+
+                isEditableSrcFile =
+                    has (just << srcDir) mDirCtx
+
+                fileActionLabel =
+                    if file.view.isViewing then
+                        "Close " ++ itemName
+
+                    else if isEditableSrcFile then
+                        "Edit " ++ itemName
+
+                    else
+                        "View " ++ itemName
             in
             Html.div [ class "directory-file-container" ]
                 [ Html.div [ class "directory-file", id anchor ]
                     [ icon True fileIcon
                     , Html.div [ class "file-name-container" ]
                         [ Html.span [ class "file-name" ] [ Html.text itemName ]
-                        , Html.nothing
+                        , if isEditableSrcFile && file.isNew then
+                            Html.span [ class "src-file-change-status is-new" ] [ Html.text "New" ]
+
+                          else if isEditableSrcFile && file.isDeleted then
+                            Html.span [ class "src-file-change-status is-deleted" ] [ Html.text "Deleted" ]
+
+                          else
+                            Html.viewIf (isEditableSrcFile && Maybe.isJust file.editedContent) <|
+                                Html.span [ class "src-file-change-status" ] [ Html.text "Changed" ]
                         , Html.span [ class "directory-item-meta" ] [ Html.text (Filesize.formatBase2 file.size) ]
                         ]
                     , Html.div [ class "file-actions" ]
                         [ Html.viewIf canView <|
                             Html.button
                                 [ class "dir-item-icon-btn"
+                                , Html.Attributes.title fileActionLabel
                                 , disabled (srcWritePending model mDirCtx)
                                 , Html.Events.onClick
                                     (case mDirCtx of
@@ -406,7 +423,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             Flow.pure ()
                                     )
                                 ]
-                                [ icon True "visibility" ]
+                                [ icon True (if isEditableSrcFile then "edit" else "visibility") ]
                         , externalArtifactUrl
                             |> Html.viewMaybe
                                 (\url ->
@@ -428,13 +445,23 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         , viewCompareButton model mCompareSelection
                         , case ( mDirCtx, isLocked ) of
                             ( Just (SrcDir recordId), False ) ->
-                                Html.button
-                                    [ class "dir-item-icon-btn"
-                                    , Html.Attributes.title "Delete"
-                                    , disabled (srcWritePending model mDirCtx)
-                                    , Html.Events.onClick (Actions.deleteSrcFile recordId path)
-                                    ]
-                                    [ icon True "delete" ]
+                                if file.isDeleted then
+                                    Html.button
+                                        [ class "dir-item-icon-btn"
+                                        , Html.Attributes.title "Restore"
+                                        , disabled (srcWritePending model mDirCtx)
+                                        , Html.Events.onClick (Actions.restoreSrcFile recordId path)
+                                        ]
+                                        [ icon True "restore_from_trash" ]
+
+                                else
+                                    Html.button
+                                        [ class "dir-item-icon-btn"
+                                        , Html.Attributes.title "Delete"
+                                        , disabled (srcWritePending model mDirCtx)
+                                        , Html.Events.onClick (Actions.stageSrcFileDeletion recordId path)
+                                        ]
+                                        [ icon True "delete" ]
 
                             _ ->
                                 Html.nothing
@@ -558,7 +585,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     mEditRecordId =
                                         mDirCtx
                                             |> Maybe.andThen (try srcDir)
-                                            |> Maybe.filter (always (not isLocked && Maybe.isNothing mSelectedRange))
+                                            |> Maybe.filter (always (Maybe.isNothing mSelectedRange))
 
                                     viewContent text =
                                         let
@@ -605,15 +632,6 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 , readonly writePending
                                                 ]
                                                 []
-                                            , Html.viewIf changed <|
-                                                Html.div [ class "src-file-actions" ]
-                                                    [ Html.button
-                                                        [ class "btn"
-                                                        , disabled writePending
-                                                        , Html.Events.onClick (Actions.saveSrcFile recordId path)
-                                                        ]
-                                                        [ Html.text "Save" ]
-                                                    ]
                                             ]
                                 in
                                 Html.div [ class "file-viewer" ]

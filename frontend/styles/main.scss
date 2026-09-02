@@ -534,6 +534,23 @@ body {
   overflow-wrap: anywhere;
 }
 
+.src-file-change-status {
+  flex: 0 0 auto;
+  padding: 0 var(--spacing-xs);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  background: var(--state-warning-outline);
+  border-radius: 999px;
+
+  &.is-new {
+    background: var(--state-success-outline);
+  }
+
+  &.is-deleted {
+    background: var(--state-danger-outline);
+  }
+}
+
 .file-actions {
   display: flex;
   gap: var(--spacing-xs);
