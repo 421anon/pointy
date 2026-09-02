@@ -30,6 +30,7 @@ type alias ResolvedMention =
     { route : Route
     , runAction : Maybe (Flow Model ())
     , label : String
+    , tooltip : String
     , suffixText : String
     }
 
@@ -43,30 +44,38 @@ mentionTarget model entityId fixed candidates =
     let
         resolved route runAction mName =
             let
-                ( label, suffixText ) =
-                    resolveLabel fixed mName candidates
+                name =
+                    Maybe.withDefault (entityIdText entityId) mName
+
+                label =
+                    case entityId of
+                        StepId _ ->
+                            entityIdText entityId
+
+                        ProjectId _ ->
+                            name
             in
             { route = route
             , runAction = runAction
             , label = label
-            , suffixText = suffixText
+            , tooltip = name
+            , suffixText = resolveSuffix fixed mName candidates
             }
     in
     case entityId of
         StepId stepId ->
             Actions.stepOutputRoute model stepId
-                |> Maybe.andThen
+                |> Maybe.map
                     (\route ->
                         case route.page of
                             Route.Project params ->
-                                Just
-                                    (resolved route
+                                (resolved route
                                         (mentionRunAction model params.projectId stepId)
                                         (try (Lenses.projectStep (Just params.projectId) (Just stepId)) model |> Maybe.map .name)
                                     )
 
                             _ ->
-                                Just (resolved route Nothing Nothing)
+                                (resolved route Nothing Nothing)
                     )
 
         ProjectId projectId ->
@@ -79,23 +88,19 @@ mentionTarget model entityId fixed candidates =
                     )
 
 
-resolveLabel : Bool -> Maybe String -> List String -> ( String, String )
-resolveLabel fixed mName candidates =
+resolveSuffix : Bool -> Maybe String -> List String -> String
+resolveSuffix fixed mName candidates =
     let
         used =
             if fixed then
                 List.length candidates
 
             else
-                max 1
-                    (namePrefixLength
-                        (Maybe.withDefault [] (Maybe.map String.words mName))
-                        candidates
-                    )
+                namePrefixLength
+                    (Maybe.withDefault [] (Maybe.map String.words mName))
+                    candidates
     in
-    ( String.join " " (List.take used candidates)
-    , suffixFrom (List.drop used candidates)
-    )
+    suffixFrom (List.drop used candidates)
 
 
 suffixFrom : List String -> String
@@ -152,12 +157,12 @@ toHtml resolve body =
 
 nameToken : String
 nameToken =
-    "[^\\s\",.;:!?()\\[\\]{}\\u2014\\u2013-]+"
+    "[^\\s@\",.;:!?()\\[\\]{}\\u2014\\u2013-]+"
 
 
 wholeQuotedRegex : Regex
 wholeQuotedRegex =
-    fromRegex ("\"@\\[(step|project):([0-9]+)\\]\\s+([^\"]+)\"")
+    fromRegex "\"@\\[(step|project):([0-9]+)\\]\\s+([^\"]+)\""
 
 
 structuredRegex : Regex
@@ -165,9 +170,14 @@ structuredRegex =
     fromRegex ("@\\[(step|project):([0-9]+)\\]\\s*(\"[^\"]+\"|" ++ nameToken ++ "(?:\\s+" ++ nameToken ++ "){0,4})")
 
 
+bareStructuredRegex : Regex
+bareStructuredRegex =
+    fromRegex "@\\[(step|project):([0-9]+)\\]"
+
+
 legacyRegex : Regex
 legacyRegex =
-    fromRegex ("\\b(step|project)\\s+([0-9]+)\\b")
+    fromRegex "\\b(step|project)\\s+([0-9]+)\\b"
 
 
 fromRegex : String -> Regex
@@ -206,7 +216,7 @@ parseWholeQuoted match =
     decodeCommon match
         (\keyword digits label ->
             { candidates = String.words label
-            , fixedLabel = False
+            , fixedLabel = True
             , entityId = toEntityId keyword digits
             }
         )
@@ -217,10 +227,27 @@ parseStructured match =
     decodeCommon match
         (\keyword digits label ->
             { candidates = String.words (unquote label)
-            , fixedLabel = False
+            , fixedLabel = String.startsWith "\"" label && String.endsWith "\"" label
             , entityId = toEntityId keyword digits
             }
         )
+
+
+parseBareStructured : Regex.Match -> Maybe ParsedMention
+parseBareStructured match =
+    case match.submatches of
+        [ Just keyword, Just digits ] ->
+            String.toInt digits
+                |> Maybe.map
+                    (\id_ ->
+                        { candidates = []
+                        , fixedLabel = True
+                        , entityId = toEntityId keyword id_
+                        }
+                    )
+
+        _ ->
+            Nothing
 
 
 decodeCommon : Regex.Match -> (String -> Int -> String -> ParsedMention) -> Maybe ParsedMention
@@ -261,11 +288,22 @@ type alias MentionSpan =
 
 mentionSpans : String -> List MentionSpan
 mentionSpans text =
-    List.sortBy .index
+    List.sortWith compareMentionSpans
         (spansOf parseWholeQuoted wholeQuotedRegex text
             ++ spansOf parseStructured structuredRegex text
+            ++ spansOf parseBareStructured bareStructuredRegex text
             ++ spansOf parseLegacy legacyRegex text
         )
+
+
+compareMentionSpans : MentionSpan -> MentionSpan -> Order
+compareMentionSpans left right =
+    case compare left.index right.index of
+        EQ ->
+            compare right.end left.end
+
+        order ->
+            order
 
 
 spansOf : (Regex.Match -> Maybe ParsedMention) -> Regex -> String -> List MentionSpan
@@ -397,14 +435,13 @@ entityIdText entity =
             "project " ++ String.fromInt id_
 
 
-
 viewMention : EntityId -> ResolvedMention -> Html (Flow Model ())
 viewMention entity target =
     Html.span [ class "agent-panel__mention" ]
         (Html.a
             [ class "agent-panel__mention-link"
             , Route.href target.route
-            , title target.label
+            , title target.tooltip
             , Events.onClick
                 (Flow.performTask Dom.getViewport
                     |> Flow.andThen

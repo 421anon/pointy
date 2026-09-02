@@ -37,8 +37,10 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
             ++ map ("- " <>) agentOutputPathPatterns
             ++ [ "Do not edit outside this allowlist; those changes will be discarded."
                , "Follow the Embedded agents only section in AGENTS.md."
-               , "When a known project or step has a name, refer to it in replies as @[step:<id>] <name> or @[project:<id>] <name> (e.g. @[step:201] script); quote multi-word names (e.g. @[step:156] \"Oligopool QC alignment\"). Never use a bare name without its id."
-               , "Keep the whole mention as ordinary plain text: no inline code, no Markdown link, no parentheses around the id."
+               , "Use only these entity-reference formats in every response:"
+               , "- Step: step <id>. This is the entire step reference; never include the step name."
+               , "- Project: @[project:<id>] <name>. Quote the name when it contains spaces."
+               , "Keep entity references as ordinary plain text: no inline code, no Markdown links, and no parentheses around an id."
                , ""
                , configuredPrompt
                ]
