@@ -1,3 +1,22 @@
+# Pointy backend deployment configuration.
+#
+# A running instance serves exactly ONE user repo (the single-repo variant):
+# `[user-repo]` is the target repo for repo-scoped reads/writes and for the
+# agent session's worktree. Deployments that need more than one repo run one
+# instance per repo (e.g. a dedicated confidential instance for data the LLM
+# agent must not see), each with its own config.toml and its own tracked repo.
+#
+# In production the file is generated from the deployment repo's unencrypted
+# pointy config (trotter config/pointy.nix for the host instance;
+# pointy-c-instance config/pointy-config.toml for the confidential tenant), not
+# hand-written or encrypted:
+#   - `[user-repo]`  the instance's repo binding (url/keyfile/branch)
+#   - `[agent]`      agent runner settings -- supplied by the deployment config,
+#                    not baked into backend defaults
+#   - `[nix-evaluator]` optional evaluation tunables
+# Runtime secrets (the repo SSH deploy key, agent API keys) stay out of this
+# file and are provisioned separately.
+
 [user-repo]
 url = "git@example.com:your-org/user-repo.git"
 keyfile = "/home/backend/.ssh/id_ed25519_deploy"
@@ -13,7 +32,11 @@ extra = []
 enforcement = "scheduler"
 
 [agent]
-# The backend invokes runner-command through sbox-command from the session worktree.
+# Agent runner settings. The backend falls back to these values when the
+# table is absent (e.g. local dev).
+#
+# The backend invokes runner-command inside the session worktree via
+# sbox-command.
 # Argument templates expand the following placeholders:
 #   {worktree}    absolute path to the session worktree (the sandbox CWD)
 #   {home}        per-session HOME directory ({worktree}/../home), pre-created and bind-mounted into the sandbox
@@ -27,12 +50,13 @@ runner-command = "pi"
 # per agent session), so consecutive turns share context. Drop -c if you want
 # every turn to start cold; never combine -c with --no-session.
 # The explicit --model is required: pi's built-in registry keeps deepseek-v4-pro
-# (its per-provider default) even when models.json only declares flash, and a
+# (pi's per-provider default) even when models.json only declares flash, and a
 # continued/forked session restores its recorded model. --model wins over both.
 runner-args = ["-p", "-c", "--model", "deepseek/deepseek-v4-flash", "{prompt}"]
 # Pre-warm a Pi session by running this prompt once against a fresh checkout.
-# On first turn of each new draft, the backend forks that session so the agent
-# already has project context and vocabulary. Set to empty string to disable.
+# On first turn of each new session, the backend forks that session so the
+# agent already has project context and vocabulary. Set to empty string to
+# disable.
 # bootstrap-prompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
 timeout-seconds = 1800
 output-limit-bytes = 1048576
