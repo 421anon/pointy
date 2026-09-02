@@ -766,7 +766,7 @@ viewAddOrEditRecordForm model spec table extraSection record =
                         (Decode.at [ "target", "value" ] Decode.string |> Decode.maybe |> Decode.map (Maybe.withDefault ""))
 
                 allowEnter target =
-                    target.tag /= "TEXTAREA" && target.id /= "save-button" && target.id /= "select-input" && not (String.endsWith "-list-input" target.id)
+                    target.tag /= "TEXTAREA" && target.id /= "save-button" && target.id /= "select-input" && target.id /= "src-file-name-input" && not (String.endsWith "-list-input" target.id)
             in
             Keyboard.decodeCombinations
                 [ ( Keyboard.enter
