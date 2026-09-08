@@ -219,6 +219,7 @@ body {
 
 .table-record-name {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-sm);
   align-items: center;
   margin-right: auto;
@@ -1076,6 +1077,50 @@ $delimited-grid-row-height: 28px;
 .icon-btn {
   @include mixins.icon-btn-base;
   color: var(--text-muted);
+}
+
+.step-validation {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.step-validation-chip,
+.step-validation-diff {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-size: 11px;
+
+  > .material-symbols-outlined {
+    font-size: 12px;
+  }
+}
+
+.step-validation-chip {
+  cursor: help;
+  padding: 1px var(--spacing-xs);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-secondary) 5%, transparent);
+
+  &.step-validation-warning > .material-symbols-outlined {
+    color: var(--state-warning);
+  }
+
+  &.step-validation-danger > .material-symbols-outlined {
+    color: var(--state-danger);
+  }
+}
+
+.step-validation-diff {
+  @include mixins.button-base;
+  font-size: 11px;
+  min-height: 24px;
+  text-decoration: none;
+  text-underline-offset: 3px;
 }
 
 .dir-item-icon-btn {

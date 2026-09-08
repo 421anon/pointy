@@ -126,6 +126,9 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                 (\editedRecord -> editedRecord.id == record.id && record.id /= Nothing)
                 table.edited
 
+        editable record =
+            not isReadOnly && not (TableSpec.getIsLocked spec record)
+
         sourceFilesNeedLoading record =
             case Maybe.map .children (TableSpec.getSrcFilesView spec record) of
                 Just NotAsked ->
@@ -157,7 +160,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
               , render = \record -> Html.viewMaybe (dirButton (isOpen record) []) record.id
               }
             , -- Edit button
-              { shouldShow = \record -> not isReadOnly && record.id /= Nothing
+              { shouldShow = \record -> editable record && record.id /= Nothing
               , render = \record -> viewIconButtonWithTooltip "edit" True "Edit" <| toggleRecordEditor record
               }
             , -- Share button (shareable only)
@@ -205,7 +208,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             hasDependentInProject =
                                 False
                         in
-                        not isReadOnly
+                        editable record
                             && record.id
                             /= Nothing
                             && (not (TableSpec.getShareable spec record) || not hasDependentInProject)
@@ -344,7 +347,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         aStatus
 
                 recordNameEditable =
-                    if recordIsEditing record && table.nameEditOnly then
+                    if recordIsEditing record && table.nameEditOnly && editable record then
                         Html.input
                             [ type_ "text"
                             , value (Maybe.map .name table.edited |> Maybe.withDefault record.name)
@@ -371,11 +374,12 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         [ Html.text (String.fromInt id_) ]
                                 )
                                 record.id
-                            , iconCustom True
-                                "edit"
-                                [ class "edit-icon"
-                                , Events.stopPropagationOn "click" (Decode.succeed ( Actions.startInlineRecordNameEdit spec record, True ))
-                                ]
+                            , Html.viewIf (editable record) <|
+                                iconCustom True
+                                    "edit"
+                                    [ class "edit-icon"
+                                    , Events.stopPropagationOn "click" (Decode.succeed ( Actions.startInlineRecordNameEdit spec record, True ))
+                                    ]
                             ]
 
                 viewUnmovedRecord attrs mkDragAttrs mkDropAttrs =
@@ -444,6 +448,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         [ iconCustom True "error" [] ]
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
+                                , Html.span [] (alwaysVisibleRecordActions record)
                                 , mtimeBadge
                                 , Html.viewIf (record.id == Nothing || record.isUpdating) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
@@ -480,7 +485,6 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                             )
                                             recordActions
                                     )
-                                , Html.div [] (alwaysVisibleRecordActions record)
                                 , Html.viewIf (not isReadOnly) <|
                                     Html.div (class "table-record-drag-target" :: cmap (mkDragAttrs itemId))
                                         [ icon True "drag_indicator" ]
@@ -489,7 +493,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             ]
                         , let
                             editing =
-                                recordIsEditing record
+                                recordIsEditing record && editable record
                           in
                           Html.viewIf (editing && not table.nameEditOnly)
                             (Html.viewMaybe
@@ -2172,6 +2176,7 @@ viewIconButtonWithTooltip iconName filled tooltip action =
         [ Events.onClick action
         , class "icon-btn"
         , title tooltip
+        , attribute "aria-label" tooltip
         ]
         [ icon filled iconName
         , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]

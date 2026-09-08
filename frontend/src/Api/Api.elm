@@ -15,6 +15,7 @@ module Api.Api exposing
     , fetchFileSeek
     , fetchNotices
     , fetchPresets
+    , fetchProjectValidation
     , fetchProjects
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
@@ -30,13 +31,17 @@ module Api.Api exposing
     , saveSrcFile
     , srcFileDownloadUrl
     , srcFileRawUrl
+    , stepDiffReportUrl
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
     , unassignRecordFromProject
+    , unvalidateStep
     , uploadFiles
+    , validateStep
     )
 
+import Api.ApiData exposing (ApiData)
 import Api.Decode as Decode
 import Api.Encode as Encode
 import Dict exposing (Dict)
@@ -46,7 +51,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, StepValidation)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -179,6 +184,47 @@ stepAction action id commit =
             , body = Http.emptyBody
             , expect = Http.expectStringResponse identity (stringResponse (always ()))
             }
+
+
+stepDiffReportUrl : Int -> String
+stepDiffReportUrl id =
+    "/backend/step-diff-report?id=" ++ String.fromInt id
+
+
+stepValidationUrl : Int -> String
+stepValidationUrl id =
+    "/backend/step-validation?id=" ++ String.fromInt id
+
+
+fetchProjectValidation : Int -> String -> Flow s (Result Http.Error (Dict Int (Maybe (ApiData StepValidation))))
+fetchProjectValidation projectId commit =
+    Flow.lift <|
+        Http.get
+            { url = UrlBuilder.absolute [ "backend", "project-validation" ] [ UrlBuilder.int "project_id" projectId, UrlBuilder.string "commit" commit ]
+            , expect = Http.expectJson identity Decode.validationOutcomes
+            }
+
+
+validateStep : Int -> Flow s (Result Http.Error Bool)
+validateStep id =
+    Flow.lift <|
+        Http.post
+            { url = stepValidationUrl id
+            , body = Http.emptyBody
+            , expect =
+                Http.expectStringResponse identity
+                    (stringResponse identity
+                        >> Result.andThen
+                            (Json.Decode.decodeString Json.Decode.bool
+                                >> Result.mapError (Json.Decode.errorToString >> Http.BadBody)
+                            )
+                    )
+            }
+
+
+unvalidateStep : Int -> Flow s (Result Http.Error ())
+unvalidateStep id =
+    request "DELETE" (stepValidationUrl id) Http.emptyBody
 
 
 createProject : Presets -> StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)

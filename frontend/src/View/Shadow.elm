@@ -2,13 +2,16 @@ module View.Shadow exposing (viewProject)
 
 import Accessors exposing (fst, get, has, just, try)
 import Actions
-import Api.ApiData as ApiData
+import Api.Api as Api
+import Api.ApiData as ApiData exposing (ApiData)
 import Dict
+import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Html.Extra as Html
+import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses as Lenses exposing (currentProject, mCommit, route)
@@ -54,6 +57,104 @@ viewRunStop spec r =
             ]
 
         Nothing ->
+            []
+
+
+type alias ValidationChip =
+    { severity : String
+    , icon : String
+    , label : String
+    , explanation : String
+    }
+
+
+verdictChip : Model.StepValidation -> ValidationChip
+verdictChip verdict =
+    case verdict of
+        Model.ValidationCurrent ->
+            ValidationChip "muted" "verified" "Validated" "The current output matches the saved validation baseline."
+
+        Model.ValidationIdentical ->
+            ValidationChip "muted" "published_with_changes" "Matches" "The output contents still match the baseline. Update validation to pin the current revision."
+
+        Model.ValidationUnbuilt ->
+            ValidationChip "warning" "pending" "Needs rebuild" "This step changed since validation. Run it to compare the new output with the saved baseline."
+
+        Model.ValidationDiffer ->
+            ValidationChip "warning" "difference" "Differs" "The current output differs from the saved baseline. View the diff to review the changes."
+
+        Model.ValidationMissing ->
+            ValidationChip "warning" "cloud_off" "Baseline missing" "The validated output is no longer in the store. Rebuild the validated revision to compare, or unvalidate to start a new baseline."
+
+
+viewValidationChip : Bool -> Int -> ApiData Model.StepValidation -> Html (Flow Model ())
+viewValidationChip isReadOnly stepId validation =
+    let
+        pending =
+            ValidationChip "muted" "verified" "Validated" "A validation baseline is saved for this step."
+
+        whileChecking c =
+            { c | explanation = "Checking current output. " ++ c.explanation }
+
+        failed error =
+            ValidationChip "danger" "error_outline" "Check failed" ("The validation check failed: " ++ Http.errorMessage error)
+
+        chip =
+            ApiData.foldVisible (whileChecking pending) (whileChecking << Maybe.unwrap pending verdictChip) verdictChip failed validation
+
+        explanation =
+            chip.explanation ++ " Editing is locked. Unvalidate this step in the current view to edit it."
+    in
+    Html.span
+        [ Html.Attributes.class "step-validation"
+        , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+        ]
+        [ Html.span
+            [ Html.Attributes.class ("step-validation-chip step-validation-" ++ chip.severity)
+            , Html.Attributes.tabindex 0
+            , Html.Attributes.attribute "role" "note"
+            , Html.Attributes.title explanation
+            , Html.Attributes.attribute "aria-label" (chip.label ++ ". " ++ explanation)
+            ]
+            [ iconCustom False chip.icon [ Html.Attributes.attribute "aria-hidden" "true" ]
+            , Html.text chip.label
+            ]
+        , Html.viewIf (not isReadOnly && ApiData.toMaybe validation == Just Model.ValidationDiffer) (viewDiffReportLink stepId)
+        ]
+
+
+viewDiffReportLink : Int -> Html (Flow Model ())
+viewDiffReportLink stepId =
+    Html.a
+        [ Html.Attributes.class "step-validation-diff"
+        , Html.Attributes.title "View diff (opens in a new tab)"
+        , Html.Attributes.attribute "aria-label" ("View diff for step " ++ String.fromInt stepId ++ " (opens in a new tab)")
+        , Html.Attributes.href (Api.stepDiffReportUrl stepId)
+        , Html.Attributes.target "_blank"
+        , Html.Attributes.rel "noopener"
+        ]
+        [ Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "View diff" ]
+        , iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ]
+        ]
+
+
+viewValidationActions : Bool -> TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewValidationActions isReadOnly spec r =
+    case ( r.id, r.isUpdating, isReadOnly ) of
+        ( Just stepId, False, False ) ->
+            case r.validation of
+                Nothing ->
+                    [ Html.viewIf (ApiData.toMaybe (TableSpec.getStatus spec r) == Just Model.StatusSuccess) <|
+                        viewIconButtonWithTooltip "verified" True "Validate step" (Actions.validateStep stepId)
+                    ]
+
+                Just validation ->
+                    [ Html.viewIf (ApiData.toMaybe validation == Just Model.ValidationIdentical) <|
+                        viewIconButtonWithTooltip "published_with_changes" True "Update validation" (Actions.validateStep stepId)
+                    , viewIconButtonWithTooltip "verified_off" False "Unvalidate step" (Actions.unvalidateStep stepId)
+                    ]
+
+        _ ->
             []
 
 
@@ -180,20 +281,11 @@ viewSection model sectionName entry steps =
         , table = steps
         , alwaysVisibleRecordActions =
             \r ->
-                case stepType of
-                    FileUpload _ ->
-                        case r.id |> Maybe.andThen (\id -> Dict.get id (Model.getUploadProgress model) |> Maybe.map (Tuple.pair id)) of
-                            Just ( stepId, progress ) ->
-                                [ viewUploadProgress stepId progress ]
-
-                            Nothing ->
-                                []
-
-                    Derivation _ _ ->
-                        []
-
-                    Download ->
-                        []
+                Maybe.values
+                    [ Maybe.map2 (viewValidationChip isReadOnly) r.id r.validation
+                    , r.id
+                        |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
+                    ]
         , specificRecordActions =
             \r ->
                 let
@@ -220,7 +312,9 @@ viewSection model sectionName entry steps =
                                             []
 
                                         Nothing ->
-                                            [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id ]
+                                            [ Html.viewIf (Maybe.isNothing r.validation) <|
+                                                Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id
+                                            ]
 
                                 Derivation _ _ ->
                                     []
@@ -274,7 +368,7 @@ viewSection model sectionName entry steps =
                                                 )
                                     )
                 in
-                uploadActions ++ runActions ++ quickCreateActions
+                viewValidationActions isReadOnly spec r ++ uploadActions ++ runActions ++ quickCreateActions
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
         , onRecordClick =

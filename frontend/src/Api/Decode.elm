@@ -4,6 +4,7 @@ import Api.ApiData exposing (ApiData(..))
 import Components.Select as Select
 import Dict exposing (Dict)
 import Extra.Decode exposing (firstMatching)
+import Http
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (optional, required)
@@ -206,7 +207,7 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ note args lastModifiedAt ->
+        (\id name type_ note args validationCommitHash lastModifiedAt ->
             { id = Just id
             , clientId = Nothing
             , type_ = type_
@@ -215,6 +216,7 @@ stepValueOnly stepType_ =
             , name = name
             , note = note
             , runState = NotAsked
+            , validation = Maybe.map (always NotAsked) validationCommitHash
             , args = args
             , isUpdating = False
             , lastModifiedAt = lastModifiedAt
@@ -234,7 +236,51 @@ stepValueOnly stepType_ =
         |> required "type" Decode.string
         |> optional "note" Decode.string ""
         |> required "args" (stepArgs stepType_)
+        |> optional "validationCommitHash" (maybe Decode.string) Nothing
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
+
+
+validationOutcome : Decoder (Maybe (ApiData Model.StepValidation))
+validationOutcome =
+    Decode.succeed Tuple.pair
+        |> required "verdict" Decode.string
+        |> optional "message" (maybe Decode.string) Nothing
+        |> Decode.andThen
+            (\( verdict, message ) ->
+                case verdict of
+                    "unvalidated" ->
+                        Decode.succeed Nothing
+
+                    "current" ->
+                        Decode.succeed (Just (Success Model.ValidationCurrent))
+
+                    "identical" ->
+                        Decode.succeed (Just (Success Model.ValidationIdentical))
+
+                    "differ" ->
+                        Decode.succeed (Just (Success Model.ValidationDiffer))
+
+                    "unbuilt" ->
+                        Decode.succeed (Just (Success Model.ValidationUnbuilt))
+
+                    "missing" ->
+                        Decode.succeed (Just (Success Model.ValidationMissing))
+
+                    "error" ->
+                        Decode.succeed (Just (Error (Http.BadBody (Maybe.withDefault "The validation check failed." message))))
+
+                    other ->
+                        Decode.fail ("Unknown step validation verdict: " ++ other)
+            )
+
+
+validationOutcomes : Decoder (Dict Int (Maybe (ApiData Model.StepValidation)))
+validationOutcomes =
+    Decode.keyValuePairs validationOutcome
+        |> Decode.map
+            (List.filterMap (\( key, outcome ) -> Maybe.map (\stepId -> ( stepId, outcome )) (String.toInt key))
+                >> Dict.fromList
+            )
 
 
 noticeSeverity : Decoder Model.NoticeSeverity

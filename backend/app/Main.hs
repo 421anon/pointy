@@ -38,6 +38,7 @@ import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSr
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
+import Handlers.StepValidation (getProjectValidationHandler, stepDiffReportHandler, unvalidateStepHandler, validateStepHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
@@ -83,6 +84,10 @@ server =
         :<|> autocompleteHandler
         :<|> patchStepHandler
         :<|> postStepHandler
+        :<|> getProjectValidationHandler
+        :<|> validateStepHandler
+        :<|> unvalidateStepHandler
+        :<|> stepDiffReportHandler
         :<|> noticesHandler
         :<|> runStepHandler
         :<|> stopStepHandler

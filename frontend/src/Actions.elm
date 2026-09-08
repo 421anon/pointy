@@ -1,6 +1,6 @@
 module Actions exposing (..)
 
-import Accessors exposing (An_Optic, all, each, get, has, just, keyI, over, set, try, values)
+import Accessors exposing (An_Optic, Traversal, all, each, get, has, just, keyI, over, set, try, values)
 import Api.Agent as AgentApi
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
@@ -260,6 +260,7 @@ loadProjects =
                                 callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
                                     |> ignoreResult
                                     |> Flow.seq (Flow.async replayStepStatusBuffer)
+                                    |> Flow.seq (Flow.async loadProjectValidations)
                             )
                 )
         )
@@ -421,6 +422,89 @@ removeProjectTemplate template =
 refetchCommitHash : Flow Model ()
 refetchCommitHash =
     callApi commitHash Api.fetchCommitHash |> Flow.map (always ())
+
+
+validationTarget : Model -> Maybe ( Int, String )
+validationTarget model =
+    Maybe.map2 Tuple.pair
+        (try currentProjectId model)
+        (try (orElseT (route << Route.page << Route.project << mCommit << just) (commitHash << success)) model)
+
+
+stepRecordById : Int -> Traversal Model StepRecord x y
+stepRecordById stepId =
+    projects << records << success << each << projectStepRecords << where_ (.id >> (==) (Just stepId))
+
+
+loadProjectValidations : Flow Model ()
+loadProjectValidations =
+    Flow.get
+        |> Flow.assertCondition (not << has (currentProjectStepRecords << validation << just << where_ ApiData.isLoading))
+        |> Flow.map validationTarget
+        |> Flow.assertJust
+        |> Flow.andThen
+            (\(( projectId_, commit_ ) as target) ->
+                Flow.over (currentProjectStepRecords << validation) (Maybe.map ApiData.toLoading)
+                    |> Flow.seq (Api.fetchProjectValidation projectId_ commit_)
+                    |> Flow.andThen
+                        (\result ->
+                            Flow.get
+                                |> Flow.assertCondition (validationTarget >> (==) (Just target))
+                                |> Flow.seq (Flow.over currentProjectStepRecords (mergeStepValidation result))
+                        )
+            )
+
+
+mergeStepValidation : Result Http.Error (Dict Int (Maybe (ApiData Model.StepValidation))) -> StepRecord -> StepRecord
+mergeStepValidation result record =
+    case result of
+        Ok outcomes ->
+            record.id
+                |> Maybe.andThen (\stepId -> Dict.get stepId outcomes)
+                |> Maybe.unwrap record (\outcome -> set validation outcome record)
+
+        Err err ->
+            set (validation << just) (Error err) record
+
+
+refreshValidations : Flow Model ()
+refreshValidations =
+    refetchCommitHash |> Flow.seq (Flow.async loadProjectValidations)
+
+
+whenStepIdle : Int -> Flow Model () -> Flow Model ()
+whenStepIdle stepId io =
+    Flow.forAll (stepRecordById stepId << isUpdating)
+        (\updating -> Flow.unless updating (Flow.setting (stepRecordById stepId << isUpdating) io))
+
+
+settleValidation : Int -> Maybe (ApiData Model.StepValidation) -> String -> Result Http.Error Bool -> Flow Model ()
+settleValidation stepId pinned message result =
+    case result of
+        Ok True ->
+            Flow.async (addToast False "Output differs from the validated version. Unvalidate the step to record a new baseline.")
+
+        Ok False ->
+            Flow.setAll (stepRecordById stepId << validation) pinned
+                |> Flow.seq refreshValidations
+                |> Flow.seq (Flow.async (addToast True message))
+
+        Err err ->
+            Flow.async (addToast False (Http.errorMessage err))
+
+
+validateStep : Int -> Flow Model ()
+validateStep stepId =
+    whenStepIdle stepId (Api.validateStep stepId |> Flow.andThen (settleValidation stepId (Just NotAsked) "Step validated."))
+
+
+unvalidateStep : Int -> Flow Model ()
+unvalidateStep stepId =
+    whenStepIdle stepId
+        (Api.unvalidateStep stepId
+            |> Flow.map (Result.map (always False))
+            |> Flow.andThen (settleValidation stepId Nothing "Step unvalidated.")
+        )
 
 
 removeRecord : TableSpec (BaseRecord a) -> Int -> Flow Model ()
@@ -596,7 +680,7 @@ saveExistingRecordWith beforeRequest lens record mergeFn spec =
                     Flow.over (remkT lens << records << success << by .id record.id)
                         (\r -> { r | isUpdating = False, lastModifiedAt = Just posix })
                 )
-                |> Flow.seq refetchCommitHash
+                |> Flow.seq refreshValidations
     in
     Flow.over (remkT lens << records << success)
         (List.updateIf (\r -> r.id == record.id)
@@ -1979,7 +2063,7 @@ predictSrcFileChange recordId path prediction apiCall =
                             callApiMerge Model.updateDirectoryChildren
                                 (allStepTables << srcFilesChildrenAt recordId dirPath)
                                 (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId dirPath)
-                                |> Flow.seq refetchCommitHash
+                                |> Flow.seq refreshValidations
                         )
                     |> FlowError.foldResult (\_ -> Flow.pure ())
                         (\_ ->
@@ -2370,7 +2454,7 @@ uploadFiles spec types stepId =
                             |> FlowError.foldResult
                                 (\_ ->
                                     Flow.over uploadProgress (Dict.remove stepId)
-                                        |> Flow.seq refetchCommitHash
+                                        |> Flow.seq refreshValidations
                                         |> Flow.seq (runStep spec stepId)
                                 )
                                 (\_ -> Flow.over uploadProgress (Dict.remove stepId))
@@ -3801,6 +3885,14 @@ requestProjectStatus projectId commit =
         |> ignoreResult
 
 
+resyncWorkspace : String -> Flow Model ()
+resyncWorkspace snapshotCommit =
+    refetchCommitHash
+        |> Flow.seq (Flow.get |> Flow.assertCondition (has (commitHash << success << where_ ((==) snapshotCommit))))
+        |> Flow.seq loadProjects
+        |> Flow.seq (Flow.forAll currentProjectId (\projectId -> requestProjectStatus projectId Nothing))
+
+
 listenAndProcessStepStatus : Flow Model Decode.Value
 listenAndProcessStepStatus =
     Flow.subscribe onStepStatusIn Channels.stepStatus
@@ -3813,7 +3905,8 @@ onStepStatusIn value =
             Flow.get
                 |> Flow.andThen
                     (\model ->
-                        applySnapshot (stateUpdateVisible model projectId commit) commit steps
+                        Flow.when (headMovedRemotely model commit) (Flow.async (resyncWorkspace commit))
+                            |> Flow.seq (applySnapshot (stateUpdateVisible model projectId commit) commit steps)
                     )
 
         Ok SSEHeartbeat ->
@@ -3842,6 +3935,12 @@ stateUpdateVisible model snapshotProjectId snapshotCommit =
     Maybe.unwrap True ((==) snapshotCommit) viewCommit
 
 
+headMovedRemotely : Model -> String -> Bool
+headMovedRemotely model snapshotCommit =
+    has (commitHash << success << where_ ((/=) snapshotCommit)) model
+        && not (has (route << Route.page << Route.project << mCommit << just) model)
+
+
 applySnapshot : Bool -> String -> List { stepId : Int, status : Status } -> Flow Model ()
 applySnapshot stateVisible commit steps =
     if stateVisible then
@@ -3855,7 +3954,12 @@ updateStepStatus : String -> Int -> Status -> Flow Model ()
 updateStepStatus snapshotCommit stepId newStatus =
     let
         stepRunState =
-            projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState
+            stepRecordById stepId << runState
+
+        pinnedRunFinished model =
+            has (stepRecordById stepId << validation << just) model
+                && (try (stepRunState << success << status) model |> Maybe.andThen ApiData.toMaybe)
+                == Just StatusRunning
     in
     Flow.get
         |> Flow.andThen
@@ -3863,6 +3967,7 @@ updateStepStatus snapshotCommit stepId newStatus =
                 if has stepRunState model then
                     Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
                         |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
+                        |> Flow.seq (Flow.when (newStatus == StatusSuccess && pinnedRunFinished model) (Flow.async loadProjectValidations))
 
                 else
                     Flow.over stepStatusBuffer (Dict.insert stepId ( snapshotCommit, newStatus ))

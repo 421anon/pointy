@@ -29,6 +29,7 @@ steps name entry =
         , decodeRecord = Decode.stepValueOnly stepType
         , status = \r -> ApiData.unwrap (ApiData.loading Nothing) .status r.runState
         , validationErrors = always []
+        , isLocked = .validation >> (/=) Nothing
         , directoryView = \r -> ApiData.toMaybe r.runState |> Maybe.map .directoryView
         , srcFilesView =
             if has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType then
@@ -46,6 +47,7 @@ steps name entry =
             , note = ""
             , args = Dict.empty
             , runState = ApiData.loading Nothing
+            , validation = Nothing
             , isUpdating = False
             , lastModifiedAt = Nothing
             , srcFiles =
@@ -91,6 +93,7 @@ projects presets stepConfig =
         , decodeRecord = Decode.projectRecord presets stepConfig
         , status = always NotAsked
         , validationErrors = .validationErrors
+        , isLocked = always False
         , directoryView = always Nothing
         , srcFilesView = always Nothing
         , defaultRecord =

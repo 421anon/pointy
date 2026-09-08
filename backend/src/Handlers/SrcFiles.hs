@@ -17,6 +17,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import Handlers.Store (DirEntry, FileChunk, downloadHandler, fromRawBase, listHandler, parseSeekOffset, seekHandler)
+import Handlers.StepValidation (ensureStepUnvalidated)
 import OutPaths (withWriteRepoTransaction)
 import Network.Wai (Application)
 import Servant (Handler, Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, throwError)
@@ -87,6 +88,7 @@ mutateSrcFile stepId rel verb falseErr action
         throwError err400{errBody = "Invalid source file path"}
     | otherwise = do
         result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+            ensureStepUnvalidated ctx stepId
             done <- liftIO $ action (worktreePath </> "srcFiles" </> relPath)
             when done $ commitAndPushChanges ctx (verb ++ " source file " ++ relPath)
             pure done

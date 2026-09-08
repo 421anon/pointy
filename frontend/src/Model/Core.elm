@@ -62,6 +62,14 @@ type alias StepRunState =
     }
 
 
+type StepValidation
+    = ValidationCurrent
+    | ValidationIdentical
+    | ValidationDiffer
+    | ValidationUnbuilt
+    | ValidationMissing
+
+
 type alias SrcFileDraft =
     { name : String
     , content : String
@@ -73,6 +81,7 @@ type alias StepRecord =
         { type_ : String
         , note : String
         , runState : ApiData StepRunState
+        , validation : Maybe (ApiData StepValidation)
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
@@ -1235,7 +1244,12 @@ updateStepRecordTable new old =
                 (\oldRecord ->
                     List.updateIf
                         (\newRecord -> newRecord.id == oldRecord.id)
-                        (\newRecord -> { newRecord | runState = oldRecord.runState })
+                        (\newRecord ->
+                            { newRecord
+                                | runState = oldRecord.runState
+                                , validation = Maybe.map (always (Maybe.withDefault NotAsked oldRecord.validation)) newRecord.validation
+                            }
+                        )
                 )
 
         mergedRecords =

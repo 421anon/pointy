@@ -2,26 +2,26 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.Projects (getProjectsHandler, patchProjectHandler, batchUpdateProjectsHandler, postProjectHandler, deleteProjectHandler, jsonToNix, RawJSON, ProjectUpdate (..)) where
+module Handlers.Projects (getProjectsHandler, patchProjectHandler, batchUpdateProjectsHandler, postProjectHandler, deleteProjectHandler, jsonToNix, rewriteNixFile, RawJSON, ProjectUpdate (..)) where
 
 import ApiTypes (DynamicJson (..))
 import Control.Monad (mapM_)
 import Control.Monad.Except (ExceptT (..), catchError, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
-import qualified Data.ByteString.Lazy as LB
-import qualified Data.Text.Encoding as TE
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Aeson (FromJSON (..), Options (..), Result (..), Value (..), defaultOptions, eitherDecode, encode, fromJSON, genericParseJSON)
-import GHC.Generics (Generic)
 import Data.Aeson.Key (toText)
 import qualified Data.Aeson.KeyMap as KeyMap
+import qualified Data.ByteString.Lazy as LB
 import Data.Fix (foldFix)
 import Data.List (foldl')
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
 import Data.Scientific (floatingOrInteger)
+import qualified Data.Text.Encoding as TE
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as V
+import GHC.Generics (Generic)
 import Network.HTTP.Media ((//))
 import OutPaths (withWriteRepoTransaction)
 import Servant (Accept (..), Handler, MimeRender (..), MimeUnrender (..), NoContent (..))
@@ -31,7 +31,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath (takeBaseName, (</>))
 import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalImpureJsonExpr, runNixEvalJsonInRepo, withReadRepoTransaction)
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -103,7 +103,7 @@ data ProjectUpdate = ProjectUpdate
     deriving (Generic, Show)
 
 instance FromJSON ProjectUpdate where
-    parseJSON = genericParseJSON $ defaultOptions { fieldLabelModifier = \label -> if label == "projectUpdateRecord" then "record" else "id" }
+    parseJSON = genericParseJSON $ defaultOptions{fieldLabelModifier = \label -> if label == "projectUpdateRecord" then "record" else "id"}
 
 batchUpdateProjectsHandler :: [ProjectUpdate] -> Handler NoContent
 batchUpdateProjectsHandler [] =
@@ -165,6 +165,12 @@ jsonToNix :: LB.ByteString -> Either String T.Text
 jsonToNix bs = do
     val <- eitherDecode bs
     return $ renderMultilineNix $ jsonValueToNixExpr val
+
+rewriteNixFile :: FilePath -> T.Text -> ExceptT String IO ()
+rewriteNixFile path transformation = do
+    output <- runNixEvalImpureJsonExpr $ T.unpack $ "let orig = import " <> T.pack path <> "; in " <> transformation
+    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
+    liftIO $ TIO.writeFile path (nixResult <> "\n")
 
 jsonValueToNixExpr :: Value -> NExpr
 jsonValueToNixExpr (Object obj) =

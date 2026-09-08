@@ -8,12 +8,14 @@ import Agent.Git (AgentApplyView, AgentSessionView, AgentUsage)
 import Agent.Session (AgentTurn)
 import ApiTypes (DynamicJson)
 import qualified Data.ByteString as BS
+import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
+import Handlers.StepValidation (ValidationOutcome)
 import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
@@ -357,6 +359,31 @@ type CreateStep =
         :> ReqBody '[RawJSON] DynamicJson
         :> Post '[RawJSON] DynamicJson
 
+type GetProjectValidation =
+    "project-validation"
+        :> Description "Reports the validation outcome of every step in a project at one revision."
+        :> ReqProjectId
+        :> QueryParam "commit" Text
+        :> Get '[JSON] (Map String ValidationOutcome)
+
+type ValidateStep =
+    "step-validation"
+        :> Description "Validates a built step, or advances a validation whose output is unchanged. Returns whether the output differs from the baseline."
+        :> ReqId
+        :> Post '[JSON] Bool
+
+type UnvalidateStep =
+    "step-validation"
+        :> Description "Removes a step's validation."
+        :> ReqId
+        :> Delete '[JSON] NoContent
+
+type StepDiffReport =
+    "step-diff-report"
+        :> Description "Serves the diffoscope comparison of a step's validated and current outputs."
+        :> ReqId
+        :> Raw
+
 type GetNotices =
     "notices"
         :> Description "Returns evaluation notices (warnings and errors) for a step."
@@ -416,6 +443,10 @@ type API =
         :<|> Autocomplete
         :<|> UpdateStep
         :<|> CreateStep
+        :<|> GetProjectValidation
+        :<|> ValidateStep
+        :<|> UnvalidateStep
+        :<|> StepDiffReport
         :<|> GetNotices
         :<|> RunStep
         :<|> StopStep

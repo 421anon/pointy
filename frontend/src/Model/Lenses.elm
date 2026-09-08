@@ -541,9 +541,19 @@ runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
 
 
+validation : Lens ls { a | validation : b } b x y
+validation =
+    lens "validation" .validation (\t validation_ -> { t | validation = validation_ })
+
+
 projectStepRecords : Traversal ProjectRecord StepRecord x y
 projectStepRecords =
     tables << values << records << success << each
+
+
+currentProjectStepRecords : Traversal Model StepRecord x y
+currentProjectStepRecords =
+    currentProject << success << projectStepRecords
 
 
 sortKey : Lens ls { a | sortKey : b } b x y

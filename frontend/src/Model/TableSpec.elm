@@ -8,6 +8,7 @@ module Model.TableSpec exposing
     , getDirectoryView
     , getDisplayName
     , getEncodeRecord
+    , getIsLocked
     , getLens
     , getName
     , getShareable
@@ -34,6 +35,7 @@ type TableSpec a
         , lens : A_Traversal Model (Table a)
         , status : a -> ApiData Status
         , validationErrors : a -> List String
+        , isLocked : a -> Bool
         , directoryView : a -> Maybe DirectoryFolder
         , srcFilesView : a -> Maybe DirectoryFolder
         , encodeRecord : a -> Json.Encode.Value
@@ -84,6 +86,11 @@ getStatus (TableSpec spec) =
 getValidationErrors : TableSpec a -> a -> List String
 getValidationErrors (TableSpec spec) =
     spec.validationErrors
+
+
+getIsLocked : TableSpec a -> a -> Bool
+getIsLocked (TableSpec spec) =
+    spec.isLocked
 
 
 getShareable : TableSpec a -> a -> Bool
