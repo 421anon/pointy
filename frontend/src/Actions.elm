@@ -450,13 +450,13 @@ loadProjectValidations =
             )
 
 
-mergeStepValidation : Result Http.Error (Dict Int (Maybe (ApiData Model.StepValidation))) -> StepRecord -> StepRecord
+mergeStepValidation : Result Http.Error (Dict Int (Maybe String, Maybe (ApiData Model.StepValidation))) -> StepRecord -> StepRecord
 mergeStepValidation result record =
     case result of
         Ok outcomes ->
             record.id
                 |> Maybe.andThen (\stepId -> Dict.get stepId outcomes)
-                |> Maybe.unwrap record (\outcome -> set validation outcome record)
+                |> Maybe.unwrap record (\( pin, outcome ) -> set validation outcome (set validationPin pin record))
 
         Err err ->
             set (validation << just) (Error err) record
@@ -473,14 +473,15 @@ whenStepIdle stepId io =
         (\updating -> Flow.unless updating (Flow.setting (stepRecordById stepId << isUpdating) io))
 
 
-settleValidation : Int -> Maybe (ApiData Model.StepValidation) -> String -> Result Http.Error Bool -> Flow Model ()
-settleValidation stepId pinned message result =
+settleValidation : Int -> Maybe (ApiData Model.StepValidation) -> Maybe String -> String -> Result Http.Error Bool -> Flow Model ()
+settleValidation stepId pinned pin message result =
     case result of
         Ok True ->
             Flow.async (addToast False "Output differs from the validated version. Unvalidate the step to record a new baseline.")
 
         Ok False ->
             Flow.setAll (stepRecordById stepId << validation) pinned
+                |> Flow.seq (Flow.setAll (stepRecordById stepId << validationPin) pin)
                 |> Flow.seq refreshValidations
                 |> Flow.seq (Flow.async (addToast True message))
 
@@ -496,10 +497,20 @@ validateStep stepId =
                 let
                     mCommit_ =
                         try (route << Route.page << Route.project << mCommit << just) model
+
+                    -- The backend pins the revision it validates: the browsed
+                    -- revision, or the checked-out commit at validation time.
+                    revision =
+                        case mCommit_ of
+                            Just commit_ ->
+                                Just commit_
+
+                            Nothing ->
+                                ApiData.toMaybe (Model.getCommitHash model)
                 in
                 whenStepIdle stepId
                     (Api.validateStep stepId mCommit_
-                        |> Flow.andThen (settleValidation stepId (Just NotAsked) "Step validated.")
+                        |> Flow.andThen (settleValidation stepId (Just NotAsked) revision "Step validated.")
                     )
             )
 
@@ -509,7 +520,7 @@ unvalidateStep stepId =
     whenStepIdle stepId
         (Api.unvalidateStep stepId
             |> Flow.map (Result.map (always False))
-            |> Flow.andThen (settleValidation stepId Nothing "Step unvalidated.")
+            |> Flow.andThen (settleValidation stepId Nothing Nothing "Step unvalidated.")
         )
 
 

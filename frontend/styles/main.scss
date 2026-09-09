@@ -1087,7 +1087,8 @@ $delimited-grid-row-height: 28px;
 }
 
 .step-validation-chip,
-.step-validation-diff {
+.step-validation-diff,
+.step-validation-pin {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2xs);
@@ -1115,12 +1116,17 @@ $delimited-grid-row-height: 28px;
   }
 }
 
-.step-validation-diff {
+.step-validation-diff,
+.step-validation-pin {
   @include mixins.button-base;
   font-size: 11px;
   min-height: 24px;
   text-decoration: none;
   text-underline-offset: 3px;
+}
+
+.step-validation-pin-hash {
+  font-family: monospace;
 }
 
 .dir-item-icon-btn {

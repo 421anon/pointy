@@ -48,6 +48,7 @@ steps name entry =
             , args = Dict.empty
             , runState = ApiData.loading Nothing
             , validation = Nothing
+            , validationPin = Nothing
             , isUpdating = False
             , lastModifiedAt = Nothing
             , srcFiles =

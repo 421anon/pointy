@@ -82,6 +82,7 @@ type alias StepRecord =
         , note : String
         , runState : ApiData StepRunState
         , validation : Maybe (ApiData StepValidation)
+        , validationPin : Maybe String
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
@@ -1248,6 +1249,16 @@ updateStepRecordTable new old =
                             { newRecord
                                 | runState = oldRecord.runState
                                 , validation = Maybe.map (always (Maybe.withDefault NotAsked oldRecord.validation)) newRecord.validation
+                                , validationPin =
+                                    -- The validation outcome carries the baseline pin from
+                                    -- current repository state; a record fetched at an older
+                                    -- revision must not replace it with that revision's pin.
+                                    case oldRecord.validationPin of
+                                        Just pin ->
+                                            Just pin
+
+                                        Nothing ->
+                                            newRecord.validationPin
                             }
                         )
                 )

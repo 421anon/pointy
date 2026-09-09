@@ -546,6 +546,11 @@ validation =
     lens "validation" .validation (\t validation_ -> { t | validation = validation_ })
 
 
+validationPin : Lens ls { a | validationPin : b } b x y
+validationPin =
+    lens "validationPin" .validationPin (\t validationPin_ -> { t | validationPin = validationPin_ })
+
+
 projectStepRecords : Traversal ProjectRecord StepRecord x y
 projectStepRecords =
     tables << values << records << success << each

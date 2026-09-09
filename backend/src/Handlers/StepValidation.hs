@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Handlers.StepValidation (
+    StepValidationReport (..),
     ValidationOutcome,
     ensureStepUnvalidated,
     getProjectValidationHandler,
@@ -65,14 +66,32 @@ data ValidationOutcome
 instance ToJSON ValidationOutcome where
     toJSON outcome = object ["verdict" .= verdict, "message" .= message]
       where
-        (verdict, message) = case outcome of
-            Unvalidated -> ("unvalidated" :: Text, Nothing)
-            Current -> ("current", Nothing)
-            Identical -> ("identical", Nothing)
-            Differ -> ("differ", Nothing)
-            Unbuilt -> ("unbuilt", Nothing)
-            MissingBaseline detail -> ("missing", Just detail)
-            CheckFailed detail -> ("error", Just detail)
+        (verdict, message) = outcomeFields outcome
+
+outcomeFields :: ValidationOutcome -> (Text, Maybe Text)
+outcomeFields = \case
+    Unvalidated -> ("unvalidated", Nothing)
+    Current -> ("current", Nothing)
+    Identical -> ("identical", Nothing)
+    Differ -> ("differ", Nothing)
+    Unbuilt -> ("unbuilt", Nothing)
+    MissingBaseline detail -> ("missing", Just detail)
+    CheckFailed detail -> ("error", Just detail)
+
+{- | A step's validation outcome together with the revision its baseline pins.
+The pin comes from current repository state, so it is the revision to browse
+for a validated step even when the requested revision predates the validation.
+-}
+data StepValidationReport = StepValidationReport
+    { reportPin :: Maybe Text
+    , reportOutcome :: ValidationOutcome
+    }
+
+instance ToJSON StepValidationReport where
+    toJSON (StepValidationReport pin outcome) =
+        object ["pin" .= pin, "verdict" .= verdict, "message" .= message]
+      where
+        (verdict, message) = outcomeFields outcome
 
 type StepPins = Map Int (Maybe Text)
 
@@ -81,14 +100,17 @@ type StepOutPaths = Map Int (Either String FilePath)
 newtype PathInfo = PathInfo {narHash :: Text}
     deriving (Generic, FromJSON)
 
-getProjectValidationHandler :: Int -> Maybe Text -> Handler (Map String ValidationOutcome)
+getProjectValidationHandler :: Int -> Maybe Text -> Handler (Map String StepValidationReport)
 getProjectValidationHandler projectId commit = do
     result <- liftIO $ withReadRepoTransaction $ \context -> do
         target <- maybe (pure context) (commitContext (readRepoPath context)) commit
         -- The baseline lives in current repository state, not in the requested
         -- revision, so a revision validated now reads back as validated.
         pins <- stepPins context =<< projectStepIds target projectId
-        Map.mapKeys show <$> stepOutcomes target pins
+        outcomes <- stepOutcomes target pins
+        pure $
+            Map.mapKeys show $
+                Map.mapWithKey (\stepId outcome -> StepValidationReport (Map.findWithDefault Nothing stepId pins) outcome) outcomes
     orFail err500 result
 
 validateStepHandler :: Int -> Maybe Text -> Handler Bool
@@ -225,7 +247,7 @@ lookupOutPath stepId = Map.findWithDefault (Left ("Step " ++ show stepId ++ " ha
 
 missingBaseline :: Int -> FilePath -> Text
 missingBaseline stepId outPath =
-    T.pack $ "Step " ++ show stepId ++ ": validated output missing (" ++ outPath ++ "). Rebuild the validated revision or unvalidate."
+    T.pack $ "Step " ++ show stepId ++ ": the pinned revision has no built output (" ++ outPath ++ "). Rebuild the pinned revision or unvalidate."
 
 ensureStepUnvalidated :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO ()
 ensureStepUnvalidated ctx stepId = do

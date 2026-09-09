@@ -14,7 +14,7 @@ import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses as Lenses exposing (currentProject, mCommit, route)
+import Model.Lenses as Lenses exposing (currentProject, currentProjectId, mCommit, route)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfigEntry, StepType(..), derivation)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
@@ -84,11 +84,11 @@ verdictChip verdict =
             ValidationChip "warning" "difference" "Differs" "The current output differs from the saved baseline. View the diff to review the changes."
 
         Model.ValidationMissing ->
-            ValidationChip "warning" "cloud_off" "Baseline missing" "The validated output is no longer in the store. Rebuild the validated revision to compare, or unvalidate to start a new baseline."
+            ValidationChip "warning" "pending" "Pinned version not built" "The pinned revision has no built output. Run the step at that revision to restore the validation baseline, or unvalidate this step."
 
 
-viewValidationChip : Bool -> Int -> ApiData Model.StepValidation -> Html (Flow Model ())
-viewValidationChip isReadOnly stepId validation =
+viewValidationChip : Model -> Bool -> Int -> Maybe String -> ApiData Model.StepValidation -> Html (Flow Model ())
+viewValidationChip model isReadOnly stepId mPin validation =
     let
         pending =
             ValidationChip "muted" "verified" "Validated" "A validation baseline is saved for this step."
@@ -102,8 +102,26 @@ viewValidationChip isReadOnly stepId validation =
         chip =
             ApiData.foldVisible (whileChecking pending) (whileChecking << Maybe.unwrap pending verdictChip) verdictChip failed validation
 
+        currentCommit =
+            try (route << Route.page << Route.project << mCommit << just) model
+
+        pinNote =
+            mPin
+                |> Maybe.map (\pin -> " Pinned revision: " ++ shortRevision pin ++ ".")
+                |> Maybe.withDefault ""
+
         explanation =
-            chip.explanation ++ " Editing is locked. Unvalidate this step in the current view to edit it."
+            chip.explanation ++ pinNote ++ " Editing is locked. Unvalidate this step in the current view to edit it."
+
+        pinnedVersionLink =
+            mPin
+                |> Maybe.filter (\pin -> currentCommit /= Just pin)
+                |> Maybe.andThen
+                    (\pin ->
+                        try currentProjectId model
+                            |> Maybe.map (viewPinnedVersionLink stepId pin)
+                    )
+                |> Maybe.withDefault Html.nothing
     in
     Html.span
         [ Html.Attributes.class "step-validation"
@@ -119,7 +137,59 @@ viewValidationChip isReadOnly stepId validation =
             [ iconCustom False chip.icon [ Html.Attributes.attribute "aria-hidden" "true" ]
             , Html.text chip.label
             ]
+        , pinnedVersionLink
         , Html.viewIf (not isReadOnly && ApiData.toMaybe validation == Just Model.ValidationDiffer) (viewDiffReportLink stepId)
+        ]
+
+
+shortRevision : String -> String
+shortRevision =
+    String.left 7
+
+
+{- | The pinned version is the repository at the validated revision, browsed
+read-only like any other past commit, with the validated step revealed.
+-}
+viewPinnedVersionLink : Int -> String -> Int -> Html (Flow Model ())
+viewPinnedVersionLink stepId pin projectId =
+    let
+        shortPin =
+            shortRevision pin
+
+        targetRoute =
+            Route.fromPage
+                (Route.Project
+                    { projectId = projectId
+                    , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                    , mCommit = Just pin
+                    , mCompare = Nothing
+                    }
+                )
+
+        titleText =
+            "View the repository at the validated revision " ++ shortPin ++ " (read-only)"
+    in
+    Html.a
+        [ Html.Attributes.class "step-validation-pin"
+        , Html.Attributes.title titleText
+        , Html.Attributes.attribute "aria-label" ("View pinned version of step " ++ String.fromInt stepId ++ " at revision " ++ shortPin ++ " (read-only)")
+        , Route.href targetRoute
+        , Html.Events.preventDefaultOn "click"
+            (Decode.map4
+                (\ctrl meta shift alt ->
+                    ( Actions.goToRoute targetRoute, not (ctrl || meta || shift || alt) )
+                )
+                (Decode.field "ctrlKey" Decode.bool)
+                (Decode.field "metaKey" Decode.bool)
+                (Decode.field "shiftKey" Decode.bool)
+                (Decode.field "altKey" Decode.bool)
+            )
+        ]
+        [ iconCustom False "push_pin" [ Html.Attributes.attribute "aria-hidden" "true" ]
+        , Html.span [ Html.Attributes.style "text-decoration" "underline" ]
+            [ Html.text "Pinned version "
+            , Html.span [ Html.Attributes.class "step-validation-pin-hash" ] [ Html.text shortPin ]
+            ]
         ]
 
 
@@ -282,7 +352,7 @@ viewSection model sectionName entry steps =
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values
-                    [ Maybe.map2 (viewValidationChip isReadOnly) r.id r.validation
+                    [ Maybe.map2 (\stepId validation -> viewValidationChip model isReadOnly stepId r.validationPin validation) r.id r.validation
                     , r.id
                         |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
                     ]

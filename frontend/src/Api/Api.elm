@@ -196,7 +196,7 @@ stepValidationUrl id =
     "/backend/step-validation?id=" ++ String.fromInt id
 
 
-fetchProjectValidation : Int -> String -> Flow s (Result Http.Error (Dict Int (Maybe (ApiData StepValidation))))
+fetchProjectValidation : Int -> String -> Flow s (Result Http.Error (Dict Int (Maybe String, Maybe (ApiData StepValidation))))
 fetchProjectValidation projectId commit =
     Flow.lift <|
         Http.get

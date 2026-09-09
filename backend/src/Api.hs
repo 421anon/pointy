@@ -15,7 +15,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
-import Handlers.StepValidation (ValidationOutcome)
+import Handlers.StepValidation (StepValidationReport)
 import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
@@ -361,10 +361,10 @@ type CreateStep =
 
 type GetProjectValidation =
     "project-validation"
-        :> Description "Reports the validation outcome of every step in a project at one revision, compared against the current validation baseline."
+        :> Description "Reports the validation outcome of every step in a project at one revision, compared against the current validation baseline, together with the pinned revision of each baseline."
         :> ReqProjectId
         :> QueryParam "commit" Text
-        :> Get '[JSON] (Map String ValidationOutcome)
+        :> Get '[JSON] (Map String StepValidationReport)
 
 type ValidateStep =
     "step-validation"
