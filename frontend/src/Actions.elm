@@ -424,20 +424,15 @@ refetchCommitHash =
     callApi commitHash Api.fetchCommitHash |> Flow.map (always ())
 
 
-validationTarget : Model -> Maybe ( Int, String )
-validationTarget model =
-    Maybe.map2 Tuple.pair
-        (try currentProjectId model)
-        (try (orElseT (route << Route.page << Route.project << mCommit << just) (commitHash << success)) model)
-
-
-stepRecordById : Int -> Traversal Model StepRecord x y
-stepRecordById stepId =
-    projects << records << success << each << projectStepRecords << where_ (.id >> (==) (Just stepId))
-
-
 loadProjectValidations : Flow Model ()
 loadProjectValidations =
+    let
+        validationTarget : Model -> Maybe ( Int, String )
+        validationTarget model =
+            Maybe.map2 Tuple.pair
+                (try currentProjectId model)
+                (try (orElseT (route << Route.page << Route.project << mCommit << just) (commitHash << success)) model)
+    in
     Flow.get
         |> Flow.assertCondition (not << has (currentProjectStepRecords << validation << just << where_ ApiData.isLoading))
         |> Flow.map validationTarget
@@ -495,7 +490,18 @@ settleValidation stepId pinned message result =
 
 validateStep : Int -> Flow Model ()
 validateStep stepId =
-    whenStepIdle stepId (Api.validateStep stepId |> Flow.andThen (settleValidation stepId (Just NotAsked) "Step validated."))
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    mCommit_ =
+                        try (route << Route.page << Route.project << mCommit << just) model
+                in
+                whenStepIdle stepId
+                    (Api.validateStep stepId mCommit_
+                        |> Flow.andThen (settleValidation stepId (Just NotAsked) "Step validated.")
+                    )
+            )
 
 
 unvalidateStep : Int -> Flow Model ()

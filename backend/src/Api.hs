@@ -361,15 +361,16 @@ type CreateStep =
 
 type GetProjectValidation =
     "project-validation"
-        :> Description "Reports the validation outcome of every step in a project at one revision."
+        :> Description "Reports the validation outcome of every step in a project at one revision, compared against the current validation baseline."
         :> ReqProjectId
         :> QueryParam "commit" Text
         :> Get '[JSON] (Map String ValidationOutcome)
 
 type ValidateStep =
     "step-validation"
-        :> Description "Validates a built step, or advances a validation whose output is unchanged. Returns whether the output differs from the baseline."
+        :> Description "Validates a built revision of a step, pinning it as the validation baseline when there is no baseline or its output is unchanged. Returns whether the output differs from the baseline."
         :> ReqId
+        :> QueryParam "commit" Text
         :> Post '[JSON] Bool
 
 type UnvalidateStep =

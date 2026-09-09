@@ -85,23 +85,30 @@ getProjectValidationHandler :: Int -> Maybe Text -> Handler (Map String Validati
 getProjectValidationHandler projectId commit = do
     result <- liftIO $ withReadRepoTransaction $ \context -> do
         target <- maybe (pure context) (commitContext (readRepoPath context)) commit
-        pins <- stepPins target =<< projectStepIds target projectId
+        -- The baseline lives in current repository state, not in the requested
+        -- revision, so a revision validated now reads back as validated.
+        pins <- stepPins context =<< projectStepIds target projectId
         Map.mapKeys show <$> stepOutcomes target pins
     orFail err500 result
 
-validateStepHandler :: Int -> Handler Bool
-validateStepHandler stepId = do
+validateStepHandler :: Int -> Maybe Text -> Handler Bool
+validateStepHandler stepId mCommit = do
     repoPath <- liftIO userRepoPath
     result <- liftIO $ withWriteRepoTransaction $ \context@(WriteRepoContext worktreePath) -> do
         (code, stdout, stderr) <- liftIO $ runGitIn worktreePath ["rev-parse", "HEAD"]
         unless (code == ExitSuccess) $ throwError ("Failed to resolve the current commit: " ++ stderr)
-        let commit = T.strip (T.pack stdout)
-            target = ReadRepoContext repoPath (T.unpack commit)
+        let headCommit = T.unpack (T.strip (T.pack stdout))
+        target <- case mCommit of
+            Nothing -> pure (ReadRepoContext repoPath headCommit)
+            Just commit -> commitContext repoPath commit
+        let revision = T.pack (readCommitHash target)
             advance = do
-                setValidationCommitHash context stepId (Just commit)
+                setValidationCommitHash context stepId (Just revision)
                 commitAndPushChanges context $ "validate step " ++ show stepId
                 pure False
-        pin <- stepPin target stepId
+        -- Compare against the baseline in current repository state, so an
+        -- explicit revision is checked against what the branch records now.
+        pin <- stepPin context stepId
         outcome <- Map.findWithDefault Unvalidated stepId <$> stepOutcomes target (Map.singleton stepId pin)
         case outcome of
             Differ -> pure True
@@ -111,7 +118,7 @@ validateStepHandler stepId = do
                 when (Map.notMember outPath hashes) $
                     throwError ("Build the step before validating it. Output not in the store: " ++ outPath)
                 advance
-            Unbuilt -> throwError "Build the current output before updating its validation."
+            Unbuilt -> throwError ("Build the output at " ++ T.unpack revision ++ " before validating it.")
             MissingBaseline detail -> throwError (T.unpack detail)
             CheckFailed detail -> throwError (T.unpack detail)
             _ -> advance

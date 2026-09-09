@@ -551,6 +551,11 @@ projectStepRecords =
     tables << values << records << success << each
 
 
+stepRecordById : Int -> Traversal Model StepRecord x y
+stepRecordById stepId =
+    projects << records << success << each << projectStepRecords << where_ (.id >> (==) (Just stepId))
+
+
 currentProjectStepRecords : Traversal Model StepRecord x y
 currentProjectStepRecords =
     currentProject << success << projectStepRecords

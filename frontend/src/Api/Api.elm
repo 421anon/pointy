@@ -205,11 +205,11 @@ fetchProjectValidation projectId commit =
             }
 
 
-validateStep : Int -> Flow s (Result Http.Error Bool)
-validateStep id =
+validateStep : Int -> Maybe String -> Flow s (Result Http.Error Bool)
+validateStep id commit =
     Flow.lift <|
         Http.post
-            { url = stepValidationUrl id
+            { url = appendCommitQuery (stepValidationUrl id) commit
             , body = Http.emptyBody
             , expect =
                 Http.expectStringResponse identity

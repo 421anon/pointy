@@ -138,10 +138,10 @@ viewDiffReportLink stepId =
         ]
 
 
-viewValidationActions : Bool -> TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewValidationActions isReadOnly spec r =
-    case ( r.id, r.isUpdating, isReadOnly ) of
-        ( Just stepId, False, False ) ->
+viewValidationActions : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewValidationActions spec r =
+    case ( r.id, r.isUpdating ) of
+        ( Just stepId, False ) ->
             case r.validation of
                 Nothing ->
                     [ Html.viewIf (ApiData.toMaybe (TableSpec.getStatus spec r) == Just Model.StatusSuccess) <|
@@ -368,7 +368,7 @@ viewSection model sectionName entry steps =
                                                 )
                                     )
                 in
-                viewValidationActions isReadOnly spec r ++ uploadActions ++ runActions ++ quickCreateActions
+                viewValidationActions spec r ++ uploadActions ++ runActions ++ quickCreateActions
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
         , onRecordClick =
