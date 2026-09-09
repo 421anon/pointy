@@ -100,7 +100,14 @@
             };
           };
           packages = {
-            backend = pkgs.haskellPackages.callCabal2nix "backend" ./backend { };
+            # Leaf application package: nothing consumes its profiling or haddock
+            # outputs. Building them costs ~45% of the build time (39 modules get
+            # compiled three ways: vanilla, dynamic and profiling, plus haddock).
+            backend = pkgs.haskell.lib.dontHaddock (
+              pkgs.haskell.lib.disableLibraryProfiling (
+                pkgs.haskellPackages.callCabal2nix "backend" ./backend { }
+              )
+            );
             frontend = dream2nix.lib.evalModules {
               packageSets.nixpkgs = nixpkgs.legacyPackages.${system};
               modules = [ ./frontend/module.nix ];
