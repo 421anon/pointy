@@ -145,7 +145,7 @@ viewValidationActions spec r =
             case r.validation of
                 Nothing ->
                     [ Html.viewIf (ApiData.toMaybe (TableSpec.getStatus spec r) == Just Model.StatusSuccess) <|
-                        viewIconButtonWithTooltip "verified" True "Validate step" (Actions.validateStep stepId)
+                        viewIconButtonWithTooltip "verified" True "Mark step as validated" (Actions.validateStep stepId)
                     ]
 
                 Just validation ->
