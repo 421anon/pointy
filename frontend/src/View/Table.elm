@@ -81,7 +81,6 @@ viewTable :
     { model : Model
     , spec : TableSpec (BaseRecord a)
     , table : Table (BaseRecord a)
-    , nameActions : BaseRecord a -> List (Html (Flow Model ()))
     , specificRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , alwaysVisibleRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , directorySection : BaseRecord a -> Html (Flow Model ())
@@ -90,7 +89,7 @@ viewTable :
     , isOpen : BaseRecord a -> Bool
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, nameActions, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen } =
+viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen } =
     let
         lens =
             TableSpec.getLens spec
@@ -375,15 +374,13 @@ viewTable { model, spec, table, nameActions, specificRecordActions, alwaysVisibl
                                         [ Html.text (String.fromInt id_) ]
                                 )
                                 record.id
+                             , Html.viewIf (editable record) <|
+                                iconCustom True
+                                    "edit"
+                                    [ class "edit-icon"
+                                    , Events.stopPropagationOn "click" (Decode.succeed ( Actions.startInlineRecordNameEdit spec record, True ))
+                                    ]
                              ]
-                                ++ nameActions record
-                                ++ [ Html.viewIf (editable record) <|
-                                        iconCustom True
-                                            "edit"
-                                            [ class "edit-icon"
-                                            , Events.stopPropagationOn "click" (Decode.succeed ( Actions.startInlineRecordNameEdit spec record, True ))
-                                            ]
-                                   ]
                             )
 
                 viewUnmovedRecord attrs mkDragAttrs mkDropAttrs =

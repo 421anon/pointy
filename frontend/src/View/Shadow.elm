@@ -81,8 +81,8 @@ pinChip verdict =
         Model.PinIdentical ->
             Just (PinChip "muted" "published_with_changes" "Matches" "The latest output still matches the pinned version, but at a newer revision. Updating the pin is optional.")
 
-        Model.PinUnbuilt ->
-            Just (PinChip "warning" "pending" "Latest not built" "Dependencies changed since the step was pinned, so the latest revision's output is not built. Build it to compare with the pinned version.")
+        Model.PinUpdatable ->
+            Just (PinChip "muted" "pending" "Updatable" "Dependencies changed since the step was pinned, so the latest revision's output is not built. Build it to compare with the pinned version.")
 
         Model.PinDiffer ->
             Just (PinChip "warning" "difference" "Differs" "The latest output differs from the pinned version. View the diff to review the changes; the pin stays until you update it.")
@@ -91,8 +91,38 @@ pinChip verdict =
             Nothing
 
 
-viewPinChip : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.PinVerdict -> Html (Flow Model ())
-viewPinChip model spec isReadOnly stepId mPin verdict =
+{- | A step's pin controls: the pin toggle, plus the chip describing how the
+latest output relates to the pin and the pinned revision it refers to. A step
+with neither a pin toggle nor a pin shows nothing.
+-}
+viewPinControls : Model -> TableSpec StepRecord -> Bool -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
+viewPinControls model spec isReadOnly stepId record =
+    let
+        indicator =
+            record.pinVerdict
+                |> Maybe.map (viewPinIndicator model spec isReadOnly stepId record.pinRevision)
+                |> Maybe.withDefault []
+
+        content =
+            viewPinActions spec record ++ indicator
+    in
+    if List.isEmpty content then
+        Nothing
+
+    else
+        Just <|
+            Html.span
+                [ Html.Attributes.class "step-pin"
+                , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+                ]
+                content
+
+
+{- | The chip describing how the latest output relates to the pin, together
+with the pinned revision and any comparison actions.
+-}
+viewPinIndicator : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.PinVerdict -> List (Html (Flow Model ()))
+viewPinIndicator model spec isReadOnly stepId mPin verdict =
     let
         pending =
             PinChip "muted" "verified" "Pinned" "This step is pinned."
@@ -142,6 +172,20 @@ viewPinChip model spec isReadOnly stepId mPin verdict =
                 , Html.text chip.label
                 ]
 
+        viewDiffButton chip =
+            Html.a
+                [ Html.Attributes.class "step-pin-diff"
+                , Html.Attributes.title (explanation chip ++ " Opens in a new tab.")
+                , Html.Attributes.attribute "aria-label" ("Updated. " ++ explanation chip ++ " Opens in a new tab.")
+                , Html.Attributes.href (Api.stepDiffReportUrl stepId)
+                , Html.Attributes.target "_blank"
+                , Html.Attributes.rel "noopener"
+                ]
+                [ iconCustom False "pages" [ Html.Attributes.attribute "aria-hidden" "true" ]
+                , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Updated" ]
+                , iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ]
+                ]
+
         pinnedVersionLink =
             mPin
                 |> Maybe.filter (\pin -> currentCommit /= Just pin)
@@ -151,15 +195,24 @@ viewPinChip model spec isReadOnly stepId mPin verdict =
                             |> Maybe.map (viewPinnedVersionLink stepId pin)
                     )
                 |> Maybe.withDefault Html.nothing
+
+        isDiffer =
+            ApiData.toMaybe verdict == Just Model.PinDiffer
+
+        chipOrDiffButton =
+            if isDiffer && not isReadOnly then
+                Html.viewMaybe viewDiffButton mChip
+
+            else
+                Html.viewMaybe viewChip mChip
     in
-    Html.span
-        [ Html.Attributes.class "step-pin"
-        , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
-        ]
-        [ Html.viewMaybe viewChip mChip
+    if isDiffer then
+        [ pinnedVersionLink, chipOrDiffButton ]
+
+    else
+        [ chipOrDiffButton
         , pinnedVersionLink
-        , Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUnbuilt) (viewBuildLatestLink model spec stepId)
-        , Html.viewIf (not isReadOnly && ApiData.toMaybe verdict == Just Model.PinDiffer) (viewDiffReportLink stepId)
+        , Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUpdatable) (viewBuildLatestLink model spec stepId)
         ]
 
 
@@ -242,26 +295,11 @@ viewPinnedVersionLink stepId pin projectId =
                 (Decode.field "altKey" Decode.bool)
             )
         ]
-        [ iconCustom False "push_pin" [ Html.Attributes.attribute "aria-hidden" "true" ]
-        , Html.span [ Html.Attributes.style "text-decoration" "underline" ]
-            [ Html.text "Pinned version "
-            , Html.span [ Html.Attributes.class "step-pin-revision-hash" ] [ Html.text shortPin ]
+        [ Html.span
+            [ Html.Attributes.class "step-pin-revision-hash"
+            , Html.Attributes.style "text-decoration" "underline"
             ]
-        ]
-
-
-viewDiffReportLink : Int -> Html (Flow Model ())
-viewDiffReportLink stepId =
-    Html.a
-        [ Html.Attributes.class "step-pin-diff"
-        , Html.Attributes.title "View diff (opens in a new tab)"
-        , Html.Attributes.attribute "aria-label" ("View diff for step " ++ String.fromInt stepId ++ " (opens in a new tab)")
-        , Html.Attributes.href (Api.stepDiffReportUrl stepId)
-        , Html.Attributes.target "_blank"
-        , Html.Attributes.rel "noopener"
-        ]
-        [ Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "View diff" ]
-        , iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ]
+            [ Html.text shortPin ]
         ]
 
 
@@ -410,11 +448,10 @@ viewSection model sectionName entry steps =
         { model = model
         , spec = spec
         , table = steps
-        , nameActions = viewPinActions spec
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values
-                    [ Maybe.map2 (\stepId verdict -> viewPinChip model spec isReadOnly stepId r.pinRevision verdict) r.id r.pinVerdict
+                    [ r.id |> Maybe.andThen (\stepId -> viewPinControls model spec isReadOnly stepId r)
                     , r.id
                         |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
                     ]

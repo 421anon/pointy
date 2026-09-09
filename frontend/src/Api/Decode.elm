@@ -271,8 +271,9 @@ pinReport =
                     "differ" ->
                         Decode.succeed (withVerdict (Just (Success Model.PinDiffer)))
 
+                    -- The backend calls this "unbuilt": the latest output is not built.
                     "unbuilt" ->
-                        Decode.succeed (withVerdict (Just (Success Model.PinUnbuilt)))
+                        Decode.succeed (withVerdict (Just (Success Model.PinUpdatable)))
 
                     "missing" ->
                         Decode.succeed (withVerdict (Just (Success Model.PinMissing)))

@@ -66,7 +66,7 @@ type PinVerdict
     = PinCurrent
     | PinIdentical
     | PinDiffer
-    | PinUnbuilt
+    | PinUpdatable
     | PinMissing
 
 
