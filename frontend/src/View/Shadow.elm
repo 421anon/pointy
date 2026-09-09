@@ -69,8 +69,7 @@ type alias PinChip =
 
 
 {- | The chip describing how the latest revision's output relates to the pin.
-The pin itself is represented by the always-present "Pinned" badge, so a
-current pin and a missing baseline add no chip: a current pin needs no
+A current pin and a missing baseline add no chip: a current pin needs no
 comparison, and a missing baseline is already visible as the pinned output's
 status.
 -}
@@ -129,17 +128,6 @@ with the pinned revision and any comparison actions.
 viewPinIndicator : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.PinVerdict -> List (Html (Flow Model ()))
 viewPinIndicator model spec isReadOnly stepId mPin verdict =
     let
-        pinnedChip =
-            PinChip "muted"
-                "verified"
-                "Pinned"
-                (if ApiData.toMaybe verdict == Just Model.PinCurrent then
-                    "The step is shown at its pinned revision, and the latest revision's output is unchanged."
-
-                 else
-                    "This step is pinned."
-                )
-
         whileChecking chip =
             { chip | explanation = "Checking the latest output. " ++ chip.explanation }
 
@@ -214,8 +202,7 @@ viewPinIndicator model spec isReadOnly stepId mPin verdict =
             else
                 Html.viewMaybe viewChip mVerdictChip
     in
-    [ viewChip pinnedChip
-    , pinnedVersionLink
+    [ pinnedVersionLink
     , chipOrDiffButton
     , Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUpdatable) (viewBuildLatestLink model spec stepId)
     ]
@@ -325,11 +312,26 @@ viewPinActions spec r =
                 Just verdict ->
                     [ Html.viewIf (ApiData.toMaybe verdict == Just Model.PinIdentical) <|
                         viewInlineIconButtonWithTooltip "published_with_changes" True "Update pin" (Actions.pinStep stepId)
-                    , viewInlineIconButtonWithTooltip "push_pin" True "Unpin step" (Actions.unpinStep stepId)
+                    , viewPinnedToggle stepId
                     ]
 
         _ ->
             []
+
+
+{- | The pin toggle of a pinned step, marked with a verified modifier so a
+pinned row shows its pin at a glance.
+-}
+viewPinnedToggle : Int -> Html (Flow Model ())
+viewPinnedToggle stepId =
+    Html.span [ Html.Attributes.class "pin-toggle" ]
+        [ viewInlineIconButtonWithTooltip "push_pin" True "Unpin step" (Actions.unpinStep stepId)
+        , iconCustom True
+            "verified"
+            [ Html.Attributes.class "pin-toggle-modifier"
+            , Html.Attributes.attribute "aria-hidden" "true"
+            ]
+        ]
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
