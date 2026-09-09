@@ -177,7 +177,7 @@ viewPinIndicator model spec isReadOnly stepId mPin verdict =
                 , Html.Attributes.target "_blank"
                 , Html.Attributes.rel "noopener"
                 ]
-                [ iconCustom False "pages" [ Html.Attributes.attribute "aria-hidden" "true" ]
+                [ iconCustom False "file_copy" [ Html.Attributes.attribute "aria-hidden" "true" ]
                 , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Updated" ]
                 , iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ]
                 ]
