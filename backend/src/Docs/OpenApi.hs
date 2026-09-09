@@ -167,7 +167,11 @@ instance ToSchema ValidationOutcome where
     declareNamedSchema _ = pure $ objectSchema "ValidationOutcome" [("verdict", stringField), ("message", stringField)]
 
 instance ToSchema StepValidationReport where
-    declareNamedSchema _ = pure $ objectSchema "StepValidationReport" [("pin", stringField), ("verdict", stringField), ("message", stringField)]
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "StepValidationReport"
+                [("pin", stringField), ("status", stringField), ("error", stringField), ("verdict", stringField), ("message", stringField)]
 
 -- | The publicly documented OpenAPI specification.
 pointyOpenApi :: OpenApi

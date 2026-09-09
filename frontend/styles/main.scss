@@ -1088,7 +1088,8 @@ $delimited-grid-row-height: 28px;
 
 .step-validation-chip,
 .step-validation-diff,
-.step-validation-pin {
+.step-validation-pin,
+.step-validation-build {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2xs);
@@ -1117,12 +1118,20 @@ $delimited-grid-row-height: 28px;
 }
 
 .step-validation-diff,
-.step-validation-pin {
+.step-validation-pin,
+.step-validation-build {
   @include mixins.button-base;
   font-size: 11px;
   min-height: 24px;
   text-decoration: none;
   text-underline-offset: 3px;
+}
+
+.step-validation-build {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-secondary);
 }
 
 .step-validation-pin-hash {

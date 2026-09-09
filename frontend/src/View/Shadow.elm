@@ -72,23 +72,23 @@ verdictChip : Model.StepValidation -> ValidationChip
 verdictChip verdict =
     case verdict of
         Model.ValidationCurrent ->
-            ValidationChip "muted" "verified" "Validated" "The current output matches the saved validation baseline."
+            ValidationChip "muted" "verified" "Validated" "The step is shown at its pinned revision, and the latest revision's output is unchanged."
 
         Model.ValidationIdentical ->
-            ValidationChip "muted" "published_with_changes" "Matches" "The output contents still match the baseline. Update validation to pin the current revision."
+            ValidationChip "muted" "published_with_changes" "Matches" "The latest output still matches the pinned version, but at a newer revision. Updating the pin is optional."
 
         Model.ValidationUnbuilt ->
-            ValidationChip "warning" "pending" "Needs rebuild" "This step changed since validation. Run it to compare the new output with the saved baseline."
+            ValidationChip "warning" "pending" "Latest not built" "Dependencies changed since validation, so the latest revision's output is not built. Build it to compare with the pinned version."
 
         Model.ValidationDiffer ->
-            ValidationChip "warning" "difference" "Differs" "The current output differs from the saved baseline. View the diff to review the changes."
+            ValidationChip "warning" "difference" "Differs" "The latest output differs from the pinned version. View the diff to review the changes; the pin stays until you update it."
 
         Model.ValidationMissing ->
-            ValidationChip "warning" "pending" "Pinned version not built" "The pinned revision has no built output. Run the step at that revision to restore the validation baseline, or unvalidate this step."
+            ValidationChip "warning" "pending" "Pinned version not built" "The pinned revision has no built output. Run the step to rebuild the pinned version, or unvalidate it."
 
 
-viewValidationChip : Model -> Bool -> Int -> Maybe String -> ApiData Model.StepValidation -> Html (Flow Model ())
-viewValidationChip model isReadOnly stepId mPin validation =
+viewValidationChip : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.StepValidation -> Html (Flow Model ())
+viewValidationChip model spec isReadOnly stepId mPin validation =
     let
         pending =
             ValidationChip "muted" "verified" "Validated" "A validation baseline is saved for this step."
@@ -138,7 +138,28 @@ viewValidationChip model isReadOnly stepId mPin validation =
             , Html.text chip.label
             ]
         , pinnedVersionLink
+        , Html.viewIf (ApiData.toMaybe validation == Just Model.ValidationUnbuilt) (viewBuildLatestLink model spec stepId)
         , Html.viewIf (not isReadOnly && ApiData.toMaybe validation == Just Model.ValidationDiffer) (viewDiffReportLink stepId)
+        ]
+
+
+{- | Build the latest revision so its output can be compared with the pinned
+version. The row itself stays at the pinned revision.
+-}
+viewBuildLatestLink : Model -> TableSpec StepRecord -> Int -> Html (Flow Model ())
+viewBuildLatestLink model spec stepId =
+    let
+        titleText =
+            "Build the latest revision's output to compare with the pinned version"
+    in
+    Html.button
+        [ Html.Attributes.class "step-validation-build"
+        , Html.Attributes.title titleText
+        , Html.Attributes.attribute "aria-label" titleText
+        , Html.Events.onClick (Actions.buildLatest spec stepId (Model.viewedRevision model))
+        ]
+        [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
+        , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build latest" ]
         ]
 
 
@@ -352,7 +373,7 @@ viewSection model sectionName entry steps =
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values
-                    [ Maybe.map2 (\stepId validation -> viewValidationChip model isReadOnly stepId r.validationPin validation) r.id r.validation
+                    [ Maybe.map2 (\stepId validation -> viewValidationChip model spec isReadOnly stepId r.validationPin validation) r.id r.validation
                     , r.id
                         |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
                     ]

@@ -18,7 +18,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -53,14 +53,23 @@ srcWritePending model mDirCtx =
         |> Maybe.withDefault False
 
 
-compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
-compareSelectionFor projectId fileName mime path ctx =
+{- | The revision a step's files are browsed at: its pin once validated,
+otherwise the revision being viewed.
+-}
+recordRevision : Model -> Int -> Maybe String
+recordRevision model recordId =
+    try (currentProject << success << tables << values << recordById recordId) model
+        |> Maybe.andThen (stepRevision model)
+
+
+compareSelectionFor : Model -> Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
+compareSelectionFor model projectId fileName mime path ctx =
     case ctx of
         OutputDir recordId commit_ ->
             { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
 
         SrcDir recordId ->
-            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc }
+            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc (recordRevision model recordId) }
 
 
 viewCompareButton : Model -> Maybe CompareSelection -> Html (Flow Model ())
@@ -323,7 +332,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     Actions.downloadFile stepId_ commit_ path
 
                 Just (SrcDir id) ->
-                    Actions.downloadSrcFile id path
+                    Actions.downloadSrcFile id (recordRevision model id) path
 
                 Nothing ->
                     Flow.pure ()
@@ -345,7 +354,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 mCompareSelection =
                     if not file.isDeleted && (file.viewable || isImage) then
-                        Maybe.map2 (\pid -> compareSelectionFor pid itemName file.mimeType path)
+                        Maybe.map2 (\pid -> compareSelectionFor model pid itemName file.mimeType path)
                             (try currentProjectId model)
                             mDirCtx
 
@@ -504,7 +513,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 Just (Api.stepFileBundleUrl stepId_ commit_ path)
 
                                             Just (SrcDir recordId) ->
-                                                Just (Api.srcFileRawUrl recordId path)
+                                                Just (Api.srcFileRawUrl recordId (recordRevision model recordId) path)
 
                                             Nothing ->
                                                 Nothing

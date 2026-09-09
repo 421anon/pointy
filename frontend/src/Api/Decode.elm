@@ -241,42 +241,51 @@ stepValueOnly stepType_ =
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
-validationOutcome : Decoder (Maybe String, Maybe (ApiData Model.StepValidation))
+validationOutcome : Decoder Model.ValidationReport
 validationOutcome =
-    Decode.succeed (\pin verdict message -> ( pin, verdict, message ))
+    Decode.succeed (\pin status_ error verdict message -> { pin = pin, status = status_, error = error, verdict = verdict, message = message })
         |> optional "pin" (maybe Decode.string) Nothing
+        |> optional "status" (maybe status) Nothing
+        |> optional "error" (maybe Decode.string) Nothing
         |> required "verdict" Decode.string
         |> optional "message" (maybe Decode.string) Nothing
         |> Decode.andThen
-            (\( pin, verdict, message ) ->
-                case verdict of
+            (\fields ->
+                let
+                    withVerdict verdict_ =
+                        { pin = fields.pin
+                        , status = Maybe.map (\status_ -> applyError status_ fields.error) fields.status
+                        , verdict = verdict_
+                        }
+                in
+                case fields.verdict of
                     "unvalidated" ->
-                        Decode.succeed ( pin, Nothing )
+                        Decode.succeed { pin = fields.pin, status = Nothing, verdict = Nothing }
 
                     "current" ->
-                        Decode.succeed ( pin, Just (Success Model.ValidationCurrent) )
+                        Decode.succeed (withVerdict (Just (Success Model.ValidationCurrent)))
 
                     "identical" ->
-                        Decode.succeed ( pin, Just (Success Model.ValidationIdentical) )
+                        Decode.succeed (withVerdict (Just (Success Model.ValidationIdentical)))
 
                     "differ" ->
-                        Decode.succeed ( pin, Just (Success Model.ValidationDiffer) )
+                        Decode.succeed (withVerdict (Just (Success Model.ValidationDiffer)))
 
                     "unbuilt" ->
-                        Decode.succeed ( pin, Just (Success Model.ValidationUnbuilt) )
+                        Decode.succeed (withVerdict (Just (Success Model.ValidationUnbuilt)))
 
                     "missing" ->
-                        Decode.succeed ( pin, Just (Success Model.ValidationMissing) )
+                        Decode.succeed (withVerdict (Just (Success Model.ValidationMissing)))
 
                     "error" ->
-                        Decode.succeed ( pin, Just (Error (Http.BadBody (Maybe.withDefault "The validation check failed." message))) )
+                        Decode.succeed (withVerdict (Just (Error (Http.BadBody (Maybe.withDefault "The validation check failed." fields.message)))))
 
                     other ->
                         Decode.fail ("Unknown step validation verdict: " ++ other)
             )
 
 
-validationOutcomes : Decoder (Dict Int (Maybe String, Maybe (ApiData Model.StepValidation)))
+validationOutcomes : Decoder (Dict Int Model.ValidationReport)
 validationOutcomes =
     Decode.keyValuePairs validationOutcome
         |> Decode.map

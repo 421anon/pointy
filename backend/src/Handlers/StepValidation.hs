@@ -31,7 +31,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import Handlers.Projects (rewriteNixFile)
-import Handlers.Statuses (forkBroadcastStatusForStepProjectsAtHead)
+import Handlers.Statuses (checkStatus, forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseFile, responseLBS)
 import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), withWriteRepoTransaction)
@@ -46,6 +46,7 @@ import UserRepo (
     RepoContext,
     WriteRepoContext (..),
     commitAndPushChanges,
+    commitContext,
     runGitIn,
     runNix,
     runNixEvalJsonApplyInRepo,
@@ -78,18 +79,25 @@ outcomeFields = \case
     MissingBaseline detail -> ("missing", Just detail)
     CheckFailed detail -> ("error", Just detail)
 
-{- | A step's validation outcome together with the revision its baseline pins.
-The pin comes from current repository state, so it is the revision to browse
-for a validated step even when the requested revision predates the validation.
+{- | A step's validation outcome together with the revision its baseline pins
+and the build state of that pinned output, so a validated step can be shown as
+it was at the pinned revision even when the requested revision differs.
 -}
 data StepValidationReport = StepValidationReport
     { reportPin :: Maybe Text
+    , reportStatus :: Maybe (Text, Maybe Text)
     , reportOutcome :: ValidationOutcome
     }
 
 instance ToJSON StepValidationReport where
-    toJSON (StepValidationReport pin outcome) =
-        object ["pin" .= pin, "verdict" .= verdict, "message" .= message]
+    toJSON (StepValidationReport pin mStatus outcome) =
+        object
+            [ "pin" .= pin
+            , "status" .= fmap fst mStatus
+            , "error" .= (mStatus >>= snd)
+            , "verdict" .= verdict
+            , "message" .= message
+            ]
       where
         (verdict, message) = outcomeFields outcome
 
@@ -108,10 +116,27 @@ getProjectValidationHandler projectId commit = do
         -- revision, so a revision validated now reads back as validated.
         pins <- stepPins context =<< projectStepIds target projectId
         outcomes <- stepOutcomes target pins
+        statuses <- baselineStatuses (readRepoPath context) pins
         pure $
             Map.mapKeys show $
-                Map.mapWithKey (\stepId outcome -> StepValidationReport (Map.findWithDefault Nothing stepId pins) outcome) outcomes
+                Map.mapWithKey
+                    (\stepId outcome -> StepValidationReport (Map.findWithDefault Nothing stepId pins) (Map.findWithDefault Nothing stepId statuses) outcome)
+                    outcomes
     orFail err500 result
+
+{- | Build state of each pinned baseline output, so a validated step's row can
+show the pinned revision's status rather than the requested revision's.
+-}
+baselineStatuses :: FilePath -> StepPins -> ExceptT String IO (Map Int (Maybe (Text, Maybe Text)))
+baselineStatuses repoPath pins = do
+    paths <- baselineOutPaths repoPath (Map.mapMaybe id pins)
+    Map.fromList <$> mapM resolve (Map.toList paths)
+  where
+    resolve (stepId, Right outPath) = do
+        status_ <- liftIO (checkStatus outPath)
+        pure (stepId, Just status_)
+
+    resolve (stepId, Left _) = pure (stepId, Nothing)
 
 validateStepHandler :: Int -> Maybe Text -> Handler Bool
 validateStepHandler stepId mCommit = do
@@ -265,13 +290,6 @@ projectStepIds context projectId = do
     case find ((== projectId) . projectDefId) (Map.elems (defs :: Map String ProjectDef)) of
         Nothing -> throwError $ "Project " ++ show projectId ++ " does not exist."
         Just project -> pure $ map (stepDefId . stepRefDef) (projectDefSteps project)
-
-commitContext :: FilePath -> Text -> ExceptT String IO ReadRepoContext
-commitContext repoPath hash = do
-    let commit = T.unpack hash
-    (exitCode, _, _) <- liftIO $ runGitIn repoPath ["cat-file", "-e", "--", commit ++ "^{commit}"]
-    when (exitCode /= ExitSuccess) $ throwError ("Commit " ++ commit ++ " is not in the local user repository.")
-    pure $ ReadRepoContext repoPath commit
 
 stepPin :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO (Maybe Text)
 stepPin ctx stepId =

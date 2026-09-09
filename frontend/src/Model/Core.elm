@@ -70,6 +70,16 @@ type StepValidation
     | ValidationMissing
 
 
+{- | A step's validation state: the pinned revision, the build status of that
+pinned output, and the verdict comparing the requested revision to the pin.
+-}
+type alias ValidationReport =
+    { pin : Maybe String
+    , status : Maybe Status
+    , verdict : Maybe (ApiData StepValidation)
+    }
+
+
 type alias SrcFileDraft =
     { name : String
     , content : String
@@ -481,7 +491,7 @@ type alias CompareSelection =
 
 type CompareSource
     = FromOutput String
-    | FromSrc
+    | FromSrc (Maybe String)
 
 
 type CompareMode
@@ -659,6 +669,37 @@ repartitionProjectSteps presets stepConfig proj =
 getCommitHash : Model -> ApiData String
 getCommitHash (Model model) =
     model.commitHash
+
+
+{- | The revision a step is shown at: its pin once validated, otherwise the
+revision currently being viewed. Validated steps are frozen at their pin.
+-}
+stepRevision : Model -> StepRecord -> Maybe String
+stepRevision model record =
+    case record.validationPin of
+        Just pin ->
+            Just pin
+
+        Nothing ->
+            viewedRevision model
+
+
+{- | The revision the project view is showing, falling back to the checked-out
+commit when no explicit commit is in the route.
+-}
+viewedRevision : Model -> Maybe String
+viewedRevision model =
+    case (getRoute model).page of
+        Route.Project { mCommit } ->
+            case mCommit of
+                Just commit_ ->
+                    Just commit_
+
+                Nothing ->
+                    ApiData.toMaybe (getCommitHash model)
+
+        _ ->
+            ApiData.toMaybe (getCommitHash model)
 
 
 getUserRepoInfo : Model -> ApiData UserRepoInfo

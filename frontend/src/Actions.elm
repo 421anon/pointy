@@ -280,12 +280,14 @@ replayStepStatusBuffer =
             )
 
 
+collapsedDirectoryView : Model.DirectoryFolder
+collapsedDirectoryView =
+    { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
+
+
 applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
 applyStepStatus snapshotCommit status_ rs =
     let
-        collapsedDirectoryView =
-            { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
-
         current =
             ApiData.toMaybe rs
                 |> Maybe.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView }
@@ -323,12 +325,16 @@ applyStatusSnapshot snapshotCommit newStatus rs =
 
 setLocalStepStatus : An_Optic pr ls Model (Table StepRecord) -> Int -> ApiData Status -> Flow Model ()
 setLocalStepStatus table stepId status_ =
-    Flow.try (commitHash << success)
-        (Maybe.unwrap (Flow.pure ())
-            (\currentCommit ->
-                Flow.over (remkT table << recordById stepId << runState) (applyStepStatus currentCommit status_)
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                try (remkT table << recordById stepId) model
+                    |> Maybe.andThen (Model.stepRevision model)
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\revision ->
+                            Flow.over (remkT table << recordById stepId << runState) (applyStepStatus revision status_)
+                        )
             )
-        )
 
 
 loadUserRepoInfo : Flow Model ()
@@ -450,16 +456,60 @@ loadProjectValidations =
             )
 
 
-mergeStepValidation : Result Http.Error (Dict Int (Maybe String, Maybe (ApiData Model.StepValidation))) -> StepRecord -> StepRecord
+mergeStepValidation : Result Http.Error (Dict Int Model.ValidationReport) -> StepRecord -> StepRecord
 mergeStepValidation result record =
     case result of
-        Ok outcomes ->
+        Ok reports ->
             record.id
-                |> Maybe.andThen (\stepId -> Dict.get stepId outcomes)
-                |> Maybe.unwrap record (\( pin, outcome ) -> set validation outcome (set validationPin pin record))
+                |> Maybe.andThen (\stepId -> Dict.get stepId reports)
+                |> Maybe.unwrap record (applyValidationReport record)
 
         Err err ->
             set (validation << just) (Error err) record
+
+
+applyValidationReport : StepRecord -> Model.ValidationReport -> StepRecord
+applyValidationReport record report =
+    let
+        withValidation =
+            set validation report.verdict (set validationPin report.pin record)
+    in
+    case report.pin of
+        Just pin ->
+            set runState (pinnedRunState pin report.status withValidation.runState) withValidation
+
+        Nothing ->
+            withValidation
+
+
+{- | A validated step is shown at its pinned revision, so its run state carries
+the pinned commit and the pinned output's build status.
+-}
+pinnedRunState : String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+pinnedRunState pin mStatus runState_ =
+    let
+        fresh =
+            Success
+                { commit = pin
+                , status = Maybe.map Success mStatus |> Maybe.withDefault (Success Model.StatusNotStarted)
+                , directoryView = collapsedDirectoryView
+                }
+    in
+    case ApiData.toMaybe runState_ of
+        Just current ->
+            if current.commit == pin then
+                if current.status == Loading (Just Model.StatusRunning) && mStatus /= Just Model.StatusRunning then
+                    -- A local run is pending; a stale report must not clear it.
+                    Success current
+
+                else
+                    Success { current | status = Maybe.map Success mStatus |> Maybe.withDefault current.status }
+
+            else
+                fresh
+
+        Nothing ->
+            fresh
 
 
 refreshValidations : Flow Model ()
@@ -482,11 +532,29 @@ settleValidation stepId pinned pin message result =
         Ok False ->
             Flow.setAll (stepRecordById stepId << validation) pinned
                 |> Flow.seq (Flow.setAll (stepRecordById stepId << validationPin) pin)
+                |> Flow.seq (Flow.when (pin == Nothing) (resetRunStateToViewed stepId))
                 |> Flow.seq refreshValidations
                 |> Flow.seq (Flow.async (addToast True message))
 
         Err err ->
             Flow.async (addToast False (Http.errorMessage err))
+
+
+{- | An unvalidated step is no longer frozen, so its run state returns to the
+revision being viewed.
+-}
+resetRunStateToViewed : Int -> Flow Model ()
+resetRunStateToViewed stepId =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case Model.viewedRevision model of
+                    Just revision ->
+                        Flow.over (stepRecordById stepId << runState) (applyStepStatus revision NotAsked)
+
+                    Nothing ->
+                        Flow.pure ()
+            )
 
 
 validateStep : Int -> Flow Model ()
@@ -994,15 +1062,16 @@ loadStepLog id =
         |> Flow.andThen
             (\model ->
                 let
-                    mCommit_ =
-                        try (route << Route.page << Route.project << mCommit << just) model
+                    revision =
+                        try (stepRecordById id) model
+                            |> Maybe.andThen (Model.stepRevision model)
 
                     key =
-                        Model.stepLogKey id mCommit_
+                        Model.stepLogKey id revision
                 in
                 Flow.over stepLogs (Dict.insert key (ApiData.loading Nothing))
                     |> Flow.seq
-                        (Api.fetchStepLog id mCommit_
+                        (Api.fetchStepLog id revision
                             |> Flow.andThen
                                 (\result ->
                                     Flow.over stepLogs (Dict.insert key (ApiData.fromResult result))
@@ -1021,6 +1090,26 @@ loadStepLog id =
 
 runStep : StepSpec -> Int -> Flow Model ()
 runStep spec id =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    table =
+                        TableSpec.getLens spec
+
+                    revision =
+                        try (remkT table << recordById id) model
+                            |> Maybe.andThen (Model.stepRevision model)
+                in
+                runStepAt spec id revision
+            )
+
+
+{- | Run a step at an explicit revision. Validated steps run at their pin;
+building the latest revision to compare against the pin uses 'viewedRevision'.
+-}
+runStepAt : StepSpec -> Int -> Maybe String -> Flow Model ()
+runStepAt spec id revision =
     let
         table =
             TableSpec.getLens spec
@@ -1031,14 +1120,10 @@ runStep spec id =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    mCommit_ =
-                        try (route << Route.page << Route.project << mCommit << just) model
-                in
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
                     |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
-                    |> Flow.seq (clearStepLog id mCommit_)
+                    |> Flow.seq (clearStepLog id revision)
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq
                         (registerStepStatusHook id
@@ -1052,11 +1137,38 @@ runStep spec id =
                                 )
                             )
                         )
-                    |> Flow.seq (callApi void (Api.runStep id mCommit_))
+                    |> Flow.seq (callApi void (Api.runStep id revision))
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
             (\_ -> setStatus (Success (StatusFailure Nothing)))
+
+
+{- | Build the latest revision of a validated step so its output can be compared
+with the pinned version. The row keeps showing the pinned revision.
+-}
+buildLatest : StepSpec -> Int -> Maybe String -> Flow Model ()
+buildLatest spec id revision =
+    let
+        table =
+            TableSpec.getLens spec
+    in
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
+                    |> Flow.seq (clearStepLog id revision)
+                    |> Flow.seq
+                        (registerStepStatusHook id
+                            (Flow.async loadProjectValidations
+                                |> Flow.seq (addToast True "Latest revision built. Comparing with the pinned version.")
+                            )
+                        )
+                    |> Flow.seq (callApi void (Api.runStep id revision))
+            )
+        |> FlowError.foldResult
+            (\_ -> Flow.pure ())
+            (\error -> addToast False (Http.errorMessage error))
 
 
 stopStep : StepSpec -> Int -> Flow Model ()
@@ -1072,11 +1184,12 @@ stopStep spec id =
         |> Flow.andThen
             (\model ->
                 let
-                    mCommit_ =
-                        try (route << Route.page << Route.project << mCommit << just) model
+                    revision =
+                        try (remkT table << recordById id) model
+                            |> Maybe.andThen (Model.stepRevision model)
                 in
                 setStatus (Success StatusRunning)
-                    |> Flow.seq (callApi void (Api.stopStep id mCommit_))
+                    |> Flow.seq (callApi void (Api.stopStep id revision))
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
@@ -1201,9 +1314,9 @@ downloadFile stepId commit filePath =
     Flow.lift (Nav.load (Api.stepFileDownloadUrl stepId (Just commit) filePath))
 
 
-downloadSrcFile : Int -> List String -> Flow Model ()
-downloadSrcFile id filePath =
-    Flow.lift (Nav.load (Api.srcFileDownloadUrl id filePath))
+downloadSrcFile : Int -> Maybe String -> List String -> Flow Model ()
+downloadSrcFile id revision filePath =
+    Flow.lift (Nav.load (Api.srcFileDownloadUrl id revision filePath))
 
 
 startCompare : CompareSelection -> Flow Model ()
@@ -1290,7 +1403,7 @@ compareSelectionFromTarget projectId target =
             , path = target.path
             , fileName = List.last target.path |> Maybe.withDefault ""
             , mimeType = target.mimeType
-            , source = FromSrc
+            , source = FromSrc target.commit
             }
     in
     case target.target of
@@ -1313,11 +1426,11 @@ compareSelectionToTarget sel =
             , mimeType = sel.mimeType
             }
 
-        FromSrc ->
+        FromSrc commit_ ->
             { id = sel.recordId
             , target = Route.Source
             , path = sel.path
-            , commit = Nothing
+            , commit = commit_
             , mimeType = sel.mimeType
             }
 
@@ -1385,8 +1498,8 @@ fetchCompareContent sel =
         FromOutput commit_ ->
             Api.fetchFileContents sel.recordId (Just commit_) sel.path
 
-        FromSrc ->
-            Api.fetchSrcFileContents sel.recordId sel.path
+        FromSrc commit_ ->
+            Api.fetchSrcFileContents sel.recordId commit_ sel.path
 
 
 shouldSkipFileContents : { r | mimeType : Maybe String } -> Bool
@@ -1544,7 +1657,10 @@ seekAndMerge target recordId path anchor bytes_ =
                         )
 
                 Route.Source ->
-                    Api.fetchSrcFileSeek recordId path anchor bytes_
+                    Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+                        (\commit_ ->
+                            Api.fetchSrcFileSeek recordId (Just commit_) path anchor bytes_
+                        )
     in
     Flow.forAll apiDataTraversal
         (\current ->
@@ -1885,18 +2001,21 @@ toggleSrcEntry recordId mOpen path =
             (allStepTables << srcFilesFolderExpandedAt recordId path) |> orElseT (allStepTables << srcFilesFileIsViewingAt recordId path)
 
         folderAction =
-            Flow.forAll (allStepTables << srcFilesItemAtPath recordId path << folder)
-                (\_ ->
+            Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+                (\revision ->
                     callApi (allStepTables << srcFilesChildrenAt recordId path)
-                        (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId path)
+                        (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) path)
                         |> Flow.return ()
                 )
 
         fetchContent =
-            callApi (allStepTables << srcFilesFileContentAt recordId path)
-                (Api.fetchSrcFileContents recordId path)
-                |> FlowError.andThen (setPlainFileLineCount Route.Source recordId path)
-                |> Flow.return ()
+            Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+                (\revision ->
+                    callApi (allStepTables << srcFilesFileContentAt recordId path)
+                        (Api.fetchSrcFileContents recordId (Just revision) path)
+                        |> FlowError.andThen (setPlainFileLineCount Route.Source recordId path)
+                        |> Flow.return ()
+                )
 
         fileAction =
             Flow.forAll (allStepTables << srcFilesItemAtPath recordId path << file)
@@ -2077,10 +2196,13 @@ predictSrcFileChange recordId path prediction apiCall =
                     |> Flow.seq (callApi void apiCall)
                     |> FlowError.andThen
                         (\_ ->
-                            callApiMerge Model.updateDirectoryChildren
-                                (allStepTables << srcFilesChildrenAt recordId dirPath)
-                                (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId dirPath)
-                                |> Flow.seq refreshValidations
+                            Flow.forAll (stepRecord << runState << success << commit)
+                                (\revision ->
+                                    callApiMerge Model.updateDirectoryChildren
+                                        (allStepTables << srcFilesChildrenAt recordId dirPath)
+                                        (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) dirPath)
+                                        |> Flow.seq refreshValidations
+                                )
                         )
                     |> FlowError.foldResult (\_ -> Flow.pure ())
                         (\_ ->
@@ -3977,19 +4099,55 @@ updateStepStatus snapshotCommit stepId newStatus =
             has (stepRecordById stepId << validation << just) model
                 && (try (stepRunState << success << status) model |> Maybe.andThen ApiData.toMaybe)
                 == Just StatusRunning
+
+        -- A snapshot describes a step only when it is for the revision that
+        -- step is shown at: its pin when validated, otherwise the viewed
+        -- revision. Snapshots at pinned revisions must not leak into steps that
+        -- are not pinned there.
+        describesStep model =
+            case try (stepRecordById stepId) model of
+                Just record ->
+                    case record.validationPin of
+                        Just pin ->
+                            snapshotCommit == pin
+
+                        Nothing ->
+                            Model.viewedRevision model
+                                == Just snapshotCommit
+                                || not (List.member snapshotCommit (pinnedRevisions model))
+
+                Nothing ->
+                    False
     in
     Flow.get
         |> Flow.andThen
             (\model ->
                 if has stepRunState model then
-                    Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
-                        |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
-                        |> Flow.seq (Flow.when (newStatus == StatusSuccess && pinnedRunFinished model) (Flow.async loadProjectValidations))
+                    if describesStep model then
+                        Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
+                            |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
+                            |> Flow.seq (Flow.when (newStatus == StatusSuccess && pinnedRunFinished model) (Flow.async loadProjectValidations))
+
+                    else
+                        Flow.pure ()
 
                 else
                     Flow.over stepStatusBuffer (Dict.insert stepId ( snapshotCommit, newStatus ))
             )
         |> Flow.seq (Flow.when (newStatus == StatusSuccess) (runAndClearStepStatusHook stepId))
+
+
+pinnedRevisions : Model -> List String
+pinnedRevisions model =
+    try (currentProject << success) model
+        |> Maybe.map
+            (\project ->
+                project.tables
+                    |> Dict.values
+                    |> List.concatMap (.records >> ApiData.toMaybe >> Maybe.withDefault [])
+                    |> List.filterMap .validationPin
+            )
+        |> Maybe.withDefault []
 
 
 startClusterStatusStream : Flow Model Decode.Value

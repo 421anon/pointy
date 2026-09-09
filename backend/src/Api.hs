@@ -54,8 +54,9 @@ type ListStepFiles =
 
 type ListSrcFiles =
     "src-files"
-        :> Description "Lists source files available to a step."
+        :> Description "Lists source files available to a step, optionally at a specific user-repo commit."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam "path" FilePath
         :> Get '[JSON] [DirEntry]
 
@@ -271,6 +272,7 @@ type DownloadSrcFile =
         :> "download"
         :> Description "Downloads a single source file."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
         :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
 
@@ -279,6 +281,7 @@ type SrcFileSeek =
         :> "seek"
         :> Description "Returns a bounded source-file chunk. Specify exactly one of line or offset and a nonzero signed byte count: positive bytes read forward from the anchor; negative bytes read backward and end at the anchor."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
         :> QueryParam "line" Int
         :> QueryParam "offset" Int
@@ -291,6 +294,7 @@ type RawSrcFile =
         :> "raw"
         :> Description "Serves the raw bytes of a source file (inline, no download disposition) for preview rendering."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
         :> Raw
 
