@@ -69,14 +69,16 @@ type alias PinChip =
 
 
 {- | The chip describing how the latest revision's output relates to the pin.
-A missing baseline has no chip: the row's status dot already shows that the
-pinned output is not built.
+The pin itself is represented by the always-present "Pinned" badge, so a
+current pin and a missing baseline add no chip: a current pin needs no
+comparison, and a missing baseline is already visible as the pinned output's
+status.
 -}
 pinChip : Model.PinVerdict -> Maybe PinChip
 pinChip verdict =
     case verdict of
         Model.PinCurrent ->
-            Just (PinChip "muted" "verified" "Pinned" "The step is shown at its pinned revision, and the latest revision's output is unchanged.")
+            Nothing
 
         Model.PinIdentical ->
             Just (PinChip "muted" "published_with_changes" "Matches" "The latest output still matches the pinned version, but at a newer revision. Updating the pin is optional.")
@@ -99,8 +101,11 @@ viewPinControls : Model -> TableSpec StepRecord -> Bool -> Int -> StepRecord -> 
 viewPinControls model spec isReadOnly stepId record =
     let
         indicator =
-            record.pinVerdict
-                |> Maybe.map (viewPinIndicator model spec isReadOnly stepId record.pinRevision)
+            record.pinRevision
+                |> Maybe.map
+                    (\pin ->
+                        viewPinIndicator model spec isReadOnly stepId (Just pin) (Maybe.withDefault ApiData.NotAsked record.pinVerdict)
+                    )
                 |> Maybe.withDefault []
 
         content =
@@ -124,8 +129,16 @@ with the pinned revision and any comparison actions.
 viewPinIndicator : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.PinVerdict -> List (Html (Flow Model ()))
 viewPinIndicator model spec isReadOnly stepId mPin verdict =
     let
-        pending =
-            PinChip "muted" "verified" "Pinned" "This step is pinned."
+        pinnedChip =
+            PinChip "muted"
+                "verified"
+                "Pinned"
+                (if ApiData.toMaybe verdict == Just Model.PinCurrent then
+                    "The step is shown at its pinned revision, and the latest revision's output is unchanged."
+
+                 else
+                    "This step is pinned."
+                )
 
         whileChecking chip =
             { chip | explanation = "Checking the latest output. " ++ chip.explanation }
@@ -133,18 +146,13 @@ viewPinIndicator model spec isReadOnly stepId mPin verdict =
         failed error =
             PinChip "danger" "error_outline" "Check failed" ("The pin check failed: " ++ Http.errorMessage error)
 
-        chipWhileLoading mPrevious =
-            case mPrevious of
-                Just previous ->
-                    Maybe.map whileChecking (pinChip previous)
+        verdictChipWhileLoading mPrevious =
+            Maybe.andThen pinChip mPrevious |> Maybe.map whileChecking
 
-                Nothing ->
-                    Just (whileChecking pending)
-
-        mChip =
+        mVerdictChip =
             ApiData.foldVisible
-                (Just (whileChecking pending))
-                chipWhileLoading
+                Nothing
+                verdictChipWhileLoading
                 pinChip
                 (Just << failed)
                 verdict
@@ -201,19 +209,16 @@ viewPinIndicator model spec isReadOnly stepId mPin verdict =
 
         chipOrDiffButton =
             if isDiffer && not isReadOnly then
-                Html.viewMaybe viewDiffButton mChip
+                Html.viewMaybe viewDiffButton mVerdictChip
 
             else
-                Html.viewMaybe viewChip mChip
+                Html.viewMaybe viewChip mVerdictChip
     in
-    if isDiffer then
-        [ pinnedVersionLink, chipOrDiffButton ]
-
-    else
-        [ chipOrDiffButton
-        , pinnedVersionLink
-        , Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUpdatable) (viewBuildLatestLink model spec stepId)
-        ]
+    [ viewChip pinnedChip
+    , pinnedVersionLink
+    , chipOrDiffButton
+    , Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUpdatable) (viewBuildLatestLink model spec stepId)
+    ]
 
 
 {- | Build the latest revision so its output can be compared with the pinned
