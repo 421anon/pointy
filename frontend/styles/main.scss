@@ -1079,17 +1079,29 @@ $delimited-grid-row-height: 28px;
   color: var(--text-muted);
 }
 
-.step-validation {
+.icon-btn-inline {
+  min-width: 20px;
+  min-height: 20px;
+  margin-left: var(--spacing-2xs);
+  vertical-align: middle;
+  color: var(--text-secondary);
+
+  > .material-symbols-outlined {
+    font-size: 15px;
+  }
+}
+
+.step-pin {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-xs);
 }
 
-.step-validation-chip,
-.step-validation-diff,
-.step-validation-pin,
-.step-validation-build {
+.step-pin-chip,
+.step-pin-diff,
+.step-pin-revision,
+.step-pin-build {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2xs);
@@ -1102,24 +1114,24 @@ $delimited-grid-row-height: 28px;
   }
 }
 
-.step-validation-chip {
+.step-pin-chip {
   cursor: help;
   padding: 1px var(--spacing-xs);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text-secondary) 5%, transparent);
 
-  &.step-validation-warning > .material-symbols-outlined {
+  &.step-pin-warning > .material-symbols-outlined {
     color: var(--state-warning);
   }
 
-  &.step-validation-danger > .material-symbols-outlined {
+  &.step-pin-danger > .material-symbols-outlined {
     color: var(--state-danger);
   }
 }
 
-.step-validation-diff,
-.step-validation-pin,
-.step-validation-build {
+.step-pin-diff,
+.step-pin-revision,
+.step-pin-build {
   @include mixins.button-base;
   font-size: 11px;
   min-height: 24px;
@@ -1127,14 +1139,22 @@ $delimited-grid-row-height: 28px;
   text-underline-offset: 3px;
 }
 
-.step-validation-build {
+.step-pin-build {
   background: none;
   border: none;
   padding: 0;
   color: var(--text-secondary);
+
+  &:disabled {
+    cursor: default;
+  }
 }
 
-.step-validation-pin-hash {
+.step-pin-build-spinner {
+  animation: spin 1s linear infinite;
+}
+
+.step-pin-revision-hash {
   font-family: monospace;
 }
 

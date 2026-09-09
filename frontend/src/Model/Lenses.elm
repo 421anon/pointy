@@ -541,14 +541,14 @@ runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
 
 
-validation : Lens ls { a | validation : b } b x y
-validation =
-    lens "validation" .validation (\t validation_ -> { t | validation = validation_ })
+pinVerdict : Lens ls { a | pinVerdict : b } b x y
+pinVerdict =
+    lens "pinVerdict" .pinVerdict (\t verdict -> { t | pinVerdict = verdict })
 
 
-validationPin : Lens ls { a | validationPin : b } b x y
-validationPin =
-    lens "validationPin" .validationPin (\t validationPin_ -> { t | validationPin = validationPin_ })
+pinRevision : Lens ls { a | pinRevision : b } b x y
+pinRevision =
+    lens "pinRevision" .pinRevision (\t revision -> { t | pinRevision = revision })
 
 
 projectStepRecords : Traversal ProjectRecord StepRecord x y
@@ -644,6 +644,11 @@ stepStatusHooks =
 stepStatusBuffer : Lens ls Model (Dict Int ( String, Model.Status )) x y
 stepStatusBuffer =
     lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
+
+
+pendingBuilds : Lens ls Model (Dict Int (Maybe String)) x y
+pendingBuilds =
+    lens ".pendingBuilds" Model.getPendingBuilds (\(Model m) builds -> Model { m | pendingBuilds = builds })
 
 
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y

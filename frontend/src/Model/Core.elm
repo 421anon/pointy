@@ -62,21 +62,21 @@ type alias StepRunState =
     }
 
 
-type StepValidation
-    = ValidationCurrent
-    | ValidationIdentical
-    | ValidationDiffer
-    | ValidationUnbuilt
-    | ValidationMissing
+type PinVerdict
+    = PinCurrent
+    | PinIdentical
+    | PinDiffer
+    | PinUnbuilt
+    | PinMissing
 
 
-{- | A step's validation state: the pinned revision, the build status of that
-pinned output, and the verdict comparing the requested revision to the pin.
+{- | A step's pin state: the pinned revision, the build status of that pinned
+output, and the verdict comparing the requested revision to the pin.
 -}
-type alias ValidationReport =
+type alias PinReport =
     { pin : Maybe String
     , status : Maybe Status
-    , verdict : Maybe (ApiData StepValidation)
+    , verdict : Maybe (ApiData PinVerdict)
     }
 
 
@@ -91,8 +91,8 @@ type alias StepRecord =
         { type_ : String
         , note : String
         , runState : ApiData StepRunState
-        , validation : Maybe (ApiData StepValidation)
-        , validationPin : Maybe String
+        , pinVerdict : Maybe (ApiData PinVerdict)
+        , pinRevision : Maybe String
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
@@ -434,6 +434,7 @@ type Model
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict Int ( String, Status )
+        , pendingBuilds : Dict Int (Maybe String)
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
@@ -671,12 +672,12 @@ getCommitHash (Model model) =
     model.commitHash
 
 
-{- | The revision a step is shown at: its pin once validated, otherwise the
-revision currently being viewed. Validated steps are frozen at their pin.
+{- | The revision a step is shown at: its pin once pinned, otherwise the
+revision currently being viewed. Pinned steps are frozen at their pin.
 -}
 stepRevision : Model -> StepRecord -> Maybe String
 stepRevision model record =
-    case record.validationPin of
+    case record.pinRevision of
         Just pin ->
             Just pin
 
@@ -743,6 +744,15 @@ getStepStatusHooks (Model model) =
 getStepStatusBuffer : Model -> Dict Int ( String, Status )
 getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
+
+
+{- | The revisions of "Build latest" requests in flight, keyed by step id. The
+row keeps showing the pinned revision, so the build is tracked here until its
+status snapshot arrives.
+-}
+getPendingBuilds : Model -> Dict Int (Maybe String)
+getPendingBuilds (Model model) =
+    model.pendingBuilds
 
 
 getAutocomplete : Model -> Dict String AutocompleteState
@@ -847,6 +857,7 @@ initialModel key route flags =
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
+        , pendingBuilds = Dict.empty
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
@@ -1289,17 +1300,17 @@ updateStepRecordTable new old =
                         (\newRecord ->
                             { newRecord
                                 | runState = oldRecord.runState
-                                , validation = Maybe.map (always (Maybe.withDefault NotAsked oldRecord.validation)) newRecord.validation
-                                , validationPin =
-                                    -- The validation outcome carries the baseline pin from
+                                , pinVerdict = Maybe.map (always (Maybe.withDefault NotAsked oldRecord.pinVerdict)) newRecord.pinVerdict
+                                , pinRevision =
+                                    -- The pin report carries the baseline pin from
                                     -- current repository state; a record fetched at an older
                                     -- revision must not replace it with that revision's pin.
-                                    case oldRecord.validationPin of
+                                    case oldRecord.pinRevision of
                                         Just pin ->
                                             Just pin
 
                                         Nothing ->
-                                            newRecord.validationPin
+                                            newRecord.pinRevision
                             }
                         )
                 )

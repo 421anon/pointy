@@ -151,7 +151,7 @@ validateStepHandler stepId mCommit = do
         let revision = T.pack (readCommitHash target)
             advance = do
                 setValidationCommitHash context stepId (Just revision)
-                commitAndPushChanges context $ "validate step " ++ show stepId
+                commitAndPushChanges context $ "pin step " ++ show stepId
                 pure False
         -- Compare against the baseline in current repository state, so an
         -- explicit revision is checked against what the branch records now.
@@ -163,9 +163,9 @@ validateStepHandler stepId mCommit = do
                 outPath <- stepOutPath target stepId
                 hashes <- storeHashes [outPath]
                 when (Map.notMember outPath hashes) $
-                    throwError ("Build the step before validating it. Output not in the store: " ++ outPath)
+                    throwError ("Build the step before pinning it. Output not in the store: " ++ outPath)
                 advance
-            Unbuilt -> throwError ("Build the output at " ++ T.unpack revision ++ " before validating it.")
+            Unbuilt -> throwError ("Build the output at " ++ T.unpack revision ++ " before pinning it.")
             MissingBaseline detail -> throwError (T.unpack detail)
             CheckFailed detail -> throwError (T.unpack detail)
             _ -> advance
@@ -179,7 +179,7 @@ unvalidateStepHandler stepId = do
         pinned <- any isJust <$> stepPins context [stepId]
         when pinned $ do
             setValidationCommitHash context stepId Nothing
-            commitAndPushChanges context $ "unvalidate step " ++ show stepId
+            commitAndPushChanges context $ "unpin step " ++ show stepId
         pure pinned
     unvalidated <- orFail err409 result
     when unvalidated $ liftIO (forkBroadcastStatusForStepProjectsAtHead stepId)
@@ -189,7 +189,7 @@ stepDiffReportHandler :: Int -> Tagged Handler Application
 stepDiffReportHandler stepId = Tagged $ \_ respond -> do
     prepared <- withReadRepoTransaction $ \context -> do
         pin <- stepPin context stepId
-        baseline <- maybe (throwError "This step is not validated, so there is no baseline to compare.") (commitContext (readRepoPath context)) pin
+        baseline <- maybe (throwError "This step is not pinned, so there is no baseline to compare.") (commitContext (readRepoPath context)) pin
         (,) <$> stepOutPath baseline stepId <*> stepOutPath context stepId
     report <- runExceptT $ liftEither prepared >>= uncurry (renderReport stepId)
     respond $ either failure success report
@@ -212,7 +212,7 @@ renderReport stepId baseline current = do
     case (Map.lookup baseline hashes, Map.lookup current hashes) of
         (Nothing, _) -> throwError $ T.unpack (missingBaseline stepId baseline)
         (_, Nothing) -> throwError $ "The current output is not built (" ++ current ++ "). Build the step to compare it."
-        (baselineHash, currentHash) | baselineHash == currentHash -> throwError "The validated and current outputs are identical."
+        (baselineHash, currentHash) | baselineHash == currentHash -> throwError "The pinned and current outputs are identical."
         _ -> pure ()
     home <- liftIO getHomeDirectory
     let dir = home </> ".local/state/pointy/diff-reports"
@@ -234,7 +234,7 @@ renderReport stepId baseline current = do
     retitle html =
         let (before, rest) = T.breakOn "<title>" html
             (_, closing) = T.breakOn "</title>" rest
-         in before <> "<title>Step " <> T.pack (show stepId) <> " · validated vs current" <> closing
+         in before <> "<title>Step " <> T.pack (show stepId) <> " · pinned vs current" <> closing
     comparisonArgs out =
         words "--jquery disable --no-progress --exclude-directory-metadata yes --timeout 120 --max-report-size 8388608"
             ++ ["--html", out, baseline, current]
@@ -272,13 +272,13 @@ lookupOutPath stepId = Map.findWithDefault (Left ("Step " ++ show stepId ++ " ha
 
 missingBaseline :: Int -> FilePath -> Text
 missingBaseline stepId outPath =
-    T.pack $ "Step " ++ show stepId ++ ": the pinned revision has no built output (" ++ outPath ++ "). Rebuild the pinned revision or unvalidate."
+    T.pack $ "Step " ++ show stepId ++ ": the pinned revision has no built output (" ++ outPath ++ "). Rebuild the pinned revision or unpin."
 
 ensureStepUnvalidated :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO ()
 ensureStepUnvalidated ctx stepId = do
     pins <- stepPins ctx [stepId]
     when (any isJust pins) $
-        throwError "Validated steps cannot be edited. Unvalidate this step first."
+        throwError "Pinned steps cannot be edited. Unpin this step first."
 
 requireStepUnvalidated :: Int -> Handler ()
 requireStepUnvalidated stepId =

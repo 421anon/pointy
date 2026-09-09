@@ -138,7 +138,7 @@ applyRoute forceRevealHighlight newRoute =
                                 |> Flow.when (mOldCommit /= mNewCommit)
                                 |> Flow.seq
                                     (Flow.when (try (Route.page << Route.project << projectId) newRoute /= try (route << Route.page << Route.project << projectId) model)
-                                        (Flow.async Actions.loadProjectValidations)
+                                        (Flow.async Actions.loadProjectPins)
                                     )
                         )
                     |> Flow.seq

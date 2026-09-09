@@ -365,27 +365,27 @@ type CreateStep =
 
 type GetProjectValidation =
     "project-validation"
-        :> Description "Reports the validation outcome of every step in a project at one revision, compared against the current validation baseline, together with the pinned revision of each baseline."
+        :> Description "Reports how every step in a project at one revision relates to its pinned baseline, together with the pinned revision of each baseline."
         :> ReqProjectId
         :> QueryParam "commit" Text
         :> Get '[JSON] (Map String StepValidationReport)
 
 type ValidateStep =
     "step-validation"
-        :> Description "Validates a built revision of a step, pinning it as the validation baseline when there is no baseline or its output is unchanged. Returns whether the output differs from the baseline."
+        :> Description "Pins a built revision of a step when there is no pin or its output is unchanged. Returns whether the output differs from the pinned baseline."
         :> ReqId
         :> QueryParam "commit" Text
         :> Post '[JSON] Bool
 
 type UnvalidateStep =
     "step-validation"
-        :> Description "Removes a step's validation."
+        :> Description "Removes a step's pin."
         :> ReqId
         :> Delete '[JSON] NoContent
 
 type StepDiffReport =
     "step-diff-report"
-        :> Description "Serves the diffoscope comparison of a step's validated and current outputs."
+        :> Description "Serves the diffoscope comparison of a step's pinned and current outputs."
         :> ReqId
         :> Raw
 

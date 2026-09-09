@@ -15,7 +15,7 @@ module Api.Api exposing
     , fetchFileSeek
     , fetchNotices
     , fetchPresets
-    , fetchProjectValidation
+    , fetchProjectPins
     , fetchProjects
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
@@ -36,9 +36,9 @@ module Api.Api exposing
     , stepFileDownloadUrl
     , stopStep
     , unassignRecordFromProject
-    , unvalidateStep
+    , unpinStep
     , uploadFiles
-    , validateStep
+    , pinStep
     )
 
 import Api.ApiData exposing (ApiData)
@@ -51,7 +51,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, StepValidation, ValidationReport)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, PinVerdict, PinReport)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -205,25 +205,26 @@ stepDiffReportUrl id =
     "/backend/step-diff-report?id=" ++ String.fromInt id
 
 
-stepValidationUrl : Int -> String
-stepValidationUrl id =
+-- The backend's endpoint paths keep their historical "validation" names.
+stepPinUrl : Int -> String
+stepPinUrl id =
     "/backend/step-validation?id=" ++ String.fromInt id
 
 
-fetchProjectValidation : Int -> String -> Flow s (Result Http.Error (Dict Int ValidationReport))
-fetchProjectValidation projectId commit =
+fetchProjectPins : Int -> String -> Flow s (Result Http.Error (Dict Int PinReport))
+fetchProjectPins projectId commit =
     Flow.lift <|
         Http.get
             { url = UrlBuilder.absolute [ "backend", "project-validation" ] [ UrlBuilder.int "project_id" projectId, UrlBuilder.string "commit" commit ]
-            , expect = Http.expectJson identity Decode.validationOutcomes
+            , expect = Http.expectJson identity Decode.pinReports
             }
 
 
-validateStep : Int -> Maybe String -> Flow s (Result Http.Error Bool)
-validateStep id commit =
+pinStep : Int -> Maybe String -> Flow s (Result Http.Error Bool)
+pinStep id commit =
     Flow.lift <|
         Http.post
-            { url = appendCommitQuery (stepValidationUrl id) commit
+            { url = appendCommitQuery (stepPinUrl id) commit
             , body = Http.emptyBody
             , expect =
                 Http.expectStringResponse identity
@@ -236,9 +237,9 @@ validateStep id commit =
             }
 
 
-unvalidateStep : Int -> Flow s (Result Http.Error ())
-unvalidateStep id =
-    request "DELETE" (stepValidationUrl id) Http.emptyBody
+unpinStep : Int -> Flow s (Result Http.Error ())
+unpinStep id =
+    request "DELETE" (stepPinUrl id) Http.emptyBody
 
 
 createProject : Presets -> StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)

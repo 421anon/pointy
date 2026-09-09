@@ -216,8 +216,8 @@ stepValueOnly stepType_ =
             , name = name
             , note = note
             , runState = NotAsked
-            , validation = Maybe.map (always NotAsked) validationCommitHash
-            , validationPin = validationCommitHash
+            , pinVerdict = Maybe.map (always NotAsked) validationCommitHash
+            , pinRevision = validationCommitHash
             , args = args
             , isUpdating = False
             , lastModifiedAt = lastModifiedAt
@@ -241,8 +241,8 @@ stepValueOnly stepType_ =
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
-validationOutcome : Decoder Model.ValidationReport
-validationOutcome =
+pinReport : Decoder Model.PinReport
+pinReport =
     Decode.succeed (\pin status_ error verdict message -> { pin = pin, status = status_, error = error, verdict = verdict, message = message })
         |> optional "pin" (maybe Decode.string) Nothing
         |> optional "status" (maybe status) Nothing
@@ -263,31 +263,31 @@ validationOutcome =
                         Decode.succeed { pin = fields.pin, status = Nothing, verdict = Nothing }
 
                     "current" ->
-                        Decode.succeed (withVerdict (Just (Success Model.ValidationCurrent)))
+                        Decode.succeed (withVerdict (Just (Success Model.PinCurrent)))
 
                     "identical" ->
-                        Decode.succeed (withVerdict (Just (Success Model.ValidationIdentical)))
+                        Decode.succeed (withVerdict (Just (Success Model.PinIdentical)))
 
                     "differ" ->
-                        Decode.succeed (withVerdict (Just (Success Model.ValidationDiffer)))
+                        Decode.succeed (withVerdict (Just (Success Model.PinDiffer)))
 
                     "unbuilt" ->
-                        Decode.succeed (withVerdict (Just (Success Model.ValidationUnbuilt)))
+                        Decode.succeed (withVerdict (Just (Success Model.PinUnbuilt)))
 
                     "missing" ->
-                        Decode.succeed (withVerdict (Just (Success Model.ValidationMissing)))
+                        Decode.succeed (withVerdict (Just (Success Model.PinMissing)))
 
                     "error" ->
-                        Decode.succeed (withVerdict (Just (Error (Http.BadBody (Maybe.withDefault "The validation check failed." fields.message)))))
+                        Decode.succeed (withVerdict (Just (Error (Http.BadBody (Maybe.withDefault "The pin check failed." fields.message)))))
 
                     other ->
-                        Decode.fail ("Unknown step validation verdict: " ++ other)
+                        Decode.fail ("Unknown step pin verdict: " ++ other)
             )
 
 
-validationOutcomes : Decoder (Dict Int Model.ValidationReport)
-validationOutcomes =
-    Decode.keyValuePairs validationOutcome
+pinReports : Decoder (Dict Int Model.PinReport)
+pinReports =
+    Decode.keyValuePairs pinReport
         |> Decode.map
             (List.filterMap (\( key, outcome ) -> Maybe.map (\stepId -> ( stepId, outcome )) (String.toInt key))
                 >> Dict.fromList

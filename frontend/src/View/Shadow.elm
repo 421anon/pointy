@@ -22,7 +22,7 @@ import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewInlineIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
 viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
@@ -60,7 +60,7 @@ viewRunStop spec r =
             []
 
 
-type alias ValidationChip =
+type alias PinChip =
     { severity : String
     , icon : String
     , label : String
@@ -68,39 +68,56 @@ type alias ValidationChip =
     }
 
 
-verdictChip : Model.StepValidation -> ValidationChip
-verdictChip verdict =
+{- | The chip describing how the latest revision's output relates to the pin.
+A missing baseline has no chip: the row's status dot already shows that the
+pinned output is not built.
+-}
+pinChip : Model.PinVerdict -> Maybe PinChip
+pinChip verdict =
     case verdict of
-        Model.ValidationCurrent ->
-            ValidationChip "muted" "verified" "Validated" "The step is shown at its pinned revision, and the latest revision's output is unchanged."
+        Model.PinCurrent ->
+            Just (PinChip "muted" "verified" "Pinned" "The step is shown at its pinned revision, and the latest revision's output is unchanged.")
 
-        Model.ValidationIdentical ->
-            ValidationChip "muted" "published_with_changes" "Matches" "The latest output still matches the pinned version, but at a newer revision. Updating the pin is optional."
+        Model.PinIdentical ->
+            Just (PinChip "muted" "published_with_changes" "Matches" "The latest output still matches the pinned version, but at a newer revision. Updating the pin is optional.")
 
-        Model.ValidationUnbuilt ->
-            ValidationChip "warning" "pending" "Latest not built" "Dependencies changed since validation, so the latest revision's output is not built. Build it to compare with the pinned version."
+        Model.PinUnbuilt ->
+            Just (PinChip "warning" "pending" "Latest not built" "Dependencies changed since the step was pinned, so the latest revision's output is not built. Build it to compare with the pinned version.")
 
-        Model.ValidationDiffer ->
-            ValidationChip "warning" "difference" "Differs" "The latest output differs from the pinned version. View the diff to review the changes; the pin stays until you update it."
+        Model.PinDiffer ->
+            Just (PinChip "warning" "difference" "Differs" "The latest output differs from the pinned version. View the diff to review the changes; the pin stays until you update it.")
 
-        Model.ValidationMissing ->
-            ValidationChip "warning" "pending" "Pinned version not built" "The pinned revision has no built output. Run the step to rebuild the pinned version, or unvalidate it."
+        Model.PinMissing ->
+            Nothing
 
 
-viewValidationChip : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.StepValidation -> Html (Flow Model ())
-viewValidationChip model spec isReadOnly stepId mPin validation =
+viewPinChip : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.PinVerdict -> Html (Flow Model ())
+viewPinChip model spec isReadOnly stepId mPin verdict =
     let
         pending =
-            ValidationChip "muted" "verified" "Validated" "A validation baseline is saved for this step."
+            PinChip "muted" "verified" "Pinned" "This step is pinned."
 
-        whileChecking c =
-            { c | explanation = "Checking current output. " ++ c.explanation }
+        whileChecking chip =
+            { chip | explanation = "Checking the latest output. " ++ chip.explanation }
 
         failed error =
-            ValidationChip "danger" "error_outline" "Check failed" ("The validation check failed: " ++ Http.errorMessage error)
+            PinChip "danger" "error_outline" "Check failed" ("The pin check failed: " ++ Http.errorMessage error)
 
-        chip =
-            ApiData.foldVisible (whileChecking pending) (whileChecking << Maybe.unwrap pending verdictChip) verdictChip failed validation
+        chipWhileLoading mPrevious =
+            case mPrevious of
+                Just previous ->
+                    Maybe.map whileChecking (pinChip previous)
+
+                Nothing ->
+                    Just (whileChecking pending)
+
+        mChip =
+            ApiData.foldVisible
+                (Just (whileChecking pending))
+                chipWhileLoading
+                pinChip
+                (Just << failed)
+                verdict
 
         currentCommit =
             try (route << Route.page << Route.project << mCommit << just) model
@@ -110,8 +127,20 @@ viewValidationChip model spec isReadOnly stepId mPin validation =
                 |> Maybe.map (\pin -> " Pinned revision: " ++ shortRevision pin ++ ".")
                 |> Maybe.withDefault ""
 
-        explanation =
-            chip.explanation ++ pinNote ++ " Editing is locked. Unvalidate this step in the current view to edit it."
+        explanation chip =
+            chip.explanation ++ pinNote ++ " Editing is locked. Unpin this step in the current view to edit it."
+
+        viewChip chip =
+            Html.span
+                [ Html.Attributes.class ("step-pin-chip step-pin-" ++ chip.severity)
+                , Html.Attributes.tabindex 0
+                , Html.Attributes.attribute "role" "note"
+                , Html.Attributes.title (explanation chip)
+                , Html.Attributes.attribute "aria-label" (chip.label ++ ". " ++ explanation chip)
+                ]
+                [ iconCustom False chip.icon [ Html.Attributes.attribute "aria-hidden" "true" ]
+                , Html.text chip.label
+                ]
 
         pinnedVersionLink =
             mPin
@@ -124,22 +153,13 @@ viewValidationChip model spec isReadOnly stepId mPin validation =
                 |> Maybe.withDefault Html.nothing
     in
     Html.span
-        [ Html.Attributes.class "step-validation"
+        [ Html.Attributes.class "step-pin"
         , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
         ]
-        [ Html.span
-            [ Html.Attributes.class ("step-validation-chip step-validation-" ++ chip.severity)
-            , Html.Attributes.tabindex 0
-            , Html.Attributes.attribute "role" "note"
-            , Html.Attributes.title explanation
-            , Html.Attributes.attribute "aria-label" (chip.label ++ ". " ++ explanation)
-            ]
-            [ iconCustom False chip.icon [ Html.Attributes.attribute "aria-hidden" "true" ]
-            , Html.text chip.label
-            ]
+        [ Html.viewMaybe viewChip mChip
         , pinnedVersionLink
-        , Html.viewIf (ApiData.toMaybe validation == Just Model.ValidationUnbuilt) (viewBuildLatestLink model spec stepId)
-        , Html.viewIf (not isReadOnly && ApiData.toMaybe validation == Just Model.ValidationDiffer) (viewDiffReportLink stepId)
+        , Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUnbuilt) (viewBuildLatestLink model spec stepId)
+        , Html.viewIf (not isReadOnly && ApiData.toMaybe verdict == Just Model.PinDiffer) (viewDiffReportLink stepId)
         ]
 
 
@@ -148,19 +168,35 @@ version. The row itself stays at the pinned revision.
 -}
 viewBuildLatestLink : Model -> TableSpec StepRecord -> Int -> Html (Flow Model ())
 viewBuildLatestLink model spec stepId =
-    let
-        titleText =
-            "Build the latest revision's output to compare with the pinned version"
-    in
-    Html.button
-        [ Html.Attributes.class "step-validation-build"
-        , Html.Attributes.title titleText
-        , Html.Attributes.attribute "aria-label" titleText
-        , Html.Events.onClick (Actions.buildLatest spec stepId (Model.viewedRevision model))
-        ]
-        [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
-        , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build latest" ]
-        ]
+    if Dict.member stepId (Model.getPendingBuilds model) then
+        Html.button
+            [ Html.Attributes.class "step-pin-build"
+            , Html.Attributes.disabled True
+            , Html.Attributes.title "Building the latest revision"
+            , Html.Attributes.attribute "aria-label" "Building the latest revision"
+            ]
+            [ iconCustom True
+                "progress_activity"
+                [ Html.Attributes.class "step-pin-build-spinner"
+                , Html.Attributes.attribute "aria-hidden" "true"
+                ]
+            , Html.text "Building..."
+            ]
+
+    else
+        let
+            titleText =
+                "Build the latest revision's output to compare with the pinned version"
+        in
+        Html.button
+            [ Html.Attributes.class "step-pin-build"
+            , Html.Attributes.title titleText
+            , Html.Attributes.attribute "aria-label" titleText
+            , Html.Events.onClick (Actions.buildLatest spec stepId (Model.viewedRevision model))
+            ]
+            [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
+            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build latest" ]
+            ]
 
 
 shortRevision : String -> String
@@ -168,8 +204,8 @@ shortRevision =
     String.left 7
 
 
-{- | The pinned version is the repository at the validated revision, browsed
-read-only like any other past commit, with the validated step revealed.
+{- | The pinned version is the repository at the pinned revision, browsed
+read-only like any other past commit, with the pinned step revealed.
 -}
 viewPinnedVersionLink : Int -> String -> Int -> Html (Flow Model ())
 viewPinnedVersionLink stepId pin projectId =
@@ -188,10 +224,10 @@ viewPinnedVersionLink stepId pin projectId =
                 )
 
         titleText =
-            "View the repository at the validated revision " ++ shortPin ++ " (read-only)"
+            "View the repository at the pinned revision " ++ shortPin ++ " (read-only)"
     in
     Html.a
-        [ Html.Attributes.class "step-validation-pin"
+        [ Html.Attributes.class "step-pin-revision"
         , Html.Attributes.title titleText
         , Html.Attributes.attribute "aria-label" ("View pinned version of step " ++ String.fromInt stepId ++ " at revision " ++ shortPin ++ " (read-only)")
         , Route.href targetRoute
@@ -209,7 +245,7 @@ viewPinnedVersionLink stepId pin projectId =
         [ iconCustom False "push_pin" [ Html.Attributes.attribute "aria-hidden" "true" ]
         , Html.span [ Html.Attributes.style "text-decoration" "underline" ]
             [ Html.text "Pinned version "
-            , Html.span [ Html.Attributes.class "step-validation-pin-hash" ] [ Html.text shortPin ]
+            , Html.span [ Html.Attributes.class "step-pin-revision-hash" ] [ Html.text shortPin ]
             ]
         ]
 
@@ -217,7 +253,7 @@ viewPinnedVersionLink stepId pin projectId =
 viewDiffReportLink : Int -> Html (Flow Model ())
 viewDiffReportLink stepId =
     Html.a
-        [ Html.Attributes.class "step-validation-diff"
+        [ Html.Attributes.class "step-pin-diff"
         , Html.Attributes.title "View diff (opens in a new tab)"
         , Html.Attributes.attribute "aria-label" ("View diff for step " ++ String.fromInt stepId ++ " (opens in a new tab)")
         , Html.Attributes.href (Api.stepDiffReportUrl stepId)
@@ -229,20 +265,24 @@ viewDiffReportLink stepId =
         ]
 
 
-viewValidationActions : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewValidationActions spec r =
+{- | Pin controls, shown next to the step id. A step can be pinned once its
+output is built; an existing pin can advance when the latest output still
+matches it.
+-}
+viewPinActions : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewPinActions spec r =
     case ( r.id, r.isUpdating ) of
         ( Just stepId, False ) ->
-            case r.validation of
+            case r.pinVerdict of
                 Nothing ->
                     [ Html.viewIf (ApiData.toMaybe (TableSpec.getStatus spec r) == Just Model.StatusSuccess) <|
-                        viewIconButtonWithTooltip "verified" True "Mark step as validated" (Actions.validateStep stepId)
+                        viewInlineIconButtonWithTooltip "push_pin" False "Pin step" (Actions.pinStep stepId)
                     ]
 
-                Just validation ->
-                    [ Html.viewIf (ApiData.toMaybe validation == Just Model.ValidationIdentical) <|
-                        viewIconButtonWithTooltip "published_with_changes" True "Update validation" (Actions.validateStep stepId)
-                    , viewIconButtonWithTooltip "verified_off" False "Unvalidate step" (Actions.unvalidateStep stepId)
+                Just verdict ->
+                    [ Html.viewIf (ApiData.toMaybe verdict == Just Model.PinIdentical) <|
+                        viewInlineIconButtonWithTooltip "published_with_changes" True "Update pin" (Actions.pinStep stepId)
+                    , viewInlineIconButtonWithTooltip "push_pin" True "Unpin step" (Actions.unpinStep stepId)
                     ]
 
         _ ->
@@ -370,10 +410,11 @@ viewSection model sectionName entry steps =
         { model = model
         , spec = spec
         , table = steps
+        , nameActions = viewPinActions spec
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values
-                    [ Maybe.map2 (\stepId validation -> viewValidationChip model spec isReadOnly stepId r.validationPin validation) r.id r.validation
+                    [ Maybe.map2 (\stepId verdict -> viewPinChip model spec isReadOnly stepId r.pinRevision verdict) r.id r.pinVerdict
                     , r.id
                         |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
                     ]
@@ -403,7 +444,7 @@ viewSection model sectionName entry steps =
                                             []
 
                                         Nothing ->
-                                            [ Html.viewIf (Maybe.isNothing r.validation) <|
+                                            [ Html.viewIf (Maybe.isNothing r.pinVerdict) <|
                                                 Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id
                                             ]
 
@@ -459,7 +500,7 @@ viewSection model sectionName entry steps =
                                                 )
                                     )
                 in
-                viewValidationActions spec r ++ uploadActions ++ runActions ++ quickCreateActions
+                uploadActions ++ runActions ++ quickCreateActions
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
         , onRecordClick =

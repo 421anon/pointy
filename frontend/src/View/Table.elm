@@ -1,4 +1,4 @@
-module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewInlineIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 import Accessors exposing (all, each, just, key, lens, over, set, try)
 import Actions
@@ -81,6 +81,7 @@ viewTable :
     { model : Model
     , spec : TableSpec (BaseRecord a)
     , table : Table (BaseRecord a)
+    , nameActions : BaseRecord a -> List (Html (Flow Model ()))
     , specificRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , alwaysVisibleRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , directorySection : BaseRecord a -> Html (Flow Model ())
@@ -89,7 +90,7 @@ viewTable :
     , isOpen : BaseRecord a -> Bool
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen } =
+viewTable { model, spec, table, nameActions, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen } =
     let
         lens =
             TableSpec.getLens spec
@@ -367,20 +368,23 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         Html.span
                             [ class "record-name-container"
                             ]
-                            [ Html.text record.name
-                            , Html.viewMaybe
+                            ([ Html.text record.name
+                             , Html.viewMaybe
                                 (\id_ ->
                                     Html.span [ class "table-record-id", title <| "id: " ++ String.fromInt id_ ]
                                         [ Html.text (String.fromInt id_) ]
                                 )
                                 record.id
-                            , Html.viewIf (editable record) <|
-                                iconCustom True
-                                    "edit"
-                                    [ class "edit-icon"
-                                    , Events.stopPropagationOn "click" (Decode.succeed ( Actions.startInlineRecordNameEdit spec record, True ))
-                                    ]
-                            ]
+                             ]
+                                ++ nameActions record
+                                ++ [ Html.viewIf (editable record) <|
+                                        iconCustom True
+                                            "edit"
+                                            [ class "edit-icon"
+                                            , Events.stopPropagationOn "click" (Decode.succeed ( Actions.startInlineRecordNameEdit spec record, True ))
+                                            ]
+                                   ]
+                            )
 
                 viewUnmovedRecord attrs mkDragAttrs mkDropAttrs =
                     let
@@ -2175,6 +2179,22 @@ viewIconButtonWithTooltip iconName filled tooltip action =
     Html.button
         [ Events.onClick action
         , class "icon-btn"
+        , title tooltip
+        , attribute "aria-label" tooltip
+        ]
+        [ icon filled iconName
+        , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
+        ]
+
+
+{- | Compact icon button for the record name area. The click must not reach the
+row's open-output handler, so it stops propagating.
+-}
+viewInlineIconButtonWithTooltip : String -> Bool -> String -> Flow Model () -> Html (Flow Model ())
+viewInlineIconButtonWithTooltip iconName filled tooltip action =
+    Html.button
+        [ Events.stopPropagationOn "click" (Decode.succeed ( action, True ))
+        , class "icon-btn icon-btn-inline"
         , title tooltip
         , attribute "aria-label" tooltip
         ]

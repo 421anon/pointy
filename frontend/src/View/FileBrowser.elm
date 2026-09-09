@@ -53,7 +53,7 @@ srcWritePending model mDirCtx =
         |> Maybe.withDefault False
 
 
-{- | The revision a step's files are browsed at: its pin once validated,
+{- | The revision a step's files are browsed at: its pin once pinned,
 otherwise the revision being viewed.
 -}
 recordRevision : Model -> Int -> Maybe String
@@ -166,7 +166,7 @@ viewSrcFilesSection model stepType spec step =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
         isLocked =
-            Maybe.isJust step.validation || has (route << Route.page << Route.project << mCommit << just) model
+            Maybe.isJust step.pinVerdict || has (route << Route.page << Route.project << mCommit << just) model
 
         writePending =
             step.srcFileWriting

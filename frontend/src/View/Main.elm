@@ -35,6 +35,7 @@ view model =
                         { model = model
                         , spec = Specs.projects presets stepConfig
                         , table = Model.getProjects model
+                        , nameActions = \_ -> []
                         , specificRecordActions = \_ -> []
                         , alwaysVisibleRecordActions = \_ -> []
                         , directorySection = \_ -> Html.nothing
