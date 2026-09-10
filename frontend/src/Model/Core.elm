@@ -512,6 +512,16 @@ getRoute (Model model) =
     model.route
 
 
+isReadOnlyRoute : Model -> Bool
+isReadOnlyRoute model =
+    case (getRoute model).page of
+        Route.Project { mCommit } ->
+            Maybe.isJust mCommit
+
+        _ ->
+            False
+
+
 getClusterStatus : Model -> ClusterStatus
 getClusterStatus (Model model) =
     model.clusterStatus

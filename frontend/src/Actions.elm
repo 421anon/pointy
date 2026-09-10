@@ -53,14 +53,14 @@ toggleShowHiddenRecords lens =
 toggleAddOrEditRecordForm : TableSpec (BaseRecord a) -> Maybe Int -> Flow Model ()
 toggleAddOrEditRecordForm spec mRecordId =
     let
-        updateTable t =
+        updateTable readOnly t =
             let
                 stashed =
-                    case t.edited of
-                        Just r ->
+                    case ( readOnly, t.edited ) of
+                        ( False, Just r ) ->
                             set (draftAt r.id) (Just r) t
 
-                        Nothing ->
+                        _ ->
                             t
 
                 mRecordToEdit =
@@ -83,6 +83,9 @@ toggleAddOrEditRecordForm spec mRecordId =
                     if formIsOpen && (togglingCurrentRecord || (clickedNewRecord && notEditingExistingRecord)) then
                         Nothing
 
+                    else if readOnly then
+                        mRecordToEdit
+
                     else
                         get (draftAt mRecordId) stashed
                             |> Maybe.orElse mRecordToEdit
@@ -97,7 +100,8 @@ toggleAddOrEditRecordForm spec mRecordId =
         focusAction =
             Flow.attemptTask (Dom.focus (TableSpec.getName spec ++ "-name-input"))
     in
-    Flow.over (TableSpec.getLens spec) updateTable
+    Flow.get
+        |> Flow.andThen (\model -> Flow.over (TableSpec.getLens spec) (updateTable (Model.isReadOnlyRoute model)))
         |> Flow.seq Flow.get
         |> Flow.map (try (TableSpec.getLens spec << edited << just))
         |> Flow.andThen
@@ -565,21 +569,25 @@ upsertStep spec =
             )
 
 
-endRecordEdit : A_Traversal s (Table (BaseRecord a)) -> Flow s ()
+endRecordEdit : A_Traversal Model (Table (BaseRecord a)) -> Flow Model ()
 endRecordEdit lens =
-    Flow.over (remkT lens)
-        (\t ->
-            let
-                cleared =
-                    case t.edited of
-                        Just r ->
-                            set (draftAt r.id) Nothing t
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Flow.over (remkT lens)
+                    (\t ->
+                        let
+                            cleared =
+                                case ( Model.isReadOnlyRoute model, t.edited ) of
+                                    ( False, Just r ) ->
+                                        set (draftAt r.id) Nothing t
 
-                        Nothing ->
-                            t
-            in
-            { cleared | edited = Nothing, addMode = AddNew }
-        )
+                                    _ ->
+                                        t
+                        in
+                        { cleared | edited = Nothing, addMode = AddNew }
+                    )
+            )
 
 
 saveExistingRecord : A_Traversal Model (Table (BaseRecord a)) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model ()

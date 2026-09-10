@@ -1144,6 +1144,10 @@ $form-vertical-gap: var(--spacing-md);
   border-color: var(--state-warning);
 }
 
+.form-read-only {
+  border-color: var(--state-info);
+}
+
 .form-header {
   padding: 6px var(--spacing-md);
   border-bottom: 1px solid var(--border-color);
@@ -1161,6 +1165,11 @@ $form-vertical-gap: var(--spacing-md);
 .form-editing .form-header {
   background: var(--state-warning-outline);
   border-color: var(--state-warning);
+}
+
+.form-read-only .form-header {
+  background: var(--state-info-outline);
+  border-color: var(--state-info);
 }
 
 .form-body {

@@ -11,7 +11,7 @@ import Html.Events
 import Html.Extra as Html
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses as Lenses exposing (currentProject, mCommit, route)
+import Model.Lenses as Lenses exposing (currentProject)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfigEntry, StepType(..), derivation)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
@@ -60,11 +60,8 @@ viewRunStop spec r =
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
 viewProject model proj =
     let
-        mCommit_ =
-            try (route << Route.page << Route.project << mCommit << just) model
-
         isReadOnly =
-            Maybe.isJust mCommit_
+            Model.isReadOnlyRoute model
 
         mProjectSpec =
             Maybe.map2 Specs.projects
@@ -168,7 +165,7 @@ viewSection model sectionName entry steps =
             Specs.steps sectionName entry
 
         isReadOnly =
-            has (route << Route.page << Route.project << mCommit << just) model
+            Model.isReadOnlyRoute model
 
         stepConfig_ =
             try (Lenses.stepConfig << ApiData.success) model

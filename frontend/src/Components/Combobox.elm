@@ -218,7 +218,7 @@ view config =
             )
 
         dropdown =
-            if String.isEmpty (String.trim config.inputValue) then
+            if config.readOnly || String.isEmpty (String.trim config.inputValue) then
                 Html.nothing
 
             else if config.loading then

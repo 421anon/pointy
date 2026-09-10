@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Accessors exposing (each, get, has, just, set, try)
+import Accessors exposing (each, get, has, just, set, try, values)
 import Actions
 import Api.ApiData exposing (ApiData(..), success)
 import Browser.Events
@@ -10,8 +10,8 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, gutterDrag, mCommit, mHighlight, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, userRepoInfo)
+import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
+import Model.Lenses exposing (commitHash, currentProjectId, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, tables, userRepoInfo)
 import Ports
 import Route exposing (Route)
 import Specs
@@ -127,9 +127,24 @@ applyRoute forceRevealHighlight newRoute =
                                 mNewCommit =
                                     try (Route.page << Route.project << mCommit << just) newRoute
                             in
-                            Flow.setAll
-                                (projects << records << success << each << projectStepRecords << runState)
-                                (Api.ApiData.loading Nothing)
+                            Flow.over (projects << records << success << each << tables << values)
+                                (\table ->
+                                    let
+                                        stashed =
+                                            case ( mOldCommit, table.edited ) of
+                                                ( Nothing, Just draft ) ->
+                                                    set (draftAt draft.id) (Just draft) table
+
+                                                _ ->
+                                                    table
+                                    in
+                                    { stashed | edited = Nothing, nameEditOnly = False, addMode = AddNew }
+                                )
+                                |> Flow.seq
+                                    (Flow.setAll
+                                        (projects << records << success << each << projectStepRecords << runState)
+                                        (Api.ApiData.loading Nothing)
+                                    )
                                 |> Flow.seq (Flow.over (projects << records) Api.ApiData.toLoading)
                                 |> Flow.seq (Flow.over commitHash Api.ApiData.toLoading)
                                 |> Flow.seq Actions.loadStepConfig
