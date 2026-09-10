@@ -253,13 +253,20 @@ data StepStore = StepStore
     , ssCache :: IORef (Map FilePath DrvNode)
     }
 
+-- | Store paths are the only values the store-facing probes accept.
+isStorePath :: FilePath -> Bool
+isStorePath path = "/nix/store/" `isPrefixOf` path
+
 {- | Resolve every step's derivation and build plan with two processes: one
 @nix derivation show@ over the step output paths, one build-plan query over
 the resulting derivations.
 -}
 buildStepStore :: Map Int Text -> IO StepStore
 buildStepStore outPaths = do
-    nodes <- queryDerivations (map unpack (Map.elems outPaths))
+    -- Steps whose evaluation failed resolve to the placeholder @\/invalid@;
+    -- they have no derivation and would make @nix derivation show@ fail for the
+    -- whole batch, so they never reach it.
+    nodes <- queryDerivations (filter isStorePath (map unpack (Map.elems outPaths)))
     let byOutput =
             Map.fromList
                 [ (output, drv)
@@ -288,20 +295,25 @@ rawStatusesBatched store isRunning outPaths = Map.traverseWithKey classify outPa
                         then ("running", Nothing)
                         else ("not-started", Nothing)
 
-    stepOutputValid sid outPath = case Map.lookup sid (ssDrvOf store) of
-        Nothing -> probe outPath
-        Just drv -> do
-            node <- Map.lookup drv <$> readIORef (ssCache store)
-            case node of
-                -- A multi-output step can have its own output valid while
-                -- siblings are missing; ask about the step's output directly.
-                Just node_ | length (dnOutputs node_) > 1 -> probe outPath
-                _ ->
-                    return $
-                        not
-                            ( Set.member drv (spBuild (ssPlan store))
-                                || Set.member outPath (spFetch (ssPlan store))
-                            )
+    stepOutputValid sid outPath
+        -- Only store paths can be valid entries; anything else (the @\/invalid@
+        -- placeholder, empty strings) is not one, and asking nix about it would
+        -- cost a process each.
+        | not (isStorePath outPath) = return False
+        | otherwise = case Map.lookup sid (ssDrvOf store) of
+            Nothing -> probe outPath
+            Just drv -> do
+                node <- Map.lookup drv <$> readIORef (ssCache store)
+                case node of
+                    -- A multi-output step can have its own output valid while
+                    -- siblings are missing; ask about the step's output directly.
+                    Just node_ | length (dnOutputs node_) > 1 -> probe outPath
+                    _ ->
+                        return $
+                            not
+                                ( Set.member drv (spBuild (ssPlan store))
+                                    || Set.member outPath (spFetch (ssPlan store))
+                                )
 
     probe path = isValidStorePath path `catch` \(_ :: SomeException) -> return False
 
