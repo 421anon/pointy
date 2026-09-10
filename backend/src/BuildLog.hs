@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 {- | Resolves the build log relevant to a step.
 
@@ -7,21 +8,43 @@ derivation has no recorded log (because a build-time input derivation failed
 and the step itself never built — e.g. ShellCheck inside the
 @writeShellApplication@ wrapper used by @script.nix@), we walk the input
 derivation graph to find the failing input and surface its log instead.
+
+'resolveBuildLog' walks one step at a time and shells out per graph node; it
+serves the log endpoint and single-step broadcasts. Project-wide status
+broadcasts use the batched probes below ('buildStepStore',
+'rawStatusesBatched', 'resolveStatusesBatched'), which answer the same
+questions with a handful of processes regardless of step count.
 -}
 module BuildLog (
     ResolvedLog (..),
     LogSource (..),
     resolveBuildLog,
     lastMeaningfulLine,
+    StepStore,
+    buildStepStore,
+    rawStatusesBatched,
+    resolveStatusesBatched,
+    logDirectoryAvailable,
 ) where
 
+import Control.Exception (SomeException, catch)
+import Control.Monad (forM_, guard, unless)
 import Control.Monad.Except (runExceptT)
-import Data.List (isSuffixOf)
+import Data.Aeson (FromJSON (..), Value, eitherDecode, withObject, (.:), (.:?), (.!=))
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isPrefixOf, isSuffixOf, sort)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text (Text, pack)
+import Data.Text (Text, pack, unpack)
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import NixUtils (isValidStorePath)
+import System.Directory (doesDirectoryExist, doesFileExist)
 import System.Exit (ExitCode (..))
+import System.FilePath (takeFileName, (</>))
 import System.Process (readProcessWithExitCode)
 import UserRepo (runNix)
 
@@ -181,3 +204,334 @@ anyOutputValid outputs = go outputs
     go (p : ps) = do
         valid <- isValidStorePath p
         if valid then return True else go ps
+
+----------------------------------------------------------------------
+-- Batched probes
+----------------------------------------------------------------------
+
+{- | A derivation's structure as reported by @nix derivation show@: the store
+paths it declares and the derivations it uses at build time.
+-}
+data DrvNode = DrvNode
+    { dnOutputs :: [FilePath]
+    , dnInputs :: [FilePath]
+    }
+
+instance FromJSON DrvNode where
+    parseJSON = withObject "derivation" $ \obj -> do
+        outputs <- obj .:? "outputs" .!= (Map.empty :: Map Text (Maybe OutputInfo))
+        inputs <- obj .:? "inputDrvs" .!= (Map.empty :: Map FilePath Value)
+        return
+            DrvNode
+                { dnOutputs = [path | Just (OutputInfo path) <- Map.elems outputs]
+                , dnInputs = sort (Map.keys inputs)
+                }
+
+newtype OutputInfo = OutputInfo FilePath
+
+instance FromJSON OutputInfo where
+    parseJSON = withObject "derivation output" $ \obj -> OutputInfo <$> obj .: "path"
+
+{- | What nix would do to realise a set of derivations: build them (outputs
+missing and not substitutable) or fetch some of their outputs. A fully valid
+derivation, or one whose missing outputs are all substitutable, appears only
+in 'spFetch'; one with at least one valid output appears in neither.
+-}
+data StorePlan = StorePlan
+    { spBuild :: Set FilePath
+    , spFetch :: Set FilePath
+    }
+    deriving (Show)
+
+{- | Per-project store snapshot shared by every step of one status broadcast:
+step to derivation, nix's build plan for those derivations, and a cache of
+derivation structures filled in as the failure walk expands.
+-}
+data StepStore = StepStore
+    { ssDrvOf :: Map Int FilePath
+    , ssPlan :: StorePlan
+    , ssCache :: IORef (Map FilePath DrvNode)
+    }
+
+{- | Resolve every step's derivation and build plan with two processes: one
+@nix derivation show@ over the step output paths, one build-plan query over
+the resulting derivations.
+-}
+buildStepStore :: Map Int Text -> IO StepStore
+buildStepStore outPaths = do
+    nodes <- queryDerivations (map unpack (Map.elems outPaths))
+    let byOutput =
+            Map.fromList
+                [ (output, drv)
+                | (drv, node) <- Map.toList nodes
+                , output <- dnOutputs node
+                ]
+        drvOf = Map.mapMaybe (\outPath -> Map.lookup (unpack outPath) byOutput) outPaths
+    cache <- newIORef nodes
+    plan <- queryStorePlan (Set.toList (Set.fromList (Map.elems drvOf)))
+    return StepStore{ssDrvOf = drvOf, ssPlan = plan, ssCache = cache}
+
+{- | Raw statuses for a whole project. A step is successful when its output is
+a valid local store entry; an active job makes it running, anything else
+not-started.
+-}
+rawStatusesBatched :: StepStore -> (Text -> Bool) -> Map Int Text -> IO (Map Int (Text, Maybe Text))
+rawStatusesBatched store isRunning outPaths = Map.traverseWithKey classify outPaths
+  where
+    classify sid outPath = do
+        valid <- stepOutputValid sid (unpack outPath)
+        return $
+            if valid
+                then ("success", Nothing)
+                else
+                    if isRunning outPath
+                        then ("running", Nothing)
+                        else ("not-started", Nothing)
+
+    stepOutputValid sid outPath = case Map.lookup sid (ssDrvOf store) of
+        Nothing -> probe outPath
+        Just drv -> do
+            node <- Map.lookup drv <$> readIORef (ssCache store)
+            case node of
+                -- A multi-output step can have its own output valid while
+                -- siblings are missing; ask about the step's output directly.
+                Just node_ | length (dnOutputs node_) > 1 -> probe outPath
+                _ ->
+                    return $
+                        not
+                            ( Set.member drv (spBuild (ssPlan store))
+                                || Set.member outPath (spFetch (ssPlan store))
+                            )
+
+    probe path = isValidStorePath path `catch` \(_ :: SomeException) -> return False
+
+{- | Resolve failure logs for the pending steps of one project with a
+level-batched walk over the derivation graph: one @nix derivation show@ per
+BFS level, one log-file stat per visited node, and one @nix log@ per recovered
+failure. Semantics match 'resolveBuildLog': a step's own log wins; otherwise
+the first input (level order, depth at most 'maxBfsDepth') whose outputs are
+all invalid and that has a recorded local log.
+-}
+resolveStatusesBatched :: StepStore -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+resolveStatusesBatched store statuses = do
+    logCache <- newIORef Map.empty
+    resolved <- newIORef Map.empty
+    let seeds =
+            [ (sid, drv)
+            | (sid, (state, _)) <- Map.toList statuses
+            , state == "failure" || state == "not-started"
+            , Just drv <- [Map.lookup sid (ssDrvOf store)]
+            ]
+    -- The step's own log takes precedence, as in 'resolveBuildLog'. Status
+    -- resolution reads only locally recorded logs; cache-only logs belong to
+    -- successful substitutions, which never reach this path.
+    forM_ seeds $ \(sid, drv) -> do
+        mOwnLog <- cachedLog logCache drv
+        forM_ mOwnLog $ \logText ->
+            modifyIORef' resolved (Map.insert sid ("failure", lastMeaningfulLine logText))
+    seedNodes <- fetchNodes store (map snd seeds)
+    visited <- newIORef (Map.fromList [(sid, Set.singleton drv) | (sid, drv) <- seeds])
+    frontierRef <-
+        newIORef $
+            Map.fromList
+                [ (sid, [(input, 1) | input <- dnInputs node])
+                | (sid, drv) <- seeds
+                , Just node <- [Map.lookup drv seedNodes]
+                ]
+    let levelLoop = do
+            frontier <- readIORef frontierRef
+            let levelNodes = Set.fromList [drv | queue <- Map.elems frontier, (drv, _) <- queue]
+            unless (Set.null levelNodes) $ do
+                level <- fetchNodes store (Set.toList levelNodes)
+                nextFrontier <- newIORef Map.empty
+                forM_ (Map.toList frontier) $ \(sid, queue) -> do
+                    done <- Map.member sid <$> readIORef resolved
+                    unless done $ do
+                        seen <- Map.findWithDefault Set.empty sid <$> readIORef visited
+                        (mLog, seen', expanded) <- walkQueue store logCache level seen queue
+                        modifyIORef' visited (Map.insert sid seen')
+                        case mLog of
+                            Just logText ->
+                                modifyIORef' resolved (Map.insert sid ("failure", lastMeaningfulLine logText))
+                            Nothing ->
+                                unless (null expanded) $
+                                    modifyIORef' nextFrontier (Map.insert sid expanded)
+                writeIORef frontierRef =<< readIORef nextFrontier
+                levelLoop
+    levelLoop
+    resolvedMap <- readIORef resolved
+    return $ Map.union resolvedMap statuses
+
+{- | One step's queue at one BFS level. Returns the log of the first input whose
+outputs are all invalid and that carries a recorded local log, plus the visited
+set and the queue for the next level.
+-}
+walkQueue :: StepStore -> IORef (Map FilePath (Maybe String)) -> Map FilePath DrvNode -> Set FilePath -> [(FilePath, Int)] -> IO (Maybe String, Set FilePath, [(FilePath, Int)])
+walkQueue store logCache level seen queue = go seen [] queue
+  where
+    go visited expanded [] = return (Nothing, visited, expanded)
+    go visited expanded ((drv, depth) : rest)
+        | drv `Set.member` visited = go visited expanded rest
+        | depth > maxBfsDepth = go (Set.insert drv visited) expanded rest
+        | not (Set.member drv (spBuild (ssPlan store))) =
+            go (Set.insert drv visited) expanded rest
+        | otherwise = case Map.lookup drv level of
+            Nothing -> go (Set.insert drv visited) expanded rest
+            Just node -> do
+                mLog <- cachedLog logCache drv
+                case mLog of
+                    Just logText -> do
+                        -- The build plan marks drvs that need work; a candidate
+                        -- additionally needs every output invalid (partial
+                        -- multi-output drvs are pruned), as in the per-step walk.
+                        allInvalid <- outputsAllInvalid node
+                        if allInvalid
+                            then return (Just logText, Set.insert drv visited, expanded)
+                            else go (Set.insert drv visited) expanded rest
+                    Nothing ->
+                        go
+                            (Set.insert drv visited)
+                            ( expanded
+                                ++ [ (input, depth + 1)
+                                   | input <- dnInputs node
+                                   , depth < maxBfsDepth
+                                   , input `Set.notMember` visited
+                                   ]
+                            )
+                            rest
+
+outputsAllInvalid :: DrvNode -> IO Bool
+outputsAllInvalid node = case dnOutputs node of
+    [] -> return False
+    [_] -> return True
+    outputs -> and <$> mapM (fmap not . isValidStorePath) outputs
+
+cachedLog :: IORef (Map FilePath (Maybe String)) -> FilePath -> IO (Maybe String)
+cachedLog cacheRef drv = do
+    cached <- Map.lookup drv <$> readIORef cacheRef
+    case cached of
+        Just result -> return result
+        Nothing -> do
+            result <- readLocalLog drv
+            modifyIORef' cacheRef (Map.insert drv result)
+            return result
+
+{- | Structures for the given derivations; one @nix derivation show@ for
+whatever is not cached yet.
+-}
+fetchNodes :: StepStore -> [FilePath] -> IO (Map FilePath DrvNode)
+fetchNodes store paths = do
+    cached <- readIORef (ssCache store)
+    let wanted = Set.fromList paths
+        missing = Set.toList (wanted `Set.difference` Map.keysSet cached)
+    fetched <-
+        if null missing
+            then return Map.empty
+            else do
+                nodes <- queryDerivations missing
+                modifyIORef' (ssCache store) (Map.union nodes)
+                return nodes
+    return $ Map.union fetched (Map.restrictKeys cached wanted)
+
+{- | Structural lookups for many derivations. One unreadable path makes
+@nix derivation show@ fail for the whole batch, so failures halve the batch
+until the culprit is isolated.
+-}
+queryDerivations :: [FilePath] -> IO (Map FilePath DrvNode)
+queryDerivations [] = return Map.empty
+queryDerivations [path] = do
+    result <- runExceptT $ runNix ["derivation", "show", path]
+    return $ case result of
+        Right output -> fromMaybe Map.empty (decodeDrvNodes output)
+        Left _ -> Map.empty
+queryDerivations paths = do
+    result <- runExceptT $ runNix (["derivation", "show"] ++ paths)
+    case result of
+        Right output | Just nodes <- decodeDrvNodes output -> return nodes
+        _ -> do
+            let (left, right) = splitAt (length paths `div` 2) paths
+            Map.union <$> queryDerivations left <*> queryDerivations right
+
+decodeDrvNodes :: String -> Maybe (Map FilePath DrvNode)
+decodeDrvNodes = either (const Nothing) Just . eitherDecode . TLE.encodeUtf8 . TL.pack
+
+{- | Nix's build plan for a set of derivations. As with the structure lookup, a
+batch that fails is halved; a single derivation that still fails is assumed to
+need a build, the conservative answer for status display.
+-}
+queryStorePlan :: [FilePath] -> IO StorePlan
+queryStorePlan [] = return (StorePlan Set.empty Set.empty)
+queryStorePlan [path] = do
+    (code, out, err) <- readProcessWithExitCode "nix-store" ["--realise", "--dry-run", path] ""
+    return $ case code of
+        ExitSuccess -> parseStorePlan (out ++ err)
+        ExitFailure _ -> StorePlan (Set.singleton path) Set.empty
+queryStorePlan paths = do
+    (code, out, err) <- readProcessWithExitCode "nix-store" (["--realise", "--dry-run"] ++ paths) ""
+    case code of
+        ExitSuccess -> return (parseStorePlan (out ++ err))
+        ExitFailure _ -> do
+            let (left, right) = splitAt (length paths `div` 2) paths
+            leftPlan <- queryStorePlan left
+            rightPlan <- queryStorePlan right
+            return
+                StorePlan
+                    { spBuild = spBuild leftPlan <> spBuild rightPlan
+                    , spFetch = spFetch leftPlan <> spFetch rightPlan
+                    }
+
+-- | Read the two headings of @nix-store --realise --dry-run@ (which nix prints
+-- on stderr): derivations under @... will be built:@, store paths under
+-- @... will be fetched:@.
+parseStorePlan :: String -> StorePlan
+parseStorePlan = go False (StorePlan Set.empty Set.empty) . lines
+  where
+    go _ plan [] = plan
+    go building plan (line : rest)
+        | isSuffixOf ":" line = go ("will be built:" `isSuffixOf` line) plan rest
+        | Just path <- entryOf line =
+            go
+                building
+                ( if building
+                    then plan{spBuild = Set.insert path (spBuild plan)}
+                    else plan{spFetch = Set.insert path (spFetch plan)}
+                )
+                rest
+        | otherwise = go building plan rest
+
+    entryOf line = case words line of
+        [path] | "/nix/store/" `isPrefixOf` path -> Just path
+        _ -> Nothing
+
+-- | True when the local build-log tree is readable, i.e. the batched walk can
+-- rely on stat-ing log files.
+logDirectoryAvailable :: IO Bool
+logDirectoryAvailable = doesDirectoryExist logRoot
+
+-- | Read a locally recorded log, skipping the subprocess when the log file is
+-- absent — the common case during status refreshes.
+readLocalLog :: FilePath -> IO (Maybe String)
+readLocalLog drv = do
+    present <- maybe (return False) doesFileExist (logPathFor drv)
+    if not present
+        then return Nothing
+        else do
+            result <- runExceptT $ runNix ["--offline", "log", drv]
+            return $ case result of
+                Right output | not (null output) -> Just output
+                _ -> Nothing
+
+logRoot :: FilePath
+logRoot = "/nix/var/log/nix/drvs"
+
+-- | @\/nix\/store\/<hash>-<name>.drv@ maps to
+-- @\/nix\/var\/log\/nix\/drvs\/<hash prefix>\/<hash remainder>-<name>.drv.bz2@.
+logPathFor :: FilePath -> Maybe FilePath
+logPathFor drv = do
+    let file = takeFileName drv
+    guard (".drv" `isSuffixOf` file)
+    let stem = take (length file - 4) file
+        (hash, rest) = break (== '-') stem
+    guard (length hash == 32)
+    guard (not (null rest))
+    return $ logRoot </> take 2 hash </> (drop 2 hash ++ rest ++ ".drv.bz2")
