@@ -185,6 +185,7 @@ body {
     position: relative;
     align-items: center;
     display: flex;
+    cursor: grab;
 
     &::before {
       content: "";
