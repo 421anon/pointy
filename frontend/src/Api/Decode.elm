@@ -347,6 +347,7 @@ stepArgType =
             Decode.map2 TInt
                 (Decode.field "display" tStringDisplay)
                 (maybe (Decode.field "autocomplete" Decode.string))
+        , Decode.field "bool" (Decode.succeed TBool)
         , Decode.map2 TEnum (Decode.field "enum" (Decode.list Decode.string)) (Decode.oneOf [ Decode.field "enumDisplayNames" (Decode.dict Decode.string), Decode.succeed Dict.empty ])
         , Decode.field "step" <|
             Decode.map2 TStep
@@ -388,6 +389,9 @@ stepArgValue argType_ =
 
         TInt _ _ ->
             Decode.int |> Decode.map TIntValue
+
+        TBool ->
+            Decode.bool |> Decode.map TBoolValue
 
         TStep _ _ ->
             Decode.field "step" Decode.int |> Decode.map TStepValue

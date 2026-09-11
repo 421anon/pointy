@@ -1264,6 +1264,14 @@ $form-vertical-gap: var(--spacing-md);
   @include mixins.form-control;
 }
 
+.form-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--state-info);
+  cursor: pointer;
+}
+
 .form-input-textarea {
   border-radius: 0;
   background-color: var(--bg-primary);

@@ -259,6 +259,9 @@ viewArgValue model projectId argType mValue =
         ( TInt _ _, Just (TIntValue n) ) ->
             Html.text (String.fromInt n)
 
+        ( TBool, Just (TBoolValue b) ) ->
+            Html.text (if b then "true" else "false")
+
         ( TStep _ _, Just (TStepValue stepId) ) ->
             Html.text (stepNameOf model projectId stepId)
 

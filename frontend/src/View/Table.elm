@@ -29,7 +29,7 @@ import Markdown
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tBoolValue, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Scroll
@@ -1321,6 +1321,23 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                             Nothing ->
                                 intField ""
 
+                    TBool ->
+                        formField
+                            { label = fieldLabel
+                            , mHint = fieldHint
+                            , id = fieldId
+                            }
+                            (Html.input
+                                [ Html.Attributes.type_ "checkbox"
+                                , id fieldId
+                                , checked (Maybe.withDefault False (try (paramLens << just << tBoolValue) model))
+                                , Events.onCheck (\b -> Flow.modify (set paramLens (Just (TBoolValue b))))
+                                , class "form-checkbox"
+                                , classList [ ( "field-changed", fieldHasChanged ) ]
+                                ]
+                                []
+                            )
+
                     TString display _ ->
                         case display of
                             TextField ->
@@ -1595,6 +1612,31 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                             , id = fieldId_ ++ "-input"
                                             }
 
+                                    TBool ->
+                                        let
+                                            boolVal =
+                                                case currentVal of
+                                                    Just (TBoolValue b) ->
+                                                        b
+
+                                                    _ ->
+                                                        False
+                                        in
+                                        formField
+                                            { label = recordFieldLabel
+                                            , mHint = Nothing
+                                            , id = fieldId_ ++ "-input"
+                                            }
+                                            (Html.input
+                                                [ Html.Attributes.type_ "checkbox"
+                                                , id (fieldId_ ++ "-input")
+                                                , checked boolVal
+                                                , Events.onCheck (\b -> updateField idx fieldName (TBoolValue b))
+                                                , class "form-checkbox"
+                                                ]
+                                                []
+                                            )
+
                                     TEnum enumValues enumDisplayNames ->
                                         formField
                                             { label = recordFieldLabel
@@ -1763,6 +1805,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                     _ ->
                                         Html.nothing
 
+
                             viewRecord idx _ =
                                 Html.div [ class "record-item" ]
                                     [ Html.div [ class "record-item-fields" ]
@@ -1795,6 +1838,9 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                                 case fieldArgType.type_ of
                                                                     TList _ ->
                                                                         TListValue []
+
+                                                                    TBool ->
+                                                                        TBoolValue False
 
                                                                     TEnum (first :: _) _ ->
                                                                         TEnumValue first
@@ -2354,6 +2400,9 @@ stepArgValueKey value =
 
         TIntValue n ->
             keyPart "int" (String.fromInt n)
+
+        TBoolValue b ->
+            keyPart "bool" (if b then "true" else "false")
 
         TStepValue stepId ->
             keyPart "step" (String.fromInt stepId)
