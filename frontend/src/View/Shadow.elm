@@ -389,11 +389,8 @@ viewPinnedToggle stepId =
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
 viewProject model proj =
     let
-        mCommit_ =
-            try (route << Route.page << Route.project << mCommit << just) model
-
         isReadOnly =
-            Maybe.isJust mCommit_
+            Model.isReadOnlyRoute model
 
         mProjectSpec =
             Maybe.map2 Specs.projects
@@ -497,7 +494,7 @@ viewSection model sectionName entry steps =
             Specs.steps sectionName entry
 
         isReadOnly =
-            has (route << Route.page << Route.project << mCommit << just) model
+            Model.isReadOnlyRoute model
 
         stepConfig_ =
             try (Lenses.stepConfig << ApiData.success) model

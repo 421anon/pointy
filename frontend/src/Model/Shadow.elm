@@ -8,6 +8,7 @@ import Dict exposing (Dict)
 type StepArgType
     = TString TStringDisplay (Maybe String)
     | TInt TStringDisplay (Maybe String)
+    | TBool
     | TStep (Maybe (List String)) Bool
     | TUploadHash
     | TList StepArgType
@@ -25,6 +26,7 @@ type TStringDisplay
 type StepArgValue
     = TStringValue String
     | TIntValue Int
+    | TBoolValue Bool
     | TStepValue Int
     | TUploadHashValue String
     | TListValue (List StepArgValue)
@@ -67,6 +69,20 @@ tIntValue =
         (\stepArgVal ->
             case stepArgVal of
                 TIntValue val ->
+                    Ok val
+
+                _ ->
+                    Err stepArgVal
+        )
+
+
+tBoolValue : Prism ls StepArgValue Bool x y
+tBoolValue =
+    prism ">TBoolValue"
+        TBoolValue
+        (\stepArgVal ->
+            case stepArgVal of
+                TBoolValue val ->
                     Ok val
 
                 _ ->

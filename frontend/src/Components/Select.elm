@@ -295,7 +295,7 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                 ++ keyedSelectedChips
                 ++ [ inputElement ]
             )
-        , if selectState.active && not (List.isEmpty filteredAvailableItems) then
+        , if not readOnly && selectState.active && not (List.isEmpty filteredAvailableItems) then
             Html.div
                 [ class "select-menu", id "select-menu" ]
                 (filteredAvailableItems

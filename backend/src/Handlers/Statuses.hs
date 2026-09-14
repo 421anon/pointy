@@ -19,12 +19,12 @@ module Handlers.Statuses (
     restoreRunningStatuses,
 ) where
 
-import BuildLog (ResolvedLog (..), lastMeaningfulLine, resolveBuildLog)
-import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
+import BuildLog (ResolvedLog (..), StepStore, buildStepStore, lastMeaningfulLine, logDirectoryAvailable, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
+import BuildRunner (BuildKey (..), BuildState (..), buildKeyForOutPath, queryState, querySlurmJobs, slurmJobName)
 import Bus (broadcastSnapshot)
 import ClusterBus (restoreRunningStepIds)
 import Control.Concurrent (forkIO)
-import Control.Concurrent.Async (mapConcurrently, mapConcurrently_)
+import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, void, when)
 
@@ -82,15 +82,47 @@ resolveStatusesAtCommitWithPaths targetCommit outPaths statuses = do
   where
     resolveOneWithPath ctx outPaths (sid, entry) =
         resolveStepStatus ctx (fmap unpack $ Map.lookup sid outPaths) (sid, entry)
+
+-- | Slurm job names of every queued or running build, in one query.
+runningBuildKeys :: IO (Set String)
+runningBuildKeys = do
+    jobs <- querySlurmJobs `catch` \(_ :: SomeException) -> return []
+    return $ Set.fromList (map slurmJobName jobs)
+
+isRunningOutPath :: Set String -> Text -> Bool
+isRunningOutPath runningKeys outPath =
+    Set.member (unBuildKey (buildKeyForOutPath (unpack outPath))) runningKeys
+
+{- | Raw statuses and out paths for every step of a project. One derivation
+lookup, one build-plan query and one slurm query answer all steps at once; if
+any of those fail, the per-step probes are used instead.
+-}
 getRawStatusesWithPaths :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text), Map Int Text))
-getRawStatusesWithPaths pid targetCommit = do
+getRawStatusesWithPaths pid targetCommit =
+    fmap (\(statuses, outPaths, _) -> (statuses, outPaths)) <$> getBatchedStatuses pid targetCommit
+
+getBatchedStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text), Map Int Text, Maybe StepStore))
+getBatchedStatuses pid targetCommit = do
     result <- getProjectOutPaths pid targetCommit
     case result of
         Left err -> return $ Left err
         Right outPaths -> do
-            rawStatuses <- Map.fromList <$> mapConcurrently getStatusForStep (Map.toList outPaths)
-            return $ Right (rawStatuses, outPaths)
+            batched <-
+                (Right <$> buildBatched outPaths)
+                    `catch` \(err :: SomeException) -> do
+                        putStrLn $ "Batched status probe failed, falling back to per-step probes: " ++ show err
+                        statuses <- Map.fromList <$> mapConcurrently getStatusForStep (Map.toList outPaths)
+                        return (Left statuses)
+            case batched of
+                Right (statuses, store) -> return $ Right (statuses, outPaths, Just store)
+                Left statuses -> return $ Right (statuses, outPaths, Nothing)
   where
+    buildBatched outPaths = do
+        store <- buildStepStore outPaths
+        runningKeys <- runningBuildKeys
+        statuses <- rawStatusesBatched store (isRunningOutPath runningKeys) outPaths
+        return (statuses, store)
+
     getStatusForStep (sid, path) = do
         status_ <-
             checkStatus (unpack path)
@@ -103,27 +135,31 @@ getRawStatuses pid targetCommit = do
     return $ fmap fst result
 getStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
 getStatuses pid targetCommit = do
-    rawResult <- getRawStatusesWithPaths pid targetCommit
+    rawResult <- getBatchedStatuses pid targetCommit
     case rawResult of
         Left err -> return $ Left err
-        Right (statuses, outPaths) -> Right <$> resolveStatusesAtCommitWithPaths targetCommit outPaths statuses
+        Right (statuses, outPaths, store) -> Right <$> resolveStatusesFor targetCommit outPaths store statuses
 
-broadcastResolvedStatusesAtCommit :: Int -> Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
-broadcastResolvedStatusesAtCommit pid targetCommit outPaths statuses = do
-    repoPath <- userRepoPath
-    let ctx = ReadRepoContext repoPath (unpack targetCommit)
-    mapConcurrently_ (broadcastResolvedStatus ctx outPaths) (Map.toList statuses)
-  where
-    broadcastResolvedStatus ctx outPaths (sid, entry) = do
-        (sid', status_) <- resolveStepStatus ctx (fmap unpack $ Map.lookup sid outPaths) (sid, entry)
-        broadcastSnapshot pid targetCommit (Map.singleton sid' status_)
+{- | Resolve the failure logs behind pending statuses. The batched walk answers
+every step with a handful of processes; when the local build-log tree is not
+readable it falls back to the per-step walk. The log endpoint keeps its own
+online fetch through 'resolveBuildLog'.
+-}
+resolveStatusesFor :: Text -> Map Int Text -> Maybe StepStore -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+resolveStatusesFor targetCommit outPaths mStore statuses = case mStore of
+    Just store -> do
+        batchable <- logDirectoryAvailable
+        if batchable
+            then resolveStatusesBatched store statuses
+            else resolveStatusesAtCommitWithPaths targetCommit outPaths statuses
+    Nothing -> resolveStatusesAtCommitWithPaths targetCommit outPaths statuses
 
 broadcastProjectStatus :: Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> IO ()
 broadcastProjectStatus pid targetCommit mStatusOverride = do
-    result <- getRawStatusesWithPaths pid targetCommit
+    result <- getBatchedStatuses pid targetCommit
     case result of
         Left err -> putStrLn $ "broadcastProjectStatus skipped: " ++ err
-        Right (stats, outPaths) -> do
+        Right (stats, outPaths, store) -> do
             let finalStats = case mStatusOverride of
                     Just (sid, st) -> Map.insert sid st stats
                     Nothing -> stats
@@ -131,8 +167,10 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
             broadcastSnapshot pid targetCommit immediate
             when (not (Map.null pending)) $
                 void $
-                    forkIO $
-                        broadcastResolvedStatusesAtCommit pid targetCommit outPaths pending
+                    forkIO $ do
+                        resolved <- resolveStatusesFor targetCommit outPaths store pending
+                        forM_ (Map.toList resolved) $ \(sid, status_) ->
+                            broadcastSnapshot pid targetCommit (Map.singleton sid status_)
 
 withStepProjects :: Int -> Text -> (Int -> ReadRepoContext -> IO ()) -> IO ()
 withStepProjects sid targetCommit action = do

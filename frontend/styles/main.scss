@@ -185,6 +185,7 @@ body {
     position: relative;
     align-items: center;
     display: flex;
+    cursor: grab;
 
     &::before {
       content: "";
@@ -1235,6 +1236,10 @@ $form-vertical-gap: var(--spacing-md);
   border-color: var(--state-warning);
 }
 
+.form-read-only {
+  border-color: var(--state-info);
+}
+
 .form-header {
   padding: 6px var(--spacing-md);
   border-bottom: 1px solid var(--border-color);
@@ -1252,6 +1257,11 @@ $form-vertical-gap: var(--spacing-md);
 .form-editing .form-header {
   background: var(--state-warning-outline);
   border-color: var(--state-warning);
+}
+
+.form-read-only .form-header {
+  background: var(--state-info-outline);
+  border-color: var(--state-info);
 }
 
 .form-body {
@@ -1344,6 +1354,14 @@ $form-vertical-gap: var(--spacing-md);
 
 .form-input {
   @include mixins.form-control;
+}
+
+.form-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--state-info);
+  cursor: pointer;
 }
 
 .form-input-textarea {

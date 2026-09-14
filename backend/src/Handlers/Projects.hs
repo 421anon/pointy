@@ -5,6 +5,7 @@
 module Handlers.Projects (getProjectsHandler, patchProjectHandler, batchUpdateProjectsHandler, postProjectHandler, deleteProjectHandler, jsonToNix, rewriteNixFile, RawJSON, ProjectUpdate (..)) where
 
 import ApiTypes (DynamicJson (..))
+import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Monad (mapM_)
 import Control.Monad.Except (ExceptT (..), catchError, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -29,6 +30,7 @@ import Servant.Server (err400, err500, errBody)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeBaseName, (</>))
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalImpureJsonExpr, runNixEvalJsonInRepo, withReadRepoTransaction)
@@ -63,8 +65,28 @@ getProjectsHandler commit = do
         Right output -> return (DynamicJson output)
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
+-- | Mtimes for a revision never change, while walking the repository history
+-- costs hundreds of milliseconds, so keep the most recent revisions.
+{-# NOINLINE mtimeCacheRef #-}
+mtimeCacheRef :: MVar [(String, Map.Map FilePath T.Text)]
+mtimeCacheRef = unsafePerformIO (newMVar [])
+
+mtimeCacheLimit :: Int
+mtimeCacheLimit = 8
+
 readRecordMtimes :: FilePath -> String -> IO (Map.Map FilePath T.Text)
 readRecordMtimes repoPath commit = do
+    cache <- readMVar mtimeCacheRef
+    case lookup commit cache of
+        Just mtimes -> return mtimes
+        Nothing -> do
+            mtimes <- loadRecordMtimes repoPath commit
+            modifyMVar_ mtimeCacheRef $ \entries ->
+                return $ take mtimeCacheLimit $ (commit, mtimes) : filter ((/= commit) . fst) entries
+            return mtimes
+
+loadRecordMtimes :: FilePath -> String -> IO (Map.Map FilePath T.Text)
+loadRecordMtimes repoPath commit = do
     (code, out, _) <- runGitIn repoPath ["log", commit, "--pretty=tformat:%cI", "--name-only", "--", "steps/", "projects/"]
     return $ case code of
         ExitSuccess -> snd $ foldl' step (T.empty, Map.empty) (lines out)

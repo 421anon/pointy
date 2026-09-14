@@ -17,6 +17,9 @@ stepArgValue argType arg =
         ( TInt _ _, TIntValue n ) ->
             Just (Encode.int n)
 
+        ( TBool, TBoolValue b ) ->
+            Just (Encode.bool b)
+
         ( TStep _ _, TStepValue id ) ->
             Just (Encode.object [ ( "step", Encode.int id ) ])
 
