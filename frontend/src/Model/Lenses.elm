@@ -541,14 +541,14 @@ runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
 
 
-reviewComparison : Lens ls { a | reviewComparison : b } b x y
-reviewComparison =
-    lens "reviewComparison" .reviewComparison (\t comparison -> { t | reviewComparison = comparison })
+review : Lens ls { a | review : b } b x y
+review =
+    lens "review" .review (\t r -> { t | review = r })
 
 
-reviewedRevision : Lens ls { a | reviewedRevision : b } b x y
-reviewedRevision =
-    lens "reviewedRevision" .reviewedRevision (\t revision -> { t | reviewedRevision = revision })
+comparison : Lens ls { a | comparison : b } b x y
+comparison =
+    lens "comparison" .comparison (\t c -> { t | comparison = c })
 
 
 projectStepRecords : Traversal ProjectRecord StepRecord x y
@@ -559,6 +559,17 @@ projectStepRecords =
 stepRecordById : Int -> Traversal Model StepRecord x y
 stepRecordById stepId =
     projects << records << success << each << projectStepRecords << where_ (.id >> (==) (Just stepId))
+
+
+stepRevisionById : Int -> Model -> Maybe String
+stepRevisionById stepId model =
+    try (stepRecordById stepId) model
+        |> Maybe.andThen (Model.stepRevision model)
+
+
+stepShownRevision : Int -> Traversal Model String x y
+stepShownRevision stepId =
+    currentProject << success << tables << values << recordById stepId << runState << success << commit
 
 
 sortKey : Lens ls { a | sortKey : b } b x y

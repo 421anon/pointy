@@ -1115,20 +1115,16 @@ $delimited-grid-row-height: 28px;
   }
 }
 
-.step-review-chip,
 .step-review-diff,
 .step-review-revision,
 .step-review-build {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2xs);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  font-size: 11px;
-
-  > .material-symbols-outlined {
-    font-size: 12px;
-  }
+  @include mixins.button-base;
+  min-height: 24px;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  background: none;
+  border: none;
+  padding: 0;
 }
 
 .step-review-chip {
@@ -1146,17 +1142,20 @@ $delimited-grid-row-height: 28px;
   }
 }
 
+.step-review-chip,
 .step-review-diff,
 .step-review-revision,
 .step-review-build {
-  @include mixins.button-base;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
   font-size: 11px;
-  min-height: 24px;
-  text-decoration: none;
-  text-underline-offset: 3px;
-  background: none;
-  border: none;
-  padding: 0;
+
+  > .material-symbols-outlined {
+    font-size: 12px;
+  }
 }
 
 .step-review-build:disabled {

@@ -291,19 +291,14 @@ collapsedDirectoryView =
 
 applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
 applyStepStatus snapshotCommit status_ rs =
-    let
-        current =
+    Success
+        { commit = snapshotCommit
+        , status = status_
+        , directoryView =
             ApiData.toMaybe rs
-                |> Maybe.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView }
-
-        directoryView_ =
-            if current.commit == snapshotCommit then
-                current.directoryView
-
-            else
-                collapsedDirectoryView
-    in
-    Success { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
+                |> Maybe.filter (.commit >> (==) snapshotCommit)
+                |> Maybe.unwrap collapsedDirectoryView .directoryView
+        }
 
 
 applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
@@ -332,8 +327,7 @@ setLocalStepStatus table stepId status_ =
     Flow.get
         |> Flow.andThen
             (\model ->
-                try (remkT table << recordById stepId) model
-                    |> Maybe.andThen (Model.stepRevision model)
+                stepRevisionById stepId model
                     |> Maybe.unwrap (Flow.pure ())
                         (\revision ->
                             Flow.over (remkT table << recordById stepId << runState) (applyStepStatus revision status_)
@@ -452,7 +446,7 @@ loadProjectReviews =
                     stepRecords =
                         projects << records << success << by .id (Just projectId_) << projectStepRecords
                 in
-                Flow.over (stepRecords << reviewComparison) (Maybe.map ApiData.toLoading)
+                Flow.over (stepRecords << review << just << comparison) ApiData.toLoading
                     |> Flow.seq (Api.fetchProjectReviews projectId_ commit_)
                     |> Flow.andThen
                         (\result ->
@@ -463,7 +457,7 @@ loadProjectReviews =
                                             Flow.over stepRecords (mergeReviewReport commit_ result)
 
                                         else
-                                            Flow.over (stepRecords << reviewComparison) (Maybe.map ApiData.stopLoading)
+                                            Flow.over (stepRecords << review << just << comparison) ApiData.stopLoading
                                     )
                         )
             )
@@ -475,54 +469,45 @@ mergeReviewReport commit_ result record =
         Ok reports ->
             record.id
                 |> Maybe.andThen (\stepId -> Dict.get stepId reports)
-                |> Maybe.unwrap (over (reviewComparison << just) ApiData.stopLoading record)
+                |> Maybe.unwrap (over (review << just << comparison) ApiData.stopLoading record)
                     (applyReviewReport commit_ record)
 
         Err err ->
-            set (reviewComparison << just) (Error err) record
+            set (review << just << comparison) (Error err) record
 
 
 applyReviewReport : String -> StepRecord -> Model.ReviewReport -> StepRecord
 applyReviewReport commit_ record report =
-    let
-        withReview =
-            set reviewComparison report.comparison (set reviewedRevision report.reviewedRevision { record | reviewedBy = report.reviewedBy, reviewComments = report.reviewComments })
-    in
-    case ( report.reviewedRevision, record.reviewedRevision ) of
-        ( Just reviewedRevision, _ ) ->
-            set runState (reviewedRunState reviewedRevision report.reviewedStatus withReview.runState) withReview
+    { record
+        | review = report.review
+        , runState =
+            case ( report.review, record.review ) of
+                ( Just reviewed, _ ) ->
+                    reviewedRunState reviewed.revision report.reviewedStatus record.runState
 
-        ( Nothing, Just _ ) ->
-            set runState (applyStepStatus commit_ NotAsked withReview.runState) withReview
+                ( Nothing, Just _ ) ->
+                    applyStepStatus commit_ NotAsked record.runState
 
-        ( Nothing, Nothing ) ->
-            withReview
+                ( Nothing, Nothing ) ->
+                    record.runState
+    }
 
 
 reviewedRunState : String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-reviewedRunState reviewedRevision mStatus runState_ =
-    let
-        fresh =
-            Success
-                { commit = reviewedRevision
-                , status = Maybe.map Success mStatus |> Maybe.withDefault (Success Model.StatusNotStarted)
-                , directoryView = collapsedDirectoryView
-                }
-    in
-    case ApiData.toMaybe runState_ of
-        Just current ->
-            if current.commit == reviewedRevision then
-                if current.status == Loading (Just Model.StatusRunning) && mStatus /= Just Model.StatusRunning then
-                    Success current
-
-                else
-                    Success { current | status = Maybe.map Success mStatus |> Maybe.withDefault current.status }
+reviewedRunState revision mStatus runState_ =
+    case ( ApiData.toMaybe runState_ |> Maybe.filter (.commit >> (==) revision), mStatus ) of
+        ( Just current, Just status_ ) ->
+            if current.status == Loading (Just Model.StatusRunning) && status_ /= Model.StatusRunning then
+                Success current
 
             else
-                fresh
+                Success { current | status = Success status_ }
 
-        Nothing ->
-            fresh
+        ( Just current, Nothing ) ->
+            Success current
+
+        ( Nothing, _ ) ->
+            applyStepStatus revision (Success (Maybe.withDefault Model.StatusNotStarted mStatus)) NotAsked
 
 
 refreshReviews : Flow Model ()
@@ -540,17 +525,16 @@ whenStepIdle stepId io =
             )
 
 
-settleReview : Int -> Maybe (ApiData Model.ReviewComparison) -> Maybe String -> String -> Result Http.Error Bool -> Flow Model ()
-settleReview stepId mComparison mReviewedRevision message result =
+settleReview : Int -> Maybe Model.Review -> String -> Result Http.Error Bool -> Flow Model ()
+settleReview stepId mReview message result =
     case result of
         Ok True ->
             Flow.async (addToast False "The viewed output differs from the reviewed output. Remove the review first to record the newer revision.")
                 |> Flow.seq refreshReviews
 
         Ok False ->
-            Flow.setAll (stepRecordById stepId << reviewComparison) mComparison
-                |> Flow.seq (Flow.setAll (stepRecordById stepId << reviewedRevision) mReviewedRevision)
-                |> Flow.seq (Flow.when (mReviewedRevision == Nothing) (resetRunStateToViewed stepId))
+            Flow.setAll (stepRecordById stepId << review) mReview
+                |> Flow.seq (Flow.when (Maybe.isNothing mReview) (resetRunStateToViewed stepId))
                 |> Flow.seq refreshReviews
                 |> Flow.seq (Flow.setAll reviewDraft Nothing)
                 |> Flow.seq (Flow.async (addToast True message))
@@ -584,7 +568,7 @@ reviewStep draft =
                 in
                 whenStepIdle draft.stepId
                     (Api.reviewStep draft mCommit_
-                        |> Flow.andThen (settleReview draft.stepId (Just NotAsked) (Model.viewedRevision model) "Step reviewed.")
+                        |> Flow.andThen (settleReview draft.stepId (Maybe.map (\revision -> { revision = revision, reviewedBy = draft.reviewedBy, comments = draft.comments, comparison = NotAsked }) (Model.viewedRevision model)) "Step reviewed.")
                     )
             )
 
@@ -611,7 +595,7 @@ removeReview stepId =
     whenStepIdle stepId
         (Api.removeReview stepId
             |> Flow.map (Result.map (always False))
-            |> Flow.andThen (settleReview stepId Nothing Nothing "Review removed.")
+            |> Flow.andThen (settleReview stepId Nothing "Review removed.")
         )
 
 
@@ -1090,8 +1074,7 @@ loadStepLog id =
             (\model ->
                 let
                     revision =
-                        try (stepRecordById id) model
-                            |> Maybe.andThen (Model.stepRevision model)
+                        stepRevisionById id model
 
                     key =
                         Model.stepLogKey id revision
@@ -1129,8 +1112,7 @@ runStep spec id =
             (\model ->
                 let
                     revision =
-                        try (remkT table << recordById id) model
-                            |> Maybe.andThen (Model.stepRevision model)
+                        stepRevisionById id model
                 in
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
@@ -1158,16 +1140,12 @@ runStep spec id =
 
 buildViewedRevision : StepSpec -> Int -> Flow Model ()
 buildViewedRevision spec id =
-    let
-        table =
-            TableSpec.getLens spec
-    in
     Flow.get
         |> Flow.andThen
             (\model ->
                 Flow.fromMaybe (Model.viewedRevision model)
                     (\revision ->
-                        Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
+                        Flow.when (model |> has (TableSpec.getLens spec << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                             |> Flow.seq (Flow.over pendingBuilds (Dict.insert id revision))
                             |> Flow.seq (clearStepLog id (Just revision))
                             |> Flow.seq (callApi void (Api.runStep id (Just revision)))
@@ -1183,23 +1161,11 @@ buildViewedRevision spec id =
 
 stopStep : StepSpec -> Int -> Flow Model ()
 stopStep spec id =
-    let
-        table =
-            TableSpec.getLens spec
-
-        setStatus =
-            setLocalStepStatus table id
-    in
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    revision =
-                        try (remkT table << recordById id) model
-                            |> Maybe.andThen (Model.stepRevision model)
-                in
-                setStatus (Success StatusRunning)
-                    |> Flow.seq (callApi void (Api.stopStep id revision))
+                setLocalStepStatus (TableSpec.getLens spec) id (Success StatusRunning)
+                    |> Flow.seq (callApi void (Api.stopStep id (stepRevisionById id model)))
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
@@ -1663,13 +1629,13 @@ seekAndMerge target recordId path anchor bytes_ =
         apiCall =
             case target of
                 Route.Output ->
-                    Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+                    Flow.forAll (stepShownRevision recordId)
                         (\commit_ ->
                             Api.fetchFileSeek recordId (Just commit_) path anchor bytes_
                         )
 
                 Route.Source ->
-                    Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+                    Flow.forAll (stepShownRevision recordId)
                         (\commit_ ->
                             Api.fetchSrcFileSeek recordId (Just commit_) path anchor bytes_
                         )
@@ -1870,7 +1836,7 @@ toggleOutputEntry recordId mOpen path =
             (allStepTables << folderExpandedAt recordId path) |> orElseT (allStepTables << fileIsViewingAt recordId path)
 
         stepCommit =
-            allStepTables << recordById recordId << runState << success << commit
+            stepShownRevision recordId
 
         extrasLensFor p =
             if List.isEmpty p then
@@ -2009,7 +1975,7 @@ toggleSrcEntry recordId mOpen path =
             (allStepTables << srcFilesFolderExpandedAt recordId path) |> orElseT (allStepTables << srcFilesFileIsViewingAt recordId path)
 
         folderAction =
-            Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+            Flow.forAll (stepShownRevision recordId)
                 (\revision ->
                     callApi (allStepTables << srcFilesChildrenAt recordId path)
                         (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) path)
@@ -2017,7 +1983,7 @@ toggleSrcEntry recordId mOpen path =
                 )
 
         fetchContent =
-            Flow.forAll (allStepTables << recordById recordId << runState << success << commit)
+            Flow.forAll (stepShownRevision recordId)
                 (\revision ->
                     callApi (allStepTables << srcFilesFileContentAt recordId path)
                         (Api.fetchSrcFileContents recordId (Just revision) path)
@@ -2204,7 +2170,7 @@ predictSrcFileChange recordId path prediction apiCall =
                     |> Flow.seq (callApi void apiCall)
                     |> FlowError.andThen
                         (\_ ->
-                            Flow.forAll (stepRecord << runState << success << commit)
+                            Flow.forAll (stepShownRevision recordId)
                                 (\revision ->
                                     callApiMerge Model.updateDirectoryChildren
                                         (allStepTables << srcFilesChildrenAt recordId dirPath)
@@ -4079,24 +4045,16 @@ updateStepStatus snapshotCommit stepId newStatus =
             stepRecordById stepId << runState
 
         reviewedRunFinished model =
-            has (stepRecordById stepId << reviewComparison << just) model
+            has (stepRecordById stepId << review << just) model
                 && (try (stepRunState << success << status) model |> Maybe.andThen ApiData.toMaybe)
                 == Just StatusRunning
-
-        describesStep model =
-            case try (stepRecordById stepId) model of
-                Just record ->
-                    Maybe.unwrap True ((==) snapshotCommit) (Model.stepRevision model record)
-
-                Nothing ->
-                    False
     in
     Flow.get
         |> Flow.andThen
             (\model ->
                 Flow.batchM
                     [ if has stepRunState model then
-                        Flow.when (describesStep model)
+                        Flow.when (Maybe.unwrap True ((==) snapshotCommit) (stepRevisionById stepId model))
                             (Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
                                 |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
                                 |> Flow.seq (Flow.when (newStatus == StatusSuccess && reviewedRunFinished model) (Flow.async loadProjectReviews))

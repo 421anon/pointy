@@ -186,7 +186,7 @@ viewSrcFilesSection model stepType spec step =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
         isLocked =
-            Maybe.isJust step.reviewComparison || has (route << Route.page << Route.project << mCommit << just) model
+            Maybe.isJust step.review || has (route << Route.page << Route.project << mCommit << just) model
 
         writePending =
             step.srcFileWriting

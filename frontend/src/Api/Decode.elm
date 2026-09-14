@@ -216,10 +216,7 @@ stepValueOnly stepType_ =
             , name = name
             , note = note
             , runState = NotAsked
-            , reviewComparison = Maybe.map (always NotAsked) reviewedRevision
-            , reviewedRevision = reviewedRevision
-            , reviewedBy = ""
-            , reviewComments = ""
+            , review = Maybe.map (\revision -> { revision = revision, reviewedBy = "", comments = "", comparison = NotAsked }) reviewedRevision
             , args = args
             , isUpdating = False
             , lastModifiedAt = lastModifiedAt
@@ -243,9 +240,37 @@ stepValueOnly stepType_ =
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
+reviewComparison : String -> Maybe String -> Decoder (Maybe (ApiData Model.ReviewComparison))
+reviewComparison comparison detail =
+    case comparison of
+        "no-review" ->
+            Decode.succeed Nothing
+
+        "same-out-path" ->
+            Decode.succeed (Just (Success Model.SameOutPath))
+
+        "same-content" ->
+            Decode.succeed (Just (Success Model.SameContent))
+
+        "different-content" ->
+            Decode.succeed (Just (Success Model.DifferentContent))
+
+        "viewed-output-unbuilt" ->
+            Decode.succeed (Just (Success Model.ViewedOutputUnbuilt))
+
+        "reviewed-output-unbuilt" ->
+            Decode.succeed (Just (Success Model.ReviewedOutputUnbuilt))
+
+        "unresolvable" ->
+            Decode.succeed (Just (Error (Http.BadBody (Maybe.withDefault "The review check failed." detail))))
+
+        other ->
+            Decode.fail ("Unknown step review comparison: " ++ other)
+
+
 reviewReport : Decoder Model.ReviewReport
 reviewReport =
-    Decode.succeed (\reviewedRevision reviewedBy reviewComments reviewedStatus_ reviewedStatusError comparison comparisonDetail -> { reviewedRevision = reviewedRevision, reviewedBy = reviewedBy, reviewComments = reviewComments, reviewedStatus = reviewedStatus_, reviewedStatusError = reviewedStatusError, comparison = comparison, comparisonDetail = comparisonDetail })
+    Decode.succeed (\revision reviewedBy comments reviewedStatus_ reviewedStatusError comparison detail -> { revision = revision, reviewedBy = reviewedBy, comments = comments, reviewedStatus = Maybe.map (\status_ -> applyError status_ reviewedStatusError) reviewedStatus_, comparison = comparison, detail = detail })
         |> optional "reviewedRevision" (maybe Decode.string) Nothing
         |> optional "reviewedBy" Decode.string ""
         |> optional "reviewComments" Decode.string ""
@@ -255,39 +280,17 @@ reviewReport =
         |> optional "comparisonDetail" (maybe Decode.string) Nothing
         |> Decode.andThen
             (\fields ->
-                let
-                    withComparison comparison_ =
-                        { reviewedRevision = fields.reviewedRevision
-                        , reviewedBy = fields.reviewedBy
-                        , reviewComments = fields.reviewComments
-                        , reviewedStatus = Maybe.map (\status_ -> applyError status_ fields.reviewedStatusError) fields.reviewedStatus
-                        , comparison = comparison_
-                        }
-                in
-                case fields.comparison of
-                    "no-review" ->
-                        Decode.succeed { reviewedRevision = Nothing, reviewedBy = "", reviewComments = "", reviewedStatus = Nothing, comparison = Nothing }
-
-                    "same-out-path" ->
-                        Decode.succeed (withComparison (Just (Success Model.SameOutPath)))
-
-                    "same-content" ->
-                        Decode.succeed (withComparison (Just (Success Model.SameContent)))
-
-                    "different-content" ->
-                        Decode.succeed (withComparison (Just (Success Model.DifferentContent)))
-
-                    "viewed-output-unbuilt" ->
-                        Decode.succeed (withComparison (Just (Success Model.ViewedOutputUnbuilt)))
-
-                    "reviewed-output-unbuilt" ->
-                        Decode.succeed (withComparison (Just (Success Model.ReviewedOutputUnbuilt)))
-
-                    "unresolvable" ->
-                        Decode.succeed (withComparison (Just (Error (Http.BadBody (Maybe.withDefault "The review check failed." fields.comparisonDetail)))))
-
-                    other ->
-                        Decode.fail ("Unknown step review comparison: " ++ other)
+                reviewComparison fields.comparison fields.detail
+                    |> Decode.map
+                        (\mComparison ->
+                            { review =
+                                Maybe.map2
+                                    (\revision comparison -> { revision = revision, reviewedBy = fields.reviewedBy, comments = fields.comments, comparison = comparison })
+                                    fields.revision
+                                    mComparison
+                            , reviewedStatus = Maybe.andThen (always fields.reviewedStatus) mComparison
+                            }
+                        )
             )
 
 

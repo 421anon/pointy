@@ -68,3 +68,23 @@ boolText value =
 
     else
         "false"
+
+
+popoverTrigger : String -> List (Html.Attribute msg)
+popoverTrigger popoverId =
+    [ Html.Attributes.attribute "popovertarget" popoverId
+    , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
+    ]
+
+
+viewPopover : String -> String -> List (Html msg) -> List (Html msg) -> Html msg
+viewPopover popoverId baseClass header body =
+    Html.div
+        [ class baseClass
+        , Html.Attributes.id popoverId
+        , Html.Attributes.attribute "popover" "auto"
+        , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
+        ]
+        [ Html.div [ class (baseClass ++ "-header") ] header
+        , Html.div [ class (baseClass ++ "-body") ] body
+        ]

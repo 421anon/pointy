@@ -70,12 +70,17 @@ type ReviewComparison
     | ReviewedOutputUnbuilt
 
 
-type alias ReviewReport =
-    { reviewedRevision : Maybe String
+type alias Review =
+    { revision : String
     , reviewedBy : String
-    , reviewComments : String
+    , comments : String
+    , comparison : ApiData ReviewComparison
+    }
+
+
+type alias ReviewReport =
+    { review : Maybe Review
     , reviewedStatus : Maybe Status
-    , comparison : Maybe (ApiData ReviewComparison)
     }
 
 
@@ -97,10 +102,7 @@ type alias StepRecord =
         { type_ : String
         , note : String
         , runState : ApiData StepRunState
-        , reviewComparison : Maybe (ApiData ReviewComparison)
-        , reviewedRevision : Maybe String
-        , reviewedBy : String
-        , reviewComments : String
+        , review : Maybe Review
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
@@ -694,9 +696,9 @@ getCommitHash (Model model) =
 
 stepRevision : Model -> StepRecord -> Maybe String
 stepRevision model record =
-    case record.reviewedRevision of
-        Just reviewedRevision ->
-            Just reviewedRevision
+    case record.review of
+        Just review ->
+            Just review.revision
 
         Nothing ->
             viewedRevision model
@@ -706,12 +708,7 @@ viewedRevision : Model -> Maybe String
 viewedRevision model =
     case (getRoute model).page of
         Route.Project { mCommit } ->
-            case mCommit of
-                Just commit_ ->
-                    Just commit_
-
-                Nothing ->
-                    ApiData.toMaybe (getCommitHash model)
+            Maybe.orElse (ApiData.toMaybe (getCommitHash model)) mCommit
 
         _ ->
             ApiData.toMaybe (getCommitHash model)
@@ -1325,9 +1322,9 @@ updateStepRecordTable new old =
 
 keepReviewState : StepRecord -> StepRecord -> StepRecord
 keepReviewState oldRecord newRecord =
-    case oldRecord.reviewedRevision of
+    case oldRecord.review of
         Just _ ->
-            { newRecord | reviewedRevision = oldRecord.reviewedRevision, reviewedBy = oldRecord.reviewedBy, reviewComments = oldRecord.reviewComments, reviewComparison = oldRecord.reviewComparison }
+            { newRecord | review = oldRecord.review }
 
         Nothing ->
             newRecord
