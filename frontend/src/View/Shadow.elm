@@ -60,7 +60,7 @@ viewRunStop spec r =
             []
 
 
-type alias PinChip =
+type alias ComparisonChip =
     { severity : String
     , icon : String
     , label : String
@@ -68,47 +68,48 @@ type alias PinChip =
     }
 
 
-{- | The chip describing how the latest revision's output relates to the pin.
-A current pin and a missing baseline add no chip: a current pin needs no
-comparison, and a missing baseline is already visible as the pinned output's
-status.
+{- | The chip describing how the viewed revision's output relates to the reviewed
+output. A matching out path and a missing reviewed output add no chip: a match
+needs no comparison, and a missing reviewed output is already visible as the
+output's status.
 -}
-pinChip : Model.PinVerdict -> Maybe PinChip
-pinChip verdict =
-    case verdict of
-        Model.PinCurrent ->
+comparisonChip : Model.ReviewComparison -> Maybe ComparisonChip
+comparisonChip comparison =
+    case comparison of
+        Model.SameOutPath ->
             Nothing
 
-        Model.PinIdentical ->
-            Just (PinChip "muted" "published_with_changes" "Matches" "The latest output still matches the pinned version, but at a newer revision. Updating the pin is optional.")
+        Model.SameContent ->
+            Just (ComparisonChip "muted" "published_with_changes" "Same content" "The viewed revision builds a different store path with identical content. Updating the review is optional.")
 
-        Model.PinUpdatable ->
-            Just (PinChip "muted" "pending" "Updatable" "Dependencies changed since the step was pinned, so the latest revision's output is not built. Build it to compare with the pinned version.")
+        Model.ViewedOutputUnbuilt ->
+            Just (ComparisonChip "muted" "pending" "Not built" "The viewed revision's output is not built, so it cannot be compared with the reviewed output. Build it to compare.")
 
-        Model.PinDiffer ->
-            Just (PinChip "warning" "difference" "Differs" "The latest output differs from the pinned version. View the diff to review the changes; the pin stays until you update it.")
+        Model.DifferentContent ->
+            Just (ComparisonChip "warning" "difference" "Differs" "The viewed output differs from the reviewed output. View the diff to review the changes; the review stays until you update it.")
 
-        Model.PinMissing ->
+        Model.ReviewedOutputUnbuilt ->
             Nothing
 
 
-{- | A step's pin controls: the pin toggle, plus the chip describing how the
-viewed revision's output relates to the pin and the pinned revision it refers
-to. A step with neither a pin toggle nor a pin shows nothing.
+{- | A step's review controls: the review toggle, plus the chip describing how
+the viewed revision's output relates to the reviewed output and the reviewed
+revision it refers to. A step with neither a review toggle nor a review shows
+nothing.
 -}
-viewPinControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
-viewPinControls model spec stepId record =
+viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
+viewReviewControls model spec stepId record =
     let
         indicator =
-            record.pinRevision
+            record.reviewedRevision
                 |> Maybe.map
-                    (\pin ->
-                        viewPinIndicator model spec stepId (Just pin) (Maybe.withDefault ApiData.NotAsked record.pinVerdict)
+                    (\reviewedRevision ->
+                        viewReviewIndicator model spec stepId (Just reviewedRevision) (Maybe.withDefault ApiData.NotAsked record.reviewComparison)
                     )
                 |> Maybe.withDefault []
 
         content =
-            viewPinActions spec record ++ indicator
+            viewReviewActions spec record ++ indicator
     in
     if List.isEmpty content then
         Nothing
@@ -116,49 +117,49 @@ viewPinControls model spec stepId record =
     else
         Just <|
             Html.span
-                [ Html.Attributes.class "step-pin"
+                [ Html.Attributes.class "step-review"
                 , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
                 ]
                 content
 
 
-{- | The chip describing how the viewed revision's output relates to the pin,
-together with the pinned revision and any comparison actions.
+{- | The chip describing how the viewed revision's output relates to the reviewed
+output, together with the reviewed revision and any comparison actions.
 -}
-viewPinIndicator : Model -> TableSpec StepRecord -> Int -> Maybe String -> ApiData Model.PinVerdict -> List (Html (Flow Model ()))
-viewPinIndicator model spec stepId mPin verdict =
+viewReviewIndicator : Model -> TableSpec StepRecord -> Int -> Maybe String -> ApiData Model.ReviewComparison -> List (Html (Flow Model ()))
+viewReviewIndicator model spec stepId mReviewedRevision comparison =
     let
         whileChecking chip =
-            { chip | explanation = "Checking the latest output. " ++ chip.explanation }
+            { chip | explanation = "Checking the viewed revision's output. " ++ chip.explanation }
 
         failed error =
-            PinChip "danger" "error_outline" "Check failed" ("The pin check failed: " ++ Http.errorMessage error)
+            ComparisonChip "danger" "error_outline" "Check failed" ("The review check failed: " ++ Http.errorMessage error)
 
-        verdictChipWhileLoading mPrevious =
-            Maybe.andThen pinChip mPrevious |> Maybe.map whileChecking
+        comparisonChipWhileLoading mPrevious =
+            Maybe.andThen comparisonChip mPrevious |> Maybe.map whileChecking
 
-        mVerdictChip =
+        mComparisonChip =
             ApiData.foldVisible
                 Nothing
-                verdictChipWhileLoading
-                pinChip
+                comparisonChipWhileLoading
+                comparisonChip
                 (Just << failed)
-                verdict
+                comparison
 
         currentCommit =
             try (route << Route.page << Route.project << mCommit << just) model
 
-        pinNote =
-            mPin
-                |> Maybe.map (\pin -> " Pinned revision: " ++ shortRevision pin ++ ".")
+        reviewedRevisionNote =
+            mReviewedRevision
+                |> Maybe.map (\reviewedRevision -> " Reviewed revision: " ++ shortRevision reviewedRevision ++ ".")
                 |> Maybe.withDefault ""
 
         explanation chip =
-            chip.explanation ++ pinNote ++ " Editing is locked. Unpin this step in the current view to edit it."
+            chip.explanation ++ reviewedRevisionNote ++ " Editing is locked. Remove the review to edit it."
 
         viewChip chip =
             Html.span
-                [ Html.Attributes.class ("step-pin-chip step-pin-" ++ chip.severity)
+                [ Html.Attributes.class ("step-review-chip step-review-" ++ chip.severity)
                 , Html.Attributes.tabindex 0
                 , Html.Attributes.attribute "role" "note"
                 , Html.Attributes.title (explanation chip)
@@ -172,11 +173,11 @@ viewPinIndicator model spec stepId mPin verdict =
             Maybe.map Tuple.first (Model.getOpenDiff model) == Just stepId
 
         diffUrl =
-            Api.stepDiffReportUrl stepId (Model.viewedRevision model)
+            Api.reviewDiffUrl stepId (Model.viewedRevision model)
 
         viewDiffToggle chip =
             Html.button
-                [ Html.Attributes.class "step-pin-diff"
+                [ Html.Attributes.class "step-review-diff"
                 , Html.Attributes.title (explanation chip)
                 , Html.Attributes.attribute "aria-expanded"
                     (if isDiffOpen then
@@ -210,7 +211,7 @@ viewPinIndicator model spec stepId mPin verdict =
 
         viewDiffInNewTab =
             Html.a
-                [ Html.Attributes.class "step-pin-diff"
+                [ Html.Attributes.class "step-review-diff"
                 , Html.Attributes.title "Open the diff in a new tab"
                 , Html.Attributes.attribute "aria-label" "Open the diff in a new tab"
                 , Html.Attributes.href diffUrl
@@ -219,32 +220,32 @@ viewPinIndicator model spec stepId mPin verdict =
                 ]
                 [ iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
 
-        pinnedVersionLink =
-            mPin
-                |> Maybe.filter (\pin -> currentCommit /= Just pin)
+        reviewedRevisionLink =
+            mReviewedRevision
+                |> Maybe.filter (\reviewedRevision -> currentCommit /= Just reviewedRevision)
                 |> Maybe.andThen
-                    (\pin ->
+                    (\reviewedRevision ->
                         try currentProjectId model
-                            |> Maybe.map (viewPinnedVersionLink stepId pin)
+                            |> Maybe.map (viewReviewedRevisionLink stepId reviewedRevision)
                     )
                 |> Maybe.withDefault Html.nothing
 
         comparisonControls =
-            if ApiData.toMaybe verdict == Just Model.PinDiffer then
-                mVerdictChip
+            if ApiData.toMaybe comparison == Just Model.DifferentContent then
+                mComparisonChip
                     |> Maybe.unwrap [] (\chip -> [ viewDiffToggle chip, viewDiffInNewTab ])
 
             else
-                [ Html.viewMaybe viewChip mVerdictChip ]
+                [ Html.viewMaybe viewChip mComparisonChip ]
     in
-    (pinnedVersionLink :: comparisonControls)
-        ++ [ Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUpdatable) (viewBuildLatestLink model spec stepId) ]
+    (reviewedRevisionLink :: comparisonControls)
+        ++ [ Html.viewIf (ApiData.toMaybe comparison == Just Model.ViewedOutputUnbuilt) (viewBuildViewedLink model spec stepId) ]
 
 
 viewDiffSection : Model -> StepRecord -> Html (Flow Model ())
 viewDiffSection model record =
-    case ( record.id, Maybe.andThen ApiData.toMaybe record.pinVerdict ) of
-        ( Just stepId, Just Model.PinDiffer ) ->
+    case ( record.id, Maybe.andThen ApiData.toMaybe record.reviewComparison ) of
+        ( Just stepId, Just Model.DifferentContent ) ->
             Html.viewIf (Maybe.map Tuple.first (Model.getOpenDiff model) == Just stepId) <|
                 let
                     frameId =
@@ -252,7 +253,7 @@ viewDiffSection model record =
                 in
                 FileBrowser.viewHtmlFrame
                     { id = frameId
-                    , src = Api.stepDiffReportUrl stepId (Model.viewedRevision model)
+                    , src = Api.reviewDiffUrl stepId (Model.viewedRevision model)
                     , zoom = Actions.zoomIframeBy (Lenses.openDiff << just << snd) frameId
                     }
 
@@ -260,21 +261,21 @@ viewDiffSection model record =
             Html.nothing
 
 
-{- | Build the latest revision so its output can be compared with the pinned
-version. The row itself stays at the pinned revision.
+{- | Build the viewed revision so its output can be compared with the reviewed
+output. The row itself stays at the reviewed revision.
 -}
-viewBuildLatestLink : Model -> TableSpec StepRecord -> Int -> Html (Flow Model ())
-viewBuildLatestLink model spec stepId =
+viewBuildViewedLink : Model -> TableSpec StepRecord -> Int -> Html (Flow Model ())
+viewBuildViewedLink model spec stepId =
     if Dict.member stepId (Model.getPendingBuilds model) then
         Html.button
-            [ Html.Attributes.class "step-pin-build"
+            [ Html.Attributes.class "step-review-build"
             , Html.Attributes.disabled True
-            , Html.Attributes.title "Building the latest revision"
-            , Html.Attributes.attribute "aria-label" "Building the latest revision"
+            , Html.Attributes.title "Building this revision"
+            , Html.Attributes.attribute "aria-label" "Building this revision"
             ]
             [ iconCustom True
                 "progress_activity"
-                [ Html.Attributes.class "step-pin-build-spinner"
+                [ Html.Attributes.class "step-review-build-spinner"
                 , Html.Attributes.attribute "aria-hidden" "true"
                 ]
             , Html.text "Building..."
@@ -283,16 +284,16 @@ viewBuildLatestLink model spec stepId =
     else
         let
             titleText =
-                "Build the latest revision's output to compare with the pinned version"
+                "Build the viewed revision's output to compare with the reviewed output"
         in
         Html.button
-            [ Html.Attributes.class "step-pin-build"
+            [ Html.Attributes.class "step-review-build"
             , Html.Attributes.title titleText
             , Html.Attributes.attribute "aria-label" titleText
-            , Html.Events.onClick (Actions.buildLatest spec stepId)
+            , Html.Events.onClick (Actions.buildViewedRevision spec stepId)
             ]
             [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
-            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build latest" ]
+            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build this revision" ]
             ]
 
 
@@ -301,32 +302,32 @@ shortRevision =
     String.left 7
 
 
-{- | The pinned version is the repository at the pinned revision, browsed
-read-only like any other past commit, with the pinned step revealed.
+{- | The reviewed revision is the repository at that revision, browsed
+read-only like any other past commit, with the reviewed step revealed.
 -}
-viewPinnedVersionLink : Int -> String -> Int -> Html (Flow Model ())
-viewPinnedVersionLink stepId pin projectId =
+viewReviewedRevisionLink : Int -> String -> Int -> Html (Flow Model ())
+viewReviewedRevisionLink stepId reviewedRevision projectId =
     let
-        shortPin =
-            shortRevision pin
+        shortReviewedRevision =
+            shortRevision reviewedRevision
 
         targetRoute =
             Route.fromPage
                 (Route.Project
                     { projectId = projectId
                     , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                    , mCommit = Just pin
+                    , mCommit = Just reviewedRevision
                     , mCompare = Nothing
                     }
                 )
 
         titleText =
-            "View the repository at the pinned revision " ++ shortPin ++ " (read-only)"
+            "View the repository at the reviewed revision " ++ shortReviewedRevision ++ " (read-only)"
     in
     Html.a
-        [ Html.Attributes.class "step-pin-revision"
+        [ Html.Attributes.class "step-review-revision"
         , Html.Attributes.title titleText
-        , Html.Attributes.attribute "aria-label" ("View pinned version of step " ++ String.fromInt stepId ++ " at revision " ++ shortPin ++ " (read-only)")
+        , Html.Attributes.attribute "aria-label" ("View reviewed revision of step " ++ String.fromInt stepId ++ " at revision " ++ shortReviewedRevision ++ " (read-only)")
         , Route.href targetRoute
         , Html.Events.preventDefaultOn "click"
             (Decode.map4
@@ -340,47 +341,47 @@ viewPinnedVersionLink stepId pin projectId =
             )
         ]
         [ Html.span
-            [ Html.Attributes.class "step-pin-revision-hash"
+            [ Html.Attributes.class "step-review-revision-hash"
             , Html.Attributes.style "text-decoration" "underline"
             ]
-            [ Html.text shortPin ]
+            [ Html.text shortReviewedRevision ]
         ]
 
 
-{- | Pin controls, shown next to the step id. A step can be pinned once its
-output is built; an existing pin can advance when the latest output still
+{- | Review controls, shown next to the step id. A step can be reviewed once its
+output is built; an existing review can advance when the viewed output still
 matches it.
 -}
-viewPinActions : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewPinActions spec r =
+viewReviewActions : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewReviewActions spec r =
     case ( r.id, r.isUpdating ) of
         ( Just stepId, False ) ->
-            case r.pinVerdict of
+            case r.reviewComparison of
                 Nothing ->
                     [ Html.viewIf (ApiData.toMaybe (TableSpec.getStatus spec r) == Just Model.StatusSuccess) <|
-                        viewInlineIconButtonWithTooltip "push_pin" False "Pin step" (Actions.pinStep stepId)
+                        viewInlineIconButtonWithTooltip "fact_check" False "Review step" (Actions.reviewStep stepId)
                     ]
 
-                Just verdict ->
-                    [ Html.viewIf (ApiData.toMaybe verdict == Just Model.PinIdentical) <|
-                        viewInlineIconButtonWithTooltip "published_with_changes" True "Update pin" (Actions.pinStep stepId)
-                    , viewPinnedToggle stepId
+                Just comparison ->
+                    [ Html.viewIf (ApiData.toMaybe comparison == Just Model.SameContent) <|
+                        viewInlineIconButtonWithTooltip "published_with_changes" True "Update review" (Actions.reviewStep stepId)
+                    , viewReviewToggle stepId
                     ]
 
         _ ->
             []
 
 
-{- | The pin toggle of a pinned step, marked with a verified modifier so a
-pinned row shows its pin at a glance.
+{- | The review toggle of a reviewed step, marked with a verified modifier so a
+reviewed row shows its review at a glance.
 -}
-viewPinnedToggle : Int -> Html (Flow Model ())
-viewPinnedToggle stepId =
-    Html.span [ Html.Attributes.class "pin-toggle" ]
-        [ viewInlineIconButtonWithTooltip "push_pin" True "Unpin step" (Actions.unpinStep stepId)
+viewReviewToggle : Int -> Html (Flow Model ())
+viewReviewToggle stepId =
+    Html.span [ Html.Attributes.class "review-toggle" ]
+        [ viewInlineIconButtonWithTooltip "fact_check" True "Remove review" (Actions.removeReview stepId)
         , iconCustom True
             "verified"
-            [ Html.Attributes.class "pin-toggle-modifier"
+            [ Html.Attributes.class "review-toggle-modifier"
             , Html.Attributes.attribute "aria-hidden" "true"
             ]
         ]
@@ -507,7 +508,7 @@ viewSection model sectionName entry steps =
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values
-                    [ r.id |> Maybe.andThen (\stepId -> viewPinControls model spec stepId r)
+                    [ r.id |> Maybe.andThen (\stepId -> viewReviewControls model spec stepId r)
                     , r.id
                         |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
                     ]
@@ -537,7 +538,7 @@ viewSection model sectionName entry steps =
                                             []
 
                                         Nothing ->
-                                            [ Html.viewIf (Maybe.isNothing r.pinVerdict) <|
+                                            [ Html.viewIf (Maybe.isNothing r.reviewComparison) <|
                                                 Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id
                                             ]
 

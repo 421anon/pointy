@@ -264,7 +264,7 @@ loadProjects =
                                 callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
                                     |> ignoreResult
                                     |> Flow.seq (Flow.async replayStepStatusBuffer)
-                                    |> Flow.seq (Flow.async loadProjectPins)
+                                    |> Flow.seq (Flow.async loadProjectReviews)
                             )
                 )
         )
@@ -434,17 +434,17 @@ refetchCommitHash =
     callApi commitHash Api.fetchCommitHash |> Flow.map (always ())
 
 
-loadProjectPins : Flow Model ()
-loadProjectPins =
+loadProjectReviews : Flow Model ()
+loadProjectReviews =
     let
-        pinTarget : Model -> Maybe ( Int, String )
-        pinTarget model =
+        reviewTarget : Model -> Maybe ( Int, String )
+        reviewTarget model =
             Maybe.map2 Tuple.pair
                 (try currentProjectId model)
                 (try (orElseT (route << Route.page << Route.project << mCommit << just) (commitHash << success)) model)
     in
     Flow.get
-        |> Flow.map pinTarget
+        |> Flow.map reviewTarget
         |> Flow.assertJust
         |> Flow.andThen
             (\(( projectId_, commit_ ) as target) ->
@@ -452,69 +452,69 @@ loadProjectPins =
                     stepRecords =
                         projects << records << success << by .id (Just projectId_) << projectStepRecords
                 in
-                Flow.over (stepRecords << pinVerdict) (Maybe.map ApiData.toLoading)
-                    |> Flow.seq (Api.fetchProjectPins projectId_ commit_)
+                Flow.over (stepRecords << reviewComparison) (Maybe.map ApiData.toLoading)
+                    |> Flow.seq (Api.fetchProjectReviews projectId_ commit_)
                     |> Flow.andThen
                         (\result ->
                             Flow.get
                                 |> Flow.andThen
                                     (\model ->
-                                        if pinTarget model == Just target then
-                                            Flow.over stepRecords (mergePinReport commit_ result)
+                                        if reviewTarget model == Just target then
+                                            Flow.over stepRecords (mergeReviewReport commit_ result)
 
                                         else
-                                            Flow.over (stepRecords << pinVerdict) (Maybe.map ApiData.stopLoading)
+                                            Flow.over (stepRecords << reviewComparison) (Maybe.map ApiData.stopLoading)
                                     )
                         )
             )
 
 
-mergePinReport : String -> Result Http.Error (Dict Int Model.PinReport) -> StepRecord -> StepRecord
-mergePinReport commit_ result record =
+mergeReviewReport : String -> Result Http.Error (Dict Int Model.ReviewReport) -> StepRecord -> StepRecord
+mergeReviewReport commit_ result record =
     case result of
         Ok reports ->
             record.id
                 |> Maybe.andThen (\stepId -> Dict.get stepId reports)
-                |> Maybe.unwrap (over (pinVerdict << just) ApiData.stopLoading record)
-                    (applyPinReport commit_ record)
+                |> Maybe.unwrap (over (reviewComparison << just) ApiData.stopLoading record)
+                    (applyReviewReport commit_ record)
 
         Err err ->
-            set (pinVerdict << just) (Error err) record
+            set (reviewComparison << just) (Error err) record
 
 
-applyPinReport : String -> StepRecord -> Model.PinReport -> StepRecord
-applyPinReport commit_ record report =
+applyReviewReport : String -> StepRecord -> Model.ReviewReport -> StepRecord
+applyReviewReport commit_ record report =
     let
-        withPin =
-            set pinVerdict report.verdict (set pinRevision report.pin record)
+        withReview =
+            set reviewComparison report.comparison (set reviewedRevision report.reviewedRevision record)
     in
-    case ( report.pin, record.pinRevision ) of
-        ( Just pin, _ ) ->
-            set runState (pinnedRunState pin report.status withPin.runState) withPin
+    case ( report.reviewedRevision, record.reviewedRevision ) of
+        ( Just reviewedRevision, _ ) ->
+            set runState (reviewedRunState reviewedRevision report.reviewedStatus withReview.runState) withReview
 
         ( Nothing, Just _ ) ->
-            set runState (applyStepStatus commit_ NotAsked withPin.runState) withPin
+            set runState (applyStepStatus commit_ NotAsked withReview.runState) withReview
 
         ( Nothing, Nothing ) ->
-            withPin
+            withReview
 
 
-{- | A pinned step is shown at its pinned revision, so its run state carries
-the pinned commit and the pinned output's build status.
+{- | A reviewed step is shown at its reviewed revision, so its run state carries
+the reviewed commit and the reviewed output's build status.
 -}
-pinnedRunState : String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-pinnedRunState pin mStatus runState_ =
+reviewedRunState : String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+reviewedRunState reviewedRevision mStatus runState_ =
     let
         fresh =
             Success
-                { commit = pin
+                { commit = reviewedRevision
                 , status = Maybe.map Success mStatus |> Maybe.withDefault (Success Model.StatusNotStarted)
                 , directoryView = collapsedDirectoryView
                 }
     in
     case ApiData.toMaybe runState_ of
         Just current ->
-            if current.commit == pin then
+            if current.commit == reviewedRevision then
                 if current.status == Loading (Just Model.StatusRunning) && mStatus /= Just Model.StatusRunning then
                     -- A local run is pending; a stale report must not clear it.
                     Success current
@@ -529,9 +529,9 @@ pinnedRunState pin mStatus runState_ =
             fresh
 
 
-refreshPins : Flow Model ()
-refreshPins =
-    refetchCommitHash |> Flow.seq (Flow.async loadProjectPins)
+refreshReviews : Flow Model ()
+refreshReviews =
+    refetchCommitHash |> Flow.seq (Flow.async loadProjectReviews)
 
 
 {- | Run a step-scoped action once, unless one of its records is already
@@ -548,26 +548,26 @@ whenStepIdle stepId io =
             )
 
 
-settlePin : Int -> Maybe (ApiData Model.PinVerdict) -> Maybe String -> String -> Result Http.Error Bool -> Flow Model ()
-settlePin stepId pinned pin message result =
+settleReview : Int -> Maybe (ApiData Model.ReviewComparison) -> Maybe String -> String -> Result Http.Error Bool -> Flow Model ()
+settleReview stepId mComparison mReviewedRevision message result =
     case result of
         Ok True ->
-            Flow.async (addToast False "Output differs from the pinned version. Unpin the step to pin the newer output.")
-                |> Flow.seq refreshPins
+            Flow.async (addToast False "The viewed output differs from the reviewed output. Remove the review first to record the newer revision.")
+                |> Flow.seq refreshReviews
 
         Ok False ->
-            Flow.setAll (stepRecordById stepId << pinVerdict) pinned
-                |> Flow.seq (Flow.setAll (stepRecordById stepId << pinRevision) pin)
-                |> Flow.seq (Flow.when (pin == Nothing) (resetRunStateToViewed stepId))
-                |> Flow.seq refreshPins
+            Flow.setAll (stepRecordById stepId << reviewComparison) mComparison
+                |> Flow.seq (Flow.setAll (stepRecordById stepId << reviewedRevision) mReviewedRevision)
+                |> Flow.seq (Flow.when (mReviewedRevision == Nothing) (resetRunStateToViewed stepId))
+                |> Flow.seq refreshReviews
                 |> Flow.seq (Flow.async (addToast True message))
 
         Err err ->
             Flow.async (addToast False (Http.errorMessage err))
 
 
-{- | An unpinned step is no longer frozen, so its run state returns to the
-revision being viewed.
+{- | A step without a review is no longer frozen, so its run state returns to
+the revision being viewed.
 -}
 resetRunStateToViewed : Int -> Flow Model ()
 resetRunStateToViewed stepId =
@@ -583,20 +583,21 @@ resetRunStateToViewed stepId =
             )
 
 
-pinStep : Int -> Flow Model ()
-pinStep stepId =
+reviewStep : Int -> Flow Model ()
+reviewStep stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
                 let
-                    -- The backend pins the revision it is asked for: the
-                    -- browsed revision, or the checked-out commit at pin time.
+                    -- The backend records the revision it is asked for: the
+                    -- browsed revision, or the checked-out commit when the
+                    -- review is recorded.
                     mCommit_ =
                         try (route << Route.page << Route.project << mCommit << just) model
                 in
                 whenStepIdle stepId
-                    (Api.pinStep stepId mCommit_
-                        |> Flow.andThen (settlePin stepId (Just NotAsked) (Model.viewedRevision model) "Step pinned.")
+                    (Api.reviewStep stepId mCommit_
+                        |> Flow.andThen (settleReview stepId (Just NotAsked) (Model.viewedRevision model) "Step reviewed.")
                     )
             )
 
@@ -613,12 +614,12 @@ toggleDiffPanel stepId =
         )
 
 
-unpinStep : Int -> Flow Model ()
-unpinStep stepId =
+removeReview : Int -> Flow Model ()
+removeReview stepId =
     whenStepIdle stepId
-        (Api.unpinStep stepId
+        (Api.removeReview stepId
             |> Flow.map (Result.map (always False))
-            |> Flow.andThen (settlePin stepId Nothing Nothing "Step unpinned.")
+            |> Flow.andThen (settleReview stepId Nothing Nothing "Review removed.")
         )
 
 
@@ -799,7 +800,7 @@ saveExistingRecordWith beforeRequest lens record mergeFn spec =
                     Flow.over (remkT lens << records << success << by .id record.id)
                         (\r -> { r | isUpdating = False, lastModifiedAt = Just posix })
                 )
-                |> Flow.seq refreshPins
+                |> Flow.seq refreshReviews
     in
     Flow.over (remkT lens << records << success)
         (List.updateIf (\r -> r.id == record.id)
@@ -1139,8 +1140,9 @@ runStep spec id =
             )
 
 
-{- | Run a step at an explicit revision. Pinned steps run at their pin;
-building the latest revision to compare against the pin uses 'viewedRevision'.
+{- | Run a step at an explicit revision. Reviewed steps run at their reviewed
+revision; building the viewed revision to compare against the reviewed output
+uses 'viewedRevision'.
 -}
 runStepAt : StepSpec -> Int -> Maybe String -> Flow Model ()
 runStepAt spec id revision =
@@ -1178,12 +1180,12 @@ runStepAt spec id revision =
             (\_ -> setStatus (Success (StatusFailure Nothing)))
 
 
-{- | Build the latest revision of a pinned step so its output can be compared
-with the pinned version. The row keeps showing the pinned revision, so the
+{- | Build the viewed revision of a reviewed step so its output can be compared
+with the reviewed output. The row keeps showing the reviewed revision, so the
 build reports its own outcome once its pending entry settles.
 -}
-buildLatest : StepSpec -> Int -> Flow Model ()
-buildLatest spec id =
+buildViewedRevision : StepSpec -> Int -> Flow Model ()
+buildViewedRevision spec id =
     let
         table =
             TableSpec.getLens spec
@@ -2235,7 +2237,7 @@ predictSrcFileChange recordId path prediction apiCall =
                                     callApiMerge Model.updateDirectoryChildren
                                         (allStepTables << srcFilesChildrenAt recordId dirPath)
                                         (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) dirPath)
-                                        |> Flow.seq refreshPins
+                                        |> Flow.seq refreshReviews
                                 )
                         )
                     |> FlowError.foldResult (\_ -> Flow.pure ())
@@ -2627,7 +2629,7 @@ uploadFiles spec types stepId =
                             |> FlowError.foldResult
                                 (\_ ->
                                     Flow.over uploadProgress (Dict.remove stepId)
-                                        |> Flow.seq refreshPins
+                                        |> Flow.seq refreshReviews
                                         |> Flow.seq (runStep spec stepId)
                                 )
                                 (\_ -> Flow.over uploadProgress (Dict.remove stepId))
@@ -4104,15 +4106,15 @@ updateStepStatus snapshotCommit stepId newStatus =
         stepRunState =
             stepRecordById stepId << runState
 
-        pinnedRunFinished model =
-            has (stepRecordById stepId << pinVerdict << just) model
+        reviewedRunFinished model =
+            has (stepRecordById stepId << reviewComparison << just) model
                 && (try (stepRunState << success << status) model |> Maybe.andThen ApiData.toMaybe)
                 == Just StatusRunning
 
         -- A snapshot describes a step only when it is for the revision that
-        -- step is shown at: its pin when pinned, otherwise the viewed
-        -- revision. Snapshots at pinned revisions must not leak into steps that
-        -- are not pinned there.
+        -- step is shown at: its reviewed revision when reviewed, otherwise the
+        -- viewed revision. Snapshots at reviewed revisions must not leak into
+        -- steps that are not reviewed there.
         describesStep model =
             case try (stepRecordById stepId) model of
                 Just record ->
@@ -4129,7 +4131,7 @@ updateStepStatus snapshotCommit stepId newStatus =
                         Flow.when (describesStep model)
                             (Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
                                 |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
-                                |> Flow.seq (Flow.when (newStatus == StatusSuccess && pinnedRunFinished model) (Flow.async loadProjectPins))
+                                |> Flow.seq (Flow.when (newStatus == StatusSuccess && reviewedRunFinished model) (Flow.async loadProjectReviews))
                             )
 
                       else
@@ -4140,9 +4142,9 @@ updateStepStatus snapshotCommit stepId newStatus =
             )
 
 
-{- | A pending "Build latest" clears once the build's status snapshot for the
-revision it requested reaches a terminal state. A failed build also raises a
-toast: the row keeps showing the pinned revision, so it cannot show the latest
+{- | A pending "Build this revision" clears once the build's status snapshot for
+the revision it requested reaches a terminal state. A failed build also raises a
+toast: the row keeps showing the reviewed revision, so it cannot show the
 build's failure.
 -}
 settlePendingBuild : String -> Int -> Status -> Flow Model ()
@@ -4152,15 +4154,15 @@ settlePendingBuild snapshotCommit stepId status_ =
             case status_ of
                 StatusSuccess ->
                     Just
-                        (Flow.async loadProjectPins
-                            |> Flow.seq (addToast True "Latest revision built. Comparing with the pinned version.")
+                        (Flow.async loadProjectReviews
+                            |> Flow.seq (addToast True "The viewed revision is built. Comparing with the reviewed output.")
                         )
 
                 StatusFailure (Just error) ->
-                    Just (addToast False ("Building the latest revision failed: " ++ error))
+                    Just (addToast False ("Building this revision failed: " ++ error))
 
                 StatusFailure Nothing ->
-                    Just (addToast False "Building the latest revision failed.")
+                    Just (addToast False "Building this revision failed.")
 
                 _ ->
                     Nothing

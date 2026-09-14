@@ -207,7 +207,7 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ note args validationCommitHash lastModifiedAt ->
+        (\id name type_ note args reviewedRevision lastModifiedAt ->
             { id = Just id
             , clientId = Nothing
             , type_ = type_
@@ -216,8 +216,8 @@ stepValueOnly stepType_ =
             , name = name
             , note = note
             , runState = NotAsked
-            , pinVerdict = Maybe.map (always NotAsked) validationCommitHash
-            , pinRevision = validationCommitHash
+            , reviewComparison = Maybe.map (always NotAsked) reviewedRevision
+            , reviewedRevision = reviewedRevision
             , args = args
             , isUpdating = False
             , lastModifiedAt = lastModifiedAt
@@ -237,58 +237,57 @@ stepValueOnly stepType_ =
         |> required "type" Decode.string
         |> optional "note" Decode.string ""
         |> required "args" (stepArgs stepType_)
-        |> optional "validationCommitHash" (maybe Decode.string) Nothing
+        |> optional "reviewedRevision" (maybe Decode.string) Nothing
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
-pinReport : Decoder Model.PinReport
-pinReport =
-    Decode.succeed (\pin status_ error verdict message -> { pin = pin, status = status_, error = error, verdict = verdict, message = message })
-        |> optional "pin" (maybe Decode.string) Nothing
-        |> optional "status" (maybe status) Nothing
-        |> optional "error" (maybe Decode.string) Nothing
-        |> required "verdict" Decode.string
-        |> optional "message" (maybe Decode.string) Nothing
+reviewReport : Decoder Model.ReviewReport
+reviewReport =
+    Decode.succeed (\reviewedRevision reviewedStatus_ reviewedStatusError comparison comparisonDetail -> { reviewedRevision = reviewedRevision, reviewedStatus = reviewedStatus_, reviewedStatusError = reviewedStatusError, comparison = comparison, comparisonDetail = comparisonDetail })
+        |> optional "reviewedRevision" (maybe Decode.string) Nothing
+        |> optional "reviewedStatus" (maybe status) Nothing
+        |> optional "reviewedStatusError" (maybe Decode.string) Nothing
+        |> required "comparison" Decode.string
+        |> optional "comparisonDetail" (maybe Decode.string) Nothing
         |> Decode.andThen
             (\fields ->
                 let
-                    withVerdict verdict_ =
-                        { pin = fields.pin
-                        , status = Maybe.map (\status_ -> applyError status_ fields.error) fields.status
-                        , verdict = verdict_
+                    withComparison comparison_ =
+                        { reviewedRevision = fields.reviewedRevision
+                        , reviewedStatus = Maybe.map (\status_ -> applyError status_ fields.reviewedStatusError) fields.reviewedStatus
+                        , comparison = comparison_
                         }
                 in
-                case fields.verdict of
-                    "unvalidated" ->
-                        Decode.succeed { pin = Nothing, status = Nothing, verdict = Nothing }
+                case fields.comparison of
+                    "no-review" ->
+                        Decode.succeed { reviewedRevision = Nothing, reviewedStatus = Nothing, comparison = Nothing }
 
-                    "current" ->
-                        Decode.succeed (withVerdict (Just (Success Model.PinCurrent)))
+                    "same-out-path" ->
+                        Decode.succeed (withComparison (Just (Success Model.SameOutPath)))
 
-                    "identical" ->
-                        Decode.succeed (withVerdict (Just (Success Model.PinIdentical)))
+                    "same-content" ->
+                        Decode.succeed (withComparison (Just (Success Model.SameContent)))
 
-                    "differ" ->
-                        Decode.succeed (withVerdict (Just (Success Model.PinDiffer)))
+                    "different-content" ->
+                        Decode.succeed (withComparison (Just (Success Model.DifferentContent)))
 
-                    -- The backend calls this "unbuilt": the latest output is not built.
-                    "unbuilt" ->
-                        Decode.succeed (withVerdict (Just (Success Model.PinUpdatable)))
+                    "viewed-output-unbuilt" ->
+                        Decode.succeed (withComparison (Just (Success Model.ViewedOutputUnbuilt)))
 
-                    "missing" ->
-                        Decode.succeed (withVerdict (Just (Success Model.PinMissing)))
+                    "reviewed-output-unbuilt" ->
+                        Decode.succeed (withComparison (Just (Success Model.ReviewedOutputUnbuilt)))
 
-                    "error" ->
-                        Decode.succeed (withVerdict (Just (Error (Http.BadBody (Maybe.withDefault "The pin check failed." fields.message)))))
+                    "unresolvable" ->
+                        Decode.succeed (withComparison (Just (Error (Http.BadBody (Maybe.withDefault "The review check failed." fields.comparisonDetail)))))
 
                     other ->
-                        Decode.fail ("Unknown step pin verdict: " ++ other)
+                        Decode.fail ("Unknown step review comparison: " ++ other)
             )
 
 
-pinReports : Decoder (Dict Int Model.PinReport)
-pinReports =
-    Decode.keyValuePairs pinReport
+reviewReports : Decoder (Dict Int Model.ReviewReport)
+reviewReports =
+    Decode.keyValuePairs reviewReport
         |> Decode.map
             (List.filterMap (\( key, outcome ) -> Maybe.map (\stepId -> ( stepId, outcome )) (String.toInt key))
                 >> Dict.fromList

@@ -19,7 +19,7 @@ import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extrac
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (jsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
-import Handlers.StepValidation (ensureStepUnvalidated, requireStepUnvalidated)
+import Handlers.StepReview (ensureStepUnreviewed, requireStepUnreviewed)
 import OutPaths (scheduleProjectOutPathsWarm, withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), throwError)
 import Servant.Server (err400, err409, err500, errBody)
@@ -56,7 +56,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
     bodyValue <- case eitherDecode jsonBody of
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack $ "Invalid JSON in request body: " ++ err}
         Right v -> return v
-    requireStepUnvalidated stepId
+    requireStepUnreviewed stepId
 
     -- Read-only phase: discover download templates only.
     templates <- liftIO $ withReadRepoTransaction $ \ctx ->
@@ -113,7 +113,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
         let isDownloadW = maybe False (\t -> Set.member t templatesW) mReqType
         when (isDownload /= isDownloadW) $
             throwError "Step kind classification changed; retry"
-        ensureStepUnvalidated ctx stepId
+        ensureStepUnreviewed ctx stepId
 
         -- For download steps: re-read the current step definition and abort
         -- if its URL or hash differs from our preflight read (no network under

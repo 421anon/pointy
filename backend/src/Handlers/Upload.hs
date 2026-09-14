@@ -14,7 +14,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.StepValidation (ensureStepUnvalidated, requireStepUnvalidated)
+import Handlers.StepReview (ensureStepUnreviewed, requireStepUnreviewed)
 import OutPaths (withWriteRepoTransaction)
 import Servant (Handler, err400, err409, errBody, throwError)
 import Servant.Multipart (FileData (fdFileName, fdPayload), MultipartData (files), Tmp)
@@ -31,7 +31,7 @@ uploadHandler :: Int -> MultipartData Tmp -> Handler Text
 uploadHandler stepId multipartData = do
     let uploadedFiles = files multipartData
     when (null uploadedFiles) $ throwError err400{errBody = "No files found"}
-    requireStepUnvalidated stepId
+    requireStepUnreviewed stepId
 
     hash <- liftIO $ withSystemTempDirectory ("upload_" ++ show stepId) $ \tmpDir -> do
         let storeRefDir = tmpDir </> "store-ref"
@@ -59,7 +59,7 @@ uploadHandler stepId multipartData = do
             Right h -> return h
 
     result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
-        ensureStepUnvalidated ctx stepId
+        ensureStepUnreviewed ctx stepId
         updateStepNixFile ctx stepId hash
         commitAndPushChanges ctx $ "Upload files for step " ++ show stepId
     case result of

@@ -15,7 +15,7 @@ module Api.Api exposing
     , fetchFileSeek
     , fetchNotices
     , fetchPresets
-    , fetchProjectPins
+    , fetchProjectReviews
     , fetchProjects
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
@@ -31,14 +31,14 @@ module Api.Api exposing
     , saveSrcFile
     , srcFileDownloadUrl
     , srcFileRawUrl
-    , stepDiffReportUrl
+    , reviewDiffUrl
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
     , unassignRecordFromProject
-    , unpinStep
+    , removeReview
     , uploadFiles
-    , pinStep
+    , reviewStep
     )
 
 import Api.ApiData exposing (ApiData)
@@ -51,7 +51,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, PinVerdict, PinReport)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, ReviewComparison, ReviewReport)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -192,31 +192,30 @@ stepAction action id commit =
             }
 
 
-stepDiffReportUrl : Int -> Maybe String -> String
-stepDiffReportUrl id commit =
-    UrlBuilder.absolute [ "backend", "step-diff-report" ] (idCommitQuery id commit)
+reviewDiffUrl : Int -> Maybe String -> String
+reviewDiffUrl id commit =
+    UrlBuilder.absolute [ "backend", "step-review-diff" ] (idCommitQuery id commit)
 
 
--- The backend's endpoint paths keep their historical "validation" names.
-stepPinUrl : Int -> String
-stepPinUrl id =
-    "/backend/step-validation?id=" ++ String.fromInt id
+stepReviewUrl : Int -> String
+stepReviewUrl id =
+    "/backend/step-review?id=" ++ String.fromInt id
 
 
-fetchProjectPins : Int -> String -> Flow s (Result Http.Error (Dict Int PinReport))
-fetchProjectPins projectId commit =
+fetchProjectReviews : Int -> String -> Flow s (Result Http.Error (Dict Int ReviewReport))
+fetchProjectReviews projectId commit =
     Flow.lift <|
         Http.get
-            { url = UrlBuilder.absolute [ "backend", "project-validation" ] [ UrlBuilder.int "project_id" projectId, UrlBuilder.string "commit" commit ]
-            , expect = Http.expectJson identity Decode.pinReports
+            { url = UrlBuilder.absolute [ "backend", "project-review" ] [ UrlBuilder.int "project_id" projectId, UrlBuilder.string "commit" commit ]
+            , expect = Http.expectJson identity Decode.reviewReports
             }
 
 
-pinStep : Int -> Maybe String -> Flow s (Result Http.Error Bool)
-pinStep id commit =
+reviewStep : Int -> Maybe String -> Flow s (Result Http.Error Bool)
+reviewStep id commit =
     Flow.lift <|
         Http.post
-            { url = appendCommitQuery (stepPinUrl id) commit
+            { url = appendCommitQuery (stepReviewUrl id) commit
             , body = Http.emptyBody
             , expect =
                 Http.expectStringResponse identity
@@ -229,9 +228,9 @@ pinStep id commit =
             }
 
 
-unpinStep : Int -> Flow s (Result Http.Error ())
-unpinStep id =
-    request "DELETE" (stepPinUrl id) Http.emptyBody
+removeReview : Int -> Flow s (Result Http.Error ())
+removeReview id =
+    request "DELETE" (stepReviewUrl id) Http.emptyBody
 
 
 createProject : Presets -> StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)

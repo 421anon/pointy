@@ -15,7 +15,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
-import Handlers.StepValidation (StepValidationReport)
+import Handlers.StepReview (StepReviewReport)
 import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
@@ -363,29 +363,29 @@ type CreateStep =
         :> ReqBody '[RawJSON] DynamicJson
         :> Post '[RawJSON] DynamicJson
 
-type GetProjectValidation =
-    "project-validation"
-        :> Description "Reports how every step in a project at one revision relates to its pinned baseline, together with the pinned revision of each baseline."
+type GetProjectReview =
+    "project-review"
+        :> Description "Reports how every step in a project at one revision compares with its reviewed revision, together with that reviewed revision."
         :> ReqProjectId
         :> QueryParam "commit" Text
-        :> Get '[JSON] (Map String StepValidationReport)
+        :> Get '[JSON] (Map String StepReviewReport)
 
-type ValidateStep =
-    "step-validation"
-        :> Description "Pins a built revision of a step when there is no pin or its output is unchanged. Returns whether the output differs from the pinned baseline."
+type ReviewStep =
+    "step-review"
+        :> Description "Records the viewed revision as a step's reviewed revision when there is no review or its output is unchanged. Returns whether the viewed output differs from the reviewed one."
         :> ReqId
         :> QueryParam "commit" Text
         :> Post '[JSON] Bool
 
-type UnvalidateStep =
-    "step-validation"
-        :> Description "Removes a step's pin."
+type RemoveReview =
+    "step-review"
+        :> Description "Removes a step's review."
         :> ReqId
         :> Delete '[JSON] NoContent
 
-type StepDiffReport =
-    "step-diff-report"
-        :> Description "Serves the diffoscope comparison of a step's live pinned baseline and the requested revision's output (HEAD by default)."
+type ReviewDiff =
+    "step-review-diff"
+        :> Description "Serves the diffoscope comparison of a step's reviewed output and the viewed revision's output (HEAD by default)."
         :> ReqId
         :> QueryParam "commit" Text
         :> Raw
@@ -449,10 +449,10 @@ type API =
         :<|> Autocomplete
         :<|> UpdateStep
         :<|> CreateStep
-        :<|> GetProjectValidation
-        :<|> ValidateStep
-        :<|> UnvalidateStep
-        :<|> StepDiffReport
+        :<|> GetProjectReview
+        :<|> ReviewStep
+        :<|> RemoveReview
+        :<|> ReviewDiff
         :<|> GetNotices
         :<|> RunStep
         :<|> StopStep

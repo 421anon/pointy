@@ -37,7 +37,7 @@ library
     Handlers.Statuses
     Handlers.StatusStream
     Handlers.StepConfig
-    Handlers.StepValidation
+    Handlers.StepReview
     Handlers.Steps
     Handlers.Store
     Handlers.Upload

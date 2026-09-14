@@ -64,7 +64,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
-import Handlers.StepValidation (stepPins)
+import Handlers.StepReview (stepReviewRevisions)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
@@ -467,8 +467,8 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             when (worktreeHead /= candidateHead candidate) $ throwError "candidate_mismatch"
             changesetDiff <- runGitChecked (candidateWorktree candidate) ["diff", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
             changedSteps <- nub . mapMaybe appliedStepId . T.lines <$> runGitChecked (candidateWorktree candidate) ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-            pins <- stepPins (ReadRepoContext repoPath (T.unpack currentTarget)) changedSteps
-            when (any isJust pins) $ throwError "step_validated"
+            reviews <- stepReviewRevisions (ReadRepoContext repoPath (T.unpack currentTarget)) changedSteps
+            when (any isJust reviews) $ throwError "step_reviewed"
             pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile userRepo) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
             case pushResult of
                 (ExitSuccess, _, _) -> do

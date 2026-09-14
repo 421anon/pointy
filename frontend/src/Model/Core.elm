@@ -62,21 +62,21 @@ type alias StepRunState =
     }
 
 
-type PinVerdict
-    = PinCurrent
-    | PinIdentical
-    | PinDiffer
-    | PinUpdatable
-    | PinMissing
+type ReviewComparison
+    = SameOutPath
+    | SameContent
+    | DifferentContent
+    | ViewedOutputUnbuilt
+    | ReviewedOutputUnbuilt
 
 
-{- | A step's pin state: the pinned revision, the build status of that pinned
-output, and the verdict comparing the requested revision to the pin.
+{- | A step's review state: the reviewed revision, the build status of the
+reviewed output, and the comparison of the viewed revision's output with it.
 -}
-type alias PinReport =
-    { pin : Maybe String
-    , status : Maybe Status
-    , verdict : Maybe (ApiData PinVerdict)
+type alias ReviewReport =
+    { reviewedRevision : Maybe String
+    , reviewedStatus : Maybe Status
+    , comparison : Maybe (ApiData ReviewComparison)
     }
 
 
@@ -91,8 +91,8 @@ type alias StepRecord =
         { type_ : String
         , note : String
         , runState : ApiData StepRunState
-        , pinVerdict : Maybe (ApiData PinVerdict)
-        , pinRevision : Maybe String
+        , reviewComparison : Maybe (ApiData ReviewComparison)
+        , reviewedRevision : Maybe String
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
@@ -683,14 +683,15 @@ getCommitHash (Model model) =
     model.commitHash
 
 
-{- | The revision a step is shown at: its pin once pinned, otherwise the
-revision currently being viewed. Pinned steps are frozen at their pin.
+{- | The revision a step is shown at: its reviewed revision once a review is
+recorded, otherwise the revision currently being viewed. Steps under review are
+frozen at their reviewed revision.
 -}
 stepRevision : Model -> StepRecord -> Maybe String
 stepRevision model record =
-    case record.pinRevision of
-        Just pin ->
-            Just pin
+    case record.reviewedRevision of
+        Just reviewedRevision ->
+            Just reviewedRevision
 
         Nothing ->
             viewedRevision model
@@ -757,9 +758,9 @@ getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
 
 
-{- | The revisions of "Build latest" requests in flight, keyed by step id. The
-row keeps showing the pinned revision, so the build is tracked here until its
-status snapshot arrives.
+{- | The revisions of "Build this revision" requests in flight, keyed by step id.
+The row keeps showing the reviewed revision, so the build is tracked here until
+its status snapshot arrives.
 -}
 getPendingBuilds : Model -> Dict Int String
 getPendingBuilds (Model model) =
@@ -1314,7 +1315,7 @@ updateStepRecordTable new old =
                 (\oldRecord ->
                     List.updateIf
                         (\newRecord -> newRecord.id == oldRecord.id)
-                        (\newRecord -> keepPinState oldRecord { newRecord | runState = oldRecord.runState })
+                        (\newRecord -> keepReviewState oldRecord { newRecord | runState = oldRecord.runState })
                 )
 
         mergedRecords =
@@ -1323,11 +1324,11 @@ updateStepRecordTable new old =
     { old | records = mergedRecords }
 
 
-keepPinState : StepRecord -> StepRecord -> StepRecord
-keepPinState oldRecord newRecord =
-    case oldRecord.pinRevision of
+keepReviewState : StepRecord -> StepRecord -> StepRecord
+keepReviewState oldRecord newRecord =
+    case oldRecord.reviewedRevision of
         Just _ ->
-            { newRecord | pinRevision = oldRecord.pinRevision, pinVerdict = oldRecord.pinVerdict }
+            { newRecord | reviewedRevision = oldRecord.reviewedRevision, reviewComparison = oldRecord.reviewComparison }
 
         Nothing ->
             newRecord

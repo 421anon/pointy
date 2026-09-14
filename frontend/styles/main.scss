@@ -1092,19 +1092,19 @@ $delimited-grid-row-height: 28px;
   }
 }
 
-.step-pin {
+.step-review {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-xs);
 }
 
-.pin-toggle {
+.review-toggle {
   position: relative;
   display: inline-flex;
   align-items: center;
 
-  .pin-toggle-modifier {
+  .review-toggle-modifier {
     position: absolute;
     top: -3px;
     right: -4px;
@@ -1115,10 +1115,10 @@ $delimited-grid-row-height: 28px;
   }
 }
 
-.step-pin-chip,
-.step-pin-diff,
-.step-pin-revision,
-.step-pin-build {
+.step-review-chip,
+.step-review-diff,
+.step-review-revision,
+.step-review-build {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2xs);
@@ -1131,24 +1131,24 @@ $delimited-grid-row-height: 28px;
   }
 }
 
-.step-pin-chip {
+.step-review-chip {
   cursor: help;
   padding: 1px var(--spacing-xs);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text-secondary) 5%, transparent);
 
-  &.step-pin-warning > .material-symbols-outlined {
+  &.step-review-warning > .material-symbols-outlined {
     color: var(--state-warning);
   }
 
-  &.step-pin-danger > .material-symbols-outlined {
+  &.step-review-danger > .material-symbols-outlined {
     color: var(--state-danger);
   }
 }
 
-.step-pin-diff,
-.step-pin-revision,
-.step-pin-build {
+.step-review-diff,
+.step-review-revision,
+.step-review-build {
   @include mixins.button-base;
   font-size: 11px;
   min-height: 24px;
@@ -1159,15 +1159,15 @@ $delimited-grid-row-height: 28px;
   padding: 0;
 }
 
-.step-pin-build:disabled {
+.step-review-build:disabled {
   cursor: default;
 }
 
-.step-pin-build-spinner {
+.step-review-build-spinner {
   animation: spin 1s linear infinite;
 }
 
-.step-pin-revision-hash {
+.step-review-revision-hash {
   font-family: monospace;
 }
 

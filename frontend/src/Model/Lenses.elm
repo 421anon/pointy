@@ -541,14 +541,14 @@ runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
 
 
-pinVerdict : Lens ls { a | pinVerdict : b } b x y
-pinVerdict =
-    lens "pinVerdict" .pinVerdict (\t verdict -> { t | pinVerdict = verdict })
+reviewComparison : Lens ls { a | reviewComparison : b } b x y
+reviewComparison =
+    lens "reviewComparison" .reviewComparison (\t comparison -> { t | reviewComparison = comparison })
 
 
-pinRevision : Lens ls { a | pinRevision : b } b x y
-pinRevision =
-    lens "pinRevision" .pinRevision (\t revision -> { t | pinRevision = revision })
+reviewedRevision : Lens ls { a | reviewedRevision : b } b x y
+reviewedRevision =
+    lens "reviewedRevision" .reviewedRevision (\t revision -> { t | reviewedRevision = revision })
 
 
 projectStepRecords : Traversal ProjectRecord StepRecord x y

@@ -6,7 +6,7 @@ import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead)
-import Handlers.StepValidation (ensureStepUnvalidated)
+import Handlers.StepReview (ensureStepUnreviewed)
 import OutPaths (withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), err409, err500, errBody, throwError)
 import System.FilePath ((</>))
@@ -45,7 +45,7 @@ batchAssignRecordsHandler projectId recordIds = do
 unassignRecordHandler :: Int -> Int -> Handler NoContent
 unassignRecordHandler projectId recordId = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
-        ensureStepUnvalidated ctx recordId
+        ensureStepUnreviewed ctx recordId
         updateProjectNixFile ctx projectId (removeRecord recordId)
         commitAndPushChanges ctx $ "Unassign record " ++ show recordId ++ " from project " ++ show projectId
     case result of
