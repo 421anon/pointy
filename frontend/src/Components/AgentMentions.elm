@@ -4,14 +4,13 @@ import Accessors exposing (try)
 import Actions
 import Api.ApiData as ApiData
 import Browser.Dom as Dom
+import Components.Markdown as Markdown
 import Dict
 import Extra.Accessors exposing (by)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, title, type_)
 import Html.Events as Events
-import Markdown.Block as Block
-import Markdown.Inline as Inline exposing (Inline)
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses
 import Model.TableSpec as TableSpec
@@ -150,9 +149,8 @@ mentionRunAction model projectId stepId =
 
 
 toHtml : Resolver -> String -> List (Html (Flow Model ()))
-toHtml resolve body =
-    Block.parse Nothing body
-        |> List.concatMap (Block.defaultHtml Nothing (Just (inlineToHtml resolve)))
+toHtml resolve =
+    Markdown.toHtml (viewText resolve)
 
 
 nameToken : String
@@ -371,22 +369,6 @@ isMention segment =
 
         Plain _ ->
             False
-
-
-inlineToHtml : Resolver -> Inline i -> Html (Flow Model ())
-inlineToHtml resolve inline =
-    case inline of
-        Inline.Link _ _ _ ->
-            Inline.defaultHtml Nothing inline
-
-        Inline.HtmlInline _ _ _ ->
-            Inline.defaultHtml Nothing inline
-
-        Inline.Text text ->
-            viewText resolve text
-
-        _ ->
-            Inline.defaultHtml (Just (inlineToHtml resolve)) inline
 
 
 viewText : Resolver -> String -> Html (Flow Model ())

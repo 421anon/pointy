@@ -1251,6 +1251,20 @@ $form-vertical-gap: var(--spacing-md);
   p {
     margin: 0;
   }
+
+  table {
+    border-collapse: collapse;
+  }
+
+  th,
+  td {
+    padding: 2px var(--spacing-xs);
+    border: 1px solid var(--line-color);
+  }
+
+  th {
+    font-weight: 600;
+  }
 }
 
 .form-intro {

@@ -7,6 +7,7 @@ import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Basics.Extra exposing (flip)
 import Browser.Dom as Dom
 import Components.Combobox as Combobox
+import Components.Markdown as Markdown
 import Components.Select as Select
 import Dict
 import Extra.Accessors exposing (by, where_)
@@ -25,7 +26,6 @@ import Json.Decode.Extra as Decode
 import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
-import Markdown
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
@@ -1231,7 +1231,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 viewFieldNotice notice =
                     Html.div [ class "field-notice", class "field-notice-info" ]
                         [ iconCustom True "info" [ class "field-notice-icon" ]
-                        , Html.div [ class "field-notice-markdown" ] <| Markdown.toHtml Nothing notice.message
+                        , Html.div [ class "field-notice-markdown" ] <| Markdown.plain notice.message
                         ]
 
                 withFieldNotices field =
