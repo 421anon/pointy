@@ -22,7 +22,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, object, withObject,
 import Data.Either (rights)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (isJust, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -48,7 +48,6 @@ import UserRepo (
     WriteRepoContext (..),
     commitAndPushChanges,
     commitContext,
-    runGitIn,
     runNix,
     runNixEvalJsonApplyInRepo,
     userRepoPath,
@@ -123,33 +122,31 @@ getProjectReviewHandler projectId commit = do
         viewed <- maybe (pure context) (commitContext (readRepoPath context)) commit
         stepIds <- projectStepIds viewed projectId
         liveReviews <- stepReviews context stepIds
-        let reviews = Map.union liveReviews (Map.fromList [(stepId, Nothing) | stepId <- stepIds])
-        reviewedOutputs <- reviewedOutPaths (readRepoPath context) (reviewedRevisions reviews)
+        let reviews = liveReviews <> Map.fromList [(stepId, Nothing) | stepId <- stepIds]
+        reviewedOutputs <- reviewedOutPaths (readRepoPath context) reviews
         comparisons <- stepComparisons viewed reviews reviewedOutputs
-        statuses <- reviewedOutputStatuses reviewedOutputs
+        statuses <-
+            mapM
+                (\case
+                    Right outPath -> liftIO (checkStatus outPath)
+                    Left err -> pure ("failure", Just (T.pack err))
+                )
+                reviewedOutputs
         pure $
-            Map.mapKeys show $
-                Map.mapWithKey
-                    (\stepId comparison -> StepReviewReport (Map.findWithDefault Nothing stepId reviews) (Map.lookup stepId statuses) comparison)
-                    comparisons
+            Map.fromList
+                [ (show stepId, StepReviewReport review (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons))
+                | (stepId, review) <- Map.toList reviews
+                ]
     orFail err500 result
-
-reviewedOutputStatuses :: StepOutPaths -> ExceptT String IO (Map Int (Text, Maybe Text))
-reviewedOutputStatuses = mapM $ \case
-    Right outPath -> liftIO (checkStatus outPath)
-    Left err -> pure ("failure", Just (T.pack err))
 
 reviewStepHandler :: Int -> Maybe Text -> ReviewRequest -> Handler Bool
 reviewStepHandler stepId mCommit request = do
-    (by, comments) <- orFail err400 (recordedFields request)
+    let by = T.unwords (T.words (requestedBy request))
+        comments = T.strip (requestedComments request)
+    when (T.null by) $ Servant.throwError err400{errBody = "Name who reviewed the step."}
     repoPath <- liftIO userRepoPath
-    result <- liftIO $ withWriteRepoTransaction $ \context@(WriteRepoContext worktreePath) -> do
-        (code, stdout, stderr) <- liftIO $ runGitIn worktreePath ["rev-parse", "HEAD"]
-        unless (code == ExitSuccess) $ throwError ("Failed to resolve the current commit: " ++ stderr)
-        let headCommit = T.unpack (T.strip (T.pack stdout))
-        viewed <- case mCommit of
-            Nothing -> pure (ReadRepoContext repoPath headCommit)
-            Just commit -> commitContext repoPath commit
+    result <- liftIO $ withWriteRepoTransaction $ \context -> do
+        viewed <- commitContext repoPath (fromMaybe "HEAD" mCommit)
         let revision = T.pack (readCommitHash viewed)
             advance = do
                 setReview context stepId (Just (Review revision by comments))
@@ -157,7 +154,7 @@ reviewStepHandler stepId mCommit request = do
                 pure False
         review <- stepReview context stepId
         let reviews = Map.singleton stepId review
-        reviewedOutputs <- reviewedOutPaths repoPath (reviewedRevisions reviews)
+        reviewedOutputs <- reviewedOutPaths repoPath reviews
         comparison <- Map.findWithDefault NoReview stepId <$> stepComparisons viewed reviews reviewedOutputs
         case comparison of
             DifferentContent -> pure True
@@ -248,25 +245,22 @@ stepComparisons viewed revisions reviewedOutputs
     | otherwise = do
         viewedOutputs <- stepOutPaths viewed (Map.keys reviewed)
         hashes <- storeHashes $ resolved viewedOutputs ++ resolved reviewedOutputs
-        pure $ Map.mapWithKey (comparisonFor viewedOutputs reviewedOutputs hashes) revisions
+        pure $ Map.mapWithKey (comparisonFor viewedOutputs hashes) revisions
   where
     reviewed = Map.mapMaybe id revisions
     resolved = rights . Map.elems
-
-comparisonFor :: StepOutPaths -> StepOutPaths -> Map FilePath Text -> Int -> Maybe Review -> ReviewComparison
-comparisonFor viewedOutputs reviewedOutputs hashes stepId = \case
-    Nothing -> NoReview
-    Just _ -> either (Unresolvable . oneLine) id $ do
-        viewed <- lookupOutPath stepId viewedOutputs
-        reviewed <- lookupOutPath stepId reviewedOutputs
-        pure $ case (Map.lookup reviewed hashes, Map.lookup viewed hashes) of
-            (Nothing, _) -> ReviewedOutputUnbuilt (reviewedOutputUnbuiltDetail stepId reviewed)
-            _ | viewed == reviewed -> SameOutPath
-            (_, Nothing) -> ViewedOutputUnbuilt
-            (reviewedHash, viewedHash)
-                | reviewedHash == viewedHash -> SameContent
-                | otherwise -> DifferentContent
-  where
+    comparisonFor viewedOutputs hashes stepId = \case
+        Nothing -> NoReview
+        Just _ -> either (Unresolvable . oneLine) id $ do
+            viewedPath <- lookupOutPath stepId viewedOutputs
+            reviewedPath <- lookupOutPath stepId reviewedOutputs
+            pure $ case (Map.lookup reviewedPath hashes, Map.lookup viewedPath hashes) of
+                (Nothing, _) -> ReviewedOutputUnbuilt (reviewedOutputUnbuiltDetail stepId reviewedPath)
+                _ | viewedPath == reviewedPath -> SameOutPath
+                (_, Nothing) -> ViewedOutputUnbuilt
+                (reviewedHash, viewedHash)
+                    | reviewedHash == viewedHash -> SameContent
+                    | otherwise -> DifferentContent
     oneLine = T.take 500 . T.unwords . T.words . T.pack
 
 lookupOutPath :: Int -> StepOutPaths -> Either String FilePath
@@ -306,15 +300,12 @@ stepReviews ctx stepIds = do
     pure $ Map.mapMaybe listToMaybe $ Map.fromList $ zip stepIds (looked :: [[Maybe Review]])
   where
     reviewOfExistingStep =
-        "if builtins.hasAttr name steps then [ (let step = steps.${name}; in if step ? reviewedRevision then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
+        "if builtins.hasAttr name steps then [ (let step = steps.${name}; in if (step.reviewedRevision or null) != null then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
 
-reviewedRevisions :: StepReviews -> Map Int Text
-reviewedRevisions = Map.map reviewedRevision . Map.mapMaybe id
-
-reviewedOutPaths :: FilePath -> Map Int Text -> ExceptT String IO StepOutPaths
-reviewedOutPaths repoPath reviewed = Map.unions <$> mapM revisionPaths (Map.toList grouped)
+reviewedOutPaths :: FilePath -> StepReviews -> ExceptT String IO StepOutPaths
+reviewedOutPaths repoPath reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)
   where
-    grouped = Map.fromListWith (++) [(revision, [stepId]) | (stepId, revision) <- Map.toList reviewed]
+    grouped = Map.fromListWith (++) [(reviewedRevision review, [stepId]) | (stepId, Just review) <- Map.toList reviews]
     revisionPaths (revision, stepIds) = do
         result <- liftIO $ runExceptT $ commitContext repoPath revision >>= (`stepOutPaths` stepIds)
         pure $ either (\err -> Map.fromList [(stepId, Left err) | stepId <- stepIds]) id result
@@ -367,13 +358,6 @@ nixString text = "\"" <> T.concatMap escape text <> "\""
         '\r' -> "\\r"
         '\t' -> "\\t"
         character -> T.singleton character
-
-recordedFields :: ReviewRequest -> Either String (Text, Text)
-recordedFields request
-    | T.null by = Left "Name who reviewed the step."
-    | otherwise = Right (by, T.strip (requestedComments request))
-  where
-    by = T.unwords (T.words (requestedBy request))
 
 decodeNix :: (FromJSON a) => String -> String -> ExceptT String IO a
 decodeNix label output =
