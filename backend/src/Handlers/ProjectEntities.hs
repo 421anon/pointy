@@ -8,7 +8,7 @@ import qualified Data.Text as T
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead)
 import Handlers.StepValidation (ensureStepUnvalidated)
 import OutPaths (withWriteRepoTransaction)
-import Servant (Handler, NoContent (..), err500, errBody, throwError)
+import Servant (Handler, NoContent (..), err409, err500, errBody, throwError)
 import System.FilePath ((</>))
 import UserRepo (WriteRepoContext (..), commitAndPushChanges)
 
@@ -49,7 +49,7 @@ unassignRecordHandler projectId recordId = do
         updateProjectNixFile ctx projectId (removeRecord recordId)
         commitAndPushChanges ctx $ "Unassign record " ++ show recordId ++ " from project " ++ show projectId
     case result of
-        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+        Left err -> throwError err409{errBody = TLE.encodeUtf8 (TL.pack err)}
         Right _ -> do
             liftIO $ forkBroadcastProjectStatusAtHead projectId
             return NoContent

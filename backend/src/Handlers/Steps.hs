@@ -22,7 +22,7 @@ import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusF
 import Handlers.StepValidation (ensureStepUnvalidated, requireStepUnvalidated)
 import OutPaths (scheduleProjectOutPathsWarm, withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), throwError)
-import Servant.Server (err400, err500, errBody)
+import Servant.Server (err400, err409, err500, errBody)
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.FilePath (takeBaseName, (</>))
 import System.Process (readProcessWithExitCode)
@@ -149,7 +149,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
         Right _ -> do
             liftIO $ forkBroadcastStatusForStepProjectsAtHead stepId
             return NoContent
-        Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
+        Left err -> throwError $ err409{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 -----------------------------------------------------------------------------
 -- POST /api/steps

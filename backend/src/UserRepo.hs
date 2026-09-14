@@ -242,9 +242,9 @@ message for unknown revisions (a user-supplied URL can carry any hash).
 commitContext :: FilePath -> Text -> ExceptT String IO ReadRepoContext
 commitContext repoPath hash = do
     let commit = T.unpack hash
-    (exitCode, _, _) <- liftIO $ runGitIn repoPath ["cat-file", "-e", "--", commit ++ "^{commit}"]
+    (exitCode, resolved, _) <- liftIO $ runGitIn repoPath ["rev-parse", "--verify", "--end-of-options", commit ++ "^{commit}"]
     when (exitCode /= ExitSuccess) $ throwError ("Commit " ++ commit ++ " is not in the local user repository.")
-    pure $ ReadRepoContext repoPath commit
+    pure $ ReadRepoContext repoPath (T.unpack (T.strip (T.pack resolved)))
 
 {- | Ensure a pinned commit exists in the local bare repository. Fetch only
 when the object is absent so cached project evaluations stay network-free.

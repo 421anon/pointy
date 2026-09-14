@@ -646,9 +646,14 @@ stepStatusBuffer =
     lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
 
 
-pendingBuilds : Lens ls Model (Dict Int (Maybe String)) x y
+pendingBuilds : Lens ls Model (Dict Int String) x y
 pendingBuilds =
     lens ".pendingBuilds" Model.getPendingBuilds (\(Model m) builds -> Model { m | pendingBuilds = builds })
+
+
+openDiff : Lens ls Model (Maybe ( Int, Float )) x y
+openDiff =
+    lens ".openDiff" Model.getOpenDiff (\(Model m) shown -> Model { m | openDiff = shown })
 
 
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y

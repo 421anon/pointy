@@ -385,8 +385,9 @@ type UnvalidateStep =
 
 type StepDiffReport =
     "step-diff-report"
-        :> Description "Serves the diffoscope comparison of a step's pinned and current outputs."
+        :> Description "Serves the diffoscope comparison of a step's live pinned baseline and the requested revision's output (HEAD by default)."
         :> ReqId
+        :> QueryParam "commit" Text
         :> Raw
 
 type GetNotices =

@@ -94,7 +94,7 @@ mutateSrcFile stepId rel verb falseErr action
             when done $ commitAndPushChanges ctx (verb ++ " source file " ++ relPath)
             pure done
         case result of
-            Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+            Left err -> throwError err409{errBody = TLE.encodeUtf8 (TL.pack err)}
             Right True -> pure NoContent
             Right False -> throwError falseErr
   where

@@ -260,7 +260,7 @@ pinReport =
                 in
                 case fields.verdict of
                     "unvalidated" ->
-                        Decode.succeed { pin = fields.pin, status = Nothing, verdict = Nothing }
+                        Decode.succeed { pin = Nothing, status = Nothing, verdict = Nothing }
 
                     "current" ->
                         Decode.succeed (withVerdict (Just (Success Model.PinCurrent)))

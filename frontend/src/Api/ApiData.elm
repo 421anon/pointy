@@ -196,6 +196,19 @@ toLoading apiData =
             Loading Nothing
 
 
+stopLoading : ApiData a -> ApiData a
+stopLoading apiData =
+    case apiData of
+        Loading (Just value) ->
+            Success value
+
+        Loading Nothing ->
+            NotAsked
+
+        _ ->
+            apiData
+
+
 isLoading : ApiData a -> Bool
 isLoading =
     foldVisible False (always True) (always False) (always False)

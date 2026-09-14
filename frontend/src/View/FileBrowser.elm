@@ -1,4 +1,4 @@
-module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
+module View.FileBrowser exposing (viewDirectorySection, viewHtmlFrame, viewSrcFilesSection)
 
 import Accessors exposing (Prism, has, just, prism, snd, try, values)
 import Actions
@@ -30,6 +30,29 @@ import View.Lib exposing (viewLoading)
 type DirContext
     = OutputDir Int String
     | SrcDir Int
+
+
+viewHtmlFrame : { id : String, src : String, zoom : Float -> Flow Model () } -> Html (Flow Model ())
+viewHtmlFrame frame =
+    Html.div [ class "iframe-zoom-wrapper" ]
+        [ Html.node "iframe"
+            [ src frame.src
+            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
+            , class "file-html-viewer"
+            , id frame.id
+            ]
+            []
+        , Html.button
+            [ class "iframe-zoom-btn zoom-in"
+            , Html.Events.stopPropagationOn "click" (Decode.succeed ( frame.zoom 1.16, True ))
+            ]
+            [ icon True "zoom_in" ]
+        , Html.button
+            [ class "iframe-zoom-btn zoom-out"
+            , Html.Events.stopPropagationOn "click" (Decode.succeed ( frame.zoom (1 / 1.16), True ))
+            ]
+            [ icon True "zoom_out" ]
+        ]
 
 
 srcDir : Prism pr DirContext Int x y
@@ -523,31 +546,11 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                     zoomAction factor =
                                         mRecordId
-                                            |> Maybe.map (\recordId -> Actions.zoomHtmlFileBy (fileZoomAt recordId path) iframeId factor)
+                                            |> Maybe.map (\recordId -> Actions.zoomIframeBy (currentProject << success << tables << values << fileZoomAt recordId path) iframeId factor)
                                             |> Maybe.withDefault Flow.none
                                 in
                                 Html.viewMaybe
-                                    (\htmlSrc ->
-                                        Html.div [ class "iframe-zoom-wrapper" ]
-                                            [ Html.node "iframe"
-                                                [ src htmlSrc
-                                                , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
-                                                , class "file-html-viewer"
-                                                , id iframeId
-                                                ]
-                                                []
-                                            , Html.button
-                                                [ class "iframe-zoom-btn zoom-in"
-                                                , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction 1.16, True ))
-                                                ]
-                                                [ icon True "zoom_in" ]
-                                            , Html.button
-                                                [ class "iframe-zoom-btn zoom-out"
-                                                , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction (1 / 1.16), True ))
-                                                ]
-                                                [ icon True "zoom_out" ]
-                                            ]
-                                    )
+                                    (\htmlSrc -> viewHtmlFrame { id = iframeId, src = htmlSrc, zoom = zoomAction })
                                     mHtmlSrc
 
                               else if file.seekable then

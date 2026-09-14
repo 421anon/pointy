@@ -434,7 +434,8 @@ type Model
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict Int ( String, Status )
-        , pendingBuilds : Dict Int (Maybe String)
+        , pendingBuilds : Dict Int String
+        , openDiff : Maybe ( Int, Float )
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
@@ -750,9 +751,14 @@ getStepStatusBuffer (Model model) =
 row keeps showing the pinned revision, so the build is tracked here until its
 status snapshot arrives.
 -}
-getPendingBuilds : Model -> Dict Int (Maybe String)
+getPendingBuilds : Model -> Dict Int String
 getPendingBuilds (Model model) =
     model.pendingBuilds
+
+
+getOpenDiff : Model -> Maybe ( Int, Float )
+getOpenDiff (Model model) =
+    model.openDiff
 
 
 getAutocomplete : Model -> Dict String AutocompleteState
@@ -858,6 +864,7 @@ initialModel key route flags =
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
         , pendingBuilds = Dict.empty
+        , openDiff = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
@@ -1297,28 +1304,23 @@ updateStepRecordTable new old =
                 (\oldRecord ->
                     List.updateIf
                         (\newRecord -> newRecord.id == oldRecord.id)
-                        (\newRecord ->
-                            { newRecord
-                                | runState = oldRecord.runState
-                                , pinVerdict = Maybe.map (always (Maybe.withDefault NotAsked oldRecord.pinVerdict)) newRecord.pinVerdict
-                                , pinRevision =
-                                    -- The pin report carries the baseline pin from
-                                    -- current repository state; a record fetched at an older
-                                    -- revision must not replace it with that revision's pin.
-                                    case oldRecord.pinRevision of
-                                        Just pin ->
-                                            Just pin
-
-                                        Nothing ->
-                                            newRecord.pinRevision
-                            }
-                        )
+                        (\newRecord -> keepPinState oldRecord { newRecord | runState = oldRecord.runState })
                 )
 
         mergedRecords =
             ApiData.update mergeRecords new.records old.records
     in
     { old | records = mergedRecords }
+
+
+keepPinState : StepRecord -> StepRecord -> StepRecord
+keepPinState oldRecord newRecord =
+    case oldRecord.pinRevision of
+        Just _ ->
+            { newRecord | pinRevision = oldRecord.pinRevision, pinVerdict = oldRecord.pinVerdict }
+
+        Nothing ->
+            newRecord
 
 
 updateProjectRecordList : List ProjectRecord -> List ProjectRecord -> List ProjectRecord

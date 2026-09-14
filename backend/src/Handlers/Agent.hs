@@ -149,7 +149,7 @@ throwAgentError err =
                 "empty_session_name" ->
                     err400
                 _ ->
-                    if err `elem` ["session_applied", "session_discarded", "session_archived", "runner_active"]
+                    if err `elem` ["session_applied", "session_discarded", "session_archived", "runner_active", "step_validated"]
                         then
                             err409
                         else

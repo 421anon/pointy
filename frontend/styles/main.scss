@@ -1153,17 +1153,13 @@ $delimited-grid-row-height: 28px;
   min-height: 24px;
   text-decoration: none;
   text-underline-offset: 3px;
-}
-
-.step-pin-build {
   background: none;
   border: none;
   padding: 0;
-  color: var(--text-secondary);
+}
 
-  &:disabled {
-    cursor: default;
-  }
+.step-pin-build:disabled {
+  cursor: default;
 }
 
 .step-pin-build-spinner {

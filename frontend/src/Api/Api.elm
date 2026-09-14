@@ -109,9 +109,9 @@ appendCommitQuery url commit =
             url
 
 
-stepFileQuery : Int -> Maybe String -> List UrlBuilder.QueryParameter
-stepFileQuery stepId commit =
-    UrlBuilder.int "id" stepId
+idCommitQuery : Int -> Maybe String -> List UrlBuilder.QueryParameter
+idCommitQuery id commit =
+    UrlBuilder.int "id" id
         :: (case commit of
                 Just c ->
                     [ UrlBuilder.string "commit" c ]
@@ -124,25 +124,13 @@ stepFileQuery stepId commit =
 stepFileDownloadUrl : Int -> Maybe String -> List String -> String
 stepFileDownloadUrl stepId commit filePath =
     UrlBuilder.absolute [ "backend", "step-files", "download" ]
-        (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
-
-
-srcFileQuery : Int -> Maybe String -> List UrlBuilder.QueryParameter
-srcFileQuery id commit =
-    UrlBuilder.int "id" id
-        :: (case commit of
-                Just c ->
-                    [ UrlBuilder.string "commit" c ]
-
-                Nothing ->
-                    []
-           )
+        (idCommitQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
 
 
 srcFileRawUrl : Int -> Maybe String -> List String -> String
 srcFileRawUrl id commit filePath =
     UrlBuilder.absolute [ "backend", "src-files", "raw" ]
-        (srcFileQuery id commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
+        (idCommitQuery id commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
 
 
 
@@ -154,7 +142,7 @@ stepFileBundleUrl stepId commit filePath =
 srcFileDownloadUrl : Int -> Maybe String -> List String -> String
 srcFileDownloadUrl id commit filePath =
     UrlBuilder.absolute [ "backend", "src-files", "download" ]
-        (srcFileQuery id commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
+        (idCommitQuery id commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
 
 
 stringResponse : (String -> a) -> Http.Response String -> Result Http.Error a
@@ -169,8 +157,12 @@ stringResponse onSuccess response =
         Http.NetworkError_ ->
             Err Http.NetworkError
 
-        Http.BadStatus_ _ body ->
-            Err (Http.BadBody body)
+        Http.BadStatus_ metadata body ->
+            if String.isEmpty (String.trim body) then
+                Err (Http.BadStatus metadata.statusCode)
+
+            else
+                Err (Http.BadBody body)
 
         Http.GoodStatus_ _ body ->
             Ok (onSuccess body)
@@ -184,7 +176,7 @@ request method url body =
             , headers = []
             , url = url
             , body = body
-            , expect = Http.expectWhatever identity
+            , expect = Http.expectStringResponse identity (stringResponse (always ()))
             , timeout = Nothing
             , tracker = Nothing
             }
@@ -200,9 +192,9 @@ stepAction action id commit =
             }
 
 
-stepDiffReportUrl : Int -> String
-stepDiffReportUrl id =
-    "/backend/step-diff-report?id=" ++ String.fromInt id
+stepDiffReportUrl : Int -> Maybe String -> String
+stepDiffReportUrl id commit =
+    UrlBuilder.absolute [ "backend", "step-diff-report" ] (idCommitQuery id commit)
 
 
 -- The backend's endpoint paths keep their historical "validation" names.
@@ -427,7 +419,7 @@ fetchDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int ->
 fetchDirectoryContents itemDecoder stepId commit folderPath =
     Flow.lift <|
         Http.get
-            { url = UrlBuilder.absolute [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
+            { url = UrlBuilder.absolute [ "backend", "step-files" ] (idCommitQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
             }
 
@@ -438,7 +430,7 @@ fetchExtras stepId commit folderPath =
         Http.get
             { url =
                 UrlBuilder.absolute [ "backend", "step-files", "extras" ]
-                    (stepFileQuery stepId commit
+                    (idCommitQuery stepId commit
                         ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ]
                     )
             , expect = Http.expectJson identity (Json.Decode.dict Json.Decode.value)
@@ -460,7 +452,7 @@ fetchFileSeek stepId commit filePath anchor bytes_ =
         Http.get
             { url =
                 UrlBuilder.absolute [ "backend", "step-files", "seek" ]
-                    (stepFileQuery stepId commit
+                    (idCommitQuery stepId commit
                         ++ [ UrlBuilder.string "path" (String.join "/" filePath) ]
                         ++ seekQueryParams anchor bytes_
                     )
@@ -474,7 +466,7 @@ fetchSrcFileSeek recordId commit filePath anchor bytes_ =
         Http.get
             { url =
                 UrlBuilder.absolute [ "backend", "src-files", "seek" ]
-                    (srcFileQuery recordId commit
+                    (idCommitQuery recordId commit
                         ++ [ UrlBuilder.string "path" (String.join "/" filePath) ]
                         ++ seekQueryParams anchor bytes_
                     )
@@ -497,7 +489,7 @@ fetchSrcDirectoryContents itemDecoder id commit folderPath =
         Http.get
             { url =
                 UrlBuilder.absolute [ "backend", "src-files" ]
-                    (srcFileQuery id commit
+                    (idCommitQuery id commit
                         ++ (if List.isEmpty folderPath then
                                 []
 

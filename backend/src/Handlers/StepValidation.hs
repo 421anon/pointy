@@ -5,7 +5,6 @@
 
 module Handlers.StepValidation (
     StepValidationReport (..),
-    ValidationOutcome,
     ensureStepUnvalidated,
     getProjectValidationHandler,
     requireStepUnvalidated,
@@ -16,14 +15,14 @@ module Handlers.StepValidation (
 ) where
 
 import Control.Monad (unless, when)
-import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON, ToJSON (..), eitherDecode, object, (.=))
 import Data.Either (rights)
-import Data.List (find)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (isJust, listToMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -34,12 +33,13 @@ import Handlers.Projects (rewriteNixFile)
 import Handlers.Statuses (checkStatus, forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseFile, responseLBS)
-import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), withWriteRepoTransaction)
+import OutPaths (withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), ServerError (..), Tagged (..), err409, err500)
 import qualified Servant
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
+import System.IO.Temp (withTempDirectory)
 import System.Process (readProcessWithExitCode)
 import UserRepo (
     ReadRepoContext (..),
@@ -50,7 +50,6 @@ import UserRepo (
     runGitIn,
     runNix,
     runNixEvalJsonApplyInRepo,
-    runNixEvalJsonInRepo,
     userRepoPath,
     withReadRepoTransaction,
  )
@@ -63,11 +62,6 @@ data ValidationOutcome
     | Unbuilt
     | MissingBaseline Text
     | CheckFailed Text
-
-instance ToJSON ValidationOutcome where
-    toJSON outcome = object ["verdict" .= verdict, "message" .= message]
-      where
-        (verdict, message) = outcomeFields outcome
 
 outcomeFields :: ValidationOutcome -> (Text, Maybe Text)
 outcomeFields = \case
@@ -114,29 +108,26 @@ getProjectValidationHandler projectId commit = do
         target <- maybe (pure context) (commitContext (readRepoPath context)) commit
         -- The baseline lives in current repository state, not in the requested
         -- revision, so a revision validated now reads back as validated.
-        pins <- stepPins context =<< projectStepIds target projectId
-        outcomes <- stepOutcomes target pins
-        statuses <- baselineStatuses (readRepoPath context) pins
+        stepIds <- projectStepIds target projectId
+        livePins <- stepPins context stepIds
+        let pins = Map.union livePins (Map.fromList [(stepId, Nothing) | stepId <- stepIds])
+        baselines <- baselineOutPaths (readRepoPath context) (Map.mapMaybe id pins)
+        outcomes <- stepOutcomes target pins baselines
+        statuses <- baselineStatuses baselines
         pure $
             Map.mapKeys show $
                 Map.mapWithKey
-                    (\stepId outcome -> StepValidationReport (Map.findWithDefault Nothing stepId pins) (Map.findWithDefault Nothing stepId statuses) outcome)
+                    (\stepId outcome -> StepValidationReport (Map.findWithDefault Nothing stepId pins) (Map.lookup stepId statuses) outcome)
                     outcomes
     orFail err500 result
 
 {- | Build state of each pinned baseline output, so a validated step's row can
 show the pinned revision's status rather than the requested revision's.
 -}
-baselineStatuses :: FilePath -> StepPins -> ExceptT String IO (Map Int (Maybe (Text, Maybe Text)))
-baselineStatuses repoPath pins = do
-    paths <- baselineOutPaths repoPath (Map.mapMaybe id pins)
-    Map.fromList <$> mapM resolve (Map.toList paths)
-  where
-    resolve (stepId, Right outPath) = do
-        status_ <- liftIO (checkStatus outPath)
-        pure (stepId, Just status_)
-
-    resolve (stepId, Left _) = pure (stepId, Nothing)
+baselineStatuses :: StepOutPaths -> ExceptT String IO (Map Int (Text, Maybe Text))
+baselineStatuses = mapM $ \case
+    Right outPath -> liftIO (checkStatus outPath)
+    Left err -> pure ("failure", Just (T.pack err))
 
 validateStepHandler :: Int -> Maybe Text -> Handler Bool
 validateStepHandler stepId mCommit = do
@@ -156,7 +147,9 @@ validateStepHandler stepId mCommit = do
         -- Compare against the baseline in current repository state, so an
         -- explicit revision is checked against what the branch records now.
         pin <- stepPin context stepId
-        outcome <- Map.findWithDefault Unvalidated stepId <$> stepOutcomes target (Map.singleton stepId pin)
+        let pins = Map.singleton stepId pin
+        baselines <- baselineOutPaths repoPath (Map.mapMaybe id pins)
+        outcome <- Map.findWithDefault Unvalidated stepId <$> stepOutcomes target pins baselines
         case outcome of
             Differ -> pure True
             Unvalidated -> do
@@ -185,12 +178,13 @@ unvalidateStepHandler stepId = do
     when unvalidated $ liftIO (forkBroadcastStatusForStepProjectsAtHead stepId)
     pure NoContent
 
-stepDiffReportHandler :: Int -> Tagged Handler Application
-stepDiffReportHandler stepId = Tagged $ \_ respond -> do
+stepDiffReportHandler :: Int -> Maybe Text -> Tagged Handler Application
+stepDiffReportHandler stepId mCommit = Tagged $ \_ respond -> do
     prepared <- withReadRepoTransaction $ \context -> do
+        target <- maybe (pure context) (commitContext (readRepoPath context)) mCommit
         pin <- stepPin context stepId
         baseline <- maybe (throwError "This step is not pinned, so there is no baseline to compare.") (commitContext (readRepoPath context)) pin
-        (,) <$> stepOutPath baseline stepId <*> stepOutPath context stepId
+        (,) <$> stepOutPath baseline stepId <*> stepOutPath target stepId
     report <- runExceptT $ liftEither prepared >>= uncurry (renderReport stepId)
     respond $ either failure success report
   where
@@ -200,7 +194,7 @@ stepDiffReportHandler stepId = Tagged $ \_ respond -> do
         responseFile
             status200
             [ ("Content-Type", "text/html; charset=utf-8")
-            , ("Content-Security-Policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
+            , ("Content-Security-Policy", "sandbox allow-same-origin; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
             , ("X-Content-Type-Options", "nosniff")
             ]
             path
@@ -217,10 +211,10 @@ renderReport stepId baseline current = do
     home <- liftIO getHomeDirectory
     let dir = home </> ".local/state/pointy/diff-reports"
         reportPath = dir </> "step-" ++ show stepId ++ "-" ++ storeHash baseline ++ "-" ++ storeHash current ++ ".html"
-        staging = reportPath ++ ".part"
     liftIO $ createDirectoryIfMissing True dir
     cached <- liftIO $ doesFileExist reportPath
-    unless cached $ do
+    unless cached $ ExceptT $ withTempDirectory dir "report-" $ \stagingDir -> runExceptT $ do
+        let staging = stagingDir </> "report.html"
         (code, _, stderr) <- liftIO $ readProcessWithExitCode "diffoscope" (comparisonArgs staging) ""
         unless (code `elem` [ExitSuccess, inputsDiffer]) $
             throwError ("Output comparison failed: " ++ take 300 (unwords (words stderr)))
@@ -236,15 +230,14 @@ renderReport stepId baseline current = do
             (_, closing) = T.breakOn "</title>" rest
          in before <> "<title>Step " <> T.pack (show stepId) <> " · pinned vs current" <> closing
     comparisonArgs out =
-        words "--jquery disable --no-progress --exclude-directory-metadata yes --timeout 120 --max-report-size 8388608"
+        words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
             ++ ["--html", out, baseline, current]
 
-stepOutcomes :: ReadRepoContext -> StepPins -> ExceptT String IO (Map Int ValidationOutcome)
-stepOutcomes context pins
+stepOutcomes :: ReadRepoContext -> StepPins -> StepOutPaths -> ExceptT String IO (Map Int ValidationOutcome)
+stepOutcomes context pins baselines
     | Map.null pinned = pure $ Unvalidated <$ pins
     | otherwise = do
         currents <- stepOutPaths context (Map.keys pinned)
-        baselines <- baselineOutPaths (readRepoPath context) pinned
         hashes <- storeHashes $ resolved currents ++ resolved baselines
         pure $ Map.mapWithKey (outcomeFor currents baselines hashes) pins
   where
@@ -285,11 +278,12 @@ requireStepUnvalidated stepId =
     liftIO (withReadRepoTransaction (`ensureStepUnvalidated` stepId)) >>= orFail err409
 
 projectStepIds :: ReadRepoContext -> Int -> ExceptT String IO [Int]
-projectStepIds context projectId = do
-    defs <- decodeNix "Failed to decode #pointy.projects" =<< runNixEvalJsonInRepo context "#pointy.projects"
-    case find ((== projectId) . projectDefId) (Map.elems (defs :: Map String ProjectDef)) of
-        Nothing -> throwError $ "Project " ++ show projectId ++ " does not exist."
-        Just project -> pure $ map (stepDefId . stepRefDef) (projectDefSteps project)
+projectStepIds context projectId =
+    decodeNix "Failed to decode project step IDs"
+        =<< runNixEvalJsonApplyInRepo
+            context
+            ("projects: map (step: step.def.id) (projects." ++ show (show projectId) ++ ".steps or (throw \"Project " ++ show projectId ++ " does not exist.\"))")
+            "#pointy.projects"
 
 stepPin :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO (Maybe Text)
 stepPin ctx stepId =
@@ -308,10 +302,9 @@ baselineOutPaths :: FilePath -> Map Int Text -> ExceptT String IO StepOutPaths
 baselineOutPaths repoPath pinned = Map.unions <$> mapM revisionPaths (Map.toList grouped)
   where
     grouped = Map.fromListWith (++) [(pin, [stepId]) | (stepId, pin) <- Map.toList pinned]
-    revisionPaths (pin, stepIds) =
-        liftIO (runExceptT (commitContext repoPath pin)) >>= \case
-            Left err -> pure $ Map.fromList [(stepId, Left err) | stepId <- stepIds]
-            Right context -> stepOutPaths context stepIds
+    revisionPaths (pin, stepIds) = do
+        result <- liftIO $ runExceptT $ commitContext repoPath pin >>= (`stepOutPaths` stepIds)
+        pure $ either (\err -> Map.fromList [(stepId, Left err) | stepId <- stepIds]) id result
 
 stepOutPath :: ReadRepoContext -> Int -> ExceptT String IO FilePath
 stepOutPath context stepId =
@@ -334,7 +327,7 @@ mapStepNames expression stepIds =
 storeHashes :: [FilePath] -> ExceptT String IO (Map FilePath Text)
 storeHashes [] = pure Map.empty
 storeHashes paths = do
-    infos <- decodeNix "Failed to decode Nix path information" =<< runNix (["--offline", "path-info", "--json"] ++ paths)
+    infos <- decodeNix "Failed to decode Nix path information" =<< runNix (["--offline", "path-info", "--json"] ++ Set.toList (Set.fromList paths))
     pure $ Map.mapMaybe (fmap narHash) (infos :: Map FilePath (Maybe PathInfo))
 
 setValidationCommitHash :: WriteRepoContext -> Int -> Maybe Text -> ExceptT String IO ()

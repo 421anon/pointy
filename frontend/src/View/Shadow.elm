@@ -1,6 +1,6 @@
 module View.Shadow exposing (viewProject)
 
-import Accessors exposing (fst, get, has, just, try)
+import Accessors exposing (fst, get, has, just, snd, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData)
@@ -93,17 +93,17 @@ pinChip verdict =
 
 
 {- | A step's pin controls: the pin toggle, plus the chip describing how the
-latest output relates to the pin and the pinned revision it refers to. A step
-with neither a pin toggle nor a pin shows nothing.
+viewed revision's output relates to the pin and the pinned revision it refers
+to. A step with neither a pin toggle nor a pin shows nothing.
 -}
-viewPinControls : Model -> TableSpec StepRecord -> Bool -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
-viewPinControls model spec isReadOnly stepId record =
+viewPinControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
+viewPinControls model spec stepId record =
     let
         indicator =
             record.pinRevision
                 |> Maybe.map
                     (\pin ->
-                        viewPinIndicator model spec isReadOnly stepId (Just pin) (Maybe.withDefault ApiData.NotAsked record.pinVerdict)
+                        viewPinIndicator model spec stepId (Just pin) (Maybe.withDefault ApiData.NotAsked record.pinVerdict)
                     )
                 |> Maybe.withDefault []
 
@@ -122,11 +122,11 @@ viewPinControls model spec isReadOnly stepId record =
                 content
 
 
-{- | The chip describing how the latest output relates to the pin, together
-with the pinned revision and any comparison actions.
+{- | The chip describing how the viewed revision's output relates to the pin,
+together with the pinned revision and any comparison actions.
 -}
-viewPinIndicator : Model -> TableSpec StepRecord -> Bool -> Int -> Maybe String -> ApiData Model.PinVerdict -> List (Html (Flow Model ()))
-viewPinIndicator model spec isReadOnly stepId mPin verdict =
+viewPinIndicator : Model -> TableSpec StepRecord -> Int -> Maybe String -> ApiData Model.PinVerdict -> List (Html (Flow Model ()))
+viewPinIndicator model spec stepId mPin verdict =
     let
         whileChecking chip =
             { chip | explanation = "Checking the latest output. " ++ chip.explanation }
@@ -168,19 +168,56 @@ viewPinIndicator model spec isReadOnly stepId mPin verdict =
                 , Html.text chip.label
                 ]
 
-        viewDiffButton chip =
+        isDiffOpen =
+            Maybe.map Tuple.first (Model.getOpenDiff model) == Just stepId
+
+        diffUrl =
+            Api.stepDiffReportUrl stepId (Model.viewedRevision model)
+
+        viewDiffToggle chip =
+            Html.button
+                [ Html.Attributes.class "step-pin-diff"
+                , Html.Attributes.title (explanation chip)
+                , Html.Attributes.attribute "aria-expanded"
+                    (if isDiffOpen then
+                        "true"
+
+                     else
+                        "false"
+                    )
+                , Html.Attributes.attribute "aria-label"
+                    ((if isDiffOpen then
+                        "Hide the diff. "
+
+                      else
+                        "View the diff. "
+                     )
+                        ++ explanation chip
+                    )
+                , Html.Events.onClick (Actions.toggleDiffPanel stepId)
+                ]
+                [ iconCustom False "difference" [ Html.Attributes.attribute "aria-hidden" "true" ]
+                , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "View diff" ]
+                , iconCustom False
+                    (if isDiffOpen then
+                        "expand_less"
+
+                     else
+                        "expand_more"
+                    )
+                    [ Html.Attributes.attribute "aria-hidden" "true" ]
+                ]
+
+        viewDiffInNewTab =
             Html.a
                 [ Html.Attributes.class "step-pin-diff"
-                , Html.Attributes.title (explanation chip ++ " Opens in a new tab.")
-                , Html.Attributes.attribute "aria-label" ("Updated. " ++ explanation chip ++ " Opens in a new tab.")
-                , Html.Attributes.href (Api.stepDiffReportUrl stepId)
+                , Html.Attributes.title "Open the diff in a new tab"
+                , Html.Attributes.attribute "aria-label" "Open the diff in a new tab"
+                , Html.Attributes.href diffUrl
                 , Html.Attributes.target "_blank"
                 , Html.Attributes.rel "noopener"
                 ]
-                [ iconCustom False "file_copy" [ Html.Attributes.attribute "aria-hidden" "true" ]
-                , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Updated" ]
-                , iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ]
-                ]
+                [ iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
 
         pinnedVersionLink =
             mPin
@@ -192,20 +229,35 @@ viewPinIndicator model spec isReadOnly stepId mPin verdict =
                     )
                 |> Maybe.withDefault Html.nothing
 
-        isDiffer =
-            ApiData.toMaybe verdict == Just Model.PinDiffer
-
-        chipOrDiffButton =
-            if isDiffer && not isReadOnly then
-                Html.viewMaybe viewDiffButton mVerdictChip
+        comparisonControls =
+            if ApiData.toMaybe verdict == Just Model.PinDiffer then
+                mVerdictChip
+                    |> Maybe.unwrap [] (\chip -> [ viewDiffToggle chip, viewDiffInNewTab ])
 
             else
-                Html.viewMaybe viewChip mVerdictChip
+                [ Html.viewMaybe viewChip mVerdictChip ]
     in
-    [ pinnedVersionLink
-    , chipOrDiffButton
-    , Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUpdatable) (viewBuildLatestLink model spec stepId)
-    ]
+    (pinnedVersionLink :: comparisonControls)
+        ++ [ Html.viewIf (ApiData.toMaybe verdict == Just Model.PinUpdatable) (viewBuildLatestLink model spec stepId) ]
+
+
+viewDiffSection : Model -> StepRecord -> Html (Flow Model ())
+viewDiffSection model record =
+    case ( record.id, Maybe.andThen ApiData.toMaybe record.pinVerdict ) of
+        ( Just stepId, Just Model.PinDiffer ) ->
+            Html.viewIf (Maybe.map Tuple.first (Model.getOpenDiff model) == Just stepId) <|
+                let
+                    frameId =
+                        "step-diff-" ++ String.fromInt stepId
+                in
+                FileBrowser.viewHtmlFrame
+                    { id = frameId
+                    , src = Api.stepDiffReportUrl stepId (Model.viewedRevision model)
+                    , zoom = Actions.zoomIframeBy (Lenses.openDiff << just << snd) frameId
+                    }
+
+        _ ->
+            Html.nothing
 
 
 {- | Build the latest revision so its output can be compared with the pinned
@@ -237,7 +289,7 @@ viewBuildLatestLink model spec stepId =
             [ Html.Attributes.class "step-pin-build"
             , Html.Attributes.title titleText
             , Html.Attributes.attribute "aria-label" titleText
-            , Html.Events.onClick (Actions.buildLatest spec stepId (Model.viewedRevision model))
+            , Html.Events.onClick (Actions.buildLatest spec stepId)
             ]
             [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
             , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build latest" ]
@@ -458,7 +510,7 @@ viewSection model sectionName entry steps =
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values
-                    [ r.id |> Maybe.andThen (\stepId -> viewPinControls model spec isReadOnly stepId r)
+                    [ r.id |> Maybe.andThen (\stepId -> viewPinControls model spec stepId r)
                     , r.id
                         |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
                     ]
@@ -547,6 +599,7 @@ viewSection model sectionName entry steps =
                 uploadActions ++ runActions ++ quickCreateActions
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
+        , detailSection = viewDiffSection model
         , onRecordClick =
             \record ->
                 record.id

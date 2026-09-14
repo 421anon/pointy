@@ -31,7 +31,7 @@ import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest
 import Handlers.Projects (ProjectUpdate)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.SrcFiles (UserRepoInfo)
-import Handlers.StepValidation (StepValidationReport, ValidationOutcome)
+import Handlers.StepValidation (StepValidationReport)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
@@ -162,9 +162,6 @@ instance ToSchema AgentGitState
 instance ToSchema AgentSessionView
 instance ToSchema AgentApplyView
 instance ToSchema AgentUsage
-
-instance ToSchema ValidationOutcome where
-    declareNamedSchema _ = pure $ objectSchema "ValidationOutcome" [("verdict", stringField), ("message", stringField)]
 
 instance ToSchema StepValidationReport where
     declareNamedSchema _ =

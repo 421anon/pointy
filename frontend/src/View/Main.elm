@@ -39,6 +39,7 @@ view model =
                         , alwaysVisibleRecordActions = \_ -> []
                         , directorySection = \_ -> Html.nothing
                         , srcFilesSection = \_ -> Html.nothing
+                        , detailSection = \_ -> Html.nothing
                         , onRecordClick = .id >> Maybe.map (\id -> Actions.goToRoute (Route.fromPage (Route.Project { projectId = id, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing })))
                         , isOpen = always False
                         }

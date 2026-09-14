@@ -85,11 +85,12 @@ viewTable :
     , alwaysVisibleRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , directorySection : BaseRecord a -> Html (Flow Model ())
     , srcFilesSection : BaseRecord a -> Html (Flow Model ())
+    , detailSection : BaseRecord a -> Html (Flow Model ())
     , onRecordClick : BaseRecord a -> Maybe (Flow Model ())
     , isOpen : BaseRecord a -> Bool
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen } =
+viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, detailSection, onRecordClick, isOpen } =
     let
         lens =
             TableSpec.getLens spec
@@ -502,6 +503,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 table.edited
                             )
                         , Html.viewIf (TableSpec.getDirectoryView spec record |> Maybe.map .expanded |> Maybe.withDefault False) (directorySection record)
+                        , detailSection record
                         ]
             in
             Html.Keyed.node "div"

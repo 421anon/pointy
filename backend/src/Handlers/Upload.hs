@@ -16,7 +16,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Handlers.StepValidation (ensureStepUnvalidated, requireStepUnvalidated)
 import OutPaths (withWriteRepoTransaction)
-import Servant (Handler, err400, err500, errBody, throwError)
+import Servant (Handler, err400, err409, errBody, throwError)
 import Servant.Multipart (FileData (fdFileName, fdPayload), MultipartData (files), Tmp)
 import System.Directory (createDirectoryIfMissing, renameFile)
 import System.Exit (ExitCode (..))
@@ -63,7 +63,7 @@ uploadHandler stepId multipartData = do
         updateStepNixFile ctx stepId hash
         commitAndPushChanges ctx $ "Upload files for step " ++ show stepId
     case result of
-        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+        Left err -> throwError err409{errBody = TLE.encodeUtf8 (TL.pack err)}
         Right _ -> return $ "Uploaded " <> T.pack (show (length uploadedFiles)) <> " files with hash: " <> hash
 
 extractNarHash :: Value -> Maybe Text
