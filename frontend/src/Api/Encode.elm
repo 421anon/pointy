@@ -4,7 +4,7 @@ import Api.ApiData as ApiData
 import Dict exposing (Dict)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (ProjectRecord, StepRecord, TemplateSource(..))
+import Model.Core exposing (ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..))
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..))
 
 
@@ -130,4 +130,12 @@ projectRecord record =
         , ( "sortKey", Maybe.unwrap Encode.null Encode.int record.sortKey )
         , sourceField
         , ( "steps", Encode.list stepRef steps )
+        ]
+
+
+reviewDraft : ReviewDraft -> Encode.Value
+reviewDraft draft =
+    Encode.object
+        [ ( "reviewedBy", Encode.string draft.reviewedBy )
+        , ( "reviewComments", Encode.string draft.comments )
         ]

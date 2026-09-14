@@ -12,7 +12,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, ReviewDraft, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Time
@@ -561,11 +561,6 @@ stepRecordById stepId =
     projects << records << success << each << projectStepRecords << where_ (.id >> (==) (Just stepId))
 
 
-currentProjectStepRecords : Traversal Model StepRecord x y
-currentProjectStepRecords =
-    currentProject << success << projectStepRecords
-
-
 sortKey : Lens ls { a | sortKey : b } b x y
 sortKey =
     lens ".sortKey" .sortKey (\t sortKey_ -> { t | sortKey = sortKey_ })
@@ -654,6 +649,11 @@ pendingBuilds =
 openDiff : Lens ls Model (Maybe ( Int, Float )) x y
 openDiff =
     lens ".openDiff" Model.getOpenDiff (\(Model m) shown -> Model { m | openDiff = shown })
+
+
+reviewDraft : Lens ls Model (Maybe ReviewDraft) x y
+reviewDraft =
+    lens ".reviewDraft" Model.getReviewDraft (\(Model m) draft -> Model { m | reviewDraft = draft })
 
 
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y

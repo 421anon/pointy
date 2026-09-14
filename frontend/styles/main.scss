@@ -1719,28 +1719,40 @@ select.field-changed,
   appearance: none;
   cursor: pointer;
 }
-.step-log-popover {
+.step-log-popover,
+.step-review-popover {
   margin: 0;
   margin-top: var(--spacing-xs);
   border: 1px solid var(--color-gray-500);
   border-radius: var(--radius-sm);
   padding: 0;
-  width: min(720px, calc(100vw - (2 * var(--spacing-md))));
   max-width: calc(100vw - (2 * var(--spacing-md)));
-  max-height: min(70vh, 640px);
   background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: var(--shadow-elevated);
   overflow: hidden;
 }
-.step-log-popover:popover-open {
+
+.step-log-popover {
+  width: min(720px, calc(100vw - (2 * var(--spacing-md))));
+  max-height: min(70vh, 640px);
+}
+
+.step-review-popover {
+  width: min(340px, calc(100vw - (2 * var(--spacing-md))));
+}
+
+.step-log-popover:popover-open,
+.step-review-popover:popover-open {
   display: flex;
   flex-direction: column;
   position: absolute;
   position-area: bottom span-right;
   position-try-fallbacks: top span-right, bottom span-left, top span-left;
 }
-.step-log-popover-header {
+
+.step-log-popover-header,
+.step-review-popover-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1749,9 +1761,45 @@ select.field-changed,
   border-bottom: 1px solid var(--color-gray-500);
   background: var(--bg-secondary);
 }
+
 .step-log-popover-body {
   padding: var(--spacing-md);
   overflow: auto;
+}
+
+.step-review-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+}
+
+.step-review-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2xs);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.step-review-input,
+.step-review-comments {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--color-gray-500);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-2xs) var(--spacing-xs);
+}
+
+.step-review-comments {
+  resize: vertical;
+}
+
+.step-review-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-xs);
 }
 .step-log-pre {
   --ansi-black: #484f58;

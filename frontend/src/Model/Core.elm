@@ -70,13 +70,19 @@ type ReviewComparison
     | ReviewedOutputUnbuilt
 
 
-{- | A step's review state: the reviewed revision, the build status of the
-reviewed output, and the comparison of the viewed revision's output with it.
--}
 type alias ReviewReport =
     { reviewedRevision : Maybe String
+    , reviewedBy : String
+    , reviewComments : String
     , reviewedStatus : Maybe Status
     , comparison : Maybe (ApiData ReviewComparison)
+    }
+
+
+type alias ReviewDraft =
+    { stepId : Int
+    , reviewedBy : String
+    , comments : String
     }
 
 
@@ -93,6 +99,8 @@ type alias StepRecord =
         , runState : ApiData StepRunState
         , reviewComparison : Maybe (ApiData ReviewComparison)
         , reviewedRevision : Maybe String
+        , reviewedBy : String
+        , reviewComments : String
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
@@ -436,6 +444,7 @@ type Model
         , stepStatusBuffer : Dict Int ( String, Status )
         , pendingBuilds : Dict Int String
         , openDiff : Maybe ( Int, Float )
+        , reviewDraft : Maybe ReviewDraft
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
@@ -683,10 +692,6 @@ getCommitHash (Model model) =
     model.commitHash
 
 
-{- | The revision a step is shown at: its reviewed revision once a review is
-recorded, otherwise the revision currently being viewed. Steps under review are
-frozen at their reviewed revision.
--}
 stepRevision : Model -> StepRecord -> Maybe String
 stepRevision model record =
     case record.reviewedRevision of
@@ -697,9 +702,6 @@ stepRevision model record =
             viewedRevision model
 
 
-{- | The revision the project view is showing, falling back to the checked-out
-commit when no explicit commit is in the route.
--}
 viewedRevision : Model -> Maybe String
 viewedRevision model =
     case (getRoute model).page of
@@ -758,10 +760,6 @@ getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
 
 
-{- | The revisions of "Build this revision" requests in flight, keyed by step id.
-The row keeps showing the reviewed revision, so the build is tracked here until
-its status snapshot arrives.
--}
 getPendingBuilds : Model -> Dict Int String
 getPendingBuilds (Model model) =
     model.pendingBuilds
@@ -876,6 +874,7 @@ initialModel key route flags =
         , stepStatusBuffer = Dict.empty
         , pendingBuilds = Dict.empty
         , openDiff = Nothing
+        , reviewDraft = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
@@ -1328,7 +1327,7 @@ keepReviewState : StepRecord -> StepRecord -> StepRecord
 keepReviewState oldRecord newRecord =
     case oldRecord.reviewedRevision of
         Just _ ->
-            { newRecord | reviewedRevision = oldRecord.reviewedRevision, reviewComparison = oldRecord.reviewComparison }
+            { newRecord | reviewedRevision = oldRecord.reviewedRevision, reviewedBy = oldRecord.reviewedBy, reviewComments = oldRecord.reviewComments, reviewComparison = oldRecord.reviewComparison }
 
         Nothing ->
             newRecord
@@ -1407,6 +1406,11 @@ getRunningStepSummaries (Model model) =
 getModalConfirm : Model -> ModalConfirmConfig
 getModalConfirm (Model model) =
     model.modalConfirm
+
+
+getReviewDraft : Model -> Maybe ReviewDraft
+getReviewDraft (Model model) =
+    model.reviewDraft
 
 
 getSearchBox : Model -> SelectState

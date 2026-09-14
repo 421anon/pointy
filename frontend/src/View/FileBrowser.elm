@@ -76,9 +76,6 @@ srcWritePending model mDirCtx =
         |> Maybe.withDefault False
 
 
-{- | The revision a step's files are browsed at: its reviewed revision once a
-review is recorded, otherwise the revision being viewed.
--}
 recordRevision : Model -> Int -> Maybe String
 recordRevision model recordId =
     try (currentProject << success << tables << values << recordById recordId) model

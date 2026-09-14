@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Handlers.StepReview (
+    ReviewRequest (..),
     StepReviewReport (..),
     ensureStepUnreviewed,
     getProjectReviewHandler,
@@ -11,13 +12,13 @@ module Handlers.StepReview (
     requireStepUnreviewed,
     reviewDiffHandler,
     reviewStepHandler,
-    stepReviewRevisions,
+    stepReviews,
 ) where
 
 import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON, ToJSON (..), eitherDecode, object, (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Either (rights)
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -34,7 +35,7 @@ import Handlers.Statuses (checkStatus, forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseFile, responseLBS)
 import OutPaths (withWriteRepoTransaction)
-import Servant (Handler, NoContent (..), ServerError (..), Tagged (..), err409, err500)
+import Servant (Handler, NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
 import qualified Servant
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Exit (ExitCode (..))
@@ -54,10 +55,6 @@ import UserRepo (
     withReadRepoTransaction,
  )
 
-{- | How the viewed revision's output relates to the revision the review
-records. Path equality is answered first: a review that already names the
-viewed output has nothing to compare, whatever the bytes are.
--}
 data ReviewComparison
     = NoReview
     | SameOutPath
@@ -77,20 +74,34 @@ comparisonFields = \case
     ReviewedOutputUnbuilt detail -> ("reviewed-output-unbuilt", Just detail)
     Unresolvable detail -> ("unresolvable", Just detail)
 
-{- | A step's review comparison together with the revision its review records
-and the build state of that reviewed output, so a reviewed step can be shown as
-it was at the reviewed revision even when the viewed revision differs.
--}
+data Review = Review
+    { reviewedRevision :: Text
+    , reviewedBy :: Text
+    , reviewComments :: Text
+    }
+    deriving (Generic, FromJSON)
+
+data ReviewRequest = ReviewRequest
+    { requestedBy :: Text
+    , requestedComments :: Text
+    }
+
+instance FromJSON ReviewRequest where
+    parseJSON = withObject "ReviewRequest" $ \fields ->
+        ReviewRequest <$> fields .: "reviewedBy" <*> fields .:? "reviewComments" .!= ""
+
 data StepReviewReport = StepReviewReport
-    { reportReviewedRevision :: Maybe Text
+    { reportReview :: Maybe Review
     , reportReviewedStatus :: Maybe (Text, Maybe Text)
     , reportComparison :: ReviewComparison
     }
 
 instance ToJSON StepReviewReport where
-    toJSON (StepReviewReport reviewedRevision mStatus comparison) =
+    toJSON (StepReviewReport mReview mStatus comparison) =
         object
-            [ "reviewedRevision" .= reviewedRevision
+            [ "reviewedRevision" .= fmap reviewedRevision mReview
+            , "reviewedBy" .= fmap reviewedBy mReview
+            , "reviewComments" .= fmap reviewComments mReview
             , "reviewedStatus" .= fmap fst mStatus
             , "reviewedStatusError" .= (mStatus >>= snd)
             , "comparison" .= comparisonText
@@ -99,7 +110,7 @@ instance ToJSON StepReviewReport where
       where
         (comparisonText, detail) = comparisonFields comparison
 
-type StepReviewRevisions = Map Int (Maybe Text)
+type StepReviews = Map Int (Maybe Review)
 
 type StepOutPaths = Map Int (Either String FilePath)
 
@@ -110,12 +121,10 @@ getProjectReviewHandler :: Int -> Maybe Text -> Handler (Map String StepReviewRe
 getProjectReviewHandler projectId commit = do
     result <- liftIO $ withReadRepoTransaction $ \context -> do
         viewed <- maybe (pure context) (commitContext (readRepoPath context)) commit
-        -- The review lives in current repository state, not in the viewed
-        -- revision, so a revision reviewed now reads back as reviewed.
         stepIds <- projectStepIds viewed projectId
-        liveReviews <- stepReviewRevisions context stepIds
+        liveReviews <- stepReviews context stepIds
         let reviews = Map.union liveReviews (Map.fromList [(stepId, Nothing) | stepId <- stepIds])
-        reviewedOutputs <- reviewedOutPaths (readRepoPath context) (Map.mapMaybe id reviews)
+        reviewedOutputs <- reviewedOutPaths (readRepoPath context) (reviewedRevisions reviews)
         comparisons <- stepComparisons viewed reviews reviewedOutputs
         statuses <- reviewedOutputStatuses reviewedOutputs
         pure $
@@ -125,16 +134,14 @@ getProjectReviewHandler projectId commit = do
                     comparisons
     orFail err500 result
 
-{- | Build state of each reviewed output, so a reviewed step's row can show the
-reviewed revision's status rather than the viewed revision's.
--}
 reviewedOutputStatuses :: StepOutPaths -> ExceptT String IO (Map Int (Text, Maybe Text))
 reviewedOutputStatuses = mapM $ \case
     Right outPath -> liftIO (checkStatus outPath)
     Left err -> pure ("failure", Just (T.pack err))
 
-reviewStepHandler :: Int -> Maybe Text -> Handler Bool
-reviewStepHandler stepId mCommit = do
+reviewStepHandler :: Int -> Maybe Text -> ReviewRequest -> Handler Bool
+reviewStepHandler stepId mCommit request = do
+    (by, comments) <- orFail err400 (recordedFields request)
     repoPath <- liftIO userRepoPath
     result <- liftIO $ withWriteRepoTransaction $ \context@(WriteRepoContext worktreePath) -> do
         (code, stdout, stderr) <- liftIO $ runGitIn worktreePath ["rev-parse", "HEAD"]
@@ -145,14 +152,12 @@ reviewStepHandler stepId mCommit = do
             Just commit -> commitContext repoPath commit
         let revision = T.pack (readCommitHash viewed)
             advance = do
-                setReviewedRevision context stepId (Just revision)
-                commitAndPushChanges context $ "review step " ++ show stepId
+                setReview context stepId (Just (Review revision by comments))
+                commitAndPushChanges context $ "review step " ++ show stepId ++ " by " ++ T.unpack by
                 pure False
-        -- Compare against the review in current repository state, so an explicit
-        -- revision is compared with what the branch records now.
-        reviewedRevision <- stepReviewRevision context stepId
-        let reviews = Map.singleton stepId reviewedRevision
-        reviewedOutputs <- reviewedOutPaths repoPath (Map.mapMaybe id reviews)
+        review <- stepReview context stepId
+        let reviews = Map.singleton stepId review
+        reviewedOutputs <- reviewedOutPaths repoPath (reviewedRevisions reviews)
         comparison <- Map.findWithDefault NoReview stepId <$> stepComparisons viewed reviews reviewedOutputs
         case comparison of
             DifferentContent -> pure True
@@ -173,9 +178,9 @@ reviewStepHandler stepId mCommit = do
 removeReviewHandler :: Int -> Handler NoContent
 removeReviewHandler stepId = do
     result <- liftIO $ withWriteRepoTransaction $ \context -> do
-        reviewed <- any isJust <$> stepReviewRevisions context [stepId]
+        reviewed <- any isJust <$> stepReviews context [stepId]
         when reviewed $ do
-            setReviewedRevision context stepId Nothing
+            setReview context stepId Nothing
             commitAndPushChanges context $ "remove review of step " ++ show stepId
         pure reviewed
     removed <- orFail err409 result
@@ -186,8 +191,8 @@ reviewDiffHandler :: Int -> Maybe Text -> Tagged Handler Application
 reviewDiffHandler stepId mCommit = Tagged $ \_ respond -> do
     prepared <- withReadRepoTransaction $ \context -> do
         viewed <- maybe (pure context) (commitContext (readRepoPath context)) mCommit
-        reviewedRevision <- stepReviewRevision context stepId
-        reviewed <- maybe (throwError "This step has no review, so there is nothing to compare it with.") (commitContext (readRepoPath context)) reviewedRevision
+        review <- stepReview context stepId
+        reviewed <- maybe (throwError "This step has no review, so there is nothing to compare it with.") (commitContext (readRepoPath context) . reviewedRevision) review
         (,) <$> stepOutPath reviewed stepId <*> stepOutPath viewed stepId
     report <- runExceptT $ liftEither prepared >>= uncurry (renderReport stepId)
     respond $ either failure success report
@@ -237,7 +242,7 @@ renderReport stepId reviewed viewed = do
         words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
             ++ ["--html", out, reviewed, viewed]
 
-stepComparisons :: ReadRepoContext -> StepReviewRevisions -> StepOutPaths -> ExceptT String IO (Map Int ReviewComparison)
+stepComparisons :: ReadRepoContext -> StepReviews -> StepOutPaths -> ExceptT String IO (Map Int ReviewComparison)
 stepComparisons viewed revisions reviewedOutputs
     | Map.null reviewed = pure $ NoReview <$ revisions
     | otherwise = do
@@ -248,7 +253,7 @@ stepComparisons viewed revisions reviewedOutputs
     reviewed = Map.mapMaybe id revisions
     resolved = rights . Map.elems
 
-comparisonFor :: StepOutPaths -> StepOutPaths -> Map FilePath Text -> Int -> Maybe Text -> ReviewComparison
+comparisonFor :: StepOutPaths -> StepOutPaths -> Map FilePath Text -> Int -> Maybe Review -> ReviewComparison
 comparisonFor viewedOutputs reviewedOutputs hashes stepId = \case
     Nothing -> NoReview
     Just _ -> either (Unresolvable . oneLine) id $ do
@@ -273,7 +278,7 @@ reviewedOutputUnbuiltDetail stepId outPath =
 
 ensureStepUnreviewed :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO ()
 ensureStepUnreviewed ctx stepId = do
-    reviews <- stepReviewRevisions ctx [stepId]
+    reviews <- stepReviews ctx [stepId]
     when (any isJust reviews) $
         throwError "Reviewed steps cannot be edited. Remove the review first."
 
@@ -289,18 +294,22 @@ projectStepIds context projectId =
             ("projects: map (step: step.def.id) (projects." ++ show (show projectId) ++ ".steps or (throw \"Project " ++ show projectId ++ " does not exist.\"))")
             "#pointy.projects"
 
-stepReviewRevision :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO (Maybe Text)
-stepReviewRevision ctx stepId =
-    stepReviewRevisions ctx [stepId]
+stepReview :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO (Maybe Review)
+stepReview ctx stepId =
+    stepReviews ctx [stepId]
         >>= maybe (throwError ("Step " ++ show stepId ++ " does not exist.")) pure . Map.lookup stepId
 
-stepReviewRevisions :: (RepoContext ctx) => ctx -> [Int] -> ExceptT String IO StepReviewRevisions
-stepReviewRevisions _ [] = pure Map.empty
-stepReviewRevisions ctx stepIds = do
-    looked <- decodeNix "Failed to decode reviewed revisions" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames reviewedRevisionOfExistingStep stepIds) "#pointy.stepDefs"
-    pure $ Map.mapMaybe listToMaybe $ Map.fromList $ zip stepIds (looked :: [[Maybe Text]])
+stepReviews :: (RepoContext ctx) => ctx -> [Int] -> ExceptT String IO StepReviews
+stepReviews _ [] = pure Map.empty
+stepReviews ctx stepIds = do
+    looked <- decodeNix "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames reviewOfExistingStep stepIds) "#pointy.stepDefs"
+    pure $ Map.mapMaybe listToMaybe $ Map.fromList $ zip stepIds (looked :: [[Maybe Review]])
   where
-    reviewedRevisionOfExistingStep = "if builtins.hasAttr name steps then [ (steps.${name}.reviewedRevision or null) ] else []"
+    reviewOfExistingStep =
+        "if builtins.hasAttr name steps then [ (let step = steps.${name}; in if step ? reviewedRevision then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
+
+reviewedRevisions :: StepReviews -> Map Int Text
+reviewedRevisions = Map.map reviewedRevision . Map.mapMaybe id
 
 reviewedOutPaths :: FilePath -> Map Int Text -> ExceptT String IO StepOutPaths
 reviewedOutPaths repoPath reviewed = Map.unions <$> mapM revisionPaths (Map.toList grouped)
@@ -334,11 +343,37 @@ storeHashes paths = do
     infos <- decodeNix "Failed to decode Nix path information" =<< runNix (["--offline", "path-info", "--json"] ++ Set.toList (Set.fromList paths))
     pure $ Map.mapMaybe (fmap narHash) (infos :: Map FilePath (Maybe PathInfo))
 
-setReviewedRevision :: WriteRepoContext -> Int -> Maybe Text -> ExceptT String IO ()
-setReviewedRevision (WriteRepoContext worktreePath) stepId revision =
-    rewriteNixFile (worktreePath </> "steps" </> show stepId ++ ".nix") $ case revision of
-        Just hash -> "orig // { reviewedRevision = \"" <> hash <> "\"; }"
-        Nothing -> "builtins.removeAttrs orig [ \"reviewedRevision\" ]"
+setReview :: WriteRepoContext -> Int -> Maybe Review -> ExceptT String IO ()
+setReview (WriteRepoContext worktreePath) stepId mReview =
+    rewriteNixFile (worktreePath </> "steps" </> show stepId ++ ".nix") $ case mReview of
+        Just review ->
+            "orig // { reviewedRevision = "
+                <> nixString (reviewedRevision review)
+                <> "; reviewedBy = "
+                <> nixString (reviewedBy review)
+                <> "; reviewComments = "
+                <> nixString (reviewComments review)
+                <> "; }"
+        Nothing -> "builtins.removeAttrs orig [ \"reviewedRevision\" \"reviewedBy\" \"reviewComments\" ]"
+
+nixString :: Text -> Text
+nixString text = "\"" <> T.concatMap escape text <> "\""
+  where
+    escape = \case
+        '\\' -> "\\\\"
+        '"' -> "\\\""
+        '$' -> "\\$"
+        '\n' -> "\\n"
+        '\r' -> "\\r"
+        '\t' -> "\\t"
+        character -> T.singleton character
+
+recordedFields :: ReviewRequest -> Either String (Text, Text)
+recordedFields request
+    | T.null by = Left "Name who reviewed the step."
+    | otherwise = Right (by, T.strip (requestedComments request))
+  where
+    by = T.unwords (T.words (requestedBy request))
 
 decodeNix :: (FromJSON a) => String -> String -> ExceptT String IO a
 decodeNix label output =

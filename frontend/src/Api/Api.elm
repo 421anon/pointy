@@ -51,7 +51,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, ReviewComparison, ReviewReport)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, ReviewDraft, ReviewReport)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -211,12 +211,12 @@ fetchProjectReviews projectId commit =
             }
 
 
-reviewStep : Int -> Maybe String -> Flow s (Result Http.Error Bool)
-reviewStep id commit =
+reviewStep : ReviewDraft -> Maybe String -> Flow s (Result Http.Error Bool)
+reviewStep draft commit =
     Flow.lift <|
         Http.post
-            { url = appendCommitQuery (stepReviewUrl id) commit
-            , body = Http.emptyBody
+            { url = appendCommitQuery (stepReviewUrl draft.stepId) commit
+            , body = Http.jsonBody (Encode.reviewDraft draft)
             , expect =
                 Http.expectStringResponse identity
                     (stringResponse identity

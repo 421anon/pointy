@@ -209,11 +209,6 @@ stopLoading apiData =
             apiData
 
 
-isLoading : ApiData a -> Bool
-isLoading =
-    foldVisible False (always True) (always False) (always False)
-
-
 reloading : Prism pr (ApiData a) a x y
 reloading =
     prism ">Loading(Just)"

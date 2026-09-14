@@ -486,7 +486,7 @@ applyReviewReport : String -> StepRecord -> Model.ReviewReport -> StepRecord
 applyReviewReport commit_ record report =
     let
         withReview =
-            set reviewComparison report.comparison (set reviewedRevision report.reviewedRevision record)
+            set reviewComparison report.comparison (set reviewedRevision report.reviewedRevision { record | reviewedBy = report.reviewedBy, reviewComments = report.reviewComments })
     in
     case ( report.reviewedRevision, record.reviewedRevision ) of
         ( Just reviewedRevision, _ ) ->
@@ -499,9 +499,6 @@ applyReviewReport commit_ record report =
             withReview
 
 
-{- | A reviewed step is shown at its reviewed revision, so its run state carries
-the reviewed commit and the reviewed output's build status.
--}
 reviewedRunState : String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
 reviewedRunState reviewedRevision mStatus runState_ =
     let
@@ -516,7 +513,6 @@ reviewedRunState reviewedRevision mStatus runState_ =
         Just current ->
             if current.commit == reviewedRevision then
                 if current.status == Loading (Just Model.StatusRunning) && mStatus /= Just Model.StatusRunning then
-                    -- A local run is pending; a stale report must not clear it.
                     Success current
 
                 else
@@ -534,10 +530,6 @@ refreshReviews =
     refetchCommitHash |> Flow.seq (Flow.async loadProjectReviews)
 
 
-{- | Run a step-scoped action once, unless one of its records is already
-updating. The same step definition can be used by several projects, so the
-action must not run once per project.
--}
 whenStepIdle : Int -> Flow Model () -> Flow Model ()
 whenStepIdle stepId io =
     Flow.get
@@ -560,15 +552,13 @@ settleReview stepId mComparison mReviewedRevision message result =
                 |> Flow.seq (Flow.setAll (stepRecordById stepId << reviewedRevision) mReviewedRevision)
                 |> Flow.seq (Flow.when (mReviewedRevision == Nothing) (resetRunStateToViewed stepId))
                 |> Flow.seq refreshReviews
+                |> Flow.seq (Flow.setAll reviewDraft Nothing)
                 |> Flow.seq (Flow.async (addToast True message))
 
         Err err ->
             Flow.async (addToast False (Http.errorMessage err))
 
 
-{- | A step without a review is no longer frozen, so its run state returns to
-the revision being viewed.
--}
 resetRunStateToViewed : Int -> Flow Model ()
 resetRunStateToViewed stepId =
     Flow.get
@@ -583,23 +573,25 @@ resetRunStateToViewed stepId =
             )
 
 
-reviewStep : Int -> Flow Model ()
-reviewStep stepId =
+reviewStep : Model.ReviewDraft -> Flow Model ()
+reviewStep draft =
     Flow.get
         |> Flow.andThen
             (\model ->
                 let
-                    -- The backend records the revision it is asked for: the
-                    -- browsed revision, or the checked-out commit when the
-                    -- review is recorded.
                     mCommit_ =
                         try (route << Route.page << Route.project << mCommit << just) model
                 in
-                whenStepIdle stepId
-                    (Api.reviewStep stepId mCommit_
-                        |> Flow.andThen (settleReview stepId (Just NotAsked) (Model.viewedRevision model) "Step reviewed.")
+                whenStepIdle draft.stepId
+                    (Api.reviewStep draft mCommit_
+                        |> Flow.andThen (settleReview draft.stepId (Just NotAsked) (Model.viewedRevision model) "Step reviewed.")
                     )
             )
+
+
+setReviewDraft : Model.ReviewDraft -> Flow Model ()
+setReviewDraft draft =
+    Flow.setAll reviewDraft (Just draft)
 
 
 toggleDiffPanel : Int -> Flow Model ()
@@ -1125,27 +1117,6 @@ loadStepLog id =
 
 runStep : StepSpec -> Int -> Flow Model ()
 runStep spec id =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                let
-                    table =
-                        TableSpec.getLens spec
-
-                    revision =
-                        try (remkT table << recordById id) model
-                            |> Maybe.andThen (Model.stepRevision model)
-                in
-                runStepAt spec id revision
-            )
-
-
-{- | Run a step at an explicit revision. Reviewed steps run at their reviewed
-revision; building the viewed revision to compare against the reviewed output
-uses 'viewedRevision'.
--}
-runStepAt : StepSpec -> Int -> Maybe String -> Flow Model ()
-runStepAt spec id revision =
     let
         table =
             TableSpec.getLens spec
@@ -1156,6 +1127,11 @@ runStepAt spec id revision =
     Flow.get
         |> Flow.andThen
             (\model ->
+                let
+                    revision =
+                        try (remkT table << recordById id) model
+                            |> Maybe.andThen (Model.stepRevision model)
+                in
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
                     |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
@@ -1180,10 +1156,6 @@ runStepAt spec id revision =
             (\_ -> setStatus (Success (StatusFailure Nothing)))
 
 
-{- | Build the viewed revision of a reviewed step so its output can be compared
-with the reviewed output. The row keeps showing the reviewed revision, so the
-build reports its own outcome once its pending entry settles.
--}
 buildViewedRevision : StepSpec -> Int -> Flow Model ()
 buildViewedRevision spec id =
     let
@@ -4111,10 +4083,6 @@ updateStepStatus snapshotCommit stepId newStatus =
                 && (try (stepRunState << success << status) model |> Maybe.andThen ApiData.toMaybe)
                 == Just StatusRunning
 
-        -- A snapshot describes a step only when it is for the revision that
-        -- step is shown at: its reviewed revision when reviewed, otherwise the
-        -- viewed revision. Snapshots at reviewed revisions must not leak into
-        -- steps that are not reviewed there.
         describesStep model =
             case try (stepRecordById stepId) model of
                 Just record ->
@@ -4142,11 +4110,6 @@ updateStepStatus snapshotCommit stepId newStatus =
             )
 
 
-{- | A pending "Build this revision" clears once the build's status snapshot for
-the revision it requested reaches a terminal state. A failed build also raises a
-toast: the row keeps showing the reviewed revision, so it cannot show the
-build's failure.
--}
 settlePendingBuild : String -> Int -> Status -> Flow Model ()
 settlePendingBuild snapshotCommit stepId status_ =
     let

@@ -22,7 +22,7 @@ import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewInlineIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 
 viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
@@ -68,11 +68,6 @@ type alias ComparisonChip =
     }
 
 
-{- | The chip describing how the viewed revision's output relates to the reviewed
-output. A matching out path and a missing reviewed output add no chip: a match
-needs no comparison, and a missing reviewed output is already visible as the
-output's status.
--}
 comparisonChip : Model.ReviewComparison -> Maybe ComparisonChip
 comparisonChip comparison =
     case comparison of
@@ -92,11 +87,6 @@ comparisonChip comparison =
             Nothing
 
 
-{- | A step's review controls: the review toggle, plus the chip describing how
-the viewed revision's output relates to the reviewed output and the reviewed
-revision it refers to. A step with neither a review toggle nor a review shows
-nothing.
--}
 viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
 viewReviewControls model spec stepId record =
     let
@@ -109,7 +99,7 @@ viewReviewControls model spec stepId record =
                 |> Maybe.withDefault []
 
         content =
-            viewReviewActions spec record ++ indicator
+            viewReviewPopover model spec stepId record ++ indicator
     in
     if List.isEmpty content then
         Nothing
@@ -123,9 +113,6 @@ viewReviewControls model spec stepId record =
                 content
 
 
-{- | The chip describing how the viewed revision's output relates to the reviewed
-output, together with the reviewed revision and any comparison actions.
--}
 viewReviewIndicator : Model -> TableSpec StepRecord -> Int -> Maybe String -> ApiData Model.ReviewComparison -> List (Html (Flow Model ()))
 viewReviewIndicator model spec stepId mReviewedRevision comparison =
     let
@@ -261,9 +248,6 @@ viewDiffSection model record =
             Html.nothing
 
 
-{- | Build the viewed revision so its output can be compared with the reviewed
-output. The row itself stays at the reviewed revision.
--}
 viewBuildViewedLink : Model -> TableSpec StepRecord -> Int -> Html (Flow Model ())
 viewBuildViewedLink model spec stepId =
     if Dict.member stepId (Model.getPendingBuilds model) then
@@ -302,9 +286,6 @@ shortRevision =
     String.left 7
 
 
-{- | The reviewed revision is the repository at that revision, browsed
-read-only like any other past commit, with the reviewed step revealed.
--}
 viewReviewedRevisionLink : Int -> String -> Int -> Html (Flow Model ())
 viewReviewedRevisionLink stepId reviewedRevision projectId =
     let
@@ -348,43 +329,129 @@ viewReviewedRevisionLink stepId reviewedRevision projectId =
         ]
 
 
-{- | Review controls, shown next to the step id. A step can be reviewed once its
-output is built; an existing review can advance when the viewed output still
-matches it.
--}
-viewReviewActions : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewReviewActions spec r =
-    case ( r.id, r.isUpdating ) of
-        ( Just stepId, False ) ->
-            case r.reviewComparison of
+viewReviewPopover : Model -> TableSpec StepRecord -> Int -> StepRecord -> List (Html (Flow Model ()))
+viewReviewPopover model spec stepId record =
+    let
+        isReviewed =
+            record.reviewedRevision /= Nothing
+
+        isBuilt =
+            ApiData.toMaybe (TableSpec.getStatus spec record) == Just Model.StatusSuccess
+
+        canRecord =
+            case record.reviewComparison of
                 Nothing ->
-                    [ Html.viewIf (ApiData.toMaybe (TableSpec.getStatus spec r) == Just Model.StatusSuccess) <|
-                        viewInlineIconButtonWithTooltip "fact_check" False "Review step" (Actions.reviewStep stepId)
-                    ]
+                    isBuilt
 
                 Just comparison ->
-                    [ Html.viewIf (ApiData.toMaybe comparison == Just Model.SameContent) <|
-                        viewInlineIconButtonWithTooltip "published_with_changes" True "Update review" (Actions.reviewStep stepId)
-                    , viewReviewToggle stepId
+                    ApiData.toMaybe comparison == Just Model.SameContent
+
+        draft =
+            Model.getReviewDraft model
+                |> Maybe.filter (.stepId >> (==) stepId)
+                |> Maybe.withDefault { stepId = stepId, reviewedBy = record.reviewedBy, comments = record.reviewComments }
+
+        popoverId =
+            "step-review-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt stepId
+
+        title =
+            if isReviewed then
+                "Review of step " ++ String.fromInt stepId
+
+            else
+                "Review step"
+
+        trigger =
+            Html.span [ Html.Attributes.class "review-toggle" ]
+                [ Html.button
+                    [ Html.Attributes.class "icon-btn icon-btn-inline"
+                    , Html.Attributes.title title
+                    , Html.Attributes.attribute "aria-label" title
+                    , Html.Attributes.attribute "popovertarget" popoverId
+                    , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
                     ]
+                    [ iconCustom isReviewed "fact_check" []
+                    , Html.span [ Html.Attributes.class "icon-btn-text" ] [ Html.text title ]
+                    ]
+                , Html.viewIf isReviewed <|
+                    iconCustom True
+                        "verified"
+                        [ Html.Attributes.class "review-toggle-modifier"
+                        , Html.Attributes.attribute "aria-hidden" "true"
+                        ]
+                ]
 
-        _ ->
-            []
+        field labelText control =
+            Html.label [ Html.Attributes.class "step-review-field" ]
+                [ Html.span [] [ Html.text labelText ]
+                , control
+                ]
 
+        popover =
+            Html.div
+                [ Html.Attributes.class "step-review-popover"
+                , Html.Attributes.id popoverId
+                , Html.Attributes.attribute "popover" "auto"
+                , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
+                ]
+                [ Html.div [ Html.Attributes.class "step-review-popover-header" ]
+                    [ Html.strong [] [ Html.text title ]
+                    , Html.button
+                        [ Html.Attributes.class "icon-btn"
+                        , Html.Attributes.title "Close"
+                        , Html.Events.onClick (Actions.hidePopover popoverId)
+                        ]
+                        [ iconCustom True "close" [] ]
+                    ]
+                , Html.div [ Html.Attributes.class "step-review-popover-body" ]
+                    [ field "Reviewed by" <|
+                        Html.input
+                            [ Html.Attributes.class "step-review-input"
+                            , Html.Attributes.type_ "text"
+                            , Html.Attributes.value draft.reviewedBy
+                            , Html.Attributes.readonly (not canRecord)
+                            , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | reviewedBy = value })
+                            ]
+                            []
+                    , field "Comments" <|
+                        Html.textarea
+                            [ Html.Attributes.class "step-review-comments"
+                            , Html.Attributes.rows 4
+                            , Html.Attributes.value draft.comments
+                            , Html.Attributes.readonly (not canRecord)
+                            , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | comments = value })
+                            ]
+                            []
+                    , Html.div [ Html.Attributes.class "step-review-popover-actions" ]
+                        [ Html.viewIf canRecord <|
+                            Html.button
+                                [ Html.Attributes.class "btn"
+                                , Html.Attributes.disabled (String.trim draft.reviewedBy == "")
+                                , Html.Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.reviewStep draft))
+                                ]
+                                [ Html.text
+                                    (if isReviewed then
+                                        "Update review"
 
-{- | The review toggle of a reviewed step, marked with a verified modifier so a
-reviewed row shows its review at a glance.
--}
-viewReviewToggle : Int -> Html (Flow Model ())
-viewReviewToggle stepId =
-    Html.span [ Html.Attributes.class "review-toggle" ]
-        [ viewInlineIconButtonWithTooltip "fact_check" True "Remove review" (Actions.removeReview stepId)
-        , iconCustom True
-            "verified"
-            [ Html.Attributes.class "review-toggle-modifier"
-            , Html.Attributes.attribute "aria-hidden" "true"
-            ]
-        ]
+                                     else
+                                        "Review step"
+                                    )
+                                ]
+                        , Html.viewIf isReviewed <|
+                            Html.button
+                                [ Html.Attributes.class "btn"
+                                , Html.Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.removeReview stepId))
+                                ]
+                                [ Html.text "Remove review" ]
+                        ]
+                    ]
+                ]
+    in
+    if record.isUpdating || not (isReviewed || isBuilt) then
+        []
+
+    else
+        [ trigger, popover ]
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())

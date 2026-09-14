@@ -236,9 +236,6 @@ cloneRepoFresh cfg = do
         Right () -> putStrLn "User repo cloned successfully"
         Left err -> error err
 
-{- | Resolve a commit that exists in the local repository, failing with a clear
-message for unknown revisions (a user-supplied URL can carry any hash).
--}
 commitContext :: FilePath -> Text -> ExceptT String IO ReadRepoContext
 commitContext repoPath hash = do
     let commit = T.unpack hash

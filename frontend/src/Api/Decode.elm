@@ -218,6 +218,8 @@ stepValueOnly stepType_ =
             , runState = NotAsked
             , reviewComparison = Maybe.map (always NotAsked) reviewedRevision
             , reviewedRevision = reviewedRevision
+            , reviewedBy = ""
+            , reviewComments = ""
             , args = args
             , isUpdating = False
             , lastModifiedAt = lastModifiedAt
@@ -243,8 +245,10 @@ stepValueOnly stepType_ =
 
 reviewReport : Decoder Model.ReviewReport
 reviewReport =
-    Decode.succeed (\reviewedRevision reviewedStatus_ reviewedStatusError comparison comparisonDetail -> { reviewedRevision = reviewedRevision, reviewedStatus = reviewedStatus_, reviewedStatusError = reviewedStatusError, comparison = comparison, comparisonDetail = comparisonDetail })
+    Decode.succeed (\reviewedRevision reviewedBy reviewComments reviewedStatus_ reviewedStatusError comparison comparisonDetail -> { reviewedRevision = reviewedRevision, reviewedBy = reviewedBy, reviewComments = reviewComments, reviewedStatus = reviewedStatus_, reviewedStatusError = reviewedStatusError, comparison = comparison, comparisonDetail = comparisonDetail })
         |> optional "reviewedRevision" (maybe Decode.string) Nothing
+        |> optional "reviewedBy" Decode.string ""
+        |> optional "reviewComments" Decode.string ""
         |> optional "reviewedStatus" (maybe status) Nothing
         |> optional "reviewedStatusError" (maybe Decode.string) Nothing
         |> required "comparison" Decode.string
@@ -254,13 +258,15 @@ reviewReport =
                 let
                     withComparison comparison_ =
                         { reviewedRevision = fields.reviewedRevision
+                        , reviewedBy = fields.reviewedBy
+                        , reviewComments = fields.reviewComments
                         , reviewedStatus = Maybe.map (\status_ -> applyError status_ fields.reviewedStatusError) fields.reviewedStatus
                         , comparison = comparison_
                         }
                 in
                 case fields.comparison of
                     "no-review" ->
-                        Decode.succeed { reviewedRevision = Nothing, reviewedStatus = Nothing, comparison = Nothing }
+                        Decode.succeed { reviewedRevision = Nothing, reviewedBy = "", reviewComments = "", reviewedStatus = Nothing, comparison = Nothing }
 
                     "same-out-path" ->
                         Decode.succeed (withComparison (Just (Success Model.SameOutPath)))

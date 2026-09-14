@@ -15,7 +15,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
-import Handlers.StepReview (StepReviewReport)
+import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
@@ -372,9 +372,10 @@ type GetProjectReview =
 
 type ReviewStep =
     "step-review"
-        :> Description "Records the viewed revision as a step's reviewed revision when there is no review or its output is unchanged. Returns whether the viewed output differs from the reviewed one."
+        :> Description "Records the viewed revision as a step's reviewed revision, together with who reviewed it and their comments, when there is no review or its output is unchanged. Returns whether the viewed output differs from the reviewed one."
         :> ReqId
         :> QueryParam "commit" Text
+        :> ReqBody '[JSON] ReviewRequest
         :> Post '[JSON] Bool
 
 type RemoveReview =

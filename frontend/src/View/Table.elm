@@ -1,4 +1,4 @@
-module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewInlineIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 import Accessors exposing (all, each, just, key, lens, over, set, try)
 import Actions
@@ -163,8 +163,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
               { shouldShow = \record -> TableSpec.getStatus spec record == Success StatusSuccess
               , render = \record -> Html.viewMaybe (dirButton (isOpen record) []) record.id
               }
-            , -- Edit button (inspect on read-only routes)
-              { shouldShow = \record -> record.id /= Nothing && (isReadOnly || editable record)
+            , { shouldShow = \record -> record.id /= Nothing && (isReadOnly || editable record)
               , render =
                     \record ->
                         if isReadOnly then
@@ -2292,22 +2291,6 @@ viewIconButtonWithTooltip iconName filled tooltip action =
     Html.button
         [ Events.onClick action
         , class "icon-btn"
-        , title tooltip
-        , attribute "aria-label" tooltip
-        ]
-        [ icon filled iconName
-        , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
-        ]
-
-
-{- | Compact icon button for the record name area. The click must not reach the
-row's open-output handler, so it stops propagating.
--}
-viewInlineIconButtonWithTooltip : String -> Bool -> String -> Flow Model () -> Html (Flow Model ())
-viewInlineIconButtonWithTooltip iconName filled tooltip action =
-    Html.button
-        [ Events.stopPropagationOn "click" (Decode.succeed ( action, True ))
-        , class "icon-btn icon-btn-inline"
         , title tooltip
         , attribute "aria-label" tooltip
         ]
