@@ -185,7 +185,7 @@ renderReport stepId reviewed viewed = do
         unless (code `elem` [ExitSuccess, ExitFailure 1]) $
             throwError ("Output comparison failed: " ++ take 300 (unwords (words stderr)))
         liftIO $ do
-            TIO.readFile staging >>= TIO.writeFile staging . retitle
+            TIO.readFile staging >>= TIO.writeFile staging . relabel . retitle
             renameFile staging reportPath
     pure reportPath
   where
@@ -194,6 +194,8 @@ renderReport stepId reviewed viewed = do
         let (before, rest) = T.breakOn "<title>" html
             (_, closing) = T.breakOn "</title>" rest
          in before <> "<title>Step " <> T.pack (show stepId) <> " · reviewed vs viewed" <> closing
+    relabel = source reviewed "reviewed" . source viewed "viewed"
+    source path name = T.replace ("class=\"source\">" <> T.pack path) ("class=\"source\">" <> name)
     comparisonArgs out =
         words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
             ++ ["--html", out, reviewed, viewed]
