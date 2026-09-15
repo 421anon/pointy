@@ -1,6 +1,6 @@
 module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
-import Accessors exposing (all, each, just, key, lens, over, set, try)
+import Accessors exposing (all, each, has, just, key, lens, over, set, try)
 import Actions
 import Ansi.Log as AnsiLog
 import Api.ApiData as ApiData exposing (ApiData(..), success)
@@ -28,7 +28,7 @@ import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
-import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
+import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, recordId, records, route, selectExistingSteps, tables, templatesSelect)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tBoolValue, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
@@ -38,17 +38,51 @@ import Time.Distance
 import View.Icons exposing (icon, iconCustom)
 
 
+isSuccessStatus : ApiData Status -> Bool
+isSuccessStatus status =
+    case status of
+        Success StatusSuccess ->
+            True
+
+        _ ->
+            False
+
+
+sortBySortKey : List (BaseRecord a) -> List (BaseRecord a)
+sortBySortKey =
+    List.map (\record -> ( getSortKey record, record ))
+        >> List.sortBy Tuple.first
+        >> List.map Tuple.second
+
+
 viewStatusCountBadge : TableSpec (BaseRecord a) -> List (BaseRecord a) -> Html msg
 viewStatusCountBadge spec allRecords =
     let
         statusOf r =
             TableSpec.getStatus spec r |> ApiData.toMaybe
 
+        statusCounts =
+            List.foldl countStatus { running = 0, done = 0, failed = 0 } allRecords
+
+        countStatus record counts =
+            case statusOf record of
+                Just Model.StatusRunning ->
+                    { counts | running = counts.running + 1 }
+
+                Just Model.StatusSuccess ->
+                    { counts | done = counts.done + 1 }
+
+                Just Model.StatusNotStarted ->
+                    counts
+
+                Just _ ->
+                    { counts | failed = counts.failed + 1 }
+
+                Nothing ->
+                    counts
+
         totalCount =
             List.length allRecords
-
-        count pred =
-            List.count (statusOf >> pred) allRecords
 
         format ( n, label ) =
             if n > 0 then
@@ -58,9 +92,9 @@ viewStatusCountBadge spec allRecords =
                 Nothing
 
         statusDetails =
-            [ ( count ((==) (Just Model.StatusRunning)), "running" )
-            , ( count ((==) (Just Model.StatusSuccess)), "done" )
-            , ( count (Maybe.unwrap False (\s -> s /= Model.StatusNotStarted && s /= Model.StatusRunning && s /= Model.StatusSuccess)), "failed" )
+            [ ( statusCounts.running, "running" )
+            , ( statusCounts.done, "done" )
+            , ( statusCounts.failed, "failed" )
             ]
                 |> List.filterMap format
                 |> String.join " · "
@@ -113,6 +147,15 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
         isReadOnly =
             Model.isReadOnlyRoute model
 
+        isProjectsTag =
+            TableSpec.getTag spec == TagProjects
+
+        hasHiddenRecords =
+            has (records << ApiData.success << where_ (List.any .hidden)) table
+
+        now =
+            Model.getNow model
+
         tableActionBtn action className content =
             Html.button
                 [ Events.onClick action
@@ -124,10 +167,11 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
         mProjectId =
             try currentProjectId model
 
+        mEditedId =
+            try (edited << just << recordId << just) table
+
         recordIsEditing record =
-            Maybe.unwrap False
-                (\editedRecord -> editedRecord.id == record.id && record.id /= Nothing)
-                table.edited
+            Maybe.map2 (==) mEditedId record.id |> Maybe.withDefault False
 
         sourceFilesNeedLoading record =
             case Maybe.map .children (TableSpec.getSrcFilesView spec record) of
@@ -156,10 +200,10 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
 
         recordActions =
             [ -- Directory button
-              { shouldShow = \record -> TableSpec.getStatus spec record == Success StatusSuccess
+              { shouldShow = isSuccessStatus << TableSpec.getStatus spec
               , render = \record -> Html.viewMaybe (dirButton (isOpen record) []) record.id
               }
-            , { shouldShow = \record -> record.id /= Nothing
+            , { shouldShow = Maybe.isJust << .id
               , render =
                     \record ->
                         if isReadOnly then
@@ -169,7 +213,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             viewIconButtonWithTooltip "edit" True "Edit" (toggleRecordEditor record)
               }
             , -- Share button (shareable only)
-              { shouldShow = \record -> TableSpec.getShareable spec record && record.id /= Nothing
+              { shouldShow = \record -> TableSpec.getShareable spec record && Maybe.isJust record.id
               , render =
                     \record ->
                         viewIconButtonWithTooltip
@@ -183,7 +227,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             )
               }
             , -- Visibility toggle button
-              { shouldShow = \record -> not isReadOnly && record.id /= Nothing
+              { shouldShow = \record -> not isReadOnly && Maybe.isJust record.id
               , render =
                     \record ->
                         viewIconButtonWithTooltip
@@ -214,8 +258,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 False
                         in
                         not isReadOnly
-                            && record.id
-                            /= Nothing
+                            && Maybe.isJust record.id
                             && (not (TableSpec.getShareable spec record) || not hasDependentInProject)
               , render = \record -> Html.viewMaybe (viewIconButtonWithTooltip "delete" False "Remove" << Actions.removeRecord spec) record.id
               }
@@ -397,6 +440,12 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         actionsContainerClass =
                             "table-record-actions-container"
 
+                        recordStatus =
+                            TableSpec.getStatus spec record
+
+                        validationErrors =
+                            TableSpec.getValidationErrors spec record
+
                         mtimeBadge =
                             Html.viewMaybe
                                 (\posix ->
@@ -409,7 +458,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         , attribute "datetime" iso
                                         , title ("Last modified: " ++ iso)
                                         ]
-                                        [ Html.text (Time.Distance.inWords posix (Model.getNow model)) ]
+                                        [ Html.text (Time.Distance.inWords posix now) ]
                                 )
                                 record.lastModifiedAt
                     in
@@ -420,10 +469,10 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                              , classList
                                 [ ( "hidden", record.hidden )
                                 , ( "highlighted", isHighlighted )
-                                , ( "no-status", TableSpec.getTag spec == TagProjects && List.isEmpty (TableSpec.getValidationErrors spec record) )
+                                , ( "no-status", isProjectsTag && List.isEmpty validationErrors )
                                 ]
                              ]
-                                ++ (if record.id /= Nothing && (TableSpec.getTag spec == TagProjects || TableSpec.getStatus spec record == Success StatusSuccess) then
+                                ++ (if Maybe.isJust record.id && (isProjectsTag || isSuccessStatus recordStatus) then
                                         Maybe.unwrap []
                                             (\action ->
                                                 [ Events.on "click" (Decode.field "target" (Decode.whenNotInside actionsContainerClass action))
@@ -436,14 +485,13 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         []
                                    )
                             )
-                            [ case TableSpec.getValidationErrors spec record of
+                            [ case validationErrors of
                                 [] ->
-                                    case TableSpec.getTag spec of
-                                        TagProjects ->
-                                            Html.nothing
+                                    if isProjectsTag then
+                                        Html.nothing
 
-                                        _ ->
-                                            viewStatusApiData (TableSpec.getStatus spec record)
+                                    else
+                                        viewStatusApiData recordStatus
 
                                 errors ->
                                     Html.span
@@ -563,7 +611,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         identity
 
                                     else
-                                        List.sortBy getSortKey
+                                        sortBySortKey
                                    )
                                 |> List.indexedMap viewRecord
                                 |> Html.div [ class "table-records", Events.onMouseDown (Flow.modify (set (lens << dndAffected) [])) ]
@@ -592,7 +640,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         , ApiData.unwrap Html.nothing (viewStatusCountBadge spec) table.records
                         ]
                     , Html.div [ class "table-header-controls" ]
-                        [ Html.viewIf (not isReadOnly && ApiData.unwrap False (List.any .hidden) table.records) <|
+                        [ Html.viewIf (not isReadOnly && hasHiddenRecords) <|
                             tableActionBtn (Actions.toggleShowHiddenRecords lens)
                                 "btn"
                                 [ Html.text
@@ -603,7 +651,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         "Show Hidden"
                                     )
                                 ]
-                        , Html.viewIf (not isReadOnly && ApiData.unwrap False (List.any .hidden) table.records) <|
+                        , Html.viewIf (not isReadOnly && hasHiddenRecords) <|
                             tableActionBtn
                                 (ApiData.unwrap (Flow.pure ())
                                     (Flow.batchM << List.map (Actions.toggleRecordVisibility spec mProjectId (Just False)))

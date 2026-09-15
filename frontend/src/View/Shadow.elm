@@ -4,6 +4,7 @@ import Accessors exposing (fst, get, has, just, try)
 import Actions
 import Api.ApiData as ApiData
 import Dict
+import Extra.Accessors exposing (orElseT, where_)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
@@ -170,6 +171,39 @@ viewSection model sectionName entry steps =
         stepConfig_ =
             try (Lenses.stepConfig << ApiData.success) model
                 |> Maybe.unwrap [] Dict.toList
+
+        rendersRecords =
+            get Lenses.isOpen steps
+                && has (Lenses.records << orElseT ApiData.success ApiData.reloading << where_ (not << List.isEmpty)) steps
+
+        quickCreateCandidates =
+            if isReadOnly || not rendersRecords then
+                []
+
+            else
+                stepConfig_
+                    |> List.filter (\( targetType, _ ) -> has (Lenses.currentTableOf targetType) model)
+                    |> List.concatMap
+                        (\( targetType, targetEntry ) ->
+                            let
+                                targetSpec =
+                                    Specs.steps targetType targetEntry
+
+                                label =
+                                    "Create " ++ TableSpec.getDisplayName targetSpec
+                            in
+                            try (derivation << fst) targetEntry.stepType
+                                |> Maybe.unwrap [] Dict.toList
+                                |> List.map
+                                    (\( argName, arg ) ->
+                                        { icon = targetEntry.icon
+                                        , label = label
+                                        , targetSpec = targetSpec
+                                        , argName = argName
+                                        , argType = arg.type_
+                                        }
+                                    )
+                        )
     in
     viewTable
         { model = model
@@ -245,31 +279,15 @@ viewSection model sectionName entry steps =
                                 Nothing
 
                     quickCreateActions =
-                        if isReadOnly then
-                            []
-
-                        else
-                            stepConfig_
-                                |> List.filter (\( targetType, _ ) -> has (Lenses.currentTableOf targetType) model)
-                                |> List.concatMap
-                                    (\( targetType, targetEntry ) ->
-                                        let
-                                            targetSpec =
-                                                Specs.steps targetType targetEntry
-                                        in
-                                        try (derivation << fst) targetEntry.stepType
-                                            |> Maybe.unwrap [] Dict.toList
-                                            |> List.filterMap
-                                                (\( argName, arg ) ->
-                                                    prefill arg.type_
-                                                        |> Maybe.map
-                                                            (\value ->
-                                                                viewQuickCreateButton targetEntry.icon
-                                                                    ("Create " ++ TableSpec.getDisplayName targetSpec)
-                                                                    (Actions.addStepWithArg targetSpec argName value)
-                                                            )
-                                                )
-                                    )
+                        quickCreateCandidates
+                            |> List.filterMap
+                                (\candidate ->
+                                    prefill candidate.argType
+                                        |> Maybe.map
+                                            (viewQuickCreateButton candidate.icon candidate.label
+                                                << Actions.addStepWithArg candidate.targetSpec candidate.argName
+                                            )
+                                )
                 in
                 uploadActions ++ runActions ++ quickCreateActions
         , directorySection = FileBrowser.viewDirectorySection model spec
