@@ -21,6 +21,7 @@ module UserRepo (
     withWriteRepoTransactionRaw,
     withUserRepoExclusive,
     commitAndPushChanges,
+    commitContext,
     fetchRepo,
     fetchRepoStrict,
     ensureRepoCommit,
@@ -30,7 +31,7 @@ import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
 import Control.Monad (when)
-import Control.Monad.Except (ExceptT (..), runExceptT)
+import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -234,6 +235,13 @@ cloneRepoFresh cfg = do
     case res of
         Right () -> putStrLn "User repo cloned successfully"
         Left err -> error err
+
+commitContext :: FilePath -> Text -> ExceptT String IO ReadRepoContext
+commitContext repoPath hash = do
+    let commit = T.unpack hash
+    (exitCode, resolved, _) <- liftIO $ runGitIn repoPath ["rev-parse", "--verify", "--end-of-options", commit ++ "^{commit}"]
+    when (exitCode /= ExitSuccess) $ throwError ("Commit " ++ commit ++ " is not in the local user repository.")
+    pure $ ReadRepoContext repoPath (T.unpack (T.strip (T.pack resolved)))
 
 {- | Ensure a pinned commit exists in the local bare repository. Fetch only
 when the object is absent so cached project evaluations stay network-free.

@@ -62,6 +62,35 @@ type alias StepRunState =
     }
 
 
+type ReviewComparison
+    = SameOutPath
+    | SameContent
+    | DifferentContent
+    | ViewedOutputUnbuilt
+    | ReviewedOutputUnbuilt
+
+
+type alias Review =
+    { revision : String
+    , reviewedBy : String
+    , comments : String
+    , comparison : ApiData ReviewComparison
+    }
+
+
+type alias ReviewReport =
+    { review : Maybe Review
+    , reviewedStatus : Maybe Status
+    }
+
+
+type alias ReviewDraft =
+    { stepId : Int
+    , reviewedBy : String
+    , comments : String
+    }
+
+
 type alias SrcFileDraft =
     { name : String
     , content : String
@@ -73,6 +102,7 @@ type alias StepRecord =
         { type_ : String
         , note : String
         , runState : ApiData StepRunState
+        , review : Maybe Review
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
@@ -414,6 +444,9 @@ type Model
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict Int ( String, Status )
+        , pendingBuilds : Dict Int String
+        , openDiff : Maybe ( Int, Float )
+        , reviewDraft : Maybe ReviewDraft
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
         , gutterDrag : Maybe GutterDrag
@@ -471,7 +504,7 @@ type alias CompareSelection =
 
 type CompareSource
     = FromOutput String
-    | FromSrc
+    | FromSrc (Maybe String)
 
 
 type CompareMode
@@ -666,6 +699,21 @@ getCommitHash (Model model) =
     model.commitHash
 
 
+stepRevision : Model -> StepRecord -> Maybe String
+stepRevision model record =
+    Maybe.orElse (viewedRevision model) (Maybe.map .revision record.review)
+
+
+viewedRevision : Model -> Maybe String
+viewedRevision model =
+    case (getRoute model).page of
+        Route.Project { mCommit } ->
+            Maybe.orElse (ApiData.toMaybe (getCommitHash model)) mCommit
+
+        _ ->
+            ApiData.toMaybe (getCommitHash model)
+
+
 getUserRepoInfo : Model -> ApiData UserRepoInfo
 getUserRepoInfo (Model model) =
     model.userRepoInfo
@@ -707,6 +755,16 @@ getStepStatusHooks (Model model) =
 getStepStatusBuffer : Model -> Dict Int ( String, Status )
 getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
+
+
+getPendingBuilds : Model -> Dict Int String
+getPendingBuilds (Model model) =
+    model.pendingBuilds
+
+
+getOpenDiff : Model -> Maybe ( Int, Float )
+getOpenDiff (Model model) =
+    model.openDiff
 
 
 getAutocomplete : Model -> Dict String AutocompleteState
@@ -811,6 +869,9 @@ initialModel key route flags =
         , uploadProgress = Dict.empty
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
+        , pendingBuilds = Dict.empty
+        , openDiff = Nothing
+        , reviewDraft = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , gutterDrag = Nothing
@@ -1250,7 +1311,7 @@ updateStepRecordTable new old =
                 (\oldRecord ->
                     List.updateIf
                         (\newRecord -> newRecord.id == oldRecord.id)
-                        (\newRecord -> { newRecord | runState = oldRecord.runState })
+                        (\newRecord -> { newRecord | runState = oldRecord.runState, review = Maybe.orElse newRecord.review oldRecord.review })
                 )
 
         mergedRecords =
@@ -1332,6 +1393,11 @@ getRunningStepSummaries (Model model) =
 getModalConfirm : Model -> ModalConfirmConfig
 getModalConfirm (Model model) =
     model.modalConfirm
+
+
+getReviewDraft : Model -> Maybe ReviewDraft
+getReviewDraft (Model model) =
+    model.reviewDraft
 
 
 getSearchBox : Model -> SelectState

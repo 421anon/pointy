@@ -399,15 +399,17 @@ compareTargetFromQuery mRef mCommit mMimeType =
             let
                 mimeType =
                     Maybe.andThen nonEmpty mMimeType
+
+                commit =
+                    Maybe.andThen nonEmpty mCommit
             in
             case ref.target of
                 Output ->
-                    mCommit
-                        |> Maybe.andThen nonEmpty
-                        |> Maybe.map (\commit -> { id = ref.id, target = ref.target, path = ref.path, commit = Just commit, mimeType = mimeType })
+                    commit
+                        |> Maybe.map (\commit_ -> { id = ref.id, target = ref.target, path = ref.path, commit = Just commit_, mimeType = mimeType })
 
                 Source ->
-                    Just { id = ref.id, target = ref.target, path = ref.path, commit = Nothing, mimeType = mimeType }
+                    Just { id = ref.id, target = ref.target, path = ref.path, commit = commit, mimeType = mimeType }
 
         Nothing ->
             Nothing

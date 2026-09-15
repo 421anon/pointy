@@ -17,13 +17,14 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import Handlers.Store (DirEntry, FileChunk, downloadHandler, fromRawBase, listHandler, parseSeekOffset, seekHandler)
+import Handlers.StepReview (ensureStepUnreviewed)
 import OutPaths (withWriteRepoTransaction)
 import Network.Wai (Application)
 import Servant (Handler, Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, (</>))
-import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNixEvalRawInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, commitContext, runNixEvalRawInRepo, withReadRepoTransaction)
 
 data UserRepoInfo = UserRepoInfo
     { url :: Text
@@ -37,46 +38,47 @@ getUserRepoInfoHandler = do
     let userRepo = configUserRepo cfg
     return $ UserRepoInfo (userRepoUrl userRepo) (userRepoBranch userRepo)
 
-getSrcFilesBasePath :: Handler Text
-getSrcFilesBasePath = do
+getSrcFilesBasePath :: Maybe Text -> Handler Text
+getSrcFilesBasePath mCommit = do
     result <- liftIO $ withReadRepoTransaction $ \ctx -> do
-        output <- runNixEvalRawInRepo ctx "#pointy.srcFiles"
+        target <- maybe (pure ctx) (\commit -> commitContext (readRepoPath ctx) commit) mCommit
+        output <- runNixEvalRawInRepo target "#pointy.srcFiles"
         return $ T.strip (T.pack output)
     case result of
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}
         Right path -> return path
 
-getStepSrcFilesPath :: Int -> Handler FilePath
-getStepSrcFilesPath stepId = do
-    basePath <- getSrcFilesBasePath
+getStepSrcFilesPath :: Maybe Text -> Int -> Handler FilePath
+getStepSrcFilesPath mCommit stepId = do
+    basePath <- getSrcFilesBasePath mCommit
     return (T.unpack basePath </> show stepId)
 
-listSrcFilesHandler :: Int -> Maybe FilePath -> Handler [DirEntry]
-listSrcFilesHandler stepId mRel = do
-    fullBasePath <- getStepSrcFilesPath stepId
+listSrcFilesHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler [DirEntry]
+listSrcFilesHandler stepId mCommit mRel = do
+    fullBasePath <- getStepSrcFilesPath mCommit stepId
     exists <- liftIO $ doesDirectoryExist fullBasePath
     if exists
         then listHandler (T.pack fullBasePath) mRel
         else return []
 
-downloadSrcFilesHandler :: Int -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
-downloadSrcFilesHandler stepId rel = do
-    fullBasePath <- getStepSrcFilesPath stepId
+downloadSrcFilesHandler :: Int -> Maybe Text -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
+downloadSrcFilesHandler stepId mCommit rel = do
+    fullBasePath <- getStepSrcFilesPath mCommit stepId
     downloadHandler (T.pack fullBasePath) rel
 
 
 -- | Serves a source file inline (no download disposition) so HTML and other
 -- renderable sources can be shown in preview iframes.
-srcRawHandler :: Int -> FilePath -> Tagged Handler Application
-srcRawHandler stepId rel =
-    fromRawBase (getStepSrcFilesPath stepId) (splitDirectories rel)
+srcRawHandler :: Int -> Maybe Text -> FilePath -> Tagged Handler Application
+srcRawHandler stepId mCommit rel =
+    fromRawBase (getStepSrcFilesPath mCommit stepId) (splitDirectories rel)
 
 
 
-seekSrcFilesHandler :: Int -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
-seekSrcFilesHandler stepId rel line byteOffset bytes = do
+seekSrcFilesHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
+seekSrcFilesHandler stepId mCommit rel line byteOffset bytes = do
     offset <- parseSeekOffset line byteOffset bytes
-    fullBasePath <- getStepSrcFilesPath stepId
+    fullBasePath <- getStepSrcFilesPath mCommit stepId
     seekHandler (T.pack fullBasePath) rel offset bytes
 
 
@@ -87,11 +89,12 @@ mutateSrcFile stepId rel verb falseErr action
         throwError err400{errBody = "Invalid source file path"}
     | otherwise = do
         result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+            ensureStepUnreviewed ctx stepId
             done <- liftIO $ action (worktreePath </> "srcFiles" </> relPath)
             when done $ commitAndPushChanges ctx (verb ++ " source file " ++ relPath)
             pure done
         case result of
-            Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+            Left err -> throwError err409{errBody = TLE.encodeUtf8 (TL.pack err)}
             Right True -> pure NoContent
             Right False -> throwError falseErr
   where

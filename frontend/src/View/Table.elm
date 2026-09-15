@@ -122,10 +122,11 @@ viewTable :
     , alwaysVisibleRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , directorySection : BaseRecord a -> Html (Flow Model ())
     , srcFilesSection : BaseRecord a -> Html (Flow Model ())
+    , detailSection : BaseRecord a -> Html (Flow Model ())
     , onRecordClick : BaseRecord a -> Maybe (Flow Model ())
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick } =
+viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVisibleRecordActions, directorySection, srcFilesSection, detailSection, onRecordClick } =
     let
         lens =
             TableSpec.getLens spec
@@ -170,6 +171,9 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
         recordIsEditing record =
             Maybe.map2 (==) mEditedId record.id |> Maybe.withDefault False
 
+        editable record =
+            not isReadOnly && not (TableSpec.getIsLocked spec record)
+
         viewRecord index record =
             let
                 isHighlighted =
@@ -177,7 +181,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                         |> Maybe.withDefault False
 
                 recordNameEditable =
-                    if not isReadOnly && recordIsEditing record && table.nameEditOnly then
+                    if recordIsEditing record && table.nameEditOnly && editable record then
                         Html.input
                             [ type_ "text"
                             , value (Maybe.map .name table.edited |> Maybe.withDefault record.name)
@@ -204,7 +208,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                                         [ Html.text (String.fromInt id_) ]
                                 )
                                 record.id
-                            , Html.viewIf (not isReadOnly) <|
+                            , Html.viewIf (editable record) <|
                                 iconCustom True
                                     "edit"
                                     [ class "edit-icon"
@@ -267,6 +271,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                                         [ iconCustom True "error" [] ]
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
+                                , Html.span [] (alwaysVisibleRecordActions record)
                                 , Html.Lazy.lazy2 viewMtimeBadge record.lastModifiedAt now
                                 , Html.viewIf (record.id == Nothing || record.isUpdating) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
@@ -286,7 +291,6 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                                     ]
                                     [ icon True "more_vert" ]
                                 , recordActionsPopover record
-                                , Html.div [] (alwaysVisibleRecordActions record)
                                 , Html.viewIf (not isReadOnly) <|
                                     Html.div (class "table-record-drag-target" :: cmap (mkDragAttrs itemId))
                                         [ icon True "drag_indicator" ]
@@ -312,6 +316,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                                 table.edited
                             )
                         , Html.viewIf (TableSpec.getDirectoryView spec record |> Maybe.map .expanded |> Maybe.withDefault False) (directorySection record)
+                        , detailSection record
                         ]
             in
             Html.Keyed.node "div"
@@ -628,6 +633,9 @@ compares its references with `===`, so nothing here may capture the model.
 viewRecordActions : TableSpec (BaseRecord a) -> Bool -> Maybe Int -> BaseRecord a -> List (Html (Flow Model ()))
 viewRecordActions spec isReadOnly mProjectId record =
     let
+        editable r =
+            not isReadOnly && not (TableSpec.getIsLocked spec r)
+
         isDirectoryOpen =
             TableSpec.getDirectoryView spec record |> Maybe.map .expanded |> Maybe.withDefault False
 
@@ -664,11 +672,11 @@ viewRecordActions spec isReadOnly mProjectId record =
             , { shouldShow = Maybe.isJust << .id
               , render =
                     \r ->
-                        if isReadOnly then
-                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec r.id)
+                        if editable r then
+                            viewIconButtonWithTooltip "edit" True "Edit" toggleRecordEditor
 
                         else
-                            viewIconButtonWithTooltip "edit" True "Edit" toggleRecordEditor
+                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec r.id)
               }
             , -- Share button (shareable only)
               { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
@@ -715,7 +723,7 @@ viewRecordActions spec isReadOnly mProjectId record =
                             hasDependentInProject =
                                 False
                         in
-                        not isReadOnly
+                        editable r
                             && Maybe.isJust r.id
                             && (not (TableSpec.getShareable spec r) || not hasDependentInProject)
               , render = \r -> Html.viewMaybe (viewIconButtonWithTooltip "delete" False "Remove" << Actions.removeRecord spec) r.id
@@ -816,7 +824,7 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
                     []
 
         uploadActions =
-            if isReadOnly || uploading then
+            if isReadOnly || uploading || Maybe.isJust record.review then
                 []
 
             else
@@ -873,7 +881,7 @@ viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord
 viewAddOrEditRecordForm model spec table extraSection record =
     let
         readOnly =
-            Model.isReadOnlyRoute model
+            Model.isReadOnlyRoute model || TableSpec.getIsLocked spec record
 
         editing =
             record.id /= Nothing && (table.addMode /= AddFromOtherProject)

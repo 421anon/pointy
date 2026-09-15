@@ -131,6 +131,7 @@ in
         (with pkgs; [
           bashInteractive
           file
+          (diffoscope.override { enableBloat = false; })
           nix
           gitMinimal
           openssh

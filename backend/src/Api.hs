@@ -8,12 +8,14 @@ import Agent.Git (AgentApplyView, AgentSessionView, AgentUsage)
 import Agent.Session (AgentTurn)
 import ApiTypes (DynamicJson)
 import qualified Data.ByteString as BS
+import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
+import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
@@ -52,8 +54,9 @@ type ListStepFiles =
 
 type ListSrcFiles =
     "src-files"
-        :> Description "Lists source files available to a step."
+        :> Description "Lists source files available to a step, optionally at a specific user-repo commit."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam "path" FilePath
         :> Get '[JSON] [DirEntry]
 
@@ -269,6 +272,7 @@ type DownloadSrcFile =
         :> "download"
         :> Description "Downloads a single source file."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
         :> StreamGet NoFraming OctetStream (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (SourceT IO BS.ByteString))
 
@@ -277,6 +281,7 @@ type SrcFileSeek =
         :> "seek"
         :> Description "Returns a bounded source-file chunk. Specify exactly one of line or offset and a nonzero signed byte count: positive bytes read forward from the anchor; negative bytes read backward and end at the anchor."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
         :> QueryParam "line" Int
         :> QueryParam "offset" Int
@@ -289,6 +294,7 @@ type RawSrcFile =
         :> "raw"
         :> Description "Serves the raw bytes of a source file (inline, no download disposition) for preview rendering."
         :> ReqId
+        :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
         :> Raw
 
@@ -357,6 +363,34 @@ type CreateStep =
         :> ReqBody '[RawJSON] DynamicJson
         :> Post '[RawJSON] DynamicJson
 
+type GetProjectReview =
+    "project-review"
+        :> Description "Reports how every step in a project at one revision compares with its reviewed revision, together with that reviewed revision."
+        :> ReqProjectId
+        :> QueryParam "commit" Text
+        :> Get '[JSON] (Map String StepReviewReport)
+
+type ReviewStep =
+    "step-review"
+        :> Description "Records the viewed revision as a step's reviewed revision, together with who reviewed it and their comments, when there is no review or its output is unchanged. Returns whether the viewed output differs from the reviewed one."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> ReqBody '[JSON] ReviewRequest
+        :> Post '[JSON] Bool
+
+type RemoveReview =
+    "step-review"
+        :> Description "Removes a step's review."
+        :> ReqId
+        :> Delete '[JSON] NoContent
+
+type ReviewDiff =
+    "step-review-diff"
+        :> Description "Serves the diffoscope comparison of a step's reviewed output and the viewed revision's output (HEAD by default)."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> Raw
+
 type GetNotices =
     "notices"
         :> Description "Returns evaluation notices (warnings and errors) for a step."
@@ -416,6 +450,10 @@ type API =
         :<|> Autocomplete
         :<|> UpdateStep
         :<|> CreateStep
+        :<|> GetProjectReview
+        :<|> ReviewStep
+        :<|> RemoveReview
+        :<|> ReviewDiff
         :<|> GetNotices
         :<|> RunStep
         :<|> StopStep

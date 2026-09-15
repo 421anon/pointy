@@ -1,25 +1,346 @@
 module View.Shadow exposing (viewProject)
 
-import Accessors exposing (get, just, try)
+import Accessors exposing (get, just, snd, try)
 import Actions
+import Api.Api as Api
 import Api.ApiData as ApiData
 import Dict
+import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Html.Extra as Html
 import Html.Lazy
+import Json.Decode as Decode
+import Keyboard
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses as Lenses exposing (currentProject)
-import Model.Shadow exposing (StepConfigEntry, StepType(..))
+import Model.Lenses as Lenses exposing (currentProject, currentProjectId, mCommit, route)
+import Model.Shadow exposing (StepConfigEntry)
+import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
 import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Table exposing (routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
+
+
+type alias ComparisonChip =
+    { severity : String
+    , icon : String
+    , label : String
+    , explanation : String
+    }
+
+
+comparisonChip : Model.ReviewComparison -> Maybe ComparisonChip
+comparisonChip comparison =
+    case comparison of
+        Model.SameOutPath ->
+            Nothing
+
+        Model.SameContent ->
+            Just (ComparisonChip "muted" "published_with_changes" "Same content" "The viewed revision builds a different store path with identical content. Updating the review is optional.")
+
+        Model.ViewedOutputUnbuilt ->
+            Just (ComparisonChip "muted" "pending" "Not built" "The viewed revision's output is not built, so it cannot be compared with the reviewed output. Build it to compare.")
+
+        Model.DifferentContent ->
+            Just (ComparisonChip "warning" "difference" "Differs" "The viewed output differs from the reviewed output. View the diff, then remove the review to review the changed output.")
+
+        Model.ReviewedOutputUnbuilt ->
+            Just (ComparisonChip "warning" "warning" "Reviewed output missing" "The reviewed output is no longer in the store. Run the step to rebuild its reviewed revision, or remove the review.")
+
+
+blockedReason : ApiData.ApiData Model.ReviewComparison -> Maybe String
+blockedReason comparison =
+    let
+        checking =
+            Just "Checking the viewed revision's output."
+    in
+    ApiData.foldVisible checking (always checking) (Maybe.map .explanation << comparisonChip) (always (Just "The review check failed, so the review cannot be updated.")) comparison
+
+
+viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
+viewReviewControls model spec stepId record =
+    let
+        content =
+            viewReviewPopover model spec stepId record
+                ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId) record.review
+    in
+    if List.isEmpty content then
+        Nothing
+
+    else
+        Just <|
+            Html.span
+                [ Html.Attributes.class "step-review"
+                , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+                ]
+                content
+
+
+viewReviewIndicator : Model -> TableSpec StepRecord -> Int -> Model.Review -> List (Html (Flow Model ()))
+viewReviewIndicator model spec stepId reviewed =
+    let
+        mComparisonChip =
+            ApiData.foldVisible
+                Nothing
+                (\mPrevious ->
+                    Maybe.andThen comparisonChip mPrevious
+                        |> Maybe.map (\chip -> { chip | explanation = "Checking the viewed revision's output. " ++ chip.explanation })
+                )
+                comparisonChip
+                (\error -> Just (ComparisonChip "danger" "error_outline" "Check failed" ("The review check failed: " ++ Http.errorMessage error)))
+                reviewed.comparison
+
+        explanation chip =
+            chip.explanation ++ " Reviewed revision: " ++ String.left 7 reviewed.revision ++ ". Editing is locked. Remove the review to edit it."
+
+        viewChip chip =
+            Html.span
+                [ Html.Attributes.class ("step-review-chip step-review-" ++ chip.severity)
+                , Html.Attributes.tabindex 0
+                , Html.Attributes.attribute "role" "note"
+                , Html.Attributes.title (explanation chip)
+                , Html.Attributes.attribute "aria-label" (chip.label ++ ". " ++ explanation chip)
+                ]
+                [ iconCustom False chip.icon [ Html.Attributes.attribute "aria-hidden" "true" ]
+                , Html.text chip.label
+                ]
+
+        ( diffExpanded, diffActionLabel, diffChevron ) =
+            if Maybe.map Tuple.first (Model.getOpenDiff model) == Just stepId then
+                ( "true", "Hide diff", "expand_less" )
+
+            else
+                ( "false", "View diff", "expand_more" )
+
+        viewDiffToggle chip =
+            Html.button
+                [ Html.Attributes.class "step-review-diff"
+                , Html.Attributes.title (explanation chip)
+                , Html.Attributes.attribute "aria-expanded" diffExpanded
+                , Html.Attributes.attribute "aria-label" (diffActionLabel ++ ". " ++ explanation chip)
+                , Html.Events.onClick (Actions.toggleDiffPanel stepId)
+                ]
+                [ iconCustom False "difference" [ Html.Attributes.attribute "aria-hidden" "true" ]
+                , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text diffActionLabel ]
+                , iconCustom False diffChevron [ Html.Attributes.attribute "aria-hidden" "true" ]
+                ]
+
+        viewDiffInNewTab =
+            Html.a
+                [ Html.Attributes.class "step-review-diff"
+                , Html.Attributes.title "Open the diff in a new tab"
+                , Html.Attributes.attribute "aria-label" "Open the diff in a new tab"
+                , Html.Attributes.href (Api.reviewDiffUrl stepId (Model.viewedRevision model))
+                , Html.Attributes.target "_blank"
+                , Html.Attributes.rel "noopener"
+                ]
+                [ iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
+
+        reviewedRevisionLink =
+            Html.viewIf (try (route << Route.page << Route.project << mCommit << just) model /= Just reviewed.revision) <|
+                Html.viewMaybe (viewReviewedRevisionLink stepId reviewed.revision) (try currentProjectId model)
+
+        comparisonControls =
+            if ApiData.toMaybe reviewed.comparison == Just Model.DifferentContent then
+                mComparisonChip
+                    |> Maybe.unwrap [] (\chip -> [ viewDiffToggle chip, viewDiffInNewTab ])
+
+            else
+                [ Html.viewMaybe viewChip mComparisonChip ]
+    in
+    (reviewedRevisionLink :: comparisonControls)
+        ++ [ Html.viewIf (ApiData.toMaybe reviewed.comparison == Just Model.ViewedOutputUnbuilt) (viewBuildViewedLink model spec stepId) ]
+
+
+viewDiffSection : Model -> StepRecord -> Html (Flow Model ())
+viewDiffSection model record =
+    case ( record.id, record.review |> Maybe.andThen (.comparison >> ApiData.toMaybe) ) of
+        ( Just stepId, Just Model.DifferentContent ) ->
+            Html.viewIf (Maybe.map Tuple.first (Model.getOpenDiff model) == Just stepId) <|
+                let
+                    frameId =
+                        "step-diff-" ++ String.fromInt stepId
+                in
+                FileBrowser.viewHtmlFrame
+                    { id = frameId
+                    , src = Api.reviewDiffUrl stepId (Model.viewedRevision model)
+                    , zoom = Actions.zoomIframeBy (Lenses.openDiff << just << snd) frameId
+                    }
+
+        _ ->
+            Html.nothing
+
+
+viewBuildViewedLink : Model -> TableSpec StepRecord -> Int -> Html (Flow Model ())
+viewBuildViewedLink model spec stepId =
+    if Dict.member stepId (Model.getPendingBuilds model) then
+        Html.button
+            [ Html.Attributes.class "step-review-build"
+            , Html.Attributes.disabled True
+            , Html.Attributes.title "Building this revision"
+            , Html.Attributes.attribute "aria-label" "Building this revision"
+            ]
+            [ iconCustom True "progress_activity" [ Html.Attributes.class "step-review-build-spinner", Html.Attributes.attribute "aria-hidden" "true" ]
+            , Html.text "Building..."
+            ]
+
+    else
+        Html.button
+            [ Html.Attributes.class "step-review-build"
+            , Html.Attributes.title "Build the viewed revision's output to compare with the reviewed output"
+            , Html.Attributes.attribute "aria-label" "Build the viewed revision's output to compare with the reviewed output"
+            , Html.Events.onClick (Actions.buildViewedRevision spec stepId)
+            ]
+            [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
+            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build this revision" ]
+            ]
+
+
+viewReviewedRevisionLink : Int -> String -> Int -> Html (Flow Model ())
+viewReviewedRevisionLink stepId reviewedRevision projectId =
+    let
+        shortReviewedRevision =
+            String.left 7 reviewedRevision
+
+        targetRoute =
+            Route.fromPage
+                (Route.Project
+                    { projectId = projectId
+                    , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                    , mCommit = Just reviewedRevision
+                    , mCompare = Nothing
+                    }
+                )
+    in
+    Html.a
+        [ Html.Attributes.class "step-review-revision"
+        , Html.Attributes.title ("View the repository at the reviewed revision " ++ shortReviewedRevision ++ " (read-only)")
+        , Html.Attributes.attribute "aria-label" ("View reviewed revision of step " ++ String.fromInt stepId ++ " at revision " ++ shortReviewedRevision ++ " (read-only)")
+        , Route.href targetRoute
+        ]
+        [ Html.span [ Html.Attributes.class "step-review-revision-hash", Html.Attributes.style "text-decoration" "underline" ]
+            [ Html.text shortReviewedRevision ]
+        ]
+
+
+viewReviewPopover : Model -> TableSpec StepRecord -> Int -> StepRecord -> List (Html (Flow Model ()))
+viewReviewPopover model spec stepId record =
+    let
+        isReviewed =
+            Maybe.isJust record.review
+
+        isBuilt =
+            ApiData.toMaybe (TableSpec.getStatus spec record) == Just Model.StatusSuccess
+
+        canRecord =
+            Maybe.unwrap isBuilt (\reviewed -> List.member (ApiData.toMaybe reviewed.comparison) [ Just Model.SameContent, Just Model.SameOutPath ]) record.review
+
+        draft =
+            Model.getReviewDraft model
+                |> Maybe.filter (.stepId >> (==) stepId)
+                |> Maybe.withDefault { stepId = stepId, reviewedBy = Maybe.unwrap "" .reviewedBy record.review, comments = Maybe.unwrap "" .comments record.review }
+
+        popoverId =
+            "step-review-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt stepId
+
+        ( title, submitLabel ) =
+            if isReviewed then
+                ( "Review of step " ++ String.fromInt stepId, "Update review" )
+
+            else
+                ( "Review step " ++ String.fromInt stepId, "Review step" )
+
+        trigger =
+            Html.button
+                [ Html.Attributes.class "icon-btn icon-btn-inline"
+                , Html.Attributes.title title
+                , Html.Attributes.attribute "aria-label" title
+                , Html.Attributes.attribute "popovertarget" popoverId
+                , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
+                ]
+                [ iconCustom isReviewed "fact_check" []
+                , Html.span [ Html.Attributes.class "icon-btn-text" ] [ Html.text title ]
+                ]
+
+        field labelText control =
+            Html.label [ Html.Attributes.class "step-review-field" ]
+                [ Html.span [] [ Html.text labelText ], control ]
+
+        submit =
+            Flow.when (canRecord && String.trim draft.reviewedBy /= "")
+                (Actions.hidePopover popoverId |> Flow.seq (Actions.reviewStep draft))
+
+        blockedNote =
+            Html.viewMaybe (\reason -> Html.p [ Html.Attributes.class "step-review-note" ] [ Html.text reason ])
+                (Maybe.andThen (.comparison >> blockedReason) (Maybe.filter (always (not canRecord)) record.review))
+
+        popover =
+            Html.div
+                [ Html.Attributes.class "step-review-popover"
+                , Html.Attributes.id popoverId
+                , Html.Attributes.attribute "popover" "auto"
+                , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
+                ]
+                [ Html.div [ Html.Attributes.class "step-review-popover-header" ]
+                    [ Html.strong [] [ Html.text title ]
+                    , Html.button
+                        [ Html.Attributes.class "icon-btn"
+                        , Html.Attributes.title "Close"
+                        , Html.Events.onClick (Actions.hidePopover popoverId)
+                        ]
+                        [ iconCustom True "close" [] ]
+                    ]
+                , Html.div [ Html.Attributes.class "step-review-popover-body" ]
+                    [ blockedNote
+                    , field "Reviewed by" <|
+                        Html.input
+                            [ Html.Attributes.class "step-review-input"
+                            , Html.Attributes.type_ "text"
+                            , Html.Attributes.value draft.reviewedBy
+                            , Html.Attributes.readonly (not canRecord)
+                            , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | reviewedBy = value })
+                            , Html.Events.on "keydown" (Keyboard.decodeCombinations [ ( Keyboard.enter, Decode.succeed submit ) ])
+                            ]
+                            []
+                    , field "Comments" <|
+                        Html.textarea
+                            [ Html.Attributes.class "step-review-comments"
+                            , Html.Attributes.placeholder "Optional"
+                            , Html.Attributes.rows 4
+                            , Html.Attributes.value draft.comments
+                            , Html.Attributes.readonly (not canRecord)
+                            , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | comments = value })
+                            ]
+                            []
+                    , Html.div [ Html.Attributes.class "step-review-popover-actions" ]
+                        [ Html.viewIf canRecord <|
+                            Html.button
+                                [ Html.Attributes.class "btn"
+                                , Html.Attributes.disabled (String.trim draft.reviewedBy == "")
+                                , Html.Events.onClick submit
+                                ]
+                                [ Html.text submitLabel ]
+                        , Html.viewIf isReviewed <|
+                            Html.button
+                                [ Html.Attributes.class "btn btn-danger"
+                                , Html.Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.removeReview stepId))
+                                ]
+                                [ Html.text "Remove review" ]
+                        ]
+                    ]
+                ]
+    in
+    if not (isReviewed || isBuilt) then
+        []
+
+    else
+        [ trigger, popover ]
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
@@ -136,7 +457,7 @@ viewSection model sectionName entry steps =
                 |> String.join ","
 
         projectIdKey =
-            try Lenses.currentProjectId model
+            try currentProjectId model
                 |> Maybe.map String.fromInt
                 |> Maybe.unwrap "" identity
 
@@ -180,22 +501,14 @@ viewSection model sectionName entry steps =
                     )
         , alwaysVisibleRecordActions =
             \r ->
-                case entry.stepType of
-                    FileUpload _ ->
-                        case r.id |> Maybe.andThen (\id -> Dict.get id (Model.getUploadProgress model) |> Maybe.map (Tuple.pair id)) of
-                            Just ( stepId, progress ) ->
-                                [ viewUploadProgress stepId progress ]
-
-                            Nothing ->
-                                []
-
-                    Derivation _ _ ->
-                        []
-
-                    Download ->
-                        []
+                Maybe.values
+                    [ r.id |> Maybe.andThen (\stepId -> viewReviewControls model spec stepId r)
+                    , r.id
+                        |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
+                    ]
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model entry.stepType spec
+        , detailSection = viewDiffSection model
         , onRecordClick =
             \record ->
                 record.id

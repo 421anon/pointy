@@ -11,7 +11,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectStepRecords, projects, records, route, runState, stepConfig, tables, userRepoInfo)
+import Model.Lenses exposing (commitHash, currentProjectId, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectId, projectStepRecords, projects, records, route, runState, stepConfig, tables, userRepoInfo)
 import Ports
 import Route exposing (Route)
 import Specs
@@ -151,6 +151,10 @@ applyRoute forceRevealHighlight newRoute =
                                 |> Flow.seq Actions.loadPresets
                                 |> Flow.seq Actions.loadProjects
                                 |> Flow.when (mOldCommit /= mNewCommit)
+                                |> Flow.seq
+                                    (Flow.when (try (Route.page << Route.project << projectId) newRoute /= try (route << Route.page << Route.project << projectId) model)
+                                        (Flow.async Actions.loadProjectReviews)
+                                    )
                         )
                     |> Flow.seq
                         (Flow.forAll route

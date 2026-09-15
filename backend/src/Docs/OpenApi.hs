@@ -31,6 +31,7 @@ import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest
 import Handlers.Projects (ProjectUpdate)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.SrcFiles (UserRepoInfo)
+import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
@@ -161,6 +162,17 @@ instance ToSchema AgentGitState
 instance ToSchema AgentSessionView
 instance ToSchema AgentApplyView
 instance ToSchema AgentUsage
+
+instance ToSchema ReviewRequest where
+    declareNamedSchema _ =
+        pure $ objectSchema "ReviewRequest" [("reviewedBy", stringField), ("reviewComments", stringField)]
+
+instance ToSchema StepReviewReport where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "StepReviewReport"
+                [("reviewedRevision", stringField), ("reviewedBy", stringField), ("reviewComments", stringField), ("reviewedStatus", stringField), ("reviewedStatusError", stringField), ("comparison", stringField), ("comparisonDetail", stringField)]
 
 -- | The publicly documented OpenAPI specification.
 pointyOpenApi :: OpenApi

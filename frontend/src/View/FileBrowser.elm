@@ -1,4 +1,4 @@
-module View.FileBrowser exposing (viewDirectorySection, viewSrcFilesSection)
+module View.FileBrowser exposing (viewDirectorySection, viewHtmlFrame, viewSrcFilesSection)
 
 import Accessors exposing (Prism, has, just, prism, snd, try, values)
 import Actions
@@ -18,8 +18,8 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, Status(..), StepRecord, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
+import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -30,6 +30,29 @@ import View.Lib exposing (viewLoading)
 type DirContext
     = OutputDir Int String
     | SrcDir Int
+
+
+viewHtmlFrame : { id : String, src : String, zoom : Float -> Flow Model () } -> Html (Flow Model ())
+viewHtmlFrame frame =
+    Html.div [ class "iframe-zoom-wrapper" ]
+        [ Html.node "iframe"
+            [ src frame.src
+            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
+            , class "file-html-viewer"
+            , id frame.id
+            ]
+            []
+        , Html.button
+            [ class "iframe-zoom-btn zoom-in"
+            , Html.Events.stopPropagationOn "click" (Decode.succeed ( frame.zoom 1.16, True ))
+            ]
+            [ icon True "zoom_in" ]
+        , Html.button
+            [ class "iframe-zoom-btn zoom-out"
+            , Html.Events.stopPropagationOn "click" (Decode.succeed ( frame.zoom (1 / 1.16), True ))
+            ]
+            [ icon True "zoom_out" ]
+        ]
 
 
 srcDir : Prism pr DirContext Int x y
@@ -53,14 +76,20 @@ srcWritePending model mDirCtx =
         |> Maybe.withDefault False
 
 
-compareSelectionFor : Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
-compareSelectionFor projectId fileName mime path ctx =
+recordRevision : Model -> Int -> Maybe String
+recordRevision model recordId =
+    try (currentProject << success << tables << values << recordById recordId) model
+        |> Maybe.andThen (stepRevision model)
+
+
+compareSelectionFor : Model -> Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
+compareSelectionFor model projectId fileName mime path ctx =
     case ctx of
         OutputDir recordId commit_ ->
             { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
 
         SrcDir recordId ->
-            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc }
+            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc (recordRevision model recordId) }
 
 
 viewCompareButton : Model -> Maybe CompareSelection -> Html (Flow Model ())
@@ -156,6 +185,8 @@ viewSrcFilesSection model stepType spec step =
         hasSrcFiles =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
+        isLocked =
+            Maybe.isJust step.review || has (route << Route.page << Route.project << mCommit << just) model
 
         writePending =
             step.srcFileWriting
@@ -234,14 +265,14 @@ viewSrcFilesSection model stepType spec step =
             Html.div [ class "src-files-section" ]
                 [ Html.div [ class "src-files-header" ]
                     [ Html.h3 [] [ Html.text "Source Files" ]
-                    , createButton
+                    , Html.viewIf (not isLocked) createButton
                     ]
-                , createForm
+                , Html.viewIf (not isLocked) createForm
                 , renderDirectoryContents model
                     spec
                     step.id
                     (Maybe.map SrcDir step.id)
-                    False
+                    isLocked
                     []
                     "directory-view"
                     (case step.srcFiles.children of
@@ -321,7 +352,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     Actions.downloadFile stepId_ commit_ path
 
                 Just (SrcDir id) ->
-                    Actions.downloadSrcFile id path
+                    Actions.downloadSrcFile id (recordRevision model id) path
 
                 Nothing ->
                     Flow.pure ()
@@ -343,7 +374,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 mCompareSelection =
                     if not file.isDeleted && (file.viewable || isImage) then
-                        Maybe.map2 (\pid -> compareSelectionFor pid itemName file.mimeType path)
+                        Maybe.map2 (\pid -> compareSelectionFor model pid itemName file.mimeType path)
                             (try currentProjectId model)
                             mDirCtx
 
@@ -377,7 +408,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         "description"
 
                 isEditableSrcFile =
-                    has (just << srcDir) mDirCtx
+                    has (just << srcDir) mDirCtx && not isLocked
 
                 fileActionLabel =
                     if file.view.isViewing then
@@ -502,7 +533,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 Just (Api.stepFileBundleUrl stepId_ commit_ path)
 
                                             Just (SrcDir recordId) ->
-                                                Just (Api.srcFileRawUrl recordId path)
+                                                Just (Api.srcFileRawUrl recordId (recordRevision model recordId) path)
 
                                             Nothing ->
                                                 Nothing
@@ -512,31 +543,11 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                     zoomAction factor =
                                         mRecordId
-                                            |> Maybe.map (\recordId -> Actions.zoomHtmlFileBy (fileZoomAt recordId path) iframeId factor)
+                                            |> Maybe.map (\recordId -> Actions.zoomIframeBy (currentProject << success << tables << values << fileZoomAt recordId path) iframeId factor)
                                             |> Maybe.withDefault Flow.none
                                 in
                                 Html.viewMaybe
-                                    (\htmlSrc ->
-                                        Html.div [ class "iframe-zoom-wrapper" ]
-                                            [ Html.node "iframe"
-                                                [ src htmlSrc
-                                                , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
-                                                , class "file-html-viewer"
-                                                , id iframeId
-                                                ]
-                                                []
-                                            , Html.button
-                                                [ class "iframe-zoom-btn zoom-in"
-                                                , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction 1.16, True ))
-                                                ]
-                                                [ icon True "zoom_in" ]
-                                            , Html.button
-                                                [ class "iframe-zoom-btn zoom-out"
-                                                , Html.Events.stopPropagationOn "click" (Decode.succeed ( zoomAction (1 / 1.16), True ))
-                                                ]
-                                                [ icon True "zoom_out" ]
-                                            ]
-                                    )
+                                    (\htmlSrc -> viewHtmlFrame { id = iframeId, src = htmlSrc, zoom = zoomAction })
                                     mHtmlSrc
 
                               else if file.seekable then
@@ -585,7 +596,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     mEditRecordId =
                                         mDirCtx
                                             |> Maybe.andThen (try srcDir)
-                                            |> Maybe.filter (always (Maybe.isNothing mSelectedRange))
+                                            |> Maybe.filter (always (not isLocked && Maybe.isNothing mSelectedRange))
 
                                     viewContent text =
                                         let

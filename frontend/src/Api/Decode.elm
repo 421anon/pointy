@@ -4,6 +4,7 @@ import Api.ApiData exposing (ApiData(..))
 import Components.Select as Select
 import Dict exposing (Dict)
 import Extra.Decode exposing (firstMatching)
+import Http
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (optional, required)
@@ -206,7 +207,7 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ note args lastModifiedAt ->
+        (\id name type_ note args reviewedRevision reviewedBy comments lastModifiedAt ->
             { id = Just id
             , clientId = Nothing
             , type_ = type_
@@ -215,6 +216,7 @@ stepValueOnly stepType_ =
             , name = name
             , note = note
             , runState = NotAsked
+            , review = Maybe.map (\revision -> { revision = revision, reviewedBy = reviewedBy, comments = comments, comparison = NotAsked }) reviewedRevision
             , args = args
             , isUpdating = False
             , lastModifiedAt = lastModifiedAt
@@ -234,7 +236,66 @@ stepValueOnly stepType_ =
         |> required "type" Decode.string
         |> optional "note" Decode.string ""
         |> required "args" (stepArgs stepType_)
+        |> optional "reviewedRevision" (maybe Decode.string) Nothing
+        |> optional "reviewedBy" Decode.string ""
+        |> optional "reviewComments" Decode.string ""
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
+
+
+reviewComparison : String -> Maybe String -> Decoder (Maybe (ApiData Model.ReviewComparison))
+reviewComparison comparison detail =
+    case comparison of
+        "no-review" ->
+            Decode.succeed Nothing
+
+        "same-out-path" ->
+            Decode.succeed (Just (Success Model.SameOutPath))
+
+        "same-content" ->
+            Decode.succeed (Just (Success Model.SameContent))
+
+        "different-content" ->
+            Decode.succeed (Just (Success Model.DifferentContent))
+
+        "viewed-output-unbuilt" ->
+            Decode.succeed (Just (Success Model.ViewedOutputUnbuilt))
+
+        "reviewed-output-unbuilt" ->
+            Decode.succeed (Just (Success Model.ReviewedOutputUnbuilt))
+
+        "unresolvable" ->
+            Decode.succeed (Just (Error (Http.BadBody (Maybe.withDefault "The review check failed." detail))))
+
+        other ->
+            Decode.fail ("Unknown step review comparison: " ++ other)
+
+
+reviewReport : Decoder Model.ReviewReport
+reviewReport =
+    Decode.succeed (\revision reviewedBy comments reviewedStatus_ reviewedStatusError comparison detail -> { revision = revision, reviewedBy = reviewedBy, comments = comments, reviewedStatus = Maybe.map (\status_ -> applyError status_ reviewedStatusError) reviewedStatus_, comparison = comparison, detail = detail })
+        |> optional "reviewedRevision" (maybe Decode.string) Nothing
+        |> optional "reviewedBy" Decode.string ""
+        |> optional "reviewComments" Decode.string ""
+        |> optional "reviewedStatus" (maybe status) Nothing
+        |> optional "reviewedStatusError" (maybe Decode.string) Nothing
+        |> required "comparison" Decode.string
+        |> optional "comparisonDetail" (maybe Decode.string) Nothing
+        |> Decode.andThen
+            (\fields ->
+                reviewComparison fields.comparison fields.detail
+                    |> Decode.map
+                        (\mComparison ->
+                            { review = Maybe.map2 (\revision comparison -> { revision = revision, reviewedBy = fields.reviewedBy, comments = fields.comments, comparison = comparison }) fields.revision mComparison
+                            , reviewedStatus = Maybe.andThen (always fields.reviewedStatus) mComparison
+                            }
+                        )
+            )
+
+
+reviewReports : Decoder (Dict Int Model.ReviewReport)
+reviewReports =
+    Decode.keyValuePairs reviewReport
+        |> Decode.map (List.filterMap (\( key, outcome ) -> Maybe.map (\stepId -> ( stepId, outcome )) (String.toInt key)) >> Dict.fromList)
 
 
 noticeSeverity : Decoder Model.NoticeSeverity

@@ -2,19 +2,19 @@
 
 module Handlers.ProjectEntities (assignRecordHandler, assignRecordToProject, batchAssignRecordsHandler, unassignRecordHandler) where
 
-import Control.Monad.Except (ExceptT, liftEither)
+import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead)
+import Handlers.StepReview (ensureStepUnreviewed)
 import OutPaths (withWriteRepoTransaction)
-import Servant (Handler, NoContent (..), err500, errBody, throwError)
+import Servant (Handler, NoContent (..), err409, err500, errBody, throwError)
 import System.FilePath ((</>))
-import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNixEvalImpureJsonExpr)
+import UserRepo (WriteRepoContext (..), commitAndPushChanges)
 
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Handlers.Projects (jsonToNix)
+import Handlers.Projects (rewriteNixFile)
 
 assignRecordHandler :: Int -> Int -> Handler NoContent
 assignRecordHandler projectId recordId = do
@@ -45,10 +45,11 @@ batchAssignRecordsHandler projectId recordIds = do
 unassignRecordHandler :: Int -> Int -> Handler NoContent
 unassignRecordHandler projectId recordId = do
     result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
+        ensureStepUnreviewed ctx recordId
         updateProjectNixFile ctx projectId (removeRecord recordId)
         commitAndPushChanges ctx $ "Unassign record " ++ show recordId ++ " from project " ++ show projectId
     case result of
-        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+        Left err -> throwError err409{errBody = TLE.encodeUtf8 (TL.pack err)}
         Right _ -> do
             liftIO $ forkBroadcastProjectStatusAtHead projectId
             return NoContent
@@ -67,10 +68,5 @@ removeRecord recordId =
     "orig // { steps = builtins.filter (s: s.id != " <> T.pack (show recordId) <> ") orig.steps; }"
 
 updateProjectNixFile :: WriteRepoContext -> Int -> T.Text -> ExceptT String IO ()
-updateProjectNixFile (WriteRepoContext worktreePath) projectId transformation = do
-    let nixFilePath = worktreePath </> "projects" </> show projectId ++ ".nix"
-        nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in " <> transformation
-
-    output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
-    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
-    liftIO $ TIO.writeFile nixFilePath (nixResult <> "\n")
+updateProjectNixFile (WriteRepoContext worktreePath) projectId =
+    rewriteNixFile (worktreePath </> "projects" </> show projectId ++ ".nix")

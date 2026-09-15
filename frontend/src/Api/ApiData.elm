@@ -196,6 +196,11 @@ toLoading apiData =
             Loading Nothing
 
 
+stopLoading : ApiData a -> ApiData a
+stopLoading =
+    foldVisible NotAsked (Maybe.withDefault NotAsked << Maybe.map Success) Success Error
+
+
 reloading : Prism pr (ApiData a) a x y
 reloading =
     prism ">Loading(Just)"

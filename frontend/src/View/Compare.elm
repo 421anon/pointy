@@ -319,8 +319,8 @@ sourceRoute sel =
                 FromOutput commit_ ->
                     ( Route.Output, Just commit_ )
 
-                FromSrc ->
-                    ( Route.Source, Nothing )
+                FromSrc commit_ ->
+                    ( Route.Source, commit_ )
     in
     Route.fromPage
         (Route.Project
@@ -380,8 +380,8 @@ rawUrl sel =
         FromOutput commit_ ->
             Api.stepFileBundleUrl sel.recordId commit_ sel.path
 
-        FromSrc ->
-            Api.srcFileRawUrl sel.recordId sel.path
+        FromSrc commit_ ->
+            Api.srcFileRawUrl sel.recordId commit_ sel.path
 
 
 viewTextDiff : Model -> CompareActiveData -> String -> String -> Html (Flow Model ())

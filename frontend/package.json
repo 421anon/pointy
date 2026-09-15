@@ -5,7 +5,7 @@
   "scripts": {
     "build": "webpack --mode=production",
     "production": "webpack serve --mode=development",
-    "dev-vm": "PROXY_TARGET=http://localhost:8080 webpack serve --mode=development",
+    "dev-vm": "PROXY_TARGET=http://localhost:8080/backend webpack serve --mode=development",
     "watch": "webpack --mode=development --watch"
   },
   "devDependencies": {

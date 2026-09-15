@@ -7,12 +7,12 @@ import Components.Select exposing (SelectState)
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Dict.Accessors
-import Extra.Accessors exposing (by, remkT, where_)
+import Extra.Accessors exposing (by, orElseT, remkT, where_)
 import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
-import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, ReviewDraft, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Time
@@ -95,7 +95,7 @@ projects =
 
 currentTableOf : String -> Traversal Model (Table StepRecord) x y
 currentTableOf key_ =
-    currentProject << success << tableInProject key_
+    currentProject << orElseT success ApiData.reloading << tableInProject key_
 
 
 tableInProject : String -> Traversal ProjectRecord (Table StepRecord) x y
@@ -541,9 +541,34 @@ runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
 
 
+review : Lens ls { a | review : b } b x y
+review =
+    lens "review" .review (\t r -> { t | review = r })
+
+
+comparison : Lens ls { a | comparison : b } b x y
+comparison =
+    lens "comparison" .comparison (\t c -> { t | comparison = c })
+
+
 projectStepRecords : Traversal ProjectRecord StepRecord x y
 projectStepRecords =
     tables << values << records << success << each
+
+
+stepRecordById : Int -> Traversal Model StepRecord x y
+stepRecordById stepId =
+    projects << records << success << each << projectStepRecords << where_ (.id >> (==) (Just stepId))
+
+
+stepRevisionById : Int -> Model -> Maybe String
+stepRevisionById stepId model =
+    try (stepRecordById stepId) model |> Maybe.andThen (Model.stepRevision model)
+
+
+stepShownRevision : Int -> Traversal Model String x y
+stepShownRevision stepId =
+    currentProject << success << tables << values << recordById stepId << runState << success << commit
 
 
 sortKey : Lens ls { a | sortKey : b } b x y
@@ -624,6 +649,21 @@ stepStatusHooks =
 stepStatusBuffer : Lens ls Model (Dict Int ( String, Model.Status )) x y
 stepStatusBuffer =
     lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
+
+
+pendingBuilds : Lens ls Model (Dict Int String) x y
+pendingBuilds =
+    lens ".pendingBuilds" Model.getPendingBuilds (\(Model m) builds -> Model { m | pendingBuilds = builds })
+
+
+openDiff : Lens ls Model (Maybe ( Int, Float )) x y
+openDiff =
+    lens ".openDiff" Model.getOpenDiff (\(Model m) shown -> Model { m | openDiff = shown })
+
+
+reviewDraft : Lens ls Model (Maybe ReviewDraft) x y
+reviewDraft =
+    lens ".reviewDraft" Model.getReviewDraft (\(Model m) draft -> Model { m | reviewDraft = draft })
 
 
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y
