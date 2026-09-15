@@ -33,7 +33,7 @@ import GHC.Generics (Generic)
 import Handlers.Projects (rewriteNixFile)
 import Handlers.Statuses (checkStatus, forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
-import Network.Wai (Application, responseFile, responseLBS)
+import Network.Wai (Application, responseLBS)
 import OutPaths (withWriteRepoTransaction)
 import Servant (Handler, NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
@@ -159,17 +159,25 @@ reviewDiffHandler stepId mCommit = Tagged $ \_ respond -> do
         review <- stepReview context stepId
         reviewed <- maybe (throwError "This step has no review, so there is nothing to compare it with.") (commitContext (readRepoPath context) . reviewedRevision) review
         (,) <$> stepOutPath reviewed stepId <*> stepOutPath viewed stepId
-    report <- runExceptT $ liftEither prepared >>= uncurry (renderReport stepId)
+    report <- runExceptT $ do
+        (reviewed, viewed) <- liftEither prepared
+        path <- uncurry (renderReport stepId) (reviewed, viewed)
+        dressReport stepId reviewed viewed <$> liftIO (TIO.readFile path)
     respond $ either failure success report
   where
     failure message = responseLBS status500 [("Content-Type", "text/plain; charset=utf-8")] (TLE.encodeUtf8 (TL.pack message))
-    success path =
-        responseFile status200
+    success html =
+        responseLBS
+            status200
             [ ("Content-Type", "text/html; charset=utf-8")
             , ("Content-Security-Policy", "sandbox allow-same-origin; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
             , ("X-Content-Type-Options", "nosniff")
-            ] path Nothing
+            ]
+            (TLE.encodeUtf8 (TL.fromStrict html))
 
+{- | The returned file is diffoscope's own output: the cache is keyed by the two
+store hashes, which decide what it holds rather than who reads it.
+-}
 renderReport :: Int -> FilePath -> FilePath -> ExceptT String IO FilePath
 renderReport stepId reviewed viewed = do
     hashes <- storeHashes [reviewed, viewed]
@@ -184,21 +192,246 @@ renderReport stepId reviewed viewed = do
         (code, _, stderr) <- liftIO $ readProcessWithExitCode "diffoscope" (comparisonArgs staging) ""
         unless (code `elem` [ExitSuccess, ExitFailure 1]) $
             throwError ("Output comparison failed: " ++ take 300 (unwords (words stderr)))
-        liftIO $ do
-            TIO.readFile staging >>= TIO.writeFile staging . relabel . retitle
-            renameFile staging reportPath
+        liftIO $ renameFile staging reportPath
     pure reportPath
   where
     storeHash = take 32 . takeFileName
+    comparisonArgs out =
+        words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
+            ++ ["--html", out, reviewed, viewed]
+
+{- | Applied on the way out: only the comparison is cached, so a report rendered
+before any of this was here reads the same as a fresh one.
+-}
+dressReport :: Int -> FilePath -> FilePath -> Text -> Text
+dressReport stepId reviewed viewed =
+    injectStyles . source viewed "viewed" . source reviewed "reviewed" . retitle
+  where
     retitle html =
         let (before, rest) = T.breakOn "<title>" html
             (_, closing) = T.breakOn "</title>" rest
          in before <> "<title>Step " <> T.pack (show stepId) <> " · reviewed vs viewed" <> closing
-    relabel = source reviewed "reviewed" . source viewed "viewed"
     source path name = T.replace ("class=\"source\">" <> T.pack path) ("class=\"source\">" <> name)
-    comparisonArgs out =
-        words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
-            ++ ["--html", out, reviewed, viewed]
+    injectStyles html =
+        let (before, rest) = T.breakOn "</head>" html
+         in before <> reportStyles <> rest
+
+{- | Diffoscope dresses its report as a page of its own; a reviewer reads it
+inside a step row, so it is dressed for the app instead. The palette mirrors
+frontend/styles/_tokens.scss, and the light values answer to the colour scheme
+the embedding frame carries, since a report cannot read the root's theme.
+-}
+reportStyles :: Text
+reportStyles =
+    T.unlines
+        [ "<style>"
+        , "body.diffoscope {"
+        , "  --bg-primary: #1e1e1e;"
+        , "  --bg-secondary: #252526;"
+        , "  --bg-elevated: #2d2d30;"
+        , "  --bg-hover: #38383b;"
+        , "  --text-primary: #e6e6e6;"
+        , "  --text-secondary: #b3b3b3;"
+        , "  --text-muted: #808080;"
+        , "  --border-color: #5a5a5a;"
+        , "  --line-color: rgba(90, 90, 90, 0.3);"
+        , "  --link: #0969da;"
+        , "  --state-danger: #e05252;"
+        , "  --state-danger-outline: rgba(224, 82, 82, 0.4);"
+        , "  --row-added: rgba(46, 160, 67, 0.16);"
+        , "  --row-deleted: rgba(224, 82, 82, 0.16);"
+        , "  --row-changed: rgba(226, 183, 20, 0.12);"
+        , "  --mark-added: rgba(46, 160, 67, 0.32);"
+        , "  --mark-deleted: rgba(224, 82, 82, 0.32);"
+        , "  --font-size-sm: 12px;"
+        , "  --radius-sm: 6px;"
+        , "  --spacing-2xs: 2px;"
+        , "  --spacing-xs: 4px;"
+        , "  --spacing-sm: 8px;"
+        , "  margin: 0;"
+        , "  padding: var(--spacing-sm);"
+        , "  background: var(--bg-secondary);"
+        , "  color: var(--text-primary);"
+        , "  font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;"
+        , "}"
+        , ""
+        , "@media (prefers-color-scheme: light) {"
+        , "  body.diffoscope {"
+        , "    --bg-primary: #fafafa;"
+        , "    --bg-secondary: #eaeaeb;"
+        , "    --bg-elevated: #ffffff;"
+        , "    --bg-hover: #dfdfdf;"
+        , "    --text-primary: #1a1a1a;"
+        , "    --text-secondary: #454545;"
+        , "    --text-muted: #6e6e6e;"
+        , "    --border-color: #c4c4c4;"
+        , "    --line-color: rgba(5, 80, 174, 0.3);"
+        , "    --link: #0550ae;"
+        , "    --state-danger: #cf222e;"
+        , "    --state-danger-outline: rgba(207, 34, 46, 0.12);"
+        , "    --row-added: rgba(26, 127, 55, 0.12);"
+        , "    --row-deleted: rgba(207, 34, 46, 0.12);"
+        , "    --row-changed: rgba(154, 103, 0, 0.12);"
+        , "    --mark-added: rgba(26, 127, 55, 0.22);"
+        , "    --mark-deleted: rgba(207, 34, 46, 0.22);"
+        , "  }"
+        , "}"
+        , ""
+        , "/* The root difference is the report; the ones inside it are the files. */"
+        , ".diffoscope .difference {"
+        , "  border: 1px solid var(--border-color);"
+        , "  border-radius: var(--radius-sm);"
+        , "  background: none;"
+        , "  padding: var(--spacing-sm);"
+        , "  margin: 0 0 var(--spacing-sm);"
+        , "}"
+        , ""
+        , ".diffoscope > .difference {"
+        , "  border: 0;"
+        , "  border-radius: 0;"
+        , "  padding: 0;"
+        , "  margin: 0;"
+        , "}"
+        , ""
+        , ".diffoscope > .difference > .diffheader {"
+        , "  background: var(--bg-elevated);"
+        , "  border: 1px solid var(--border-color);"
+        , "  border-radius: var(--radius-sm);"
+        , "  padding: var(--spacing-xs) var(--spacing-sm);"
+        , "  margin: 0 0 var(--spacing-xs);"
+        , "}"
+        , ""
+        , ".diffoscope .diffheader {"
+        , "  padding: 0 0 var(--spacing-xs);"
+        , "  font-size: var(--font-size-sm);"
+        , "  color: var(--text-secondary);"
+        , "}"
+        , ""
+        , ".diffoscope .source {"
+        , "  color: var(--text-primary);"
+        , "  font-weight: 600;"
+        , "}"
+        , ""
+        , ".diffoscope .diffsize {"
+        , "  color: var(--text-muted);"
+        , "  font-family: monospace;"
+        , "  font-size: 10px;"
+        , "}"
+        , ""
+        , ".diffoscope .anchor {"
+        , "  color: var(--text-muted);"
+        , "  text-decoration: none;"
+        , "}"
+        , ""
+        , ".diffoscope a {"
+        , "  color: var(--link);"
+        , "}"
+        , ""
+        , ".diffoscope table.diff {"
+        , "  border: 0;"
+        , "  border-collapse: collapse;"
+        , "  width: 100%;"
+        , "  table-layout: fixed;"
+        , "  font-family: 'Courier New', monospace;"
+        , "  font-size: var(--font-size-sm);"
+        , "  word-break: break-word;"
+        , "}"
+        , ""
+        , ".diffoscope table.diff td {"
+        , "  border: 0;"
+        , "  padding: 0 var(--spacing-xs);"
+        , "  vertical-align: top;"
+        , "}"
+        , ""
+        , ".diffoscope .diffline {"
+        , "  color: var(--text-muted);"
+        , "  text-align: right;"
+        , "  user-select: none;"
+        , "}"
+        , ""
+        , ".diffoscope .diffunmodified td {"
+        , "  background: none;"
+        , "}"
+        , ""
+        , ".diffoscope .diffchanged td {"
+        , "  background: var(--row-changed);"
+        , "}"
+        , ""
+        , ".diffoscope .diffadded td {"
+        , "  background: var(--row-added);"
+        , "}"
+        , ""
+        , ".diffoscope .diffdeleted td {"
+        , "  background: var(--row-deleted);"
+        , "}"
+        , ""
+        , ".diffoscope .diffhunk td {"
+        , "  background: var(--bg-elevated);"
+        , "  color: var(--text-muted);"
+        , "  font-size: 11px;"
+        , "  padding: var(--spacing-2xs) var(--spacing-xs);"
+        , "}"
+        , ""
+        , ".diffoscope table.diff tr:hover td {"
+        , "  background: color-mix(in srgb, var(--text-primary) 8%, transparent);"
+        , "}"
+        , ""
+        , ".diffoscope ins {"
+        , "  background: var(--mark-added);"
+        , "}"
+        , ""
+        , ".diffoscope del {"
+        , "  background: var(--mark-deleted);"
+        , "}"
+        , ""
+        , ".diffoscope .dp {"
+        , "  color: var(--text-muted);"
+        , "  opacity: 0.6;"
+        , "}"
+        , ""
+        , ".diffoscope th {"
+        , "  background: var(--bg-elevated);"
+        , "  color: var(--text-secondary);"
+        , "}"
+        , ""
+        , ".diffoscope .comment {"
+        , "  color: var(--text-secondary);"
+        , "  font-style: italic;"
+        , "}"
+        , ""
+        , ".diffoscope .comment.multiline {"
+        , "  font-style: normal;"
+        , "  font-family: monospace;"
+        , "  white-space: pre;"
+        , "}"
+        , ""
+        , ".diffoscope .error {"
+        , "  border: 1px solid var(--state-danger);"
+        , "  border-radius: var(--radius-sm);"
+        , "  background: var(--state-danger-outline);"
+        , "  color: var(--text-primary);"
+        , "  padding: var(--spacing-xs);"
+        , "}"
+        , ""
+        , ".diffoscope table.diff tr.ondemand td,"
+        , ".diffoscope div.ondemand-details {"
+        , "  background: var(--bg-elevated);"
+        , "  color: var(--text-secondary);"
+        , "}"
+        , ""
+        , ".diffoscope table.diff tr.ondemand:hover td,"
+        , ".diffoscope div.ondemand-details:hover {"
+        , "  background: var(--bg-hover);"
+        , "  cursor: pointer;"
+        , "}"
+        , ""
+        , ".diffoscope .footer {"
+        , "  color: var(--text-muted);"
+        , "  font-size: 11px;"
+        , "  padding-top: var(--spacing-sm);"
+        , "}"
+        , "</style>"
+        ]
 
 stepComparisons :: ReadRepoContext -> StepReviews -> StepOutPaths -> ExceptT String IO (Map Int ReviewComparison)
 stepComparisons viewed revisions reviewedOutputs

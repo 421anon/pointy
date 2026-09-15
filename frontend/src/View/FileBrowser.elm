@@ -32,9 +32,17 @@ type DirContext
     | SrcDir Int
 
 
-viewHtmlFrame : { id : String, src : String, zoom : Float -> Flow Model () } -> Html (Flow Model ())
+{-| An embedded document. `fitContent` frames take their height from the document
+they show, which is how the review diff is read: in a row, not in a box.
+-}
+viewHtmlFrame : { id : String, src : String, zoom : Float -> Flow Model (), fitContent : Bool } -> Html (Flow Model ())
 viewHtmlFrame frame =
-    Html.div [ class "iframe-zoom-wrapper" ]
+    Html.div
+        [ classList
+            [ ( "iframe-zoom-wrapper", True )
+            , ( "iframe-zoom-wrapper-fit", frame.fitContent )
+            ]
+        ]
         [ Html.node "iframe"
             [ src frame.src
             , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
@@ -547,7 +555,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             |> Maybe.withDefault Flow.none
                                 in
                                 Html.viewMaybe
-                                    (\htmlSrc -> viewHtmlFrame { id = iframeId, src = htmlSrc, zoom = zoomAction })
+                                    (\htmlSrc -> viewHtmlFrame { id = iframeId, src = htmlSrc, zoom = zoomAction, fitContent = False })
                                     mHtmlSrc
 
                               else if file.seekable then

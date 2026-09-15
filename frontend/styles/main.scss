@@ -962,6 +962,24 @@ $delimited-grid-row-height: 28px;
   resize: vertical;
 }
 
+// The review diff is sized by iframe-fit.js and reads the app's colour scheme
+// through prefers-color-scheme, which the frame carries: a report is a document
+// of its own and cannot follow the root element's theme. It sits on the surface
+// the app shows files on.
+.iframe-zoom-wrapper-fit {
+  height: auto;
+  resize: none;
+
+  > iframe {
+    background: var(--bg-secondary);
+    color-scheme: dark;
+  }
+}
+
+[data-theme="light"] .iframe-zoom-wrapper-fit > iframe {
+  color-scheme: light;
+}
+
 .iframe-zoom-btn {
   position: absolute;
   bottom: var(--spacing-sm);

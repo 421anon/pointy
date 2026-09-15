@@ -200,6 +200,7 @@ viewDiffSection model record =
                     { id = frameId
                     , src = Api.reviewDiffUrl stepId (Model.viewedRevision model)
                     , zoom = Actions.zoomIframeBy (Lenses.openDiff << just << snd) frameId
+                    , fitContent = True
                     }
 
         _ ->

@@ -4,6 +4,7 @@ import { connectPorts } from "./ffi.js";
 import "./code-editor.js";
 import "./molstar-viewer.js";
 import "./grid-resize.js";
+import "./iframe-fit.js";
 
 // Initialize the Elm app
 const app = Elm.Main.init({
