@@ -464,6 +464,7 @@ loadProjectReviews =
 
                                         else
                                             Flow.over (stepRecords << review << just << comparison) ApiData.stopLoading
+                                                |> Flow.seq (Flow.async loadProjectReviews)
                                     )
                         )
             )
@@ -4097,10 +4098,8 @@ settlePendingBuild snapshotCommit stepId status_ =
             (\model ->
                 case ( settled, Dict.get stepId (Model.getPendingBuilds model) ) of
                     ( Just report, Just requestedRevision ) ->
-                        Flow.when (requestedRevision == snapshotCommit)
-                            (Flow.over pendingBuilds (Dict.remove stepId)
-                                |> Flow.seq report
-                            )
+                        Flow.over pendingBuilds (Dict.remove stepId)
+                            |> Flow.seq (Flow.when (requestedRevision == snapshotCommit) report)
 
                     _ ->
                         Flow.pure ()

@@ -7,7 +7,7 @@ import Components.Select exposing (SelectState)
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Dict.Accessors
-import Extra.Accessors exposing (by, remkT, where_)
+import Extra.Accessors exposing (by, orElseT, remkT, where_)
 import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
@@ -95,7 +95,7 @@ projects =
 
 currentTableOf : String -> Traversal Model (Table StepRecord) x y
 currentTableOf key_ =
-    currentProject << success << tableInProject key_
+    currentProject << orElseT success ApiData.reloading << tableInProject key_
 
 
 tableInProject : String -> Traversal ProjectRecord (Table StepRecord) x y
