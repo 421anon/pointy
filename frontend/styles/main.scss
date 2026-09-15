@@ -1159,8 +1159,30 @@ $delimited-grid-row-height: 28px;
   animation: spin 1s linear infinite;
 }
 
+.step-review-revision {
+  // A term with an explanation, not a control.
+  cursor: help;
+}
+
 .step-review-revision-hash {
   font-family: monospace;
+  // Not a link: a dashed line marks it as a term with an explanation.
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+}
+
+.icon-btn-tooltip {
+  display: inline-flex;
+}
+
+.icon-btn-inactive {
+  cursor: default;
+  opacity: 0.45;
+
+  &:hover {
+    background: none;
+    color: var(--text-muted);
+  }
 }
 
 .dir-item-icon-btn {

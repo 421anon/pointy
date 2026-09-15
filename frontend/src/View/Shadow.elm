@@ -23,6 +23,8 @@ import Model.Shadow exposing (StepConfigEntry)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
 import Specs
+import Time exposing (Posix)
+import Time.Distance
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
@@ -44,25 +46,41 @@ comparisonChip comparison =
             Nothing
 
         Model.SameContent ->
-            Just (ComparisonChip "muted" "published_with_changes" "Same content" "The viewed revision builds a different store path with identical content. Updating the review is optional.")
+            Just (ComparisonChip "muted" "published_with_changes" "Same content" "This step's inputs have changed since review but the outcome is the same. No action needed.")
 
         Model.ViewedOutputUnbuilt ->
-            Just (ComparisonChip "muted" "pending" "Not built" "The viewed revision's output is not built, so it cannot be compared with the reviewed output. Build it to compare.")
+            Just (ComparisonChip "muted" "pending" "Not built" "This step's inputs have changed since review. You may build the latest version to check whether the outputs change too.")
 
         Model.DifferentContent ->
-            Just (ComparisonChip "warning" "difference" "Differs" "The viewed output differs from the reviewed output. View the diff, then remove the review to review the changed output.")
+            Just (ComparisonChip "warning" "difference" "Differs" "This step's output changed since review. The reviewed version is still shown. Inspect the difference here.")
 
+        -- A review whose output is gone is a question for the reviewer, not a
+        -- row-level flag: the popover names it as the reason updates are off.
         Model.ReviewedOutputUnbuilt ->
-            Just (ComparisonChip "warning" "warning" "Reviewed output missing" "The reviewed output is no longer in the store. Run the step to rebuild its reviewed revision, or remove the review.")
+            Nothing
 
 
+{-| Why a review cannot be updated. Comparisons that carry no chip still block
+an update, so they are named here, next to the fields they disable.
+-}
 blockedReason : ApiData.ApiData Model.ReviewComparison -> Maybe String
 blockedReason comparison =
     let
         checking =
             Just "Checking the viewed revision's output."
     in
-    ApiData.foldVisible checking (always checking) (Maybe.map .explanation << comparisonChip) (always (Just "The review check failed, so the review cannot be updated.")) comparison
+    ApiData.foldVisible checking
+        (always checking)
+        (\current ->
+            case current of
+                Model.ReviewedOutputUnbuilt ->
+                    Just "The reviewed output is no longer in the store. Run the step to rebuild its reviewed revision, or remove the review."
+
+                _ ->
+                    Maybe.map .explanation (comparisonChip current)
+        )
+        (always (Just "The review check failed, so the review cannot be updated."))
+        comparison
 
 
 viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
@@ -70,7 +88,7 @@ viewReviewControls model spec stepId record =
     let
         content =
             viewReviewPopover model spec stepId record
-                ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId) record.review
+                ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId record.lastModifiedAt) record.review
     in
     if List.isEmpty content then
         Nothing
@@ -84,8 +102,8 @@ viewReviewControls model spec stepId record =
                 content
 
 
-viewReviewIndicator : Model -> TableSpec StepRecord -> Int -> Model.Review -> List (Html (Flow Model ()))
-viewReviewIndicator model spec stepId reviewed =
+viewReviewIndicator : Model -> TableSpec StepRecord -> Int -> Maybe Posix -> Model.Review -> List (Html (Flow Model ()))
+viewReviewIndicator model spec stepId mReviewedAt reviewed =
     let
         mComparisonChip =
             ApiData.foldVisible
@@ -98,16 +116,13 @@ viewReviewIndicator model spec stepId reviewed =
                 (\error -> Just (ComparisonChip "danger" "error_outline" "Check failed" ("The review check failed: " ++ Http.errorMessage error)))
                 reviewed.comparison
 
-        explanation chip =
-            chip.explanation ++ " Reviewed revision: " ++ String.left 7 reviewed.revision ++ ". Editing is locked. Remove the review to edit it."
-
         viewChip chip =
             Html.span
                 [ Html.Attributes.class ("step-review-chip step-review-" ++ chip.severity)
                 , Html.Attributes.tabindex 0
                 , Html.Attributes.attribute "role" "note"
-                , Html.Attributes.title (explanation chip)
-                , Html.Attributes.attribute "aria-label" (chip.label ++ ". " ++ explanation chip)
+                , Html.Attributes.title chip.explanation
+                , Html.Attributes.attribute "aria-label" (chip.label ++ ". " ++ chip.explanation)
                 ]
                 [ iconCustom False chip.icon [ Html.Attributes.attribute "aria-hidden" "true" ]
                 , Html.text chip.label
@@ -123,9 +138,9 @@ viewReviewIndicator model spec stepId reviewed =
         viewDiffToggle chip =
             Html.button
                 [ Html.Attributes.class "step-review-diff"
-                , Html.Attributes.title (explanation chip)
+                , Html.Attributes.title chip.explanation
                 , Html.Attributes.attribute "aria-expanded" diffExpanded
-                , Html.Attributes.attribute "aria-label" (diffActionLabel ++ ". " ++ explanation chip)
+                , Html.Attributes.attribute "aria-label" (diffActionLabel ++ ". " ++ chip.explanation)
                 , Html.Events.onClick (Actions.toggleDiffPanel stepId)
                 ]
                 [ iconCustom False "difference" [ Html.Attributes.attribute "aria-hidden" "true" ]
@@ -144,9 +159,9 @@ viewReviewIndicator model spec stepId reviewed =
                 ]
                 [ iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
 
-        reviewedRevisionLink =
+        reviewedRevision =
             Html.viewIf (try (route << Route.page << Route.project << mCommit << just) model /= Just reviewed.revision) <|
-                Html.viewMaybe (viewReviewedRevisionLink stepId reviewed.revision) (try currentProjectId model)
+                viewReviewedRevision model mReviewedAt reviewed.revision
 
         comparisonControls =
             if ApiData.toMaybe reviewed.comparison == Just Model.DifferentContent then
@@ -156,7 +171,7 @@ viewReviewIndicator model spec stepId reviewed =
             else
                 [ Html.viewMaybe viewChip mComparisonChip ]
     in
-    (reviewedRevisionLink :: comparisonControls)
+    (reviewedRevision :: comparisonControls)
         ++ [ Html.viewIf (ApiData.toMaybe reviewed.comparison == Just Model.ViewedOutputUnbuilt) (viewBuildViewedLink model spec stepId) ]
 
 
@@ -204,31 +219,101 @@ viewBuildViewedLink model spec stepId =
             ]
 
 
-viewReviewedRevisionLink : Int -> String -> Int -> Html (Flow Model ())
-viewReviewedRevisionLink stepId reviewedRevision projectId =
+viewReviewedRevision : Model -> Maybe Posix -> String -> Html (Flow Model ())
+viewReviewedRevision model mReviewedAt reviewedRevision =
     let
-        shortReviewedRevision =
+        shortRevision =
             String.left 7 reviewedRevision
 
-        targetRoute =
-            Route.fromPage
-                (Route.Project
-                    { projectId = projectId
-                    , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                    , mCommit = Just reviewedRevision
-                    , mCompare = Nothing
-                    }
-                )
+        explanation =
+            reviewedAtExplanation model mReviewedAt shortRevision
     in
-    Html.a
+    Html.span
         [ Html.Attributes.class "step-review-revision"
-        , Html.Attributes.title ("View the repository at the reviewed revision " ++ shortReviewedRevision ++ " (read-only)")
-        , Html.Attributes.attribute "aria-label" ("View reviewed revision of step " ++ String.fromInt stepId ++ " at revision " ++ shortReviewedRevision ++ " (read-only)")
-        , Route.href targetRoute
+        , Html.Attributes.title explanation
+        , Html.Attributes.attribute "aria-label" explanation
         ]
-        [ Html.span [ Html.Attributes.class "step-review-revision-hash", Html.Attributes.style "text-decoration" "underline" ]
-            [ Html.text shortReviewedRevision ]
+        [ Html.span [ Html.Attributes.class "step-review-revision-hash" ]
+            [ Html.text shortRevision ]
         ]
+
+
+{-| A reviewed step is locked, so the record's mtime is the review commit's
+time: it is the only review timestamp the backend reports.
+-}
+reviewedAtExplanation : Model -> Maybe Posix -> String -> String
+reviewedAtExplanation model mReviewedAt shortRevision =
+    "Reviewed at revision "
+        ++ shortRevision
+        ++ Maybe.unwrap "."
+            (\reviewedAt ->
+                ", "
+                    ++ Time.Distance.inWords reviewedAt (Model.getNow model)
+                    ++ ", at "
+                    ++ formatLocalMinute (Model.getZone model) reviewedAt
+                    ++ "."
+            )
+            mReviewedAt
+
+
+formatLocalMinute : Time.Zone -> Posix -> String
+formatLocalMinute zone posix =
+    String.join ""
+        [ String.fromInt (Time.toYear zone posix)
+        , "-"
+        , padToTwo (monthNumber (Time.toMonth zone posix))
+        , "-"
+        , padToTwo (Time.toDay zone posix)
+        , " "
+        , padToTwo (Time.toHour zone posix)
+        , ":"
+        , padToTwo (Time.toMinute zone posix)
+        ]
+
+
+padToTwo : Int -> String
+padToTwo number =
+    String.padLeft 2 '0' (String.fromInt number)
+
+
+monthNumber : Time.Month -> Int
+monthNumber month =
+    case month of
+        Time.Jan ->
+            1
+
+        Time.Feb ->
+            2
+
+        Time.Mar ->
+            3
+
+        Time.Apr ->
+            4
+
+        Time.May ->
+            5
+
+        Time.Jun ->
+            6
+
+        Time.Jul ->
+            7
+
+        Time.Aug ->
+            8
+
+        Time.Sep ->
+            9
+
+        Time.Oct ->
+            10
+
+        Time.Nov ->
+            11
+
+        Time.Dec ->
+            12
 
 
 viewReviewPopover : Model -> TableSpec StepRecord -> Int -> StepRecord -> List (Html (Flow Model ()))

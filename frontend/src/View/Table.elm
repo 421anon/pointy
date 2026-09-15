@@ -655,6 +655,12 @@ viewRecordActions spec isReadOnly mProjectId record =
               { shouldShow = isSuccessStatus << TableSpec.getStatus spec
               , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
               }
+            , -- A locked record keeps its edit button, dead, ahead of the
+              -- inspection that stands in for it: what unlocks the record is
+              -- worth saying where the reviewer reaches for it.
+              { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
+              , render = always (viewDisabledIconButtonWithTooltip "edit" "Remove review to edit")
+              }
             , { shouldShow = Maybe.isJust << .id
               , render =
                     \r ->
@@ -2508,6 +2514,26 @@ viewIconButtonWithTooltip iconName filled tooltip action =
         ]
         [ icon filled iconName
         , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
+        ]
+
+
+{-| A disabled control shows no tooltip of its own, so the title sits on the
+wrapper that the pointer still reaches.
+-}
+viewDisabledIconButtonWithTooltip : String -> String -> Html (Flow Model ())
+viewDisabledIconButtonWithTooltip iconName tooltip =
+    Html.span
+        [ class "icon-btn-tooltip"
+        , title tooltip
+        ]
+        [ Html.button
+            [ class "icon-btn icon-btn-inactive"
+            , disabled True
+            , attribute "aria-label" tooltip
+            ]
+            [ icon False iconName
+            , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
+            ]
         ]
 
 

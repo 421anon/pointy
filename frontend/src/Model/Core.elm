@@ -452,6 +452,7 @@ type Model
         , gutterDrag : Maybe GutterDrag
         , compareState : CompareState
         , now : Time.Posix
+        , zone : Time.Zone
         , agent : AgentState
         , clusterStatus : ClusterStatus
         , runningStepIds : List Int
@@ -782,6 +783,11 @@ getNow (Model model) =
     model.now
 
 
+getZone : Model -> Time.Zone
+getZone (Model model) =
+    model.zone
+
+
 dndSystem : DnDList.System a DnDList.Msg
 dndSystem =
     let
@@ -862,6 +868,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
+        , zone = Time.utc
         , agent = { initAgentState | lastChat = flags.lastChat }
         , clusterStatus = ClusterUnknown
         , runningStepIds = []

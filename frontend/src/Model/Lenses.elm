@@ -766,6 +766,11 @@ now =
     lens ".now" Model.getNow (\(Model m) t -> Model { m | now = t })
 
 
+zone : Lens ls Model Time.Zone x y
+zone =
+    lens ".zone" Model.getZone (\(Model m) z -> Model { m | zone = z })
+
+
 templateSource : Lens ls { a | templateSource : TemplateSource } TemplateSource x y
 templateSource =
     lens ".templateSource" .templateSource (\p t -> { p | templateSource = t })

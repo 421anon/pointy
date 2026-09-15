@@ -11,7 +11,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectId, projectStepRecords, projects, records, route, runState, stepConfig, tables, userRepoInfo)
+import Model.Lenses exposing (commitHash, currentProjectId, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectId, projectStepRecords, projects, records, route, runState, stepConfig, tables, userRepoInfo, zone)
 import Ports
 import Route exposing (Route)
 import Specs
@@ -61,6 +61,9 @@ initializeWorkspace =
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
+        -- The browser only reports its current offset, so times on the far
+        -- side of a daylight saving change are off by the difference.
+        |> Flow.seq (Flow.performTask Time.here |> Flow.andThen (Flow.setAll zone))
         |> Flow.seq (Flow.async Actions.startClusterStatusStream)
         |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
 
