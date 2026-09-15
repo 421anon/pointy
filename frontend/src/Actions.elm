@@ -105,7 +105,7 @@ toggleAddOrEditRecordForm spec mRecordId =
             Flow.attemptTask (Dom.focus (TableSpec.getName spec ++ "-name-input"))
     in
     Flow.get
-        |> Flow.andThen (\model -> Flow.over (TableSpec.getLens spec) (updateTable (Model.isReadOnlyRoute model)))
+        |> Flow.andThen (\model -> Flow.over (TableSpec.getLens spec) (updateTable (isReadOnlyRoute model)))
         |> Flow.seq Flow.get
         |> Flow.map (try (TableSpec.getLens spec << edited << just))
         |> Flow.andThen
@@ -762,7 +762,7 @@ endRecordEdit lens =
                     (\t ->
                         let
                             cleared =
-                                case ( Model.isReadOnlyRoute model, t.edited ) of
+                                case ( isReadOnlyRoute model, t.edited ) of
                                     ( False, Just r ) ->
                                         set (draftAt r.id) Nothing t
 
@@ -4067,7 +4067,7 @@ applyListedStatuses statuses model =
 
         hooks =
             statuses
-                |> Dict.filter (\_ ( _, status_ ) -> status_ == StatusSuccess)
+                |> Dict.filter (\_ -> succeeded)
                 |> Dict.keys
                 |> List.map runAndClearStepStatusHook
 
@@ -4099,7 +4099,12 @@ announcedStatus statuses =
 
 announcedSuccess : Dict Int ( String, Status ) -> StepRecord -> Bool
 announcedSuccess statuses =
-    announcedStatus statuses >> Maybe.map Tuple.second >> (==) (Just StatusSuccess)
+    announcedStatus statuses >> Maybe.unwrap False succeeded
+
+
+succeeded : ( String, Status ) -> Bool
+succeeded =
+    Tuple.second >> (==) StatusSuccess
 
 
 applyStatusToStepRecord : Model -> Dict Int ( String, Status ) -> StepRecord -> StepRecord

@@ -1,10 +1,12 @@
 module View.Shadow exposing (viewProject)
 
-import Accessors exposing (get, just, snd, try)
+import Accessors exposing (get, has, just, snd, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData
+import Basics.Extra exposing (flip)
 import Dict
+import Extra.Accessors exposing (where_)
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
@@ -16,7 +18,7 @@ import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses as Lenses exposing (currentProject, currentProjectId, mCommit, route)
+import Model.Lenses as Lenses exposing (currentProject, currentProjectId, isReadOnlyRoute, mCommit, recordId, route)
 import Model.Shadow exposing (StepConfigEntry)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
@@ -347,7 +349,7 @@ viewProject : Model -> ProjectRecord -> Html (Flow Model ())
 viewProject model proj =
     let
         isReadOnly =
-            Model.isReadOnlyRoute model
+            isReadOnlyRoute model
 
         mProjectSpec =
             Maybe.map2 Specs.projects
@@ -458,8 +460,10 @@ viewSection model sectionName entry steps =
 
         projectIdKey =
             try currentProjectId model
-                |> Maybe.map String.fromInt
-                |> Maybe.unwrap "" identity
+                |> Maybe.unwrap "" String.fromInt
+
+        uploads =
+            Model.getUploadProgress model
 
         page =
             (Model.getRoute model).page
@@ -469,6 +473,11 @@ viewSection model sectionName entry steps =
 
         stepLogs =
             Model.getStepLogs model
+
+        recordLog record =
+            record.id
+                |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id currentRouteCommit) stepLogs)
+                |> Maybe.unwrap ApiData.NotAsked identity
     in
     viewTable
         { model = model
@@ -480,10 +489,7 @@ viewSection model sectionName entry steps =
                     sectionName
                     entry
                     page
-                    (record.id
-                        |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id currentRouteCommit) stepLogs)
-                        |> Maybe.unwrap ApiData.NotAsked identity
-                    )
+                    (recordLog record)
                     record
         , recordActionsPopover =
             \record ->
@@ -495,10 +501,7 @@ viewSection model sectionName entry steps =
                     projectIdKey
                     page
                     record
-                    (record.id
-                        |> Maybe.map (\id -> Dict.member id (Model.getUploadProgress model))
-                        |> Maybe.unwrap False identity
-                    )
+                    (has (recordId << just << where_ (flip Dict.member uploads)) record)
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values

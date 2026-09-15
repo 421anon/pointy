@@ -12,7 +12,7 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Extra as Html
 import Model.Core as Model exposing (Model)
-import Model.Lenses as Lenses exposing (currentProject, name)
+import Model.Lenses as Lenses exposing (currentProject, isReadOnlyRoute, name)
 import Model.Lib as Lib
 import Model.TableSpec as TableSpec
 import Route
@@ -48,7 +48,7 @@ view model =
                             \record ->
                                 viewRecordActionsPopover
                                     (actionsPopoverId (TableSpec.getName spec) record)
-                                    (viewRecordActions spec (Model.isReadOnlyRoute model) mProjectId record)
+                                    (viewRecordActions spec (isReadOnlyRoute model) mProjectId record)
                         , alwaysVisibleRecordActions = \_ -> []
                         , directorySection = \_ -> Html.nothing
                         , srcFilesSection = \_ -> Html.nothing

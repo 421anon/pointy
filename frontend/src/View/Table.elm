@@ -28,7 +28,7 @@ import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), StepRecord, Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
-import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, recordId, records, route, selectExistingSteps, tables, templatesSelect)
+import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, isReadOnlyPage, isReadOnlyRoute, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, recordId, records, route, selectExistingSteps, tables, templatesSelect)
 import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), TStringDisplay(..), downloadArgs, tBoolValue, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
@@ -41,13 +41,8 @@ import View.Icons exposing (icon, iconCustom)
 
 
 isSuccessStatus : ApiData Status -> Bool
-isSuccessStatus status =
-    case status of
-        Success StatusSuccess ->
-            True
-
-        _ ->
-            False
+isSuccessStatus =
+    has (ApiData.success << where_ ((==) StatusSuccess))
 
 
 sortBySortKey : List (BaseRecord a) -> List (BaseRecord a)
@@ -143,7 +138,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                     Nothing
 
         isReadOnly =
-            Model.isReadOnlyRoute model
+            isReadOnlyRoute model
 
         isProjectsTag =
             TableSpec.getTag spec == TagProjects
@@ -462,13 +457,8 @@ viewMtimeBadge mPosix now =
 
 
 routeCommit : Route.Page -> Maybe String
-routeCommit page =
-    case page of
-        Route.Project { mCommit } ->
-            mCommit
-
-        _ ->
-            Nothing
+routeCommit =
+    try (Route.project << mCommit << just)
 
 
 viewStatusApiData : String -> Maybe String -> ApiData String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
@@ -774,7 +764,7 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
             Specs.steps name entry
 
         isReadOnly =
-            Model.isReadOnlyPage page
+            isReadOnlyPage page
 
         mProjectId =
             String.toInt projectIdKey
@@ -870,7 +860,7 @@ viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord
 viewAddOrEditRecordForm model spec table extraSection record =
     let
         readOnly =
-            Model.isReadOnlyRoute model || TableSpec.getIsLocked spec record
+            isReadOnlyRoute model || TableSpec.getIsLocked spec record
 
         editing =
             record.id /= Nothing && (table.addMode /= AddFromOtherProject)

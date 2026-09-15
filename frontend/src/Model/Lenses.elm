@@ -61,6 +61,16 @@ currentProjectId =
     currentProject << success << recordId << just
 
 
+isReadOnlyPage : Route.Page -> Bool
+isReadOnlyPage =
+    has (Route.project << mCommit << just)
+
+
+isReadOnlyRoute : Model -> Bool
+isReadOnlyRoute =
+    has (route << Route.page << Route.project << mCommit << just)
+
+
 projectStep : Maybe Int -> Maybe Int -> Traversal Model StepRecord x y
 projectStep mPid mRid =
     projects << records << success << by .id mPid << projectStepRecords << where_ (.id >> (==) mRid)

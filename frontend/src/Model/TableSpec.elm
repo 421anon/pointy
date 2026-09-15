@@ -101,15 +101,7 @@ getShareable (TableSpec spec) =
 
 isShareableStatus : Status -> Bool
 isShareableStatus status =
-    case status of
-        StatusSuccess ->
-            True
-
-        StatusRunning ->
-            True
-
-        _ ->
-            False
+    status == StatusSuccess || status == StatusRunning
 
 
 getDirectoryView : TableSpec a -> a -> Maybe DirectoryFolder
