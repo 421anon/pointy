@@ -2,6 +2,7 @@ module Model.Lenses exposing (..)
 
 import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData, success)
+import Basics.Extra exposing (flip)
 import Browser.Navigation
 import Components.Select exposing (SelectState)
 import Debounce exposing (Debounce)
@@ -12,6 +13,7 @@ import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
+import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, ReviewDraft, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
@@ -556,9 +558,19 @@ projectStepRecords =
     tables << values << records << success << each
 
 
+stepRecords : Traversal Model StepRecord x y
+stepRecords =
+    projects << records << success << each << projectStepRecords
+
+
+stepRecordsListed : Dict Int a -> Traversal Model StepRecord x y
+stepRecordsListed statuses =
+    stepRecords << where_ (.id >> Maybe.unwrap False (flip Dict.member statuses))
+
+
 stepRecordById : Int -> Traversal Model StepRecord x y
 stepRecordById stepId =
-    projects << records << success << each << projectStepRecords << where_ (.id >> (==) (Just stepId))
+    stepRecords << where_ (.id >> (==) (Just stepId))
 
 
 stepRevisionById : Int -> Model -> Maybe String

@@ -5,6 +5,7 @@ import Api.Agent as AgentApi
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Api.Decode as ApiDecode
+import Basics.Extra exposing (flip)
 import Browser
 import Browser.Dom as Dom
 import Browser.Navigation as Nav
@@ -279,10 +280,7 @@ replayStepStatusBuffer =
     Flow.get
         |> Flow.andThen
             (\model ->
-                get stepStatusBuffer model
-                    |> Dict.toList
-                    |> List.map (\( stepId, ( commit, status ) ) -> updateStepStatus commit stepId status)
-                    |> Flow.batchM
+                applyStepStatuses (get stepStatusBuffer model)
                     |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
             )
 
@@ -303,8 +301,17 @@ applyStepStatus snapshotCommit status_ rs =
 
             else
                 collapsedDirectoryView
+
+        updated =
+            { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
     in
-    Success { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
+    -- A repeated status must not build a new record: a new reference throws away
+    -- every lazily rendered part of the row.
+    if rs == Success updated then
+        rs
+
+    else
+        Success updated
 
 
 applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
@@ -4024,7 +4031,7 @@ onStepStatusIn value =
                 |> Flow.andThen
                     (\model ->
                         Flow.when (headMovedRemotely model commit) (Flow.async (resyncWorkspace commit))
-                            |> Flow.seq (Flow.batchM (List.map (\s -> updateStepStatus commit s.stepId s.status) steps))
+                            |> Flow.seq (applyStepStatuses (Dict.fromList (List.map (\step -> ( step.stepId, ( commit, step.status ) )) steps)))
                     )
 
         Ok SSEHeartbeat ->
@@ -4043,34 +4050,97 @@ headMovedRemotely model snapshotCommit =
         && not (has (route << Route.page << Route.project << mCommit << just) model)
 
 
-updateStepStatus : String -> Int -> Status -> Flow Model ()
-updateStepStatus snapshotCommit stepId newStatus =
+{-| Apply a whole broadcast in one walk: it lists every running or succeeded step. -}
+applyStepStatuses : Dict Int ( String, Status ) -> Flow Model ()
+applyStepStatuses statuses =
+    Flow.get |> Flow.andThen (applyListedStatuses statuses)
+
+
+applyListedStatuses : Dict Int ( String, Status ) -> Model -> Flow Model ()
+applyListedStatuses statuses model =
     let
-        stepRunState =
-            stepRecordById stepId << runState
+        listed =
+            all (stepRecordsListed statuses) model
 
-        reviewedRunFinished model =
-            has (stepRecordById stepId << review << just) model
-                && (try (stepRunState << success << status) model |> Maybe.andThen ApiData.toMaybe)
-                == Just StatusRunning
+        listedIds =
+            Set.fromList (List.filterMap (get recordId) listed)
+
+        pending =
+            Dict.filter (\stepId _ -> not (Set.member stepId listedIds)) statuses
+
+        dropListed =
+            Dict.filter (\stepId _ -> not (Set.member stepId listedIds))
+
+        hooks =
+            statuses
+                |> Dict.filter (\_ ( _, status_ ) -> status_ == StatusSuccess)
+                |> Dict.keys
+                |> List.map runAndClearStepStatusHook
+
+        settles =
+            Dict.toList statuses
+                |> List.map (\( stepId, ( commit, status_ ) ) -> settlePendingBuild commit stepId status_)
+
+        reviewReloads =
+            listed
+                |> List.filter (renewsReview statuses)
+                |> List.map (always (Flow.async loadProjectReviews))
     in
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.batchM
-                    [ if has stepRunState model then
-                        Flow.when (Maybe.unwrap True ((==) snapshotCommit) (stepRevisionById stepId model))
-                            (Flow.over stepRunState (applyStatusSnapshot snapshotCommit newStatus)
-                                |> Flow.seq (Flow.over stepStatusBuffer (Dict.remove stepId))
-                                |> Flow.seq (Flow.when (newStatus == StatusSuccess && reviewedRunFinished model) (Flow.async loadProjectReviews))
-                            )
+    Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
+        |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (dropListed buffer) pending))
+        |> Flow.seq (Flow.batchM (hooks ++ settles ++ reviewReloads))
 
-                      else
-                        Flow.over stepStatusBuffer (Dict.insert stepId ( snapshotCommit, newStatus ))
-                    , Flow.when (newStatus == StatusSuccess) (runAndClearStepStatusHook stepId)
-                    , settlePendingBuild snapshotCommit stepId newStatus
-                    ]
-            )
+
+renewsReview : Dict Int ( String, Status ) -> StepRecord -> Bool
+renewsReview statuses record =
+    has (review << just) record
+        && has (runState << success << status << where_ ((==) (Success StatusRunning))) record
+        && announcedSuccess statuses record
+
+
+announcedStatus : Dict Int ( String, Status ) -> StepRecord -> Maybe ( String, Status )
+announcedStatus statuses =
+    get recordId >> Maybe.andThen (flip Dict.get statuses)
+
+
+announcedSuccess : Dict Int ( String, Status ) -> StepRecord -> Bool
+announcedSuccess statuses =
+    announcedStatus statuses >> Maybe.map Tuple.second >> (==) (Just StatusSuccess)
+
+
+applyStatusToStepRecord : Model -> Dict Int ( String, Status ) -> StepRecord -> StepRecord
+applyStatusToStepRecord model statuses record =
+    case announcedStatus statuses record of
+        Just ( commit, status_ ) ->
+            if acceptsCommit model commit record then
+                applySnapshotToRecord commit status_ record
+
+            else
+                record
+
+        Nothing ->
+            record
+
+
+acceptsCommit : Model -> String -> StepRecord -> Bool
+acceptsCommit model commit =
+    Maybe.unwrap True ((==) commit) << Model.stepRevision model
+
+
+applySnapshotToRecord : String -> Status -> StepRecord -> StepRecord
+applySnapshotToRecord commit status_ record =
+    let
+        current =
+            get runState record
+
+        updated =
+            applyStatusSnapshot commit status_ current
+    in
+    if updated == current then
+        record
+
+    else
+        set runState updated record
 
 
 settlePendingBuild : String -> Int -> Status -> Flow Model ()
