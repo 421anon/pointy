@@ -35,6 +35,7 @@ import Route exposing (Route)
 import Scroll
 import Set
 import Specs
+import Time exposing (Posix)
 import Time.Distance
 import View.Icons exposing (icon, iconCustom)
 
@@ -226,22 +227,6 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
 
                         validationErrors =
                             TableSpec.getValidationErrors spec record
-
-                        mtimeBadge =
-                            Html.viewMaybe
-                                (\posix ->
-                                    let
-                                        iso =
-                                            Iso8601.fromTime posix
-                                    in
-                                    Html.node "time"
-                                        [ class "table-record-mtime"
-                                        , attribute "datetime" iso
-                                        , title ("Last modified: " ++ iso)
-                                        ]
-                                        [ Html.text (Time.Distance.inWords posix now) ]
-                                )
-                                record.lastModifiedAt
                     in
                     Html.div
                         ([ class "table-record", id itemId ] ++ attrs ++ cmap (mkDropAttrs itemId))
@@ -282,7 +267,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                                         [ iconCustom True "error" [] ]
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
-                                , mtimeBadge
+                                , Html.Lazy.lazy2 viewMtimeBadge record.lastModifiedAt now
                                 , Html.viewIf (record.id == Nothing || record.isUpdating) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
                                         [ iconCustom True "progress_activity" [ class "pending-record-icon" ]
@@ -305,7 +290,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                                 , Html.viewIf (not isReadOnly) <|
                                     Html.div (class "table-record-drag-target" :: cmap (mkDragAttrs itemId))
                                         [ icon True "drag_indicator" ]
-                                , mtimeBadge
+                                , Html.Lazy.lazy2 viewMtimeBadge record.lastModifiedAt now
                                 ]
                             ]
                         , let
@@ -447,6 +432,30 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                 ]
     in
     viewContent
+
+
+{-| The relative-time badge of a record. A row places it twice (in the name
+and in the actions container, only one of which is displayed depending on the
+viewport), so each call site builds its own thunk: a lazy node caches its
+rendered node on itself, and one thunk in two positions would hand the same
+element to both.
+-}
+viewMtimeBadge : Maybe Posix -> Posix -> Html msg
+viewMtimeBadge mPosix now =
+    Html.viewMaybe
+        (\posix ->
+            let
+                iso =
+                    Iso8601.fromTime posix
+            in
+            Html.node "time"
+                [ class "table-record-mtime"
+                , attribute "datetime" iso
+                , title ("Last modified: " ++ iso)
+                ]
+                [ Html.text (Time.Distance.inWords posix now) ]
+        )
+        mPosix
 
 
 routeCommit : Route.Page -> Maybe String
