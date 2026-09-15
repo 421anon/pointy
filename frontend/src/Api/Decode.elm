@@ -207,7 +207,7 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ note args reviewedRevision lastModifiedAt ->
+        (\id name type_ note args reviewedRevision reviewedBy comments lastModifiedAt ->
             { id = Just id
             , clientId = Nothing
             , type_ = type_
@@ -216,7 +216,7 @@ stepValueOnly stepType_ =
             , name = name
             , note = note
             , runState = NotAsked
-            , review = Maybe.map (\revision -> { revision = revision, reviewedBy = "", comments = "", comparison = NotAsked }) reviewedRevision
+            , review = Maybe.map (\revision -> { revision = revision, reviewedBy = reviewedBy, comments = comments, comparison = NotAsked }) reviewedRevision
             , args = args
             , isUpdating = False
             , lastModifiedAt = lastModifiedAt
@@ -237,6 +237,8 @@ stepValueOnly stepType_ =
         |> optional "note" Decode.string ""
         |> required "args" (stepArgs stepType_)
         |> optional "reviewedRevision" (maybe Decode.string) Nothing
+        |> optional "reviewedBy" Decode.string ""
+        |> optional "reviewComments" Decode.string ""
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
 
 
@@ -283,11 +285,7 @@ reviewReport =
                 reviewComparison fields.comparison fields.detail
                     |> Decode.map
                         (\mComparison ->
-                            { review =
-                                Maybe.map2
-                                    (\revision comparison -> { revision = revision, reviewedBy = fields.reviewedBy, comments = fields.comments, comparison = comparison })
-                                    fields.revision
-                                    mComparison
+                            { review = Maybe.map2 (\revision comparison -> { revision = revision, reviewedBy = fields.reviewedBy, comments = fields.comments, comparison = comparison }) fields.revision mComparison
                             , reviewedStatus = Maybe.andThen (always fields.reviewedStatus) mComparison
                             }
                         )
@@ -297,10 +295,7 @@ reviewReport =
 reviewReports : Decoder (Dict Int Model.ReviewReport)
 reviewReports =
     Decode.keyValuePairs reviewReport
-        |> Decode.map
-            (List.filterMap (\( key, outcome ) -> Maybe.map (\stepId -> ( stepId, outcome )) (String.toInt key))
-                >> Dict.fromList
-            )
+        |> Decode.map (List.filterMap (\( key, outcome ) -> Maybe.map (\stepId -> ( stepId, outcome )) (String.toInt key)) >> Dict.fromList)
 
 
 noticeSeverity : Decoder Model.NoticeSeverity

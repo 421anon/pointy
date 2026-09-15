@@ -36,7 +36,6 @@ import Scroll
 import Set
 import Time.Distance
 import View.Icons exposing (icon, iconCustom)
-import View.Lib exposing (popoverTrigger, viewPopover)
 
 
 viewStatusCountBadge : TableSpec (BaseRecord a) -> List (BaseRecord a) -> Html msg
@@ -269,54 +268,62 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             in
                             Html.span []
                                 [ Html.button
-                                    ([ class "status-indicator-wrapper status-log-trigger"
-                                     , title statusText
-                                     ]
-                                        ++ popoverTrigger popoverId
-                                        ++ [ Events.onClick (Actions.loadStepLog stepId) ]
-                                    )
+                                    [ class "status-indicator-wrapper status-log-trigger"
+                                    , title statusText
+                                    , attribute "popovertarget" popoverId
+                                    , style "anchor-name" ("--anchor-" ++ popoverId)
+                                    , Events.onClick (Actions.loadStepLog stepId)
+                                    ]
                                     [ Html.span
                                         [ class ("status-indicator " ++ colorClass) ]
                                         []
                                     ]
-                                , viewPopover popoverId "step-log-popover"
-                                    [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
-                                    , Html.span []
-                                        [ Html.viewMaybe
-                                            (\log ->
-                                                Html.button
-                                                    [ class "icon-btn"
-                                                    , title "Investigate with agent"
-                                                    , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
-                                                    ]
-                                                    [ icon False "smart_toy" ]
-                                            )
-                                            (ApiData.toMaybe logState)
-                                        , Html.button
-                                            [ class "icon-btn"
-                                            , title "Close"
-                                            , Events.onClick (Actions.hidePopover popoverId)
-                                            ]
-                                            [ icon True "close" ]
-                                        ]
+                                , Html.div
+                                    [ class "step-log-popover"
+                                    , id popoverId
+                                    , attribute "popover" "auto"
+                                    , style "position-anchor" ("--anchor-" ++ popoverId)
                                     ]
-                                    [ case logState of
-                                        NotAsked ->
-                                            Html.text "Loading build log..."
+                                    [ Html.div [ class "step-log-popover-header" ]
+                                        [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
+                                        , Html.span []
+                                            [ Html.viewMaybe
+                                                (\log ->
+                                                    Html.button
+                                                        [ class "icon-btn"
+                                                        , title "Investigate with agent"
+                                                        , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
+                                                        ]
+                                                        [ icon False "smart_toy" ]
+                                                )
+                                                (ApiData.toMaybe logState)
+                                            , Html.button
+                                                [ class "icon-btn"
+                                                , title "Close"
+                                                , Events.onClick (Actions.hidePopover popoverId)
+                                                ]
+                                                [ icon True "close" ]
+                                            ]
+                                        ]
+                                    , Html.div [ class "step-log-popover-body" ]
+                                        [ case logState of
+                                            NotAsked ->
+                                                Html.text "Loading build log..."
 
-                                        Loading _ ->
-                                            Html.text "Loading build log..."
+                                            Loading _ ->
+                                                Html.text "Loading build log..."
 
-                                        Success log ->
-                                            if String.isEmpty log then
-                                                Html.text "Build log is empty."
+                                            Success log ->
+                                                if String.isEmpty log then
+                                                    Html.text "Build log is empty."
 
-                                            else
-                                                Html.div [ class "step-log-pre" ]
-                                                    [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
+                                                else
+                                                    Html.div [ class "step-log-pre" ]
+                                                        [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
 
-                                        Error err ->
-                                            Html.text (Http.errorMessage err)
+                                            Error err ->
+                                                Html.text (Http.errorMessage err)
+                                        ]
                                     ]
                                 ]
 
@@ -369,21 +376,20 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         Html.span
                             [ class "record-name-container"
                             ]
-                            ([ Html.text record.name
-                             , Html.viewMaybe
+                            [ Html.text record.name
+                            , Html.viewMaybe
                                 (\id_ ->
                                     Html.span [ class "table-record-id", title <| "id: " ++ String.fromInt id_ ]
                                         [ Html.text (String.fromInt id_) ]
                                 )
                                 record.id
-                             , Html.viewIf (editable record) <|
+                            , Html.viewIf (editable record) <|
                                 iconCustom True
                                     "edit"
                                     [ class "edit-icon"
                                     , Events.stopPropagationOn "click" (Decode.succeed ( Actions.startInlineRecordNameEdit spec record, True ))
                                     ]
-                             ]
-                            )
+                            ]
 
                 viewUnmovedRecord attrs mkDragAttrs mkDropAttrs =
                     let
@@ -496,7 +502,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             ]
                         , let
                             editing =
-                                recordIsEditing record && editable record
+                                recordIsEditing record && (isReadOnly || editable record)
                           in
                           Html.viewIf (editing && not table.nameEditOnly)
                             (Html.viewMaybe
@@ -2285,7 +2291,6 @@ viewIconButtonWithTooltip iconName filled tooltip action =
         [ Events.onClick action
         , class "icon-btn"
         , title tooltip
-        , attribute "aria-label" tooltip
         ]
         [ icon filled iconName
         , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]

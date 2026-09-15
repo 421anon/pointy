@@ -696,12 +696,7 @@ getCommitHash (Model model) =
 
 stepRevision : Model -> StepRecord -> Maybe String
 stepRevision model record =
-    case record.review of
-        Just review ->
-            Just review.revision
-
-        Nothing ->
-            viewedRevision model
+    Maybe.orElse (viewedRevision model) (Maybe.map .revision record.review)
 
 
 viewedRevision : Model -> Maybe String
@@ -1311,23 +1306,13 @@ updateStepRecordTable new old =
                 (\oldRecord ->
                     List.updateIf
                         (\newRecord -> newRecord.id == oldRecord.id)
-                        (\newRecord -> keepReviewState oldRecord { newRecord | runState = oldRecord.runState })
+                        (\newRecord -> { newRecord | runState = oldRecord.runState, review = Maybe.orElse newRecord.review oldRecord.review })
                 )
 
         mergedRecords =
             ApiData.update mergeRecords new.records old.records
     in
     { old | records = mergedRecords }
-
-
-keepReviewState : StepRecord -> StepRecord -> StepRecord
-keepReviewState oldRecord newRecord =
-    case oldRecord.review of
-        Just _ ->
-            { newRecord | review = oldRecord.review }
-
-        Nothing ->
-            newRecord
 
 
 updateProjectRecordList : List ProjectRecord -> List ProjectRecord -> List ProjectRecord

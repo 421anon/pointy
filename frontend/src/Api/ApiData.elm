@@ -197,16 +197,8 @@ toLoading apiData =
 
 
 stopLoading : ApiData a -> ApiData a
-stopLoading apiData =
-    case apiData of
-        Loading (Just value) ->
-            Success value
-
-        Loading Nothing ->
-            NotAsked
-
-        _ ->
-            apiData
+stopLoading =
+    foldVisible NotAsked (Maybe.withDefault NotAsked << Maybe.map Success) Success Error
 
 
 reloading : Prism pr (ApiData a) a x y

@@ -1,6 +1,6 @@
 module Actions exposing (..)
 
-import Accessors exposing (An_Optic, Traversal, all, each, get, has, just, keyI, over, set, try, values)
+import Accessors exposing (An_Optic, all, each, get, has, just, keyI, over, set, try, values)
 import Api.Agent as AgentApi
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
@@ -284,21 +284,24 @@ replayStepStatusBuffer =
             )
 
 
-collapsedDirectoryView : Model.DirectoryFolder
-collapsedDirectoryView =
-    { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
-
-
 applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
 applyStepStatus snapshotCommit status_ rs =
-    Success
-        { commit = snapshotCommit
-        , status = status_
-        , directoryView =
+    let
+        collapsedDirectoryView =
+            { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
+
+        current =
             ApiData.toMaybe rs
-                |> Maybe.filter (.commit >> (==) snapshotCommit)
-                |> Maybe.unwrap collapsedDirectoryView .directoryView
-        }
+                |> Maybe.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView }
+
+        directoryView_ =
+            if current.commit == snapshotCommit then
+                current.directoryView
+
+            else
+                collapsedDirectoryView
+    in
+    Success { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
 
 
 applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
@@ -435,7 +438,7 @@ loadProjectReviews =
         reviewTarget model =
             Maybe.map2 Tuple.pair
                 (try currentProjectId model)
-                (try (orElseT (route << Route.page << Route.project << mCommit << just) (commitHash << success)) model)
+                (Model.viewedRevision model)
     in
     Flow.get
         |> Flow.map reviewTarget
@@ -1232,26 +1235,24 @@ cloneStep spec record =
 
 shareEntity : Int -> Int -> Route.HighlightTarget -> List String -> Maybe Route.LineRange -> Flow Model ()
 shareEntity projectId entityId target pathSegments mRange =
-    Flow.get
-        |> Flow.map Model.viewedRevision
-        |> Flow.andThen
-            (\mCommit_ ->
-                Flow.forAll origin
-                    (\origin_ ->
-                        let
-                            route_ =
-                                Route.fromPage
-                                    (Route.Project
-                                        { projectId = projectId
-                                        , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
-                                        , mCommit = mCommit_
-                                        , mCompare = Nothing
-                                        }
-                                    )
-                        in
-                        callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString route_)
-                    )
-            )
+    Flow.try (orElseT (route << Route.page << Route.project << mCommit << just) (commitHash << success))
+        (\mCommit_ ->
+            Flow.forAll origin
+                (\origin_ ->
+                    let
+                        route_ =
+                            Route.fromPage
+                                (Route.Project
+                                    { projectId = projectId
+                                    , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
+                                    , mCommit = mCommit_
+                                    , mCompare = Nothing
+                                    }
+                                )
+                    in
+                    callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString route_)
+                )
+        )
         |> Flow.seq (addToast True "Share link copied to clipboard")
 
 

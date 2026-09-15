@@ -563,8 +563,7 @@ stepRecordById stepId =
 
 stepRevisionById : Int -> Model -> Maybe String
 stepRevisionById stepId model =
-    try (stepRecordById stepId) model
-        |> Maybe.andThen (Model.stepRevision model)
+    try (stepRecordById stepId) model |> Maybe.andThen (Model.stepRevision model)
 
 
 stepShownRevision : Int -> Traversal Model String x y

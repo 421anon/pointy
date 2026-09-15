@@ -24,6 +24,9 @@ module Api.Api exposing
     , fetchStepLog
     , fetchUserRepoInfo
     , refreshProjectStatus
+    , removeReview
+    , reviewDiffUrl
+    , reviewStep
     , runStep
     , saveProject
     , saveProjectsBatch
@@ -31,17 +34,13 @@ module Api.Api exposing
     , saveSrcFile
     , srcFileDownloadUrl
     , srcFileRawUrl
-    , reviewDiffUrl
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
     , unassignRecordFromProject
-    , removeReview
     , uploadFiles
-    , reviewStep
     )
 
-import Api.ApiData exposing (ApiData)
 import Api.Decode as Decode
 import Api.Encode as Encode
 import Dict exposing (Dict)
@@ -51,7 +50,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, StepRecord, ReviewDraft, ReviewReport)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -109,9 +108,9 @@ appendCommitQuery url commit =
             url
 
 
-idCommitQuery : Int -> Maybe String -> List UrlBuilder.QueryParameter
-idCommitQuery id commit =
-    UrlBuilder.int "id" id
+stepFileQuery : Int -> Maybe String -> List UrlBuilder.QueryParameter
+stepFileQuery stepId commit =
+    UrlBuilder.int "id" stepId
         :: (case commit of
                 Just c ->
                     [ UrlBuilder.string "commit" c ]
@@ -121,20 +120,15 @@ idCommitQuery id commit =
            )
 
 
-filePathUrl : List String -> Int -> Maybe String -> List String -> String
-filePathUrl segments id commit filePath =
-    UrlBuilder.absolute ("backend" :: segments)
-        (idCommitQuery id commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
-
-
 stepFileDownloadUrl : Int -> Maybe String -> List String -> String
-stepFileDownloadUrl =
-    filePathUrl [ "step-files", "download" ]
+stepFileDownloadUrl stepId commit filePath =
+    UrlBuilder.absolute [ "backend", "step-files", "download" ]
+        (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" filePath) ])
 
 
 srcFileRawUrl : Int -> Maybe String -> List String -> String
-srcFileRawUrl =
-    filePathUrl [ "src-files", "raw" ]
+srcFileRawUrl id commit filePath =
+    appendCommitQuery ("/backend/src-files/raw?id=" ++ String.fromInt id ++ "&path=" ++ String.join "/" filePath) commit
 
 
 
@@ -144,8 +138,8 @@ stepFileBundleUrl stepId commit filePath =
 
 
 srcFileDownloadUrl : Int -> Maybe String -> List String -> String
-srcFileDownloadUrl =
-    filePathUrl [ "src-files", "download" ]
+srcFileDownloadUrl id commit filePath =
+    appendCommitQuery ("/backend/src-files/download?id=" ++ String.fromInt id ++ "&path=" ++ String.join "/" filePath) commit
 
 
 stringResponse : (String -> a) -> Http.Response String -> Result Http.Error a
@@ -189,7 +183,7 @@ stepAction : String -> Int -> Maybe String -> Flow s (Result Http.Error ())
 stepAction action id commit =
     Flow.lift <|
         Http.post
-            { url = stepUrl action id commit
+            { url = appendCommitQuery ("/backend/" ++ action ++ "?id=" ++ String.fromInt id) commit
             , body = Http.emptyBody
             , expect = Http.expectStringResponse identity (stringResponse (always ()))
             }
@@ -197,19 +191,14 @@ stepAction action id commit =
 
 reviewDiffUrl : Int -> Maybe String -> String
 reviewDiffUrl id commit =
-    UrlBuilder.absolute [ "backend", "step-review-diff" ] (idCommitQuery id commit)
-
-
-stepUrl : String -> Int -> Maybe String -> String
-stepUrl name id commit =
-    UrlBuilder.absolute [ "backend", name ] (idCommitQuery id commit)
+    appendCommitQuery ("/backend/step-review-diff?id=" ++ String.fromInt id) commit
 
 
 fetchProjectReviews : Int -> String -> Flow s (Result Http.Error (Dict Int ReviewReport))
 fetchProjectReviews projectId commit =
     Flow.lift <|
         Http.get
-            { url = UrlBuilder.absolute [ "backend", "project-review" ] [ UrlBuilder.int "project_id" projectId, UrlBuilder.string "commit" commit ]
+            { url = appendCommitQuery ("/backend/project-review?project_id=" ++ String.fromInt projectId) (Just commit)
             , expect = Http.expectJson identity Decode.reviewReports
             }
 
@@ -218,7 +207,7 @@ reviewStep : ReviewDraft -> Maybe String -> Flow s (Result Http.Error Bool)
 reviewStep draft commit =
     Flow.lift <|
         Http.post
-            { url = stepUrl "step-review" draft.stepId commit
+            { url = appendCommitQuery ("/backend/step-review?id=" ++ String.fromInt draft.stepId) commit
             , body = Http.jsonBody (Encode.reviewDraft draft)
             , expect =
                 Http.expectStringResponse identity
@@ -233,7 +222,7 @@ reviewStep draft commit =
 
 removeReview : Int -> Flow s (Result Http.Error ())
 removeReview id =
-    request "DELETE" (stepUrl "step-review" id Nothing) Http.emptyBody
+    request "DELETE" ("/backend/step-review?id=" ++ String.fromInt id) Http.emptyBody
 
 
 createProject : Presets -> StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
@@ -403,7 +392,7 @@ fetchStepLog : Int -> Maybe String -> Flow s (Result Http.Error String)
 fetchStepLog id commit =
     Flow.lift <|
         Http.get
-            { url = stepUrl "step-log" id commit
+            { url = appendCommitQuery ("/backend/step-log?id=" ++ String.fromInt id) commit
             , expect = Http.expectStringResponse identity (stringResponse identity)
             }
 
@@ -412,7 +401,7 @@ fetchNotices : Int -> Maybe String -> Flow s (Result Http.Error (List Notice))
 fetchNotices id commit =
     Flow.lift <|
         Http.get
-            { url = stepUrl "notices" id commit
+            { url = appendCommitQuery ("/backend/notices?id=" ++ String.fromInt id) commit
             , expect = Http.expectJson identity (Json.Decode.list Decode.notice)
             }
 
@@ -421,7 +410,7 @@ fetchDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int ->
 fetchDirectoryContents itemDecoder stepId commit folderPath =
     Flow.lift <|
         Http.get
-            { url = UrlBuilder.absolute [ "backend", "step-files" ] (idCommitQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
+            { url = UrlBuilder.absolute [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
             }
 
@@ -432,7 +421,7 @@ fetchExtras stepId commit folderPath =
         Http.get
             { url =
                 UrlBuilder.absolute [ "backend", "step-files", "extras" ]
-                    (idCommitQuery stepId commit
+                    (stepFileQuery stepId commit
                         ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ]
                     )
             , expect = Http.expectJson identity (Json.Decode.dict Json.Decode.value)
@@ -454,7 +443,7 @@ fetchFileSeek stepId commit filePath anchor bytes_ =
         Http.get
             { url =
                 UrlBuilder.absolute [ "backend", "step-files", "seek" ]
-                    (idCommitQuery stepId commit
+                    (stepFileQuery stepId commit
                         ++ [ UrlBuilder.string "path" (String.join "/" filePath) ]
                         ++ seekQueryParams anchor bytes_
                     )
@@ -468,7 +457,7 @@ fetchSrcFileSeek recordId commit filePath anchor bytes_ =
         Http.get
             { url =
                 UrlBuilder.absolute [ "backend", "src-files", "seek" ]
-                    (idCommitQuery recordId commit
+                    (stepFileQuery recordId commit
                         ++ [ UrlBuilder.string "path" (String.join "/" filePath) ]
                         ++ seekQueryParams anchor bytes_
                     )
@@ -490,15 +479,17 @@ fetchSrcDirectoryContents itemDecoder id commit folderPath =
     Flow.lift <|
         Http.get
             { url =
-                UrlBuilder.absolute [ "backend", "src-files" ]
-                    (idCommitQuery id commit
+                appendCommitQuery
+                    ("/backend/src-files?id="
+                        ++ String.fromInt id
                         ++ (if List.isEmpty folderPath then
-                                []
+                                ""
 
                             else
-                                [ UrlBuilder.string "path" (String.join "/" folderPath) ]
+                                "&path=" ++ String.join "/" folderPath
                            )
                     )
+                    commit
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
             }
 

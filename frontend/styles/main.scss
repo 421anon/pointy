@@ -1084,7 +1084,6 @@ $delimited-grid-row-height: 28px;
   min-width: 20px;
   min-height: 20px;
   margin-left: var(--spacing-2xs);
-  vertical-align: middle;
   color: var(--text-secondary);
 
   > .material-symbols-outlined {
@@ -1120,6 +1119,7 @@ $delimited-grid-row-height: 28px;
 .step-review-build {
   @include mixins.button-base;
   min-height: 24px;
+  white-space: nowrap;
   text-decoration: none;
   text-underline-offset: 3px;
   background: none;
@@ -1150,7 +1150,6 @@ $delimited-grid-row-height: 28px;
   align-items: center;
   gap: var(--spacing-2xs);
   color: var(--text-secondary);
-  white-space: nowrap;
   font-size: 11px;
 
   > .material-symbols-outlined {
@@ -1725,22 +1724,17 @@ select.field-changed,
   border: 1px solid var(--color-gray-500);
   border-radius: var(--radius-sm);
   padding: 0;
+  width: min(720px, calc(100vw - (2 * var(--spacing-md))));
   max-width: calc(100vw - (2 * var(--spacing-md)));
+  max-height: min(70vh, 640px);
   background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: var(--shadow-elevated);
   overflow: hidden;
 }
-
-.step-log-popover {
-  width: min(720px, calc(100vw - (2 * var(--spacing-md))));
-  max-height: min(70vh, 640px);
-}
-
 .step-review-popover {
   width: min(340px, calc(100vw - (2 * var(--spacing-md))));
 }
-
 .step-log-popover:popover-open,
 .step-review-popover:popover-open {
   display: flex;
@@ -1749,7 +1743,6 @@ select.field-changed,
   position-area: bottom span-right;
   position-try-fallbacks: top span-right, bottom span-left, top span-left;
 }
-
 .step-log-popover-header,
 .step-review-popover-header {
   display: flex;
@@ -1760,17 +1753,10 @@ select.field-changed,
   border-bottom: 1px solid var(--color-gray-500);
   background: var(--bg-secondary);
 }
-
-.step-log-popover-body {
+.step-log-popover-body,
+.step-review-popover-body {
   padding: var(--spacing-md);
   overflow: auto;
-}
-
-.step-review-popover-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-md);
 }
 
 .step-review-field {
@@ -2007,7 +1993,8 @@ body:has(dialog[open]) {
   color: var(--text-primary);
 }
 
-.dialog-body {
+.dialog-body,
+.step-review-popover-body {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
