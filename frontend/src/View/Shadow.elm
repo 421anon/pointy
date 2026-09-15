@@ -212,8 +212,8 @@ viewBuildViewedLink model spec stepId =
         Html.button
             [ Html.Attributes.class "step-review-build"
             , Html.Attributes.disabled True
-            , Html.Attributes.title "Building this version"
-            , Html.Attributes.attribute "aria-label" "Building this version"
+            , Html.Attributes.title "Building the latest version"
+            , Html.Attributes.attribute "aria-label" "Building the latest version"
             ]
             [ iconCustom True "progress_activity" [ Html.Attributes.class "step-review-build-spinner", Html.Attributes.attribute "aria-hidden" "true" ]
             , Html.text "Building..."
@@ -227,7 +227,7 @@ viewBuildViewedLink model spec stepId =
             , Html.Events.onClick (Actions.buildViewedRevision spec stepId)
             ]
             [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
-            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build this version" ]
+            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build latest version" ]
             ]
 
 
