@@ -439,11 +439,9 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
     viewContent
 
 
-{-| The relative-time badge of a record. A row places it twice (in the name
-and in the actions container, only one of which is displayed depending on the
-viewport), so each call site builds its own thunk: a lazy node caches its
-rendered node on itself, and one thunk in two positions would hand the same
-element to both.
+{-| A row places the badge twice and a viewport displays only one of the two, so
+each call site builds its own thunk: a lazy node caches its rendered node on
+itself, and one thunk in two positions would hand the same element to both.
 -}
 viewMtimeBadge : Maybe Posix -> Posix -> Html msg
 viewMtimeBadge mPosix now =
@@ -594,10 +592,9 @@ viewStatusApiData tableName currentRouteCommit logState mRecordId status =
         status
 
 
-{-| The status indicator of a step record, as a memoizable node: failure rows
-carry a build-log popover, which is rendered into its own node per row on
-every redraw otherwise. The log state is passed in pre-resolved so that a log
-arriving for one step only invalidates that step's row.
+{-| A failure row carries a build-log popover, so the status is built as its own
+node per row rather than inside the row's redraw. The log state arrives
+pre-resolved, so a log arriving for one step invalidates only that step's row.
 -}
 viewStepRecordStatus : String -> StepConfigEntry -> Route.Page -> ApiData String -> StepRecord -> Html (Flow Model ())
 viewStepRecordStatus name entry page logState record =
@@ -626,9 +623,8 @@ viewRecordActionsPopover popoverId actions =
         actions
 
 
-{-| The actions of one record. Split out of `viewTable` so that the memoized
-step variant below can rebuild them from data alone: a `Html.Lazy` thunk
-compares its references with `===`, so nothing here may capture the model.
+{-| `Html.Lazy` compares references with `===`, so nothing here may capture the
+model: the memoized step variant rebuilds these actions from data alone.
 -}
 viewRecordActions : TableSpec (BaseRecord a) -> Bool -> Maybe Int -> BaseRecord a -> List (Html (Flow Model ()))
 viewRecordActions spec isReadOnly mProjectId record =
@@ -768,15 +764,8 @@ viewRunStop spec record =
             []
 
 
-{-| The record actions of a step table, as a single memoizable node.
-
-Everything it needs arrives as a value: the section name and entry give the
-spec, the step config and the names with tables give the quick-create
-buttons, and the route page and the project id key give the share and
-visibility targets. Rows that are mid-upload change the upload button, so
-that comes in as a flag. Nothing else in a row's actions is time- or
-model-dependent, so an unchanged row's popover is never rebuilt.
-
+{-| Everything a row's actions need arrives as a value, because `Html.Lazy.lazy8`
+compares references with `===`: an unchanged row's popover is never rebuilt.
 -}
 viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> Bool -> Html (Flow Model ())
 viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record uploading =

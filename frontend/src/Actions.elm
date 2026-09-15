@@ -305,8 +305,6 @@ applyStepStatus snapshotCommit status_ rs =
         updated =
             { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
     in
-    -- A repeated status must not build a new record: a new reference throws away
-    -- every lazily rendered part of the row.
     if rs == Success updated then
         rs
 
@@ -4050,7 +4048,6 @@ headMovedRemotely model snapshotCommit =
         && not (has (route << Route.page << Route.project << mCommit << just) model)
 
 
-{-| Apply a whole broadcast in one walk: it lists every running or succeeded step. -}
 applyStepStatuses : Dict Int ( String, Status ) -> Flow Model ()
 applyStepStatuses statuses =
     Flow.get |> Flow.andThen (applyListedStatuses statuses)
@@ -4065,10 +4062,7 @@ applyListedStatuses statuses model =
         listedIds =
             Set.fromList (List.filterMap (get recordId) listed)
 
-        pending =
-            Dict.filter (\stepId _ -> not (Set.member stepId listedIds)) statuses
-
-        dropListed =
+        unlisted =
             Dict.filter (\stepId _ -> not (Set.member stepId listedIds))
 
         hooks =
@@ -4087,7 +4081,7 @@ applyListedStatuses statuses model =
                 |> List.map (always (Flow.async loadProjectReviews))
     in
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
-        |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (dropListed buffer) pending))
+        |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (unlisted buffer) (unlisted statuses)))
         |> Flow.seq (Flow.batchM (hooks ++ settles ++ reviewReloads))
 
 
