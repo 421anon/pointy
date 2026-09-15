@@ -547,7 +547,12 @@ getRoute (Model model) =
 
 isReadOnlyRoute : Model -> Bool
 isReadOnlyRoute model =
-    case (getRoute model).page of
+    isReadOnlyPage (getRoute model).page
+
+
+isReadOnlyPage : Route.Page -> Bool
+isReadOnlyPage page =
+    case page of
         Route.Project { mCommit } ->
             Maybe.isJust mCommit
 

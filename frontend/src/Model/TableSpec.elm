@@ -19,9 +19,9 @@ module Model.TableSpec exposing
     , getValidationErrors
     )
 
-import Accessors exposing (Traversal)
+import Accessors exposing (Traversal, has)
 import Api.ApiData as ApiData exposing (ApiData)
-import Extra.Accessors exposing (A_Traversal, remkT)
+import Extra.Accessors exposing (A_Traversal, orElseT, remkT, where_)
 import Flow exposing (Flow)
 import Json.Decode
 import Json.Encode
@@ -96,9 +96,20 @@ getIsLocked (TableSpec spec) =
 getShareable : TableSpec a -> a -> Bool
 getShareable (TableSpec spec) =
     spec.status
-        >> ApiData.toMaybe
-        >> Maybe.map (\status_ -> status_ == StatusSuccess || status_ == StatusRunning)
-        >> Maybe.withDefault False
+        >> has (orElseT ApiData.success ApiData.reloading << where_ isShareableStatus)
+
+
+isShareableStatus : Status -> Bool
+isShareableStatus status =
+    case status of
+        StatusSuccess ->
+            True
+
+        StatusRunning ->
+            True
+
+        _ ->
+            False
 
 
 getDirectoryView : TableSpec a -> a -> Maybe DirectoryFolder

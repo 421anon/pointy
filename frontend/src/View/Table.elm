@@ -1,12 +1,13 @@
-module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (actionsPopoverId, routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
-import Accessors exposing (all, each, just, key, lens, over, set, try)
+import Accessors exposing (all, each, has, just, key, lens, over, set, try)
 import Actions
 import Ansi.Log as AnsiLog
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Basics.Extra exposing (flip)
 import Browser.Dom as Dom
 import Components.Combobox as Combobox
+import Components.Markdown as Markdown
 import Components.Select as Select
 import Dict
 import Extra.Accessors exposing (by, where_)
@@ -25,17 +26,35 @@ import Json.Decode.Extra as Decode
 import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
-import Markdown
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
-import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, records, route, selectExistingSteps, tables, templatesSelect)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tBoolValue, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), StepRecord, Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
+import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, recordId, records, route, selectExistingSteps, tables, templatesSelect)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), TStringDisplay(..), downloadArgs, tBoolValue, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Scroll
 import Set
+import Specs
+import Time exposing (Posix)
 import Time.Distance
 import View.Icons exposing (icon, iconCustom)
+
+
+isSuccessStatus : ApiData Status -> Bool
+isSuccessStatus status =
+    case status of
+        Success StatusSuccess ->
+            True
+
+        _ ->
+            False
+
+
+sortBySortKey : List (BaseRecord a) -> List (BaseRecord a)
+sortBySortKey =
+    List.map (\record -> ( getSortKey record, record ))
+        >> List.sortBy Tuple.first
+        >> List.map Tuple.second
 
 
 viewStatusCountBadge : TableSpec (BaseRecord a) -> List (BaseRecord a) -> Html msg
@@ -44,11 +63,28 @@ viewStatusCountBadge spec allRecords =
         statusOf r =
             TableSpec.getStatus spec r |> ApiData.toMaybe
 
+        statusCounts =
+            List.foldl countStatus { running = 0, done = 0, failed = 0 } allRecords
+
+        countStatus record counts =
+            case statusOf record of
+                Just Model.StatusRunning ->
+                    { counts | running = counts.running + 1 }
+
+                Just Model.StatusSuccess ->
+                    { counts | done = counts.done + 1 }
+
+                Just Model.StatusNotStarted ->
+                    counts
+
+                Just _ ->
+                    { counts | failed = counts.failed + 1 }
+
+                Nothing ->
+                    counts
+
         totalCount =
             List.length allRecords
-
-        count pred =
-            List.count (statusOf >> pred) allRecords
 
         format ( n, label ) =
             if n > 0 then
@@ -58,9 +94,9 @@ viewStatusCountBadge spec allRecords =
                 Nothing
 
         statusDetails =
-            [ ( count ((==) (Just Model.StatusRunning)), "running" )
-            , ( count ((==) (Just Model.StatusSuccess)), "done" )
-            , ( count (Maybe.unwrap False (\s -> s /= Model.StatusNotStarted && s /= Model.StatusRunning && s /= Model.StatusSuccess)), "failed" )
+            [ ( statusCounts.running, "running" )
+            , ( statusCounts.done, "done" )
+            , ( statusCounts.failed, "failed" )
             ]
                 |> List.filterMap format
                 |> String.join " · "
@@ -81,27 +117,22 @@ viewTable :
     { model : Model
     , spec : TableSpec (BaseRecord a)
     , table : Table (BaseRecord a)
-    , specificRecordActions : BaseRecord a -> List (Html (Flow Model ()))
+    , recordStatusPill : BaseRecord a -> Html (Flow Model ())
+    , recordActionsPopover : BaseRecord a -> Html (Flow Model ())
     , alwaysVisibleRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , directorySection : BaseRecord a -> Html (Flow Model ())
     , srcFilesSection : BaseRecord a -> Html (Flow Model ())
     , detailSection : BaseRecord a -> Html (Flow Model ())
     , onRecordClick : BaseRecord a -> Maybe (Flow Model ())
-    , isOpen : BaseRecord a -> Bool
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, detailSection, onRecordClick, isOpen } =
+viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVisibleRecordActions, directorySection, srcFilesSection, detailSection, onRecordClick } =
     let
         lens =
             TableSpec.getLens spec
 
         currentRouteCommit =
-            case (Model.getRoute model).page of
-                Route.Project { mCommit } ->
-                    mCommit
-
-                _ ->
-                    Nothing
+            routeCommit (Model.getRoute model).page
 
         highlightedEntityId =
             case (Model.getRoute model).page of
@@ -114,6 +145,15 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
         isReadOnly =
             Model.isReadOnlyRoute model
 
+        isProjectsTag =
+            TableSpec.getTag spec == TagProjects
+
+        hasHiddenRecords =
+            has (records << ApiData.success << where_ (List.any .hidden)) table
+
+        now =
+            Model.getNow model
+
         tableActionBtn action className content =
             Html.button
                 [ Events.onClick action
@@ -125,235 +165,20 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
         mProjectId =
             try currentProjectId model
 
+        mEditedId =
+            try (edited << just << recordId << just) table
+
         recordIsEditing record =
-            Maybe.unwrap False
-                (\editedRecord -> editedRecord.id == record.id && record.id /= Nothing)
-                table.edited
+            Maybe.map2 (==) mEditedId record.id |> Maybe.withDefault False
 
         editable record =
             not isReadOnly && not (TableSpec.getIsLocked spec record)
-
-        sourceFilesNeedLoading record =
-            case Maybe.map .children (TableSpec.getSrcFilesView spec record) of
-                Just NotAsked ->
-                    True
-
-                Just (Error _) ->
-                    True
-
-                _ ->
-                    False
-
-        toggleRecordEditor record =
-            let
-                loadSourceFiles =
-                    if sourceFilesNeedLoading record then
-                        Maybe.unwrap (Flow.pure ())
-                            (\recordId -> Actions.toggleSrcEntry recordId (Just True) [] |> Flow.return ())
-                            record.id
-
-                    else
-                        Flow.pure ()
-            in
-            Actions.toggleAddOrEditRecordForm spec record.id
-                |> Flow.seq loadSourceFiles
-
-        recordActions =
-            [ -- Directory button
-              { shouldShow = \record -> TableSpec.getStatus spec record == Success StatusSuccess
-              , render = \record -> Html.viewMaybe (dirButton (isOpen record) []) record.id
-              }
-            , { shouldShow = \record -> record.id /= Nothing
-              , render =
-                    \record ->
-                        if editable record then
-                            viewIconButtonWithTooltip "edit" True "Edit" (toggleRecordEditor record)
-
-                        else
-                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec record.id)
-              }
-            , -- Share button (shareable only)
-              { shouldShow = \record -> TableSpec.getShareable spec record && record.id /= Nothing
-              , render =
-                    \record ->
-                        viewIconButtonWithTooltip
-                            "share"
-                            True
-                            "Share"
-                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [] Nothing)
-                                mProjectId
-                                record.id
-                                |> Maybe.withDefault Flow.none
-                            )
-              }
-            , -- Visibility toggle button
-              { shouldShow = \record -> not isReadOnly && record.id /= Nothing
-              , render =
-                    \record ->
-                        viewIconButtonWithTooltip
-                            (if record.hidden then
-                                "visibility"
-
-                             else
-                                "visibility_off"
-                            )
-                            True
-                            (if record.hidden then
-                                "Show"
-
-                             else
-                                "Hide"
-                            )
-                            (Actions.toggleRecordVisibility spec mProjectId Nothing record)
-              }
-            , -- Clone button (shareable only)
-              { shouldShow = \record -> not isReadOnly && TableSpec.getShareable spec record
-              , render = \record -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec record)
-              }
-            , -- Remove button
-              { shouldShow =
-                    \record ->
-                        let
-                            hasDependentInProject =
-                                False
-                        in
-                        editable record
-                            && record.id
-                            /= Nothing
-                            && (not (TableSpec.getShareable spec record) || not hasDependentInProject)
-              , render = \record -> Html.viewMaybe (viewIconButtonWithTooltip "delete" False "Remove" << Actions.removeRecord spec) record.id
-              }
-            ]
 
         viewRecord index record =
             let
                 isHighlighted =
                     Maybe.map2 (==) (Maybe.map .id highlightedEntityId) record.id
                         |> Maybe.withDefault False
-
-                viewStatusPill s =
-                    let
-                        ( colorClass, statusText ) =
-                            case s of
-                                StatusNotStarted ->
-                                    ( "status-not-started", "Not Started" )
-
-                                StatusRunning ->
-                                    ( "status-running", "Running" )
-
-                                StatusSuccess ->
-                                    ( "status-success", "Success" )
-
-                                StatusFailure mError ->
-                                    ( "status-failure"
-                                    , case mError of
-                                        Just err ->
-                                            "Failure: " ++ err
-
-                                        Nothing ->
-                                            "Failure"
-                                    )
-                    in
-                    case ( s, record.id ) of
-                        ( StatusFailure _, Just stepId ) ->
-                            let
-                                logKey =
-                                    Model.stepLogKey stepId currentRouteCommit
-
-                                logState =
-                                    Dict.get logKey (Model.getStepLogs model) |> Maybe.withDefault NotAsked
-
-                                popoverId =
-                                    "step-log-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt stepId
-                            in
-                            Html.span []
-                                [ Html.button
-                                    [ class "status-indicator-wrapper status-log-trigger"
-                                    , title statusText
-                                    , attribute "popovertarget" popoverId
-                                    , style "anchor-name" ("--anchor-" ++ popoverId)
-                                    , Events.onClick (Actions.loadStepLog stepId)
-                                    ]
-                                    [ Html.span
-                                        [ class ("status-indicator " ++ colorClass) ]
-                                        []
-                                    ]
-                                , Html.div
-                                    [ class "step-log-popover"
-                                    , id popoverId
-                                    , attribute "popover" "auto"
-                                    , style "position-anchor" ("--anchor-" ++ popoverId)
-                                    ]
-                                    [ Html.div [ class "step-log-popover-header" ]
-                                        [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
-                                        , Html.span []
-                                            [ Html.viewMaybe
-                                                (\log ->
-                                                    Html.button
-                                                        [ class "icon-btn"
-                                                        , title "Investigate with agent"
-                                                        , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
-                                                        ]
-                                                        [ icon False "smart_toy" ]
-                                                )
-                                                (ApiData.toMaybe logState)
-                                            , Html.button
-                                                [ class "icon-btn"
-                                                , title "Close"
-                                                , Events.onClick (Actions.hidePopover popoverId)
-                                                ]
-                                                [ icon True "close" ]
-                                            ]
-                                        ]
-                                    , Html.div [ class "step-log-popover-body" ]
-                                        [ case logState of
-                                            NotAsked ->
-                                                Html.text "Loading build log..."
-
-                                            Loading _ ->
-                                                Html.text "Loading build log..."
-
-                                            Success log ->
-                                                if String.isEmpty log then
-                                                    Html.text "Build log is empty."
-
-                                                else
-                                                    Html.div [ class "step-log-pre" ]
-                                                        [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
-
-                                            Error err ->
-                                                Html.text (Http.errorMessage err)
-                                        ]
-                                    ]
-                                ]
-
-                        _ ->
-                            Html.span
-                                [ class "status-indicator-wrapper"
-                                , title statusText
-                                ]
-                                [ Html.span
-                                    [ class ("status-indicator " ++ colorClass) ]
-                                    []
-                                ]
-
-                viewStatusApiData aStatus =
-                    ApiData.foldVisible
-                        (Html.div [] [])
-                        (\mPrevStatus ->
-                            Html.span
-                                [ class "status-indicator-wrapper"
-                                , title "Loading"
-                                ]
-                                [ mPrevStatus
-                                    |> Maybe.map viewStatusPill
-                                    |> Maybe.withDefault (Html.div [] [])
-                                , iconCustom True "progress_activity" [ class "status-indicator-loading" ]
-                                ]
-                        )
-                        viewStatusPill
-                        (always <| viewStatusPill (StatusFailure Nothing))
-                        aStatus
 
                 recordNameEditable =
                     if recordIsEditing record && table.nameEditOnly && editable record then
@@ -401,21 +226,11 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         actionsContainerClass =
                             "table-record-actions-container"
 
-                        mtimeBadge =
-                            Html.viewMaybe
-                                (\posix ->
-                                    let
-                                        iso =
-                                            Iso8601.fromTime posix
-                                    in
-                                    Html.node "time"
-                                        [ class "table-record-mtime"
-                                        , attribute "datetime" iso
-                                        , title ("Last modified: " ++ iso)
-                                        ]
-                                        [ Html.text (Time.Distance.inWords posix (Model.getNow model)) ]
-                                )
-                                record.lastModifiedAt
+                        recordStatus =
+                            TableSpec.getStatus spec record
+
+                        validationErrors =
+                            TableSpec.getValidationErrors spec record
                     in
                     Html.div
                         ([ class "table-record", id itemId ] ++ attrs ++ cmap (mkDropAttrs itemId))
@@ -424,10 +239,10 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                              , classList
                                 [ ( "hidden", record.hidden )
                                 , ( "highlighted", isHighlighted )
-                                , ( "no-status", TableSpec.getTag spec == TagProjects && List.isEmpty (TableSpec.getValidationErrors spec record) )
+                                , ( "no-status", isProjectsTag && List.isEmpty validationErrors )
                                 ]
                              ]
-                                ++ (if record.id /= Nothing && (TableSpec.getTag spec == TagProjects || TableSpec.getStatus spec record == Success StatusSuccess) then
+                                ++ (if Maybe.isJust record.id && (isProjectsTag || isSuccessStatus recordStatus) then
                                         Maybe.unwrap []
                                             (\action ->
                                                 [ Events.on "click" (Decode.field "target" (Decode.whenNotInside actionsContainerClass action))
@@ -440,14 +255,13 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         []
                                    )
                             )
-                            [ case TableSpec.getValidationErrors spec record of
+                            [ case validationErrors of
                                 [] ->
-                                    case TableSpec.getTag spec of
-                                        TagProjects ->
-                                            Html.nothing
+                                    if isProjectsTag then
+                                        Html.nothing
 
-                                        _ ->
-                                            viewStatusApiData (TableSpec.getStatus spec record)
+                                    else
+                                        recordStatusPill record
 
                                 errors ->
                                     Html.span
@@ -458,7 +272,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             , Html.span [ class "table-record-name" ]
                                 [ recordNameEditable
                                 , Html.span [] (alwaysVisibleRecordActions record)
-                                , mtimeBadge
+                                , Html.Lazy.lazy2 viewMtimeBadge record.lastModifiedAt now
                                 , Html.viewIf (record.id == Nothing || record.isUpdating) <|
                                     Html.span [ class "pending-record-indicator", title "Saving..." ]
                                         [ iconCustom True "progress_activity" [ class "pending-record-icon" ]
@@ -466,7 +280,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 ]
                             , let
                                 popoverId =
-                                    "actions-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt (Maybe.withDefault -1 record.id)
+                                    actionsPopoverId (TableSpec.getName spec) record
                               in
                               Html.div
                                 [ class actionsContainerClass ]
@@ -476,28 +290,11 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                     , style "anchor-name" ("--anchor-" ++ popoverId)
                                     ]
                                     [ icon True "more_vert" ]
-                                , Html.div
-                                    [ class "table-record-actions"
-                                    , id popoverId
-                                    , attribute "popover" "auto"
-                                    , style "position-anchor" ("--anchor-" ++ popoverId)
-                                    , Events.on "click" (Decode.succeed (Actions.hidePopover popoverId))
-                                    ]
-                                    (specificRecordActions record
-                                        ++ List.filterMap
-                                            (\recordActionBtn ->
-                                                if recordActionBtn.shouldShow record then
-                                                    Just (recordActionBtn.render record)
-
-                                                else
-                                                    Nothing
-                                            )
-                                            recordActions
-                                    )
+                                , recordActionsPopover record
                                 , Html.viewIf (not isReadOnly) <|
                                     Html.div (class "table-record-drag-target" :: cmap (mkDragAttrs itemId))
                                         [ icon True "drag_indicator" ]
-                                , mtimeBadge
+                                , Html.Lazy.lazy2 viewMtimeBadge record.lastModifiedAt now
                                 ]
                             ]
                         , let
@@ -568,7 +365,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         identity
 
                                     else
-                                        List.sortBy getSortKey
+                                        sortBySortKey
                                    )
                                 |> List.indexedMap viewRecord
                                 |> Html.div [ class "table-records", Events.onMouseDown (Flow.modify (set (lens << dndAffected) [])) ]
@@ -597,7 +394,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                         , ApiData.unwrap Html.nothing (viewStatusCountBadge spec) table.records
                         ]
                     , Html.div [ class "table-header-controls" ]
-                        [ Html.viewIf (not isReadOnly && ApiData.unwrap False (List.any .hidden) table.records) <|
+                        [ Html.viewIf (not isReadOnly && hasHiddenRecords) <|
                             tableActionBtn (Actions.toggleShowHiddenRecords lens)
                                 "btn"
                                 [ Html.text
@@ -608,7 +405,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                         "Show Hidden"
                                     )
                                 ]
-                        , Html.viewIf (not isReadOnly && ApiData.unwrap False (List.any .hidden) table.records) <|
+                        , Html.viewIf (not isReadOnly && hasHiddenRecords) <|
                             tableActionBtn
                                 (ApiData.unwrap (Flow.pure ())
                                     (Flow.batchM << List.map (Actions.toggleRecordVisibility spec mProjectId (Just False)))
@@ -640,6 +437,444 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                 ]
     in
     viewContent
+
+
+{-| The relative-time badge of a record. A row places it twice (in the name
+and in the actions container, only one of which is displayed depending on the
+viewport), so each call site builds its own thunk: a lazy node caches its
+rendered node on itself, and one thunk in two positions would hand the same
+element to both.
+-}
+viewMtimeBadge : Maybe Posix -> Posix -> Html msg
+viewMtimeBadge mPosix now =
+    Html.viewMaybe
+        (\posix ->
+            let
+                iso =
+                    Iso8601.fromTime posix
+            in
+            Html.node "time"
+                [ class "table-record-mtime"
+                , attribute "datetime" iso
+                , title ("Last modified: " ++ iso)
+                ]
+                [ Html.text (Time.Distance.inWords posix now) ]
+        )
+        mPosix
+
+
+routeCommit : Route.Page -> Maybe String
+routeCommit page =
+    case page of
+        Route.Project { mCommit } ->
+            mCommit
+
+        _ ->
+            Nothing
+
+
+viewStatusApiData : String -> Maybe String -> ApiData String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
+viewStatusApiData tableName currentRouteCommit logState mRecordId status =
+    let
+        viewStatusPill s =
+            let
+                ( colorClass, statusText ) =
+                    case s of
+                        StatusNotStarted ->
+                            ( "status-not-started", "Not Started" )
+
+                        StatusRunning ->
+                            ( "status-running", "Running" )
+
+                        StatusSuccess ->
+                            ( "status-success", "Success" )
+
+                        StatusFailure mError ->
+                            ( "status-failure"
+                            , case mError of
+                                Just err ->
+                                    "Failure: " ++ err
+
+                                Nothing ->
+                                    "Failure"
+                            )
+            in
+            case ( s, mRecordId ) of
+                ( StatusFailure _, Just stepId ) ->
+                    let
+                        popoverId =
+                            "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
+                    in
+                    Html.span []
+                        [ Html.button
+                            [ class "status-indicator-wrapper status-log-trigger"
+                            , title statusText
+                            , attribute "popovertarget" popoverId
+                            , style "anchor-name" ("--anchor-" ++ popoverId)
+                            , Events.onClick (Actions.loadStepLog stepId)
+                            ]
+                            [ Html.span
+                                [ class ("status-indicator " ++ colorClass) ]
+                                []
+                            ]
+                        , Html.div
+                            [ class "step-log-popover"
+                            , id popoverId
+                            , attribute "popover" "auto"
+                            , style "position-anchor" ("--anchor-" ++ popoverId)
+                            ]
+                            [ Html.div [ class "step-log-popover-header" ]
+                                [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
+                                , Html.span []
+                                    [ Html.viewMaybe
+                                        (\log ->
+                                            Html.button
+                                                [ class "icon-btn"
+                                                , title "Investigate with agent"
+                                                , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
+                                                ]
+                                                [ icon False "smart_toy" ]
+                                        )
+                                        (ApiData.toMaybe logState)
+                                    , Html.button
+                                        [ class "icon-btn"
+                                        , title "Close"
+                                        , Events.onClick (Actions.hidePopover popoverId)
+                                        ]
+                                        [ icon True "close" ]
+                                    ]
+                                ]
+                            , Html.div [ class "step-log-popover-body" ]
+                                [ case logState of
+                                    NotAsked ->
+                                        Html.text "Loading build log..."
+
+                                    Loading _ ->
+                                        Html.text "Loading build log..."
+
+                                    Success log ->
+                                        if String.isEmpty log then
+                                            Html.text "Build log is empty."
+
+                                        else
+                                            Html.div [ class "step-log-pre" ]
+                                                [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
+
+                                    Error err ->
+                                        Html.text (Http.errorMessage err)
+                                ]
+                            ]
+                        ]
+
+                _ ->
+                    Html.span
+                        [ class "status-indicator-wrapper"
+                        , title statusText
+                        ]
+                        [ Html.span
+                            [ class ("status-indicator " ++ colorClass) ]
+                            []
+                        ]
+    in
+    ApiData.foldVisible
+        (Html.div [] [])
+        (\mPrevStatus ->
+            Html.span
+                [ class "status-indicator-wrapper"
+                , title "Loading"
+                ]
+                [ mPrevStatus
+                    |> Maybe.map viewStatusPill
+                    |> Maybe.withDefault (Html.div [] [])
+                , iconCustom True "progress_activity" [ class "status-indicator-loading" ]
+                ]
+        )
+        viewStatusPill
+        (always <| viewStatusPill (StatusFailure Nothing))
+        status
+
+
+{-| The status indicator of a step record, as a memoizable node: failure rows
+carry a build-log popover, which is rendered into its own node per row on
+every redraw otherwise. The log state is passed in pre-resolved so that a log
+arriving for one step only invalidates that step's row.
+-}
+viewStepRecordStatus : String -> StepConfigEntry -> Route.Page -> ApiData String -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatus name entry page logState record =
+    viewStatusApiData
+        name
+        (routeCommit page)
+        logState
+        record.id
+        (TableSpec.getStatus (Specs.steps name entry) record)
+
+
+actionsPopoverId : String -> BaseRecord a -> String
+actionsPopoverId tableName record =
+    "actions-popover-" ++ tableName ++ "-" ++ String.fromInt (Maybe.withDefault -1 record.id)
+
+
+viewRecordActionsPopover : String -> List (Html (Flow Model ())) -> Html (Flow Model ())
+viewRecordActionsPopover popoverId actions =
+    Html.div
+        [ class "table-record-actions"
+        , id popoverId
+        , attribute "popover" "auto"
+        , style "position-anchor" ("--anchor-" ++ popoverId)
+        , Events.on "click" (Decode.succeed (Actions.hidePopover popoverId))
+        ]
+        actions
+
+
+{-| The actions of one record. Split out of `viewTable` so that the memoized
+step variant below can rebuild them from data alone: a `Html.Lazy` thunk
+compares its references with `===`, so nothing here may capture the model.
+-}
+viewRecordActions : TableSpec (BaseRecord a) -> Bool -> Maybe Int -> BaseRecord a -> List (Html (Flow Model ()))
+viewRecordActions spec isReadOnly mProjectId record =
+    let
+        editable r =
+            not isReadOnly && not (TableSpec.getIsLocked spec r)
+
+        isDirectoryOpen =
+            TableSpec.getDirectoryView spec record |> Maybe.map .expanded |> Maybe.withDefault False
+
+        sourceFilesNeedLoading =
+            case Maybe.map .children (TableSpec.getSrcFilesView spec record) of
+                Just NotAsked ->
+                    True
+
+                Just (Error _) ->
+                    True
+
+                _ ->
+                    False
+
+        toggleRecordEditor =
+            let
+                loadSourceFiles =
+                    if sourceFilesNeedLoading then
+                        Maybe.unwrap (Flow.pure ())
+                            (\recordId -> Actions.toggleSrcEntry recordId (Just True) [] |> Flow.return ())
+                            record.id
+
+                    else
+                        Flow.pure ()
+            in
+            Actions.toggleAddOrEditRecordForm spec record.id
+                |> Flow.seq loadSourceFiles
+
+        recordActions =
+            [ -- Directory button
+              { shouldShow = isSuccessStatus << TableSpec.getStatus spec
+              , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
+              }
+            , { shouldShow = Maybe.isJust << .id
+              , render =
+                    \r ->
+                        if editable r then
+                            viewIconButtonWithTooltip "edit" True "Edit" toggleRecordEditor
+
+                        else
+                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec r.id)
+              }
+            , -- Share button (shareable only)
+              { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
+              , render =
+                    \r ->
+                        viewIconButtonWithTooltip
+                            "share"
+                            True
+                            "Share"
+                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [] Nothing)
+                                mProjectId
+                                r.id
+                                |> Maybe.withDefault Flow.none
+                            )
+              }
+            , -- Visibility toggle button
+              { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
+              , render =
+                    \r ->
+                        viewIconButtonWithTooltip
+                            (if r.hidden then
+                                "visibility"
+
+                             else
+                                "visibility_off"
+                            )
+                            True
+                            (if r.hidden then
+                                "Show"
+
+                             else
+                                "Hide"
+                            )
+                            (Actions.toggleRecordVisibility spec mProjectId Nothing r)
+              }
+            , -- Clone button (shareable only)
+              { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
+              , render = \r -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec r)
+              }
+            , -- Remove button
+              { shouldShow =
+                    \r ->
+                        let
+                            hasDependentInProject =
+                                False
+                        in
+                        editable r
+                            && Maybe.isJust r.id
+                            && (not (TableSpec.getShareable spec r) || not hasDependentInProject)
+              , render = \r -> Html.viewMaybe (viewIconButtonWithTooltip "delete" False "Remove" << Actions.removeRecord spec) r.id
+              }
+            ]
+    in
+    List.filterMap (\recordActionBtn -> if recordActionBtn.shouldShow record then Just (recordActionBtn.render record) else Nothing) recordActions
+
+
+viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewRunStop spec record =
+    case record.id of
+        Just id ->
+            let
+                status =
+                    TableSpec.getStatus spec record
+
+                isRunning =
+                    status
+                        |> ApiData.toMaybe
+                        |> (==) (Just StatusRunning)
+
+                canRun =
+                    case status of
+                        Loading _ ->
+                            False
+
+                        Success StatusSuccess ->
+                            False
+
+                        Success StatusRunning ->
+                            False
+
+                        _ ->
+                            True
+            in
+            [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
+            , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
+            ]
+
+        Nothing ->
+            []
+
+
+{-| The record actions of a step table, as a single memoizable node.
+
+Everything it needs arrives as a value: the section name and entry give the
+spec, the step config and the names with tables give the quick-create
+buttons, and the route page and the project id key give the share and
+visibility targets. Rows that are mid-upload change the upload button, so
+that comes in as a flag. Nothing else in a row's actions is time- or
+model-dependent, so an unchanged row's popover is never rebuilt.
+
+-}
+viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> Bool -> Html (Flow Model ())
+viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record uploading =
+    let
+        spec =
+            Specs.steps name entry
+
+        isReadOnly =
+            Model.isReadOnlyPage page
+
+        mProjectId =
+            String.toInt projectIdKey
+
+        presentTypes =
+            String.split "," presentTypesKey
+
+        prefill argType =
+            let
+                wire allowedTypes toValue =
+                    if Maybe.unwrap True (List.member record.type_) allowedTypes then
+                        Maybe.map toValue record.id
+
+                    else
+                        Nothing
+            in
+            case argType of
+                TStep allowedTypes True ->
+                    wire allowedTypes TStepValue
+
+                TList (TStep allowedTypes True) ->
+                    wire allowedTypes (TListValue << List.singleton << TStepValue)
+
+                _ ->
+                    Nothing
+
+        runActions =
+            case entry.stepType of
+                Derivation _ _ ->
+                    viewRunStop spec record
+
+                Download ->
+                    viewRunStop spec record
+
+                FileUpload _ ->
+                    []
+
+        uploadActions =
+            if isReadOnly || uploading || Maybe.isJust record.review then
+                []
+
+            else
+                case entry.stepType of
+                    FileUpload types ->
+                        [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) record.id ]
+
+                    Derivation _ _ ->
+                        []
+
+                    Download ->
+                        []
+
+        quickCreateActions =
+            if isReadOnly then
+                []
+
+            else
+                stepConfig
+                    |> Dict.toList
+                    |> List.filter (\( targetType, _ ) -> List.member targetType presentTypes)
+                    |> List.concatMap
+                        (\( targetType, targetEntry ) ->
+                            let
+                                targetSpec =
+                                    Specs.steps targetType targetEntry
+
+                                label =
+                                    "Create " ++ TableSpec.getDisplayName targetSpec
+                            in
+                            case targetEntry.stepType of
+                                Derivation args _ ->
+                                    args
+                                        |> Dict.toList
+                                        |> List.filterMap
+                                            (\( argName, arg ) ->
+                                                prefill arg.type_
+                                                    |> Maybe.map (viewQuickCreateButton targetEntry.icon label << Actions.addStepWithArg targetSpec argName)
+                                            )
+
+                                FileUpload _ ->
+                                    []
+
+                                Download ->
+                                    []
+                        )
+    in
+    viewRecordActionsPopover
+        (actionsPopoverId name record)
+        (uploadActions ++ runActions ++ quickCreateActions ++ viewRecordActions spec isReadOnly mProjectId record)
 
 
 viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
@@ -1236,7 +1471,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 viewFieldNotice notice =
                     Html.div [ class "field-notice", class "field-notice-info" ]
                         [ iconCustom True "info" [ class "field-notice-icon" ]
-                        , Html.div [ class "field-notice-markdown" ] <| Markdown.toHtml Nothing notice.message
+                        , Html.div [ class "field-notice-markdown" ] <| Markdown.plain notice.message
                         ]
 
                 withFieldNotices field =

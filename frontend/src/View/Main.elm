@@ -12,8 +12,9 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Extra as Html
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (currentProject, name)
+import Model.Lenses as Lenses exposing (currentProject, name)
 import Model.Lib as Lib
+import Model.TableSpec as TableSpec
 import Route
 import Specs
 import Toast
@@ -21,27 +22,38 @@ import View.Compare as Compare
 import View.Dialog as Dialog
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Project exposing (viewCurrentProject)
-import View.Table exposing (viewTable)
+import View.Table exposing (actionsPopoverId, viewRecordActions, viewRecordActionsPopover, viewTable)
 
 
 view : Model -> Browser.Document (Flow Model ())
 view model =
     let
         viewHome presets stepConfig =
+            let
+                spec =
+                    Specs.projects presets stepConfig
+
+                mProjectId =
+                    try Lenses.currentProjectId model
+            in
             viewPage
                 { header = [ viewSearchBox model ]
                 , content =
                     viewTable
                         { model = model
-                        , spec = Specs.projects presets stepConfig
+                        , spec = spec
                         , table = Model.getProjects model
-                        , specificRecordActions = \_ -> []
+                        , recordStatusPill = \_ -> Html.nothing
+                        , recordActionsPopover =
+                            \record ->
+                                viewRecordActionsPopover
+                                    (actionsPopoverId (TableSpec.getName spec) record)
+                                    (viewRecordActions spec (Model.isReadOnlyRoute model) mProjectId record)
                         , alwaysVisibleRecordActions = \_ -> []
                         , directorySection = \_ -> Html.nothing
                         , srcFilesSection = \_ -> Html.nothing
                         , detailSection = \_ -> Html.nothing
                         , onRecordClick = .id >> Maybe.map (\id -> Actions.goToRoute (Route.fromPage (Route.Project { projectId = id, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing })))
-                        , isOpen = always False
                         }
                 }
     in
