@@ -1,10 +1,9 @@
 module View.Shadow exposing (viewProject)
 
-import Accessors exposing (fst, get, has, just, try)
+import Accessors exposing (get, just, try)
 import Actions
 import Api.ApiData as ApiData
 import Dict
-import Extra.Accessors exposing (orElseT, where_)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
@@ -14,14 +13,13 @@ import Html.Lazy
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses as Lenses exposing (currentProject)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfigEntry, StepType(..), derivation)
-import Model.TableSpec as TableSpec exposing (TableSpec)
+import Model.Shadow exposing (StepConfigEntry, StepType(..))
 import Route
 import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewStepRecordActions, viewTable, viewUploadProgress)
+import View.Table exposing (routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
@@ -144,11 +142,28 @@ viewSection model sectionName entry steps =
 
         page =
             (Model.getRoute model).page
+
+        currentRouteCommit =
+            routeCommit page
+
+        stepLogs =
+            Model.getStepLogs model
     in
     viewTable
         { model = model
         , spec = spec
         , table = steps
+        , recordStatusPill =
+            \record ->
+                Html.Lazy.lazy5 viewStepRecordStatus
+                    sectionName
+                    entry
+                    page
+                    (record.id
+                        |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id currentRouteCommit) stepLogs)
+                        |> Maybe.unwrap ApiData.NotAsked identity
+                    )
+                    record
         , recordActionsPopover =
             \record ->
                 Html.Lazy.lazy8 viewStepRecordActions

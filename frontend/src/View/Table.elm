@@ -1,4 +1,4 @@
-module View.Table exposing (actionsPopoverId, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewStepRecordActions, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (actionsPopoverId, routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 import Accessors exposing (all, each, has, just, key, lens, over, set, try)
 import Actions
@@ -116,6 +116,7 @@ viewTable :
     { model : Model
     , spec : TableSpec (BaseRecord a)
     , table : Table (BaseRecord a)
+    , recordStatusPill : BaseRecord a -> Html (Flow Model ())
     , recordActionsPopover : BaseRecord a -> Html (Flow Model ())
     , alwaysVisibleRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , directorySection : BaseRecord a -> Html (Flow Model ())
@@ -123,18 +124,13 @@ viewTable :
     , onRecordClick : BaseRecord a -> Maybe (Flow Model ())
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, recordActionsPopover, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick } =
+viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick } =
     let
         lens =
             TableSpec.getLens spec
 
         currentRouteCommit =
-            case (Model.getRoute model).page of
-                Route.Project { mCommit } ->
-                    mCommit
-
-                _ ->
-                    Nothing
+            routeCommit (Model.getRoute model).page
 
         highlightedEntityId =
             case (Model.getRoute model).page of
@@ -178,130 +174,6 @@ viewTable { model, spec, table, recordActionsPopover, alwaysVisibleRecordActions
                 isHighlighted =
                     Maybe.map2 (==) (Maybe.map .id highlightedEntityId) record.id
                         |> Maybe.withDefault False
-
-                viewStatusPill s =
-                    let
-                        ( colorClass, statusText ) =
-                            case s of
-                                StatusNotStarted ->
-                                    ( "status-not-started", "Not Started" )
-
-                                StatusRunning ->
-                                    ( "status-running", "Running" )
-
-                                StatusSuccess ->
-                                    ( "status-success", "Success" )
-
-                                StatusFailure mError ->
-                                    ( "status-failure"
-                                    , case mError of
-                                        Just err ->
-                                            "Failure: " ++ err
-
-                                        Nothing ->
-                                            "Failure"
-                                    )
-                    in
-                    case ( s, record.id ) of
-                        ( StatusFailure _, Just stepId ) ->
-                            let
-                                logKey =
-                                    Model.stepLogKey stepId currentRouteCommit
-
-                                logState =
-                                    Dict.get logKey (Model.getStepLogs model) |> Maybe.withDefault NotAsked
-
-                                popoverId =
-                                    "step-log-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt stepId
-                            in
-                            Html.span []
-                                [ Html.button
-                                    [ class "status-indicator-wrapper status-log-trigger"
-                                    , title statusText
-                                    , attribute "popovertarget" popoverId
-                                    , style "anchor-name" ("--anchor-" ++ popoverId)
-                                    , Events.onClick (Actions.loadStepLog stepId)
-                                    ]
-                                    [ Html.span
-                                        [ class ("status-indicator " ++ colorClass) ]
-                                        []
-                                    ]
-                                , Html.div
-                                    [ class "step-log-popover"
-                                    , id popoverId
-                                    , attribute "popover" "auto"
-                                    , style "position-anchor" ("--anchor-" ++ popoverId)
-                                    ]
-                                    [ Html.div [ class "step-log-popover-header" ]
-                                        [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
-                                        , Html.span []
-                                            [ Html.viewMaybe
-                                                (\log ->
-                                                    Html.button
-                                                        [ class "icon-btn"
-                                                        , title "Investigate with agent"
-                                                        , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
-                                                        ]
-                                                        [ icon False "smart_toy" ]
-                                                )
-                                                (ApiData.toMaybe logState)
-                                            , Html.button
-                                                [ class "icon-btn"
-                                                , title "Close"
-                                                , Events.onClick (Actions.hidePopover popoverId)
-                                                ]
-                                                [ icon True "close" ]
-                                            ]
-                                        ]
-                                    , Html.div [ class "step-log-popover-body" ]
-                                        [ case logState of
-                                            NotAsked ->
-                                                Html.text "Loading build log..."
-
-                                            Loading _ ->
-                                                Html.text "Loading build log..."
-
-                                            Success log ->
-                                                if String.isEmpty log then
-                                                    Html.text "Build log is empty."
-
-                                                else
-                                                    Html.div [ class "step-log-pre" ]
-                                                        [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
-
-                                            Error err ->
-                                                Html.text (Http.errorMessage err)
-                                        ]
-                                    ]
-                                ]
-
-                        _ ->
-                            Html.span
-                                [ class "status-indicator-wrapper"
-                                , title statusText
-                                ]
-                                [ Html.span
-                                    [ class ("status-indicator " ++ colorClass) ]
-                                    []
-                                ]
-
-                viewStatusApiData aStatus =
-                    ApiData.foldVisible
-                        (Html.div [] [])
-                        (\mPrevStatus ->
-                            Html.span
-                                [ class "status-indicator-wrapper"
-                                , title "Loading"
-                                ]
-                                [ mPrevStatus
-                                    |> Maybe.map viewStatusPill
-                                    |> Maybe.withDefault (Html.div [] [])
-                                , iconCustom True "progress_activity" [ class "status-indicator-loading" ]
-                                ]
-                        )
-                        viewStatusPill
-                        (always <| viewStatusPill (StatusFailure Nothing))
-                        aStatus
 
                 recordNameEditable =
                     if not isReadOnly && recordIsEditing record && table.nameEditOnly then
@@ -400,7 +272,7 @@ viewTable { model, spec, table, recordActionsPopover, alwaysVisibleRecordActions
                                         Html.nothing
 
                                     else
-                                        viewStatusApiData recordStatus
+                                        recordStatusPill record
 
                                 errors ->
                                     Html.span
@@ -575,6 +447,152 @@ viewTable { model, spec, table, recordActionsPopover, alwaysVisibleRecordActions
                 ]
     in
     viewContent
+
+
+routeCommit : Route.Page -> Maybe String
+routeCommit page =
+    case page of
+        Route.Project { mCommit } ->
+            mCommit
+
+        _ ->
+            Nothing
+
+
+viewStatusApiData : String -> Maybe String -> ApiData String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
+viewStatusApiData tableName currentRouteCommit logState mRecordId status =
+    let
+        viewStatusPill s =
+            let
+                ( colorClass, statusText ) =
+                    case s of
+                        StatusNotStarted ->
+                            ( "status-not-started", "Not Started" )
+
+                        StatusRunning ->
+                            ( "status-running", "Running" )
+
+                        StatusSuccess ->
+                            ( "status-success", "Success" )
+
+                        StatusFailure mError ->
+                            ( "status-failure"
+                            , case mError of
+                                Just err ->
+                                    "Failure: " ++ err
+
+                                Nothing ->
+                                    "Failure"
+                            )
+            in
+            case ( s, mRecordId ) of
+                ( StatusFailure _, Just stepId ) ->
+                    let
+                        popoverId =
+                            "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
+                    in
+                    Html.span []
+                        [ Html.button
+                            [ class "status-indicator-wrapper status-log-trigger"
+                            , title statusText
+                            , attribute "popovertarget" popoverId
+                            , style "anchor-name" ("--anchor-" ++ popoverId)
+                            , Events.onClick (Actions.loadStepLog stepId)
+                            ]
+                            [ Html.span
+                                [ class ("status-indicator " ++ colorClass) ]
+                                []
+                            ]
+                        , Html.div
+                            [ class "step-log-popover"
+                            , id popoverId
+                            , attribute "popover" "auto"
+                            , style "position-anchor" ("--anchor-" ++ popoverId)
+                            ]
+                            [ Html.div [ class "step-log-popover-header" ]
+                                [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
+                                , Html.span []
+                                    [ Html.viewMaybe
+                                        (\log ->
+                                            Html.button
+                                                [ class "icon-btn"
+                                                , title "Investigate with agent"
+                                                , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
+                                                ]
+                                                [ icon False "smart_toy" ]
+                                        )
+                                        (ApiData.toMaybe logState)
+                                    , Html.button
+                                        [ class "icon-btn"
+                                        , title "Close"
+                                        , Events.onClick (Actions.hidePopover popoverId)
+                                        ]
+                                        [ icon True "close" ]
+                                    ]
+                                ]
+                            , Html.div [ class "step-log-popover-body" ]
+                                [ case logState of
+                                    NotAsked ->
+                                        Html.text "Loading build log..."
+
+                                    Loading _ ->
+                                        Html.text "Loading build log..."
+
+                                    Success log ->
+                                        if String.isEmpty log then
+                                            Html.text "Build log is empty."
+
+                                        else
+                                            Html.div [ class "step-log-pre" ]
+                                                [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
+
+                                    Error err ->
+                                        Html.text (Http.errorMessage err)
+                                ]
+                            ]
+                        ]
+
+                _ ->
+                    Html.span
+                        [ class "status-indicator-wrapper"
+                        , title statusText
+                        ]
+                        [ Html.span
+                            [ class ("status-indicator " ++ colorClass) ]
+                            []
+                        ]
+    in
+    ApiData.foldVisible
+        (Html.div [] [])
+        (\mPrevStatus ->
+            Html.span
+                [ class "status-indicator-wrapper"
+                , title "Loading"
+                ]
+                [ mPrevStatus
+                    |> Maybe.map viewStatusPill
+                    |> Maybe.withDefault (Html.div [] [])
+                , iconCustom True "progress_activity" [ class "status-indicator-loading" ]
+                ]
+        )
+        viewStatusPill
+        (always <| viewStatusPill (StatusFailure Nothing))
+        status
+
+
+{-| The status indicator of a step record, as a memoizable node: failure rows
+carry a build-log popover, which is rendered into its own node per row on
+every redraw otherwise. The log state is passed in pre-resolved so that a log
+arriving for one step only invalidates that step's row.
+-}
+viewStepRecordStatus : String -> StepConfigEntry -> Route.Page -> ApiData String -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatus name entry page logState record =
+    viewStatusApiData
+        name
+        (routeCommit page)
+        logState
+        record.id
+        (TableSpec.getStatus (Specs.steps name entry) record)
 
 
 actionsPopoverId : String -> BaseRecord a -> String

@@ -43,6 +43,7 @@ view model =
                         { model = model
                         , spec = spec
                         , table = Model.getProjects model
+                        , recordStatusPill = \_ -> Html.nothing
                         , recordActionsPopover =
                             \record ->
                                 viewRecordActionsPopover
