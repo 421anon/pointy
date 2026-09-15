@@ -67,6 +67,9 @@ toggleAddOrEditRecordForm spec mRecordId =
                     mRecordId
                         |> Maybe.andThen (\recordId -> try (success << by .id (Just recordId)) t.records)
 
+                inspecting =
+                    readOnly || Maybe.unwrap False (TableSpec.getIsLocked spec) mRecordToEdit
+
                 formIsOpen =
                     t.edited /= Nothing && not t.nameEditOnly
 
@@ -83,7 +86,7 @@ toggleAddOrEditRecordForm spec mRecordId =
                     if formIsOpen && (togglingCurrentRecord || (clickedNewRecord && notEditingExistingRecord)) then
                         Nothing
 
-                    else if readOnly then
+                    else if inspecting then
                         mRecordToEdit
 
                     else

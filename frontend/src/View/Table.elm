@@ -163,14 +163,14 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
               { shouldShow = \record -> TableSpec.getStatus spec record == Success StatusSuccess
               , render = \record -> Html.viewMaybe (dirButton (isOpen record) []) record.id
               }
-            , { shouldShow = \record -> record.id /= Nothing && (isReadOnly || editable record)
+            , { shouldShow = \record -> record.id /= Nothing
               , render =
                     \record ->
-                        if isReadOnly then
-                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec record.id)
+                        if editable record then
+                            viewIconButtonWithTooltip "edit" True "Edit" (toggleRecordEditor record)
 
                         else
-                            viewIconButtonWithTooltip "edit" True "Edit" (toggleRecordEditor record)
+                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec record.id)
               }
             , -- Share button (shareable only)
               { shouldShow = \record -> TableSpec.getShareable spec record && record.id /= Nothing
@@ -502,7 +502,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                             ]
                         , let
                             editing =
-                                recordIsEditing record && (isReadOnly || editable record)
+                                recordIsEditing record
                           in
                           Html.viewIf (editing && not table.nameEditOnly)
                             (Html.viewMaybe
@@ -646,7 +646,7 @@ viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord
 viewAddOrEditRecordForm model spec table extraSection record =
     let
         readOnly =
-            Model.isReadOnlyRoute model
+            Model.isReadOnlyRoute model || TableSpec.getIsLocked spec record
 
         editing =
             record.id /= Nothing && (table.addMode /= AddFromOtherProject)
