@@ -88,6 +88,15 @@ comparisonChip comparison =
             Just (ComparisonChip "warning" "warning" "Reviewed output missing" "The reviewed output is no longer in the store. Run the step to rebuild its reviewed revision, or remove the review.")
 
 
+blockedReason : ApiData.ApiData Model.ReviewComparison -> Maybe String
+blockedReason comparison =
+    let
+        checking =
+            Just "Checking the viewed revision's output."
+    in
+    ApiData.foldVisible checking (always checking) (Maybe.map .explanation << comparisonChip) (always (Just "The review check failed, so the review cannot be updated.")) comparison
+
+
 viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
 viewReviewControls model spec stepId record =
     let
@@ -301,6 +310,10 @@ viewReviewPopover model spec stepId record =
             Flow.when (canRecord && String.trim draft.reviewedBy /= "")
                 (Actions.hidePopover popoverId |> Flow.seq (Actions.reviewStep draft))
 
+        blockedNote =
+            Html.viewMaybe (\reason -> Html.p [ Html.Attributes.class "step-review-note" ] [ Html.text reason ])
+                (Maybe.andThen (.comparison >> blockedReason) (Maybe.filter (always (not canRecord)) record.review))
+
         popover =
             Html.div
                 [ Html.Attributes.class "step-review-popover"
@@ -318,7 +331,8 @@ viewReviewPopover model spec stepId record =
                         [ iconCustom True "close" [] ]
                     ]
                 , Html.div [ Html.Attributes.class "step-review-popover-body" ]
-                    [ field "Reviewed by" <|
+                    [ blockedNote
+                    , field "Reviewed by" <|
                         Html.input
                             [ Html.Attributes.class "step-review-input"
                             , Html.Attributes.type_ "text"
@@ -331,6 +345,7 @@ viewReviewPopover model spec stepId record =
                     , field "Comments" <|
                         Html.textarea
                             [ Html.Attributes.class "step-review-comments"
+                            , Html.Attributes.placeholder "Optional"
                             , Html.Attributes.rows 4
                             , Html.Attributes.value draft.comments
                             , Html.Attributes.readonly (not canRecord)
@@ -347,7 +362,7 @@ viewReviewPopover model spec stepId record =
                                 [ Html.text submitLabel ]
                         , Html.viewIf isReviewed <|
                             Html.button
-                                [ Html.Attributes.class "btn"
+                                [ Html.Attributes.class "btn btn-danger"
                                 , Html.Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.removeReview stepId))
                                 ]
                                 [ Html.text "Remove review" ]

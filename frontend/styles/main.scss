@@ -1098,6 +1098,16 @@ $delimited-grid-row-height: 28px;
   gap: var(--spacing-xs);
 }
 
+.btn-danger {
+  background: var(--state-danger-outline);
+  border-color: var(--state-danger);
+  color: var(--text-primary);
+
+  &:hover {
+    background: var(--state-danger);
+  }
+}
+
 .step-review-diff,
 .step-review-revision,
 .step-review-build {
@@ -1743,12 +1753,17 @@ select.field-changed,
   overflow: auto;
 }
 
+.step-review-note,
 .step-review-field {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2xs);
   font-size: var(--font-size-sm);
   color: var(--text-secondary);
+}
+
+.step-review-note {
+  margin: 0;
 }
 
 .step-review-input,
@@ -1766,10 +1781,15 @@ select.field-changed,
 }
 
 .step-review-popover-actions {
+  position: sticky;
+  bottom: calc(-1 * var(--spacing-md));
   display: flex;
   justify-content: flex-end;
   gap: var(--spacing-xs);
+  padding: var(--spacing-xs) 0;
+  background: var(--bg-elevated);
 }
+
 .step-log-pre {
   --ansi-black: #484f58;
   --ansi-red: #ff7b72;
@@ -1947,16 +1967,6 @@ select.field-changed,
 
   &::backdrop {
     background-color: rgba(0, 0, 0, 0.6);
-  }
-
-  .btn-danger {
-    background: var(--state-danger-outline);
-    border-color: var(--state-danger);
-    color: var(--text-primary);
-
-    &:hover {
-      background: var(--state-danger);
-    }
   }
 }
 
