@@ -1098,22 +1098,6 @@ $delimited-grid-row-height: 28px;
   gap: var(--spacing-xs);
 }
 
-.review-toggle {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-
-  .review-toggle-modifier {
-    position: absolute;
-    top: -3px;
-    right: -4px;
-    font-size: 10px;
-    line-height: 1;
-    color: var(--text-secondary);
-    pointer-events: none;
-  }
-}
-
 .step-review-diff,
 .step-review-revision,
 .step-review-build {

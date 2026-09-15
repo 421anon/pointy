@@ -282,18 +282,15 @@ viewReviewPopover model spec stepId record =
                 ( "Review step " ++ String.fromInt stepId, "Review step" )
 
         trigger =
-            Html.span [ Html.Attributes.class "review-toggle" ]
-                [ Html.button
-                    [ Html.Attributes.class "icon-btn icon-btn-inline"
-                    , Html.Attributes.title title
-                    , Html.Attributes.attribute "aria-label" title
-                    , Html.Attributes.attribute "popovertarget" popoverId
-                    , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
-                    ]
-                    [ iconCustom isReviewed "fact_check" []
-                    , Html.span [ Html.Attributes.class "icon-btn-text" ] [ Html.text title ]
-                    ]
-                , Html.viewIf isReviewed (iconCustom True "verified" [ Html.Attributes.class "review-toggle-modifier", Html.Attributes.attribute "aria-hidden" "true" ])
+            Html.button
+                [ Html.Attributes.class "icon-btn icon-btn-inline"
+                , Html.Attributes.title title
+                , Html.Attributes.attribute "aria-label" title
+                , Html.Attributes.attribute "popovertarget" popoverId
+                , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
+                ]
+                [ iconCustom isReviewed "fact_check" []
+                , Html.span [ Html.Attributes.class "icon-btn-text" ] [ Html.text title ]
                 ]
 
         field labelText control =
