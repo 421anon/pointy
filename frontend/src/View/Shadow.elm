@@ -10,6 +10,7 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Html.Extra as Html
+import Html.Lazy
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
 import Model.Lenses as Lenses exposing (currentProject)
@@ -20,42 +21,7 @@ import Specs
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
-
-
-viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewRunStop spec r =
-    case r.id of
-        Just id ->
-            let
-                status =
-                    TableSpec.getStatus spec r
-
-                isRunning =
-                    status
-                        |> ApiData.toMaybe
-                        |> (==) (Just Model.StatusRunning)
-
-                canRun =
-                    case status of
-                        ApiData.Loading _ ->
-                            False
-
-                        ApiData.Success Model.StatusSuccess ->
-                            False
-
-                        ApiData.Success Model.StatusRunning ->
-                            False
-
-                        _ ->
-                            True
-            in
-            [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-            , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
-            ]
-
-        Nothing ->
-            []
+import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewStepRecordActions, viewTable, viewUploadProgress)
 
 
 viewProject : Model -> ProjectRecord -> Html (Flow Model ())
@@ -159,59 +125,47 @@ viewProject model proj =
 viewSection : Model -> String -> StepConfigEntry -> Table StepRecord -> Html (Flow Model ())
 viewSection model sectionName entry steps =
     let
-        stepType =
-            entry.stepType
-
         spec =
             Specs.steps sectionName entry
 
-        isReadOnly =
-            Model.isReadOnlyRoute model
-
         stepConfig_ =
             try (Lenses.stepConfig << ApiData.success) model
-                |> Maybe.unwrap [] Dict.toList
+                |> Maybe.unwrap Dict.empty identity
 
-        rendersRecords =
-            get Lenses.isOpen steps
-                && has (Lenses.records << orElseT ApiData.success ApiData.reloading << where_ (not << List.isEmpty)) steps
+        presentTypesKey =
+            try (currentProject << ApiData.success << Lenses.tables) model
+                |> Maybe.unwrap [] Dict.keys
+                |> String.join ","
 
-        quickCreateCandidates =
-            if isReadOnly || not rendersRecords then
-                []
+        projectIdKey =
+            try Lenses.currentProjectId model
+                |> Maybe.map String.fromInt
+                |> Maybe.unwrap "" identity
 
-            else
-                stepConfig_
-                    |> List.filter (\( targetType, _ ) -> has (Lenses.currentTableOf targetType) model)
-                    |> List.concatMap
-                        (\( targetType, targetEntry ) ->
-                            let
-                                targetSpec =
-                                    Specs.steps targetType targetEntry
-
-                                label =
-                                    "Create " ++ TableSpec.getDisplayName targetSpec
-                            in
-                            try (derivation << fst) targetEntry.stepType
-                                |> Maybe.unwrap [] Dict.toList
-                                |> List.map
-                                    (\( argName, arg ) ->
-                                        { icon = targetEntry.icon
-                                        , label = label
-                                        , targetSpec = targetSpec
-                                        , argName = argName
-                                        , argType = arg.type_
-                                        }
-                                    )
-                        )
+        page =
+            (Model.getRoute model).page
     in
     viewTable
         { model = model
         , spec = spec
         , table = steps
+        , recordActionsPopover =
+            \record ->
+                Html.Lazy.lazy8 viewStepRecordActions
+                    sectionName
+                    entry
+                    stepConfig_
+                    presentTypesKey
+                    projectIdKey
+                    page
+                    record
+                    (record.id
+                        |> Maybe.map (\id -> Dict.member id (Model.getUploadProgress model))
+                        |> Maybe.unwrap False identity
+                    )
         , alwaysVisibleRecordActions =
             \r ->
-                case stepType of
+                case entry.stepType of
                     FileUpload _ ->
                         case r.id |> Maybe.andThen (\id -> Dict.get id (Model.getUploadProgress model) |> Maybe.map (Tuple.pair id)) of
                             Just ( stepId, progress ) ->
@@ -225,76 +179,10 @@ viewSection model sectionName entry steps =
 
                     Download ->
                         []
-        , specificRecordActions =
-            \r ->
-                let
-                    runActions =
-                        case stepType of
-                            Derivation _ _ ->
-                                viewRunStop spec r
-
-                            Download ->
-                                viewRunStop spec r
-
-                            FileUpload _ ->
-                                []
-
-                    uploadActions =
-                        if isReadOnly then
-                            []
-
-                        else
-                            case stepType of
-                                FileUpload types ->
-                                    case r.id |> Maybe.andThen (\id -> Dict.get id (Model.getUploadProgress model) |> Maybe.map (Tuple.pair id)) of
-                                        Just _ ->
-                                            []
-
-                                        Nothing ->
-                                            [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) r.id ]
-
-                                Derivation _ _ ->
-                                    []
-
-                                Download ->
-                                    []
-
-                    prefill argType =
-                        let
-                            wire allowedTypes toValue =
-                                if Maybe.unwrap True (List.member r.type_) allowedTypes then
-                                    Maybe.map toValue r.id
-
-                                else
-                                    Nothing
-                        in
-                        case argType of
-                            TStep allowedTypes True ->
-                                wire allowedTypes TStepValue
-
-                            TList (TStep allowedTypes True) ->
-                                wire allowedTypes (TListValue << List.singleton << TStepValue)
-
-                            _ ->
-                                Nothing
-
-                    quickCreateActions =
-                        quickCreateCandidates
-                            |> List.filterMap
-                                (\candidate ->
-                                    prefill candidate.argType
-                                        |> Maybe.map
-                                            (viewQuickCreateButton candidate.icon candidate.label
-                                                << Actions.addStepWithArg candidate.targetSpec candidate.argName
-                                            )
-                                )
-                in
-                uploadActions ++ runActions ++ quickCreateActions
         , directorySection = FileBrowser.viewDirectorySection model spec
-        , srcFilesSection = FileBrowser.viewSrcFilesSection model stepType spec
+        , srcFilesSection = FileBrowser.viewSrcFilesSection model entry.stepType spec
         , onRecordClick =
             \record ->
                 record.id
                     |> Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ()))
-        , isOpen = \r -> TableSpec.getDirectoryView spec r |> Maybe.map .expanded |> Maybe.withDefault False
         }

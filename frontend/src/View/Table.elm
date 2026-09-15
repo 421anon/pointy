@@ -1,4 +1,4 @@
-module View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRunButton, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (actionsPopoverId, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewStepRecordActions, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 import Accessors exposing (all, each, has, just, key, lens, over, set, try)
 import Actions
@@ -27,13 +27,14 @@ import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), StepRecord, Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
 import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, recordId, records, route, selectExistingSteps, tables, templatesSelect)
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..), TStringDisplay(..), downloadArgs, tBoolValue, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), TStringDisplay(..), downloadArgs, tBoolValue, tEnumValue, tIntValue, tListValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
 import Scroll
 import Set
+import Specs
 import Time.Distance
 import View.Icons exposing (icon, iconCustom)
 
@@ -115,15 +116,14 @@ viewTable :
     { model : Model
     , spec : TableSpec (BaseRecord a)
     , table : Table (BaseRecord a)
-    , specificRecordActions : BaseRecord a -> List (Html (Flow Model ()))
+    , recordActionsPopover : BaseRecord a -> Html (Flow Model ())
     , alwaysVisibleRecordActions : BaseRecord a -> List (Html (Flow Model ()))
     , directorySection : BaseRecord a -> Html (Flow Model ())
     , srcFilesSection : BaseRecord a -> Html (Flow Model ())
     , onRecordClick : BaseRecord a -> Maybe (Flow Model ())
-    , isOpen : BaseRecord a -> Bool
     }
     -> Html (Flow Model ())
-viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick, isOpen } =
+viewTable { model, spec, table, recordActionsPopover, alwaysVisibleRecordActions, directorySection, srcFilesSection, onRecordClick } =
     let
         lens =
             TableSpec.getLens spec
@@ -172,97 +172,6 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
 
         recordIsEditing record =
             Maybe.map2 (==) mEditedId record.id |> Maybe.withDefault False
-
-        sourceFilesNeedLoading record =
-            case Maybe.map .children (TableSpec.getSrcFilesView spec record) of
-                Just NotAsked ->
-                    True
-
-                Just (Error _) ->
-                    True
-
-                _ ->
-                    False
-
-        toggleRecordEditor record =
-            let
-                loadSourceFiles =
-                    if sourceFilesNeedLoading record then
-                        Maybe.unwrap (Flow.pure ())
-                            (\recordId -> Actions.toggleSrcEntry recordId (Just True) [] |> Flow.return ())
-                            record.id
-
-                    else
-                        Flow.pure ()
-            in
-            Actions.toggleAddOrEditRecordForm spec record.id
-                |> Flow.seq loadSourceFiles
-
-        recordActions =
-            [ -- Directory button
-              { shouldShow = isSuccessStatus << TableSpec.getStatus spec
-              , render = \record -> Html.viewMaybe (dirButton (isOpen record) []) record.id
-              }
-            , { shouldShow = Maybe.isJust << .id
-              , render =
-                    \record ->
-                        if isReadOnly then
-                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec record.id)
-
-                        else
-                            viewIconButtonWithTooltip "edit" True "Edit" (toggleRecordEditor record)
-              }
-            , -- Share button (shareable only)
-              { shouldShow = \record -> TableSpec.getShareable spec record && Maybe.isJust record.id
-              , render =
-                    \record ->
-                        viewIconButtonWithTooltip
-                            "share"
-                            True
-                            "Share"
-                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [] Nothing)
-                                mProjectId
-                                record.id
-                                |> Maybe.withDefault Flow.none
-                            )
-              }
-            , -- Visibility toggle button
-              { shouldShow = \record -> not isReadOnly && Maybe.isJust record.id
-              , render =
-                    \record ->
-                        viewIconButtonWithTooltip
-                            (if record.hidden then
-                                "visibility"
-
-                             else
-                                "visibility_off"
-                            )
-                            True
-                            (if record.hidden then
-                                "Show"
-
-                             else
-                                "Hide"
-                            )
-                            (Actions.toggleRecordVisibility spec mProjectId Nothing record)
-              }
-            , -- Clone button (shareable only)
-              { shouldShow = \record -> not isReadOnly && TableSpec.getShareable spec record
-              , render = \record -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec record)
-              }
-            , -- Remove button
-              { shouldShow =
-                    \record ->
-                        let
-                            hasDependentInProject =
-                                False
-                        in
-                        not isReadOnly
-                            && Maybe.isJust record.id
-                            && (not (TableSpec.getShareable spec record) || not hasDependentInProject)
-              , render = \record -> Html.viewMaybe (viewIconButtonWithTooltip "delete" False "Remove" << Actions.removeRecord spec) record.id
-              }
-            ]
 
         viewRecord index record =
             let
@@ -509,7 +418,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                 ]
                             , let
                                 popoverId =
-                                    "actions-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt (Maybe.withDefault -1 record.id)
+                                    actionsPopoverId (TableSpec.getName spec) record
                               in
                               Html.div
                                 [ class actionsContainerClass ]
@@ -519,24 +428,7 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                                     , style "anchor-name" ("--anchor-" ++ popoverId)
                                     ]
                                     [ icon True "more_vert" ]
-                                , Html.div
-                                    [ class "table-record-actions"
-                                    , id popoverId
-                                    , attribute "popover" "auto"
-                                    , style "position-anchor" ("--anchor-" ++ popoverId)
-                                    , Events.on "click" (Decode.succeed (Actions.hidePopover popoverId))
-                                    ]
-                                    (specificRecordActions record
-                                        ++ List.filterMap
-                                            (\recordActionBtn ->
-                                                if recordActionBtn.shouldShow record then
-                                                    Just (recordActionBtn.render record)
-
-                                                else
-                                                    Nothing
-                                            )
-                                            recordActions
-                                    )
+                                , recordActionsPopover record
                                 , Html.div [] (alwaysVisibleRecordActions record)
                                 , Html.viewIf (not isReadOnly) <|
                                     Html.div (class "table-record-drag-target" :: cmap (mkDragAttrs itemId))
@@ -683,6 +575,271 @@ viewTable { model, spec, table, specificRecordActions, alwaysVisibleRecordAction
                 ]
     in
     viewContent
+
+
+actionsPopoverId : String -> BaseRecord a -> String
+actionsPopoverId tableName record =
+    "actions-popover-" ++ tableName ++ "-" ++ String.fromInt (Maybe.withDefault -1 record.id)
+
+
+viewRecordActionsPopover : String -> List (Html (Flow Model ())) -> Html (Flow Model ())
+viewRecordActionsPopover popoverId actions =
+    Html.div
+        [ class "table-record-actions"
+        , id popoverId
+        , attribute "popover" "auto"
+        , style "position-anchor" ("--anchor-" ++ popoverId)
+        , Events.on "click" (Decode.succeed (Actions.hidePopover popoverId))
+        ]
+        actions
+
+
+{-| The actions of one record. Split out of `viewTable` so that the memoized
+step variant below can rebuild them from data alone: a `Html.Lazy` thunk
+compares its references with `===`, so nothing here may capture the model.
+-}
+viewRecordActions : TableSpec (BaseRecord a) -> Bool -> Maybe Int -> BaseRecord a -> List (Html (Flow Model ()))
+viewRecordActions spec isReadOnly mProjectId record =
+    let
+        isDirectoryOpen =
+            TableSpec.getDirectoryView spec record |> Maybe.map .expanded |> Maybe.withDefault False
+
+        sourceFilesNeedLoading =
+            case Maybe.map .children (TableSpec.getSrcFilesView spec record) of
+                Just NotAsked ->
+                    True
+
+                Just (Error _) ->
+                    True
+
+                _ ->
+                    False
+
+        toggleRecordEditor =
+            let
+                loadSourceFiles =
+                    if sourceFilesNeedLoading then
+                        Maybe.unwrap (Flow.pure ())
+                            (\recordId -> Actions.toggleSrcEntry recordId (Just True) [] |> Flow.return ())
+                            record.id
+
+                    else
+                        Flow.pure ()
+            in
+            Actions.toggleAddOrEditRecordForm spec record.id
+                |> Flow.seq loadSourceFiles
+
+        recordActions =
+            [ -- Directory button
+              { shouldShow = isSuccessStatus << TableSpec.getStatus spec
+              , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
+              }
+            , { shouldShow = Maybe.isJust << .id
+              , render =
+                    \r ->
+                        if isReadOnly then
+                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec r.id)
+
+                        else
+                            viewIconButtonWithTooltip "edit" True "Edit" toggleRecordEditor
+              }
+            , -- Share button (shareable only)
+              { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
+              , render =
+                    \r ->
+                        viewIconButtonWithTooltip
+                            "share"
+                            True
+                            "Share"
+                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [] Nothing)
+                                mProjectId
+                                r.id
+                                |> Maybe.withDefault Flow.none
+                            )
+              }
+            , -- Visibility toggle button
+              { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
+              , render =
+                    \r ->
+                        viewIconButtonWithTooltip
+                            (if r.hidden then
+                                "visibility"
+
+                             else
+                                "visibility_off"
+                            )
+                            True
+                            (if r.hidden then
+                                "Show"
+
+                             else
+                                "Hide"
+                            )
+                            (Actions.toggleRecordVisibility spec mProjectId Nothing r)
+              }
+            , -- Clone button (shareable only)
+              { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
+              , render = \r -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec r)
+              }
+            , -- Remove button
+              { shouldShow =
+                    \r ->
+                        let
+                            hasDependentInProject =
+                                False
+                        in
+                        not isReadOnly
+                            && Maybe.isJust r.id
+                            && (not (TableSpec.getShareable spec r) || not hasDependentInProject)
+              , render = \r -> Html.viewMaybe (viewIconButtonWithTooltip "delete" False "Remove" << Actions.removeRecord spec) r.id
+              }
+            ]
+    in
+    List.filterMap (\recordActionBtn -> if recordActionBtn.shouldShow record then Just (recordActionBtn.render record) else Nothing) recordActions
+
+
+viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
+viewRunStop spec record =
+    case record.id of
+        Just id ->
+            let
+                status =
+                    TableSpec.getStatus spec record
+
+                isRunning =
+                    status
+                        |> ApiData.toMaybe
+                        |> (==) (Just StatusRunning)
+
+                canRun =
+                    case status of
+                        Loading _ ->
+                            False
+
+                        Success StatusSuccess ->
+                            False
+
+                        Success StatusRunning ->
+                            False
+
+                        _ ->
+                            True
+            in
+            [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
+            , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
+            ]
+
+        Nothing ->
+            []
+
+
+{-| The record actions of a step table, as a single memoizable node.
+
+Everything it needs arrives as a value: the section name and entry give the
+spec, the step config and the names with tables give the quick-create
+buttons, and the route page and the project id key give the share and
+visibility targets. Rows that are mid-upload change the upload button, so
+that comes in as a flag. Nothing else in a row's actions is time- or
+model-dependent, so an unchanged row's popover is never rebuilt.
+
+-}
+viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> Bool -> Html (Flow Model ())
+viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record uploading =
+    let
+        spec =
+            Specs.steps name entry
+
+        isReadOnly =
+            Model.isReadOnlyPage page
+
+        mProjectId =
+            String.toInt projectIdKey
+
+        presentTypes =
+            String.split "," presentTypesKey
+
+        prefill argType =
+            let
+                wire allowedTypes toValue =
+                    if Maybe.unwrap True (List.member record.type_) allowedTypes then
+                        Maybe.map toValue record.id
+
+                    else
+                        Nothing
+            in
+            case argType of
+                TStep allowedTypes True ->
+                    wire allowedTypes TStepValue
+
+                TList (TStep allowedTypes True) ->
+                    wire allowedTypes (TListValue << List.singleton << TStepValue)
+
+                _ ->
+                    Nothing
+
+        runActions =
+            case entry.stepType of
+                Derivation _ _ ->
+                    viewRunStop spec record
+
+                Download ->
+                    viewRunStop spec record
+
+                FileUpload _ ->
+                    []
+
+        uploadActions =
+            if isReadOnly || uploading then
+                []
+
+            else
+                case entry.stepType of
+                    FileUpload types ->
+                        [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) record.id ]
+
+                    Derivation _ _ ->
+                        []
+
+                    Download ->
+                        []
+
+        quickCreateActions =
+            if isReadOnly then
+                []
+
+            else
+                stepConfig
+                    |> Dict.toList
+                    |> List.filter (\( targetType, _ ) -> List.member targetType presentTypes)
+                    |> List.concatMap
+                        (\( targetType, targetEntry ) ->
+                            let
+                                targetSpec =
+                                    Specs.steps targetType targetEntry
+
+                                label =
+                                    "Create " ++ TableSpec.getDisplayName targetSpec
+                            in
+                            case targetEntry.stepType of
+                                Derivation args _ ->
+                                    args
+                                        |> Dict.toList
+                                        |> List.filterMap
+                                            (\( argName, arg ) ->
+                                                prefill arg.type_
+                                                    |> Maybe.map (viewQuickCreateButton targetEntry.icon label << Actions.addStepWithArg targetSpec argName)
+                                            )
+
+                                FileUpload _ ->
+                                    []
+
+                                Download ->
+                                    []
+                        )
+    in
+    viewRecordActionsPopover
+        (actionsPopoverId name record)
+        (uploadActions ++ runActions ++ quickCreateActions ++ viewRecordActions spec isReadOnly mProjectId record)
 
 
 viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
