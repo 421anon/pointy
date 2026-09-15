@@ -659,7 +659,7 @@ viewRecordActions spec isReadOnly mProjectId record =
               -- inspection that stands in for it: what unlocks the record is
               -- worth saying where the reviewer reaches for it.
               { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
-              , render = always (viewDisabledIconButtonWithTooltip "edit" "Remove review to edit")
+              , render = always (viewInactiveIconButtonWithTooltip "edit" "Remove review to edit")
               }
             , { shouldShow = Maybe.isJust << .id
               , render =
@@ -2517,23 +2517,19 @@ viewIconButtonWithTooltip iconName filled tooltip action =
         ]
 
 
-{-| A disabled control shows no tooltip of its own, so the title sits on the
-wrapper that the pointer still reaches.
+{-| `aria-disabled` rather than `disabled`: a disabled control drops out of the
+tab order, and the explanation is all this button has to offer.
 -}
-viewDisabledIconButtonWithTooltip : String -> String -> Html (Flow Model ())
-viewDisabledIconButtonWithTooltip iconName tooltip =
-    Html.span
-        [ class "icon-btn-tooltip"
+viewInactiveIconButtonWithTooltip : String -> String -> Html (Flow Model ())
+viewInactiveIconButtonWithTooltip iconName tooltip =
+    Html.button
+        [ class "icon-btn icon-btn-inactive"
+        , attribute "aria-disabled" "true"
+        , attribute "aria-label" tooltip
         , title tooltip
         ]
-        [ Html.button
-            [ class "icon-btn icon-btn-inactive"
-            , disabled True
-            , attribute "aria-label" tooltip
-            ]
-            [ icon False iconName
-            , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
-            ]
+        [ icon False iconName
+        , Html.span [ class "icon-btn-text" ] [ Html.text tooltip ]
         ]
 
 

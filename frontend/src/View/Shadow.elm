@@ -14,11 +14,12 @@ import Html.Attributes
 import Html.Events
 import Html.Extra as Html
 import Html.Lazy
+import Iso8601
 import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses as Lenses exposing (currentProject, currentProjectId, isReadOnlyRoute, mCommit, recordId, route)
+import Model.Lenses as Lenses exposing (currentProject, currentProjectId, isReadOnlyRoute, recordId)
 import Model.Shadow exposing (StepConfigEntry)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
@@ -60,8 +61,9 @@ comparisonChip comparison =
             Nothing
 
 
-{-| Why a review cannot be updated. Comparisons that carry no chip still block
-an update, so they are named here, next to the fields they disable.
+{-| Why the review cannot be updated here. Only the states the row cannot speak
+for are named: every comparison that carries a chip, and the failed check, are
+already explained in the row this popover hangs under.
 -}
 blockedReason : ApiData.ApiData Model.ReviewComparison -> Maybe String
 blockedReason comparison =
@@ -69,7 +71,8 @@ blockedReason comparison =
         checking =
             Just "Checking the viewed revision's output."
     in
-    ApiData.foldVisible checking
+    ApiData.foldVisible
+        checking
         (always checking)
         (\current ->
             case current of
@@ -77,18 +80,28 @@ blockedReason comparison =
                     Just "The reviewed output is no longer in the store. Run the step to rebuild its reviewed revision, or remove the review."
 
                 _ ->
-                    Maybe.map .explanation (comparisonChip current)
+                    Nothing
         )
-        (always (Just "The review check failed, so the review cannot be updated."))
+        (always Nothing)
         comparison
 
 
 viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
 viewReviewControls model spec stepId record =
     let
+        -- Record mtimes are scoped to the viewed revision while the review is
+        -- read at HEAD, so the mtime dates the review on the live view only:
+        -- history has no commit that added the pin.
+        mReviewedAt =
+            if isReadOnlyRoute model then
+                Nothing
+
+            else
+                record.lastModifiedAt
+
         content =
             viewReviewPopover model spec stepId record
-                ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId record.lastModifiedAt) record.review
+                ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId mReviewedAt) record.review
     in
     if List.isEmpty content then
         Nothing
@@ -160,8 +173,7 @@ viewReviewIndicator model spec stepId mReviewedAt reviewed =
                 [ iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
 
         reviewedRevision =
-            Html.viewIf (try (route << Route.page << Route.project << mCommit << just) model /= Just reviewed.revision) <|
-                viewReviewedRevision model mReviewedAt reviewed.revision
+            viewReviewedRevision model mReviewedAt reviewed.revision
 
         comparisonControls =
             if ApiData.toMaybe reviewed.comparison == Just Model.DifferentContent then
@@ -200,8 +212,8 @@ viewBuildViewedLink model spec stepId =
         Html.button
             [ Html.Attributes.class "step-review-build"
             , Html.Attributes.disabled True
-            , Html.Attributes.title "Building this revision"
-            , Html.Attributes.attribute "aria-label" "Building this revision"
+            , Html.Attributes.title "Building this version"
+            , Html.Attributes.attribute "aria-label" "Building this version"
             ]
             [ iconCustom True "progress_activity" [ Html.Attributes.class "step-review-build-spinner", Html.Attributes.attribute "aria-hidden" "true" ]
             , Html.text "Building..."
@@ -210,12 +222,12 @@ viewBuildViewedLink model spec stepId =
     else
         Html.button
             [ Html.Attributes.class "step-review-build"
-            , Html.Attributes.title "Build the viewed revision's output to compare with the reviewed output"
-            , Html.Attributes.attribute "aria-label" "Build the viewed revision's output to compare with the reviewed output"
+            , Html.Attributes.title "Build the viewed version's output to compare with the reviewed output"
+            , Html.Attributes.attribute "aria-label" "Build the viewed version's output to compare with the reviewed output"
             , Html.Events.onClick (Actions.buildViewedRevision spec stepId)
             ]
             [ iconCustom False "build" [ Html.Attributes.attribute "aria-hidden" "true" ]
-            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build this revision" ]
+            , Html.span [ Html.Attributes.style "text-decoration" "underline" ] [ Html.text "Build this version" ]
             ]
 
 
@@ -250,70 +262,20 @@ reviewedAtExplanation model mReviewedAt shortRevision =
                 ", "
                     ++ Time.Distance.inWords reviewedAt (Model.getNow model)
                     ++ ", at "
-                    ++ formatLocalMinute (Model.getZone model) reviewedAt
+                    ++ formatUtcMinute reviewedAt
                     ++ "."
             )
             mReviewedAt
 
 
-formatLocalMinute : Time.Zone -> Posix -> String
-formatLocalMinute zone posix =
-    String.join ""
-        [ String.fromInt (Time.toYear zone posix)
-        , "-"
-        , padToTwo (monthNumber (Time.toMonth zone posix))
-        , "-"
-        , padToTwo (Time.toDay zone posix)
-        , " "
-        , padToTwo (Time.toHour zone posix)
-        , ":"
-        , padToTwo (Time.toMinute zone posix)
-        ]
-
-
-padToTwo : Int -> String
-padToTwo number =
-    String.padLeft 2 '0' (String.fromInt number)
-
-
-monthNumber : Time.Month -> Int
-monthNumber month =
-    case month of
-        Time.Jan ->
-            1
-
-        Time.Feb ->
-            2
-
-        Time.Mar ->
-            3
-
-        Time.Apr ->
-            4
-
-        Time.May ->
-            5
-
-        Time.Jun ->
-            6
-
-        Time.Jul ->
-            7
-
-        Time.Aug ->
-            8
-
-        Time.Sep ->
-            9
-
-        Time.Oct ->
-            10
-
-        Time.Nov ->
-            11
-
-        Time.Dec ->
-            12
+{-| `Iso8601.fromTime` always renders `YYYY-MM-DDTHH:MM:SS.sssZ`, and every
+other time in the app is UTC, so a reviewed-at time reads on the same clock.
+-}
+formatUtcMinute : Posix -> String
+formatUtcMinute posix =
+    Iso8601.fromTime posix
+        |> String.left 16
+        |> String.replace "T" " "
 
 
 viewReviewPopover : Model -> TableSpec StepRecord -> Int -> StepRecord -> List (Html (Flow Model ()))
