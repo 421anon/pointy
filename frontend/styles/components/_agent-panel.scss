@@ -560,6 +560,13 @@
   border-color: var(--state-danger);
 }
 
+.agent-panel__usage {
+  padding: 0 var(--spacing-sm);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  text-align: right;
+}
+
 .agent-panel__changeset-count {
   display: inline-flex;
   gap: var(--spacing-xs);

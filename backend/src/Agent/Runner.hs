@@ -397,23 +397,37 @@ streamHandle cfg logPath outputMarker visibleLabel handle = do
                         Right textLine
                             | textLine == outputMarker -> loop True failed
                             | otherwise -> do
-                                let (lines_, failure) =
+                                let (lines_, failure, used) =
                                         if outputReady && visibleLabel == "stdout"
                                             then piEventLines textLine
-                                            else (Just [textLine], Nothing)
+                                            else (Just [textLine], Nothing, Nothing)
                                     label = if outputReady && isJust lines_ then visibleLabel else "runner"
                                 mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
+                                mapM_ (appendLogLine cfg logPath "system" . usageRecord) used
                                 loop outputReady (fromMaybe failed failure)
     loop False False
 
-piEventLines :: Text -> (Maybe [Text], Maybe Bool)
+data RunUsage = RunUsage
+    { usageTokens :: Double
+    , usageCost :: Double
+    }
+
+usageRecord :: RunUsage -> Text
+usageRecord used =
+    T.unwords
+        [ "usage"
+        , "tokens=" <> T.pack (show (truncate (usageTokens used) :: Integer))
+        , "cost=" <> T.pack (showFFloat (Just 6) (usageCost used) "")
+        ]
+
+piEventLines :: Text -> (Maybe [Text], Maybe Bool, Maybe RunUsage)
 piEventLines line =
     case Aeson.decodeStrict (TE.encodeUtf8 line) :: Maybe Aeson.Value of
         Just (Aeson.Object event)
             | Just kind <- field "type" event >>= str -> eventLines kind event
         _ -> visible (T.splitOn "\n" line)
   where
-    visible ls = (Just ls, Nothing)
+    visible ls = (Just ls, Nothing, Nothing)
     eventLines kind event =
         let message = object (field "message" event)
             assistant = field "role" message == Just (Aeson.String "assistant")
@@ -425,7 +439,7 @@ piEventLines line =
                         let failed = text "stopReason" message `elem` ["error", "aborted"]
                             prose = contentText message
                             lines_ = if T.null prose then [] else "" : T.splitOn "\n" prose ++ [""]
-                         in (Just (lines_ ++ ["**Response error:**" <> code (text "errorMessage" message) | failed]), Just failed)
+                         in (Just (lines_ ++ ["**Response error:**" <> code (text "errorMessage" message) | failed]), Just failed, Nothing)
                     | otherwise -> visible []
                 "tool_execution_start" -> visible [toolVerb (text "toolName" event) <> toolTarget event]
                 "tool_execution_end" ->
@@ -439,14 +453,15 @@ piEventLines line =
                         let retrying = field "willRetry" event == Just (Aeson.Bool True)
                          in ( Just ["**Context summary failed:**" <> code (text "errorMessage" event)]
                             , if retrying then Nothing else Just True
+                            , Nothing
                             )
                     | otherwise -> visible []
                 "auto_retry_start" -> visible ["*Retrying (" <> number "attempt" event <> "/" <> number "maxAttempts" event <> ")*"]
                 "auto_retry_end"
                     | field "success" event == Just (Aeson.Bool False) ->
-                        (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True)
+                        (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True, Nothing)
                     | otherwise -> visible []
-                "agent_end" -> visible (usageLines event)
+                "agent_end" -> (Just [], Nothing, runUsage event)
                 _
                     | kind
                         `elem` [ "session"
@@ -460,7 +475,7 @@ piEventLines line =
                                , "thinking_level_changed"
                                ] ->
                         visible []
-                    | otherwise -> (Nothing, Nothing)
+                    | otherwise -> (Nothing, Nothing, Nothing)
 
     contentText value = case field "content" value of
         Just (Aeson.Array parts) -> T.concat (foldMap textPart parts)
@@ -469,23 +484,29 @@ piEventLines line =
         | text "type" part == "text" = [text "text" part]
     textPart _ = []
 
-    usageLines event = case field "messages" event of
-        Just (Aeson.Array messages) ->
-            let used = foldMap assistantUsage messages
-                tokens = truncate (sum (map fst used)) :: Integer
-                cost = sum (map snd used)
-             in ["*" <> T.pack (show tokens) <> " tokens" <> price cost <> "*" | tokens > 0]
-        _ -> []
+    runUsage event = case field "messages" event of
+        Just (Aeson.Array messages) -> case foldMap assistantUsage messages of
+            [] -> Nothing
+            billed ->
+                Just
+                    RunUsage
+                        { usageTokens = sum (map usageTokens billed)
+                        , usageCost = sum (map usageCost billed)
+                        }
+        _ -> Nothing
 
     assistantUsage (Aeson.Object message)
-        | field "role" message == Just (Aeson.String "assistant") =
-            let usage = object (field "usage" message)
-             in [(amount "totalTokens" usage, amount "total" (object (field "cost" usage)))]
+        | field "role" message == Just (Aeson.String "assistant")
+        , tokens > 0 =
+            [ RunUsage
+                { usageTokens = tokens
+                , usageCost = amount "total" (object (field "cost" usage))
+                }
+            ]
+      where
+        usage = object (field "usage" message)
+        tokens = amount "totalTokens" usage
     assistantUsage _ = []
-
-    price cost
-        | cost <= 0 = ""
-        | otherwise = " · $" <> T.pack (showFFloat (Just 4) cost "")
 
     amount :: Text -> KeyMap.KeyMap Aeson.Value -> Double
     amount key value = case field key value of
