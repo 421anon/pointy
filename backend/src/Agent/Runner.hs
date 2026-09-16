@@ -417,7 +417,6 @@ piEventLines line =
         let message = object (field "message" event)
             assistant = field "role" message == Just (Aeson.String "assistant")
          in case kind of
-                "message_start" -> visible ["*Working*" | assistant]
                 "message_update" ->
                     visible ["*Thinking*" | assistant, text "type" (object (field "assistantMessageEvent" event)) == "thinking_start"]
                 "message_end"
@@ -449,6 +448,7 @@ piEventLines line =
                 _
                     | kind
                         `elem` [ "session"
+                               , "message_start"
                                , "agent_start"
                                , "agent_end"
                                , "turn_start"
