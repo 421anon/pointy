@@ -52,7 +52,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
-import Numeric (showFFloat)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
@@ -397,37 +396,23 @@ streamHandle cfg logPath outputMarker visibleLabel handle = do
                         Right textLine
                             | textLine == outputMarker -> loop True failed
                             | otherwise -> do
-                                let (lines_, failure, used) =
+                                let (lines_, failure) =
                                         if outputReady && visibleLabel == "stdout"
                                             then piEventLines textLine
-                                            else (Just [textLine], Nothing, Nothing)
+                                            else (Just [textLine], Nothing)
                                     label = if outputReady && isJust lines_ then visibleLabel else "runner"
                                 mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
-                                mapM_ (appendLogLine cfg logPath "system" . usageRecord) used
                                 loop outputReady (fromMaybe failed failure)
     loop False False
 
-data RunUsage = RunUsage
-    { usageTokens :: Double
-    , usageCost :: Double
-    }
-
-usageRecord :: RunUsage -> Text
-usageRecord used =
-    T.unwords
-        [ "usage"
-        , "tokens=" <> T.pack (show (truncate (usageTokens used) :: Integer))
-        , "cost=" <> T.pack (showFFloat (Just 6) (usageCost used) "")
-        ]
-
-piEventLines :: Text -> (Maybe [Text], Maybe Bool, Maybe RunUsage)
+piEventLines :: Text -> (Maybe [Text], Maybe Bool)
 piEventLines line =
     case Aeson.decodeStrict (TE.encodeUtf8 line) :: Maybe Aeson.Value of
         Just (Aeson.Object event)
             | Just kind <- field "type" event >>= str -> eventLines kind event
         _ -> visible (T.splitOn "\n" line)
   where
-    visible ls = (Just ls, Nothing, Nothing)
+    visible ls = (Just ls, Nothing)
     eventLines kind event =
         let message = object (field "message" event)
             assistant = field "role" message == Just (Aeson.String "assistant")
@@ -439,29 +424,24 @@ piEventLines line =
                         let failed = text "stopReason" message `elem` ["error", "aborted"]
                             prose = contentText message
                             lines_ = if T.null prose then [] else "" : T.splitOn "\n" prose ++ [""]
-                         in (Just (lines_ ++ ["**Response error:**" <> code (text "errorMessage" message) | failed]), Just failed, Nothing)
+                         in (Just (lines_ ++ ["**Response error:**" <> code (text "errorMessage" message) | failed]), Just failed)
                     | otherwise -> visible []
-                "tool_execution_start" -> visible [toolVerb (text "toolName" event) <> toolTarget event]
-                "tool_execution_end" ->
-                    visible
-                        [ "**Tool failed:**" <> code (text "toolName" event) <> code (contentText (object (field "result" event)))
-                        | field "isError" event == Just (Aeson.Bool True)
-                        ]
+                "tool_execution_start" -> visible []
+                "tool_execution_end" -> visible []
                 "compaction_start" -> visible ["*Summarising the conversation so far*"]
                 "compaction_end"
                     | not (T.null (text "errorMessage" event)) ->
                         let retrying = field "willRetry" event == Just (Aeson.Bool True)
                          in ( Just ["**Context summary failed:**" <> code (text "errorMessage" event)]
                             , if retrying then Nothing else Just True
-                            , Nothing
                             )
                     | otherwise -> visible []
                 "auto_retry_start" -> visible ["*Retrying (" <> number "attempt" event <> "/" <> number "maxAttempts" event <> ")*"]
                 "auto_retry_end"
                     | field "success" event == Just (Aeson.Bool False) ->
-                        (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True, Nothing)
+                        (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True)
                     | otherwise -> visible []
-                "agent_end" -> (Just [], Nothing, runUsage event)
+                "agent_end" -> visible []
                 _
                     | kind
                         `elem` [ "session"
@@ -475,7 +455,7 @@ piEventLines line =
                                , "thinking_level_changed"
                                ] ->
                         visible []
-                    | otherwise -> (Nothing, Nothing, Nothing)
+                    | otherwise -> (Nothing, Nothing)
 
     contentText value = case field "content" value of
         Just (Aeson.Array parts) -> T.concat (foldMap textPart parts)
@@ -483,50 +463,6 @@ piEventLines line =
     textPart (Aeson.Object part)
         | text "type" part == "text" = [text "text" part]
     textPart _ = []
-
-    runUsage event = case field "messages" event of
-        Just (Aeson.Array messages) -> case foldMap assistantUsage messages of
-            [] -> Nothing
-            billed ->
-                Just
-                    RunUsage
-                        { usageTokens = sum (map usageTokens billed)
-                        , usageCost = sum (map usageCost billed)
-                        }
-        _ -> Nothing
-
-    assistantUsage (Aeson.Object message)
-        | field "role" message == Just (Aeson.String "assistant")
-        , tokens > 0 =
-            [ RunUsage
-                { usageTokens = tokens
-                , usageCost = amount "total" (object (field "cost" usage))
-                }
-            ]
-      where
-        usage = object (field "usage" message)
-        tokens = amount "totalTokens" usage
-    assistantUsage _ = []
-
-    amount :: Text -> KeyMap.KeyMap Aeson.Value -> Double
-    amount key value = case field key value of
-        Just (Aeson.Number n) -> realToFrac n
-        _ -> 0
-
-    toolVerb name = case name of
-        "read" -> "*Reading*"
-        "write" -> "*Writing*"
-        "edit" -> "*Editing*"
-        "bash" -> "*Running*"
-        "grep" -> "*Searching*"
-        "find" -> "*Finding files*"
-        "ls" -> "*Listing files*"
-        _ -> "*Using*" <> code name
-
-    toolTarget event = firstArg ["command", "pattern", "path"] (object (field "args" event))
-    firstArg [] _ = ""
-    firstArg (key : keys) args =
-        if T.null (text key args) then firstArg keys args else code (text key args)
     code value =
         let cleaned = T.unwords (T.words (T.filter (/= '`') value))
             clipped = if T.length cleaned > 100 then T.take 100 cleaned <> "..." else cleaned

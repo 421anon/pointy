@@ -512,7 +512,6 @@ viewSession resolveMention agent sessionView =
         [ viewSessionTitle agent sessionView
         , viewError session
         , viewChatTurns resolveMention agent sessionView runnerActive detailBlocked
-        , viewChatUsage sessionView.turns
         , if closedChat then
             viewClosedChat session.status
 
@@ -737,67 +736,6 @@ viewPrompt runnerActive sendingPrompt stopping canCompose canSubmit =
                     ]
             ]
         ]
-
-
-usageRecordPrefix : String
-usageRecordPrefix =
-    "[system] usage "
-
-
-costMarker : String
-costMarker =
-    "cost="
-
-
-viewChatUsage : List Model.AgentTurn -> Html (Flow Model ())
-viewChatUsage turns =
-    Html.viewMaybe
-        (\cost -> Html.div [ class "agent-panel__usage" ] [ Html.text (usageCost cost) ])
-        (chatUsage turns)
-
-
-chatUsage : List Model.AgentTurn -> Maybe Float
-chatUsage turns =
-    let
-        total =
-            List.sum (List.filterMap usageRecord (List.concatMap (String.lines << .turnLog) turns))
-    in
-    if total > 0 then
-        Just total
-
-    else
-        Nothing
-
-
-usageRecord : String -> Maybe Float
-usageRecord line =
-    if String.startsWith usageRecordPrefix line then
-        List.head (List.filterMap recordedCost (String.words line))
-
-    else
-        Nothing
-
-
-recordedCost : String -> Maybe Float
-recordedCost word =
-    if String.startsWith costMarker word then
-        String.toFloat (String.dropLeft (String.length costMarker) word)
-
-    else
-        Nothing
-
-
-usageCost : Float -> String
-usageCost cost =
-    let
-        cents =
-            round (cost * 100)
-    in
-    if cents == 0 then
-        "<$0.01"
-
-    else
-        "$" ++ String.fromFloat (toFloat cents / 100)
 
 
 submitShortcut : Bool -> Html.Attribute (Flow Model ())
