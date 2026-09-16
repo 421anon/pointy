@@ -726,6 +726,10 @@
   font-weight: 600;
 }
 
+.agent-panel__chat-content em {
+  color: var(--text-secondary);
+}
+
 .agent-panel__chat-content pre {
   margin: 0;
   max-height: 280px;
@@ -946,5 +950,19 @@
     height: calc(100dvh - var(--spacing-5xl) - var(--spacing-sm));
     border-inline: 0;
     border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-panel .shimmer-text,
+  .agent-panel__chat-cursor,
+  .agent-panel__button-spinner {
+    animation: none;
+  }
+
+  .agent-panel .shimmer-text {
+    background: none;
+    color: var(--text-secondary);
+    -webkit-text-fill-color: currentColor;
   }
 }

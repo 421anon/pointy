@@ -30,7 +30,6 @@ import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData,
 import Model.Lenses exposing (..)
 import Model.Lib exposing (sortProjects)
 import Model.Shadow exposing (StepArgValue)
-import Time
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
 import Ports
 import Process
@@ -38,6 +37,7 @@ import Route exposing (Route)
 import Scroll
 import Set
 import Task
+import Time
 import Toast exposing (Toast)
 
 
@@ -1296,6 +1296,7 @@ discard the result on both branches.
 ignoreResult : FlowError Http.Error Model a -> Flow Model ()
 ignoreResult =
     FlowError.foldResult (\_ -> Flow.pure ()) (\_ -> Flow.pure ())
+
 
 downloadFile : Int -> String -> List String -> Flow Model ()
 downloadFile stepId commit filePath =
@@ -3054,6 +3055,9 @@ chatStatusFromTurn turn =
         "failed" ->
             Model.ChatFailed (turnFailureMessage turn)
 
+        "stopped" ->
+            Model.ChatStopped
+
         _ ->
             Model.ChatDone
 
@@ -3364,6 +3368,7 @@ setSessionNameEditSaving sessionId saving agentState =
             agentState
 
 
+
 -- | Metadata-only rename merge: record the stored name so full-view responses
 -- | that started before the rename cannot restore the old one; the response's
 -- | runtime fields may be stale, so it never goes through handleAgentSessionResult.
@@ -3395,6 +3400,7 @@ applyAgentSessionRename sessionId renamedView agentState =
         | sessions = ApiData.map (List.map updateView) agentState.sessions
         , sessionRenames = renames
     }
+
 
 
 -- | Override the recorded name only when the view is not newer than the rename.
@@ -3574,10 +3580,13 @@ loadAgentSession sessionId =
             )
 
 
+
 -- | The panel can go stale when the server changes session state without the
 -- browser's involvement (a conflict resolution committed at turn end, a turn
 -- started from another client, a prepare/confirm from elsewhere). The periodic
 -- clock tick calls this so the presentation converges on the current state.
+
+
 refreshSelectedAgentSession : Flow Model ()
 refreshSelectedAgentSession =
     Flow.get
@@ -3637,7 +3646,7 @@ stopAgentTurn =
                 |> Flow.seq (AgentApi.stop view.session.sessionId)
                 |> FlowError.foldResult
                     (\stoppedView ->
-                        Flow.over agent (\s -> finalizeChatTurn Nothing { s | activeTurnStream = Nothing })
+                        Flow.over agent (\s -> { s | activeTurnStream = Nothing })
                             |> Flow.seq (handleAgentSessionResult (Ok stoppedView))
                     )
                     (\err -> addToast False (Http.errorMessage err))
@@ -3848,7 +3857,7 @@ onAgentTurnIn value =
 
         Ok (Model.AgentTurnDone turnId) ->
             withActiveAgentTurn turnId
-                (Flow.over agent (\s -> finalizeChatTurn Nothing { s | activeTurnStream = Nothing })
+                (Flow.over agent (\s -> { s | activeTurnStream = Nothing })
                     |> Flow.seq scrollAgentChatToBottom
                     |> Flow.seq
                         (Flow.get
@@ -3970,36 +3979,6 @@ appendToCurrentAssistant body entries =
         _ ->
             -- Output before any prompt was submitted (e.g. resumed turn); drop it.
             entries
-
-
-finalizeChatTurn : Maybe String -> Model.AgentState -> Model.AgentState
-finalizeChatTurn mError agentState =
-    let
-        flushed =
-            if String.isEmpty agentState.chunkBuffer then
-                agentState
-
-            else
-                ingestAgentChunk "\n" agentState
-    in
-    case List.reverse flushed.chatEntries of
-        (Model.ChatTurnEntry last) :: rest ->
-            let
-                status =
-                    case mError of
-                        Just err ->
-                            Model.ChatFailed err
-
-                        Nothing ->
-                            Model.ChatDone
-
-                updated =
-                    { last | status = status }
-            in
-            { flushed | chatEntries = List.reverse (Model.ChatTurnEntry updated :: rest) }
-
-        _ ->
-            flushed
 
 
 requestProjectStatus : Int -> Maybe String -> Flow Model ()

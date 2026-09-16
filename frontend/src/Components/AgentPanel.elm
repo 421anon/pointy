@@ -864,37 +864,26 @@ viewAgentMessage resolveMention turn =
         isEmptyAssistant =
             String.isEmpty (String.trim turn.assistant)
 
-        ( statusLabel, body, failedMessage ) =
+        ( statusLabel, emptyBody, failedMessage ) =
             case turn.status of
                 Model.ChatPending ->
-                    ( "Running"
-                    , if isEmptyAssistant then
-                        "Waiting..."
-
-                      else
-                        turn.assistant
-                    , Nothing
-                    )
+                    ( "Running", "Waiting...", Nothing )
 
                 Model.ChatDone ->
-                    ( "Done"
-                    , if isEmptyAssistant then
-                        "No reply."
+                    ( "Done", "No reply.", Nothing )
 
-                      else
-                        turn.assistant
-                    , Nothing
-                    )
+                Model.ChatStopped ->
+                    ( "Stopped", "Stopped before a reply.", Nothing )
 
                 Model.ChatFailed err ->
-                    ( "Failed"
-                    , if isEmptyAssistant then
-                        "No reply before the task failed."
+                    ( "Failed", "No reply before the task failed.", Just err )
 
-                      else
-                        turn.assistant
-                    , Just err
-                    )
+        body =
+            if isEmptyAssistant then
+                emptyBody
+
+            else
+                turn.assistant
     in
     Html.div [ class "agent-panel__chat-message agent-panel__chat-message--agent" ]
         [ Html.div [ class "agent-panel__chat-label" ]
@@ -905,6 +894,7 @@ viewAgentMessage resolveMention turn =
                     , ( "is-running", turn.status == Model.ChatPending )
                     , ( "is-failed", failedMessage /= Nothing )
                     ]
+                , attribute "role" "status"
                 ]
                 [ Html.text statusLabel ]
             ]
@@ -925,7 +915,7 @@ viewAgentMessage resolveMention turn =
                 ]
                 (AgentMentions.toHtml resolveMention body)
             , Html.viewIf (turn.status == Model.ChatPending)
-                (Html.span [ class "agent-panel__chat-cursor" ] [ Html.text "█" ])
+                (Html.span [ class "agent-panel__chat-cursor", attribute "aria-hidden" "true" ] [ Html.text "█" ])
             ]
         , Html.viewMaybe
             (\err -> Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ])

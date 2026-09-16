@@ -7,6 +7,7 @@ module Agent.Runner (
     stopAgentTurn,
     turnLogStreamHandler,
     streamLoop,
+    piEventLines,
 ) where
 
 import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, refreshSessionBase, sessionHasActiveRunner)
@@ -40,12 +41,15 @@ import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
@@ -55,7 +59,7 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getF
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
-import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsEOF, hPutStr, hSetBuffering)
+import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hPutStr, hSetBuffering)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (sigKILL, signalProcess)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, proc, terminateProcess, waitForProcess)
@@ -227,7 +231,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn =
         mWarmResult <-
             if isFirstTurn
                 then do
-                    appendLogLine cfg (turnLogPath turn) "system" "Warming up agent context..."
+                    appendLogLine cfg (turnLogPath turn) "stdout" "*Loading the project context*"
                     getOrBuildWarmSession cfg (baseCommit session_) (void . attachRunnerProcess sid tid)
                 else return Nothing
         case mWarmResult of
@@ -290,6 +294,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
             ]
                 ++ passthrough
+        promptInArgs = any (T.isInfixOf "{prompt}") (agentRunnerArgs cfg)
         -- Strip any session-management flags the config may contain; we manage them here.
         sessionManagedFlags = ["-c", "--continue", "--fork", "--session", "--no-session"]
         expandedRunnerArgs = map (expandArg session_ promptText) (agentRunnerArgs cfg)
@@ -346,12 +351,12 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     case mIn of
         Nothing -> return ()
         Just hin -> do
-            unless stopRequested $ do
+            unless (stopRequested || promptInArgs) $ do
                 hPutStr hin (T.unpack promptText)
                 hFlush hin
             hClose hin
-    outReader <- maybe (async (return ())) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout") mOut
-    errReader <- maybe (async (return ())) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr") mErr
+    outReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout") mOut
+    errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr") mErr
     mExit <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
     exitCode <- case mExit of
         Just code -> return code
@@ -359,9 +364,9 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             appendLogLine cfg (turnLogPath turn) "system" "Runner timed out; terminating process"
             terminateProcess ph
             waitForProcess ph
-    _ <- wait outReader
+    modelFailed <- wait outReader
     _ <- wait errReader
-    return exitCode
+    return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
 
 -- | Copy the operator-provided pi agent config into a session's sandbox HOME.
 seedPiConfig :: FilePath -> IO ()
@@ -377,25 +382,119 @@ seedPiConfig runnerHome = do
             createDirectoryIfMissing True dstDir
             copyFile src dst
 
-streamHandle :: AgentConfig -> FilePath -> Text -> Text -> Handle -> IO ()
+streamHandle :: AgentConfig -> FilePath -> Text -> Text -> Handle -> IO Bool
 streamHandle cfg logPath outputMarker visibleLabel handle = do
     hSetBuffering handle LineBuffering
-    let loop outputReady = do
+    let loop outputReady failed = do
             eof <- hIsEOF handle
-            unless eof $ do
-                lineResult <- try (hGetLine handle) :: IO (Either IOException String)
-                case lineResult of
-                    Left _ -> return ()
-                    Right line -> do
-                        let textLine = T.pack line
-                        if textLine == outputMarker
-                            then
-                                loop True
-                            else do
-                                let label = if outputReady then visibleLabel else "runner"
-                                appendLogLine cfg logPath label textLine
-                                loop outputReady
-    loop False
+            if eof
+                then return failed
+                else do
+                    lineResult <- try (TIO.hGetLine handle) :: IO (Either IOException Text)
+                    case lineResult of
+                        Left _ -> return failed
+                        Right textLine
+                            | textLine == outputMarker -> loop True failed
+                            | otherwise -> do
+                                let (lines_, failure) =
+                                        if outputReady && visibleLabel == "stdout"
+                                            then piEventLines textLine
+                                            else (Just [textLine], Nothing)
+                                    label = if outputReady && isJust lines_ then visibleLabel else "runner"
+                                mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
+                                loop outputReady (fromMaybe failed failure)
+    loop False False
+
+piEventLines :: Text -> (Maybe [Text], Maybe Bool)
+piEventLines line =
+    case Aeson.decodeStrict (TE.encodeUtf8 line) :: Maybe Aeson.Value of
+        Just (Aeson.Object event)
+            | Just kind <- field "type" event >>= str -> eventLines kind event
+        _ -> visible (T.splitOn "\n" line)
+  where
+    visible ls = (Just ls, Nothing)
+    eventLines kind event =
+        let message = object (field "message" event)
+            assistant = field "role" message == Just (Aeson.String "assistant")
+         in case kind of
+                "message_start" -> visible ["*Working*" | assistant]
+                "message_update" ->
+                    visible ["*Thinking*" | assistant, text "type" (object (field "assistantMessageEvent" event)) == "thinking_start"]
+                "message_end"
+                    | assistant ->
+                        let failed = text "stopReason" message `elem` ["error", "aborted"]
+                            prose = contentText message
+                            lines_ = if T.null prose then [] else "" : T.splitOn "\n" prose ++ [""]
+                         in (Just (lines_ ++ ["**Response error:**" <> code (text "errorMessage" message) | failed]), Just failed)
+                    | otherwise -> visible []
+                "tool_execution_start" -> visible [toolVerb (text "toolName" event) <> toolTarget event]
+                "tool_execution_end" ->
+                    visible
+                        [ "**Tool failed:**" <> code (text "toolName" event) <> code (contentText (object (field "result" event)))
+                        | field "isError" event == Just (Aeson.Bool True)
+                        ]
+                "compaction_start" -> visible ["*Summarising the conversation so far*"]
+                "compaction_end"
+                    | not (T.null (text "errorMessage" event)) ->
+                        let retrying = field "willRetry" event == Just (Aeson.Bool True)
+                         in ( Just ["**Context summary failed:**" <> code (text "errorMessage" event)]
+                            , if retrying then Nothing else Just True
+                            )
+                    | otherwise -> visible []
+                "auto_retry_start" -> visible ["*Retrying (" <> number "attempt" event <> "/" <> number "maxAttempts" event <> ")*"]
+                "auto_retry_end"
+                    | field "success" event == Just (Aeson.Bool False) ->
+                        (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True)
+                    | otherwise -> visible []
+                _
+                    | kind
+                        `elem` [ "session"
+                               , "agent_start"
+                               , "agent_end"
+                               , "turn_start"
+                               , "turn_end"
+                               , "tool_execution_update"
+                               , "queue_update"
+                               , "session_info_changed"
+                               , "thinking_level_changed"
+                               ] ->
+                        visible []
+                    | otherwise -> (Nothing, Nothing)
+
+    contentText value = case field "content" value of
+        Just (Aeson.Array parts) -> T.concat (foldMap textPart parts)
+        _ -> ""
+    textPart (Aeson.Object part)
+        | text "type" part == "text" = [text "text" part]
+    textPart _ = []
+
+    toolVerb name = case name of
+        "read" -> "*Reading*"
+        "write" -> "*Writing*"
+        "edit" -> "*Editing*"
+        "bash" -> "*Running*"
+        "grep" -> "*Searching*"
+        "find" -> "*Finding files*"
+        "ls" -> "*Listing files*"
+        _ -> "*Using*" <> code name
+
+    toolTarget event = firstArg ["command", "pattern", "path"] (object (field "args" event))
+    firstArg [] _ = ""
+    firstArg (key : keys) args =
+        if T.null (text key args) then firstArg keys args else code (text key args)
+    code value =
+        let cleaned = T.unwords (T.words (T.filter (/= '`') value))
+            clipped = if T.length cleaned > 100 then T.take 100 cleaned <> "..." else cleaned
+         in if T.null cleaned then "" else " `" <> clipped <> "`"
+    number key value = case field key value of
+        Just (Aeson.Number n) -> T.pack (show (floor n :: Integer))
+        _ -> "?"
+    text key value = fromMaybe "" (field key value >>= str)
+    object (Just (Aeson.Object value)) = value
+    object _ = KeyMap.empty
+    field key = KeyMap.lookup (Key.fromText key)
+    str (Aeson.String value) = Just value
+    str _ = Nothing
 
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
 finishTurn cfg _session turn exitCode = do
