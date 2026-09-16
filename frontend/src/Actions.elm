@@ -2904,6 +2904,11 @@ shouldKeepLiveTranscript view agentState =
         == Just (Model.SendingAgentPrompt view.session.sessionId)
 
 
+settledView : Model.AgentSessionView -> Model.AgentState -> Bool
+settledView view agentState =
+    view.session.activeTurnId == Nothing && agentState.selectedSessionId == Just view.session.sessionId
+
+
 persistedTranscript : Model.AgentSessionView -> List Model.ChatEntry
 persistedTranscript view =
     let
@@ -3162,12 +3167,19 @@ handleAgentSessionResult result =
                             let
                                 withView =
                                     mergeSessionView view agentState
+
+                                merged =
+                                    if withView.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
+                                        applyPersistedTranscript view withView
+
+                                    else
+                                        withView
                             in
-                            if withView.selectedSessionId == Just view.session.sessionId && not (shouldKeepLiveTranscript view agentState) then
-                                applyPersistedTranscript view withView
+                            if settledView view agentState then
+                                { merged | activeTurnStream = Nothing }
 
                             else
-                                withView
+                                merged
                         )
                         |> Flow.seq
                             (Flow.forAll agent
@@ -3808,12 +3820,23 @@ steerAgentTurn view promptSource =
 
                                                         Err err ->
                                                             clearRequestIfMatches request
-                                                                |> Flow.seq (addToast False (Http.errorMessage err))
+                                                                |> Flow.seq (addToast False (steerErrorMessage err))
+                                                                |> Flow.seq refreshSelectedAgentSession
                                                 )
                                 )
                         )
                 )
         )
+
+
+steerErrorMessage : Http.Error -> String
+steerErrorMessage error =
+    case error of
+        Http.BadStatus 409 ->
+            "The agent isn't accepting steering right now; your message was kept."
+
+        _ ->
+            Http.errorMessage error
 
 
 investigateStepWithAgent : Int -> String -> Flow Model ()

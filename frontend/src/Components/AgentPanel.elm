@@ -847,15 +847,24 @@ viewChatEntry resolveMention interactionsBlocked sessionId highlightTurnId entry
             viewChangesetBox interactionsBlocked Nothing changeset
 
 
+turnIdAttribute : Model.ChatTurn -> List (Html.Attribute (Flow Model ()))
+turnIdAttribute turn =
+    if String.isEmpty turn.turnId then
+        []
+
+    else
+        [ id (Actions.agentTurnId turn.turnId) ]
+
+
 viewChatTurn : AgentMentions.Resolver -> String -> Bool -> Model.ChatTurn -> Html (Flow Model ())
 viewChatTurn resolveMention sessionId isHighlighted turn =
     Html.div
-        [ classList
+        (classList
             [ ( "agent-panel__chat-turn", True )
             , ( "is-highlighted", isHighlighted )
             ]
-        , id (Actions.agentTurnId turn.turnId)
-        ]
+            :: turnIdAttribute turn
+        )
         [ Html.div [ class "agent-panel__chat-message agent-panel__chat-message--user" ]
             [ Html.div [ class "agent-panel__chat-label" ]
                 [ if String.isEmpty turn.turnId then

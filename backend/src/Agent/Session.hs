@@ -231,7 +231,7 @@ loadSession :: FilePath -> IO (Either String AgentSession)
 loadSession path = do
     exists <- doesFileExist path
     if not exists
-        then return $ Left $ "session metadata not found: " ++ path
+        then return $ Left "session_not_found"
         else eitherDecode <$> LBS.readFile path
 
 loadSessionById :: Text -> IO (Either String AgentSession)
