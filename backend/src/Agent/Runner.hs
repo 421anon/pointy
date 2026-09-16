@@ -52,6 +52,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
+import Numeric (showFFloat)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
@@ -445,12 +446,12 @@ piEventLines line =
                     | field "success" event == Just (Aeson.Bool False) ->
                         (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True)
                     | otherwise -> visible []
+                "agent_end" -> visible (usageLines event)
                 _
                     | kind
                         `elem` [ "session"
                                , "message_start"
                                , "agent_start"
-                               , "agent_end"
                                , "turn_start"
                                , "turn_end"
                                , "tool_execution_update"
@@ -467,6 +468,29 @@ piEventLines line =
     textPart (Aeson.Object part)
         | text "type" part == "text" = [text "text" part]
     textPart _ = []
+
+    usageLines event = case field "messages" event of
+        Just (Aeson.Array messages) ->
+            let used = foldMap assistantUsage messages
+                tokens = truncate (sum (map fst used)) :: Integer
+                cost = sum (map snd used)
+             in ["*" <> T.pack (show tokens) <> " tokens" <> price cost <> "*" | tokens > 0]
+        _ -> []
+
+    assistantUsage (Aeson.Object message)
+        | field "role" message == Just (Aeson.String "assistant") =
+            let usage = object (field "usage" message)
+             in [(amount "totalTokens" usage, amount "total" (object (field "cost" usage)))]
+    assistantUsage _ = []
+
+    price cost
+        | cost <= 0 = ""
+        | otherwise = " · $" <> T.pack (showFFloat (Just 4) cost "")
+
+    amount :: Text -> KeyMap.KeyMap Aeson.Value -> Double
+    amount key value = case field key value of
+        Just (Aeson.Number n) -> realToFrac n
+        _ -> 0
 
     toolVerb name = case name of
         "read" -> "*Reading*"
