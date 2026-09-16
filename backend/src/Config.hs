@@ -53,9 +53,10 @@ defaultAgentConfig =
         { agentSboxCommand = "sbox"
         , agentSboxArgs = ["--bind", "{home}", "{home}"]
         , agentRunnerCommand = "pi"
-        , -- Explicit --model beats pi's built-in per-provider default (deepseek-v4-pro)
-          -- and the model recorded in a continued/forked session file.
-          agentRunnerArgs = ["--mode", "rpc", "-c", "--model", "deepseek/deepseek-v4-flash"]
+        , -- The runner adds --mode rpc and the session flag itself, and strips both
+          -- from these args. Explicit --model beats pi's built-in per-provider
+          -- default (deepseek-v4-pro) and the model recorded in a forked session.
+          agentRunnerArgs = ["--model", "deepseek/deepseek-v4-flash"]
         , agentTimeoutSeconds = 1800
         , agentOutputLimitBytes = 1048576
         , agentSessionRetentionDays = 7
