@@ -42,3 +42,10 @@ isWorkspaceReloading model =
         || has (commitHash << ApiData.reloading) model
         || has (stepConfig << ApiData.reloading) model
         || has (presets << ApiData.reloading) model
+
+
+lastKnownWorkspace : Model -> Model
+lastKnownWorkspace model =
+    over stepConfig ApiData.stopLoading model
+        |> over presets ApiData.stopLoading
+        |> over (projects << records) ApiData.stopLoading

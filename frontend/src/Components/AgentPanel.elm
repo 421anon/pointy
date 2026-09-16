@@ -12,6 +12,7 @@ import Html.Extra as Html
 import Json.Decode as Decode
 import Keyboard
 import Model.Core as Model exposing (Model)
+import Model.Lib as Lib
 import Route
 import View.Icons
 import View.Lib exposing (boolText, viewLoading)
@@ -20,27 +21,31 @@ import View.Lib exposing (boolText, viewLoading)
 view : Model -> Html (Flow Model ())
 view model =
     let
+        workspace =
+            Lib.lastKnownWorkspace model
+
         resolveMention =
-            AgentMentions.mentionTarget model
+            AgentMentions.mentionTarget workspace
 
         mentionResolutionPending =
-            case ( Model.getStepConfig model, Model.getPresets model, (Model.getProjects model).records ) of
-                ( Error _, _, _ ) ->
-                    False
-
-                ( _, Error _, _ ) ->
-                    False
-
-                ( _, _, Error _ ) ->
-                    False
-
-                ( Success _, Success _, Success _ ) ->
-                    False
-
-                _ ->
-                    True
+            awaitingData (Model.getStepConfig workspace)
+                || awaitingData (Model.getPresets workspace)
+                || awaitingData (Model.getProjects workspace).records
     in
     viewPanel mentionResolutionPending resolveMention (Model.getAgent model)
+
+
+awaitingData : ApiData a -> Bool
+awaitingData data =
+    case data of
+        NotAsked ->
+            True
+
+        Loading Nothing ->
+            True
+
+        _ ->
+            False
 
 
 viewPanel : Bool -> AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
