@@ -9,8 +9,10 @@ import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, rows, title, type_, value)
 import Html.Events as Events
 import Html.Extra as Html
+import Html.Lazy
 import Json.Decode as Decode
 import Keyboard
+import List.Extra as List
 import Model.Core as Model exposing (Model)
 import Route
 import View.Icons
@@ -1105,11 +1107,12 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
         ]
         [ Html.div [ class "agent-panel__changeset-header" ]
             [ Html.h4 [] [ Html.text "Changeset" ]
+            , Html.Lazy.lazy viewChangesetTotals diff
             , Html.span [ class "agent-panel__changeset-status" ] [ Html.text statusLabel ]
             ]
         , Html.p [ class "agent-panel__changeset-description" ] [ Html.text description ]
         , Html.viewIf (not (String.isEmpty diff))
-            (Html.pre [ class "agent-panel__changeset-diff" ] [ Html.text diff ])
+            (Html.Lazy.lazy viewChangesetDiff diff)
         , errorNode
         , Html.viewIf (isProposed || isNeedsReview) <|
             Html.div [ class "agent-panel__changeset-actions" ]
@@ -1128,6 +1131,120 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
                     [ viewButtonContent isDiscarding discardLabel ]
                 ]
         ]
+
+
+type alias ChangesetFile =
+    { path : String
+    , status : String
+    , added : Int
+    , removed : Int
+    , lines : List String
+    }
+
+
+changesetFiles : String -> List ChangesetFile
+changesetFiles diff =
+    String.split "\ndiff --git " ("\n" ++ diff)
+        |> List.drop 1
+        |> List.map changesetFile
+
+
+viewChangesetTotals : String -> Html msg
+viewChangesetTotals diff =
+    case changesetFiles diff of
+        [] ->
+            Html.nothing
+
+        files ->
+            viewChangesetCount (List.sum (List.map .added files)) (List.sum (List.map .removed files))
+
+
+viewChangesetDiff : String -> Html msg
+viewChangesetDiff diff =
+    Html.div [ class "agent-panel__changeset-diff" ]
+        (case changesetFiles diff of
+            [] ->
+                [ Html.text diff ]
+
+            files ->
+                List.map viewChangesetFile files
+        )
+
+
+changesetFile : String -> ChangesetFile
+changesetFile chunk =
+    let
+        lines =
+            String.lines chunk
+
+        header =
+            Maybe.withDefault "" (List.head lines)
+
+        hunks =
+            List.dropWhile (not << String.startsWith "@@") lines
+
+        count prefix =
+            List.length (List.filter (String.startsWith prefix) hunks)
+    in
+    { path = Maybe.withDefault header (List.last (String.split " b/" header))
+    , status =
+        if String.contains "\nnew file mode" chunk then
+            "new"
+
+        else if String.contains "\ndeleted file mode" chunk then
+            "deleted"
+
+        else if String.contains "\nrename to " chunk then
+            "renamed"
+
+        else
+            ""
+    , added = count "+"
+    , removed = count "-"
+    , lines = hunks
+    }
+
+
+viewChangesetFile : ChangesetFile -> Html msg
+viewChangesetFile file =
+    Html.details [ class "agent-panel__changeset-file", attribute "open" "" ]
+        (Html.summary []
+            [ Html.text file.path
+            , Html.viewIf (not (String.isEmpty file.status))
+                (Html.span [ class "agent-panel__changeset-tag" ] [ Html.text file.status ])
+            , viewChangesetCount file.added file.removed
+            ]
+            :: List.map viewChangesetLine file.lines
+        )
+
+
+viewChangesetCount : Int -> Int -> Html msg
+viewChangesetCount added removed =
+    Html.span [ class "agent-panel__changeset-count" ]
+        [ Html.span [ class "is-added" ] [ Html.text ("+" ++ String.fromInt added) ]
+        , Html.span [ class "is-removed" ] [ Html.text ("-" ++ String.fromInt removed) ]
+        ]
+
+
+viewChangesetLine : String -> Html msg
+viewChangesetLine line =
+    Html.span [ class (changesetLineClass line) ] [ Html.text line ]
+
+
+changesetLineClass : String -> String
+changesetLineClass line =
+    case String.left 1 line of
+        "@" ->
+            "is-hunk"
+
+        "+" ->
+            "is-added"
+
+        "-" ->
+            "is-removed"
+
+        _ ->
+            ""
 
 
 shortSha : String -> String
