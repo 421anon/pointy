@@ -145,6 +145,12 @@
   align-items: end;
 }
 
+.agent-panel__composer-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: end;
+}
+
 .agent-panel__prompt {
   width: 100%;
   border: 1px solid var(--line-color);

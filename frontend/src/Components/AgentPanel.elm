@@ -523,17 +523,21 @@ viewSession resolveMention agent sessionView =
                 stopping =
                     agent.request == Just (Model.StoppingAgentTurn session.sessionId)
 
-                -- The textarea is uncontrolled, so its content survives re-renders.
-                -- Keep it editable while the agent works so the next prompt can be
-                -- pre-composed; lock it only while its content is being consumed
-                -- by a send. Submit stays gated on the broad busy state.
-                canCompose =
-                    sendingPrompt
+                -- Steering is allowed while a turn streams, so the stream itself
+                -- must not block submission; every other busy state (request in
+                -- flight, changeset work, pending rename save, loading chats)
+                -- still does.
+                submitBlocked =
+                    Model.agentInteractionsBlocked { agent | activeTurnStream = Nothing }
 
-                canSubmit =
-                    detailBlocked
+                -- The textarea is uncontrolled, so its content survives re-renders.
+                -- Keep it editable while the agent works so a steering prompt can
+                -- be typed; lock it only while its content is being consumed
+                -- by a send.
+                composeBlocked =
+                    sendingPrompt
             in
-            viewPrompt runnerActive sendingPrompt stopping canCompose canSubmit
+            viewPrompt runnerActive sendingPrompt stopping composeBlocked submitBlocked
         ]
 
 
@@ -679,7 +683,7 @@ viewError session =
 
 
 viewPrompt : Bool -> Bool -> Bool -> Bool -> Bool -> Html (Flow Model ())
-viewPrompt runnerActive sendingPrompt stopping canCompose canSubmit =
+viewPrompt runnerActive sendingPrompt stopping composeBlocked submitBlocked =
     Html.div [ class "agent-panel__composer" ]
         [ Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
@@ -687,59 +691,71 @@ viewPrompt runnerActive sendingPrompt stopping canCompose canSubmit =
                 , id "agent-prompt"
                 , rows 1
                 , placeholder "Ask for a change..."
-                , disabled canCompose
+                , disabled composeBlocked
                 , attribute "aria-label" "Agent prompt"
-                , submitShortcut canSubmit
+                , submitShortcut submitBlocked
                 ]
                 []
-            , if runnerActive || stopping then
-                Html.button
-                    [ class "btn agent-panel__run-button agent-panel__stop-button"
-                    , disabled stopping
-                    , Events.onClick Actions.stopAgentTurn
-                    , title "Stop the agent"
+            , Html.div [ class "agent-panel__composer-actions" ]
+                (if runnerActive || stopping then
+                    [ Html.button
+                        [ class "btn agent-panel__run-button"
+                        , disabled submitBlocked
+                        , attribute "aria-busy" (boolText sendingPrompt)
+                        , Events.onClick Actions.submitAgentPrompt
+                        , title "Steer the running agent (Ctrl/⌘+Enter)"
+                        ]
+                        [ viewButtonContent False "Steer" ]
+                    , Html.button
+                        [ class "btn agent-panel__run-button agent-panel__stop-button"
+                        , disabled stopping
+                        , Events.onClick Actions.stopAgentTurn
+                        , title "Stop the agent"
+                        ]
+                        [ viewButtonContent False
+                            (if stopping then
+                                "Stopping..."
+
+                             else
+                                "Stop"
+                            )
+                        , if stopping then
+                            viewButtonSpinner
+
+                          else
+                            View.Icons.icon False "stop_circle"
+                        ]
                     ]
-                    [ viewButtonContent False
-                        (if stopping then
-                            "Stopping..."
 
-                         else
-                            "Stop"
-                        )
-                    , if stopping then
-                        viewButtonSpinner
+                 else
+                    [ Html.button
+                        [ class "btn agent-panel__run-button"
+                        , disabled submitBlocked
+                        , attribute "aria-busy" (boolText sendingPrompt)
+                        , Events.onClick Actions.submitAgentPrompt
+                        , title "Send message (Ctrl/⌘+Enter)"
+                        ]
+                        [ viewButtonContent False
+                            (if sendingPrompt then
+                                "Sending..."
 
-                      else
-                        View.Icons.icon False "stop_circle"
+                             else
+                                "Send"
+                            )
+                        , if sendingPrompt then
+                            viewButtonSpinner
+
+                          else
+                            Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
+                        ]
                     ]
-
-              else
-                Html.button
-                    [ class "btn agent-panel__run-button"
-                    , disabled canSubmit
-                    , attribute "aria-busy" (boolText sendingPrompt)
-                    , Events.onClick Actions.submitAgentPrompt
-                    , title "Send message (Ctrl/⌘+Enter)"
-                    ]
-                    [ viewButtonContent False
-                        (if sendingPrompt then
-                            "Sending..."
-
-                         else
-                            "Send"
-                        )
-                    , if sendingPrompt then
-                        viewButtonSpinner
-
-                      else
-                        Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
-                    ]
+                )
             ]
         ]
 
 
 submitShortcut : Bool -> Html.Attribute (Flow Model ())
-submitShortcut canSubmit =
+submitShortcut submitBlocked =
     let
         decoder =
             Decode.map3
@@ -749,7 +765,7 @@ submitShortcut canSubmit =
                 (Decode.field "metaKey" Decode.bool)
                 |> Decode.andThen
                     (\( key, ctrl, meta ) ->
-                        if not canSubmit && key == "Enter" && (ctrl || meta) then
+                        if not submitBlocked && key == "Enter" && (ctrl || meta) then
                             Decode.succeed ( Actions.submitAgentPrompt, True )
 
                         else

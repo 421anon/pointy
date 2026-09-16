@@ -5,6 +5,7 @@
 module Agent.Runner (
     startAgentTurn,
     stopAgentTurn,
+    steerAgentTurn,
     turnLogStreamHandler,
     streamLoop,
     piEventLines,
@@ -34,7 +35,8 @@ import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (async, wait)
-import Control.Concurrent.STM (TChan, TVar, atomically, modifyTVar', newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, writeTVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
+import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, finally, try)
 import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
@@ -43,7 +45,9 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Types (parseMaybe, (.:))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as Set
@@ -59,7 +63,7 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getF
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
-import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hPutStr, hSetBuffering)
+import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (sigKILL, signalProcess)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, proc, terminateProcess, waitForProcess)
@@ -74,6 +78,61 @@ activeRunners = unsafePerformIO $ newTVarIO Map.empty
 {-# NOINLINE stopRequestedTurns #-}
 stopRequestedTurns :: TVar (Set.Set Text)
 stopRequestedTurns = unsafePerformIO $ newTVarIO Set.empty
+
+data RunnerInput = RunnerInput
+    { inputHandle :: Handle
+    , inputPending :: Maybe (Text, TMVar Bool)
+    , inputPromptSeen :: Bool
+    , inputRetrying :: Bool
+    }
+
+{-# NOINLINE runnerInputs #-}
+runnerInputs :: TVar (Map.Map Text (MVar (Maybe RunnerInput)))
+runnerInputs = unsafePerformIO $ newTVarIO Map.empty
+
+steerAgentTurn :: Text -> Text -> ExceptT String IO ()
+steerAgentTurn sid rawPrompt = do
+    let prompt = T.strip rawPrompt
+    when (T.null prompt) $ Except.throwError "empty_prompt"
+    mRunner <- liftIO $ atomically $ Map.lookup sid <$> readTVar activeRunners
+    (tid, _) <- maybe (Except.throwError "runner_not_active") return mRunner
+    stopped <- liftIO $ turnStopRequested tid
+    when stopped $ Except.throwError "runner_stopping"
+    mInput <- liftIO $ atomically $ Map.lookup sid <$> readTVar runnerInputs
+    input <- maybe (Except.throwError "runner_not_ready") return mInput
+    requestId <- liftIO newTurnId
+    reply <- liftIO newEmptyTMVarIO
+    sent <- liftIO $ modifyMVar input $ \current -> case current of
+        Just control | Nothing <- inputPending control -> do
+            result <-
+                try $
+                    writeRpc (inputHandle control) $
+                        Aeson.object
+                            [ "id" Aeson..= requestId
+                            , "type" Aeson..= ("prompt" :: Text)
+                            , "message" Aeson..= prompt
+                            , "streamingBehavior" Aeson..= ("steer" :: Text)
+                            ]
+            case result :: Either IOException () of
+                Left _ -> return (current, False)
+                Right () -> return (Just control{inputPending = Just (requestId, reply)}, True)
+        _ -> return (current, False)
+    unless sent $ Except.throwError "steering_failed"
+    accepted <- liftIO $ timeout (10 * 1000000) (atomically $ takeTMVar reply)
+    unless (accepted == Just True) $ Except.throwError "steering_failed"
+
+writeRpc :: Handle -> Aeson.Value -> IO ()
+writeRpc handle command = do
+    LBS.hPut handle (Aeson.encode command <> "\n")
+    hFlush handle
+
+closeRunnerInput :: MVar (Maybe RunnerInput) -> IO ()
+closeRunnerInput input = modifyMVar_ input $ \current -> do
+    forM_ current $ \control -> do
+        forM_ (inputPending control) $ \(_, reply) ->
+            atomically $ void $ tryPutTMVar reply False
+        void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
+    return Nothing
 
 startAgentTurn :: Text -> Text -> ExceptT String IO AgentTurn
 startAgentTurn sid prompt = do
@@ -294,18 +353,20 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
             ]
                 ++ passthrough
-        promptInArgs = any (T.isInfixOf "{prompt}") (agentRunnerArgs cfg)
-        -- Strip any session-management flags the config may contain; we manage them here.
-        sessionManagedFlags = ["-c", "--continue", "--fork", "--session", "--no-session"]
-        expandedRunnerArgs = map (expandArg session_ promptText) (agentRunnerArgs cfg)
-        strippedRunnerArgs = filter (`notElem` sessionManagedFlags) expandedRunnerArgs
+        -- The backend owns the input protocol and conversation selection.
+        stripManaged [] = []
+        stripManaged (flag : _value : rest)
+            | flag `elem` ["--mode", "--session", "--fork"] = stripManaged rest
+        stripManaged (arg : rest)
+            | arg `elem` ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"] = stripManaged rest
+            | otherwise = expandArg session_ promptText arg : stripManaged rest
         -- Inject the right session flag for this turn
         sessionFlag = case (isFirstTurn, mWarmFile) of
             (True, Just warmFile) -> ["--fork", warmFile]
             (True, Nothing) -> []
             (False, _) -> ["-c"]
         runnerArgs =
-            agentRunnerCommand cfg : sessionFlag ++ strippedRunnerArgs
+            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ stripManaged (agentRunnerArgs cfg)
         wrapperScript =
             "set -e; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
         -- When forking a warm session, bind its file read-only into the sandbox.
@@ -346,27 +407,30 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     -- explicit --model that also overrides models recorded in session files.
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
-    (mIn, mOut, mErr, ph) <- createProcess process
-    stopRequested <- attachRunnerProcess (sessionId session_) (turnId turn) ph
-    case mIn of
-        Nothing -> return ()
-        Just hin -> do
-            unless (stopRequested || promptInArgs) $ do
-                hPutStr hin (T.unpack promptText)
-                hFlush hin
-            hClose hin
-    outReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout") mOut
-    errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr") mErr
-    mExit <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
-    exitCode <- case mExit of
-        Just code -> return code
-        Nothing -> do
-            appendLogLine cfg (turnLogPath turn) "system" "Runner timed out; terminating process"
-            terminateProcess ph
-            waitForProcess ph
-    modelFailed <- wait outReader
-    _ <- wait errReader
-    return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
+    (Just hin, Just hout, mErr, ph) <- createProcess process
+    input <- newMVar (Just (RunnerInput hin Nothing False False))
+    let cleanup = do
+            atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
+            closeRunnerInput input
+        run = do
+            stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
+            unless stopped $ do
+                writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText]
+                writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
+                atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
+            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEvent cfg (turnLogPath turn) input) hout
+            errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr" (const $ return ())) mErr
+            mExit <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
+            exitCode <- case mExit of
+                Just code -> return code
+                Nothing -> do
+                    appendLogLine cfg (turnLogPath turn) "system" "Runner timed out; terminating process"
+                    terminateProcess ph
+                    waitForProcess ph
+            modelFailed <- wait outReader
+            _ <- wait errReader
+            return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
+    run `finally` cleanup
 
 -- | Copy the operator-provided pi agent config into a session's sandbox HOME.
 seedPiConfig :: FilePath -> IO ()
@@ -382,10 +446,75 @@ seedPiConfig runnerHome = do
             createDirectoryIfMissing True dstDir
             copyFile src dst
 
-streamHandle :: AgentConfig -> FilePath -> Text -> Text -> Handle -> IO Bool
-streamHandle cfg logPath outputMarker visibleLabel handle = do
+-- Pi 0.75 emits agent_end before automatic retry/compaction events; check its state before EOF.
+handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleRpcEvent cfg logPath input (Aeson.Object event) =
+    case KeyMap.lookup "type" event of
+        Just (Aeson.String "message_end") -> send "get_session_stats"
+        Just (Aeson.String "message_start")
+            | Just (Aeson.Object message) <- KeyMap.lookup "message" event
+            , KeyMap.lookup "role" message == Just (Aeson.String "user") ->
+                case KeyMap.lookup "content" message of
+                    Just content -> do
+                        let prompt = case content of
+                                Aeson.String t -> t
+                                Aeson.Array parts -> T.concat [t | Aeson.Object part <- foldMap (: []) parts, Just (Aeson.String t) <- [KeyMap.lookup "text" part]]
+                                _ -> ""
+                        -- The initial prompt is already stored in turn metadata.
+                        modifyMVar_ input $ \current -> case current of
+                            Just control -> do
+                                when (inputPromptSeen control) $
+                                    appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
+                                return $ Just control{inputPromptSeen = True}
+                            Nothing -> return Nothing
+                    _ -> return ()
+        Just (Aeson.String "agent_end") -> send "get_state"
+        Just (Aeson.String "auto_retry_start") ->
+            modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = True})
+        Just (Aeson.String "auto_retry_end") -> do
+            modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = False})
+            send "get_state"
+        Just (Aeson.String "compaction_end")
+            | KeyMap.lookup "willRetry" event /= Just (Aeson.Bool True) -> do
+                send "get_session_stats"
+                send "get_state"
+        Just (Aeson.String "response") -> do
+            modifyMVar_ input $ \current -> case current of
+                Just control
+                    | Just (requestId, reply) <- inputPending control
+                    , KeyMap.lookup "id" event == Just (Aeson.String requestId) -> do
+                        atomically $ void $ tryPutTMVar reply (KeyMap.lookup "success" event == Just (Aeson.Bool True))
+                        return $ Just control{inputPending = Nothing}
+                _ -> return current
+            case KeyMap.lookup "command" event of
+                Just (Aeson.String "prompt")
+                    | KeyMap.lookup "success" event == Just (Aeson.Bool False)
+                    , KeyMap.lookup "id" event == Just (Aeson.String "initial") ->
+                        closeRunnerInput input
+                    | otherwise -> send "get_state"
+                Just (Aeson.String "get_state")
+                    | Just (Aeson.Object state) <- KeyMap.lookup "data" event
+                    , KeyMap.lookup "isStreaming" state == Just (Aeson.Bool False)
+                    , KeyMap.lookup "isCompacting" state /= Just (Aeson.Bool True)
+                    , KeyMap.lookup "pendingMessageCount" state == Just (Aeson.Number 0) ->
+                        modifyMVar_ input $ \current -> case current of
+                            Just control
+                                | Nothing <- inputPending control
+                                , not (inputRetrying control) -> do
+                                    hClose (inputHandle control)
+                                    return Nothing
+                            _ -> return current
+                _ -> return ()
+        _ -> return ()
+  where
+    send command = withMVar input $ mapM_ $ \control ->
+        writeRpc (inputHandle control) $ Aeson.object ["type" Aeson..= (command :: Text)]
+handleRpcEvent _ _ _ _ = return ()
+
+streamHandle :: AgentConfig -> FilePath -> Text -> Text -> (Aeson.Value -> IO ()) -> Handle -> IO Bool
+streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do
     hSetBuffering handle LineBuffering
-    let loop outputReady failed = do
+    let loop outputReady failed warned = do
             eof <- hIsEOF handle
             if eof
                 then return failed
@@ -394,26 +523,32 @@ streamHandle cfg logPath outputMarker visibleLabel handle = do
                     case lineResult of
                         Left _ -> return failed
                         Right textLine
-                            | textLine == outputMarker -> loop True failed
+                            | textLine == outputMarker -> loop True failed warned
                             | otherwise -> do
-                                let (lines_, failure) =
-                                        if outputReady && visibleLabel == "stdout"
-                                            then piEventLines textLine
-                                            else (Just [textLine], Nothing)
+                                let event = if outputReady && visibleLabel == "stdout" then Aeson.decodeStrict (TE.encodeUtf8 textLine) else Nothing
+                                    (lines_, failure) = maybe (Just [textLine], Nothing) piEventLines event
+                                    usage = event >>= contextUsage
+                                    high = maybe warned (\(tokens, capacity) -> capacity > 0 && tokens * 2 >= capacity) usage
                                     label = if outputReady && isJust lines_ then visibleLabel else "runner"
-                                mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
-                                loop outputReady (fromMaybe failed failure)
-    loop False False
+                                unless (isJust usage && high && warned) $
+                                    mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
+                                mapM_ onEvent event
+                                loop outputReady (fromMaybe failed failure) high
+    loop False False False
 
-piEventLines :: Text -> (Maybe [Text], Maybe Bool)
-piEventLines line =
-    case Aeson.decodeStrict (TE.encodeUtf8 line) :: Maybe Aeson.Value of
-        Just (Aeson.Object event)
-            | Just kind <- field "type" event >>= str -> eventLines kind event
-        _ -> visible (T.splitOn "\n" line)
+contextUsage :: Aeson.Value -> Maybe (Integer, Integer)
+contextUsage = parseMaybe $ Aeson.withObject "event" $ \event -> do
+    payload <- event .: "data"
+    usage <- payload .: "contextUsage"
+    (,) <$> usage .: "tokens" <*> usage .: "contextWindow"
+
+piEventLines :: Aeson.Value -> (Maybe [Text], Maybe Bool)
+piEventLines (Aeson.Object event)
+    | Just kind <- field "type" event >>= str = eventLines kind
+    | otherwise = (Nothing, Nothing)
   where
     visible ls = (Just ls, Nothing)
-    eventLines kind event =
+    eventLines kind =
         let message = object (field "message" event)
             assistant = field "role" message == Just (Aeson.String "assistant")
          in case kind of
@@ -442,6 +577,17 @@ piEventLines line =
                         (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True)
                     | otherwise -> visible []
                 "agent_end" -> visible []
+                "response"
+                    | text "command" event == "get_session_stats"
+                    , Just (tokens, capacity) <- contextUsage (Aeson.Object event)
+                    , capacity > 0
+                    , tokens * 2 >= capacity ->
+                        visible ["**Context warning:** This chat is using " <> T.pack (show (tokens * 100 `div` capacity)) <> "% of the model's context (" <> T.pack (show tokens) <> " / " <> T.pack (show capacity) <> " tokens)."]
+                    | text "command" event == "prompt"
+                    , field "success" event == Just (Aeson.Bool False)
+                    , text "id" event == "initial" ->
+                        (Just ["**Response error:**" <> code (text "error" event)], Just True)
+                    | otherwise -> visible []
                 _
                     | kind
                         `elem` [ "session"
@@ -463,6 +609,7 @@ piEventLines line =
     textPart (Aeson.Object part)
         | text "type" part == "text" = [text "text" part]
     textPart _ = []
+
     code value =
         let cleaned = T.unwords (T.words (T.filter (/= '`') value))
             clipped = if T.length cleaned > 100 then T.take 100 cleaned <> "..." else cleaned
@@ -476,6 +623,7 @@ piEventLines line =
     field key = KeyMap.lookup (Key.fromText key)
     str (Aeson.String value) = Just value
     str _ = Nothing
+piEventLines _ = (Nothing, Nothing)
 
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
 finishTurn cfg _session turn exitCode = do

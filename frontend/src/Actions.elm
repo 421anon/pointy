@@ -2944,7 +2944,31 @@ appendPersistedTurn turn entries =
                     |> String.split "\n"
                     |> List.filter (not << String.isEmpty)
         in
-        List.foldl appendChatLine seeded logLines
+        inheritTurnStatus turn (List.foldl appendChatLine seeded logLines)
+
+
+
+-- | A consumed steering message starts its own entry as pending. When the
+-- | persisted turn already ended, its status belongs to the last entry, which
+-- | follows the steering line; anything before it stays done.
+
+
+inheritTurnStatus : Model.AgentTurn -> List Model.ChatEntry -> List Model.ChatEntry
+inheritTurnStatus turn entries =
+    if turn.turnStatus == "running" then
+        entries
+
+    else
+        case List.reverse entries of
+            (Model.ChatTurnEntry last) :: rest ->
+                if last.status == Model.ChatPending then
+                    List.reverse (Model.ChatTurnEntry { last | status = chatStatusFromTurn turn } :: rest)
+
+                else
+                    entries
+
+            _ ->
+                entries
 
 
 changesetFromLifecycleTurn : Model.AgentTurn -> Model.ChatChangeset
@@ -3663,58 +3687,130 @@ submitAgentPromptFrom : Flow Model String -> Flow Model ()
 submitAgentPromptFrom promptSource =
     withSelectedAgentSession
         (\view ->
-            withAgentRequest (Model.SendingAgentPrompt view.session.sessionId)
-                (promptSource
-                    |> Flow.andThen
-                        (\rawPrompt ->
-                            let
-                                prompt =
-                                    String.trim rawPrompt
-                            in
-                            if String.isEmpty prompt then
-                                clearRequestIfMatches (Model.SendingAgentPrompt view.session.sessionId)
-                                    |> Flow.seq (addToast False "Enter an agent prompt first.")
+            Flow.forAll agent
+                (\agentState ->
+                    if agentTurnActive view agentState then
+                        steerAgentTurn view promptSource
 
-                            else
-                                Flow.over agent
-                                    (\agentState ->
-                                        { agentState
-                                            | chunkBuffer = ""
-                                            , chatEntries =
-                                                agentState.chatEntries
-                                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = Model.ChatPending } ]
-                                        }
-                                    )
-                                    |> Flow.seq clearAgentPrompt
-                                    |> Flow.seq scrollAgentChatToBottom
-                                    |> Flow.seq (AgentApi.sendTurn view.session.sessionId prompt)
-                                    |> Flow.andThen
-                                        (\result ->
-                                            case result of
-                                                Ok turn ->
-                                                    Flow.over agent
-                                                        (\agentState ->
-                                                            { agentState
-                                                                | activeTurnStream = Just turn.turnId
-                                                            }
-                                                        )
-                                                        |> Flow.seq (Flow.async (listenAndProcessAgentTurn turn.turnId))
-                                                        |> Flow.seq (loadAgentSession view.session.sessionId)
+                    else
+                        sendAgentTurn view promptSource
+                )
+        )
 
-                                                Err err ->
-                                                    let
-                                                        message =
-                                                            Http.errorMessage err
-                                                    in
-                                                    Flow.over agent
-                                                        (\agentState ->
-                                                            { agentState
-                                                                | chatEntries = failLatestPendingChatTurn message agentState.chatEntries
-                                                            }
-                                                        )
-                                                        |> Flow.seq (clearRequestIfMatches (Model.SendingAgentPrompt view.session.sessionId))
-                                                        |> Flow.seq (addToast False message)
-                                        )
+
+
+-- | A turn the user can steer exists when a stream is open locally, the
+-- | server still reports an active turn, or the session is still running.
+
+
+agentTurnActive : Model.AgentSessionView -> Model.AgentState -> Bool
+agentTurnActive view agentState =
+    (agentState.activeTurnStream /= Nothing)
+        || (view.session.activeTurnId /= Nothing)
+        || (view.session.status == "running")
+
+
+sendAgentTurn : Model.AgentSessionView -> Flow Model String -> Flow Model ()
+sendAgentTurn view promptSource =
+    withAgentRequest (Model.SendingAgentPrompt view.session.sessionId)
+        (promptSource
+            |> Flow.andThen
+                (\rawPrompt ->
+                    let
+                        prompt =
+                            String.trim rawPrompt
+                    in
+                    if String.isEmpty prompt then
+                        clearRequestIfMatches (Model.SendingAgentPrompt view.session.sessionId)
+                            |> Flow.seq (addToast False "Enter an agent prompt first.")
+
+                    else
+                        Flow.over agent
+                            (\agentState ->
+                                { agentState
+                                    | chunkBuffer = ""
+                                    , chatEntries =
+                                        agentState.chatEntries
+                                            ++ [ Model.ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = Model.ChatPending } ]
+                                }
+                            )
+                            |> Flow.seq clearAgentPrompt
+                            |> Flow.seq scrollAgentChatToBottom
+                            |> Flow.seq (AgentApi.sendTurn view.session.sessionId prompt)
+                            |> Flow.andThen
+                                (\result ->
+                                    case result of
+                                        Ok turn ->
+                                            Flow.over agent
+                                                (\agentState ->
+                                                    { agentState
+                                                        | activeTurnStream = Just turn.turnId
+                                                    }
+                                                )
+                                                |> Flow.seq (Flow.async (listenAndProcessAgentTurn turn.turnId))
+                                                |> Flow.seq (loadAgentSession view.session.sessionId)
+
+                                        Err err ->
+                                            let
+                                                message =
+                                                    Http.errorMessage err
+                                            in
+                                            Flow.over agent
+                                                (\agentState ->
+                                                    { agentState
+                                                        | chatEntries = failLatestPendingChatTurn message agentState.chatEntries
+                                                    }
+                                                )
+                                                |> Flow.seq (clearRequestIfMatches (Model.SendingAgentPrompt view.session.sessionId))
+                                                |> Flow.seq (addToast False message)
+                                )
+                )
+        )
+
+
+
+-- | Send a prompt into the running turn instead of starting a new one. Only
+-- | the active turn itself is exempt from interaction blocking: another
+-- | request, a changeset operation, a rename save, or a loading session list
+-- | still prevents steering. The draft is kept unless the server accepts it.
+
+
+steerAgentTurn : Model.AgentSessionView -> Flow Model String -> Flow Model ()
+steerAgentTurn view promptSource =
+    let
+        request =
+            Model.SendingAgentPrompt view.session.sessionId
+    in
+    Flow.forAll agent
+        (\agentState ->
+            Flow.when (not (Model.agentInteractionsBlocked { agentState | activeTurnStream = Nothing }))
+                (Flow.over agent (\s -> { s | request = Just request })
+                    |> Flow.seq
+                        (promptSource
+                            |> Flow.andThen
+                                (\rawPrompt ->
+                                    let
+                                        prompt =
+                                            String.trim rawPrompt
+                                    in
+                                    if String.isEmpty prompt then
+                                        clearRequestIfMatches request
+                                            |> Flow.seq (addToast False "Enter an agent prompt first.")
+
+                                    else
+                                        AgentApi.steer view.session.sessionId prompt
+                                            |> Flow.andThen
+                                                (\result ->
+                                                    case result of
+                                                        Ok () ->
+                                                            clearAgentPrompt
+                                                                |> Flow.seq (clearRequestIfMatches request)
+
+                                                        Err err ->
+                                                            clearRequestIfMatches request
+                                                                |> Flow.seq (addToast False (Http.errorMessage err))
+                                                )
+                                )
                         )
                 )
         )
@@ -3934,10 +4030,38 @@ appendChatLine rawLine entries =
         "stderr" ->
             appendToCurrentAssistant body entries
 
+        "steering" ->
+            appendSteeringMessage body entries
+
         "runner" ->
             entries
 
         _ ->
+            entries
+
+
+
+-- | A consumed steering prompt is a user message inside the running turn:
+-- | close the entry it interrupted so following output starts a fresh one.
+
+
+appendSteeringMessage : String -> List Model.ChatEntry -> List Model.ChatEntry
+appendSteeringMessage body entries =
+    case Decode.decodeString Decode.string (String.trim body) of
+        Ok prompt ->
+            let
+                completed =
+                    case List.reverse entries of
+                        (Model.ChatTurnEntry last) :: rest ->
+                            List.reverse (Model.ChatTurnEntry { last | status = Model.ChatDone } :: rest)
+
+                        _ ->
+                            entries
+            in
+            completed
+                ++ [ Model.ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = Model.ChatPending } ]
+
+        Err _ ->
             entries
 
 
@@ -3951,6 +4075,9 @@ splitLogPrefix line =
 
     else if String.startsWith "[runner] " line then
         ( "runner", String.dropLeft 9 line )
+
+    else if String.startsWith "[steering] " line then
+        ( "steering", String.dropLeft 11 line )
 
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )

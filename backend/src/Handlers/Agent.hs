@@ -12,6 +12,7 @@ module Handlers.Agent (
     listSessionsHandler,
     postTurnHandler,
     stopTurnHandler,
+    steerTurnHandler,
     turnLogStreamHandler,
     prepareApplyHandler,
     confirmApplyHandler,
@@ -37,7 +38,7 @@ import Agent.Git (
     purgeAgentSession,
     renameAgentSession,
  )
-import Agent.Runner (startAgentTurn, stopAgentTurn, turnLogStreamHandler)
+import Agent.Runner (startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
 import Agent.Session (AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -113,6 +114,11 @@ stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =
     runAgentAction $ stopAgentTurn (sessionRequestSessionId req)
 
+steerTurnHandler :: TurnRequest -> Handler NoContent
+steerTurnHandler req = do
+    _ <- runAgentAction $ steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req)
+    return NoContent
+
 prepareApplyHandler :: SessionRequest -> Handler AgentSessionView
 prepareApplyHandler req =
     runLockedAction $ prepareApplyCandidate (sessionRequestSessionId req)
@@ -148,8 +154,20 @@ throwAgentError err =
             case err of
                 "empty_session_name" ->
                     err400
+                "empty_prompt" ->
+                    err400
                 _ ->
-                    if err `elem` ["session_applied", "session_discarded", "session_archived", "runner_active", "step_reviewed"]
+                    if err
+                        `elem` [ "session_applied"
+                               , "session_discarded"
+                               , "session_archived"
+                               , "runner_active"
+                               , "runner_not_active"
+                               , "runner_not_ready"
+                               , "runner_stopping"
+                               , "steering_failed"
+                               , "step_reviewed"
+                               ]
                         then
                             err409
                         else
