@@ -33,6 +33,11 @@ runner-args = ["--model", "deepseek/deepseek-v4-flash"]
 # On first turn of each new draft, the backend forks that session so the agent
 # already has project context and vocabulary. Set to empty string to disable.
 # bootstrap-prompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
+# Name each chat by asking the runner for a title, beside the first turn, with
+# the chat's opening request on stdin. No tools, no session file, and a rename
+# by the user always wins. Set to empty string to keep showing the opening
+# request instead.
+# title-prompt = "Name the chat that opens with the request in this message. Reply with the title only: five words at most, no quotes, no punctuation, no explanation."
 timeout-seconds = 1800
 output-limit-bytes = 1048576
 session-retention-days = 7

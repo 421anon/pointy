@@ -12,6 +12,7 @@ module Agent.Git (
     archiveAgentSession,
     purgeAgentSession,
     renameAgentSession,
+    nameUnnamedAgentSession,
     loadAgentSessionView,
     sessionHasActiveRunner,
     commitAgentTurnOutputs,
@@ -156,6 +157,17 @@ renameAgentSession sid rawName = do
         Just name -> do
             saveSessionUpdate session_{sessionName = Just name}
             loadAgentSessionView sid
+
+{- | Record a name for a chat that has none. A name that appeared meanwhile is
+a rename by the user and wins, so a generated title never replaces a chosen
+one.
+-}
+nameUnnamedAgentSession :: Text -> Text -> ExceptT String IO ()
+nameUnnamedAgentSession sid title = do
+    session_ <- loadSessionOrThrow sid
+    case (sessionName session_ >>= normalizeSessionName, normalizeSessionName title) of
+        (Nothing, Just name) -> saveSessionUpdate session_{sessionName = Just name}
+        _ -> return ()
 
 commitAgentTurnOutputs :: AgentSession -> AgentTurn -> ExceptT String IO (Maybe Text, [Text])
 commitAgentTurnOutputs session_ turn = do

@@ -11,8 +11,8 @@ module Agent.Runner (
     piEventLines,
 ) where
 
-import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, refreshSessionBase, sessionHasActiveRunner)
-import Agent.Sandbox (nixDaemonBindArgs)
+import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Sandbox (expandSessionArg, nixDaemonBindArgs, runnerConfigArgs, runnerEnvironment)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
@@ -22,7 +22,6 @@ import Agent.Session (
     listTurns,
     loadSessionById,
     newTurnId,
-    normalizeSessionName,
     saveSession,
     saveTurn,
     touchSession,
@@ -30,6 +29,7 @@ import Agent.Session (
     turnLogFilePath,
     turnLogHasFinalizationFailure,
  )
+import Agent.Title (generateSessionTitle)
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
@@ -59,7 +59,6 @@ import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getFileSize, getHomeDirectory)
-import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
@@ -164,21 +163,13 @@ startAgentTurn sid prompt = do
         mapM_ (appendLogLine (configAgent cfg) logPath "system") syncNotes
         existingTurns <- listTurns sid
         let isFirstTurn = null existingTurns
-            shouldAutoName = isFirstTurn && maybe True (T.null . T.strip) (sessionName freshSession)
-            namedSession =
-                if shouldAutoName
-                    then case normalizeSessionName prompt of
-                        Just name -> freshSession{sessionName = Just name}
-                        Nothing -> freshSession
-                    else
-                        freshSession
         saveTurn turn
         -- A conflict-pending apply must survive the turn boundary: the turn is
         -- how the agent resolves the conflict markers in the apply worktree.
         -- Keep the pending apply (and its conflict summary) and stay in
         -- "prepare_conflict" so the UI keeps showing the review state.
         let pendingApply =
-                case preparedApply namedSession of
+                case preparedApply freshSession of
                     Just p | applyConflictsPending p -> Just p
                     _ -> Nothing
             turnStatus =
@@ -187,9 +178,9 @@ startAgentTurn sid prompt = do
                     else "open"
             turnError =
                 if pendingApply /= Nothing
-                    then lastError namedSession
+                    then lastError freshSession
                     else Nothing
-        touched <- touchSession namedSession{status = turnStatus, activeTurnId = Nothing, preparedApply = pendingApply, lastError = turnError}
+        touched <- touchSession freshSession{status = turnStatus, activeTurnId = Nothing, preparedApply = pendingApply, lastError = turnError}
         startSaveResult <- try (saveSession touched) :: IO (Either SomeException ())
         case startSaveResult of
             Left ex -> appendLogLine (configAgent cfg) logPath "system" ("Session start metadata warning: " <> T.pack (show ex))
@@ -202,6 +193,12 @@ startAgentTurn sid prompt = do
                         <> " (the apply worktree is bound into your sandbox); the backend stages and commits your resolution automatically when this turn ends."
             Nothing -> return ()
         atomically $ modifyTVar' activeRunners $ Map.insert sid (tid, Nothing)
+        let hasNoName = maybe True (T.null . T.strip) (sessionName freshSession)
+            titlingOn = not (T.null (T.strip (agentTitlePrompt (configAgent cfg))))
+        when (hasNoName && titlingOn) $
+            void $
+                forkIO $
+                    nameChat (configAgent cfg) freshSession logPath prompt
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
     return turn
 
@@ -272,6 +269,22 @@ turnLogStreamHandler tid = do
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
 
+{- | Let the runner name a chat that has none. This runs beside the turn, not
+inside it: a throwaway completion on the opening request, so the name is there
+by the time the turn ends and a turn the user stops still gets one. Until it
+lands the UI shows the opening request, which is a prompt, not a title.
+-}
+nameChat :: AgentConfig -> AgentSession -> FilePath -> Text -> IO ()
+nameChat cfg session_ logPath prompt = do
+    titled <- generateSessionTitle cfg session_ prompt
+    case titled of
+        Left err -> note ("Could not name this chat: " <> T.pack err)
+        Right title -> do
+            saved <- Except.runExceptT (nameUnnamedAgentSession (sessionId session_) title)
+            either (note . ("Could not store this chat's name: " <>) . T.pack) return saved
+  where
+    note = appendLogLine cfg logPath "system"
+
 runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> IO ()
 runTurnProcess cfg session_ turn prompt isFirstTurn =
     continueUnlessStopped run
@@ -310,61 +323,19 @@ runTurnProcess cfg session_ turn prompt isFirstTurn =
 
 runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> IO ExitCode
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
-    baseEnv <- getEnvironment
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
-    let pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
-        sessionRoot = takeDirectory (worktreePath session_)
+    let sessionRoot = takeDirectory (worktreePath session_)
         runnerHome = sessionRoot </> "home"
-        -- sbox-inner runs `set -euo pipefail` and references USER/SHELL/etc.; we keep
-        -- the host's identity envs and a curated set of provider API keys, but strip
-        -- everything else so the runner never inherits backend Git/SSH credentials.
-        passthroughKeys =
-            [ "USER"
-            , "LOGNAME"
-            , "SHELL"
-            , "TERM"
-            , "LANG"
-            , "LC_ALL"
-            , "TZ"
-            , "XDG_RUNTIME_DIR"
-            , "XDG_DATA_DIRS"
-            , "DEEPSEEK_API_KEY"
-            , "ANTHROPIC_API_KEY"
-            , "OPENAI_API_KEY"
-            , "GROQ_API_KEY"
-            , "CEREBRAS_API_KEY"
-            , "XAI_API_KEY"
-            , "OPENROUTER_API_KEY"
-            , "MISTRAL_API_KEY"
-            , "GOOGLE_API_KEY"
-            , "GEMINI_API_KEY"
-            ]
-        passthrough =
-            [(k, v) | (k, v) <- baseEnv, k `elem` passthroughKeys]
+        expand = expandSessionArg session_ promptText
         outputMarker =
             "__POINTY_AGENT_OUTPUT_BEGIN__" <> T.unpack (turnId turn) <> "__"
-        runnerEnv =
-            [ ("PATH", pathValue)
-            , ("HOME", runnerHome)
-            , ("POINTY_AGENT_WORKTREE", worktreePath session_)
-            , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
-            , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
-            ]
-                ++ passthrough
-        -- The backend owns the input protocol and conversation selection.
-        stripManaged [] = []
-        stripManaged (flag : _value : rest)
-            | flag `elem` ["--mode", "--session", "--fork"] = stripManaged rest
-        stripManaged (arg : rest)
-            | arg `elem` ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"] = stripManaged rest
-            | otherwise = expandArg session_ promptText arg : stripManaged rest
         sessionFlag = case (isFirstTurn, mWarmFile) of
             (True, Just warmFile) -> ["--fork", warmFile]
             (True, Nothing) -> []
             (False, _) -> ["-c"]
         runnerArgs =
-            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ stripManaged (agentRunnerArgs cfg)
+            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ runnerConfigArgs expand (agentRunnerArgs cfg)
         wrapperScript =
             "set -e; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
         -- When forking a warm session, bind its file read-only into the sandbox.
@@ -382,14 +353,21 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                         ["--bind", candidateWorktree pending, candidateWorktree pending]
                 _ -> []
         args =
-            map (expandArg session_ promptText) (agentSboxArgs cfg)
+            map expand (agentSboxArgs cfg)
                 ++ warmBindArgs
                 ++ gitDirBind
                 ++ applyBindArgs
                 ++ nixBind
                 ++ ["--", "bash", "-lc", wrapperScript, "pointy-agent-runner"]
                 ++ runnerArgs
-        process =
+    runnerEnv <-
+        runnerEnvironment
+            [ ("HOME", runnerHome)
+            , ("POINTY_AGENT_WORKTREE", worktreePath session_)
+            , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
+            , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
+            ]
+    let process =
             (proc (agentSboxCommand cfg) args)
                 { cwd = Just (worktreePath session_)
                 , env = Just runnerEnv
@@ -699,17 +677,6 @@ safeFileSize path = do
     case result of
         Left _ -> return 0
         Right size -> return size
-
-expandArg :: AgentSession -> Text -> Text -> String
-expandArg session_ promptText arg =
-    let sessionRoot = T.pack (takeDirectory (worktreePath session_))
-        runnerHome = sessionRoot <> "/home"
-     in T.unpack $
-            T.replace "{prompt}" promptText $
-                T.replace "{worktree}" (T.pack (worktreePath session_)) $
-                    T.replace "{home}" runnerHome $
-                        T.replace "{sessionRoot}" sessionRoot $
-                            T.replace "{sessionId}" (sessionId session_) arg
 
 {- | Block on the turn log wakeup channel, racing against a 5-second
 heartbeat.  A log append (or a turn state save) fires a wakeup; the

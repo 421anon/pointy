@@ -44,6 +44,7 @@ data AgentConfig = AgentConfig
     , agentOutputLimitBytes :: Int
     , agentSessionRetentionDays :: Int
     , agentBootstrapPrompt :: Text
+    , agentTitlePrompt :: Text
     }
     deriving (Show)
 
@@ -61,6 +62,7 @@ defaultAgentConfig =
         , agentOutputLimitBytes = 1048576
         , agentSessionRetentionDays = 7
         , agentBootstrapPrompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
+        , agentTitlePrompt = "Name the chat that opens with the request in this message. Reply with the title only: five words at most, no quotes, no punctuation, no explanation."
         }
 
 data NixEvaluatorConfig = NixEvaluatorConfig
@@ -112,8 +114,9 @@ agentCodec =
         <*> Toml.dioptional (Toml.int "output-limit-bytes") .= (Just . agentOutputLimitBytes)
         <*> Toml.dioptional (Toml.int "session-retention-days") .= (Just . agentSessionRetentionDays)
         <*> Toml.dioptional (Toml.text "bootstrap-prompt") .= (Just . agentBootstrapPrompt)
+        <*> Toml.dioptional (Toml.text "title-prompt") .= (Just . agentTitlePrompt)
   where
-    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention mbootstrap =
+    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention mbootstrap mtitle =
         AgentConfig
             { agentSboxCommand = fromMaybe (agentSboxCommand defaultAgentConfig) msbox
             , agentSboxArgs = fromMaybe (agentSboxArgs defaultAgentConfig) msboxArgs
@@ -123,6 +126,7 @@ agentCodec =
             , agentOutputLimitBytes = fromMaybe (agentOutputLimitBytes defaultAgentConfig) mlimit
             , agentSessionRetentionDays = fromMaybe (agentSessionRetentionDays defaultAgentConfig) mretention
             , agentBootstrapPrompt = fromMaybe (agentBootstrapPrompt defaultAgentConfig) mbootstrap
+            , agentTitlePrompt = fromMaybe (agentTitlePrompt defaultAgentConfig) mtitle
             }
 
 nixEvaluatorCodec :: TomlCodec NixEvaluatorConfig

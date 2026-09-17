@@ -8,7 +8,7 @@ module Agent.WarmSession (
 ) where
 
 import Agent.Policy (renderEmbeddedBootstrapPrompt)
-import Agent.Sandbox (nixDaemonBindArgs)
+import Agent.Sandbox (nixDaemonBindArgs, runnerEnvironment)
 import Agent.Session (agentSessionsRoot)
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
@@ -17,7 +17,7 @@ import Data.Aeson (FromJSON, ToJSON, eitherDecode, encode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (isSuffixOf, sortOn)
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (listToMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -33,7 +33,6 @@ import System.Directory (
     listDirectory,
     removePathForcibly,
  )
-import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (Handle, hClose)
@@ -165,42 +164,17 @@ createBootstrapWorktree repoPath worktreeDir baseCommit = do
 
 runBootstrapProcess :: AgentConfig -> Text -> FilePath -> FilePath -> FilePath -> (ProcessHandle -> IO ()) -> IO ExitCode
 runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessStarted = do
-    baseEnv <- getEnvironment
     realHome <- getHomeDirectory
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
     let realPiAgentDir = realHome </> ".pi" </> "agent"
-    let pathValue = fromMaybe "/run/current-system/sw/bin:/usr/bin:/bin" (lookup "PATH" baseEnv)
-        passthroughKeys =
-            [ "USER"
-            , "LOGNAME"
-            , "SHELL"
-            , "TERM"
-            , "LANG"
-            , "LC_ALL"
-            , "TZ"
-            , "XDG_RUNTIME_DIR"
-            , "XDG_DATA_DIRS"
-            , "DEEPSEEK_API_KEY"
-            , "ANTHROPIC_API_KEY"
-            , "OPENAI_API_KEY"
-            , "GROQ_API_KEY"
-            , "CEREBRAS_API_KEY"
-            , "XAI_API_KEY"
-            , "OPENROUTER_API_KEY"
-            , "MISTRAL_API_KEY"
-            , "GOOGLE_API_KEY"
-            , "GEMINI_API_KEY"
-            ]
-        passthrough = [(k, v) | (k, v) <- baseEnv, k `elem` passthroughKeys]
-        runnerEnv =
-            [ ("PATH", pathValue)
-            , ("HOME", home)
+    runnerEnv <-
+        runnerEnvironment
+            [ ("HOME", home)
             , ("PI_CODING_AGENT_DIR", realPiAgentDir)
             , ("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
             ]
-                ++ passthrough
-        bootstrapPromptStr = T.unpack bootstrapPrompt
+    let bootstrapPromptStr = T.unpack bootstrapPrompt
         -- Bootstrap: read-only tools, non-interactive, no output marker wrapper needed
         runnerArgs = [agentRunnerCommand cfg, "--tools", "read,grep,find,ls", "-p", bootstrapPromptStr]
         -- Expand sbox args using bootstrap worktree/home paths
