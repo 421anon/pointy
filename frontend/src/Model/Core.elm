@@ -385,6 +385,17 @@ agentInteractionsBlocked agentState =
            )
 
 
+
+-- | Steering is allowed while a turn streams, so the stream itself must not
+-- | block submission; every other busy state (request in flight, changeset
+-- | work, pending rename save, loading chats) still does.
+
+
+agentSubmissionBlocked : AgentState -> Bool
+agentSubmissionBlocked agentState =
+    agentInteractionsBlocked { agentState | activeTurnStream = Nothing }
+
+
 agentSessionArchived : String -> Bool
 agentSessionArchived status =
     status == "archived" || status == "discarded" || status == "applied"

@@ -2959,21 +2959,12 @@ appendPersistedTurn turn entries =
 
 
 inheritTurnStatus : Model.AgentTurn -> List Model.ChatEntry -> List Model.ChatEntry
-inheritTurnStatus turn entries =
+inheritTurnStatus turn =
     if turn.turnStatus == "running" then
-        entries
+        identity
 
     else
-        case List.reverse entries of
-            (Model.ChatTurnEntry last) :: rest ->
-                if last.status == Model.ChatPending then
-                    List.reverse (Model.ChatTurnEntry { last | status = chatStatusFromTurn turn } :: rest)
-
-                else
-                    entries
-
-            _ ->
-                entries
+        mapLastChatTurn (finishPending (chatStatusFromTurn turn))
 
 
 changesetFromLifecycleTurn : Model.AgentTurn -> Model.ChatChangeset
@@ -3656,18 +3647,8 @@ withSelectedAgentSession fn =
 
 
 failLatestPendingChatTurn : String -> List Model.ChatEntry -> List Model.ChatEntry
-failLatestPendingChatTurn error entries =
-    case List.reverse entries of
-        (Model.ChatTurnEntry turn) :: rest ->
-            case turn.status of
-                Model.ChatPending ->
-                    List.reverse (Model.ChatTurnEntry { turn | status = Model.ChatFailed error } :: rest)
-
-                _ ->
-                    entries
-
-        _ ->
-            entries
+failLatestPendingChatTurn error =
+    mapLastChatTurn (finishPending (Model.ChatFailed error))
 
 
 stopAgentTurn : Flow Model ()
@@ -3708,11 +3689,6 @@ submitAgentPromptFrom promptSource =
                         sendAgentTurn view promptSource
                 )
         )
-
-
-
--- | A turn the user can steer exists when a stream is open locally, the
--- | server still reports an active turn, or the session is still running.
 
 
 agentTurnActive : Model.AgentSessionView -> Model.AgentState -> Bool
@@ -3781,10 +3757,8 @@ sendAgentTurn view promptSource =
 
 
 
--- | Send a prompt into the running turn instead of starting a new one. Only
--- | the active turn itself is exempt from interaction blocking: another
--- | request, a changeset operation, a rename save, or a loading session list
--- | still prevents steering. The draft is kept unless the server accepts it.
+-- | Send a prompt into the running turn instead of starting a new one. The
+-- | draft is kept unless the server accepts it.
 
 
 steerAgentTurn : Model.AgentSessionView -> Flow Model String -> Flow Model ()
@@ -3795,7 +3769,7 @@ steerAgentTurn view promptSource =
     in
     Flow.forAll agent
         (\agentState ->
-            Flow.when (not (Model.agentInteractionsBlocked { agentState | activeTurnStream = Nothing }))
+            Flow.when (not (Model.agentSubmissionBlocked agentState))
                 (Flow.over agent (\s -> { s | request = Just request })
                     |> Flow.seq
                         (promptSource
@@ -4072,16 +4046,7 @@ appendSteeringMessage : String -> List Model.ChatEntry -> List Model.ChatEntry
 appendSteeringMessage body entries =
     case Decode.decodeString Decode.string (String.trim body) of
         Ok prompt ->
-            let
-                completed =
-                    case List.reverse entries of
-                        (Model.ChatTurnEntry last) :: rest ->
-                            List.reverse (Model.ChatTurnEntry { last | status = Model.ChatDone } :: rest)
-
-                        _ ->
-                            entries
-            in
-            completed
+            mapLastChatTurn (\last -> { last | status = Model.ChatDone }) entries
                 ++ [ Model.ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = Model.ChatPending } ]
 
         Err _ ->
@@ -4109,26 +4074,40 @@ splitLogPrefix line =
         ( "unknown", line )
 
 
-appendToCurrentAssistant : String -> List Model.ChatEntry -> List Model.ChatEntry
-appendToCurrentAssistant body entries =
+mapLastChatTurn : (Model.ChatTurn -> Model.ChatTurn) -> List Model.ChatEntry -> List Model.ChatEntry
+mapLastChatTurn update entries =
     case List.reverse entries of
         (Model.ChatTurnEntry last) :: rest ->
-            let
-                separator =
-                    if String.isEmpty last.assistant then
-                        ""
-
-                    else
-                        "\n"
-
-                updated =
-                    { last | assistant = last.assistant ++ separator ++ body }
-            in
-            List.reverse (Model.ChatTurnEntry updated :: rest)
+            List.reverse (Model.ChatTurnEntry (update last) :: rest)
 
         _ ->
-            -- Output before any prompt was submitted (e.g. resumed turn); drop it.
+            -- Output that arrives before any prompt entry exists (a resumed
+            -- turn) has nowhere to go and is dropped.
             entries
+
+
+finishPending : Model.ChatTurnStatus -> Model.ChatTurn -> Model.ChatTurn
+finishPending status turn =
+    if turn.status == Model.ChatPending then
+        { turn | status = status }
+
+    else
+        turn
+
+
+appendToCurrentAssistant : String -> List Model.ChatEntry -> List Model.ChatEntry
+appendToCurrentAssistant body =
+    mapLastChatTurn
+        (\last ->
+            { last
+                | assistant =
+                    if String.isEmpty last.assistant then
+                        body
+
+                    else
+                        last.assistant ++ "\n" ++ body
+            }
+        )
 
 
 requestProjectStatus : Int -> Maybe String -> Flow Model ()

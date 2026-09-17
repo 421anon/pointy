@@ -523,12 +523,8 @@ viewSession resolveMention agent sessionView =
                 stopping =
                     agent.request == Just (Model.StoppingAgentTurn session.sessionId)
 
-                -- Steering is allowed while a turn streams, so the stream itself
-                -- must not block submission; every other busy state (request in
-                -- flight, changeset work, pending rename save, loading chats)
-                -- still does.
                 submitBlocked =
-                    Model.agentInteractionsBlocked { agent | activeTurnStream = Nothing }
+                    Model.agentSubmissionBlocked agent
 
                 -- The textarea is uncontrolled, so its content survives re-renders.
                 -- Keep it editable while the agent works so a steering prompt can
