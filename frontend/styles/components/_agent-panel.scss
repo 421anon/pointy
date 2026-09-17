@@ -194,6 +194,12 @@
   color: var(--text-primary);
 }
 
+.agent-panel__stop-button {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--spacing-2xs);
+}
+
 .agent-panel .agent-panel__stop-button,
 .agent-panel .agent-panel__stop-button:hover:not(:disabled) {
   border-color: var(--state-danger);
