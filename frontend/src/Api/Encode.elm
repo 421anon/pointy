@@ -5,48 +5,57 @@ import Dict exposing (Dict)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
 import Model.Core exposing (ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..))
-import Model.Shadow exposing (StepArgType(..), StepArgValue(..), StepType(..))
+import Model.Shadow exposing (Field, StepType(..), StepArgValue(..), Widget(..))
 
 
-stepArgValue : StepArgType -> StepArgValue -> Maybe Encode.Value
-stepArgValue argType arg =
-    case ( argType, arg ) of
-        ( TString _ _, TStringValue str ) ->
-            Just (Encode.string str)
+stepArgValue : Widget -> StepArgValue -> Maybe Encode.Value
+stepArgValue widget_ value =
+    case ( widget_, value ) of
+        ( WList element, TListValue items ) ->
+            encodeList (stepArgValue element) items
 
-        ( TInt _ _, TIntValue n ) ->
-            Just (Encode.int n)
+        ( WTokens _, TListValue items ) ->
+            encodeList (stepArgValue (WText Nothing)) items
 
-        ( TBool, TBoolValue b ) ->
-            Just (Encode.bool b)
+        ( WSteps artifact_, TListValue items ) ->
+            encodeList (stepArgValue (WStep artifact_)) items
 
-        ( TStep _ _, TStepValue id ) ->
-            Just (Encode.object [ ( "step", Encode.int id ) ])
-
-        ( TList itemType, TListValue items ) ->
-            List.map (stepArgValue itemType) items
-                |> Maybe.combine
-                |> Maybe.map (Encode.list identity)
-
-        ( TUploadHash, TUploadHashValue hash ) ->
-            Just (Encode.object [ ( "hash", Encode.string hash ) ])
-
-        ( TEnum _ _, TEnumValue str ) ->
-            Just (Encode.string str)
-
-        ( TRecord fieldTypes, TRecordValue fieldValues ) ->
-            Dict.toList fieldValues
+        ( WRecord fields, TRecordValue values ) ->
+            fields
                 |> List.filterMap
-                    (\( fieldName, fieldVal ) ->
-                        Dict.get fieldName fieldTypes
-                            |> Maybe.andThen (\{ type_ } -> stepArgValue type_ fieldVal)
-                            |> Maybe.map (Tuple.pair fieldName)
+                    (\f ->
+                        Dict.get f.name values
+                            |> Maybe.andThen (stepArgValue f.widget)
+                            |> Maybe.map (Tuple.pair f.name)
                     )
                 |> Encode.object
                 |> Just
 
+        ( _, TStringValue str ) ->
+            Just (Encode.string str)
+
+        ( _, TIntValue n ) ->
+            Just (Encode.int n)
+
+        ( _, TBoolValue b ) ->
+            Just (Encode.bool b)
+
+        ( _, TEnumValue str ) ->
+            Just (Encode.string str)
+
+        ( _, TStepValue stepId ) ->
+            Just (Encode.object [ ( "step", Encode.int stepId ) ])
+
         _ ->
             Nothing
+
+
+encodeList : (StepArgValue -> Maybe Encode.Value) -> List StepArgValue -> Maybe Encode.Value
+encodeList encodeItem items =
+    items
+        |> List.map encodeItem
+        |> Maybe.combine
+        |> Maybe.map (Encode.list identity)
 
 
 stepArgsValue : StepType -> Dict String StepArgValue -> Encode.Value
@@ -57,34 +66,38 @@ stepArgsValue stepType args =
                 |> Dict.toList
                 |> List.filterMap
                     (\( name, value ) ->
-                        stepArgValue TUploadHash value
-                            |> Maybe.map (Tuple.pair name)
+                        uploadHashValue value |> Maybe.map (Tuple.pair name)
                     )
-                |> Dict.fromList
-                |> Encode.dict identity identity
+                |> Encode.object
 
-        Derivation argTypes _ ->
-            args
-                |> Dict.toList
-                |> List.filterMap
-                    (\( name, value ) ->
-                        Dict.get name argTypes
-                            |> Maybe.andThen
-                                (\{ type_ } ->
-                                    stepArgValue type_ value
-                                        |> Maybe.map (Tuple.pair name)
-                                )
-                    )
-                |> Dict.fromList
-                |> Encode.dict identity identity
+        Derivation fields _ ->
+            fieldsToValue fields args
 
-        Download ->
-            case Dict.get "url" args of
-                Just (TStringValue str) ->
-                    Encode.object [ ( "url", Encode.string str ) ]
+        Download fields ->
+            fieldsToValue fields args
 
-                _ ->
-                    Encode.object []
+
+fieldsToValue : List Field -> Dict String StepArgValue -> Encode.Value
+fieldsToValue fields args =
+    fields
+        |> List.filter (not << .readOnly)
+        |> List.filterMap
+            (\f ->
+                Dict.get f.name args
+                    |> Maybe.andThen (stepArgValue f.widget)
+                    |> Maybe.map (Tuple.pair f.name)
+            )
+        |> Encode.object
+
+
+uploadHashValue : StepArgValue -> Maybe Encode.Value
+uploadHashValue value =
+    case value of
+        TUploadHashValue hash ->
+            Just (Encode.object [ ( "hash", Encode.string hash ) ])
+
+        _ ->
+            Nothing
 
 
 stepValue : StepType -> StepRecord -> Encode.Value

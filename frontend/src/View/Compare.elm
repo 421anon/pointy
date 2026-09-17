@@ -17,7 +17,7 @@ import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), Model, StepRecord)
 import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, fileDelimitedGrid, gridState, projectStep, projects, records)
-import Model.Shadow as Shadow exposing (ArgType, StepArgType(..), StepArgValue(..), TStringDisplay(..))
+import Model.Shadow as Shadow exposing (Field, StepArgValue(..), Widget(..))
 import Route exposing (Route)
 import View.Icons exposing (icon)
 
@@ -180,7 +180,7 @@ viewInspectButton hasParams inspectOpen toggle =
             [ icon True "data_info_alert" ]
 
 
-derivationParamsFor : Model -> CompareSelection -> Maybe ( StepRecord, Dict String ArgType )
+derivationParamsFor : Model -> CompareSelection -> Maybe ( StepRecord, List Field )
 derivationParamsFor model sel =
     try (projectStep (Just sel.projectId) (Just sel.recordId)) model
         |> Maybe.andThen
@@ -191,27 +191,27 @@ derivationParamsFor model sel =
                     |> Maybe.andThen
                         (\entry ->
                             case entry.stepType of
-                                Shadow.Derivation argTypes _ ->
-                                    Just argTypes
+                                Shadow.Derivation fields _ ->
+                                    Just fields
 
-                                Shadow.Download ->
-                                    Just Shadow.downloadArgs
+                                Shadow.Download fields ->
+                                    Just fields
 
                                 _ ->
                                     Nothing
                         )
-                    |> Maybe.map (\argTypes -> ( step, argTypes ))
+                    |> Maybe.map (\fields -> ( step, fields ))
             )
 
 
-viewInlineParams : Model -> CompareSelection -> Bool -> Maybe ( StepRecord, Dict String ArgType ) -> Html (Flow Model ())
+viewInlineParams : Model -> CompareSelection -> Bool -> Maybe ( StepRecord, List Field ) -> Html (Flow Model ())
 viewInlineParams model sel inspectOpen mParams =
     Html.viewIf inspectOpen <|
         Html.viewMaybe
-            (\( step, argTypes ) ->
+            (\( step, fields ) ->
                 Html.div [ class "compare-params" ]
                     [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
-                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model sel.projectId step.args argTypes)
+                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model sel.projectId step.args fields)
                     ]
             )
             mParams
@@ -226,14 +226,14 @@ viewNote note =
         [ viewParamRow "Note" (Html.text note) ]
 
 
-viewNamedArgs : Model -> Int -> Dict String StepArgValue -> Dict String ArgType -> List (Html (Flow Model ()))
+viewNamedArgs : Model -> Int -> Dict String StepArgValue -> List Field -> List (Html (Flow Model ()))
 viewNamedArgs model projectId values fields =
-    Dict.toList fields
-        |> List.map
-            (\( name, field ) ->
-                viewParamRow (Maybe.unwrap name identity field.displayName)
-                    (viewArgValue model projectId field.type_ (Dict.get name values))
-            )
+    List.map
+        (\f ->
+            viewParamRow (Maybe.unwrap f.name identity f.label)
+                (viewArgValue model projectId f.widget (Dict.get f.name values))
+        )
+        fields
 
 
 viewParamRow : String -> Html (Flow Model ()) -> Html (Flow Model ())
@@ -244,46 +244,60 @@ viewParamRow label valueHtml =
         ]
 
 
-viewArgValue : Model -> Int -> StepArgType -> Maybe StepArgValue -> Html (Flow Model ())
-viewArgValue model projectId argType mValue =
-    case ( argType, mValue ) of
-        ( TString (Code _) _, Just (TStringValue s) ) ->
-            orEmptyValue s (Html.pre [ class "compare-param-code" ] [ Html.text s ])
-
-        ( TString (Command prefix) _, Just (TStringValue s) ) ->
-            orEmptyValue s (Html.code [ class "compare-param-code" ] [ Html.text (String.trim (prefix ++ " " ++ s)) ])
-
-        ( TString _ _, Just (TStringValue s) ) ->
+viewArgValue : Model -> Int -> Widget -> Maybe StepArgValue -> Html (Flow Model ())
+viewArgValue model projectId widget_ mValue =
+    case ( widget_, mValue ) of
+        ( WText _, Just (TStringValue s) ) ->
             orEmptyValue s (Html.text s)
 
-        ( TInt _ _, Just (TIntValue n) ) ->
+        ( WTextarea, Just (TStringValue s) ) ->
+            orEmptyValue s (Html.text s)
+
+        ( WDatetime, Just (TStringValue s) ) ->
+            orEmptyValue s (Html.text s)
+
+        ( WCode _, Just (TStringValue s) ) ->
+            orEmptyValue s (Html.pre [ class "compare-param-code" ] [ Html.text s ])
+
+        ( WCommand prefix, Just (TStringValue s) ) ->
+            orEmptyValue s (Html.code [ class "compare-param-code" ] [ Html.text (String.trim (prefix ++ " " ++ s)) ])
+
+        ( WNumber, Just (TIntValue n) ) ->
             Html.text (String.fromInt n)
 
-        ( TBool, Just (TBoolValue b) ) ->
+        ( WCheckbox, Just (TBoolValue b) ) ->
             Html.text (if b then "true" else "false")
 
-        ( TStep _ _, Just (TStepValue stepId) ) ->
+        ( WStep _, Just (TStepValue stepId) ) ->
             Html.text (stepNameOf model projectId stepId)
 
-        ( TUploadHash, Just (TUploadHashValue h) ) ->
-            orEmptyValue h (Html.text h)
+        ( WSelect options, Just (TEnumValue v) ) ->
+            Html.text (Maybe.withDefault v (Dict.get v (Dict.fromList options)))
 
-        ( TEnum _ labels, Just (TEnumValue v) ) ->
-            Html.text (Maybe.unwrap v identity (Dict.get v labels))
+        ( WTokens _, Just (TListValue vs) ) ->
+            viewValueList model projectId (WText Nothing) vs
 
-        ( TList inner, Just (TListValue vs) ) ->
-            if List.isEmpty vs then
-                emptyValue
+        ( WList element, Just (TListValue vs) ) ->
+            viewValueList model projectId element vs
 
-            else
-                Html.ul [ class "compare-param-list" ]
-                    (List.map (\v -> Html.li [] [ viewArgValue model projectId inner (Just v) ]) vs)
+        ( WSteps artifact_, Just (TListValue vs) ) ->
+            viewValueList model projectId (WStep artifact_) vs
 
-        ( TRecord fields, Just (TRecordValue dict) ) ->
+        ( WRecord fields, Just (TRecordValue dict) ) ->
             Html.div [ class "compare-param-record" ] (viewNamedArgs model projectId dict fields)
 
         _ ->
             emptyValue
+
+
+viewValueList : Model -> Int -> Widget -> List StepArgValue -> Html (Flow Model ())
+viewValueList model projectId widget_ values =
+    if List.isEmpty values then
+        emptyValue
+
+    else
+        Html.ul [ class "compare-param-list" ]
+            (List.map (\v -> Html.li [] [ viewArgValue model projectId widget_ (Just v) ]) values)
 
 
 orEmptyValue : String -> Html (Flow Model ()) -> Html (Flow Model ())

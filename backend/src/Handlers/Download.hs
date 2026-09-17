@@ -1,14 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Download-kind step support: URL prefetch and hash injection.
-
-The browser sends @args.url@ as a top-level template option.  The backend
-prefetches the URL, then injects @args.downloaded = { url = args.url; hash; downloadedAt? }@
-so the existing stdlib resolver works unchanged.
-
-Download-step detection uses @#pointy.stepConfig.\<template\>.type.download@
-rather than any hard-coded template name.
--}
+{- | Download-kind step support: URL prefetch and hash injection. -}
 module Handlers.Download (
     discoverDownloadTemplates,
     prefetchFile,
@@ -107,31 +99,22 @@ prefetchFile url = do
 -- Step-config classification
 -----------------------------------------------------------------------------
 
-{- | Evaluate @#pointy.stepConfig@ and return the set of template names whose
-@type.download@ attribute is present (i.e. the step kind is \"download\").
-
-Fails with an error when the evaluated JSON is not an object.
--}
 discoverDownloadTemplates :: (RepoContext ctx) => ctx -> ExceptT String IO (Set Text)
 discoverDownloadTemplates ctx = do
     output <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
     case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of
         Left err -> throwError $ "Failed to decode stepConfig JSON: " ++ err
         Right (Object km) ->
-            return $
-                Set.fromList
-                    [ AK.toText key
-                    | (key, val) <- KM.toList km
-                    , hasDownloadType val
-                    ]
+            case KM.lookup "templates" km of
+                Just (Object templates) ->
+                    return $
+                        Set.fromList
+                            [ AK.toText key
+                            | (key, Object tpl) <- KM.toList templates
+                            , Just (String "download") <- [KM.lookup "kind" tpl]
+                            ]
+                _ -> throwError "stepConfig has no `templates` object"
         Right _ -> throwError "stepConfig is not a JSON object"
-  where
-    hasDownloadType :: Value -> Bool
-    hasDownloadType (Object obj) =
-        case KM.lookup "type" obj of
-            Just (Object typeObj) -> KM.member "download" typeObj
-            _ -> False
-    hasDownloadType _ = False
 
 -----------------------------------------------------------------------------
 -- JSON navigation helpers
@@ -157,9 +140,6 @@ extractDownloadHash val = do
     String h <- KM.lookup "hash" downloaded
     return h
 
-{- | Extract @args.downloaded.downloadedAt@ from a step JSON value.
-Returns 'Nothing' for legacy records that lack the timestamp field.
--}
 extractDownloadedAt :: Value -> Maybe Text
 extractDownloadedAt val = do
     Object obj <- Just val
@@ -175,14 +155,6 @@ extractReqType (Object o) = case KM.lookup "type" o of
     _ -> Nothing
 extractReqType _ = Nothing
 
-{- | Inject trusted download provenance by reading the canonical @args.url@ and
-constructing @args.downloaded = { url = args.url; hash; downloadedAt? }@.
-
-Any pre-existing @args.downloaded@ from the client is replaced entirely
-so that client-supplied hash values, timestamps, or extra fields are
-never preserved.  @downloadedAt@ is omitted when 'Nothing' (legacy
-records) and formatted as UTC RFC 3339 when present.
--}
 injectDownloaded :: Value -> Text -> Maybe Text -> Value
 injectDownloaded val hash mTs = case val of
     Object obj ->

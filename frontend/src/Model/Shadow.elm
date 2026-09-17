@@ -5,22 +5,34 @@ import Basics.Extra exposing (uncurry)
 import Dict exposing (Dict)
 
 
-type StepArgType
-    = TString TStringDisplay (Maybe String)
-    | TInt TStringDisplay (Maybe String)
-    | TBool
-    | TStep (Maybe (List String)) Bool
-    | TUploadHash
-    | TList StepArgType
-    | TRecord (Dict String ArgType)
-    | TEnum (List String) (Dict String String)
+type Widget
+    = WText (Maybe String)
+    | WTextarea
+    | WCode String
+    | WCommand String
+    | WNumber
+    | WCheckbox
+    | WSelect (List ( String, String ))
+    | WTokens (Maybe String)
+    | WList Widget
+    | WStep Artifact
+    | WSteps Artifact
+    | WRecord (List Field)
+    | WDatetime
 
 
-type TStringDisplay
-    = TextField
-    | TextArea
-    | Command String
-    | Code String
+type alias Artifact =
+    { accepts : Maybe (List String), create : Bool }
+
+
+type alias Field =
+    { name : String
+    , label : Maybe String
+    , help : String
+    , readOnly : Bool
+    , argsPath : Maybe (List String)
+    , widget : Widget
+    }
 
 
 type StepArgValue
@@ -90,20 +102,6 @@ tBoolValue =
         )
 
 
-tListValue : Prism ls StepArgValue (List StepArgValue) x y
-tListValue =
-    prism ">TListValue"
-        TListValue
-        (\stepArgVal ->
-            case stepArgVal of
-                TListValue val ->
-                    Ok val
-
-                _ ->
-                    Err stepArgVal
-        )
-
-
 tEnumValue : Prism ls StepArgValue String x y
 tEnumValue =
     prism ">TEnumValue"
@@ -118,14 +116,10 @@ tEnumValue =
         )
 
 
-type alias ArgType =
-    { description : String, type_ : StepArgType, displayName : Maybe String }
-
-
 type StepType
     = FileUpload (Maybe (List String))
-    | Derivation (Dict String ArgType) WithSrcFiles
-    | Download
+    | Derivation (List Field) WithSrcFiles
+    | Download (List Field)
 
 
 type WithSrcFiles
@@ -133,25 +127,7 @@ type WithSrcFiles
     | WithoutSrcFiles
 
 
-downloadArgs : Dict String ArgType
-downloadArgs =
-    Dict.fromList
-        [ ( "url"
-          , { description = "URL to fetch"
-            , type_ = TString TextField Nothing
-            , displayName = Just "URL"
-            }
-          )
-        , ( "downloadedAt"
-          , { description = "UTC timestamp when the URL was downloaded"
-            , type_ = TString TextField Nothing
-            , displayName = Just "Downloaded at"
-            }
-          )
-        ]
-
-
-derivation : Prism ls StepType ( Dict String ArgType, WithSrcFiles ) x y
+derivation : Prism ls StepType ( List Field, WithSrcFiles ) x y
 derivation =
     prism ">Derivation"
         (uncurry Derivation)
