@@ -38,14 +38,13 @@ import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, finally, try)
+import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
-import Data.Aeson.Types (parseMaybe, (.:))
+import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
@@ -360,7 +359,6 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
         stripManaged (arg : rest)
             | arg `elem` ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"] = stripManaged rest
             | otherwise = expandArg session_ promptText arg : stripManaged rest
-        -- Inject the right session flag for this turn
         sessionFlag = case (isFirstTurn, mWarmFile) of
             (True, Just warmFile) -> ["--fork", warmFile]
             (True, Nothing) -> []
@@ -448,55 +446,46 @@ seedPiConfig runnerHome = do
 
 -- Pi 0.75 emits agent_end before automatic retry/compaction events; check its state before EOF.
 handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
-handleRpcEvent cfg logPath input (Aeson.Object event) =
-    case KeyMap.lookup "type" event of
-        Just (Aeson.String "message_end") -> send "get_session_stats"
-        Just (Aeson.String "message_start")
-            | Just (Aeson.Object message) <- KeyMap.lookup "message" event
-            , KeyMap.lookup "role" message == Just (Aeson.String "user") ->
-                case KeyMap.lookup "content" message of
-                    Just content -> do
-                        let prompt = case content of
-                                Aeson.String t -> t
-                                Aeson.Array parts -> T.concat [t | Aeson.Object part <- foldMap (: []) parts, Just (Aeson.String t) <- [KeyMap.lookup "text" part]]
-                                _ -> ""
-                        -- The initial prompt is already stored in turn metadata.
-                        modifyMVar_ input $ \current -> case current of
-                            Just control -> do
-                                when (inputPromptSeen control) $
-                                    appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
-                                return $ Just control{inputPromptSeen = True}
-                            Nothing -> return Nothing
-                    _ -> return ()
-        Just (Aeson.String "agent_end") -> send "get_state"
-        Just (Aeson.String "auto_retry_start") ->
+handleRpcEvent cfg logPath input event =
+    case event ^? key "type" . _String of
+        Just "message_end" -> send "get_session_stats"
+        Just "message_start"
+            | event ^. key "message" . key "role" . _String == "user"
+            , Just content <- event ^? key "message" . key "content" -> do
+                let prompt = T.concat (content ^.. (_String `failing` (values . key "text" . _String)))
+                -- The initial prompt is already stored in turn metadata.
+                modifyMVar_ input $ traverse $ \control -> do
+                    when (inputPromptSeen control) $
+                        appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
+                    return control{inputPromptSeen = True}
+        Just "agent_end" -> send "get_state"
+        Just "auto_retry_start" ->
             modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = True})
-        Just (Aeson.String "auto_retry_end") -> do
+        Just "auto_retry_end" -> do
             modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = False})
             send "get_state"
-        Just (Aeson.String "compaction_end")
-            | KeyMap.lookup "willRetry" event /= Just (Aeson.Bool True) -> do
+        Just "compaction_end"
+            | event ^? key "willRetry" . _Bool /= Just True -> do
                 send "get_session_stats"
                 send "get_state"
-        Just (Aeson.String "response") -> do
+        Just "response" -> do
             modifyMVar_ input $ \current -> case current of
                 Just control
                     | Just (requestId, reply) <- inputPending control
-                    , KeyMap.lookup "id" event == Just (Aeson.String requestId) -> do
-                        atomically $ void $ tryPutTMVar reply (KeyMap.lookup "success" event == Just (Aeson.Bool True))
+                    , event ^? key "id" . _String == Just requestId -> do
+                        atomically $ void $ tryPutTMVar reply (event ^? key "success" . _Bool == Just True)
                         return $ Just control{inputPending = Nothing}
                 _ -> return current
-            case KeyMap.lookup "command" event of
-                Just (Aeson.String "prompt")
-                    | KeyMap.lookup "success" event == Just (Aeson.Bool False)
-                    , KeyMap.lookup "id" event == Just (Aeson.String "initial") ->
+            case event ^? key "command" . _String of
+                Just "prompt"
+                    | event ^? key "success" . _Bool == Just False
+                    , event ^? key "id" . _String == Just "initial" ->
                         closeRunnerInput input
                     | otherwise -> send "get_state"
-                Just (Aeson.String "get_state")
-                    | Just (Aeson.Object state) <- KeyMap.lookup "data" event
-                    , KeyMap.lookup "isStreaming" state == Just (Aeson.Bool False)
-                    , KeyMap.lookup "isCompacting" state /= Just (Aeson.Bool True)
-                    , KeyMap.lookup "pendingMessageCount" state == Just (Aeson.Number 0) ->
+                Just "get_state"
+                    | stateFlag "isStreaming" == Just False
+                    , stateFlag "isCompacting" /= Just True
+                    , event ^? key "data" . key "pendingMessageCount" . _Integer == Just 0 ->
                         modifyMVar_ input $ \current -> case current of
                             Just control
                                 | Nothing <- inputPending control
@@ -509,7 +498,7 @@ handleRpcEvent cfg logPath input (Aeson.Object event) =
   where
     send command = withMVar input $ mapM_ $ \control ->
         writeRpc (inputHandle control) $ Aeson.object ["type" Aeson..= (command :: Text)]
-handleRpcEvent _ _ _ _ = return ()
+    stateFlag name = event ^? key "data" . key name . _Bool
 
 streamHandle :: AgentConfig -> FilePath -> Text -> Text -> (Aeson.Value -> IO ()) -> Handle -> IO Bool
 streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do
@@ -537,93 +526,75 @@ streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do
     loop False False False
 
 contextUsage :: Aeson.Value -> Maybe (Integer, Integer)
-contextUsage = parseMaybe $ Aeson.withObject "event" $ \event -> do
-    payload <- event .: "data"
-    usage <- payload .: "contextUsage"
-    (,) <$> usage .: "tokens" <*> usage .: "contextWindow"
+contextUsage event = (,) <$> usage "tokens" <*> usage "contextWindow"
+  where
+    usage name = event ^? key "data" . key "contextUsage" . key name . _Integer
 
 piEventLines :: Aeson.Value -> (Maybe [Text], Maybe Bool)
-piEventLines (Aeson.Object event)
-    | Just kind <- field "type" event >>= str = eventLines kind
-    | otherwise = (Nothing, Nothing)
+piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . _String)
   where
     visible ls = (Just ls, Nothing)
-    eventLines kind =
-        let message = object (field "message" event)
-            assistant = field "role" message == Just (Aeson.String "assistant")
-         in case kind of
-                "message_update" ->
-                    visible ["*Thinking*" | assistant, text "type" (object (field "assistantMessageEvent" event)) == "thinking_start"]
-                "message_end"
-                    | assistant ->
-                        let failed = text "stopReason" message `elem` ["error", "aborted"]
-                            prose = contentText message
-                            lines_ = if T.null prose then [] else "" : T.splitOn "\n" prose ++ [""]
-                         in (Just (lines_ ++ ["**Response error:**" <> code (text "errorMessage" message) | failed]), Just failed)
-                    | otherwise -> visible []
-                "tool_execution_start" -> visible []
-                "tool_execution_end" -> visible []
-                "compaction_start" -> visible ["*Summarising the conversation so far*"]
-                "compaction_end"
-                    | not (T.null (text "errorMessage" event)) ->
-                        let retrying = field "willRetry" event == Just (Aeson.Bool True)
-                         in ( Just ["**Context summary failed:**" <> code (text "errorMessage" event)]
-                            , if retrying then Nothing else Just True
-                            )
-                    | otherwise -> visible []
-                "auto_retry_start" -> visible ["*Retrying (" <> number "attempt" event <> "/" <> number "maxAttempts" event <> ")*"]
-                "auto_retry_end"
-                    | field "success" event == Just (Aeson.Bool False) ->
-                        (Just ["**Retry stopped:**" <> code (text "finalError" event)], Just True)
-                    | otherwise -> visible []
-                "agent_end" -> visible []
-                "response"
-                    | text "command" event == "get_session_stats"
-                    , Just (tokens, capacity) <- contextUsage (Aeson.Object event)
-                    , capacity > 0
-                    , tokens * 2 >= capacity ->
-                        visible ["**Context warning:** This chat is using " <> T.pack (show (tokens * 100 `div` capacity)) <> "% of the model's context (" <> T.pack (show tokens) <> " / " <> T.pack (show capacity) <> " tokens)."]
-                    | text "command" event == "prompt"
-                    , field "success" event == Just (Aeson.Bool False)
-                    , text "id" event == "initial" ->
-                        (Just ["**Response error:**" <> code (text "error" event)], Just True)
-                    | otherwise -> visible []
-                _
-                    | kind
-                        `elem` [ "session"
-                               , "message_start"
-                               , "agent_start"
-                               , "turn_start"
-                               , "turn_end"
-                               , "tool_execution_update"
-                               , "queue_update"
-                               , "session_info_changed"
-                               , "thinking_level_changed"
-                               ] ->
-                        visible []
-                    | otherwise -> (Nothing, Nothing)
+    text name = event ^. key name . _String
+    messageText name = event ^. key "message" . key name . _String
+    flag name = event ^? key name . _Bool
+    number name = maybe "?" (T.pack . show) (event ^? key name . _Integer)
+    assistant = messageText "role" == "assistant"
+    eventLines kind = case kind of
+        "message_update" ->
+            visible ["*Thinking*" | assistant, event ^. key "assistantMessageEvent" . key "type" . _String == "thinking_start"]
+        "message_end"
+            | assistant ->
+                let failed = messageText "stopReason" `elem` ["error", "aborted"]
+                    prose = T.concat (event ^.. key "message" . key "content" . values . filtered isText . key "text" . _String)
+                    lines_ = if T.null prose then [] else "" : T.splitOn "\n" prose ++ [""]
+                 in (Just (lines_ ++ ["**Response error:**" <> code (messageText "errorMessage") | failed]), Just failed)
+            | otherwise -> visible []
+        "compaction_start" -> visible ["*Summarising the conversation so far*"]
+        "compaction_end"
+            | not (T.null (text "errorMessage")) ->
+                ( Just ["**Context summary failed:**" <> code (text "errorMessage")]
+                , if flag "willRetry" == Just True then Nothing else Just True
+                )
+            | otherwise -> visible []
+        "auto_retry_start" -> visible ["*Retrying (" <> number "attempt" <> "/" <> number "maxAttempts" <> ")*"]
+        "auto_retry_end"
+            | flag "success" == Just False ->
+                (Just ["**Retry stopped:**" <> code (text "finalError")], Just True)
+            | otherwise -> visible []
+        "response"
+            | text "command" == "get_session_stats"
+            , Just (tokens, capacity) <- contextUsage event
+            , capacity > 0
+            , tokens * 2 >= capacity ->
+                visible ["**Context warning:** This chat is using " <> T.pack (show (tokens * 100 `div` capacity)) <> "% of the model's context (" <> T.pack (show tokens) <> " / " <> T.pack (show capacity) <> " tokens)."]
+            | text "command" == "prompt"
+            , flag "success" == Just False
+            , text "id" == "initial" ->
+                (Just ["**Response error:**" <> code (text "error")], Just True)
+            | otherwise -> visible []
+        _
+            | kind `elem` silent -> visible []
+            | otherwise -> (Nothing, Nothing)
 
-    contentText value = case field "content" value of
-        Just (Aeson.Array parts) -> T.concat (foldMap textPart parts)
-        _ -> ""
-    textPart (Aeson.Object part)
-        | text "type" part == "text" = [text "text" part]
-    textPart _ = []
-
+    isText part = part ^. key "type" . _String == "text"
+    silent =
+        [ "session"
+        , "message_start"
+        , "agent_start"
+        , "agent_end"
+        , "turn_start"
+        , "turn_end"
+        , "tool_execution_start"
+        , "tool_execution_update"
+        , "tool_execution_end"
+        , "queue_update"
+        , "session_info_changed"
+        , "thinking_level_changed"
+        ]
     code value =
         let cleaned = T.unwords (T.words (T.filter (/= '`') value))
             clipped = if T.length cleaned > 100 then T.take 100 cleaned <> "..." else cleaned
          in if T.null cleaned then "" else " `" <> clipped <> "`"
-    number key value = case field key value of
-        Just (Aeson.Number n) -> T.pack (show (floor n :: Integer))
-        _ -> "?"
-    text key value = fromMaybe "" (field key value >>= str)
-    object (Just (Aeson.Object value)) = value
-    object _ = KeyMap.empty
-    field key = KeyMap.lookup (Key.fromText key)
-    str (Aeson.String value) = Just value
-    str _ = Nothing
-piEventLines _ = (Nothing, Nothing)
 
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
 finishTurn cfg _session turn exitCode = do

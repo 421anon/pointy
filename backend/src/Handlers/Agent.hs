@@ -43,6 +43,7 @@ import Agent.Session (AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), withObject, (.:))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
@@ -115,9 +116,8 @@ stopTurnHandler req =
     runAgentAction $ stopAgentTurn (sessionRequestSessionId req)
 
 steerTurnHandler :: TurnRequest -> Handler NoContent
-steerTurnHandler req = do
-    _ <- runAgentAction $ steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req)
-    return NoContent
+steerTurnHandler req =
+    NoContent <$ runAgentAction (steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req))
 
 prepareApplyHandler :: SessionRequest -> Handler AgentSessionView
 prepareApplyHandler req =
@@ -150,37 +150,30 @@ runAgentAction action = do
 
 throwAgentError :: String -> Handler a
 throwAgentError err =
-    let baseError =
-            case err of
-                "empty_session_name" ->
-                    err400
-                "empty_prompt" ->
-                    err400
-                "session_not_found" ->
-                    err404
-                _ ->
-                    if err
-                        `elem` [ "session_applied"
-                               , "session_discarded"
-                               , "session_archived"
-                               , "runner_active"
-                               , "runner_not_active"
-                               , "runner_not_ready"
-                               , "runner_stopping"
-                               , "steering_failed"
-                               , "step_reviewed"
-                               ]
-                        then
-                            err409
-                        else
-                            err500
-     in throwError baseError{errBody = TLE.encodeUtf8 (TL.pack err)}
+    throwError (fromMaybe err500 (lookup err statuses)){errBody = TLE.encodeUtf8 (TL.pack err)}
+  where
+    statuses =
+        [ ("empty_session_name", err400)
+        , ("empty_prompt", err400)
+        , ("session_not_found", err404)
+        ]
+            ++ [(conflict, err409) | conflict <- conflicts]
+    conflicts =
+        [ "session_applied"
+        , "session_discarded"
+        , "session_archived"
+        , "runner_active"
+        , "runner_not_active"
+        , "runner_not_ready"
+        , "runner_stopping"
+        , "steering_failed"
+        , "step_reviewed"
+        ]
 
 archiveSessionHandler :: SessionRequest -> Handler AgentSessionView
 archiveSessionHandler req =
     runLockedAction $ archiveAgentSession (sessionRequestSessionId req)
 
 purgeSessionHandler :: SessionRequest -> Handler NoContent
-purgeSessionHandler req = do
-    _ <- runLockedAction $ purgeAgentSession (sessionRequestSessionId req)
-    return NoContent
+purgeSessionHandler req =
+    NoContent <$ runLockedAction (purgeAgentSession (sessionRequestSessionId req))

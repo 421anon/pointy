@@ -68,6 +68,7 @@ library
     , http-media
     , http-types
     , lens
+    , lens-aeson
     , mtl
     , network-uri
     , openapi3
