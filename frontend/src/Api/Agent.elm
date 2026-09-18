@@ -9,6 +9,7 @@ module Api.Agent exposing
     , prepareApply
     , renameSession
     , sendTurn
+    , steer
     , stop
     , turnEvent
     )
@@ -67,6 +68,21 @@ sendTurn sessionId prompt =
                         , ( "prompt", Encode.string prompt )
                         ]
             , expect = Http.expectJson identity turnDecoder
+            }
+
+
+steer : String -> String -> Flow s (Result Http.Error ())
+steer sessionId prompt =
+    Flow.lift <|
+        Http.post
+            { url = baseUrl ++ "/steer"
+            , body =
+                Http.jsonBody <|
+                    Encode.object
+                        [ ( "sessionId", Encode.string sessionId )
+                        , ( "prompt", Encode.string prompt )
+                        ]
+            , expect = Http.expectWhatever identity
             }
 
 
@@ -151,6 +167,7 @@ sessionDecoder =
         |> optional "activeTurnId" (Decode.maybe Decode.string) Nothing
         |> optional "lastError" (Decode.maybe Decode.string) Nothing
         |> required "updatedAt" updatedAtDecoder
+
 
 
 -- | Backend "updatedAt" is RFC3339 with a fractional part; parse the fraction

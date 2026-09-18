@@ -12,6 +12,7 @@ module Agent.Git (
     archiveAgentSession,
     purgeAgentSession,
     renameAgentSession,
+    nameUnnamedAgentSession,
     loadAgentSessionView,
     sessionHasActiveRunner,
     commitAgentTurnOutputs,
@@ -142,6 +143,7 @@ listAgentSessions = do
     let ordered = sortOn (Down . createdAt) sessions
     mapM (loadAgentSessionView . sessionId) ordered
 
+loadAgentSessionView :: Text -> ExceptT String IO AgentSessionView
 loadAgentSessionView sid = do
     session_ <- loadSessionOrThrow sid
     state <- collectGitState session_
@@ -156,6 +158,13 @@ renameAgentSession sid rawName = do
         Just name -> do
             saveSessionUpdate session_{sessionName = Just name}
             loadAgentSessionView sid
+
+nameUnnamedAgentSession :: Text -> Text -> ExceptT String IO ()
+nameUnnamedAgentSession sid title = do
+    session_ <- loadSessionOrThrow sid
+    case (sessionName session_ >>= normalizeSessionName, normalizeSessionName title) of
+        (Nothing, Just name) -> saveSessionUpdate session_{sessionName = Just name}
+        _ -> return ()
 
 commitAgentTurnOutputs :: AgentSession -> AgentTurn -> ExceptT String IO (Maybe Text, [Text])
 commitAgentTurnOutputs session_ turn = do

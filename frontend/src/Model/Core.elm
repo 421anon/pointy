@@ -194,6 +194,7 @@ type alias AgentPreparedApply =
     }
 
 
+
 -- | RFC3339 "updatedAt" with the nanosecond fraction kept, so renames that
 -- | land within the same millisecond still order correctly.
 
@@ -207,7 +208,8 @@ type alias SessionTimestamp =
 sessionTimestampAtLeast : SessionTimestamp -> SessionTimestamp -> Bool
 sessionTimestampAtLeast a b =
     -- Compare millis directly (// wraps at 2^31); the fraction lives in nanos.
-    Time.posixToMillis a.posix > Time.posixToMillis b.posix
+    Time.posixToMillis a.posix
+        > Time.posixToMillis b.posix
         || (Time.posixToMillis a.posix == Time.posixToMillis b.posix && a.nanos >= b.nanos)
 
 
@@ -262,6 +264,7 @@ type alias AgentApplyView =
 type ChatTurnStatus
     = ChatPending
     | ChatDone
+    | ChatStopped
     | ChatFailed String
 
 
@@ -382,10 +385,43 @@ agentInteractionsBlocked agentState =
            )
 
 
+agentSubmissionBlocked : AgentState -> Bool
+agentSubmissionBlocked agentState =
+    agentInteractionsBlocked { agentState | activeTurnStream = Nothing }
+
+
+agentTurnActive : AgentSessionView -> AgentState -> Bool
+agentTurnActive view agentState =
+    (agentState.activeTurnStream /= Nothing)
+        || (view.session.activeTurnId /= Nothing)
+        || (view.session.status == "running")
+
+
+mapLastChatTurn : (ChatTurn -> ChatTurn) -> List ChatEntry -> List ChatEntry
+mapLastChatTurn update entries =
+    case List.reverse entries of
+        (ChatTurnEntry last) :: rest ->
+            List.reverse (ChatTurnEntry (update last) :: rest)
+
+        (ChatChangesetEntry _) :: _ ->
+            entries
+
+        [] ->
+            entries
+
+
+finishPending : ChatTurnStatus -> ChatTurn -> ChatTurn
+finishPending status turn =
+    if turn.status == ChatPending then
+        { turn | status = status }
+
+    else
+        turn
+
+
 agentSessionArchived : String -> Bool
 agentSessionArchived status =
     status == "archived" || status == "discarded" || status == "applied"
-
 
 
 selectedSessionView : AgentState -> Maybe AgentSessionView

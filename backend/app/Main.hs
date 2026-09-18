@@ -23,6 +23,7 @@ import Handlers.Agent (
     prepareApplyHandler,
     purgeSessionHandler,
     renameSessionHandler,
+    steerTurnHandler,
     stopTurnHandler,
     turnLogStreamHandler,
     usageHandler,
@@ -38,7 +39,7 @@ import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSr
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
-import Handlers.StepReview (getProjectReviewHandler, reviewDiffHandler, removeReviewHandler, reviewStepHandler)
+import Handlers.StepReview (getProjectReviewHandler, removeReviewHandler, reviewDiffHandler, reviewStepHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
@@ -99,6 +100,7 @@ server =
         :<|> getSessionHandler
         :<|> postTurnHandler
         :<|> stopTurnHandler
+        :<|> steerTurnHandler
         :<|> turnLogStreamHandler
         :<|> prepareApplyHandler
         :<|> confirmApplyHandler

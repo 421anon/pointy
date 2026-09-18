@@ -145,6 +145,12 @@
   align-items: end;
 }
 
+.agent-panel__composer-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: end;
+}
+
 .agent-panel__prompt {
   width: 100%;
   border: 1px solid var(--line-color);
@@ -186,6 +192,12 @@
   border-color: var(--state-info);
   background: var(--state-info-outline);
   color: var(--text-primary);
+}
+
+.agent-panel__stop-button {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--spacing-2xs);
 }
 
 .agent-panel .agent-panel__stop-button,
@@ -560,6 +572,65 @@
   border-color: var(--state-danger);
 }
 
+.agent-panel__changeset-count {
+  display: inline-flex;
+  gap: var(--spacing-xs);
+  margin-right: auto;
+  font-family: monospace;
+
+  .is-added {
+    color: var(--state-success);
+  }
+
+  .is-removed {
+    color: var(--state-danger);
+  }
+}
+
+.agent-panel__changeset-diff {
+  padding-inline: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-panel__changeset-file > span {
+  display: block;
+  padding: 0 var(--spacing-sm);
+}
+
+.agent-panel__changeset-file > .is-added {
+  background: color-mix(in srgb, var(--state-success) 16%, transparent);
+}
+
+.agent-panel__changeset-file > .is-removed {
+  background: color-mix(in srgb, var(--state-danger) 16%, transparent);
+}
+
+.agent-panel__changeset-file > .is-hunk {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.agent-panel__changeset-file > summary {
+  padding: 0 var(--spacing-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: pointer;
+
+  > * {
+    margin-left: var(--spacing-xs);
+  }
+}
+
+.agent-panel__changeset-file:not(:first-child) {
+  margin-top: var(--spacing-xs);
+}
+
+.agent-panel__changeset-tag {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
 .agent-panel__changeset-actions {
   display: flex;
   flex-wrap: wrap;
@@ -724,6 +795,10 @@
 
 .agent-panel__chat-content strong {
   font-weight: 600;
+}
+
+.agent-panel__chat-content em {
+  color: var(--text-secondary);
 }
 
 .agent-panel__chat-content pre {
@@ -946,5 +1021,19 @@
     height: calc(100dvh - var(--spacing-5xl) - var(--spacing-sm));
     border-inline: 0;
     border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-panel .shimmer-text,
+  .agent-panel__chat-cursor,
+  .agent-panel__button-spinner {
+    animation: none;
+  }
+
+  .agent-panel .shimmer-text {
+    background: none;
+    color: var(--text-secondary);
+    -webkit-text-fill-color: currentColor;
   }
 }

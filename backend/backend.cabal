@@ -14,6 +14,7 @@ library
     Agent.Runner
     Agent.Sandbox
     Agent.Session
+    Agent.Title
     Agent.TurnSignal
     Agent.WarmSession
     Api
@@ -68,6 +69,7 @@ library
     , http-media
     , http-types
     , lens
+    , lens-aeson
     , mtl
     , network-uri
     , openapi3

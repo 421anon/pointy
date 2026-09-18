@@ -172,6 +172,13 @@ type StopTurn =
         :> ReqBody '[JSON] SessionRequest
         :> Post '[JSON] AgentSessionView
 
+type SteerTurn =
+    "agent"
+        :> "steer"
+        :> Description "Sends steering input to the agent turn running in a session."
+        :> ReqBody '[JSON] TurnRequest
+        :> PostNoContent
+
 type PrepareApply =
     "agent"
         :> "prepare-apply"
@@ -287,7 +294,6 @@ type SrcFileSeek =
         :> QueryParam "offset" Int
         :> QueryParam' '[Required] "bytes" Int
         :> Get '[JSON] FileChunk
-
 
 type RawSrcFile =
     "src-files"
@@ -465,6 +471,7 @@ type API =
         :<|> GetAgentSession
         :<|> AgentTurnEndpoint
         :<|> StopTurn
+        :<|> SteerTurn
         :<|> AgentTurnStream
         :<|> PrepareApply
         :<|> ConfirmApply

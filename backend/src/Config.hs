@@ -44,6 +44,7 @@ data AgentConfig = AgentConfig
     , agentOutputLimitBytes :: Int
     , agentSessionRetentionDays :: Int
     , agentBootstrapPrompt :: Text
+    , agentTitlePrompt :: Text
     }
     deriving (Show)
 
@@ -53,13 +54,12 @@ defaultAgentConfig =
         { agentSboxCommand = "sbox"
         , agentSboxArgs = ["--bind", "{home}", "{home}"]
         , agentRunnerCommand = "pi"
-        -- Explicit --model beats pi's built-in per-provider default (deepseek-v4-pro)
-        -- and the model recorded in a continued/forked session file.
-        , agentRunnerArgs = ["-p", "-c", "--model", "deepseek/deepseek-v4-flash", "{prompt}"]
+        , agentRunnerArgs = ["--model", "deepseek/deepseek-v4-flash"]
         , agentTimeoutSeconds = 1800
         , agentOutputLimitBytes = 1048576
         , agentSessionRetentionDays = 7
         , agentBootstrapPrompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."
+        , agentTitlePrompt = "Name the chat that opens with the request in this message. Reply with the title only: five words at most, no quotes, no punctuation, no explanation."
         }
 
 data NixEvaluatorConfig = NixEvaluatorConfig
@@ -111,8 +111,9 @@ agentCodec =
         <*> Toml.dioptional (Toml.int "output-limit-bytes") .= (Just . agentOutputLimitBytes)
         <*> Toml.dioptional (Toml.int "session-retention-days") .= (Just . agentSessionRetentionDays)
         <*> Toml.dioptional (Toml.text "bootstrap-prompt") .= (Just . agentBootstrapPrompt)
+        <*> Toml.dioptional (Toml.text "title-prompt") .= (Just . agentTitlePrompt)
   where
-    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention mbootstrap =
+    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention mbootstrap mtitle =
         AgentConfig
             { agentSboxCommand = fromMaybe (agentSboxCommand defaultAgentConfig) msbox
             , agentSboxArgs = fromMaybe (agentSboxArgs defaultAgentConfig) msboxArgs
@@ -122,6 +123,7 @@ agentCodec =
             , agentOutputLimitBytes = fromMaybe (agentOutputLimitBytes defaultAgentConfig) mlimit
             , agentSessionRetentionDays = fromMaybe (agentSessionRetentionDays defaultAgentConfig) mretention
             , agentBootstrapPrompt = fromMaybe (agentBootstrapPrompt defaultAgentConfig) mbootstrap
+            , agentTitlePrompt = fromMaybe (agentTitlePrompt defaultAgentConfig) mtitle
             }
 
 nixEvaluatorCodec :: TomlCodec NixEvaluatorConfig

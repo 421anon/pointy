@@ -211,7 +211,7 @@ subscriptions model =
         [ dndSubscription model
         , uploadProgressSubscription model
         , gutterDragSubscription model
-        , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshSelectedAgentSession)
+        , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
         , Browser.Events.onVisibilityChange
             (\visibility ->
                 if visibility == Browser.Events.Visible then
