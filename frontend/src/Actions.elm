@@ -3599,13 +3599,6 @@ loadAgentSession sessionId =
             )
 
 
-
--- | The panel can go stale when the server changes session state without the
--- browser's involvement (a conflict resolution committed at turn end, a turn
--- started from another client, a prepare/confirm from elsewhere). The periodic
--- clock tick calls this so the presentation converges on the current state.
-
-
 refreshSelectedAgentSession : Flow Model ()
 refreshSelectedAgentSession =
     Flow.get
@@ -3622,6 +3615,18 @@ refreshSelectedAgentSession =
                     Nothing ->
                         Flow.pure ()
             )
+
+
+
+-- | Work done elsewhere is invisible to this browser until it looks again.
+
+
+refreshVisibleAgentSession : Flow Model ()
+refreshVisibleAgentSession =
+    Flow.forAll agent
+        (\agentState ->
+            Flow.when agentState.isPanelOpen refreshSelectedAgentSession
+        )
 
 
 withSelectedAgentSession : (Model.AgentSessionView -> Flow Model ()) -> Flow Model ()
