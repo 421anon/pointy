@@ -8,7 +8,7 @@ module Agent.WarmSession (
 ) where
 
 import Agent.Policy (renderEmbeddedBootstrapPrompt)
-import Agent.Sandbox (nixDaemonBindArgs, runnerEnvironment)
+import Agent.Sandbox (SandboxPaths (..), bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerEnvironment)
 import Agent.Session (agentSessionsRoot)
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
@@ -28,7 +28,6 @@ import System.Directory (
     doesDirectoryExist,
     doesFileExist,
     getFileSize,
-    getHomeDirectory,
     getModificationTime,
     listDirectory,
     removePathForcibly,
@@ -164,28 +163,27 @@ createBootstrapWorktree repoPath worktreeDir baseCommit = do
 
 runBootstrapProcess :: AgentConfig -> Text -> FilePath -> FilePath -> FilePath -> (ProcessHandle -> IO ()) -> IO ExitCode
 runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessStarted = do
-    realHome <- getHomeDirectory
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
-    let realPiAgentDir = realHome </> ".pi" </> "agent"
+    piConfigDir <- piAgentConfigDir
     runnerEnv <-
         runnerEnvironment
             [ ("HOME", home)
-            , ("PI_CODING_AGENT_DIR", realPiAgentDir)
+            , ("PI_CODING_AGENT_DIR", piConfigDir)
             , ("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
             ]
-    let bootstrapPromptStr = T.unpack bootstrapPrompt
-        -- Bootstrap: read-only tools, non-interactive, no output marker wrapper needed
-        runnerArgs = [agentRunnerCommand cfg, "--tools", "read,grep,find,ls", "-p", bootstrapPromptStr]
-        -- Expand sbox args using bootstrap worktree/home paths
-        sboxArgExpanded =
-            map
-                (expandBootstrapArg worktreeDir home)
-                (agentSboxArgs cfg)
-        piConfigBind = ["--ro-bind", realPiAgentDir, realPiAgentDir]
-        -- Bind the main git repo so the worktree's .git file resolves inside sbox.
-        gitDirBind = ["--ro-bind", repoPath, repoPath]
-        args = sboxArgExpanded ++ piConfigBind ++ gitDirBind ++ nixBind ++ ["--"] ++ runnerArgs
+    let expand =
+            expandSandboxArg
+                SandboxPaths{sandboxWorktree = worktreeDir, sandboxHome = home, sandboxSessionId = ""}
+        runnerArgs = [agentRunnerCommand cfg, "--tools", "read,grep,find,ls", "-p", T.unpack bootstrapPrompt]
+        args =
+            map expand (agentSboxArgs cfg)
+                ++ bindPathReadOnly piConfigDir
+                -- The worktree's .git file resolves into the main repo inside sbox.
+                ++ bindPathReadOnly repoPath
+                ++ nixBind
+                ++ ["--"]
+                ++ runnerArgs
         process =
             (proc (agentSboxCommand cfg) args)
                 { cwd = Just worktreeDir
@@ -211,13 +209,6 @@ drainHandle Nothing = return ()
 drainHandle (Just h) = do
     _ <- BS.hGetContents h
     return ()
-
-expandBootstrapArg :: FilePath -> FilePath -> Text -> String
-expandBootstrapArg worktreeDir home arg =
-    T.unpack $
-        T.replace "{worktree}" (T.pack worktreeDir) $
-            T.replace "{home}" (T.pack home) $
-                T.replace "{sessionRoot}" (T.pack (takeDirectory worktreeDir)) arg
 
 findSessionFile :: FilePath -> IO (Maybe FilePath)
 findSessionFile piSessionDir = do

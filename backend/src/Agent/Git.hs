@@ -143,6 +143,7 @@ listAgentSessions = do
     let ordered = sortOn (Down . createdAt) sessions
     mapM (loadAgentSessionView . sessionId) ordered
 
+loadAgentSessionView :: Text -> ExceptT String IO AgentSessionView
 loadAgentSessionView sid = do
     session_ <- loadSessionOrThrow sid
     state <- collectGitState session_
@@ -158,10 +159,6 @@ renameAgentSession sid rawName = do
             saveSessionUpdate session_{sessionName = Just name}
             loadAgentSessionView sid
 
-{- | Record a name for a chat that has none. A name that appeared meanwhile is
-a rename by the user and wins, so a generated title never replaces a chosen
-one.
--}
 nameUnnamedAgentSession :: Text -> Text -> ExceptT String IO ()
 nameUnnamedAgentSession sid title = do
     session_ <- loadSessionOrThrow sid

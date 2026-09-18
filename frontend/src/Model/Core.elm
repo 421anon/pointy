@@ -385,15 +385,38 @@ agentInteractionsBlocked agentState =
            )
 
 
-
--- | Steering is allowed while a turn streams, so the stream itself must not
--- | block submission; every other busy state (request in flight, changeset
--- | work, pending rename save, loading chats) still does.
-
-
 agentSubmissionBlocked : AgentState -> Bool
 agentSubmissionBlocked agentState =
     agentInteractionsBlocked { agentState | activeTurnStream = Nothing }
+
+
+agentTurnActive : AgentSessionView -> AgentState -> Bool
+agentTurnActive view agentState =
+    (agentState.activeTurnStream /= Nothing)
+        || (view.session.activeTurnId /= Nothing)
+        || (view.session.status == "running")
+
+
+mapLastChatTurn : (ChatTurn -> ChatTurn) -> List ChatEntry -> List ChatEntry
+mapLastChatTurn update entries =
+    case List.reverse entries of
+        (ChatTurnEntry last) :: rest ->
+            List.reverse (ChatTurnEntry (update last) :: rest)
+
+        (ChatChangesetEntry _) :: _ ->
+            entries
+
+        [] ->
+            entries
+
+
+finishPending : ChatTurnStatus -> ChatTurn -> ChatTurn
+finishPending status turn =
+    if turn.status == ChatPending then
+        { turn | status = status }
+
+    else
+        turn
 
 
 agentSessionArchived : String -> Bool

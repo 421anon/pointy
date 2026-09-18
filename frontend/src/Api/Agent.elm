@@ -169,6 +169,7 @@ sessionDecoder =
         |> required "updatedAt" updatedAtDecoder
 
 
+
 -- | Backend "updatedAt" is RFC3339 with a fractional part; parse the fraction
 -- | separately so renames that land within the same millisecond stay ordered.
 

@@ -3,18 +3,18 @@
 
 module Agent.Title (generateSessionTitle) where
 
-import Agent.Sandbox (expandSessionArg, nixDaemonBindArgs, runnerConfigArgs, runnerEnvironment)
+import Agent.Sandbox (bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sessionPaths)
 import Agent.Session (AgentSession (..))
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
 import Control.Exception (IOException, try)
-import Data.Maybe (listToMaybe)
+import Control.Lens (filtered, folded, lastOf, to)
+import Data.Either (fromRight)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeDirectory, (</>))
 import System.IO (Handle, hClose)
 import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
@@ -22,27 +22,19 @@ import System.Timeout (timeout)
 titleTimeoutSeconds :: Int
 titleTimeoutSeconds = 60
 
--- | An answer longer than this is prose, not a title.
 titleMaxLength :: Int
 titleMaxLength = 60
 
 titleMaxWords :: Int
 titleMaxWords = 10
 
-{- | Ask the runner to name a chat after the request that opened it.
-
-This is a throwaway completion: no tools, no session file, and the request
-arrives on stdin (pi merges piped stdin into the print-mode prompt), so a long
-or quote-heavy request never has to survive an argument list. It runs in the
-chat's own sandbox but touches nothing the chat owns.
--}
 generateSessionTitle :: AgentConfig -> AgentSession -> Text -> IO (Either String Text)
 generateSessionTitle cfg session_ request = do
-    realHome <- getHomeDirectory
     nixBind <- nixDaemonBindArgs
-    let piConfigDir = realHome </> ".pi" </> "agent"
-        runnerHome = takeDirectory (worktreePath session_) </> "home"
-        expand = expandSessionArg session_ ""
+    piConfigDir <- piAgentConfigDir
+    let paths = sessionPaths session_
+        runnerHome = sandboxHome paths
+        expand = expandSandboxArg paths
         runnerArgs =
             agentRunnerCommand cfg
                 : ["--no-session", "--no-tools"]
@@ -50,7 +42,7 @@ generateSessionTitle cfg session_ request = do
                 ++ ["-p", T.unpack (agentTitlePrompt cfg)]
         args =
             map expand (agentSboxArgs cfg)
-                ++ ["--ro-bind", piConfigDir, piConfigDir]
+                ++ bindPathReadOnly piConfigDir
                 ++ nixBind
                 ++ ["--"]
                 ++ runnerArgs
@@ -93,19 +85,15 @@ generateSessionTitle cfg session_ request = do
         Right _ -> return $ Left "runner pipes unavailable"
 
 readHandleText :: Handle -> IO Text
-readHandleText handle = do
-    result <- try (TIO.hGetContents handle) :: IO (Either IOException Text)
-    return $ either (const "") id result
+readHandleText handle =
+    fromRight "" <$> (try (TIO.hGetContents handle) :: IO (Either IOException Text))
 
-{- | The one short line a model's print-mode answer is supposed to be, with the
-decoration models add anyway removed. Anything wordier is rejected: falling
-back to the opening request beats showing a paragraph as a title.
--}
 titleFromOutput :: Text -> Maybe Text
 titleFromOutput output = do
-    line <- listToMaybe (reverse (filter (not . T.null) (map T.strip (T.lines output))))
-    let title = T.unwords (T.words (T.dropAround isNoise line))
-    if T.null title || T.length title > titleMaxLength || length (T.words title) > titleMaxWords
+    line <- lastOf (folded . to T.strip . filtered (not . T.null)) (T.lines output)
+    let titleWords = T.words (T.dropAround isNoise line)
+        title = T.unwords titleWords
+    if T.null title || T.length title > titleMaxLength || length titleWords > titleMaxWords
         then Nothing
         else Just title
   where

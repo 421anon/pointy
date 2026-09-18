@@ -680,6 +680,10 @@ viewError session =
 
 viewPrompt : Bool -> Bool -> Bool -> Bool -> Bool -> Html (Flow Model ())
 viewPrompt runnerActive sendingPrompt stopping composeBlocked submitBlocked =
+    let
+        steering =
+            runnerActive || stopping
+    in
     Html.div [ class "agent-panel__composer" ]
         [ Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
@@ -693,60 +697,61 @@ viewPrompt runnerActive sendingPrompt stopping composeBlocked submitBlocked =
                 ]
                 []
             , Html.div [ class "agent-panel__composer-actions" ]
-                (if runnerActive || stopping then
-                    [ Html.button
-                        [ class "btn agent-panel__run-button"
-                        , disabled submitBlocked
-                        , attribute "aria-busy" (boolText sendingPrompt)
-                        , Events.onClick Actions.submitAgentPrompt
-                        , title "Steer the running agent (Ctrl/⌘+Enter)"
-                        ]
-                        [ viewButtonContent False "Steer" ]
-                    , Html.button
-                        [ class "btn agent-panel__run-button agent-panel__stop-button"
-                        , disabled stopping
-                        , Events.onClick Actions.stopAgentTurn
-                        , title "Stop the agent"
-                        ]
-                        [ viewButtonContent False
-                            (if stopping then
-                                "Stopping..."
-
-                             else
-                                "Stop"
-                            )
-                        , if stopping then
-                            viewButtonSpinner
-
-                          else
-                            View.Icons.icon False "stop_circle"
-                        ]
-                    ]
-
-                 else
-                    [ Html.button
-                        [ class "btn agent-panel__run-button"
-                        , disabled submitBlocked
-                        , attribute "aria-busy" (boolText sendingPrompt)
-                        , Events.onClick Actions.submitAgentPrompt
-                        , title "Send message (Ctrl/⌘+Enter)"
-                        ]
-                        [ viewButtonContent False
-                            (if sendingPrompt then
-                                "Sending..."
-
-                             else
-                                "Send"
-                            )
-                        , if sendingPrompt then
-                            viewButtonSpinner
-
-                          else
-                            Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
-                        ]
-                    ]
-                )
+                [ viewSubmitButton steering sendingPrompt submitBlocked
+                , Html.viewIf steering (viewStopButton stopping)
+                ]
             ]
+        ]
+
+
+viewSubmitButton : Bool -> Bool -> Bool -> Html (Flow Model ())
+viewSubmitButton steering sendingPrompt submitBlocked =
+    Html.button
+        [ class "btn agent-panel__run-button"
+        , disabled submitBlocked
+        , attribute "aria-busy" (boolText sendingPrompt)
+        , Events.onClick Actions.submitAgentPrompt
+        , title
+            (if steering then
+                "Steer the running agent (Ctrl/⌘+Enter)"
+
+             else
+                "Send message (Ctrl/⌘+Enter)"
+            )
+        ]
+        (if steering then
+            [ viewButtonContent False "Steer" ]
+
+         else if sendingPrompt then
+            [ viewButtonContent False "Sending...", viewButtonSpinner ]
+
+         else
+            [ viewButtonContent False "Send"
+            , Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ]
+            ]
+        )
+
+
+viewStopButton : Bool -> Html (Flow Model ())
+viewStopButton stopping =
+    Html.button
+        [ class "btn agent-panel__run-button agent-panel__stop-button"
+        , disabled stopping
+        , Events.onClick Actions.stopAgentTurn
+        , title "Stop the agent"
+        ]
+        [ viewButtonContent False
+            (if stopping then
+                "Stopping..."
+
+             else
+                "Stop"
+            )
+        , if stopping then
+            viewButtonSpinner
+
+          else
+            View.Icons.icon False "stop_circle"
         ]
 
 

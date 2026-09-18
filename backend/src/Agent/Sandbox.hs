@@ -1,19 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Agent.Sandbox (
+    SandboxPaths (..),
+    sessionPaths,
+    expandSandboxArg,
+    bindPath,
+    bindPathReadOnly,
     nixDaemonBindArgs,
+    piAgentConfigDir,
     runnerEnvironment,
     runnerConfigArgs,
-    expandSessionArg,
 ) where
 
 import Agent.Session (AgentSession (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, getHomeDirectory)
 import System.Environment (getEnvironment)
-import System.FilePath (takeDirectory)
+import System.FilePath (takeDirectory, (</>))
 
 nixCompatSocket :: FilePath
 nixCompatSocket = "/run/nix-daemon-socket"
@@ -23,27 +28,51 @@ nixDaemonBindArgs = do
     exists <- doesFileExist nixCompatSocket
     return $
         if exists
-            then ["--bind", "/run/nix-daemon-socket", "/var/run/nix-daemon-socket"]
+            then ["--bind", nixCompatSocket, "/var/run/nix-daemon-socket"]
             else []
 
-fallbackPath :: String
-fallbackPath = "/run/current-system/sw/bin:/usr/bin:/bin"
+bindPath :: FilePath -> [String]
+bindPath path = ["--bind", path, path]
 
-{- | The environment a sandboxed runner gets: a PATH, the caller's own
-variables, then the host's identity and provider keys. sbox-inner runs
-`set -euo pipefail` and references USER/SHELL/etc., so those have to survive;
-everything else is dropped so the runner never inherits the backend's Git or
-SSH credentials.
--}
+bindPathReadOnly :: FilePath -> [String]
+bindPathReadOnly path = ["--ro-bind", path, path]
+
+piAgentConfigDir :: IO FilePath
+piAgentConfigDir = (\home -> home </> ".pi" </> "agent") <$> getHomeDirectory
+
+data SandboxPaths = SandboxPaths
+    { sandboxWorktree :: FilePath
+    , sandboxHome :: FilePath
+    , sandboxSessionId :: Text
+    }
+
+sessionPaths :: AgentSession -> SandboxPaths
+sessionPaths session_ =
+    SandboxPaths
+        { sandboxWorktree = worktreePath session_
+        , sandboxHome = takeDirectory (worktreePath session_) </> "home"
+        , sandboxSessionId = sessionId session_
+        }
+
+expandSandboxArg :: SandboxPaths -> Text -> String
+expandSandboxArg paths = T.unpack . flip (foldr (uncurry T.replace)) placeholders
+  where
+    placeholders =
+        [ ("{worktree}", T.pack (sandboxWorktree paths))
+        , ("{home}", T.pack (sandboxHome paths))
+        , ("{sessionRoot}", T.pack (takeDirectory (sandboxWorktree paths)))
+        , ("{sessionId}", sandboxSessionId paths)
+        ]
+
 runnerEnvironment :: [(String, String)] -> IO [(String, String)]
 runnerEnvironment ownVars = do
     baseEnv <- getEnvironment
-    let pathValue = fromMaybe fallbackPath (lookup "PATH" baseEnv)
     return $
-        ("PATH", pathValue)
+        ("PATH", fromMaybe fallbackPath (lookup "PATH" baseEnv))
             : ownVars
-            ++ [(name, value) | (name, value) <- baseEnv, name `elem` passthroughKeys]
+            ++ filter ((`elem` passthroughKeys) . fst) baseEnv
   where
+    fallbackPath = "/run/current-system/sw/bin:/usr/bin:/bin"
     passthroughKeys =
         [ "USER"
         , "LOGNAME"
@@ -66,28 +95,13 @@ runnerEnvironment ownVars = do
         , "GEMINI_API_KEY"
         ]
 
-{- | Configured runner arguments with the flags the backend owns removed: it
-picks the mode, the conversation to continue and how the prompt arrives. What
-is left describes the model, and is expanded by the caller.
--}
 runnerConfigArgs :: (Text -> String) -> [Text] -> [String]
 runnerConfigArgs expand = strip
   where
     strip [] = []
-    strip (flag : _value : rest)
-        | flag `elem` ["--mode", "--session", "--fork"] = strip rest
     strip (arg : rest)
-        | arg `elem` ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"] = strip rest
+        | arg `elem` managedWithValue = strip (drop 1 rest)
+        | arg `elem` managedFlags = strip rest
         | otherwise = expand arg : strip rest
-
--- | Fill a configured argument's placeholders with this chat's paths.
-expandSessionArg :: AgentSession -> Text -> Text -> String
-expandSessionArg session_ promptText arg =
-    let sessionRoot = T.pack (takeDirectory (worktreePath session_))
-        runnerHome = sessionRoot <> "/home"
-     in T.unpack $
-            T.replace "{prompt}" promptText $
-                T.replace "{worktree}" (T.pack (worktreePath session_)) $
-                    T.replace "{home}" runnerHome $
-                        T.replace "{sessionRoot}" sessionRoot $
-                            T.replace "{sessionId}" (sessionId session_) arg
+    managedWithValue = ["--mode", "--session", "--fork"]
+    managedFlags = ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"]
