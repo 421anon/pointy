@@ -2905,7 +2905,7 @@ applyPersistedTranscript view agentState =
     { agentState
         | chatEntries = persistedTranscript view
         , chunkBuffer = ""
-        , pendingQuestionOptions = Nothing
+        , pendingQuestionOptions = persistedQuestionOptions view
     }
 
 
@@ -2918,15 +2918,40 @@ shouldKeepLiveTranscript view agentState =
 
 persistedTranscript : Model.AgentSessionView -> List Model.ChatEntry
 persistedTranscript view =
-    let
-        turnForTranscript turn =
-            if Just turn.turnId == view.session.activeTurnId then
-                { turn | turnLog = "" }
+    List.foldl appendPersistedTurn [] (replayedTurns view)
 
-            else
-                turn
-    in
-    List.foldl appendPersistedTurn [] (List.map turnForTranscript view.turns)
+
+
+-- A refresh must keep the buttons of a question that is still open.
+
+
+persistedQuestionOptions : Model.AgentSessionView -> Maybe (List String)
+persistedQuestionOptions =
+    List.foldl questionOptionsAfterLine Nothing << replayedTurnLogLines
+
+
+replayedTurnLogLines : Model.AgentSessionView -> List String
+replayedTurnLogLines =
+    List.concatMap turnLogLines << replayedTurns
+
+
+replayedTurns : Model.AgentSessionView -> List Model.AgentTurn
+replayedTurns view =
+    List.map (withoutLiveStreamedLog view) view.turns
+
+
+withoutLiveStreamedLog : Model.AgentSessionView -> Model.AgentTurn -> Model.AgentTurn
+withoutLiveStreamedLog view turn =
+    if Just turn.turnId == view.session.activeTurnId then
+        { turn | turnLog = "" }
+
+    else
+        turn
+
+
+turnLogLines : Model.AgentTurn -> List String
+turnLogLines =
+    List.filter (not << String.isEmpty) << String.split "\n" << .turnLog
 
 
 isChangesetLifecycleTurn : Model.AgentTurn -> Bool
@@ -2952,9 +2977,7 @@ appendPersistedTurn turn entries =
                 entries ++ [ Model.ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
 
             logLines =
-                turn.turnLog
-                    |> String.split "\n"
-                    |> List.filter (not << String.isEmpty)
+                turnLogLines turn
 
             replayed =
                 List.foldl appendChatLine seeded logLines
@@ -3237,17 +3260,18 @@ selectAgentSessionAt : String -> Maybe String -> Flow Model ()
 selectAgentSessionAt sessionId mTurnId =
     Flow.over agent
         (\s ->
-            { s
-                | selectedSessionId = Just sessionId
-                , activeTurnStream = Nothing
-                , chatEntries =
+            let
+                selectedView =
                     s.sessions
                         |> ApiData.toMaybe
                         |> Maybe.andThen (List.find (\view -> view.session.sessionId == sessionId))
-                        |> Maybe.map persistedTranscript
-                        |> Maybe.withDefault []
+            in
+            { s
+                | selectedSessionId = Just sessionId
+                , activeTurnStream = Nothing
+                , chatEntries = selectedView |> Maybe.map persistedTranscript |> Maybe.withDefault []
                 , chunkBuffer = ""
-                , pendingQuestionOptions = Nothing
+                , pendingQuestionOptions = selectedView |> Maybe.andThen persistedQuestionOptions
                 , isSessionListOpen = False
                 , sessionNameEdit = Nothing
                 , highlightTurnId = mTurnId
@@ -4000,8 +4024,20 @@ questionOptionsAfterLine rawLine pending =
         ( "steering", _ ) ->
             Nothing
 
+        ( "system", body ) ->
+            if isTurnFinishedLine body then
+                Nothing
+
+            else
+                pending
+
         _ ->
             pending
+
+
+isTurnFinishedLine : String -> Bool
+isTurnFinishedLine =
+    String.startsWith "Agent turn finished with exit code "
 
 
 splitOnLastNewline : String -> ( String, String )
