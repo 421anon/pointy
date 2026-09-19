@@ -810,8 +810,13 @@ viewChatTurns resolveMention agent sessionView runnerActive interactionsBlocked 
                 Nothing ->
                     []
 
+        questionNodes =
+            agent.pendingQuestionOptions
+                |> Maybe.map (viewAgentQuestion (Model.agentSubmissionBlocked agent) >> List.singleton)
+                |> Maybe.withDefault []
+
         content =
-            List.map (viewChatEntry resolveMention interactionsBlocked sessionView.session.sessionId agent.highlightTurnId) agent.chatEntries ++ pendingChangesetNodes
+            List.map (viewChatEntry resolveMention interactionsBlocked sessionView.session.sessionId agent.highlightTurnId) agent.chatEntries ++ pendingChangesetNodes ++ questionNodes
     in
     if List.isEmpty content then
         Html.div [ class "agent-panel__chat agent-panel__chat--empty", id Actions.agentChatId ]
@@ -954,6 +959,26 @@ viewAgentMessage resolveMention turn =
             (\err -> Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ])
             failedMessage
         ]
+
+
+viewAgentQuestion : Bool -> List String -> Html (Flow Model ())
+viewAgentQuestion answerBlocked options =
+    Html.div [ class "agent-panel__question" ]
+        [ Html.div [ class "agent-panel__question-options" ]
+            (List.indexedMap (\index option -> viewQuestionOption answerBlocked (index + 1) option) options)
+        , Html.span [ class "agent-panel__question-hint" ]
+            [ Html.text "Or type your own answer below." ]
+        ]
+
+
+viewQuestionOption : Bool -> Int -> String -> Html (Flow Model ())
+viewQuestionOption answerBlocked optionNumber option =
+    Html.button
+        [ class "btn agent-panel__question-option"
+        , disabled answerBlocked
+        , Events.onClick (Actions.answerAgentQuestion optionNumber)
+        ]
+        [ Html.text option ]
 
 
 pendingChangeset : Model.AgentSessionView -> Maybe Model.ChatChangeset

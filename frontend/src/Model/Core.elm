@@ -330,6 +330,7 @@ type alias AgentState =
     , activeTurnStream : Maybe String
     , chatEntries : List ChatEntry
     , chunkBuffer : String
+    , pendingQuestionOptions : Maybe (List String)
     , showArchived : Bool
     , changesetOperation : Maybe ChangesetOperation
     , request : Maybe AgentRequest
@@ -351,6 +352,7 @@ initAgentState =
     , activeTurnStream = Nothing
     , chatEntries = []
     , chunkBuffer = ""
+    , pendingQuestionOptions = Nothing
     , showArchived = False
     , changesetOperation = Nothing
     , request = Nothing

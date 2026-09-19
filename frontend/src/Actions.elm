@@ -2902,7 +2902,11 @@ mergeSessionView view agentState =
 
 applyPersistedTranscript : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
 applyPersistedTranscript view agentState =
-    { agentState | chatEntries = persistedTranscript view, chunkBuffer = "" }
+    { agentState
+        | chatEntries = persistedTranscript view
+        , chunkBuffer = ""
+        , pendingQuestionOptions = Nothing
+    }
 
 
 shouldKeepLiveTranscript : Model.AgentSessionView -> Model.AgentState -> Bool
@@ -3243,6 +3247,7 @@ selectAgentSessionAt sessionId mTurnId =
                         |> Maybe.map persistedTranscript
                         |> Maybe.withDefault []
                 , chunkBuffer = ""
+                , pendingQuestionOptions = Nothing
                 , isSessionListOpen = False
                 , sessionNameEdit = Nothing
                 , highlightTurnId = mTurnId
@@ -3772,6 +3777,28 @@ steerAgentTurn view promptSource =
         )
 
 
+answerAgentQuestion : Int -> Flow Model ()
+answerAgentQuestion optionRow =
+    withSelectedAgentSession
+        (\view ->
+            withAgentRequestUnless Model.agentSubmissionBlocked
+                (Model.SendingAgentPrompt view.session.sessionId)
+                (AgentApi.steer view.session.sessionId (String.fromInt optionRow)
+                    |> FlowError.foldResult (always (Flow.pure ()))
+                        (\err ->
+                            addToast False
+                                (case err of
+                                    Http.BadStatus 409 ->
+                                        "The question is no longer open."
+
+                                    _ ->
+                                        Http.errorMessage err
+                                )
+                        )
+                )
+        )
+
+
 investigateStepWithAgent : Int -> String -> Flow Model ()
 investigateStepWithAgent stepId log =
     Flow.over agent (\s -> { s | isPanelOpen = True })
@@ -3909,7 +3936,7 @@ onAgentTurnIn value =
 
         Ok (Model.AgentTurnDone turnId) ->
             withActiveAgentTurn turnId
-                (Flow.over agent (\s -> { s | activeTurnStream = Nothing })
+                (Flow.over agent (\s -> { s | activeTurnStream = Nothing, pendingQuestionOptions = Nothing })
                     |> Flow.seq scrollAgentChatToBottom
                     |> Flow.seq
                         (Flow.get
@@ -3960,7 +3987,21 @@ ingestAgentChunk chunk agentState =
     { agentState
         | chunkBuffer = remainder
         , chatEntries = nextChatEntries
+        , pendingQuestionOptions = List.foldl questionOptionsAfterLine agentState.pendingQuestionOptions keptLines
     }
+
+
+questionOptionsAfterLine : String -> Maybe (List String) -> Maybe (List String)
+questionOptionsAfterLine rawLine pending =
+    case splitLogPrefix rawLine of
+        ( "question", body ) ->
+            Decode.decodeString (Decode.list Decode.string) (String.trim body) |> Result.toMaybe
+
+        ( "steering", _ ) ->
+            Nothing
+
+        _ ->
+            pending
 
 
 splitOnLastNewline : String -> ( String, String )
@@ -4018,6 +4059,9 @@ splitLogPrefix line =
 
     else if String.startsWith "[steering] " line then
         ( "steering", String.dropLeft 11 line )
+
+    else if String.startsWith "[question] " line then
+        ( "question", String.dropLeft 11 line )
 
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )

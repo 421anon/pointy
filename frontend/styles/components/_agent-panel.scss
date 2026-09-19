@@ -755,6 +755,36 @@
 }
 
 
+.agent-panel__question {
+  align-self: stretch;
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  border: 1px solid var(--state-info);
+  border-radius: 10px;
+  background: var(--state-info-outline);
+}
+
+.agent-panel__question-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2xs);
+  min-width: 0;
+}
+
+.agent-panel__question-option {
+  text-align: left;
+}
+
+.agent-panel__question-hint {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+
 /* Markdown-rendered content inside agent chat bubbles */
 .agent-panel__chat-content {
   display: flex;
