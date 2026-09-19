@@ -22,10 +22,10 @@ let
   piConfigLink = ''
     rm -rf /home/backend/.pi
     cp -r ${lib.escapeShellArg (toString cfg.piConfigDir)} /home/backend/.pi
-    mkdir -p /home/backend/.pi/agent/extensions
-    ln -sfn ${piExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
     chown -R backend:backend /home/backend/.pi
     chmod -R u=rwX,go= /home/backend/.pi
+    mkdir -p -m u=rwx,go= /home/backend/.pi/agent/extensions
+    ln -sfn ${piExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
   '';
 in
 {
