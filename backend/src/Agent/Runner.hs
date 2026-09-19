@@ -8,6 +8,12 @@ module Agent.Runner (
     steerAgentTurn,
     turnLogStreamHandler,
     streamLoop,
+    RunnerInput,
+    handleDialog,
+    handleRpcEventSafely,
+    newRunnerInput,
+    streamHandle,
+    planSteer,
 ) where
 
 import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
@@ -38,7 +44,7 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
-import Control.Exception (IOException, SomeException, finally, try)
+import Control.Exception (IOException, SomeException, catch, displayException, finally, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
@@ -48,7 +54,7 @@ import qualified Data.Aeson as Aeson
 import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.List.NonEmpty (nonEmpty)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import qualified Data.Set as Set
@@ -87,6 +93,18 @@ data RunnerInput = RunnerInput
     , inputRetrying :: Bool
     , inputQuestion :: Maybe PendingQuestion
     }
+
+newRunnerInput :: Handle -> IO (MVar (Maybe RunnerInput))
+newRunnerInput handle =
+    newMVar $
+        Just
+            RunnerInput
+                { inputHandle = handle
+                , inputPending = Nothing
+                , inputPromptSeen = False
+                , inputRetrying = False
+                , inputQuestion = Nothing
+                }
 
 {-# NOINLINE runnerInputs #-}
 runnerInputs :: TVar (Map.Map Text (MVar (Maybe RunnerInput)))
@@ -346,11 +364,11 @@ runTurnProcess cfg session_ turn prompt isFirstTurn =
             let mWarmFile = case mWarmResult of
                     Just (Right meta) -> Just (warmSessionFile meta)
                     _ -> Nothing
-            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either IOException ExitCode)
+            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either SomeException ExitCode)
             exitCode <- case result of
                 Left err -> do
-                    appendLogLine cfg (turnLogPath turn) "system" ("Runner failed to start: " <> T.pack (show err))
-                    return $ ExitFailure 127
+                    appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
+                    return $ ExitFailure 1
                 Right code -> return code
             finishTurn cfg session_ turn exitCode
 
@@ -412,7 +430,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (Just hin, Just hout, mErr, ph) <- createProcess process
-    input <- newMVar (Just (RunnerInput hin Nothing False False Nothing))
+    input <- newRunnerInput hin
     let cleanup = do
             atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
             closeRunnerInput input
@@ -422,7 +440,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText]
                 writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
                 atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
-            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEvent cfg (turnLogPath turn) input) hout
+            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
             errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr" (const $ return ())) mErr
             mExit <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
             exitCode <- case mExit of
@@ -477,6 +495,9 @@ dialogDecline :: Text -> Aeson.Value
 dialogDecline dialogId =
     Aeson.object ["type" Aeson..= ("extension_ui_response" :: Text), "id" Aeson..= dialogId, "cancelled" Aeson..= True]
 
+withoutQuestionOf :: Text -> Maybe PendingQuestion -> Maybe PendingQuestion
+withoutQuestionOf dialogId = mfilter ((/= dialogId) . questionDialogId)
+
 chosenIndex :: Int -> Text -> Maybe Int
 chosenIndex optionCount = mfilter (`elem` [1 .. optionCount]) . readMaybe . T.unpack . T.strip
 
@@ -495,7 +516,7 @@ answerQuestion question reply = (dialogResponse (questionDialogId question) dial
     carried = question{questionStashedReply = Just reply} <$ guard (isJust freeTextRow && isNothing pick)
 
 questionFreeTextRow :: PendingQuestion -> Maybe Int
-questionFreeTextRow = fmap length . nonEmpty . questionRows
+questionFreeTextRow = fmap length . NE.nonEmpty . questionRows
 
 numberedQuestionRows :: PendingQuestion -> [(Int, Text)]
 numberedQuestionRows = zip [1 ..] . questionRows
@@ -520,11 +541,10 @@ handleDialog cfg logPath input event =
   where
     rows = event ^.. key "options" . values . _String
     title = event ^. key "title" . _String
-    -- The last row is the package's own "type something" prompt, typed in the composer.
-    offeredRows = init rows
+    pickableRows = maybe [] NE.init (NE.nonEmpty rows)
     dialogLines =
         [("stdout", line) | line <- "" : T.splitOn "\n" title ++ rows ++ [""]]
-            ++ [("question", jsonLine offeredRows) | not (null offeredRows)]
+            ++ [("question", jsonLine pickableRows) | not (null pickableRows)]
     answerDialog :: Text -> Maybe RunnerInput -> IO (Maybe RunnerInput, [(Text, Text)])
     answerDialog _ Nothing = return (Nothing, [])
     answerDialog dialogId (Just control) = case inputQuestion control of
@@ -587,6 +607,23 @@ handleRpcEvent cfg logPath input event =
     send command = withMVar input $ mapM_ (\control -> writeToRunner control (Aeson.object ["type" Aeson..= (command :: Text)]))
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
+
+-- A failing handler must not kill the reader: pi writes into the pipe the reader
+-- drains, and waits on the dialogs the reader answers.
+handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleRpcEventSafely cfg logPath input event =
+    handleRpcEvent cfg logPath input event `catch` \(ex :: SomeException) ->
+        void (try (noteFailed ex) :: IO (Either SomeException ()))
+  where
+    noteFailed ex = do
+        appendLogLine cfg logPath "system" $
+            "Could not handle the runner's " <> eventKind <> " event: " <> T.pack (displayException ex)
+        when (event ^. key "type" . _String == "extension_ui_request") $
+            forM_ (event ^? key "id" . _String) declineAndForget
+    declineAndForget dialogId = do
+        void (try (withMVar input $ mapM_ (flip writeToRunner (dialogDecline dialogId))) :: IO (Either IOException ()))
+        modifyMVar_ input $ return . fmap (\control -> control{inputQuestion = withoutQuestionOf dialogId (inputQuestion control)})
+    eventKind = fromMaybe "unknown" (event ^? key "type" . _String)
 
 streamHandle :: AgentConfig -> FilePath -> Text -> Text -> (Aeson.Value -> IO ()) -> Handle -> IO Bool
 streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do

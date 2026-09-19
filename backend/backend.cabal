@@ -188,3 +188,24 @@ test-suite status-stream
 
   hs-source-dirs:   test
   default-language: Haskell2010
+
+test-suite dialog
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          Dialog.hs
+  -- The timeout around a blocking pipe read requires -threaded.
+  ghc-options:      -threaded
+  build-depends:
+    , aeson
+    , async
+    , backend
+    , base
+    , bytestring
+    , filepath
+    , stm
+    , temporary
+    , text
+    , unix
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
