@@ -38,7 +38,7 @@ import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, finally, try)
-import Control.Lens (failing, filtered, (^.), (^?))
+import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (forM_, guard, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
@@ -58,7 +58,7 @@ import Data.Time.Clock (getCurrentTime)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
-import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getFileSize)
+import System.Directory (copyFile, createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist, doesFileExist, getFileSize, getSymbolicLinkTarget, listDirectory, pathIsSymbolicLink, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
@@ -66,6 +66,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (sigKILL, signalProcess)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
+import Text.Read (readMaybe)
 import UserRepo (userRepoPath, withUserRepoExclusive)
 
 {-# NOINLINE activeRunners #-}
@@ -82,6 +83,7 @@ data RunnerInput = RunnerInput
     , inputPending :: Maybe (Text, TMVar Bool)
     , inputPromptSeen :: Bool
     , inputRetrying :: Bool
+    , inputQuestion :: Maybe PendingQuestion
     }
 
 {-# NOINLINE runnerInputs #-}
@@ -90,6 +92,8 @@ runnerInputs = unsafePerformIO $ newTVarIO Map.empty
 
 steerAckTimeoutMicros :: Int
 steerAckTimeoutMicros = 10 * 1000000
+
+data SteerOutcome = SteerFailed | SteerAnswered | SteerPrompted
 
 steerAgentTurn :: Text -> Text -> ExceptT String IO ()
 steerAgentTurn sid rawPrompt = do
@@ -108,20 +112,32 @@ steerAgentTurn sid rawPrompt = do
                 , "message" Aeson..= prompt
                 , "streamingBehavior" Aeson..= ("steer" :: Text)
                 ]
-    sent <- liftIO $ modifyMVar input $ \current -> case current of
-        Just control | Nothing <- inputPending control -> do
-            result <- try (writeRpc (inputHandle control) steerCommand)
-            return $ case result :: Either IOException () of
-                Left _ -> (current, False)
-                Right () -> (Just control{inputPending = Just (requestId, reply)}, True)
-        _ -> return (current, False)
-    unless sent $ Except.throwError "steering_failed"
-    accepted <- liftIO $ timeout steerAckTimeoutMicros (atomically $ takeTMVar reply)
-    unless (accepted == Just True) $ Except.throwError "steering_failed"
+    outcome <- liftIO $ modifyMVar input $ \current -> case current of
+        Just control
+            | Just question <- inputQuestion control ->
+                let (response, stashed) = answerQuestion question prompt
+                 in deliver control response control{inputQuestion = stashed} SteerAnswered
+            | Nothing <- inputPending control ->
+                deliver control steerCommand control{inputPending = Just (requestId, reply)} SteerPrompted
+        _ -> return (current, SteerFailed)
+    case outcome of
+        SteerFailed -> Except.throwError "steering_failed"
+        SteerAnswered -> liftIO $ do
+            cfg <- configAgent <$> (resolveConfigPath >>= loadConfig)
+            logPath <- turnLogFilePath sid tid
+            appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
+        SteerPrompted -> do
+            accepted <- liftIO $ timeout steerAckTimeoutMicros (atomically $ takeTMVar reply)
+            unless (accepted == Just True) $ Except.throwError "steering_failed"
   where
     lookupForSession err var =
         liftIO (atomically (Map.lookup sid <$> readTVar var))
             >>= maybe (Except.throwError err) return
+    deliver control command updated outcome = do
+        result <- try (writeRpc (inputHandle control) command)
+        return $ case result :: Either IOException () of
+            Left _ -> (Just control, SteerFailed)
+            Right () -> (Just updated, outcome)
 
 writeRpc :: Handle -> Aeson.Value -> IO ()
 writeRpc handle command = do
@@ -382,7 +398,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (Just hin, Just hout, mErr, ph) <- createProcess process
-    input <- newMVar (Just (RunnerInput hin Nothing False False))
+    input <- newMVar (Just (RunnerInput hin Nothing False False Nothing))
     let cleanup = do
             atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
             closeRunnerInput input
@@ -411,6 +427,8 @@ seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
     srcDir <- piAgentConfigDir
     let dstDir = runnerHome </> ".pi" </> "agent"
+        srcExtensions = srcDir </> "extensions"
+        dstExtensions = dstDir </> "extensions"
     forM_ ["models.json", "settings.json"] $ \name -> do
         let src = srcDir </> name
             dst = dstDir </> name
@@ -418,6 +436,74 @@ seedPiConfig runnerHome = do
         when exists $ do
             createDirectoryIfMissing True dstDir
             copyFile src dst
+    hasExtensions <- doesDirectoryExist srcExtensions
+    when hasExtensions $ do
+        removePathForcibly dstExtensions
+        createDirectoryIfMissing True dstExtensions
+        entries <- listDirectory srcExtensions
+        forM_ entries $ \name -> do
+            let src = srcExtensions </> name
+            isLink <- pathIsSymbolicLink src
+            when isLink $ do
+                target <- getSymbolicLinkTarget src
+                createDirectoryLink target (dstExtensions </> name)
+
+data PendingQuestion = PendingQuestion
+    { questionDialog :: Text
+    , questionSentinel :: Maybe Int
+    , questionStash :: Maybe Text
+    }
+
+dialogResponse :: Text -> Text -> Aeson.Value
+dialogResponse dialogId value =
+    Aeson.object ["type" Aeson..= ("extension_ui_response" :: Text), "id" Aeson..= dialogId, "value" Aeson..= value]
+
+dialogDecline :: Text -> Aeson.Value
+dialogDecline dialogId =
+    Aeson.object ["type" Aeson..= ("extension_ui_response" :: Text), "id" Aeson..= dialogId, "cancelled" Aeson..= True]
+
+chosenIndex :: Int -> Text -> Maybe Int
+chosenIndex optionCount reply = do
+    picked <- readMaybe (T.unpack (T.strip reply))
+    guard (picked >= 1 && picked <= optionCount)
+    return picked
+
+answerQuestion :: PendingQuestion -> Text -> (Aeson.Value, Maybe PendingQuestion)
+answerQuestion question reply = case questionSentinel question of
+    Nothing -> (dialogResponse (questionDialog question) reply, Nothing)
+    Just sentinel -> case chosenIndex (sentinel - 1) reply of
+        Just picked -> (dialogResponse (questionDialog question) (T.pack (show picked)), Nothing)
+        Nothing -> (dialogResponse (questionDialog question) (T.pack (show sentinel)), Just question{questionStash = Just reply})
+
+handleDialog :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleDialog cfg logPath input event =
+    case (event ^? key "id" . _String, event ^? key "method" . _String) of
+        (Just dialogId, Just method)
+            | method `elem` ["select", "input"] -> do
+                rendered <- modifyMVar input $ \current -> case current of
+                    Just control -> case inputQuestion control of
+                        Just question
+                            | Just stashed <- questionStash question -> do
+                                writeRpc (inputHandle control) (dialogResponse dialogId stashed)
+                                return (Just control{inputQuestion = Nothing}, False)
+                            | otherwise -> do
+                                writeRpc (inputHandle control) (dialogDecline dialogId)
+                                return (current, False)
+                        Nothing -> return (Just control{inputQuestion = Just (pendingFor dialogId)}, True)
+                    Nothing -> return (current, False)
+                when rendered $ mapM_ (appendLogLine cfg logPath "stdout") ("" : questionLines ++ [""])
+            | otherwise -> withMVar input $ mapM_ $ \control -> writeRpc (inputHandle control) (dialogDecline dialogId)
+        _ -> return ()
+  where
+    options = event ^.. key "options" . values . _String
+    title = event ^. key "title" . _String
+    questionLines = T.splitOn "\n" title ++ options
+    pendingFor dialogId =
+        PendingQuestion
+            { questionDialog = dialogId
+            , questionSentinel = if null options then Nothing else Just (length options)
+            , questionStash = Nothing
+            }
 
 -- Pi 0.75 emits agent_end before automatic retry/compaction events; check its state before EOF.
 handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
@@ -433,6 +519,7 @@ handleRpcEvent cfg logPath input event =
                     when (inputPromptSeen control) $
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
                     return control{inputPromptSeen = True}
+        Just "extension_ui_request" -> handleDialog cfg logPath input event
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True
         Just "auto_retry_end" -> do
