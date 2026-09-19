@@ -28,6 +28,9 @@ titleMaxLength = 60
 titleMaxWords :: Int
 titleMaxWords = 10
 
+titleSystemPrompt :: Text
+titleSystemPrompt = "You name chat sessions. Reply with the title only."
+
 generateSessionTitle :: AgentConfig -> AgentSession -> Text -> IO (Either String Text)
 generateSessionTitle cfg session_ request = do
     nixBind <- nixDaemonBindArgs
@@ -39,6 +42,7 @@ generateSessionTitle cfg session_ request = do
             agentRunnerCommand cfg
                 : ["--no-session", "--no-tools"]
                 ++ runnerConfigArgs expand (agentRunnerArgs cfg)
+                ++ ["--system-prompt", T.unpack titleSystemPrompt]
                 ++ ["-p", T.unpack (agentTitlePrompt cfg)]
         args =
             map expand (agentSboxArgs cfg)
