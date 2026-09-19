@@ -17,7 +17,7 @@ let
     ln -sfn ${lib.escapeShellArg (toString cfg.agentEnvFile)} /home/backend/agent-env
   '';
 
-  piExtension = pkgs.callPackage ./rpiv-ask-user-question.nix { };
+  rpivExtension = pkgs.callPackage ./rpiv-ask-user-question.nix { };
 
   piConfigLink = ''
     rm -rf /home/backend/.pi
@@ -25,7 +25,7 @@ let
     chown -R backend:backend /home/backend/.pi
     chmod -R u=rwX,go= /home/backend/.pi
     mkdir -p -m u=rwx,go= /home/backend/.pi/agent/extensions
-    ln -sfn ${piExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
+    ln -sfn ${rpivExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
   '';
 in
 {

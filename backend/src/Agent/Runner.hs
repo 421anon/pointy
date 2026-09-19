@@ -33,13 +33,14 @@ import Agent.Title (generateSessionTitle)
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
+import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, finally, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
-import Control.Monad (forM_, guard, unless, void, when)
+import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
 import Control.Monad.IO.Class (liftIO)
@@ -93,7 +94,20 @@ runnerInputs = unsafePerformIO $ newTVarIO Map.empty
 steerAckTimeoutMicros :: Int
 steerAckTimeoutMicros = 10 * 1000000
 
-data SteerOutcome = SteerFailed | SteerAnswered | SteerPrompted
+data SteerOutcome = SteerFailed | SteerAnsweredQuestion | SteerSentToAgent
+
+planSteer :: Text -> Text -> TMVar Bool -> RunnerInput -> Maybe (Aeson.Value, RunnerInput, SteerOutcome)
+planSteer prompt requestId reply control = case inputQuestion control of
+    Just question ->
+        let (response, carriedQuestion) = answerQuestion question prompt
+         in Just (response, control{inputQuestion = carriedQuestion}, SteerAnsweredQuestion)
+    Nothing ->
+        (steerCommand requestId prompt, control{inputPending = Just (requestId, reply)}, SteerSentToAgent)
+            <$ guard (isNothing (inputPending control))
+
+steerCommand :: Text -> Text -> Aeson.Value
+steerCommand requestId prompt =
+    Aeson.object ["id" Aeson..= requestId, "type" Aeson..= ("prompt" :: Text), "message" Aeson..= prompt, "streamingBehavior" Aeson..= ("steer" :: Text)]
 
 steerAgentTurn :: Text -> Text -> ExceptT String IO ()
 steerAgentTurn sid rawPrompt = do
@@ -103,45 +117,41 @@ steerAgentTurn sid rawPrompt = do
     stopped <- liftIO $ turnStopRequested tid
     when stopped $ Except.throwError "runner_stopping"
     input <- lookupForSession "runner_not_ready" runnerInputs
-    requestId <- liftIO newTurnId
-    reply <- liftIO newEmptyTMVarIO
-    let steerCommand =
-            Aeson.object
-                [ "id" Aeson..= requestId
-                , "type" Aeson..= ("prompt" :: Text)
-                , "message" Aeson..= prompt
-                , "streamingBehavior" Aeson..= ("steer" :: Text)
-                ]
-    outcome <- liftIO $ modifyMVar input $ \current -> case current of
-        Just control
-            | Just question <- inputQuestion control ->
-                let (response, stashed) = answerQuestion question prompt
-                 in deliver control response control{inputQuestion = stashed} SteerAnswered
-            | Nothing <- inputPending control ->
-                deliver control steerCommand control{inputPending = Just (requestId, reply)} SteerPrompted
-        _ -> return (current, SteerFailed)
+    (requestId, reply) <- liftIO $ (,) <$> newTurnId <*> newEmptyTMVarIO
+    outcome <- liftIO $ modifyMVar input (steerStep prompt requestId reply)
     case outcome of
         SteerFailed -> Except.throwError "steering_failed"
-        SteerAnswered -> liftIO $ do
-            cfg <- configAgent <$> (resolveConfigPath >>= loadConfig)
-            logPath <- turnLogFilePath sid tid
-            appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
-        SteerPrompted -> do
-            accepted <- liftIO $ timeout steerAckTimeoutMicros (atomically $ takeTMVar reply)
-            unless (accepted == Just True) $ Except.throwError "steering_failed"
+        SteerAnsweredQuestion -> logAnsweredSteer tid prompt
+        SteerSentToAgent -> awaitSteerAck reply
   where
     lookupForSession err var =
         liftIO (atomically (Map.lookup sid <$> readTVar var))
             >>= maybe (Except.throwError err) return
-    deliver control command updated outcome = do
-        result <- try (writeRpc (inputHandle control) command)
-        return $ case result :: Either IOException () of
-            Left _ -> (Just control, SteerFailed)
-            Right () -> (Just updated, outcome)
+    steerStep prompt requestId reply current =
+        case current >>= planSteer prompt requestId reply of
+            Just plan | Just control <- current -> sendSteerPlan control plan
+            _ -> return (current, SteerFailed)
+    -- A message that never went out must not be recorded as an accepted steer
+    -- or a consumed answer: nothing will ever acknowledge it.
+    sendSteerPlan :: RunnerInput -> (Aeson.Value, RunnerInput, SteerOutcome) -> IO (Maybe RunnerInput, SteerOutcome)
+    sendSteerPlan control (message, updatedControl, outcome) =
+        (try (writeToRunner control message) :: IO (Either IOException ()))
+            >>= return . either (const (Just control, SteerFailed)) (const (Just updatedControl, outcome))
+    -- The chat renders "steering" log lines as user messages.
+    logAnsweredSteer tid prompt = liftIO $ do
+        cfg <- configAgent <$> (resolveConfigPath >>= loadConfig)
+        logPath <- turnLogFilePath sid tid
+        appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
+    awaitSteerAck reply = do
+        accepted <- liftIO $ timeout steerAckTimeoutMicros (atomically $ takeTMVar reply)
+        unless (fromMaybe False accepted) $ Except.throwError "steering_failed"
+
+writeToRunner :: RunnerInput -> Aeson.Value -> IO ()
+writeToRunner = writeRpc . inputHandle
 
 writeRpc :: Handle -> Aeson.Value -> IO ()
-writeRpc handle command = do
-    LBS.hPut handle (Aeson.encode command <> "\n")
+writeRpc handle message = do
+    LBS.hPut handle (Aeson.encode message <> "\n")
     hFlush handle
 
 closeRunnerInput :: MVar (Maybe RunnerInput) -> IO ()
@@ -427,32 +437,33 @@ seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
     srcDir <- piAgentConfigDir
     let dstDir = runnerHome </> ".pi" </> "agent"
-        srcExtensions = srcDir </> "extensions"
-        dstExtensions = dstDir </> "extensions"
-    forM_ ["models.json", "settings.json"] $ \name -> do
-        let src = srcDir </> name
-            dst = dstDir </> name
-        exists <- doesFileExist src
-        when exists $ do
-            createDirectoryIfMissing True dstDir
-            copyFile src dst
-    hasExtensions <- doesDirectoryExist srcExtensions
+    present <- filterM (doesFileExist . (srcDir </>)) ["models.json", "settings.json"]
+    forM_ present $ \name -> do
+        createDirectoryIfMissing True dstDir
+        copyFile (srcDir </> name) (dstDir </> name)
+    seedExtensions (srcDir </> "extensions") (dstDir </> "extensions")
+
+{- | Only symlinks are re-created: the module links a store path the sandbox
+already sees read-only.
+-}
+seedExtensions :: FilePath -> FilePath -> IO ()
+seedExtensions src dst = do
+    hasExtensions <- doesDirectoryExist src
     when hasExtensions $ do
-        removePathForcibly dstExtensions
-        createDirectoryIfMissing True dstExtensions
-        entries <- listDirectory srcExtensions
-        forM_ entries $ \name -> do
-            let src = srcExtensions </> name
-            isLink <- pathIsSymbolicLink src
-            when isLink $ do
-                target <- getSymbolicLinkTarget src
-                createDirectoryLink target (dstExtensions </> name)
+        removePathForcibly dst
+        createDirectoryIfMissing True dst
+        linked <- filterM (pathIsSymbolicLink . (src </>)) =<< listDirectory src
+        forM_ linked $ \name ->
+            getSymbolicLinkTarget (src </> name) >>= flip createDirectoryLink (dst </> name)
 
 data PendingQuestion = PendingQuestion
-    { questionDialog :: Text
-    , questionSentinel :: Maybe Int
-    , questionStash :: Maybe Text
+    { questionDialogId :: Text
+    , questionOtherRow :: Maybe Int
+    , questionStashedReply :: Maybe Text
     }
+
+dialogMethods :: [Text]
+dialogMethods = ["select", "input"]
 
 dialogResponse :: Text -> Text -> Aeson.Value
 dialogResponse dialogId value =
@@ -463,47 +474,45 @@ dialogDecline dialogId =
     Aeson.object ["type" Aeson..= ("extension_ui_response" :: Text), "id" Aeson..= dialogId, "cancelled" Aeson..= True]
 
 chosenIndex :: Int -> Text -> Maybe Int
-chosenIndex optionCount reply = do
-    picked <- readMaybe (T.unpack (T.strip reply))
-    guard (picked >= 1 && picked <= optionCount)
-    return picked
+chosenIndex optionCount = mfilter (`elem` [1 .. optionCount]) . readMaybe . T.unpack . T.strip
 
+{- | Rows are numbered from 1, and the package appends its own "type something"
+row last and reads the reply back with parseInt: a reply that names none of the
+offered rows is sent as that last row's number, with the text kept for the
+follow-up dialog, because anything else cancels the whole questionnaire.
+-}
 answerQuestion :: PendingQuestion -> Text -> (Aeson.Value, Maybe PendingQuestion)
-answerQuestion question reply = case questionSentinel question of
-    Nothing -> (dialogResponse (questionDialog question) reply, Nothing)
-    Just sentinel -> case chosenIndex (sentinel - 1) reply of
-        Just picked -> (dialogResponse (questionDialog question) (T.pack (show picked)), Nothing)
-        Nothing -> (dialogResponse (questionDialog question) (T.pack (show sentinel)), Just question{questionStash = Just reply})
+answerQuestion question reply = (dialogResponse (questionDialogId question) value, carried)
+  where
+    otherRow = questionOtherRow question
+    picked = otherRow >>= \row -> chosenIndex (row - 1) reply
+    value = maybe reply (T.pack . show) (picked <|> otherRow)
+    carried = question{questionStashedReply = Just reply} <$ guard (isJust otherRow && isNothing picked)
 
+{- | A second dialog arriving while one is open is declined: pi runs tool calls
+concurrently, and the chat shows one question at a time.
+-}
 handleDialog :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleDialog cfg logPath input event =
     case (event ^? key "id" . _String, event ^? key "method" . _String) of
         (Just dialogId, Just method)
-            | method `elem` ["select", "input"] -> do
-                rendered <- modifyMVar input $ \current -> case current of
-                    Just control -> case inputQuestion control of
-                        Just question
-                            | Just stashed <- questionStash question -> do
-                                writeRpc (inputHandle control) (dialogResponse dialogId stashed)
-                                return (Just control{inputQuestion = Nothing}, False)
-                            | otherwise -> do
-                                writeRpc (inputHandle control) (dialogDecline dialogId)
-                                return (current, False)
-                        Nothing -> return (Just control{inputQuestion = Just (pendingFor dialogId)}, True)
-                    Nothing -> return (current, False)
-                when rendered $ mapM_ (appendLogLine cfg logPath "stdout") ("" : questionLines ++ [""])
-            | otherwise -> withMVar input $ mapM_ $ \control -> writeRpc (inputHandle control) (dialogDecline dialogId)
+            | method `elem` dialogMethods ->
+                modifyMVar input (answerDialog dialogId) >>= mapM_ (appendLogLine cfg logPath "stdout")
+            | otherwise -> withMVar input $ mapM_ (\control -> writeToRunner control (dialogDecline dialogId))
         _ -> return ()
   where
     options = event ^.. key "options" . values . _String
     title = event ^. key "title" . _String
-    questionLines = T.splitOn "\n" title ++ options
-    pendingFor dialogId =
-        PendingQuestion
-            { questionDialog = dialogId
-            , questionSentinel = if null options then Nothing else Just (length options)
-            , questionStash = Nothing
-            }
+    questionLines = "" : T.splitOn "\n" title ++ options ++ [""]
+    answerDialog :: Text -> Maybe RunnerInput -> IO (Maybe RunnerInput, [Text])
+    answerDialog _ Nothing = return (Nothing, [])
+    answerDialog dialogId (Just control) = case inputQuestion control of
+        Nothing -> return (Just control{inputQuestion = Just (pendingFor dialogId)}, questionLines)
+        Just question -> do
+            let stashed = questionStashedReply question
+            writeToRunner control (maybe (dialogDecline dialogId) (dialogResponse dialogId) stashed)
+            return (Just $ maybe control (const control{inputQuestion = Nothing}) stashed, [])
+    pendingFor dialogId = PendingQuestion dialogId (length options <$ guard (not (null options))) Nothing
 
 -- Pi 0.75 emits agent_end before automatic retry/compaction events; check its state before EOF.
 handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
@@ -555,8 +564,7 @@ handleRpcEvent cfg logPath input event =
                 _ -> return ()
         _ -> return ()
   where
-    send command = withMVar input $ mapM_ $ \control ->
-        writeRpc (inputHandle control) $ Aeson.object ["type" Aeson..= (command :: Text)]
+    send command = withMVar input $ mapM_ (\control -> writeToRunner control (Aeson.object ["type" Aeson..= (command :: Text)]))
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
 
