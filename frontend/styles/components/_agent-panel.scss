@@ -779,6 +779,39 @@
   text-align: left;
 }
 
+.agent-panel__question-option-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  margin-right: var(--spacing-2xs);
+  color: var(--state-info, var(--text-secondary));
+}
+
+.agent-panel__question-option-mark .material-symbols-outlined {
+  font-size: var(--font-size-md);
+}
+
+.agent-panel__question-option.is-picked,
+.agent-panel__question-option.is-picked:hover {
+  border-color: var(--state-info);
+  background: var(--state-info-outline);
+  font-weight: 600;
+}
+
+.agent-panel__question-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  min-width: 0;
+}
+
+.agent-panel__question-submit {
+  flex: none;
+}
+
 .agent-panel__question-hint {
   color: var(--text-secondary);
   font-size: var(--font-size-sm);

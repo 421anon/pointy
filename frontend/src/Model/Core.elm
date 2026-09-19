@@ -15,6 +15,7 @@ import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
+import Set exposing (Set)
 import Time
 import Toast exposing (Toast)
 
@@ -321,6 +322,27 @@ type AgentRequest
     | StoppingAgentTurn String
 
 
+type alias PendingQuestion =
+    { multi : Bool
+    , options : List String
+    , picked : Set Int
+    }
+
+
+keepPicksForSameQuestion : Maybe PendingQuestion -> Maybe PendingQuestion -> Maybe PendingQuestion
+keepPicksForSameQuestion previous next =
+    case ( previous, next ) of
+        ( Just before, Just after ) ->
+            if ( before.multi, before.options ) == ( after.multi, after.options ) then
+                Just { after | picked = before.picked }
+
+            else
+                next
+
+        _ ->
+            next
+
+
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
     , selectedSessionId : Maybe String
@@ -330,7 +352,7 @@ type alias AgentState =
     , activeTurnStream : Maybe String
     , chatEntries : List ChatEntry
     , chunkBuffer : String
-    , pendingQuestionOptions : Maybe (List String)
+    , pendingQuestion : Maybe PendingQuestion
     , showArchived : Bool
     , changesetOperation : Maybe ChangesetOperation
     , request : Maybe AgentRequest
@@ -352,7 +374,7 @@ initAgentState =
     , activeTurnStream = Nothing
     , chatEntries = []
     , chunkBuffer = ""
-    , pendingQuestionOptions = Nothing
+    , pendingQuestion = Nothing
     , showArchived = False
     , changesetOperation = Nothing
     , request = Nothing

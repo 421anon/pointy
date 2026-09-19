@@ -35,7 +35,7 @@ import Ports
 import Process
 import Route exposing (Route)
 import Scroll
-import Set
+import Set exposing (Set)
 import Task
 import Time
 import Toast exposing (Toast)
@@ -2905,7 +2905,7 @@ applyPersistedTranscript view agentState =
     { agentState
         | chatEntries = persistedTranscript view
         , chunkBuffer = ""
-        , pendingQuestionOptions = persistedQuestionOptions view
+        , pendingQuestion = Model.keepPicksForSameQuestion agentState.pendingQuestion (persistedQuestion view)
     }
 
 
@@ -2925,9 +2925,9 @@ persistedTranscript view =
 -- A refresh must keep the buttons of a question that is still open.
 
 
-persistedQuestionOptions : Model.AgentSessionView -> Maybe (List String)
-persistedQuestionOptions =
-    List.foldl questionOptionsAfterLine Nothing << replayedTurnLogLines
+persistedQuestion : Model.AgentSessionView -> Maybe Model.PendingQuestion
+persistedQuestion =
+    List.foldl pendingQuestionAfterLine Nothing << replayedTurnLogLines
 
 
 replayedTurnLogLines : Model.AgentSessionView -> List String
@@ -3271,7 +3271,7 @@ selectAgentSessionAt sessionId mTurnId =
                 , activeTurnStream = Nothing
                 , chatEntries = selectedView |> Maybe.map persistedTranscript |> Maybe.withDefault []
                 , chunkBuffer = ""
-                , pendingQuestionOptions = selectedView |> Maybe.andThen persistedQuestionOptions
+                , pendingQuestion = selectedView |> Maybe.andThen persistedQuestion
                 , isSessionListOpen = False
                 , sessionNameEdit = Nothing
                 , highlightTurnId = mTurnId
@@ -3801,26 +3801,64 @@ steerAgentTurn view promptSource =
         )
 
 
-answerAgentQuestion : Int -> Flow Model ()
-answerAgentQuestion optionRow =
-    withSelectedAgentSession
-        (\view ->
-            withAgentRequestUnless Model.agentSubmissionBlocked
-                (Model.SendingAgentPrompt view.session.sessionId)
-                (AgentApi.steer view.session.sessionId (String.fromInt optionRow)
-                    |> FlowError.foldResult (always (Flow.pure ()))
-                        (\err ->
-                            addToast False
-                                (case err of
-                                    Http.BadStatus 409 ->
-                                        "The question is no longer open."
+answerAgentQuestion : String -> Flow Model ()
+answerAgentQuestion answer =
+    Flow.when (not (String.isEmpty answer))
+        (withSelectedAgentSession
+            (\view ->
+                withAgentRequestUnless Model.agentSubmissionBlocked
+                    (Model.SendingAgentPrompt view.session.sessionId)
+                    (AgentApi.steer view.session.sessionId answer
+                        |> FlowError.foldResult (always (Flow.pure ()))
+                            (\err ->
+                                addToast False
+                                    (case err of
+                                        Http.BadStatus 409 ->
+                                            "The question is no longer open."
 
-                                    _ ->
-                                        Http.errorMessage err
-                                )
-                        )
-                )
+                                        _ ->
+                                            Http.errorMessage err
+                                    )
+                            )
+                    )
+            )
         )
+
+
+toggleAgentQuestionOption : Int -> Flow Model ()
+toggleAgentQuestionOption optionNumber =
+    Flow.over agent
+        (\agentState ->
+            { agentState | pendingQuestion = Maybe.map (togglePicked optionNumber) agentState.pendingQuestion }
+        )
+
+
+submitAgentQuestion : Flow Model ()
+submitAgentQuestion =
+    Flow.get
+        |> Flow.andThen
+            (Model.getAgent
+                >> .pendingQuestion
+                >> Maybe.map (pickedQuestionNumbers >> answerAgentQuestion)
+                >> Maybe.withDefault (Flow.pure ())
+            )
+
+
+pickedQuestionNumbers : Model.PendingQuestion -> String
+pickedQuestionNumbers =
+    String.join "," << List.map String.fromInt << Set.toList << .picked
+
+
+togglePicked : Int -> Model.PendingQuestion -> Model.PendingQuestion
+togglePicked optionNumber question =
+    { question
+        | picked =
+            if Set.member optionNumber question.picked then
+                Set.remove optionNumber question.picked
+
+            else
+                Set.insert optionNumber question.picked
+    }
 
 
 investigateStepWithAgent : Int -> String -> Flow Model ()
@@ -3960,7 +3998,7 @@ onAgentTurnIn value =
 
         Ok (Model.AgentTurnDone turnId) ->
             withActiveAgentTurn turnId
-                (Flow.over agent (\s -> { s | activeTurnStream = Nothing, pendingQuestionOptions = Nothing })
+                (Flow.over agent (\s -> { s | activeTurnStream = Nothing, pendingQuestion = Nothing })
                     |> Flow.seq scrollAgentChatToBottom
                     |> Flow.seq
                         (Flow.get
@@ -4011,15 +4049,17 @@ ingestAgentChunk chunk agentState =
     { agentState
         | chunkBuffer = remainder
         , chatEntries = nextChatEntries
-        , pendingQuestionOptions = List.foldl questionOptionsAfterLine agentState.pendingQuestionOptions keptLines
+        , pendingQuestion = List.foldl pendingQuestionAfterLine agentState.pendingQuestion keptLines
     }
 
 
-questionOptionsAfterLine : String -> Maybe (List String) -> Maybe (List String)
-questionOptionsAfterLine rawLine pending =
+pendingQuestionAfterLine : String -> Maybe Model.PendingQuestion -> Maybe Model.PendingQuestion
+pendingQuestionAfterLine rawLine pending =
     case splitLogPrefix rawLine of
         ( "question", body ) ->
-            Decode.decodeString (Decode.list Decode.string) (String.trim body) |> Result.toMaybe
+            Decode.decodeString pendingQuestionDecoder (String.trim body)
+                |> Result.toMaybe
+                |> Model.keepPicksForSameQuestion pending
 
         ( "steering", _ ) ->
             Nothing
@@ -4033,6 +4073,14 @@ questionOptionsAfterLine rawLine pending =
 
         _ ->
             pending
+
+
+pendingQuestionDecoder : Decode.Decoder Model.PendingQuestion
+pendingQuestionDecoder =
+    Decode.map3 Model.PendingQuestion
+        (Decode.field "multi" Decode.bool)
+        (Decode.field "options" (Decode.list Decode.string))
+        (Decode.succeed Set.empty)
 
 
 isTurnFinishedLine : String -> Bool

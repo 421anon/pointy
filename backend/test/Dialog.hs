@@ -1,19 +1,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | Tests for the RPC dialog bridge: pi's @extension_ui_request@ events become
-chat questions, the package's options-less dialog (its multi-select question)
-offers no buttons, and no handler failure may take the reader down with it.
+chat questions, a multi-select question's rows (numbered into its options-less
+title) become a pick list, and no handler failure may take the reader down.
 -}
 module Main (main) where
 
-import Agent.Runner (RunnerInput, handleDialog, handleRpcEventSafely, newRunnerInput, planSteer, streamHandle)
+import Agent.Runner (RunnerInput, SteerOutcome (..), handleDialog, handleRpcEventSafely, newRunnerInput, planSteer, streamHandle)
 import Config (defaultAgentConfig)
 import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, readMVar)
 import Control.Concurrent.STM (newEmptyTMVarIO)
-import Control.Monad (unless, (>=>))
+import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.Aeson as Aeson
+import Data.Aeson.Types (parseMaybe)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Text (Text)
@@ -29,7 +30,8 @@ import System.Timeout (timeout)
 main :: IO ()
 main = withSystemTempDirectory "dialog-test" $ \dir -> do
     checkSelectDialog dir
-    checkOptionsLessDialog dir
+    checkMultiSelectDialog dir
+    checkCustomAnswerDialog dir
     checkReaderSurvivesFailure dir
     checkDeclinedDialogKeepsOtherQuestion dir
 
@@ -39,20 +41,63 @@ checkSelectDialog dir = withInput $ \input -> do
     handleDialog defaultAgentConfig logPath input (selectEvent "d1")
     logged <- TIO.readFile logPath
     assertContains "select: the question reaches the chat" "[stdout] Which layout should the demo use?" logged
-    assertEqual "select: only the pickable rows become buttons" (Just ["1. Compact card - a small card.", "2. Wide table row - one line."]) (questionRowsIn logged)
-
-checkOptionsLessDialog :: FilePath -> IO ()
-checkOptionsLessDialog dir = withInput $ \input -> do
-    let logPath = dir </> "input.log"
-    handleDialog defaultAgentConfig logPath input optionsLessDialog
-    logged <- TIO.readFile logPath
-    assertContains "input: the question reaches the chat" "[stdout] [Features] Which optional features" logged
-    assertEqual "input: an options-less dialog offers no buttons" Nothing (questionRowsIn logged)
+    assertEqual "select: only the pickable rows become buttons" (Just (False, ["1. Compact card - a small card.", "2. Wide table row - one line."])) (questionIn logged)
     control <- latchedQuestion input
     reply <- newEmptyTMVarIO
-    case planSteer "1,3" "steer-1" reply control of
-        Just (response, _, _) -> assertEqual "input: the typed answer is sent to pi as the dialog's value" (dialogValue "d2" "1,3") response
-        Nothing -> fail "input: the typed answer should answer the question, not steer the agent"
+    case planSteer "2" "steer-1" reply control of
+        Just (response, _, SteerAnsweredQuestion answer) -> do
+            assertEqual "select: the picked number reaches the dialog" (dialogValue "d1" "2") response
+            assertEqual "select: the chat names the picked row" "2. Wide table row - one line." answer
+        Just _ -> fail "select: a picked answer should answer the question rather than steer the agent"
+        Nothing -> fail "select: a picked answer should answer the question, not steer the agent"
+    typed <- latchedQuestion input
+    reply2 <- newEmptyTMVarIO
+    case planSteer "something else" "steer-2" reply2 typed of
+        Just (response, _, SteerAnsweredQuestion _) -> assertEqual "select: a typed answer is sent as the dialog's free-text row" (dialogValue "d1" "3") response
+        Just _ -> fail "select: a typed answer should answer the question rather than steer the agent"
+        Nothing -> fail "select: a typed answer should answer the question, not steer the agent"
+
+checkMultiSelectDialog :: FilePath -> IO ()
+checkMultiSelectDialog dir = do
+    withInput $ \input -> do
+        let logPath = dir </> "multi.log"
+        handleDialog defaultAgentConfig logPath input multiSelectDialog
+        logged <- TIO.readFile logPath
+        assertContains "multi: the question reaches the chat" "[stdout] [Outputs] Which outputs" logged
+        assertEqual "multi: the numbered rows in the title become a pick list" (Just (True, multiRows)) (questionIn logged)
+        control <- latchedQuestion input
+        reply <- newEmptyTMVarIO
+        case planSteer "1,3" "steer-3" reply control of
+            Just (response, _, SteerAnsweredQuestion answer) -> do
+                assertEqual "multi: the picked numbers reach the dialog whole" (dialogValue "d2" "1,3") response
+                assertEqual "multi: the chat names the rows those numbers picked" (T.intercalate ", " [multiRows !! 0, multiRows !! 2]) answer
+            Just _ -> fail "multi: a picked answer should answer the question rather than steer the agent"
+            Nothing -> fail "multi: a picked answer should answer the question, not steer the agent"
+    withInput $ \input -> do
+        let logPath = dir </> "multi-typed.log"
+        handleDialog defaultAgentConfig logPath input multiSelectDialog
+        typed <- latchedQuestion input
+        reply <- newEmptyTMVarIO
+        case planSteer "please use fastp" "steer-4" reply typed of
+            Just (response, _, SteerAnsweredQuestion answer) -> do
+                assertEqual "multi: a typed answer reaches the dialog verbatim" (dialogValue "d2" "please use fastp") response
+                assertEqual "multi: a typed answer stays as it was typed" "please use fastp" answer
+            Just _ -> fail "multi: a typed answer should answer the question rather than steer the agent"
+            Nothing -> fail "multi: a typed answer should answer the question, not steer the agent"
+
+checkCustomAnswerDialog :: FilePath -> IO ()
+checkCustomAnswerDialog dir = withInput $ \input -> do
+    let logPath = dir </> "custom.log"
+    handleDialog defaultAgentConfig logPath input customAnswerDialog
+    logged <- TIO.readFile logPath
+    assertContains "custom: the question reaches the chat" "[stdout] Which layout should the demo use?" logged
+    assertEqual "custom: a question without a numbered block offers no buttons" Nothing (questionIn logged)
+    control <- latchedQuestion input
+    reply <- newEmptyTMVarIO
+    case planSteer "2" "steer-5" reply control of
+        Just (response, _, SteerAnsweredQuestion _) -> assertEqual "custom: the typed answer reaches the dialog verbatim" (dialogValue "d3" "2") response
+        Just _ -> fail "custom: the typed answer should answer the question rather than steer the agent"
+        Nothing -> fail "custom: the typed answer should answer the question, not steer the agent"
 
 checkReaderSurvivesFailure :: FilePath -> IO ()
 checkReaderSurvivesFailure dir = withInput $ \input -> do
@@ -77,8 +122,8 @@ checkReaderSurvivesFailure dir = withInput $ \input -> do
     assertContains "reader: the loop keeps reading after a handler failure" "[stdout] *Summarising the conversation so far*" logged
     control <- latchedQuestion input
     reply <- newEmptyTMVarIO
-    case planSteer "hello" "steer-2" reply control of
-        Just (response, _, _) -> assertEqual "reader: the declined dialog drops its question" (steer "steer-2" "hello") response
+    case planSteer "hello" "steer-6" reply control of
+        Just (response, _, _) -> assertEqual "reader: the declined dialog drops its question" (steer "steer-6" "hello") response
         Nothing -> fail "reader: the message should steer the agent, not park on the dialog"
 
 checkDeclinedDialogKeepsOtherQuestion :: FilePath -> IO ()
@@ -88,8 +133,9 @@ checkDeclinedDialogKeepsOtherQuestion dir = withInput $ \input -> do
     handleRpcEventSafely defaultAgentConfig logPath input (selectEvent "d2")
     control <- latchedQuestion input
     reply <- newEmptyTMVarIO
-    case planSteer "1" "steer-3" reply control of
-        Just (response, _, _) -> assertEqual "other: the open question still answers the steer" (dialogValue "d1" "1") response
+    case planSteer "1" "steer-7" reply control of
+        Just (response, _, SteerAnsweredQuestion _) -> assertEqual "other: the open question still answers the steer" (dialogValue "d1" "1") response
+        Just _ -> fail "other: the open question should answer the steer rather than pass it on"
         Nothing -> fail "other: the open question should answer the steer"
 
 -- | A runner input whose pipe has no reader: every write to pi fails.
@@ -115,14 +161,38 @@ selectEvent dialogId =
         , "options" .= (["1. Compact card - a small card.", "2. Wide table row - one line.", "3. Type something."] :: [Text])
         ]
 
-optionsLessDialog :: Value
-optionsLessDialog =
+multiSelectDialog :: Value
+multiSelectDialog =
     object
         [ "type" .= ("extension_ui_request" :: Text)
         , "id" .= ("d2" :: Text)
         , "method" .= ("input" :: Text)
-        , "title" .= ("[Features] Which optional features should the demo enable? (Select all that apply.)\n\n1. Previews\n2. Multi-select\n\nEnter the numbers of all that apply." :: Text)
+        , "title" .= multiTitle
         , "placeholder" .= ("1,3" :: Text)
+        ]
+
+multiTitle :: Text
+multiTitle =
+    "[Outputs] Which outputs should the step publish to its output folder?\n\n"
+        <> T.intercalate "\n" multiRows
+        <> "\n\nEnter the numbers of all that apply, comma-separated (e.g. \"1,3\"), or type a custom answer as plain text."
+
+multiRows :: [Text]
+multiRows =
+    [ "1. Cleaned FASTQ files — Publish the cleaned per-sample read files."
+    , "2. Quality report — Publish the fastp HTML/JSON quality report."
+    , "3. Read count table — Publish a table of read counts before and after cleaning."
+    , "4. Run log — Publish the full text log of the cleaning run."
+    ]
+
+customAnswerDialog :: Value
+customAnswerDialog =
+    object
+        [ "type" .= ("extension_ui_request" :: Text)
+        , "id" .= ("d3" :: Text)
+        , "method" .= ("input" :: Text)
+        , "title" .= ("Which layout should the demo use?\n\nType your answer:" :: Text)
+        , "placeholder" .= ("" :: Text)
         ]
 
 dialogValue :: Text -> Text -> Value
@@ -133,8 +203,13 @@ steer :: Text -> Text -> Value
 steer requestId prompt =
     object ["id" .= requestId, "type" .= ("prompt" :: Text), "message" .= prompt, "streamingBehavior" .= ("steer" :: Text)]
 
-questionRowsIn :: Text -> Maybe [Text]
-questionRowsIn = listToMaybe . mapMaybe (T.stripPrefix "[question] ") . T.lines >=> Aeson.decodeStrict . TE.encodeUtf8
+questionIn :: Text -> Maybe (Bool, [Text])
+questionIn = listToMaybe . mapMaybe question . T.lines
+  where
+    question line = do
+        body <- T.stripPrefix "[question] " line
+        value <- Aeson.decodeStrict (TE.encodeUtf8 body)
+        parseMaybe (Aeson.withObject "question" (\o -> (,) <$> o Aeson..: "multi" <*> o Aeson..: "options")) value
 
 writeLine :: Handle -> Value -> IO ()
 writeLine handle = TIO.hPutStrLn handle . TE.decodeUtf8 . LBS.toStrict . Aeson.encode

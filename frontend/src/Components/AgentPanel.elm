@@ -16,6 +16,7 @@ import List.Extra as List
 import Model.Core as Model exposing (Model)
 import Model.Lib as Lib
 import Route
+import Set
 import View.Icons
 import View.Lib exposing (boolText, viewLoading)
 
@@ -811,7 +812,7 @@ viewChatTurns resolveMention agent sessionView runnerActive interactionsBlocked 
                     []
 
         questionNodes =
-            agent.pendingQuestionOptions
+            agent.pendingQuestion
                 |> Maybe.map (viewAgentQuestion (Model.agentSubmissionBlocked agent) >> List.singleton)
                 |> Maybe.withDefault []
 
@@ -961,24 +962,82 @@ viewAgentMessage resolveMention turn =
         ]
 
 
-viewAgentQuestion : Bool -> List String -> Html (Flow Model ())
-viewAgentQuestion answerBlocked options =
+viewAgentQuestion : Bool -> Model.PendingQuestion -> Html (Flow Model ())
+viewAgentQuestion answerBlocked question =
     Html.div [ class "agent-panel__question" ]
         [ Html.div [ class "agent-panel__question-options" ]
-            (List.indexedMap (\index option -> viewQuestionOption answerBlocked (index + 1) option) options)
-        , Html.span [ class "agent-panel__question-hint" ]
-            [ Html.text "Or type your own answer below." ]
+            (List.indexedMap (viewQuestionOption answerBlocked question) question.options)
+        , Html.div [ class "agent-panel__question-actions" ]
+            [ Html.span [ class "agent-panel__question-hint" ]
+                [ Html.text
+                    (if question.multi then
+                        "Pick any number of them, then send. Or type your own answer below."
+
+                     else
+                        "Or type your own answer below."
+                    )
+                ]
+            , Html.viewIf question.multi (viewQuestionSubmit answerBlocked question)
+            ]
         ]
 
 
-viewQuestionOption : Bool -> Int -> String -> Html (Flow Model ())
-viewQuestionOption answerBlocked optionNumber option =
+viewQuestionOption : Bool -> Model.PendingQuestion -> Int -> String -> Html (Flow Model ())
+viewQuestionOption answerBlocked question index option =
+    let
+        optionNumber =
+            index + 1
+
+        picked =
+            question.multi && Set.member optionNumber question.picked
+    in
     Html.button
-        [ class "btn agent-panel__question-option"
-        , disabled answerBlocked
-        , Events.onClick (Actions.answerAgentQuestion optionNumber)
+        ([ classList
+            [ ( "btn", True )
+            , ( "agent-panel__question-option", True )
+            , ( "is-picked", picked )
+            ]
+         , disabled answerBlocked
+         , Events.onClick (questionOptionClick question optionNumber)
+         ]
+            ++ (if question.multi then
+                    [ attribute "aria-pressed" (boolText picked) ]
+
+                else
+                    []
+               )
+        )
+        (questionOptionMark question picked ++ [ Html.text option ])
+
+
+questionOptionClick : Model.PendingQuestion -> Int -> Flow Model ()
+questionOptionClick question optionNumber =
+    if question.multi then
+        Actions.toggleAgentQuestionOption optionNumber
+
+    else
+        Actions.answerAgentQuestion (String.fromInt optionNumber)
+
+
+questionOptionMark : Model.PendingQuestion -> Bool -> List (Html (Flow Model ()))
+questionOptionMark question picked =
+    if question.multi then
+        [ Html.span [ class "agent-panel__question-option-mark", attribute "aria-hidden" "true" ]
+            [ Html.viewIf picked (View.Icons.icon False "check") ]
         ]
-        [ Html.text option ]
+
+    else
+        []
+
+
+viewQuestionSubmit : Bool -> Model.PendingQuestion -> Html (Flow Model ())
+viewQuestionSubmit answerBlocked question =
+    Html.button
+        [ class "btn agent-panel__question-submit"
+        , disabled (answerBlocked || Set.isEmpty question.picked)
+        , Events.onClick Actions.submitAgentQuestion
+        ]
+        [ Html.text "Send answer" ]
 
 
 pendingChangeset : Model.AgentSessionView -> Maybe Model.ChatChangeset

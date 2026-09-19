@@ -9,6 +9,7 @@ module Agent.Runner (
     turnLogStreamHandler,
     streamLoop,
     RunnerInput,
+    SteerOutcome (..),
     handleDialog,
     handleRpcEventSafely,
     newRunnerInput,
@@ -54,9 +55,10 @@ import qualified Data.Aeson as Aeson
 import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.Char (isDigit)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -481,6 +483,7 @@ seedExtensions src dst = do
 data PendingQuestion = PendingQuestion
     { questionDialogId :: Text
     , questionRows :: [Text]
+    , questionMulti :: Bool
     , questionStashedReply :: Maybe Text
     }
 
@@ -512,11 +515,13 @@ answerQuestion question reply = (dialogResponse (questionDialogId question) dial
     freeTextRow = questionFreeTextRow question
     pick = pickedRow question reply
     dialogValue = maybe reply (T.pack . show) (fst <$> pick <|> freeTextRow)
-    answerText = maybe reply snd pick
+    answerText = fromMaybe reply (snd <$> pick <|> pickedMultiRows question reply)
     carried = question{questionStashedReply = Just reply} <$ guard (isJust freeTextRow && isNothing pick)
 
 questionFreeTextRow :: PendingQuestion -> Maybe Int
-questionFreeTextRow = fmap length . NE.nonEmpty . questionRows
+questionFreeTextRow question
+    | questionMulti question = Nothing
+    | otherwise = fmap length (NE.nonEmpty (questionRows question))
 
 numberedQuestionRows :: PendingQuestion -> [(Int, Text)]
 numberedQuestionRows = zip [1 ..] . questionRows
@@ -526,6 +531,67 @@ pickedRow question reply = do
     row <- questionFreeTextRow question
     number <- chosenIndex (row - 1) reply
     fmap ((,) number) (lookup number (numberedQuestionRows question))
+
+pickedMultiRows :: PendingQuestion -> Text -> Maybe Text
+pickedMultiRows question reply = do
+    guard (questionMulti question)
+    numbers <- NE.nonEmpty (replyRowNumbers reply)
+    labels <- traverse (`lookup` numberedQuestionRows question) numbers
+    pure (T.intercalate ", " (NE.toList labels))
+
+replyRowNumbers :: Text -> [Int]
+replyRowNumbers = mapMaybe rowNumber . T.words . T.replace "," " "
+  where
+    rowNumber = readMaybe . T.unpack . T.dropWhileEnd (== '.')
+
+data DialogQuestion = DialogQuestion
+    { dialogMulti :: Bool
+    , dialogRows :: [Text]
+    }
+
+dialogQuestion :: Aeson.Value -> DialogQuestion
+dialogQuestion event
+    | not (null options) = DialogQuestion False options
+    | otherwise = DialogQuestion True (titleRows title)
+  where
+    options = event ^.. key "options" . values . _String
+    title = event ^. key "title" . _String
+
+pendingQuestion :: Text -> DialogQuestion -> PendingQuestion
+pendingQuestion dialogId question =
+    PendingQuestion dialogId (dialogRows question) (dialogMulti question) Nothing
+
+pickableRows :: DialogQuestion -> [Text]
+pickableRows question
+    | dialogMulti question = dialogRows question
+    | otherwise = maybe [] NE.init (NE.nonEmpty (dialogRows question))
+
+pickablePayload :: DialogQuestion -> Maybe Aeson.Value
+pickablePayload question
+    | null rows = Nothing
+    | otherwise = Just (Aeson.object ["multi" Aeson..= dialogMulti question, "options" Aeson..= rows])
+  where
+    rows = pickableRows question
+
+questionLines :: DialogQuestion -> [(Text, Text)]
+questionLines = foldMap (\payload -> [("question", jsonLine payload)]) . pickablePayload
+
+titleRows :: Text -> [Text]
+titleRows title =
+    case reverse (filter (not . T.null) (T.splitOn "\n\n" title)) of
+        _instructions : block : _ | numberedBlock block -> T.lines block
+        _ -> []
+
+numberedBlock :: Text -> Bool
+numberedBlock block =
+    let rows = T.lines block
+        numbers = mapMaybe rowNumber rows
+    in numbers == [1 .. length rows]
+  where
+    rowNumber row = do
+        let (digits, rest) = T.span isDigit row
+        guard (not (T.null digits) && T.isPrefixOf ". " rest)
+        readMaybe (T.unpack digits)
 
 {- | A second dialog arriving while one is open is declined: pi runs tool calls
 concurrently, and the chat shows one question at a time.
@@ -541,14 +607,14 @@ handleDialog cfg logPath input event =
   where
     rows = event ^.. key "options" . values . _String
     title = event ^. key "title" . _String
-    pickableRows = maybe [] NE.init (NE.nonEmpty rows)
+    asked = dialogQuestion event
     dialogLines =
         [("stdout", line) | line <- "" : T.splitOn "\n" title ++ rows ++ [""]]
-            ++ [("question", jsonLine pickableRows) | not (null pickableRows)]
+            ++ questionLines asked
     answerDialog :: Text -> Maybe RunnerInput -> IO (Maybe RunnerInput, [(Text, Text)])
     answerDialog _ Nothing = return (Nothing, [])
     answerDialog dialogId (Just control) = case inputQuestion control of
-        Nothing -> return (Just control{inputQuestion = Just (PendingQuestion dialogId rows Nothing)}, dialogLines)
+        Nothing -> return (Just control{inputQuestion = Just (pendingQuestion dialogId asked)}, dialogLines)
         Just question -> do
             let stashed = questionStashedReply question
             writeToRunner control (maybe (dialogDecline dialogId) (dialogResponse dialogId) stashed)
