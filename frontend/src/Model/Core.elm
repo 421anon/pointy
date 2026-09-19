@@ -10,7 +10,7 @@ import Dict exposing (Dict)
 import DnDList
 import Flow exposing (Flow)
 import Grid
-import Json.Decode exposing (Value)
+import Json.Decode as Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
@@ -343,16 +343,35 @@ keepPicksForSameQuestion previous next =
             next
 
 
+type alias AgentLiveTurn =
+    { turnId : String
+    , finished : Bool
+    , entries : List ChatEntry
+    , chunkBuffer : String
+    , pendingQuestion : Maybe PendingQuestion
+    , streamError : Maybe String
+    }
+
+
+liveTurnFor : String -> AgentSessionView -> AgentLiveTurn
+liveTurnFor turnId view =
+    { turnId = turnId
+    , finished = False
+    , entries = persistedTranscript view
+    , chunkBuffer = ""
+    , pendingQuestion = persistedQuestion view
+    , streamError = Nothing
+    }
+
+
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
+    , liveTurns : Dict String AgentLiveTurn
+    , refreshingSessions : Set String
     , selectedSessionId : Maybe String
     , isPanelOpen : Bool
     , isSessionListOpen : Bool
     , isFocusMode : Bool
-    , activeTurnStream : Maybe String
-    , chatEntries : List ChatEntry
-    , chunkBuffer : String
-    , pendingQuestion : Maybe PendingQuestion
     , showArchived : Bool
     , changesetOperation : Maybe ChangesetOperation
     , request : Maybe AgentRequest
@@ -367,14 +386,12 @@ type alias AgentState =
 initAgentState : AgentState
 initAgentState =
     { sessions = NotAsked
+    , liveTurns = Dict.empty
+    , refreshingSessions = Set.empty
     , selectedSessionId = Nothing
     , isPanelOpen = False
     , isSessionListOpen = False
     , isFocusMode = False
-    , activeTurnStream = Nothing
-    , chatEntries = []
-    , chunkBuffer = ""
-    , pendingQuestion = Nothing
     , showArchived = False
     , changesetOperation = Nothing
     , request = Nothing
@@ -386,10 +403,9 @@ initAgentState =
     }
 
 
-agentOperationActive : AgentState -> Bool
-agentOperationActive agentState =
+agentMutationPending : AgentState -> Bool
+agentMutationPending agentState =
     (agentState.request /= Nothing)
-        || (agentState.activeTurnStream /= Nothing)
         || (agentState.changesetOperation /= Nothing)
         || (agentState.sessionNameEdit
                 |> Maybe.map .saving
@@ -397,28 +413,343 @@ agentOperationActive agentState =
            )
 
 
-agentInteractionsBlocked : AgentState -> Bool
-agentInteractionsBlocked agentState =
-    agentOperationActive agentState
-        || (case agentState.sessions of
-                Loading _ ->
-                    True
-
-                _ ->
-                    False
-           )
+failLatestPendingChatTurn : String -> List ChatEntry -> List ChatEntry
+failLatestPendingChatTurn error =
+    mapLastChatTurn (finishPending (ChatFailed error))
 
 
-agentSubmissionBlocked : AgentState -> Bool
-agentSubmissionBlocked agentState =
-    agentInteractionsBlocked { agentState | activeTurnStream = Nothing }
+ingestLiveChunk : String -> AgentLiveTurn -> AgentLiveTurn
+ingestLiveChunk chunk live =
+    let
+        combined =
+            live.chunkBuffer ++ chunk
+
+        ( completeBlock, remainder ) =
+            splitOnLastNewline combined
+
+        rawLines =
+            if String.isEmpty completeBlock then
+                []
+
+            else
+                String.split "\n" completeBlock
+
+        keptLines =
+            List.filter (not << String.isEmpty) rawLines
+    in
+    { live
+        | chunkBuffer = remainder
+        , entries = List.foldl appendChatLine live.entries keptLines
+        , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
+        , streamError = Nothing
+    }
 
 
-agentTurnActive : AgentSessionView -> AgentState -> Bool
-agentTurnActive view agentState =
-    (agentState.activeTurnStream /= Nothing)
-        || (view.session.activeTurnId /= Nothing)
-        || (view.session.status == "running")
+persistedTranscript : AgentSessionView -> List ChatEntry
+persistedTranscript view =
+    List.foldl appendPersistedTurn [] (replayedTurns view)
+
+
+persistedQuestion : AgentSessionView -> Maybe PendingQuestion
+persistedQuestion =
+    List.foldl pendingQuestionAfterLine Nothing << replayedTurnLogLines
+
+
+replayedTurnLogLines : AgentSessionView -> List String
+replayedTurnLogLines =
+    List.concatMap turnLogLines << replayedTurns
+
+
+replayedTurns : AgentSessionView -> List AgentTurn
+replayedTurns view =
+    List.map (withoutLiveStreamedLog view) view.turns
+
+
+withoutLiveStreamedLog : AgentSessionView -> AgentTurn -> AgentTurn
+withoutLiveStreamedLog view turn =
+    if Just turn.turnId == view.session.activeTurnId then
+        { turn | turnLog = "" }
+
+    else
+        turn
+
+
+turnLogLines : AgentTurn -> List String
+turnLogLines =
+    List.filter (not << String.isEmpty) << String.split "\n" << .turnLog
+
+
+isChangesetLifecycleTurn : AgentTurn -> Bool
+isChangesetLifecycleTurn turn =
+    turn.turnPrompt == "Apply proposed changeset" || turn.turnPrompt == "Discard proposed changeset"
+
+
+appendPersistedTurn : AgentTurn -> List ChatEntry -> List ChatEntry
+appendPersistedTurn turn entries =
+    if isChangesetLifecycleTurn turn then
+        entries ++ [ ChatChangesetEntry (changesetFromLifecycleTurn turn) ]
+
+    else
+        let
+            prompt =
+                if String.isEmpty (String.trim turn.turnPrompt) then
+                    "Prompt unavailable"
+
+                else
+                    turn.turnPrompt
+
+            seeded =
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+
+            logLines =
+                turnLogLines turn
+
+            replayed =
+                List.foldl appendChatLine seeded logLines
+        in
+        if turn.turnStatus == "running" then
+            replayed
+
+        else
+            mapLastChatTurn (finishPending (chatStatusFromTurn turn)) replayed
+
+
+changesetFromLifecycleTurn : AgentTurn -> ChatChangeset
+changesetFromLifecycleTurn turn =
+    let
+        state =
+            if turn.turnPrompt == "Discard proposed changeset" then
+                ChatChangesetDiscarded
+
+            else
+                ChatChangesetApplied
+
+        ( description, diff ) =
+            parseChangesetLog turn.turnLog
+    in
+    { state = state
+    , description =
+        if String.isEmpty description then
+            defaultChangesetDescription state
+
+        else
+            description
+    , diff = diff
+    }
+
+
+defaultChangesetDescription : ChatChangesetState -> String
+defaultChangesetDescription state =
+    case state of
+        ChatChangesetProposed ->
+            "Review this changeset, then apply it to the target branch or discard it."
+
+        ChatChangesetNeedsReview _ ->
+            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the changeset."
+
+        ChatChangesetApplied ->
+            "This changeset was applied. You can continue the conversation from the applied state."
+
+        ChatChangesetDiscarded ->
+            "This changeset was discarded. No changes were applied."
+
+
+parseChangesetLog : String -> ( String, String )
+parseChangesetLog logText =
+    let
+        ( descriptionLines, diffLines ) =
+            splitChangesetDiffMarker (String.split "\n" logText)
+
+        description =
+            descriptionLines
+                |> List.map changesetLogLineBody
+                |> List.filter (not << String.isEmpty)
+                |> String.join "\n"
+                |> String.trim
+    in
+    ( description, String.trimRight (String.join "\n" diffLines) )
+
+
+changesetDiffMarker : String
+changesetDiffMarker =
+    "[system] changeset-diff"
+
+
+splitChangesetDiffMarker : List String -> ( List String, List String )
+splitChangesetDiffMarker lines =
+    case lines of
+        [] ->
+            ( [], [] )
+
+        line :: rest ->
+            if line == changesetDiffMarker then
+                ( [], rest )
+
+            else
+                let
+                    ( before, after ) =
+                        splitChangesetDiffMarker rest
+                in
+                ( line :: before, after )
+
+
+changesetLogLineBody : String -> String
+changesetLogLineBody line =
+    let
+        ( prefix, body ) =
+            splitLogPrefix line
+    in
+    case prefix of
+        "stdout" ->
+            body
+
+        "stderr" ->
+            body
+
+        "system" ->
+            ""
+
+        _ ->
+            line
+
+
+chatStatusFromTurn : AgentTurn -> ChatTurnStatus
+chatStatusFromTurn turn =
+    case turn.turnStatus of
+        "running" ->
+            ChatPending
+
+        "failed" ->
+            ChatFailed (turnFailureMessage turn)
+
+        "stopped" ->
+            ChatStopped
+
+        _ ->
+            ChatDone
+
+
+turnFailureMessage : AgentTurn -> String
+turnFailureMessage turn =
+    case turn.turnExitCode of
+        Just code ->
+            "exit code " ++ String.fromInt code
+
+        Nothing ->
+            "agent failed"
+
+
+appendChatLine : String -> List ChatEntry -> List ChatEntry
+appendChatLine rawLine entries =
+    let
+        ( prefix, body ) =
+            splitLogPrefix rawLine
+    in
+    case prefix of
+        "stdout" ->
+            appendToCurrentAssistant body entries
+
+        "stderr" ->
+            appendToCurrentAssistant body entries
+
+        "steering" ->
+            case Decode.decodeString Decode.string (String.trim body) of
+                Ok prompt ->
+                    mapLastChatTurn (finishPending ChatDone) entries
+                        ++ [ ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = ChatPending } ]
+
+                Err _ ->
+                    entries
+
+        "runner" ->
+            entries
+
+        _ ->
+            entries
+
+
+splitLogPrefix : String -> ( String, String )
+splitLogPrefix line =
+    if String.startsWith "[stdout] " line then
+        ( "stdout", String.dropLeft 9 line )
+
+    else if String.startsWith "[stderr] " line then
+        ( "stderr", String.dropLeft 9 line )
+
+    else if String.startsWith "[runner] " line then
+        ( "runner", String.dropLeft 9 line )
+
+    else if String.startsWith "[steering] " line then
+        ( "steering", String.dropLeft 11 line )
+
+    else if String.startsWith "[question] " line then
+        ( "question", String.dropLeft 11 line )
+
+    else if String.startsWith "[system] " line then
+        ( "system", String.dropLeft 9 line )
+
+    else
+        ( "unknown", line )
+
+
+appendToCurrentAssistant : String -> List ChatEntry -> List ChatEntry
+appendToCurrentAssistant body =
+    mapLastChatTurn
+        (\last ->
+            { last
+                | assistant =
+                    if String.isEmpty last.assistant then
+                        body
+
+                    else
+                        last.assistant ++ "\n" ++ body
+            }
+        )
+
+
+pendingQuestionAfterLine : String -> Maybe PendingQuestion -> Maybe PendingQuestion
+pendingQuestionAfterLine rawLine pending =
+    case splitLogPrefix rawLine of
+        ( "question", body ) ->
+            Decode.decodeString pendingQuestionDecoder (String.trim body)
+                |> Result.toMaybe
+                |> keepPicksForSameQuestion pending
+
+        ( "steering", _ ) ->
+            Nothing
+
+        ( "system", body ) ->
+            if isTurnFinishedLine body then
+                Nothing
+
+            else
+                pending
+
+        _ ->
+            pending
+
+
+pendingQuestionDecoder : Decode.Decoder PendingQuestion
+pendingQuestionDecoder =
+    Decode.map3 PendingQuestion
+        (Decode.field "multi" Decode.bool)
+        (Decode.field "options" (Decode.list Decode.string))
+        (Decode.succeed Set.empty)
+
+
+isTurnFinishedLine : String -> Bool
+isTurnFinishedLine =
+    String.startsWith "Agent turn finished with exit code "
+
+
+splitOnLastNewline : String -> ( String, String )
+splitOnLastNewline text =
+    case String.indexes "\n" text |> List.reverse |> List.head of
+        Just idx ->
+            ( String.left idx text, String.dropLeft (idx + 1) text )
+
+        Nothing ->
+            ( "", text )
 
 
 mapLastChatTurn : (ChatTurn -> ChatTurn) -> List ChatEntry -> List ChatEntry
@@ -886,10 +1217,10 @@ type StepStatusEvent
 
 
 type AgentTurnEvent
-    = AgentTurnChunk { turnId : String, chunk : String }
+    = AgentTurnChunk { sessionId : String, chunk : String }
     | AgentTurnDone String
     | AgentTurnHeartbeat
-    | AgentTurnError String
+    | AgentTurnError { sessionId : String, message : String }
 
 
 initialModel : Browser.Navigation.Key -> Route -> Flags -> Model

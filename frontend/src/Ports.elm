@@ -16,7 +16,7 @@ port openStepStatusStream : {} -> Cmd msg
 port stepStatusIn : (Json.Decode.Value -> msg) -> Sub msg
 
 
-port openAgentTurnStream : { turnId : String } -> Cmd msg
+port openAgentTurnStream : { sessionId : String, turnId : String } -> Cmd msg
 
 
 port agentTurnIn : (Json.Decode.Value -> msg) -> Sub msg

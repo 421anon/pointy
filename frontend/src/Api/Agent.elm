@@ -248,20 +248,24 @@ turnEvent =
                 case type_ of
                     "chunk" ->
                         Decode.field "data"
-                            (Decode.succeed (\turnId chunk -> Model.AgentTurnChunk { turnId = turnId, chunk = chunk })
-                                |> required "turnId" Decode.string
+                            (Decode.succeed (\sessionId chunk -> Model.AgentTurnChunk { sessionId = sessionId, chunk = chunk })
+                                |> required "sessionId" Decode.string
                                 |> required "chunk" Decode.string
                             )
 
                     "done" ->
                         Decode.field "data"
-                            (Decode.map Model.AgentTurnDone (Decode.field "turnId" Decode.string))
+                            (Decode.map Model.AgentTurnDone (Decode.field "sessionId" Decode.string))
 
                     "heartbeat" ->
                         Decode.succeed Model.AgentTurnHeartbeat
 
                     "error" ->
-                        Decode.field "data" Decode.string |> Decode.map Model.AgentTurnError
+                        Decode.field "data"
+                            (Decode.succeed (\sessionId message -> Model.AgentTurnError { sessionId = sessionId, message = message })
+                                |> required "sessionId" Decode.string
+                                |> required "message" Decode.string
+                            )
 
                     _ ->
                         Decode.fail ("Unknown agent turn event: " ++ type_)

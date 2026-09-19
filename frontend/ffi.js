@@ -57,13 +57,12 @@ function openClusterStatusStream(app) {
   });
 }
 
+let elmApp = null;
 let stepStatusSource = null;
-let agentTurnSource = null;
-let agentTurnTargetKey = null;
 const AGENT_TURN_INITIAL_RETRY_DELAY = 1000;
 const AGENT_TURN_MAX_RETRY_DELAY = 30000;
-let agentTurnDeliveredLength = 0;
-let agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
+
+const agentTurnStreams = new Map();
 
 function closeStepStatusStream() {
   if (stepStatusSource) {
@@ -72,14 +71,116 @@ function closeStepStatusStream() {
   }
 }
 
-function closeAgentTurnStream() {
-  if (agentTurnSource) {
-    agentTurnSource.close();
-    agentTurnSource = null;
+function closeAgentTurnStream(turnId) {
+  const stream = agentTurnStreams.get(turnId);
+  if (!stream) {
+    return;
   }
-  agentTurnTargetKey = null;
-  agentTurnDeliveredLength = 0;
-  agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
+  clearTimeout(stream.timer);
+  if (stream.source) {
+    stream.source.close();
+  }
+  agentTurnStreams.delete(turnId);
+}
+
+function closeAllAgentTurnStreams() {
+  for (const turnId of [...agentTurnStreams.keys()]) {
+    closeAgentTurnStream(turnId);
+  }
+}
+
+function emitAgentTurnEvent(type, data) {
+  if (elmApp && elmApp.ports && elmApp.ports.agentTurnIn) {
+    elmApp.ports.agentTurnIn.send({ type, data });
+  }
+}
+
+function connectAgentTurnStream(turnId) {
+  const stream = agentTurnStreams.get(turnId);
+  if (!stream) {
+    return;
+  }
+  const { sessionId } = stream;
+  let replaySkip = stream.delivered;
+  const source = new EventSource(
+    `/backend/agent/turn/${encodeURIComponent(turnId)}/stream`,
+  );
+  stream.source = source;
+
+  source.addEventListener("chunk", (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      const fresh = data.chunk.slice(replaySkip);
+      replaySkip = 0;
+      stream.delivered += fresh.length;
+      stream.retryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
+      if (fresh) {
+        emitAgentTurnEvent("chunk", { sessionId, chunk: fresh });
+      }
+    } catch (err) {
+      emitAgentTurnEvent("error", {
+        sessionId,
+        turnId,
+        message: `Failed to parse agent log chunk: ${String(err)}`,
+      });
+    }
+  });
+
+  source.addEventListener("done", () => {
+    emitAgentTurnEvent("done", { sessionId, turnId });
+    closeAgentTurnStream(turnId);
+  });
+
+  source.addEventListener("heartbeat", () => {
+    stream.retryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
+    emitAgentTurnEvent("heartbeat", { sessionId, turnId });
+  });
+
+  source.onerror = () => {
+    source.close();
+    if (agentTurnStreams.get(turnId) !== stream || stream.source !== source) {
+      return;
+    }
+    stream.source = null;
+    const delay = stream.retryDelay;
+    if (delay === AGENT_TURN_INITIAL_RETRY_DELAY) {
+      emitAgentTurnEvent("error", {
+        sessionId,
+        turnId,
+        message: "Agent turn stream connection issue",
+      });
+    }
+    stream.retryDelay = Math.min(delay * 2, AGENT_TURN_MAX_RETRY_DELAY);
+    stream.timer = setTimeout(() => {
+      if (agentTurnStreams.get(turnId) === stream && !stream.source) {
+        connectAgentTurnStream(turnId);
+      }
+    }, delay);
+  };
+}
+
+function openAgentTurnStream({ sessionId, turnId }) {
+  if (!turnId) {
+    return;
+  }
+  const stream = agentTurnStreams.get(turnId);
+  if (stream) {
+    if (stream.source) {
+      return;
+    }
+    clearTimeout(stream.timer);
+    stream.retryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
+    connectAgentTurnStream(turnId);
+    return;
+  }
+  agentTurnStreams.set(turnId, {
+    sessionId,
+    source: null,
+    delivered: 0,
+    retryDelay: AGENT_TURN_INITIAL_RETRY_DELAY,
+    timer: null,
+  });
+  connectAgentTurnStream(turnId);
 }
 
 function toggleTheme() {
@@ -122,15 +223,10 @@ function installGutterDragListeners(app) {
 }
 
 export function connectPorts(app) {
+  elmApp = app;
   function emitToElm(type, data) {
     if (app.ports && app.ports.stepStatusIn) {
       app.ports.stepStatusIn.send({ type, data });
-    }
-  }
-
-  function emitAgentTurn(type, data) {
-    if (app.ports && app.ports.agentTurnIn) {
-      app.ports.agentTurnIn.send({ type, data });
     }
   }
 
@@ -157,66 +253,6 @@ export function connectPorts(app) {
     stepStatusSource.onerror = () => {
       emitToElm("error", "Step status stream connection issue");
     };
-  }
-
-  function connectAgentTurnStream(turnId) {
-    const source = new EventSource(
-      `/backend/agent/turn/${encodeURIComponent(turnId)}/stream`,
-    );
-    let replayLength = agentTurnDeliveredLength;
-    agentTurnSource = source;
-
-    source.addEventListener("chunk", (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        data.chunk = data.chunk.slice(replayLength);
-        replayLength = 0;
-        agentTurnDeliveredLength += data.chunk.length;
-        agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
-        if (data.chunk) emitAgentTurn("chunk", data);
-      } catch (err) {
-        emitAgentTurn("error", `Failed to parse agent log chunk: ${String(err)}`);
-      }
-    });
-
-    source.addEventListener("done", (event) => {
-      try {
-        emitAgentTurn("done", JSON.parse(event.data));
-      } catch {
-        emitAgentTurn("done", { turnId });
-      }
-      closeAgentTurnStream();
-    });
-
-    source.addEventListener("heartbeat", (event) => {
-      agentTurnRetryDelay = AGENT_TURN_INITIAL_RETRY_DELAY;
-      try {
-        emitAgentTurn("heartbeat", JSON.parse(event.data));
-      } catch {}
-    });
-
-    source.onerror = () => {
-      source.close();
-      if (source !== agentTurnSource || agentTurnTargetKey !== turnId) return;
-
-      agentTurnSource = null;
-      const delay = agentTurnRetryDelay;
-      if (delay === AGENT_TURN_INITIAL_RETRY_DELAY) {
-        emitAgentTurn("error", "Agent turn stream connection issue");
-      }
-      agentTurnRetryDelay = Math.min(delay * 2, AGENT_TURN_MAX_RETRY_DELAY);
-      setTimeout(() => {
-        if (agentTurnTargetKey === turnId && !agentTurnSource) {
-          connectAgentTurnStream(turnId);
-        }
-      }, delay);
-    };
-  }
-
-  function openAgentTurnStream({ turnId }) {
-    closeAgentTurnStream();
-    agentTurnTargetKey = turnId;
-    connectAgentTurnStream(turnId);
   }
 
   function storeLastChat(sessionId) {
@@ -258,7 +294,7 @@ export function connectPorts(app) {
 
   window.addEventListener("beforeunload", () => {
     closeStepStatusStream();
-    closeAgentTurnStream();
+    closeAllAgentTurnStreams();
     if (clusterStatusSource) clusterStatusSource.close();
   });
 }
