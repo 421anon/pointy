@@ -1,4 +1,4 @@
-module Channels exposing (agentTurn, clusterStatus, stepStatus)
+module Channels exposing (agentTurns, clusterStatus, stepStatus)
 
 import Flow.Channel as Channel exposing (Channel)
 import Json.Decode
@@ -10,9 +10,9 @@ stepStatus =
     Channel.connect Ports.stepStatusIn (\_ -> Ports.openStepStatusStream {})
 
 
-agentTurn : String -> Channel s Json.Decode.Value
-agentTurn turnId =
-    Channel.connect Ports.agentTurnIn (\_ -> Ports.openAgentTurnStream { turnId = turnId })
+agentTurns : Channel s Json.Decode.Value
+agentTurns =
+    Channel.join Ports.agentTurnIn
 
 
 clusterStatus : Channel s Json.Decode.Value

@@ -14,9 +14,10 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentState, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), ProjectRecord, ReviewDraft, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSessionView, AgentState, ChatEntry, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), PendingQuestion, ProjectRecord, ReviewDraft, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
+import Set exposing (Set)
 import Time
 import Toast exposing (Toast)
 
@@ -759,6 +760,89 @@ origin =
 agent : Lens ls Model AgentState x y
 agent =
     lens ".agent" Model.getAgent (\(Model m) agent_ -> Model { m | agent = agent_ })
+
+
+sessions : Lens ls AgentState (ApiData (List AgentSessionView)) x y
+sessions =
+    lens ".sessions" .sessions (\s sessions_ -> { s | sessions = sessions_ })
+
+
+liveTurns : Lens ls AgentState (Dict String AgentLiveTurn) x y
+liveTurns =
+    lens ".liveTurns" .liveTurns (\s liveTurns_ -> { s | liveTurns = liveTurns_ })
+
+
+liveTurnAt : String -> Lens ls AgentState (Maybe AgentLiveTurn) x y
+liveTurnAt sessionId =
+    liveTurns << Dict.Accessors.at sessionId
+
+
+refreshingSessions : Lens ls AgentState (Set String) x y
+refreshingSessions =
+    lens ".refreshingSessions" .refreshingSessions (\s refreshing_ -> { s | refreshingSessions = refreshing_ })
+
+
+turnId : Lens ls { a | turnId : b } b x y
+turnId =
+    lens ".turnId" .turnId (\t turnId_ -> { t | turnId = turnId_ })
+
+
+finished : Lens ls { a | finished : b } b x y
+finished =
+    lens ".finished" .finished (\t finished_ -> { t | finished = finished_ })
+
+
+entries : Lens ls { a | entries : b } b x y
+entries =
+    lens ".entries" .entries (\t entries_ -> { t | entries = entries_ })
+
+
+pendingQuestion : Lens ls { a | pendingQuestion : b } b x y
+pendingQuestion =
+    lens ".pendingQuestion" .pendingQuestion (\t question -> { t | pendingQuestion = question })
+
+
+streamError : Lens ls { a | streamError : b } b x y
+streamError =
+    lens ".streamError" .streamError (\t error -> { t | streamError = error })
+
+
+sessionViewAt : String -> Traversal AgentState AgentSessionView x y
+sessionViewAt sessionId =
+    sessions << success << by (.session >> .sessionId) sessionId
+
+
+agentSessionRunning : String -> AgentState -> Bool
+agentSessionRunning sessionId agentState =
+    (try (liveTurnAt sessionId << just << finished) agentState
+        |> Maybe.withDefault True
+        |> not
+    )
+        || (try (sessionViewAt sessionId) agentState
+                |> Maybe.map
+                    (\view ->
+                        (view.session.activeTurnId /= Nothing)
+                            || (view.session.status == "running")
+                    )
+                |> Maybe.withDefault False
+           )
+
+
+agentSessionBlocked : String -> AgentState -> Bool
+agentSessionBlocked sessionId agentState =
+    Model.agentMutationPending agentState || agentSessionRunning sessionId agentState
+
+
+sessionEntries : AgentSessionView -> AgentState -> List ChatEntry
+sessionEntries view agentState =
+    try (liveTurnAt view.session.sessionId << just << entries) agentState
+        |> Maybe.withDefault (Model.persistedTranscript view)
+
+
+sessionPendingQuestion : AgentSessionView -> AgentState -> Maybe PendingQuestion
+sessionPendingQuestion view agentState =
+    try (liveTurnAt view.session.sessionId << just << pendingQuestion) agentState
+        |> Maybe.withDefault (Model.persistedQuestion view)
 
 
 now : Lens ls Model Time.Posix x y

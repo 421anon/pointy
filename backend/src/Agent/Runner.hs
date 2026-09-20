@@ -8,6 +8,13 @@ module Agent.Runner (
     steerAgentTurn,
     turnLogStreamHandler,
     streamLoop,
+    RunnerInput,
+    SteerOutcome (..),
+    handleDialog,
+    handleRpcEventSafely,
+    newRunnerInput,
+    streamHandle,
+    planSteer,
 ) where
 
 import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
@@ -33,13 +40,14 @@ import Agent.Title (generateSessionTitle)
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
+import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
-import Control.Exception (IOException, SomeException, finally, try)
-import Control.Lens (failing, filtered, (^.), (^?))
-import Control.Monad (forM_, guard, unless, void, when)
+import Control.Exception (IOException, SomeException, catch, displayException, finally, try)
+import Control.Lens (failing, filtered, (^.), (^..), (^?))
+import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
 import qualified Control.Monad.Except as Except
 import Control.Monad.IO.Class (liftIO)
@@ -47,8 +55,10 @@ import qualified Data.Aeson as Aeson
 import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.Char (isDigit)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -58,7 +68,7 @@ import Data.Time.Clock (getCurrentTime)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
-import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getFileSize)
+import System.Directory (copyFile, createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist, doesFileExist, getFileSize, getSymbolicLinkTarget, listDirectory, pathIsSymbolicLink, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
@@ -66,6 +76,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (sigKILL, signalProcess)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
+import Text.Read (readMaybe)
 import UserRepo (userRepoPath, withUserRepoExclusive)
 
 {-# NOINLINE activeRunners #-}
@@ -82,7 +93,20 @@ data RunnerInput = RunnerInput
     , inputPending :: Maybe (Text, TMVar Bool)
     , inputPromptSeen :: Bool
     , inputRetrying :: Bool
+    , inputQuestion :: Maybe PendingQuestion
     }
+
+newRunnerInput :: Handle -> IO (MVar (Maybe RunnerInput))
+newRunnerInput handle =
+    newMVar $
+        Just
+            RunnerInput
+                { inputHandle = handle
+                , inputPending = Nothing
+                , inputPromptSeen = False
+                , inputRetrying = False
+                , inputQuestion = Nothing
+                }
 
 {-# NOINLINE runnerInputs #-}
 runnerInputs :: TVar (Map.Map Text (MVar (Maybe RunnerInput)))
@@ -90,6 +114,24 @@ runnerInputs = unsafePerformIO $ newTVarIO Map.empty
 
 steerAckTimeoutMicros :: Int
 steerAckTimeoutMicros = 10 * 1000000
+
+data SteerOutcome = SteerFailed | SteerAnsweredQuestion Text | SteerSentToAgent
+
+planSteer :: Text -> Text -> TMVar Bool -> RunnerInput -> Maybe (Aeson.Value, RunnerInput, SteerOutcome)
+planSteer prompt requestId reply control = case inputQuestion control of
+    Just question ->
+        let (response, carriedQuestion, answerText) = answerQuestion question prompt
+         in Just (response, control{inputQuestion = carriedQuestion}, SteerAnsweredQuestion answerText)
+    Nothing ->
+        (steerCommand requestId prompt, control{inputPending = Just (requestId, reply)}, SteerSentToAgent)
+            <$ guard (isNothing (inputPending control))
+
+steerCommand :: Text -> Text -> Aeson.Value
+steerCommand requestId prompt =
+    Aeson.object ["id" Aeson..= requestId, "type" Aeson..= ("prompt" :: Text), "message" Aeson..= prompt, "streamingBehavior" Aeson..= ("steer" :: Text)]
+
+jsonLine :: (Aeson.ToJSON a) => a -> Text
+jsonLine = TE.decodeUtf8 . LBS.toStrict . Aeson.encode
 
 steerAgentTurn :: Text -> Text -> ExceptT String IO ()
 steerAgentTurn sid rawPrompt = do
@@ -99,33 +141,41 @@ steerAgentTurn sid rawPrompt = do
     stopped <- liftIO $ turnStopRequested tid
     when stopped $ Except.throwError "runner_stopping"
     input <- lookupForSession "runner_not_ready" runnerInputs
-    requestId <- liftIO newTurnId
-    reply <- liftIO newEmptyTMVarIO
-    let steerCommand =
-            Aeson.object
-                [ "id" Aeson..= requestId
-                , "type" Aeson..= ("prompt" :: Text)
-                , "message" Aeson..= prompt
-                , "streamingBehavior" Aeson..= ("steer" :: Text)
-                ]
-    sent <- liftIO $ modifyMVar input $ \current -> case current of
-        Just control | Nothing <- inputPending control -> do
-            result <- try (writeRpc (inputHandle control) steerCommand)
-            return $ case result :: Either IOException () of
-                Left _ -> (current, False)
-                Right () -> (Just control{inputPending = Just (requestId, reply)}, True)
-        _ -> return (current, False)
-    unless sent $ Except.throwError "steering_failed"
-    accepted <- liftIO $ timeout steerAckTimeoutMicros (atomically $ takeTMVar reply)
-    unless (accepted == Just True) $ Except.throwError "steering_failed"
+    (requestId, reply) <- liftIO $ (,) <$> newTurnId <*> newEmptyTMVarIO
+    outcome <- liftIO $ modifyMVar input (steerStep prompt requestId reply)
+    case outcome of
+        SteerFailed -> Except.throwError "steering_failed"
+        SteerAnsweredQuestion answer -> logAnsweredSteer tid answer
+        SteerSentToAgent -> awaitSteerAck reply
   where
     lookupForSession err var =
         liftIO (atomically (Map.lookup sid <$> readTVar var))
             >>= maybe (Except.throwError err) return
+    steerStep prompt requestId reply current =
+        case current >>= planSteer prompt requestId reply of
+            Just plan | Just control <- current -> sendSteerPlan control plan
+            _ -> return (current, SteerFailed)
+    -- A message that never went out must not be recorded as an accepted steer
+    -- or a consumed answer: nothing will ever acknowledge it.
+    sendSteerPlan :: RunnerInput -> (Aeson.Value, RunnerInput, SteerOutcome) -> IO (Maybe RunnerInput, SteerOutcome)
+    sendSteerPlan control (message, updatedControl, outcome) =
+        (try (writeToRunner control message) :: IO (Either IOException ()))
+            >>= return . either (const (Just control, SteerFailed)) (const (Just updatedControl, outcome))
+    -- The chat renders "steering" log lines as user messages, so an answer names the row it picked.
+    logAnsweredSteer tid answer = liftIO $ do
+        cfg <- configAgent <$> (resolveConfigPath >>= loadConfig)
+        logPath <- turnLogFilePath sid tid
+        appendLogLine cfg logPath "steering" (jsonLine answer)
+    awaitSteerAck reply = do
+        accepted <- liftIO $ timeout steerAckTimeoutMicros (atomically $ takeTMVar reply)
+        unless (fromMaybe False accepted) $ Except.throwError "steering_failed"
+
+writeToRunner :: RunnerInput -> Aeson.Value -> IO ()
+writeToRunner = writeRpc . inputHandle
 
 writeRpc :: Handle -> Aeson.Value -> IO ()
-writeRpc handle command = do
-    LBS.hPut handle (Aeson.encode command <> "\n")
+writeRpc handle message = do
+    LBS.hPut handle (Aeson.encode message <> "\n")
     hFlush handle
 
 closeRunnerInput :: MVar (Maybe RunnerInput) -> IO ()
@@ -316,11 +366,11 @@ runTurnProcess cfg session_ turn prompt isFirstTurn =
             let mWarmFile = case mWarmResult of
                     Just (Right meta) -> Just (warmSessionFile meta)
                     _ -> Nothing
-            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either IOException ExitCode)
+            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either SomeException ExitCode)
             exitCode <- case result of
                 Left err -> do
-                    appendLogLine cfg (turnLogPath turn) "system" ("Runner failed to start: " <> T.pack (show err))
-                    return $ ExitFailure 127
+                    appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
+                    return $ ExitFailure 1
                 Right code -> return code
             finishTurn cfg session_ turn exitCode
 
@@ -382,7 +432,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (Just hin, Just hout, mErr, ph) <- createProcess process
-    input <- newMVar (Just (RunnerInput hin Nothing False False))
+    input <- newRunnerInput hin
     let cleanup = do
             atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
             closeRunnerInput input
@@ -392,7 +442,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText]
                 writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
                 atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
-            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEvent cfg (turnLogPath turn) input) hout
+            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
             errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr" (const $ return ())) mErr
             mExit <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
             exitCode <- case mExit of
@@ -411,13 +461,164 @@ seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
     srcDir <- piAgentConfigDir
     let dstDir = runnerHome </> ".pi" </> "agent"
-    forM_ ["models.json", "settings.json"] $ \name -> do
-        let src = srcDir </> name
-            dst = dstDir </> name
-        exists <- doesFileExist src
-        when exists $ do
-            createDirectoryIfMissing True dstDir
-            copyFile src dst
+    present <- filterM (doesFileExist . (srcDir </>)) ["models.json", "settings.json"]
+    forM_ present $ \name -> do
+        createDirectoryIfMissing True dstDir
+        copyFile (srcDir </> name) (dstDir </> name)
+    seedExtensions (srcDir </> "extensions") (dstDir </> "extensions")
+
+{- | Only symlinks are re-created: the module links a store path the sandbox
+already sees read-only.
+-}
+seedExtensions :: FilePath -> FilePath -> IO ()
+seedExtensions src dst = do
+    hasExtensions <- doesDirectoryExist src
+    when hasExtensions $ do
+        removePathForcibly dst
+        createDirectoryIfMissing True dst
+        linked <- filterM (pathIsSymbolicLink . (src </>)) =<< listDirectory src
+        forM_ linked $ \name ->
+            getSymbolicLinkTarget (src </> name) >>= flip createDirectoryLink (dst </> name)
+
+data PendingQuestion = PendingQuestion
+    { questionDialogId :: Text
+    , questionRows :: [Text]
+    , questionMulti :: Bool
+    , questionStashedReply :: Maybe Text
+    }
+
+dialogMethods :: [Text]
+dialogMethods = ["select", "input"]
+
+dialogResponse :: Text -> Text -> Aeson.Value
+dialogResponse dialogId value =
+    Aeson.object ["type" Aeson..= ("extension_ui_response" :: Text), "id" Aeson..= dialogId, "value" Aeson..= value]
+
+dialogDecline :: Text -> Aeson.Value
+dialogDecline dialogId =
+    Aeson.object ["type" Aeson..= ("extension_ui_response" :: Text), "id" Aeson..= dialogId, "cancelled" Aeson..= True]
+
+withoutQuestionOf :: Text -> Maybe PendingQuestion -> Maybe PendingQuestion
+withoutQuestionOf dialogId = mfilter ((/= dialogId) . questionDialogId)
+
+chosenIndex :: Int -> Text -> Maybe Int
+chosenIndex optionCount = mfilter (`elem` [1 .. optionCount]) . readMaybe . T.unpack . T.strip
+
+{- | Rows are numbered from 1, and the package appends its own "type something"
+row last and reads the reply back with parseInt: a reply that names none of the
+offered rows is sent as that last row's number, with the text kept for the
+follow-up dialog, because anything else cancels the whole questionnaire.
+-}
+answerQuestion :: PendingQuestion -> Text -> (Aeson.Value, Maybe PendingQuestion, Text)
+answerQuestion question reply = (dialogResponse (questionDialogId question) dialogValue, carried, answerText)
+  where
+    freeTextRow = questionFreeTextRow question
+    pick = pickedRow question reply
+    dialogValue = maybe reply (T.pack . show) (fst <$> pick <|> freeTextRow)
+    answerText = fromMaybe reply (snd <$> pick <|> pickedMultiRows question reply)
+    carried = question{questionStashedReply = Just reply} <$ guard (isJust freeTextRow && isNothing pick)
+
+questionFreeTextRow :: PendingQuestion -> Maybe Int
+questionFreeTextRow question
+    | questionMulti question = Nothing
+    | otherwise = fmap length (NE.nonEmpty (questionRows question))
+
+numberedQuestionRows :: PendingQuestion -> [(Int, Text)]
+numberedQuestionRows = zip [1 ..] . questionRows
+
+pickedRow :: PendingQuestion -> Text -> Maybe (Int, Text)
+pickedRow question reply = do
+    row <- questionFreeTextRow question
+    number <- chosenIndex (row - 1) reply
+    fmap ((,) number) (lookup number (numberedQuestionRows question))
+
+pickedMultiRows :: PendingQuestion -> Text -> Maybe Text
+pickedMultiRows question reply = do
+    guard (questionMulti question)
+    numbers <- NE.nonEmpty (replyRowNumbers reply)
+    labels <- traverse (`lookup` numberedQuestionRows question) numbers
+    pure (T.intercalate ", " (NE.toList labels))
+
+replyRowNumbers :: Text -> [Int]
+replyRowNumbers = mapMaybe rowNumber . T.words . T.replace "," " "
+  where
+    rowNumber = readMaybe . T.unpack . T.dropWhileEnd (== '.')
+
+data DialogQuestion = DialogQuestion
+    { dialogMulti :: Bool
+    , dialogRows :: [Text]
+    }
+
+dialogQuestion :: Aeson.Value -> DialogQuestion
+dialogQuestion event
+    | not (null options) = DialogQuestion False options
+    | otherwise = DialogQuestion True (titleRows title)
+  where
+    options = event ^.. key "options" . values . _String
+    title = event ^. key "title" . _String
+
+pendingQuestion :: Text -> DialogQuestion -> PendingQuestion
+pendingQuestion dialogId question =
+    PendingQuestion dialogId (dialogRows question) (dialogMulti question) Nothing
+
+pickableRows :: DialogQuestion -> [Text]
+pickableRows question
+    | dialogMulti question = dialogRows question
+    | otherwise = maybe [] NE.init (NE.nonEmpty (dialogRows question))
+
+pickablePayload :: DialogQuestion -> Maybe Aeson.Value
+pickablePayload question
+    | null rows = Nothing
+    | otherwise = Just (Aeson.object ["multi" Aeson..= dialogMulti question, "options" Aeson..= rows])
+  where
+    rows = pickableRows question
+
+questionLines :: DialogQuestion -> [(Text, Text)]
+questionLines = foldMap (\payload -> [("question", jsonLine payload)]) . pickablePayload
+
+titleRows :: Text -> [Text]
+titleRows title =
+    case reverse (filter (not . T.null) (T.splitOn "\n\n" title)) of
+        _instructions : block : _ | numberedBlock block -> T.lines block
+        _ -> []
+
+numberedBlock :: Text -> Bool
+numberedBlock block =
+    let rows = T.lines block
+        numbers = mapMaybe rowNumber rows
+    in numbers == [1 .. length rows]
+  where
+    rowNumber row = do
+        let (digits, rest) = T.span isDigit row
+        guard (not (T.null digits) && T.isPrefixOf ". " rest)
+        readMaybe (T.unpack digits)
+
+{- | A second dialog arriving while one is open is declined: pi runs tool calls
+concurrently, and the chat shows one question at a time.
+-}
+handleDialog :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleDialog cfg logPath input event =
+    case (event ^? key "id" . _String, event ^? key "method" . _String) of
+        (Just dialogId, Just method)
+            | method `elem` dialogMethods ->
+                modifyMVar input (answerDialog dialogId) >>= mapM_ (uncurry (appendLogLine cfg logPath))
+            | otherwise -> withMVar input $ mapM_ (\control -> writeToRunner control (dialogDecline dialogId))
+        _ -> return ()
+  where
+    rows = event ^.. key "options" . values . _String
+    title = event ^. key "title" . _String
+    asked = dialogQuestion event
+    dialogLines =
+        [("stdout", line) | line <- "" : T.splitOn "\n" title ++ rows ++ [""]]
+            ++ questionLines asked
+    answerDialog :: Text -> Maybe RunnerInput -> IO (Maybe RunnerInput, [(Text, Text)])
+    answerDialog _ Nothing = return (Nothing, [])
+    answerDialog dialogId (Just control) = case inputQuestion control of
+        Nothing -> return (Just control{inputQuestion = Just (pendingQuestion dialogId asked)}, dialogLines)
+        Just question -> do
+            let stashed = questionStashedReply question
+            writeToRunner control (maybe (dialogDecline dialogId) (dialogResponse dialogId) stashed)
+            return (Just $ maybe control (const control{inputQuestion = Nothing}) stashed, [])
 
 -- Pi 0.75 emits agent_end before automatic retry/compaction events; check its state before EOF.
 handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
@@ -433,6 +634,7 @@ handleRpcEvent cfg logPath input event =
                     when (inputPromptSeen control) $
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
                     return control{inputPromptSeen = True}
+        Just "extension_ui_request" -> handleDialog cfg logPath input event
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True
         Just "auto_retry_end" -> do
@@ -468,10 +670,26 @@ handleRpcEvent cfg logPath input event =
                 _ -> return ()
         _ -> return ()
   where
-    send command = withMVar input $ mapM_ $ \control ->
-        writeRpc (inputHandle control) $ Aeson.object ["type" Aeson..= (command :: Text)]
+    send command = withMVar input $ mapM_ (\control -> writeToRunner control (Aeson.object ["type" Aeson..= (command :: Text)]))
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
+
+-- A failing handler must not kill the reader: pi writes into the pipe the reader
+-- drains, and waits on the dialogs the reader answers.
+handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleRpcEventSafely cfg logPath input event =
+    handleRpcEvent cfg logPath input event `catch` \(ex :: SomeException) ->
+        void (try (noteFailed ex) :: IO (Either SomeException ()))
+  where
+    noteFailed ex = do
+        appendLogLine cfg logPath "system" $
+            "Could not handle the runner's " <> eventKind <> " event: " <> T.pack (displayException ex)
+        when (event ^. key "type" . _String == "extension_ui_request") $
+            forM_ (event ^? key "id" . _String) declineAndForget
+    declineAndForget dialogId = do
+        void (try (withMVar input $ mapM_ (flip writeToRunner (dialogDecline dialogId))) :: IO (Either IOException ()))
+        modifyMVar_ input $ return . fmap (\control -> control{inputQuestion = withoutQuestionOf dialogId (inputQuestion control)})
+    eventKind = fromMaybe "unknown" (event ^? key "type" . _String)
 
 streamHandle :: AgentConfig -> FilePath -> Text -> Text -> (Aeson.Value -> IO ()) -> Handle -> IO Bool
 streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do
