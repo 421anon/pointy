@@ -1626,29 +1626,29 @@ buildDelimitedGrid header rows mTableMeta =
                 Nothing ->
                     List.repeat columnCount { columnType = Grid.Text, nullable = False }
 
-        sampleRows =
-            List.take 100 normalizedRows
+        maxCharsByColumn =
+            maxLengthsByColumn normalizedRows normalizedHeader
 
         delimitedColumns =
-            List.indexedMap
-                (\index title ->
-                    let
-                        colMeta =
-                            List.getAt index effectiveColMetas
-                                |> Maybe.withDefault { columnType = Grid.Text, nullable = True }
-                    in
-                    { id = "column-" ++ String.fromInt index
-                    , title =
-                        if String.isEmpty (String.trim title) then
-                            "Column " ++ String.fromInt (index + 1)
+            List.map2 Tuple.pair normalizedHeader maxCharsByColumn
+                |> List.indexedMap
+                    (\index ( title, maxChars ) ->
+                        let
+                            colMeta =
+                                List.getAt index effectiveColMetas
+                                    |> Maybe.withDefault { columnType = Grid.Text, nullable = True }
+                        in
+                        { id = "column-" ++ String.fromInt index
+                        , title =
+                            if String.isEmpty (String.trim title) then
+                                "Column " ++ String.fromInt (index + 1)
 
-                        else
-                            title
-                    , width = delimitedColumnWidth title (List.map (listCell index) sampleRows)
-                    , type_ = colMeta.columnType
-                    }
-                )
-                normalizedHeader
+                            else
+                                title
+                        , width = delimitedColumnWidth maxChars
+                        , type_ = colMeta.columnType
+                        }
+                    )
     in
     { grid = Grid.init delimitedColumns (List.map Array.fromList normalizedRows)
     }
@@ -1663,20 +1663,23 @@ padDelimitedCells targetLength cells =
         cells ++ List.repeat (targetLength - List.length cells) ""
 
 
-listCell : Int -> List String -> String
-listCell index cells =
-    List.getAt index cells |> Maybe.withDefault ""
+{-| Per-column maximum cell length, starting from the header titles and
+folding in every row, so the width covers the whole column, not a sample.
+-}
+maxLengthsByColumn : List (List String) -> List String -> List Int
+maxLengthsByColumn rows header =
+    List.foldl
+        (List.map2 max << List.map String.length)
+        (List.map String.length header)
+        rows
 
 
-delimitedColumnWidth : String -> List String -> Int
-delimitedColumnWidth title values =
-    let
-        maxChars =
-            values
-                |> List.map String.length
-                |> List.foldl max (String.length title)
-    in
-    clamp 88 320 ((maxChars + 2) * 9)
+{-| Column width in pixels: wide enough for the longest cell, and never
+narrower than 88px. No upper bound — a long value gets a wide column.
+-}
+delimitedColumnWidth : Int -> Int
+delimitedColumnWidth maxChars =
+    max 88 ((maxChars + 2) * 9)
 
 
 updateStepRecordTable : Table StepRecord -> Table StepRecord -> Table StepRecord
