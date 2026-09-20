@@ -298,16 +298,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                           in
                           Html.viewIf (editing && not table.nameEditOnly)
                             (Html.viewMaybe
-                                (viewAddOrEditRecordForm model
-                                    spec
-                                    table
-                                    (if isReadOnly then
-                                        Html.nothing
-
-                                     else
-                                        srcFilesSection record
-                                    )
-                                )
+                                (viewAddOrEditRecordForm model spec table (srcFilesSection record))
                                 table.edited
                             )
                         , Html.viewIf (TableSpec.getDirectoryView spec record |> Maybe.map .expanded |> Maybe.withDefault False) (directorySection record)
@@ -636,7 +627,7 @@ viewRecordActions spec isReadOnly mProjectId record =
                 _ ->
                     False
 
-        toggleRecordEditor =
+        toggleRecordForm =
             let
                 loadSourceFiles =
                     if sourceFilesNeedLoading then
@@ -665,10 +656,10 @@ viewRecordActions spec isReadOnly mProjectId record =
               , render =
                     \r ->
                         if editable r then
-                            viewIconButtonWithTooltip "edit" True "Edit" toggleRecordEditor
+                            viewIconButtonWithTooltip "edit" True "Edit" toggleRecordForm
 
                         else
-                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" (Actions.toggleAddOrEditRecordForm spec r.id)
+                            viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" toggleRecordForm
               }
             , -- Share button (shareable only)
               { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
