@@ -1,4 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 {- | Download-kind step support: URL prefetch and hash injection. -}
 module Handlers.Download (
@@ -27,6 +29,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Effectful (Eff, (:>))
+import Effects (Eval)
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import System.Exit (ExitCode (..))
 import System.Process (readProcessWithExitCode)
@@ -99,7 +103,7 @@ prefetchFile url = do
 -- Step-config classification
 -----------------------------------------------------------------------------
 
-discoverDownloadTemplates :: (RepoContext ctx) => ctx -> ExceptT String IO (Set Text)
+discoverDownloadTemplates :: (RepoContext ctx, Eval :> es) => ctx -> ExceptT String (Eff es) (Set Text)
 discoverDownloadTemplates ctx = do
     output <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
     case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of

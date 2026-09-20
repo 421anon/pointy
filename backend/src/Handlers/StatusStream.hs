@@ -11,6 +11,7 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TChan)
 import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -19,9 +20,11 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text, pack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import EffectRunner (runAppEffects)
+import Effects (AppM)
 import Handlers.Statuses (broadcastProjectStatus)
 import Network.HTTP.Media ((//))
-import Servant (Handler, Header, Headers, NoContent (..), addHeader, throwError)
+import Servant (Header, Headers, NoContent (..), addHeader, throwError)
 import Servant.API.ContentTypes (Accept (..), MimeRender (..))
 import Servant.Server (err500, errBody)
 import qualified Servant.Types.SourceT as S
@@ -40,7 +43,7 @@ instance MimeRender EventStream BS.ByteString where
 for every project's steps, unfiltered.  Clients open this stream once;
 completion toasts then fire regardless of which page is open.
 -}
-stepStatusStreamHandler :: Handler (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (S.SourceT IO BS.ByteString))
+stepStatusStreamHandler :: AppM (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (S.SourceT IO BS.ByteString))
 stepStatusStreamHandler = do
     busChan <- liftIO subscribe
     let padding = Sse.sseComment $ "padding " <> pack (replicate 4096 ' ')
@@ -60,15 +63,15 @@ step status stream.  The target commit defaults to the current repo head
 when omitted; the evaluation runs in a forked thread so the request
 returns immediately.
 -}
-projectStatusHandler :: Int -> Maybe Text -> Handler NoContent
+projectStatusHandler :: Int -> Maybe Text -> AppM NoContent
 projectStatusHandler projectId commit = do
     targetCommit <-
         case commit of
             Just c -> pure c
             Nothing -> do
-                result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> pure (pack hash)
+                result <- lift $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> pure (pack hash)
                 either (\err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}) pure result
-    liftIO $ void $ forkIO $ broadcastProjectStatus projectId targetCommit Nothing
+    liftIO $ void $ forkIO $ runAppEffects $ broadcastProjectStatus projectId targetCommit Nothing
     pure NoContent
 
 streamLoop :: TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)

@@ -71,6 +71,25 @@
           };
         in
         {
+          lib.mkFixtureServer =
+            { fixture
+            , state
+            , frontend
+            , port ? 8080
+            }:
+            pkgs.writeShellScript "pointy-fixture-server" ''
+              work="''${TMPDIR:-/tmp}/pointy-fixture"
+              mkdir -p "$work"
+              export HOME="$work/home"
+              exec ${self.packages.${system}.backend}/bin/pointy-fixture-server \
+                --repo-source ${fixture} \
+                --state ${state} \
+                --frontend ${frontend} \
+                --work-dir "$work" \
+                --port ${toString port} \
+                "$@"
+            '';
+
           apps = {
             update-elm = mkApp "update-elm" ''
               cd frontend

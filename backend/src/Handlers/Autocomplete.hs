@@ -6,6 +6,7 @@ module Handlers.Autocomplete (AutocompleteRequest (..), autocompleteHandler) whe
 import Control.Monad (unless)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON, eitherDecode)
 import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
 import Data.Map (Map)
@@ -14,8 +15,10 @@ import Data.Text (Text, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Effectful (Eff)
+import Effects (AppM)
 import GHC.Generics (Generic)
-import Servant (Handler, throwError)
+import Servant (throwError)
 import Servant.Server (err400, err500, errBody)
 import UserRepo (ReadRepoContext (..), fetchRepo, runNixEvalJsonApplyInRepo, withReadRepoTransaction)
 
@@ -30,44 +33,46 @@ data AutocompleteRequest = AutocompleteRequest
 
 instance FromJSON AutocompleteRequest
 
-autocompleteHandler :: Maybe Text -> AutocompleteRequest -> Handler [Text]
+autocompleteHandler :: Maybe Text -> AutocompleteRequest -> AppM [Text]
 autocompleteHandler mCommit req = do
     validateRequest req
     let clampedLimit = clampLimit (limit req)
         attr = buildAttr (template req) (autocomplete req)
         applyExpr = buildApplyExpr req clampedLimit
-    result <- liftIO $ case mCommit of
-        Just commit -> withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
+    result <- case mCommit of
+        Just commit -> lift $ withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
             output <- runNixEvalJsonApplyInRepo (ReadRepoContext repoPath $ unpack commit) applyExpr attr
             decodeOutput output
-        Nothing -> runExceptT $ do
-            fetchRepo
-            ExceptT $ withReadRepoTransaction $ \ctx -> do
-                output <- runNixEvalJsonApplyInRepo ctx applyExpr attr
-                decodeOutput output
+        Nothing -> do
+            fetched <- liftIO $ runExceptT fetchRepo
+            case fetched of
+                Left err -> return (Left err)
+                Right () -> lift $ withReadRepoTransaction $ \ctx -> do
+                    output <- runNixEvalJsonApplyInRepo ctx applyExpr attr
+                    decodeOutput output
     case result of
         Right values -> return values
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-validateRequest :: AutocompleteRequest -> Handler ()
+validateRequest :: AutocompleteRequest -> AppM ()
 validateRequest req = do
     requireSafeIdentifier "template" (template req)
     requireSafeIdentifier "autocomplete" (autocomplete req)
     requireSafePackageText "query" (query req)
     mapM_ validateContextEntry (Map.toList (context req))
 
-validateContextEntry :: (Text, Text) -> Handler ()
+validateContextEntry :: (Text, Text) -> AppM ()
 validateContextEntry (key, value) = do
     requireSafeIdentifier ("context key " <> key) key
     requireSafePackageText ("context value " <> key) value
 
-requireSafeIdentifier :: Text -> Text -> Handler ()
+requireSafeIdentifier :: Text -> Text -> AppM ()
 requireSafeIdentifier name value =
     unless (not (T.null value) && T.all isSafeIdentifierChar value) $
         throwError $
             err400{errBody = TLE.encodeUtf8 (TL.fromStrict $ name <> " contains unsafe characters")}
 
-requireSafePackageText :: Text -> Text -> Handler ()
+requireSafePackageText :: Text -> Text -> AppM ()
 requireSafePackageText name value =
     unless (T.all isSafePackageChar value) $
         throwError $
@@ -101,7 +106,7 @@ buildApplyExpr req clampedLimit =
 renderAttr :: (Text, Text) -> String
 renderAttr (key, value) = unpack key <> " = \"" <> unpack value <> "\"; "
 
-decodeOutput :: String -> ExceptT String IO [Text]
+decodeOutput :: String -> ExceptT String (Eff es) [Text]
 decodeOutput output =
     ExceptT $
         return $

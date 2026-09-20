@@ -1,26 +1,35 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Handlers.SrcFiles (getStepSrcFilesPath, listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, srcRawHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Monad (unless, when)
+import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (ToJSON)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Effectful (Eff, IOE, (:>))
+import EffectRunner (runAppEffects)
+import Effects (AppM, Eval)
 import GHC.Generics (Generic)
 import Handlers.Store (DirEntry, FileChunk, downloadHandler, fromRawBase, listHandler, parseSeekOffset, seekHandler)
 import Handlers.StepReview (ensureStepUnreviewed)
+import Network.HTTP.Types (mkStatus)
+import Network.Wai (Application, responseLBS)
 import OutPaths (withWriteRepoTransaction)
-import Network.Wai (Application)
-import Servant (Handler, Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, throwError)
+import Servant (Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, (</>))
@@ -32,28 +41,35 @@ data UserRepoInfo = UserRepoInfo
     }
     deriving (Generic, ToJSON)
 
-getUserRepoInfoHandler :: Handler UserRepoInfo
+getUserRepoInfoHandler :: AppM UserRepoInfo
 getUserRepoInfoHandler = do
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     let userRepo = configUserRepo cfg
     return $ UserRepoInfo (userRepoUrl userRepo) (userRepoBranch userRepo)
 
-getSrcFilesBasePath :: Maybe Text -> Handler Text
-getSrcFilesBasePath mCommit = do
-    result <- liftIO $ withReadRepoTransaction $ \ctx -> do
-        target <- maybe (pure ctx) (\commit -> commitContext (readRepoPath ctx) commit) mCommit
-        output <- runNixEvalRawInRepo target "#pointy.srcFiles"
-        return $ T.strip (T.pack output)
-    case result of
-        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}
-        Right path -> return path
+resolveSrcFilesBasePath :: (IOE :> es, Eval :> es) => Maybe Text -> Eff es (Either ServerError Text)
+resolveSrcFilesBasePath mCommit = do
+    result <-
+        withReadRepoTransaction $ \ctx -> do
+            target <- maybe (pure ctx) (\commit -> ExceptT $ liftIO $ runExceptT $ commitContext (readRepoPath ctx) commit) mCommit
+            output <- runNixEvalRawInRepo target "#pointy.srcFiles"
+            return $ T.strip (T.pack output)
+    pure $ either (Left . srcFilesBaseError) Right result
 
-getStepSrcFilesPath :: Maybe Text -> Int -> Handler FilePath
+srcFilesBaseError :: String -> ServerError
+srcFilesBaseError err =
+    err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}
+
+getSrcFilesBasePath :: Maybe Text -> AppM Text
+getSrcFilesBasePath mCommit =
+    lift (resolveSrcFilesBasePath mCommit) >>= either throwError return
+
+getStepSrcFilesPath :: Maybe Text -> Int -> AppM FilePath
 getStepSrcFilesPath mCommit stepId = do
     basePath <- getSrcFilesBasePath mCommit
     return (T.unpack basePath </> show stepId)
 
-listSrcFilesHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler [DirEntry]
+listSrcFilesHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM [DirEntry]
 listSrcFilesHandler stepId mCommit mRel = do
     fullBasePath <- getStepSrcFilesPath mCommit stepId
     exists <- liftIO $ doesDirectoryExist fullBasePath
@@ -61,7 +77,7 @@ listSrcFilesHandler stepId mCommit mRel = do
         then listHandler (T.pack fullBasePath) mRel
         else return []
 
-downloadSrcFilesHandler :: Int -> Maybe Text -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
+downloadSrcFilesHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadSrcFilesHandler stepId mCommit rel = do
     fullBasePath <- getStepSrcFilesPath mCommit stepId
     downloadHandler (T.pack fullBasePath) rel
@@ -69,13 +85,17 @@ downloadSrcFilesHandler stepId mCommit rel = do
 
 -- | Serves a source file inline (no download disposition) so HTML and other
 -- renderable sources can be shown in preview iframes.
-srcRawHandler :: Int -> Maybe Text -> FilePath -> Tagged Handler Application
+srcRawHandler :: Int -> Maybe Text -> FilePath -> Tagged AppM Application
 srcRawHandler stepId mCommit rel =
-    fromRawBase (getStepSrcFilesPath mCommit stepId) (splitDirectories rel)
+    Tagged $ \request respond -> do
+        resolution <- runAppEffects (resolveSrcFilesBasePath mCommit)
+        case resolution of
+            Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
+            Right basePath -> fromRawBase (T.unpack basePath </> show stepId) (splitDirectories rel) request respond
 
 
 
-seekSrcFilesHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
+seekSrcFilesHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Int -> AppM FileChunk
 seekSrcFilesHandler stepId mCommit rel line byteOffset bytes = do
     offset <- parseSeekOffset line byteOffset bytes
     fullBasePath <- getStepSrcFilesPath mCommit stepId
@@ -83,12 +103,12 @@ seekSrcFilesHandler stepId mCommit rel line byteOffset bytes = do
 
 
 -- | Mutate a step's source file inside a write transaction; a 'False' result raises @falseErr@.
-mutateSrcFile :: Int -> FilePath -> String -> ServerError -> (FilePath -> IO Bool) -> Handler NoContent
+mutateSrcFile :: Int -> FilePath -> String -> ServerError -> (FilePath -> IO Bool) -> AppM NoContent
 mutateSrcFile stepId rel verb falseErr action
     | isAbsolute rel || null segments || any (`elem` [".", ".."]) segments =
         throwError err400{errBody = "Invalid source file path"}
     | otherwise = do
-        result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+        result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
             ensureStepUnreviewed ctx stepId
             done <- liftIO $ action (worktreePath </> "srcFiles" </> relPath)
             when done $ commitAndPushChanges ctx (verb ++ " source file " ++ relPath)
@@ -101,14 +121,14 @@ mutateSrcFile stepId rel verb falseErr action
     segments = splitDirectories rel
     relPath = show stepId </> rel
 
-saveSrcFileHandler :: Int -> FilePath -> Text -> Handler NoContent
+saveSrcFileHandler :: Int -> FilePath -> Text -> AppM NoContent
 saveSrcFileHandler stepId rel content =
     mutateSrcFile stepId rel "Update" err404{errBody = "Source file does not exist"} $ \target -> do
         exists <- doesFileExist target
         when exists $ TIO.writeFile target content
         pure exists
 
-createSrcFileHandler :: Int -> FilePath -> Text -> Handler NoContent
+createSrcFileHandler :: Int -> FilePath -> Text -> AppM NoContent
 createSrcFileHandler stepId rel content =
     mutateSrcFile stepId rel "Create" err409{errBody = "Source file already exists"} $ \target -> do
         exists <- doesPathExist target
@@ -117,7 +137,7 @@ createSrcFileHandler stepId rel content =
             TIO.writeFile target content
         pure (not exists)
 
-deleteSrcFileHandler :: Int -> FilePath -> Handler NoContent
+deleteSrcFileHandler :: Int -> FilePath -> AppM NoContent
 deleteSrcFileHandler stepId rel =
     mutateSrcFile stepId rel "Delete" err404{errBody = "Source file does not exist"} $ \target -> do
         exists <- doesFileExist target

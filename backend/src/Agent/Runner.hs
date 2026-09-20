@@ -65,6 +65,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
+import Interpreters.Production (runProduction)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
@@ -77,7 +78,7 @@ import System.Posix.Signals (sigKILL, signalProcess)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
-import UserRepo (userRepoPath, withUserRepoExclusive)
+import UserRepo (userRepoPath, withUserRepoExclusiveIO)
 
 {-# NOINLINE activeRunners #-}
 -- Nothing reserves an accepted turn before its process exists.
@@ -812,7 +813,7 @@ finishTurn cfg _session turn exitCode = do
     appendLogLine cfg (turnLogPath turn) "system" ("Agent turn finished with exit code " <> T.pack (show exitCodeInt))
     finishResult <-
         ( try
-                ( withUserRepoExclusive $ do
+                ( withUserRepoExclusiveIO $ do
                     loaded <- ExceptT $ loadSessionById (turnSessionId turn)
                     autoCommitResult <- liftIO $ Except.runExceptT $ commitAgentTurnOutputs loaded turn
                     autoCommitError <- case autoCommitResult of

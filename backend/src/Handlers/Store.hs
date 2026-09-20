@@ -1,7 +1,9 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, fromRawBase, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
@@ -13,6 +15,7 @@ import Control.Concurrent.Async (mapConcurrently)
 import Control.Monad (unless, void, when)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (ToJSON (..), Value (Object), eitherDecode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -26,6 +29,9 @@ import Data.Text (Text, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Text.Encoding.Error (lenientDecode)
+import Effectful (Eff, IOE, (:>))
+import EffectRunner (runAppEffects)
+import Effects (AppM, Nix, probeMimeType)
 import GHC.Generics (Generic)
 import Handlers.RunStep (buildExtras)
 
@@ -33,7 +39,6 @@ import qualified Handlers.Zip as Zip
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
 import Servant (
-    Handler,
     Header,
     Headers,
     ServerError (..),
@@ -42,14 +47,11 @@ import Servant (
     err400,
     err404,
     err500,
-    runHandler,
     throwError,
  )
 import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
-import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitDirectories, splitPath, takeExtension, takeFileName, (</>))
-import System.Process (readProcessWithExitCode)
 import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
 
 import System.IO (IOMode (..), SeekMode (..), hSeek, withBinaryFile)
@@ -64,55 +66,54 @@ data DirEntry = DirEntry
     }
     deriving (Generic, Show, ToJSON)
 
-resolveStepOutPath :: Int -> Maybe Text -> Handler Text
+resolveStepOutPath :: Int -> Maybe Text -> AppM Text
 resolveStepOutPath stepId mCommit = do
     repoPath <- liftIO userRepoPath
     commitHash <- case mCommit of
         Just c -> return (unpack c)
         Nothing -> do
-            result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return hash
+            result <- lift $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return hash
             case result of
                 Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveStepOutPath: " ++ err))}
                 Right h -> return h
     let ctx = ReadRepoContext repoPath commitHash
-    result <- liftIO $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
+    result <- lift $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
     case result of
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
         Right path -> return (T.pack path)
 
-stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler [DirEntry]
+stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM [DirEntry]
 stepListHandler stepId mCommit mRel = do
     outPath <- resolveStepOutPath stepId mCommit
     listHandler outPath mRel
 
-stepDownloadHandler :: Int -> Maybe Text -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
+stepDownloadHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 stepDownloadHandler stepId mCommit rel = do
     outPath <- resolveStepOutPath stepId mCommit
     downloadHandler outPath rel
 
--- | Resolves a base directory and serves the file reached by appending
--- @segments@ to it, validating that the result stays inside the base.
-fromRawBase :: Handler FilePath -> [String] -> Tagged Handler Application
-fromRawBase resolveBase segments = Tagged $ \_ respond -> do
-    result <- runHandler resolveBase
-    case result of
+-- | Serves the file reached by appending @segments@ to @basePath@,
+-- validating that the result stays inside the base.
+fromRawBase :: FilePath -> [String] -> Application
+fromRawBase basePath segments _ respond = do
+    let baseSegments = drop 1 (splitPath basePath)
+        allSegments = baseSegments ++ segments
+    storeFilesHandler' allSegments respond
+
+
+stepRawHandler :: Int -> Maybe Text -> [String] -> Tagged AppM Application
+stepRawHandler stepId mCommit segments = Tagged $ \request respond -> do
+    resolution <- runAppEffects $ runExceptT $ resolveStepOutPath stepId mCommit
+    case resolution of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
-        Right basePath -> do
-            let baseSegments = drop 1 (splitPath basePath)
-                allSegments = baseSegments ++ segments
-            storeFilesHandler' allSegments respond
+        Right basePath -> fromRawBase (T.unpack basePath) segments request respond
 
-
-stepRawHandler :: Int -> Maybe Text -> [String] -> Tagged Handler Application
-stepRawHandler stepId mCommit segments =
-    fromRawBase (T.unpack <$> resolveStepOutPath stepId mCommit) segments
-
-stepBundleHandler :: Int -> Text -> [String] -> Tagged Handler Application
+stepBundleHandler :: Int -> Text -> [String] -> Tagged AppM Application
 stepBundleHandler stepId commit = stepRawHandler stepId (Just commit)
 
 storeFilesHandler' :: [String] -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 storeFilesHandler' segments respond = do
-    result <- runHandler $ do
+    result <- runAppEffects $ runExceptT $ do
         unless (length segments >= 3) $
             throwError err400{errBody = "Invalid store path"}
         let absPath = normalise $ "/" ++ intercalate "/" segments
@@ -130,7 +131,7 @@ storeFilesHandler' segments respond = do
             Nothing -> do
                 exists <- liftIO $ doesFileExist absPath
                 unless exists $ throwError err404
-                mime <- liftIO $ resolvedMimeType absPath
+                mime <- lift $ resolvedMimeType absPath
                 pure $ Left (absPath, mime)
     case result of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
@@ -141,7 +142,7 @@ storeFilesHandler' segments respond = do
             let headers = [("Content-Type", TE.encodeUtf8 mime)]
             respond $ responseLBS status200 headers lbs
 
-listHandler :: Text -> Maybe FilePath -> Handler [DirEntry]
+listHandler :: Text -> Maybe FilePath -> AppM [DirEntry]
 listHandler outPathText mRel = do
     let basePath = T.unpack outPathText
     assertNixStorePath basePath
@@ -154,29 +155,29 @@ listHandler outPathText mRel = do
             map zipItemToDirEntry <$> liftZip err400 (Zip.listZipDirectory zipPath internalPath)
         Nothing -> do
             names <- liftIO $ listDirectory absPath
-            liftIO $ mapConcurrently (buildDirEntry absPath) names
+            liftIO $ mapConcurrently (runAppEffects . buildDirEntry absPath) names
 
-buildDirEntry :: FilePath -> FilePath -> IO DirEntry
+buildDirEntry :: (Nix :> es, IOE :> es) => FilePath -> FilePath -> Eff es DirEntry
 buildDirEntry absPath n = do
     let p = absPath </> n
-    isD <- doesDirectoryExist p
+    isD <- liftIO $ doesDirectoryExist p
     if isD
         then pure $ DirEntry (T.pack n) True 0 False False Nothing
         else do
-            isZipFile <- if isZipPath p then doesFileExist p else pure False
+            isZipFile <- liftIO $ if isZipPath p then doesFileExist p else pure False
             if isZipFile
                 then do
-                    sz <- getFileSize p
+                    sz <- liftIO $ getFileSize p
                     pure $ DirEntry (T.pack n) True sz False False (Just "application/zip")
                 else do
-                    sz <- getFileSize p
+                    sz <- liftIO $ getFileSize p
                     (isViewable, isSeekable, mime) <- checkViewableAndMime p sz
                     pure $ DirEntry (T.pack n) False sz isViewable isSeekable mime
 
 isZipPath :: FilePath -> Bool
 isZipPath p = map toLower (takeExtension p) == ".zip"
 
-liftZip :: ServerError -> IO (Either String a) -> Handler a
+liftZip :: ServerError -> IO (Either String a) -> AppM a
 liftZip serverError action =
     either (\message -> throwError serverError{errBody = TLE.encodeUtf8 $ TL.pack message}) pure =<< liftIO action
 
@@ -210,7 +211,7 @@ zipItemToDirEntry item
     mime = mimeTypeByExtension $ Zip.zipItemName item
     viewable' = maybe False (\m -> isReadableMimeType m && itemSize <= maxViewableSize) mime
 
-downloadHandler :: Text -> FilePath -> Handler (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
+downloadHandler :: Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadHandler outPathText rel = do
     let basePath = T.unpack outPathText
     assertNixStorePath basePath
@@ -248,13 +249,6 @@ readFileChunked path = S.SourceT $ \k ->
   where
     readChunks h = S.fromActionStep BS.null (BS.hGet h fileChunkSize)
 
-getMimeType :: FilePath -> IO (Maybe Text)
-getMimeType path = do
-    (exitCode, output, _) <- readProcessWithExitCode "file" ["-b", "-L", "--mime-type", path] ""
-    case exitCode of
-        ExitSuccess -> pure $ Just (T.strip $ T.pack output)
-        ExitFailure _ -> pure Nothing
-
 mimeTypeByExtension :: FilePath -> Maybe Text
 mimeTypeByExtension path = case map toLower (takeExtension path) of
     ".txt" -> Just "text/plain"
@@ -276,16 +270,16 @@ mimeTypeByExtension path = case map toLower (takeExtension path) of
     ".zip" -> Just "application/zip"
     _ -> Nothing
 
-resolvedMimeType :: FilePath -> IO Text
+resolvedMimeType :: (Nix :> es) => FilePath -> Eff es Text
 resolvedMimeType path = case mimeTypeByExtension path of
     Just mime -> pure mime
     Nothing -> do
-        detected <- getMimeType path
+        detected <- probeMimeType path
         pure $ fromMaybe "application/octet-stream" detected
 
-storeFilesHandler :: [String] -> Tagged Handler Application
+storeFilesHandler :: [String] -> Tagged AppM Application
 storeFilesHandler segments = Tagged $ \_ respond -> do
-    result <- runHandler $ do
+    result <- runAppEffects $ runExceptT $ do
         unless (length segments >= 3) $
             throwError err400{errBody = "Invalid store path"}
         let absPath = normalise $ "/" ++ intercalate "/" segments
@@ -294,7 +288,7 @@ storeFilesHandler segments = Tagged $ \_ respond -> do
         assertInside absPath basePath
         exists <- liftIO $ doesFileExist absPath
         unless exists $ throwError err404
-        mime <- liftIO $ resolvedMimeType absPath
+        mime <- lift $ resolvedMimeType absPath
         pure (absPath, mime)
     case result of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 $ T.pack $ errReasonPhrase err)) (errHeaders err) (errBody err)
@@ -302,14 +296,14 @@ storeFilesHandler segments = Tagged $ \_ respond -> do
             let headers = [("Content-Type", TE.encodeUtf8 mime)]
             respond $ responseFile status200 headers path Nothing
 
-checkViewableAndMime :: FilePath -> Integer -> IO (Bool, Bool, Maybe Text)
+checkViewableAndMime :: (Nix :> es) => FilePath -> Integer -> Eff es (Bool, Bool, Maybe Text)
 checkViewableAndMime path sz = do
     mType <-
         if sz == 0 then
             pure (Just "text/plain")
 
         else
-            maybe (getMimeType path) (pure . Just) (mimeTypeByExtension path)
+            maybe (probeMimeType path) (pure . Just) (mimeTypeByExtension path)
     let isReadable = maybe False isReadableMimeType mType
         isSeekable = isReadable && sz > maxViewableSize
         isViewable = isReadable && sz <= maxViewableSize
@@ -331,12 +325,12 @@ isReadableMimeType mimeType =
         , "application/x-shellscript"
         ]
 
-assertNixStorePath :: FilePath -> Handler ()
+assertNixStorePath :: FilePath -> AppM ()
 assertNixStorePath path =
     unless ("/nix/store/" `isPrefixOf` path) $
         throwError err400{errBody = "Invalid store path"}
 
-assertInside :: FilePath -> FilePath -> Handler ()
+assertInside :: FilePath -> FilePath -> AppM ()
 assertInside path base =
     unless (joinPath (splitPath (normalise base)) `isPrefixOf` joinPath (splitPath (normalise path))) $
         throwError err400{errBody = "Path traversal not allowed"}
@@ -348,7 +342,7 @@ Returns 500 when meta.json exists but is not a JSON object, or when the
 Nix evaluation itself fails for any reason other than the extras
 attribute being absent.
 -}
-stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> Handler DynamicJson
+stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM DynamicJson
 stepExtrasHandler stepId mCommit mDirPath = do
     repoPath <- liftIO userRepoPath
     commitHash <- resolveCommitHash mCommit
@@ -359,7 +353,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
         -- Nix error.  Genuine eval failures (bad commit, unknown step id,
         -- broken step expression) still surface as a Left from runNixEval...
         applyExpr = "(s: if s ? meta.pointy.extras.outPath then s.meta.pointy.extras.outPath else null)"
-    extrasResult <- liftIO $ runExceptT $ runNixEvalJsonApplyInRepo ctx applyExpr stepAttr
+    extrasResult <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx applyExpr stepAttr
     extrasPath <- case extrasResult of
         Left err ->
             throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate extras outPath: " ++ err))}
@@ -388,7 +382,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
                     -- can pick up the metadata; buildExtras short-circuits to a
                     -- GC-root refresh when the derivation is already built, so
                     -- case (b) costs only one Nix eval and one squeue check.
-                    liftIO $ void $ forkIO $ buildExtras ctx stepId
+                    liftIO $ void $ forkIO $ runAppEffects $ buildExtras ctx stepId
                     return (DynamicJson "{}")
                 else do
                     sz <- liftIO $ getFileSize metaPath
@@ -404,11 +398,11 @@ stepExtrasHandler stepId mCommit mDirPath = do
   where
     maxExtrasJsonBytes = 10 * 1024 * 1024 -- 10 MiB
 
-resolveCommitHash :: Maybe Text -> Handler String
+resolveCommitHash :: Maybe Text -> AppM String
 resolveCommitHash mCommit = case mCommit of
     Just c -> return (unpack c)
     Nothing -> do
-        result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ h) -> return h
+        result <- lift $ withReadRepoTransaction $ \(ReadRepoContext _ h) -> return h
         case result of
             Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveCommitHash: " ++ err))}
             Right h -> return h
@@ -433,7 +427,7 @@ data FileChunk = FileChunk
     }
     deriving (Generic, ToJSON)
 
-parseSeekOffset :: Maybe Int -> Maybe Int -> Int -> Handler (Either LineOffset ByteOffset)
+parseSeekOffset :: Maybe Int -> Maybe Int -> Int -> AppM (Either LineOffset ByteOffset)
 parseSeekOffset line byteOffset bytes = do
     when (bytes == 0) $
         throwError err400{errBody = "bytes must not be zero"}
@@ -448,13 +442,13 @@ parseSeekOffset line byteOffset bytes = do
             | otherwise -> return (Right (ByteOffset value))
         _ -> throwError err400{errBody = "Specify exactly one of line or offset"}
 
-stepSeekHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Int -> Handler FileChunk
+stepSeekHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Int -> AppM FileChunk
 stepSeekHandler stepId mCommit rel line byteOffset bytes = do
     offset <- parseSeekOffset line byteOffset bytes
     outPath <- resolveStepOutPath stepId mCommit
     seekHandler outPath rel offset bytes
 
-seekHandler :: Text -> FilePath -> Either LineOffset ByteOffset -> Int -> Handler FileChunk
+seekHandler :: Text -> FilePath -> Either LineOffset ByteOffset -> Int -> AppM FileChunk
 seekHandler basePathText rel offset bytes = do
     let basePath = T.unpack basePathText
     assertNixStorePath basePath

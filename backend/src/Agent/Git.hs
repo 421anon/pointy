@@ -52,7 +52,7 @@ import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
 import Control.Monad (filterM, unless, void, when)
-import Control.Monad.Except (ExceptT (..), catchError, throwError)
+import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import Data.Char (isControl)
@@ -67,6 +67,7 @@ import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
 import Handlers.StepReview (stepReviews)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
+import Interpreters.Production (runProduction)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
@@ -476,7 +477,7 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             when (worktreeHead /= candidateHead candidate) $ throwError "candidate_mismatch"
             changesetDiff <- runGitChecked (candidateWorktree candidate) ["diff", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
             changedSteps <- nub . mapMaybe appliedStepId . T.lines <$> runGitChecked (candidateWorktree candidate) ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-            reviews <- stepReviews (ReadRepoContext repoPath (T.unpack currentTarget)) changedSteps
+            reviews <- ExceptT $ liftIO $ runProduction $ runExceptT $ stepReviews (ReadRepoContext repoPath (T.unpack currentTarget)) changedSteps
             when (any isJust reviews) $ throwError "step_reviewed"
             pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile userRepo) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
             case pushResult of
@@ -657,8 +658,8 @@ hasStagedChanges worktree = ExceptT $ do
 
 broadcastAppliedStatuses :: Text -> [Int] -> [Int] -> IO ()
 broadcastAppliedStatuses commit projectIds stepIds = do
-    mapM_ (\pid -> broadcastProjectStatus pid commit Nothing) projectIds
-    mapM_ (\sid -> broadcastStatusForStepProjects sid commit Nothing) stepIds
+    mapM_ (\pid -> runProduction $ broadcastProjectStatus pid commit Nothing) projectIds
+    mapM_ (\sid -> runProduction $ broadcastStatusForStepProjects sid commit Nothing) stepIds
 
 sessionHasActiveRunner :: AgentSession -> ExceptT String IO Bool
 sessionHasActiveRunner session_ = do

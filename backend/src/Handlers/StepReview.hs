@@ -1,7 +1,9 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Handlers.StepReview (
     ReviewRequest (..),
@@ -18,6 +20,7 @@ module Handlers.StepReview (
 import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Either (rights)
 import Data.Map (Map)
@@ -29,13 +32,16 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Effectful (Eff, IOE, (:>))
+import EffectRunner (runAppEffects)
+import Effects (AppEffects, AppM, Eval, Nix)
 import GHC.Generics (Generic)
 import Handlers.Projects (rewriteNixFile)
 import Handlers.Statuses (checkStatus, forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseLBS)
 import OutPaths (withWriteRepoTransaction)
-import Servant (Handler, NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
+import Servant (NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
@@ -96,27 +102,27 @@ type StepOutPaths = Map Int (Either String FilePath)
 
 newtype PathInfo = PathInfo {narHash :: Text} deriving (Generic, FromJSON)
 
-getProjectReviewHandler :: Int -> Maybe Text -> Handler (Map String StepReviewReport)
+getProjectReviewHandler :: Int -> Maybe Text -> AppM (Map String StepReviewReport)
 getProjectReviewHandler projectId commit = do
-    result <- liftIO $ withReadRepoTransaction $ \context -> do
-        viewed <- maybe (pure context) (commitContext (readRepoPath context)) commit
+    result <- lift $ withReadRepoTransaction $ \context -> do
+        viewed <- maybe (pure context) (commitContextEff (readRepoPath context)) commit
         stepIds <- projectStepIds viewed projectId
         reviews <- (<> Map.fromList [(stepId, Nothing) | stepId <- stepIds]) <$> stepReviews context stepIds
         reviewedOutputs <- reviewedOutPaths (readRepoPath context) reviews
         comparisons <- stepComparisons viewed reviews reviewedOutputs
-        statuses <- mapM (either (\err -> pure ("failure", Just (T.pack err))) (liftIO . checkStatus)) reviewedOutputs
+        statuses <- mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedOutputs
         let stepReport stepId review = StepReviewReport review (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
     orFail err500 result
 
-reviewStepHandler :: Int -> Maybe Text -> ReviewRequest -> Handler Bool
+reviewStepHandler :: Int -> Maybe Text -> ReviewRequest -> AppM Bool
 reviewStepHandler stepId mCommit request = do
     let by = T.unwords (T.words (requestedBy request))
         comments = T.strip (requestedComments request)
     when (T.null by) $ throwError err400{errBody = "Name who reviewed the step."}
     repoPath <- liftIO userRepoPath
-    result <- liftIO $ withWriteRepoTransaction $ \context -> do
-        viewed <- commitContext repoPath (fromMaybe "HEAD" mCommit)
+    result <- lift $ withWriteRepoTransaction $ \context -> do
+        viewed <- commitContextEff repoPath (fromMaybe "HEAD" mCommit)
         let revision = T.pack (readCommitHash viewed)
             advance = do
                 setReview context stepId (Just (Review revision by comments))
@@ -141,9 +147,9 @@ reviewStepHandler stepId mCommit request = do
     unless differs $ liftIO (forkBroadcastStatusForStepProjectsAtHead stepId)
     pure differs
 
-removeReviewHandler :: Int -> Handler NoContent
+removeReviewHandler :: Int -> AppM NoContent
 removeReviewHandler stepId = do
-    removed <- liftIO (withWriteRepoTransaction $ \context -> do
+    removed <- lift (withWriteRepoTransaction $ \context -> do
         reviewed <- any isJust <$> stepReviews context [stepId]
         when reviewed $ do
             setReview context stepId Nothing
@@ -152,17 +158,21 @@ removeReviewHandler stepId = do
     when removed $ liftIO (forkBroadcastStatusForStepProjectsAtHead stepId)
     pure NoContent
 
-reviewDiffHandler :: Int -> Maybe Text -> Tagged Handler Application
-reviewDiffHandler stepId mCommit = Tagged $ \_ respond -> do
+prepareReviewDiff :: Int -> Maybe Text -> Eff AppEffects (Either String Text)
+prepareReviewDiff stepId mCommit = do
     prepared <- withReadRepoTransaction $ \context -> do
-        viewed <- maybe (pure context) (commitContext (readRepoPath context)) mCommit
+        viewed <- maybe (pure context) (commitContextEff (readRepoPath context)) mCommit
         review <- stepReview context stepId
-        reviewed <- maybe (throwError "This step has no review, so there is nothing to compare it with.") (commitContext (readRepoPath context) . reviewedRevision) review
+        reviewed <- maybe (throwError "This step has no review, so there is nothing to compare it with.") (commitContextEff (readRepoPath context) . reviewedRevision) review
         (,) <$> stepOutPath reviewed stepId <*> stepOutPath viewed stepId
-    report <- runExceptT $ do
+    runExceptT $ do
         (reviewed, viewed) <- liftEither prepared
         path <- uncurry (renderReport stepId) (reviewed, viewed)
         dressReport stepId reviewed viewed <$> liftIO (TIO.readFile path)
+
+reviewDiffHandler :: Int -> Maybe Text -> Tagged AppM Application
+reviewDiffHandler stepId mCommit = Tagged $ \_ respond -> do
+    report <- runAppEffects (prepareReviewDiff stepId mCommit)
     respond $ either failure success report
   where
     failure message = responseLBS status500 [("Content-Type", "text/plain; charset=utf-8")] (TLE.encodeUtf8 (TL.pack message))
@@ -178,7 +188,7 @@ reviewDiffHandler stepId mCommit = Tagged $ \_ respond -> do
 {- | The returned file is diffoscope's own output: the cache is keyed by the two
 store hashes, which decide what it holds rather than who reads it.
 -}
-renderReport :: Int -> FilePath -> FilePath -> ExceptT String IO FilePath
+renderReport :: (Nix :> es, IOE :> es) => Int -> FilePath -> FilePath -> ExceptT String (Eff es) FilePath
 renderReport stepId reviewed viewed = do
     hashes <- storeHashes [reviewed, viewed]
     when (Map.notMember reviewed hashes) $ throwError $ T.unpack (reviewedOutputUnbuiltDetail stepId reviewed)
@@ -187,7 +197,7 @@ renderReport stepId reviewed viewed = do
     dir <- (</> ".local/state/pointy/diff-reports") <$> liftIO getHomeDirectory
     let reportPath = dir </> "step-" ++ show stepId ++ "-" ++ storeHash reviewed ++ "-" ++ storeHash viewed ++ ".html"
     cached <- liftIO $ createDirectoryIfMissing True dir >> doesFileExist reportPath
-    unless cached $ ExceptT $ withTempDirectory dir "report-" $ \stagingDir -> runExceptT $ do
+    unless cached $ ExceptT $ liftIO $ withTempDirectory dir "report-" $ \stagingDir -> runExceptT $ do
         let staging = stagingDir </> "report.html"
         (code, _, stderr) <- liftIO $ readProcessWithExitCode "diffoscope" (comparisonArgs staging) ""
         unless (code `elem` [ExitSuccess, ExitFailure 1]) $
@@ -433,7 +443,7 @@ reportStyles =
         , "</style>"
         ]
 
-stepComparisons :: ReadRepoContext -> StepReviews -> StepOutPaths -> ExceptT String IO (Map Int ReviewComparison)
+stepComparisons :: (Eval :> es, Nix :> es) => ReadRepoContext -> StepReviews -> StepOutPaths -> ExceptT String (Eff es) (Map Int ReviewComparison)
 stepComparisons viewed revisions reviewedOutputs
     | Map.null reviewed = pure $ NoReview <$ revisions
     | otherwise = do
@@ -459,24 +469,24 @@ reviewedOutputUnbuiltDetail :: Int -> FilePath -> Text
 reviewedOutputUnbuiltDetail stepId outPath =
     T.pack $ "Step " ++ show stepId ++ ": the reviewed revision has no built output (" ++ outPath ++ "). Rebuild the reviewed revision or remove the review."
 
-ensureStepUnreviewed :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO ()
+ensureStepUnreviewed :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) ()
 ensureStepUnreviewed ctx stepId = do
     reviews <- stepReviews ctx [stepId]
     when (any isJust reviews) $ throwError "Reviewed steps cannot be edited. Remove the review first."
 
-requireStepUnreviewed :: Int -> Handler ()
-requireStepUnreviewed stepId = liftIO (withReadRepoTransaction (`ensureStepUnreviewed` stepId)) >>= orFail err409
+requireStepUnreviewed :: Int -> AppM ()
+requireStepUnreviewed stepId = lift (withReadRepoTransaction (`ensureStepUnreviewed` stepId)) >>= orFail err409
 
-projectStepIds :: ReadRepoContext -> Int -> ExceptT String IO [Int]
+projectStepIds :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) [Int]
 projectStepIds context projectId =
     decodeNix "Failed to decode project step IDs" =<< runNixEvalJsonApplyInRepo context expression "#pointy.projects"
   where
     expression = "projects: map (step: step.def.id) (projects." ++ show (show projectId) ++ ".steps or (throw \"Project " ++ show projectId ++ " does not exist.\"))"
 
-stepReview :: (RepoContext ctx) => ctx -> Int -> ExceptT String IO (Maybe Review)
+stepReview :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) (Maybe Review)
 stepReview ctx stepId = stepReviews ctx [stepId] >>= maybe (throwError ("Step " ++ show stepId ++ " does not exist.")) pure . Map.lookup stepId
 
-stepReviews :: (RepoContext ctx) => ctx -> [Int] -> ExceptT String IO StepReviews
+stepReviews :: (RepoContext ctx, Eval :> es) => ctx -> [Int] -> ExceptT String (Eff es) StepReviews
 stepReviews _ [] = pure Map.empty
 stepReviews ctx stepIds = do
     looked <- decodeNix "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames reviewOfExistingStep stepIds) "#pointy.stepDefs"
@@ -485,21 +495,24 @@ stepReviews ctx stepIds = do
     reviewOfExistingStep =
         "if builtins.hasAttr name steps then [ (let step = steps.${name}; in if (step.reviewedRevision or null) != null then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
 
-reviewedOutPaths :: FilePath -> StepReviews -> ExceptT String IO StepOutPaths
+reviewedOutPaths :: (IOE :> es, Eval :> es) => FilePath -> StepReviews -> ExceptT String (Eff es) StepOutPaths
 reviewedOutPaths repoPath reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)
   where
     grouped = Map.fromListWith (++) [(reviewedRevision review, [stepId]) | (stepId, Just review) <- Map.toList reviews]
     revisionPaths (revision, stepIds) = do
-        result <- liftIO $ runExceptT $ commitContext repoPath revision >>= (`stepOutPaths` stepIds)
+        viewedEither <- liftIO $ runExceptT $ commitContext repoPath revision
+        result <- case viewedEither of
+            Left err -> pure (Left err)
+            Right viewed -> lift $ runExceptT $ stepOutPaths viewed stepIds
         pure $ either (\err -> Map.fromList [(stepId, Left err) | stepId <- stepIds]) id result
 
-stepOutPath :: ReadRepoContext -> Int -> ExceptT String IO FilePath
+stepOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) FilePath
 stepOutPath context stepId = stepOutPaths context [stepId] >>= either throwError pure . lookupOutPath stepId
 
 lookupOutPath :: Int -> StepOutPaths -> Either String FilePath
 lookupOutPath stepId = Map.findWithDefault (Left ("Step " ++ show stepId ++ " has no output path.")) stepId
 
-stepOutPaths :: ReadRepoContext -> [Int] -> ExceptT String IO StepOutPaths
+stepOutPaths :: (Eval :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths
 stepOutPaths context stepIds = do
     resolved <- decodeNix "Failed to decode step output paths" =<< runNixEvalJsonApplyInRepo context (mapStepNames outPathExpression stepIds) "#pointy.steps"
     pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
@@ -510,13 +523,13 @@ stepOutPaths context stepIds = do
 mapStepNames :: String -> [Int] -> String
 mapStepNames expression stepIds = "steps: map (name: " ++ expression ++ ") [ " ++ unwords [show (show stepId) | stepId <- stepIds] ++ " ]"
 
-storeHashes :: [FilePath] -> ExceptT String IO (Map FilePath Text)
+storeHashes :: (Nix :> es) => [FilePath] -> ExceptT String (Eff es) (Map FilePath Text)
 storeHashes [] = pure Map.empty
 storeHashes paths = do
     infos <- decodeNix "Failed to decode Nix path information" =<< runNix (["--offline", "path-info", "--json"] ++ Set.toList (Set.fromList paths))
     pure $ Map.mapMaybe (fmap narHash) (infos :: Map FilePath (Maybe PathInfo))
 
-setReview :: WriteRepoContext -> Int -> Maybe Review -> ExceptT String IO ()
+setReview :: (Eval :> es, IOE :> es) => WriteRepoContext -> Int -> Maybe Review -> ExceptT String (Eff es) ()
 setReview (WriteRepoContext worktreePath) stepId mReview =
     rewriteNixFile (worktreePath </> "steps" </> show stepId ++ ".nix") $ case mReview of
         Just (Review revision by comments) ->
@@ -529,8 +542,11 @@ nixString text = "\"" <> T.concatMap escape text <> "\""
     escape character = Map.findWithDefault (T.singleton character) character escapes
     escapes = Map.fromList [('\\', "\\\\"), ('"', "\\\""), ('$', "\\$"), ('\n', "\\n"), ('\r', "\\r"), ('\t', "\\t")]
 
-decodeNix :: (FromJSON a) => String -> String -> ExceptT String IO a
+decodeNix :: (FromJSON a) => String -> String -> ExceptT String (Eff es) a
 decodeNix label output = liftEither $ either (Left . ((label ++ ": ") ++)) Right $ eitherDecode (TLE.encodeUtf8 (TL.pack output))
 
-orFail :: ServerError -> Either String a -> Handler a
+commitContextEff :: (IOE :> es) => FilePath -> Text -> ExceptT String (Eff es) ReadRepoContext
+commitContextEff repoPath commit = ExceptT $ liftIO $ runExceptT $ commitContext repoPath commit
+
+orFail :: ServerError -> Either String a -> AppM a
 orFail status = either (\message -> throwError status{errBody = TLE.encodeUtf8 (TL.pack message)}) pure

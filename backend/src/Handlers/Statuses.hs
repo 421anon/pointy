@@ -1,6 +1,9 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Handlers.Statuses (
     checkStatus,
@@ -25,10 +28,12 @@ import Bus (broadcastSnapshot)
 import ClusterBus (restoreRunningStepIds)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException)
+import qualified Control.Exception as Exception
 import Control.Monad (forM_, void, when)
 
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (eitherDecode)
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -37,13 +42,16 @@ import Data.Text (Text, pack, unpack)
 import qualified Data.Set as Set
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import NixUtils (isValidStorePath)
+import EffectRunner (runAppEffects)
+import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
+import Effectful.Exception (catch)
+import Effects (App, AppEffects, Nix, Slurm, pathValid)
 import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), getProjectOutPaths)
 import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, userRepoPath, withReadRepoTransaction)
 
-checkStatus :: FilePath -> IO (Text, Maybe Text)
+checkStatus :: (Nix :> es, Slurm :> es) => FilePath -> Eff es (Text, Maybe Text)
 checkStatus path = do
-    valid <- isValidStorePath path
+    valid <- pathValid path
     if valid
         then return ("success", Nothing)
         else do
@@ -60,7 +68,7 @@ isImmediateStatus (state, _) = state == "success" || state == "running"
 partitionImmediateStatuses :: Map Int (Text, Maybe Text) -> (Map Int (Text, Maybe Text), Map Int (Text, Maybe Text))
 partitionImmediateStatuses = Map.partition isImmediateStatus
 
-resolveStepStatus :: ReadRepoContext -> Maybe FilePath -> (Int, (Text, Maybe Text)) -> IO (Int, (Text, Maybe Text))
+resolveStepStatus :: (Nix :> es) => ReadRepoContext -> Maybe FilePath -> (Int, (Text, Maybe Text)) -> Eff es (Int, (Text, Maybe Text))
 resolveStepStatus _ _ entry@(_, status_)
     | isImmediateStatus status_ = return entry
 resolveStepStatus _ Nothing entry@(_, (state, _))
@@ -74,19 +82,20 @@ resolveStepStatus _ (Just outPath) entry@(sid, (state, _))
             Nothing -> entry
     | otherwise = return entry
 
-resolveStatusesAtCommitWithPaths :: Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+resolveStatusesAtCommitWithPaths :: (Nix :> es, IOE :> es) => Text -> Map Int Text -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesAtCommitWithPaths targetCommit outPaths statuses = do
-    repoPath <- userRepoPath
+    repoPath <- liftIO userRepoPath
     let ctx = ReadRepoContext repoPath (unpack targetCommit)
-    Map.fromList <$> mapConcurrently (resolveOneWithPath ctx outPaths) (Map.toList statuses)
+    Map.fromList <$> liftIO (mapConcurrently (runAppEffects . resolveOneWithPath ctx outPaths) (Map.toList statuses))
   where
-    resolveOneWithPath ctx outPaths (sid, entry) =
-        resolveStepStatus ctx (fmap unpack $ Map.lookup sid outPaths) (sid, entry)
+    resolveOneWithPath :: ReadRepoContext -> Map Int Text -> (Int, (Text, Maybe Text)) -> Eff AppEffects (Int, (Text, Maybe Text))
+    resolveOneWithPath ctx' outPaths' (sid, entry) =
+        resolveStepStatus ctx' (fmap unpack $ Map.lookup sid outPaths') (sid, entry)
 
 -- | Slurm job names of every queued or running build, in one query.
-runningBuildKeys :: IO (Set String)
+runningBuildKeys :: (Slurm :> es) => Eff es (Set String)
 runningBuildKeys = do
-    jobs <- querySlurmJobs `catch` \(_ :: SomeException) -> return []
+    jobs <- querySlurmJobs
     return $ Set.fromList (map slurmJobName jobs)
 
 isRunningOutPath :: Set String -> Text -> Bool
@@ -97,11 +106,11 @@ isRunningOutPath runningKeys outPath =
 lookup, one build-plan query and one slurm query answer all steps at once; if
 any of those fail, the per-step probes are used instead.
 -}
-getRawStatusesWithPaths :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text), Map Int Text))
+getRawStatusesWithPaths :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text), Map Int Text))
 getRawStatusesWithPaths pid targetCommit =
     fmap (\(statuses, outPaths, _) -> (statuses, outPaths)) <$> getBatchedStatuses pid targetCommit
 
-getBatchedStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text), Map Int Text, Maybe StepStore))
+getBatchedStatuses :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text), Map Int Text, Maybe StepStore))
 getBatchedStatuses pid targetCommit = do
     result <- getProjectOutPaths pid targetCommit
     case result of
@@ -110,30 +119,32 @@ getBatchedStatuses pid targetCommit = do
             batched <-
                 (Right <$> buildBatched outPaths)
                     `catch` \(err :: SomeException) -> do
-                        putStrLn $ "Batched status probe failed, falling back to per-step probes: " ++ show err
-                        statuses <- Map.fromList <$> mapConcurrently getStatusForStep (Map.toList outPaths)
+                        liftIO $ putStrLn $ "Batched status probe failed, falling back to per-step probes: " ++ show err
+                        statuses <- Map.fromList <$> liftIO (mapConcurrently (runAppEffects . getStatusForStep) (Map.toList outPaths))
                         return (Left statuses)
             case batched of
                 Right (statuses, store) -> return $ Right (statuses, outPaths, Just store)
                 Left statuses -> return $ Right (statuses, outPaths, Nothing)
   where
+    buildBatched :: (Nix :> es', Slurm :> es', IOE :> es') => Map Int Text -> Eff es' (Map Int (Text, Maybe Text), StepStore)
     buildBatched outPaths = do
         store <- buildStepStore outPaths
         runningKeys <- runningBuildKeys
         statuses <- rawStatusesBatched store (isRunningOutPath runningKeys) outPaths
         return (statuses, store)
 
+    getStatusForStep :: (Int, Text) -> Eff AppEffects (Int, (Text, Maybe Text))
     getStatusForStep (sid, path) = do
         status_ <-
             checkStatus (unpack path)
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
 
-getRawStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
+getRawStatuses :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text)))
 getRawStatuses pid targetCommit = do
     result <- getRawStatusesWithPaths pid targetCommit
     return $ fmap fst result
-getStatuses :: Int -> Text -> IO (Either String (Map Int (Text, Maybe Text)))
+getStatuses :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text)))
 getStatuses pid targetCommit = do
     rawResult <- getBatchedStatuses pid targetCommit
     case rawResult of
@@ -145,34 +156,37 @@ every step with a handful of processes; when the local build-log tree is not
 readable it falls back to the per-step walk. The log endpoint keeps its own
 online fetch through 'resolveBuildLog'.
 -}
-resolveStatusesFor :: Text -> Map Int Text -> Maybe StepStore -> Map Int (Text, Maybe Text) -> IO (Map Int (Text, Maybe Text))
+resolveStatusesFor :: (Nix :> es, IOE :> es) => Text -> Map Int Text -> Maybe StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesFor targetCommit outPaths mStore statuses = case mStore of
     Just store -> do
-        batchable <- logDirectoryAvailable
+        batchable <- liftIO logDirectoryAvailable
         if batchable
             then resolveStatusesBatched store statuses
             else resolveStatusesAtCommitWithPaths targetCommit outPaths statuses
     Nothing -> resolveStatusesAtCommitWithPaths targetCommit outPaths statuses
 
-broadcastProjectStatus :: Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> IO ()
+broadcastProjectStatus :: App es => Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> Eff es ()
 broadcastProjectStatus pid targetCommit mStatusOverride = do
     result <- getBatchedStatuses pid targetCommit
     case result of
-        Left err -> putStrLn $ "broadcastProjectStatus skipped: " ++ err
+        Left err -> liftIO $ putStrLn $ "broadcastProjectStatus skipped: " ++ err
         Right (stats, outPaths, store) -> do
             let finalStats = case mStatusOverride of
                     Just (sid, st) -> Map.insert sid st stats
                     Nothing -> stats
             let (immediate, pending) = partitionImmediateStatuses finalStats
-            broadcastSnapshot pid targetCommit immediate
+            liftIO $ broadcastSnapshot pid targetCommit immediate
             when (not (Map.null pending)) $
                 void $
-                    forkIO $ do
-                        resolved <- resolveStatusesFor targetCommit outPaths store pending
-                        forM_ (Map.toList resolved) $ \(sid, status_) ->
-                            broadcastSnapshot pid targetCommit (Map.singleton sid status_)
+                    liftIO $
+                        forkIO $
+                            runAppEffects $ do
+                                resolved <- resolveStatusesFor targetCommit outPaths store pending
+                                liftIO $
+                                    forM_ (Map.toList resolved) $ \(sid, status_) ->
+                                        broadcastSnapshot pid targetCommit (Map.singleton sid status_)
 
-withStepProjects :: Int -> Text -> (Int -> ReadRepoContext -> IO ()) -> IO ()
+withStepProjects :: App es => Int -> Text -> (Int -> ReadRepoContext -> Eff es ()) -> Eff es ()
 withStepProjects sid targetCommit action = do
     result <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
         let ctx = ReadRepoContext repoPath (unpack targetCommit)
@@ -182,24 +196,26 @@ withStepProjects sid targetCommit action = do
             Left err -> liftIO $ putStrLn $ "Error parsing #pointy.projects for step " ++ show sid ++ ": " ++ err
             Right projects -> do
                 let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
-                liftIO $ forM_ targetProjects $ \p -> forkIO $ action (projectDefId p) ctx
+                lift $
+                    withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
+                        forM_ targetProjects $ \p -> void $ forkIO $ unlift $ action (projectDefId p) ctx
     case result of
-        Left err -> putStrLn $ "Error in withStepProjects for step " ++ show sid ++ ": " ++ err
+        Left err -> liftIO $ putStrLn $ "Error in withStepProjects for step " ++ show sid ++ ": " ++ err
         Right _ -> return ()
 
-broadcastStatusForStepProjects :: Int -> Text -> Maybe (Text, Maybe Text) -> IO ()
+broadcastStatusForStepProjects :: App es => Int -> Text -> Maybe (Text, Maybe Text) -> Eff es ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride =
     withStepProjects sid targetCommit $ \pid _ ->
         broadcastProjectStatus pid targetCommit (fmap (sid,) mStatusOverride)
 
-broadcastSingleStepForProjects :: Int -> Text -> FilePath -> IO ()
+broadcastSingleStepForProjects :: App es => Int -> Text -> FilePath -> Eff es ()
 broadcastSingleStepForProjects sid targetCommit outPath = do
     rawStatus <- checkStatus outPath `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
     withStepProjects sid targetCommit $ \pid ctx -> do
         (_, resolvedStatus) <- resolveStepStatus ctx (Just outPath) (sid, rawStatus)
-        broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
 
-broadcastFailedStepForProjects :: Int -> Text -> IO ()
+broadcastFailedStepForProjects :: App es => Int -> Text -> Eff es ()
 broadcastFailedStepForProjects sid targetCommit =
     withStepProjects sid targetCommit $ \pid ctx -> do
         outPathsResult <- getProjectOutPaths pid targetCommit
@@ -207,69 +223,76 @@ broadcastFailedStepForProjects sid targetCommit =
                 Right outPaths -> fmap unpack (Map.lookup sid outPaths)
                 Left _ -> Nothing
         (_, status) <- resolveStepStatus ctx mOutPath (sid, ("failure", Nothing))
-        broadcastSnapshot pid targetCommit (Map.singleton sid status)
+        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
-broadcastKnownStepStatus :: Int -> Text -> (Text, Maybe Text) -> IO ()
+broadcastKnownStepStatus :: App es => Int -> Text -> (Text, Maybe Text) -> Eff es ()
 broadcastKnownStepStatus sid targetCommit status =
     withStepProjects sid targetCommit $ \pid _ ->
-        broadcastSnapshot pid targetCommit (Map.singleton sid status)
+        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
 forkBroadcastProjectStatusAtHead :: Int -> IO ()
 forkBroadcastProjectStatusAtHead pid = do
-    eHead <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
+    eHead <- runAppEffects $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
     case eHead of
         Left err -> putStrLn $ "forkBroadcastProjectStatusAtHead skipped: " ++ err
-        Right c -> void $ forkIO $ broadcastProjectStatus pid c Nothing
+        Right c -> void $ forkIO $ runAppEffects $ broadcastProjectStatus pid c Nothing
 
 forkBroadcastStatusForStepProjectsAtHead :: Int -> IO ()
 forkBroadcastStatusForStepProjectsAtHead sid = do
-    eHead <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
+    eHead <- runAppEffects $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
     case eHead of
         Left err -> putStrLn $ "forkBroadcastStatusForStepProjectsAtHead skipped: " ++ err
-        Right c -> void $ forkIO $ broadcastStatusForStepProjects sid c Nothing
+        Right c -> void $ forkIO $ runAppEffects $ broadcastStatusForStepProjects sid c Nothing
 
 -- | Evaluate #pointy.projects, query raw statuses for every visible project,
 -- and collect step IDs whose sampled state is @running@.  Those IDs are passed
 -- through 'restoreRunningStepIds' so live updates that overlap are never
 -- clobbered.  Per-project and top-level errors are logged; individual failures
 -- do not prevent remaining projects from being processed.
-restoreRunningStatuses :: IO ()
+restoreRunningStatuses :: App es => Eff es ()
 restoreRunningStatuses = do
     eHead <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
     case eHead of
-        Left err -> putStrLn $ "restoreRunningStatuses: cannot read HEAD: " ++ err
+        Left err -> liftIO $ putStrLn $ "restoreRunningStatuses: cannot read HEAD: " ++ err
         Right targetCommit ->
-            restoreRunningStepIds $ do
-                eProjects <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
-                    let ctx = ReadRepoContext repoPath (unpack targetCommit)
-                    output <- runNixEvalJsonInRepo ctx "#pointy.projects"
-                    let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
-                    case decodeResult of
-                        Left err -> do
-                            liftIO $ putStrLn $ "restoreRunningStatuses: error parsing projects: " ++ err
-                            return []
-                        Right projects -> return $ filter (not . projectDefHidden) (Map.elems projects)
-                case eProjects of
-                    Left err -> do
-                        putStrLn $ "restoreRunningStatuses: transaction error: " ++ err
-                        return Set.empty
-                    Right projects
-                        | null projects -> return Set.empty
-                        | otherwise -> do
-                            results <- mapConcurrently (\p -> do
-                                let pid = projectDefId p
-                                rawResult <- getRawStatuses pid targetCommit
-                                    `catch` \(e :: SomeException) -> do
-                                        putStrLn $ "restoreRunningStatuses: error for project " ++ show pid ++ ": " ++ show e
-                                        return (Right Map.empty)
-                                case rawResult of
+            liftIO $
+                restoreRunningStepIds $ do
+                    eProjects <-
+                        runAppEffects $
+                            withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
+                                let ctx = ReadRepoContext repoPath (unpack targetCommit)
+                                output <- runNixEvalJsonInRepo ctx "#pointy.projects"
+                                let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
+                                case decodeResult of
                                     Left err -> do
-                                        putStrLn $ "restoreRunningStatuses: raw status error for project " ++ show pid ++ ": " ++ err
-                                        return Set.empty
-                                    Right statuses ->
-                                        return $ Map.keysSet $ Map.filter (\(st, _) -> st == pack "running") statuses
-                                ) projects
-                            return $ Set.unions results
+                                        liftIO $ putStrLn $ "restoreRunningStatuses: error parsing projects: " ++ err
+                                        return []
+                                    Right projects -> return $ filter (not . projectDefHidden) (Map.elems projects)
+                    case eProjects of
+                        Left err -> do
+                            putStrLn $ "restoreRunningStatuses: transaction error: " ++ err
+                            return Set.empty
+                        Right projects
+                            | null projects -> return Set.empty
+                            | otherwise -> do
+                                results <-
+                                    mapConcurrently
+                                        ( \p -> do
+                                            let pid = projectDefId p
+                                            rawResult <-
+                                                runAppEffects (getRawStatuses pid targetCommit)
+                                                    `Exception.catch` \(e :: SomeException) -> do
+                                                        putStrLn $ "restoreRunningStatuses: error for project " ++ show pid ++ ": " ++ show e
+                                                        return (Right Map.empty)
+                                            case rawResult of
+                                                Left err -> do
+                                                    putStrLn $ "restoreRunningStatuses: raw status error for project " ++ show pid ++ ": " ++ err
+                                                    return Set.empty
+                                                Right statuses ->
+                                                    return $ Map.keysSet $ Map.filter (\(st, _) -> st == pack "running") statuses
+                                        )
+                                        projects
+                                return $ Set.unions results
 
 projectContainsStep :: Int -> ProjectDef -> Bool
 projectContainsStep sid p =

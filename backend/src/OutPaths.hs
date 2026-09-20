@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module OutPaths (
     getProjectOutPaths,
@@ -24,14 +26,18 @@ import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultO
 import Data.Char (toLower)
 import Data.Either (isRight)
 import Data.List (stripPrefix)
-import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import EffectRunner (runAppEffects)
+import Effectful (Eff, IOE, (:>))
+import Effects (Eval)
 import GHC.Generics (Generic)
+import NixEvaluator (RepoSource, repoSource)
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), WriteRepoContext, ensureRepoCommit, rewarmRepoJsonExpressions, runNixEvalJsonInRepo, runNixEvalJsonInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
 
@@ -69,12 +75,15 @@ prefixedFieldOptions prefix =
             map toLower (fromMaybe field (stripPrefix prefix field))
         }
 
-getProjectOutPaths :: Int -> Text -> IO (Either String (Map Int Text))
+getProjectOutPaths :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Map Int Text))
 getProjectOutPaths pid targetCommit = runExceptT $ do
     let attr = projectOutPathAttr pid
     withExceptT ("Failed to prepare project commit: " ++) $
-        ensureRepoCommit $
-            unpack targetCommit
+        ExceptT $
+            liftIO $
+                runExceptT $
+                    ensureRepoCommit $
+                        unpack targetCommit
     repoPath <- liftIO userRepoPath
     output <-
         withExceptT (("Failed to evaluate " ++ attr ++ ": ") ++) $
@@ -87,27 +96,32 @@ scheduleProjectOutPathsWarm :: Int -> Text -> IO ()
 scheduleProjectOutPathsWarm pid commit = do
     repoPath <- userRepoPath
     let ctx = ReadRepoContext repoPath $ unpack commit
-    void $ forkIO $ void $ runExceptT $ runNixEvalJsonInRepoBackground ctx $ projectOutPathAttr pid
+    void $ forkIO $ runAppEffects $ void $ runExceptT $ runNixEvalJsonInRepoBackground ctx $ projectOutPathAttr pid
 
-warmProjectOutPaths :: IO ()
+warmProjectOutPaths :: (Eval :> es, IOE :> es) => Eff es ()
 warmProjectOutPaths = do
-    repoPath <- userRepoPath
+    repoPath <- liftIO userRepoPath
     withReadRepoTransaction (pure . pack . readCommitHash) >>= \case
-        Left err -> putStrLn $ "Project outPath warm skipped: " ++ err
+        Left err -> liftIO $ putStrLn $ "Project outPath warm skipped: " ++ err
         Right commit ->
             runExceptT (warmProjectOutPathsForCommit $ ReadRepoContext repoPath $ unpack commit)
-                >>= either (putStrLn . ("Project outPath warm failed: " ++)) pure
+                >>= either (liftIO . putStrLn . ("Project outPath warm failed: " ++)) pure
 
-warmProjectOutPathsForCommit :: ReadRepoContext -> ExceptT String IO ()
+warmProjectOutPathsForCommit :: (Eval :> es) => ReadRepoContext -> ExceptT String (Eff es) ()
 warmProjectOutPathsForCommit ctx = do
-    results <- ExceptT $ rewarmRepoJsonExpressions ctx $ revisionProjectExpressions ctx
+    attrs <- ExceptT $ revisionProjectExpressions ctx
+    results <- ExceptT $ rewarmRepoJsonExpressions (readRepoSource ctx) $ toList attrs
     forM_ results $ \case
         (Nothing, result) ->
             either (throwError . ("Failed to warm #pointy.projects: " ++)) (const $ pure ()) result
         (Just pid, result) ->
             void $ either throwError pure $ decodeOutPathResult pid result
 
-revisionProjectExpressions :: ReadRepoContext -> IO (Either String (NonEmpty (Maybe Int, String)))
+readRepoSource :: ReadRepoContext -> RepoSource
+readRepoSource (ReadRepoContext repoPath commitHash) =
+    repoSource $ "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
+
+revisionProjectExpressions :: (Eval :> es) => ReadRepoContext -> Eff es (Either String (NonEmpty (Maybe Int, String)))
 revisionProjectExpressions ctx = runExceptT $ do
     projectsRaw <- runNixEvalJsonInRepo ctx "#pointy.projects"
     projectDefs <-
@@ -148,7 +162,7 @@ scheduleWarm =
 
 runWarmSafely :: IO ()
 runWarmSafely =
-    warmProjectOutPaths `catch` handleWarmException
+    runAppEffects warmProjectOutPaths `catch` handleWarmException
 
 handleWarmException :: SomeException -> IO ()
 handleWarmException err =
@@ -163,8 +177,8 @@ warmWorker = do
             else pure (st{warmRunning = False, warmPending = False}, False)
     when again warmWorker
 
-withWriteRepoTransaction :: (WriteRepoContext -> ExceptT String IO a) -> IO (Either String a)
+withWriteRepoTransaction :: (IOE :> es) => (WriteRepoContext -> ExceptT String (Eff es) a) -> Eff es (Either String a)
 withWriteRepoTransaction action = do
     result <- withWriteRepoTransactionRaw action
-    when (isRight result) scheduleWarm
+    when (isRight result) $ liftIO scheduleWarm
     pure result

@@ -1,5 +1,7 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module UserRepo (
     userRepoPath,
@@ -18,8 +20,10 @@ module UserRepo (
     WriteRepoContext (..),
     RepoContext,
     withReadRepoTransaction,
+    withReadRepoTransactionIO,
     withWriteRepoTransactionRaw,
     withUserRepoExclusive,
+    withUserRepoExclusiveIO,
     commitAndPushChanges,
     commitContext,
     fetchRepo,
@@ -29,28 +33,29 @@ module UserRepo (
 
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (threadDelay)
-import Control.Exception (finally)
-import Control.Monad (when)
+import Control.Monad (void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import qualified Data.Text as T
-import NixEvaluator (EvalPriority (..), RepoExpression, RepoSource, defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, mutableRepoSource, rawExpression, repoSource, rewarmRevision)
+import Effectful (Eff, IOE, (:>))
+import Effectful.Exception (bracket, finally)
+import Effects (App, Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, rewarm, runNixCli)
+import NixEvaluator (EvalPriority (..), RepoExpression, RepoSource, jsonExpression, mutableRepoSource, repoSource)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FileLock (SharedExclusive (..))
 import qualified System.FileLock
 import System.FilePath ((</>))
-import System.IO.Temp (withSystemTempDirectory)
+import System.IO.Temp (createTempDirectory, withSystemTempDirectory)
 import System.Posix.Process (getProcessID)
 import System.Process (
     CreateProcess (..),
     proc,
     readCreateProcessWithExitCode,
-    readProcessWithExitCode,
  )
 
 data ReadRepoContext = ReadRepoContext
@@ -72,38 +77,30 @@ instance RepoContext ReadRepoContext where
 instance RepoContext WriteRepoContext where
     evaluatorSource = mutableRepoSource . writeWorktreePath
 
-runNix :: [String] -> ExceptT String IO String
-runNix args = ExceptT $ runNixProcess args
-
-runNixEvalJsonInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
-runNixEvalJsonInRepo ctx = runRepoExpression Interactive ctx . jsonExpression
-
-runNixEvalJsonInRepoBackground :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
-runNixEvalJsonInRepoBackground ctx = runRepoExpression Background ctx . jsonExpression
-
-runNixEvalRawInRepo :: (RepoContext ctx) => ctx -> String -> ExceptT String IO String
-runNixEvalRawInRepo ctx = runRepoExpression Interactive ctx . rawExpression
-
-runNixEvalJsonApplyInRepo :: (RepoContext ctx) => ctx -> String -> String -> ExceptT String IO String
-runNixEvalJsonApplyInRepo ctx applyExpr = runRepoExpression Interactive ctx . jsonAppliedExpression applyExpr
-
-runNixEvalImpureJsonExpr :: String -> ExceptT String IO String
-runNixEvalImpureJsonExpr = ExceptT . evaluateImpure defaultNixEvaluator
-
-runRepoExpression :: (RepoContext ctx) => EvalPriority -> ctx -> RepoExpression -> ExceptT String IO String
-runRepoExpression priority ctx = ExceptT . evaluate defaultNixEvaluator priority (evaluatorSource ctx)
-
-rewarmRepoJsonExpressions :: (RepoContext ctx) => ctx -> IO (Either String (NonEmpty (key, String))) -> IO (Either String (NonEmpty (key, Either String String)))
-rewarmRepoJsonExpressions ctx resolveAttrs =
-    rewarmRevision defaultNixEvaluator (evaluatorSource ctx) $
-        fmap (fmap $ fmap $ \(key, attr) -> (key, jsonExpression attr)) resolveAttrs
-
-runNixProcess :: [String] -> IO (Either String String)
-runNixProcess args = do
-    (exitCode, stdout, stderr) <- readProcessWithExitCode "nix" args ""
-    return $ case exitCode of
+runNix :: (Nix :> es) => [String] -> ExceptT String (Eff es) String
+runNix args = ExceptT $ do
+    (code, stdout, stderr) <- runNixCli args
+    pure $ case code of
         ExitSuccess -> Right stdout
         ExitFailure _ -> Left stderr
+
+runNixEvalJsonInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
+runNixEvalJsonInRepo ctx attr = ExceptT $ evalJson Interactive (evaluatorSource ctx) attr
+
+runNixEvalJsonInRepoBackground :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
+runNixEvalJsonInRepoBackground ctx attr = ExceptT $ evalJson Background (evaluatorSource ctx) attr
+
+runNixEvalRawInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
+runNixEvalRawInRepo ctx attr = ExceptT $ evalRaw (evaluatorSource ctx) attr
+
+runNixEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) String
+runNixEvalJsonApplyInRepo ctx applyExpr attr = ExceptT $ evalJsonApply (evaluatorSource ctx) applyExpr attr
+
+runNixEvalImpureJsonExpr :: (Eval :> es) => String -> ExceptT String (Eff es) String
+runNixEvalImpureJsonExpr = ExceptT . evalImpure
+
+rewarmRepoJsonExpressions :: (Eval :> es) => RepoSource -> [(Maybe Int, String)] -> Eff es (Either String [(Maybe Int, Either String String)])
+rewarmRepoJsonExpressions = rewarm
 
 userRepoPath :: IO FilePath
 userRepoPath = do
@@ -117,17 +114,37 @@ userRepoLockPath = do
 
 -- Note: This function uses blocking file locks (flock) under the hood.
 -- See comment at the `-threaded` flag in backend.cabal.
-withFileLock :: FilePath -> RepoAccess -> IO a -> IO a
-withFileLock lockPath access action = do
-    let mode = case access of
-            ReadOnly -> Shared
-            ReadWrite -> Exclusive
-    System.FileLock.withFileLock lockPath mode $ const action
+withRepoLock :: (IOE :> es) => FilePath -> RepoAccess -> Eff es a -> Eff es a
+withRepoLock lockPath access action =
+    bracket
+        (liftIO $ System.FileLock.lockFile lockPath (lockMode access))
+        (liftIO . System.FileLock.unlockFile)
+        (const action)
 
-withUserRepoExclusive :: ExceptT String IO a -> IO (Either String a)
+lockMode :: RepoAccess -> SharedExclusive
+lockMode ReadOnly = Shared
+lockMode ReadWrite = Exclusive
+
+withUserRepoExclusive :: (IOE :> es) => ExceptT String (Eff es) a -> Eff es (Either String a)
 withUserRepoExclusive action = do
+    lockPath <- liftIO userRepoLockPath
+    withRepoLock lockPath ReadWrite (runExceptT action)
+
+withUserRepoExclusiveIO :: ExceptT String IO a -> IO (Either String a)
+withUserRepoExclusiveIO action = do
     lockPath <- userRepoLockPath
-    withFileLock lockPath ReadWrite $ runExceptT action
+    System.FileLock.withFileLock lockPath Exclusive $ const (runExceptT action)
+
+withReadRepoTransactionIO :: (ReadRepoContext -> ExceptT String IO a) -> IO (Either String a)
+withReadRepoTransactionIO action = do
+    cfg <- resolveConfigPath >>= loadConfig
+    let userRepo = configUserRepo cfg
+        branch = T.unpack $ userRepoBranch userRepo
+    repoPath <- userRepoPath
+    lockPath <- userRepoLockPath
+    System.FileLock.withFileLock lockPath Shared $ \_ -> runExceptT $ do
+        ctx <- repoHeadContext repoPath branch
+        action ctx
 data RepoAccess = ReadOnly | ReadWrite deriving (Eq, Show)
 
 runGit :: [String] -> IO (ExitCode, String, String)
@@ -329,23 +346,25 @@ retry n action = do
             retry (n - 1) action
         Right val -> return $ Right val
 
-withReadRepoTransaction :: (ReadRepoContext -> ExceptT String IO a) -> IO (Either String a)
+repoHeadContext :: (MonadIO m) => FilePath -> String -> ExceptT String m ReadRepoContext
+repoHeadContext repoPath branch = do
+    (exitCode, revOut, err) <- liftIO (runGitIn repoPath ["rev-parse", branch])
+    case exitCode of
+        ExitFailure _ -> throwError ("git rev-parse failed: " ++ err)
+        ExitSuccess -> pure (ReadRepoContext repoPath (filter (`notElem` ("\n\r" :: String)) revOut))
+
+withReadRepoTransaction :: (IOE :> es) => (ReadRepoContext -> ExceptT String (Eff es) a) -> Eff es (Either String a)
 withReadRepoTransaction action = do
-    cfg <- resolveConfigPath >>= loadConfig
+    cfg <- liftIO $ resolveConfigPath >>= loadConfig
     let userRepo = configUserRepo cfg
         branch = T.unpack $ userRepoBranch userRepo
 
-    repoPath <- userRepoPath
-    lockPath <- userRepoLockPath
+    repoPath <- liftIO userRepoPath
+    lockPath <- liftIO userRepoLockPath
 
-    withFileLock lockPath ReadOnly $ runExceptT $ do
-        (_, revOut, _) <-
-            ExceptT $
-                runGitIn repoPath ["rev-parse", branch] >>= \case
-                    (ExitFailure _, _, err) -> return $ Left $ "git rev-parse failed: " ++ err
-                    (ExitSuccess, out, _) -> return $ Right (ExitSuccess, out, "" :: String)
-        let commitHash = filter (`notElem` ("\n\r" :: String)) revOut
-        action (ReadRepoContext repoPath commitHash)
+    withRepoLock lockPath ReadOnly $ runExceptT $ do
+        ctx <- repoHeadContext repoPath branch
+        action ctx
 
 fetchAndWarn :: String -> IO ()
 fetchAndWarn context = do
@@ -354,38 +373,39 @@ fetchAndWarn context = do
         Left err -> putStrLn $ "Warning: Failed to fetch " ++ context ++ ": " ++ err
         Right () -> return ()
 
-withWriteRepoTransactionRaw :: (WriteRepoContext -> ExceptT String IO a) -> IO (Either String a)
+withWriteRepoTransactionRaw :: (IOE :> es) => (WriteRepoContext -> ExceptT String (Eff es) a) -> Eff es (Either String a)
 withWriteRepoTransactionRaw action = do
-    cfg <- resolveConfigPath >>= loadConfig
+    cfg <- liftIO $ resolveConfigPath >>= loadConfig
     let userRepo = configUserRepo cfg
         branch = T.unpack $ userRepoBranch userRepo
 
-    repoPath <- userRepoPath
-    lockPath <- userRepoLockPath
+    repoPath <- liftIO userRepoPath
+    lockPath <- liftIO userRepoLockPath
 
-    res <- withFileLock lockPath ReadWrite $ withSystemTempDirectory "pointy-worktree" $ \worktreePath -> runExceptT $ do
-        (addCode, _, addErr) <- liftIO $ runGitIn repoPath ["worktree", "add", worktreePath, branch]
-        case addCode of
-            ExitFailure _ -> ExceptT $ return $ Left $ "git worktree add failed: " ++ addErr
-            ExitSuccess -> return ()
+    withRepoLock lockPath ReadWrite $ do
+        worktreePath <- liftIO $ createTempDirectory "/tmp" "pointy-worktree"
+        let cleanup = liftIO $ void $ runGitIn repoPath ["worktree", "remove", "--force", worktreePath]
+        res <-
+            ( runExceptT $ do
+                (addCode, _, addErr) <- liftIO $ runGitIn repoPath ["worktree", "add", worktreePath, branch]
+                case addCode of
+                    ExitFailure _ -> ExceptT $ return $ Left $ "git worktree add failed: " ++ addErr
+                    ExitSuccess -> return ()
 
-        _ <- liftIO $ runGitIn worktreePath ["config", "user.email", "backend@invalid.local"]
-        _ <- liftIO $ runGitIn worktreePath ["config", "user.name", "backend"]
+                _ <- liftIO $ runGitIn worktreePath ["config", "user.email", "backend@invalid.local"]
+                _ <- liftIO $ runGitIn worktreePath ["config", "user.name", "backend"]
 
-        ExceptT $
-            runExceptT (action (WriteRepoContext worktreePath)) `finally` do
-                _ <- runGitIn repoPath ["worktree", "remove", "--force", worktreePath]
-                return ()
+                action (WriteRepoContext worktreePath)
+            )
+                `finally` cleanup
 
-    when (case res of Left e -> "Concurrent modification detected" `isInfixOf` e; _ -> False) $
-        fetchAndWarn "after write transaction"
+        when (case res of Left e -> "Concurrent modification detected" `isInfixOf` e; _ -> False) $
+            liftIO $ fetchAndWarn "after write transaction"
 
-    case res of
-        Right a -> return $ Right a
-        Left e -> return $ Left e
+        pure res
 
-commitAndPushChanges :: WriteRepoContext -> String -> ExceptT String IO ()
-commitAndPushChanges (WriteRepoContext worktreePath) message = ExceptT $ do
+commitAndPushChanges :: (IOE :> es) => WriteRepoContext -> String -> ExceptT String (Eff es) ()
+commitAndPushChanges (WriteRepoContext worktreePath) message = ExceptT $ liftIO $ do
     cfg <- resolveConfigPath >>= loadConfig
     let keyfile = userRepoKeyfile (configUserRepo cfg)
         branch = T.unpack $ userRepoBranch (configUserRepo cfg)

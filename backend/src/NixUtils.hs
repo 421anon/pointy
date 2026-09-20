@@ -1,28 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module NixUtils (isValidStorePath, sortAttrSet) where
+module NixUtils (sortAttrSet) where
 
 import Data.Fix (Fix (..))
 import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Text as T
 import Nix.Expr.Types (Binding (..), NExpr, NExprF (..), NKeyName (..), VarName (..))
-import System.Exit (ExitCode (..))
-import System.Process (readProcessWithExitCode)
-
-{- | True iff Nix considers the path a valid store path.
-
-Do not stat the filesystem first: in dev-vm, Nix talks to the host
-daemon while /nix/store is an overlay over a 9p-mounted host store.
-A pre-build negative lookup for a future output can stay cached in the
-overlay and hide the path even after the host daemon creates it.
--}
-isValidStorePath :: FilePath -> IO Bool
-isValidStorePath path = do
-    (code, _, _) <- readProcessWithExitCode "nix" ["--offline", "path-info", path] ""
-    return $ case code of
-        ExitSuccess -> True
-        ExitFailure _ -> False
 
 sortAttrSet :: NExpr -> NExpr
 sortAttrSet (Fix expr) = Fix $ case expr of

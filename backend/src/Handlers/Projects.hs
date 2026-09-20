@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Handlers.Projects (getProjectsHandler, patchProjectHandler, batchUpdateProjectsHandler, postProjectHandler, deleteProjectHandler, jsonToNix, rewriteNixFile, RawJSON, ProjectUpdate (..)) where
 
@@ -9,6 +11,7 @@ import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Monad (mapM_)
 import Control.Monad.Except (ExceptT (..), catchError, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), Options (..), Result (..), Value (..), defaultOptions, eitherDecode, encode, fromJSON, genericParseJSON)
 import Data.Aeson.Key (toText)
 import qualified Data.Aeson.KeyMap as KeyMap
@@ -22,10 +25,12 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as V
+import Effectful (Eff, IOE, (:>))
+import Effects (AppM, Eval)
 import GHC.Generics (Generic)
 import Network.HTTP.Media ((//))
 import OutPaths (withWriteRepoTransaction)
-import Servant (Accept (..), Handler, MimeRender (..), MimeUnrender (..), NoContent (..))
+import Servant (Accept (..), MimeRender (..), MimeUnrender (..), NoContent (..))
 import Servant.Server (err400, err500, errBody)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.Exit (ExitCode (..))
@@ -49,9 +54,9 @@ instance Accept RawJSON where contentType _ = "application" // "json"
 instance MimeRender RawJSON DynamicJson where mimeRender _ = unDynamicJson
 instance MimeUnrender RawJSON DynamicJson where mimeUnrender _ = Right . DynamicJson
 
-getProjectsHandler :: Maybe T.Text -> Handler DynamicJson
+getProjectsHandler :: Maybe T.Text -> AppM DynamicJson
 getProjectsHandler commit = do
-    result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
+    result <- lift $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
         let targetCommit = maybe commitHash T.unpack commit
             targetCtx = ReadRepoContext repoPath targetCommit
         output <- runNixEvalJsonInRepo targetCtx "#pointy.projects"
@@ -108,9 +113,9 @@ annotateRecordMtimes mts = onObject (KeyMap.map decorateProject)
     onArray f v = case v of Array a -> Array (f a); _ -> v
     adjustKey k f m = maybe m (\v -> KeyMap.insert k (f v) m) (KeyMap.lookup k m)
 
-patchProjectHandler :: Int -> DynamicJson -> Handler NoContent
+patchProjectHandler :: Int -> DynamicJson -> AppM NoContent
 patchProjectHandler projectId (DynamicJson jsonBody) = do
-    result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
+    result <- lift $ withWriteRepoTransaction $ \ctx -> do
         _ <- saveProject ctx (Just projectId) jsonBody
         commitAndPushChanges ctx $ "Update project " ++ show projectId
     case result of
@@ -127,11 +132,11 @@ data ProjectUpdate = ProjectUpdate
 instance FromJSON ProjectUpdate where
     parseJSON = genericParseJSON $ defaultOptions{fieldLabelModifier = \label -> if label == "projectUpdateRecord" then "record" else "id"}
 
-batchUpdateProjectsHandler :: [ProjectUpdate] -> Handler NoContent
+batchUpdateProjectsHandler :: [ProjectUpdate] -> AppM NoContent
 batchUpdateProjectsHandler [] =
     throwError $ err400{errBody = "Empty project update batch"}
 batchUpdateProjectsHandler updates = do
-    result <- liftIO $ withWriteRepoTransaction $ \ctx -> do
+    result <- lift $ withWriteRepoTransaction $ \ctx -> do
         mapM_ (\(ProjectUpdate projectId record) -> saveProject ctx (Just projectId) (encode record)) updates
         let plural = if null (tail updates) then "project" else "projects"
         commitAndPushChanges ctx $ "Update " ++ show (length updates) ++ " " ++ plural
@@ -139,9 +144,9 @@ batchUpdateProjectsHandler updates = do
         Right _ -> return NoContent
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-deleteProjectHandler :: Int -> Handler NoContent
+deleteProjectHandler :: Int -> AppM NoContent
 deleteProjectHandler projectId = do
-    result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+    result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         let outputPath = worktreePath </> "projects" </> show projectId ++ ".nix"
         _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
         commitAndPushChanges ctx $ "Delete project " ++ show projectId
@@ -149,9 +154,9 @@ deleteProjectHandler projectId = do
         Right _ -> return NoContent
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-postProjectHandler :: DynamicJson -> Handler DynamicJson
+postProjectHandler :: DynamicJson -> AppM DynamicJson
 postProjectHandler (DynamicJson jsonBody) = do
-    result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+    result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         projectId <- saveProject ctx Nothing jsonBody
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
         output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx ("#pointy.projects." ++ show projectId)) $ \err -> do
@@ -164,7 +169,7 @@ postProjectHandler (DynamicJson jsonBody) = do
         Right output -> return (DynamicJson output)
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-saveProject :: WriteRepoContext -> Maybe Int -> LB.ByteString -> ExceptT String IO Int
+saveProject :: (IOE :> es) => WriteRepoContext -> Maybe Int -> LB.ByteString -> ExceptT String (Eff es) Int
 saveProject (WriteRepoContext worktreePath) maybeId jsonBody = do
     nixText <- liftEither $ jsonToNix jsonBody
     let projectsDir = worktreePath </> "projects"
@@ -188,7 +193,7 @@ jsonToNix bs = do
     val <- eitherDecode bs
     return $ renderMultilineNix $ jsonValueToNixExpr val
 
-rewriteNixFile :: FilePath -> T.Text -> ExceptT String IO ()
+rewriteNixFile :: (Eval :> es, IOE :> es) => FilePath -> T.Text -> ExceptT String (Eff es) ()
 rewriteNixFile path transformation = do
     output <- runNixEvalImpureJsonExpr $ T.unpack $ "let orig = import " <> T.pack path <> "; in " <> transformation
     nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))

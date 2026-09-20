@@ -1,4 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Handlers.Steps (patchStepHandler, postStepHandler, noticesHandler) where
 
@@ -6,6 +8,7 @@ import ApiTypes (DynamicJson (..))
 import Control.Monad (forM_, when)
 import Control.Monad.Except (ExceptT (..), catchError, liftEither)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (mapMaybe)
@@ -15,13 +18,15 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Effectful (Eff, IOE, (:>))
+import Effects (AppM)
 import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extractDownloadUrl, extractDownloadedAt, extractReqType, injectDownloaded, prefetchFile, validateHttpUrl)
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (jsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
 import Handlers.StepReview (ensureStepUnreviewed, requireStepUnreviewed)
 import OutPaths (scheduleProjectOutPathsWarm, withWriteRepoTransaction)
-import Servant (Handler, NoContent (..), throwError)
+import Servant (NoContent (..), throwError)
 import Servant.Server (err400, err409, err500, errBody)
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.FilePath (takeBaseName, (</>))
@@ -35,9 +40,9 @@ import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChang
 
 {- | Validate a URL then prefetch it, returning the trusted hash and
 download timestamp (RFC 3339).  Errors are thrown as 400s directly in the
-Handler monad.
+AppM monad.
 -}
-prefetchDownloadUrl :: T.Text -> Handler (T.Text, T.Text)
+prefetchDownloadUrl :: T.Text -> AppM (T.Text, T.Text)
 prefetchDownloadUrl url = do
     case validateHttpUrl url of
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack err}
@@ -51,7 +56,7 @@ prefetchDownloadUrl url = do
 -- PATCH /api/steps/:id'
 -----------------------------------------------------------------------------
 
-patchStepHandler :: Int -> DynamicJson -> Handler NoContent
+patchStepHandler :: Int -> DynamicJson -> AppM NoContent
 patchStepHandler stepId (DynamicJson jsonBody) = do
     bodyValue <- case eitherDecode jsonBody of
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack $ "Invalid JSON in request body: " ++ err}
@@ -59,7 +64,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
     requireStepUnreviewed stepId
 
     -- Read-only phase: discover download templates only.
-    templates <- liftIO $ withReadRepoTransaction $ \ctx ->
+    templates <- lift $ withReadRepoTransaction $ \ctx ->
         discoverDownloadTemplates ctx
     templates' <- case templates of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 $ TL.pack err}
@@ -76,7 +81,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                     Nothing -> throwError $ err400{errBody = "Download step requires args.url"}
                     Just newUrl -> do
                         -- Evaluate existing step only when we know it is a download.
-                        existingResult <- liftIO $ withReadRepoTransaction $ \ctx -> do
+                        existingResult <- lift $ withReadRepoTransaction $ \ctx -> do
                             existingJson <- runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)
                             case eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack existingJson))) of
                                 Left err -> throwError $ "Failed to decode existing step: " ++ err
@@ -107,7 +112,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
             Nothing -> DynamicJson jsonBody
 
     -- Write transaction.
-    result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+    result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         -- Re-discover templates under the write lock; abort if classification changed.
         templatesW <- discoverDownloadTemplates ctx
         let isDownloadW = maybe False (\t -> Set.member t templatesW) mReqType
@@ -155,14 +160,14 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
 -- POST /api/steps
 -----------------------------------------------------------------------------
 
-postStepHandler :: Maybe Int -> Maybe Int -> DynamicJson -> Handler DynamicJson
+postStepHandler :: Maybe Int -> Maybe Int -> DynamicJson -> AppM DynamicJson
 postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
     bodyValue <- case eitherDecode jsonBody of
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 $ TL.pack $ "Invalid JSON in request body: " ++ err}
         Right v -> return v
 
     -- Read-only phase: discover download templates.
-    templates <- liftIO $ withReadRepoTransaction $ \ctx ->
+    templates <- lift $ withReadRepoTransaction $ \ctx ->
         discoverDownloadTemplates ctx
     templates' <- case templates of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 $ TL.pack $ "Failed to load step config: " ++ err}
@@ -188,7 +193,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
             Nothing -> DynamicJson jsonBody
 
     -- Write transaction.
-    result <- liftIO $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+    result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         stepId <- saveStep ctx Nothing (unDynamicJson finalBody)
         liftIO $ copyClonedSrcFiles worktreePath maybeSourceId stepId
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
@@ -218,7 +223,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
                 Just projectId -> do
                     -- Schedule explicit outPath warming for the affected project/commit
                     -- before status broadcast so the broadcast and any open stream share it.
-                    eHead <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (T.pack hash)
+                    eHead <- lift $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (T.pack hash)
                     case eHead of
                         Right headCommit -> liftIO $ scheduleProjectOutPathsWarm projectId headCommit
                         Left _ -> return ()
@@ -231,9 +236,9 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
 -- GET /api/steps/:id/notices
 -----------------------------------------------------------------------------
 
-noticesHandler :: Int -> Maybe T.Text -> Handler DynamicJson
+noticesHandler :: Int -> Maybe T.Text -> AppM DynamicJson
 noticesHandler stepId mCommit = do
-    result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext repoPath headCommit) -> do
+    result <- lift $ withReadRepoTransaction $ \(ReadRepoContext repoPath headCommit) -> do
         let targetCommit = maybe headCommit T.unpack mCommit
             ctx = ReadRepoContext repoPath targetCommit
             attr = "#pointy.steps." ++ show stepId
@@ -247,7 +252,7 @@ noticesHandler stepId mCommit = do
 -- Save / allocate step
 -----------------------------------------------------------------------------
 
-saveStep :: WriteRepoContext -> Maybe Int -> LBS.ByteString -> ExceptT String IO Int
+saveStep :: (IOE :> es) => WriteRepoContext -> Maybe Int -> LBS.ByteString -> ExceptT String (Eff es) Int
 saveStep (WriteRepoContext worktreePath) maybeId jsonBody = do
     nixText <- liftEither $ jsonToNix jsonBody
     let stepsDir = worktreePath </> "steps"

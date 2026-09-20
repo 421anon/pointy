@@ -1,4 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module BuildRunner (
     BuildState (..),
@@ -19,21 +21,25 @@ module BuildRunner (
     waitForCompletion,
     cancel,
     isRunningState,
+    shellCommand,
 ) where
 
 import Config (Config (..), SlurmConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent (threadDelay)
+import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), ToJSON (..), decode, encode, object, withObject, (.:), (.=))
 import Data.Bits (xor)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.Char (isAlphaNum)
-import Data.List (foldl', intercalate)
+import Data.List (foldl')
 import Data.Maybe (mapMaybe)
 import qualified Data.Text as T
 import Data.Word (Word64)
+import Effectful (Eff, IOE, (:>))
+import Effects (Slurm, SlurmQuery (..), SubmitRequest (..), cancelJob, querySlurm)
+import qualified Effects as Effects
 import Numeric (showHex)
 import System.Exit (ExitCode (..))
-import System.Process (readProcessWithExitCode)
 
 data StepRequirements = StepRequirements
     { ram :: T.Text
@@ -134,7 +140,7 @@ sanitizeJobNameChar c
     | c == '.' = c
     | otherwise = '-'
 
-submitAndWait :: StepRequirements -> BuildKey -> String -> [String] -> IO ExitCode
+submitAndWait :: (Slurm :> es, IOE :> es) => StepRequirements -> BuildKey -> String -> [String] -> Eff es ExitCode
 submitAndWait requirements key comment command = do
     state <- queryState key
     case state of
@@ -143,34 +149,34 @@ submitAndWait requirements key comment command = do
         BFailed -> pure $ ExitFailure 1
         BAbsent -> submitNewJob requirements key comment command
 
-queryState :: BuildKey -> IO BuildState
+queryState :: (Slurm :> es) => BuildKey -> Eff es BuildState
 queryState (BuildKey key) = do
-    (exitCode, stdout, _) <- readProcessWithExitCode "squeue" ["-h", "-n", key, "-o", "%T"] ""
-    pure $ case exitCode of
-        ExitSuccess
+    result <- querySlurm (JobStatesByName key)
+    pure $ case result of
+        Right stdout
             | any isRunningState (lines stdout) -> BRunning
             | null (lines stdout) -> BAbsent
             | otherwise -> BRunning
-        ExitFailure _ -> BAbsent
+        Left _ -> BAbsent
 
 -- | Job ids of every queued or running job with the given name.
-queryJobIds :: BuildKey -> IO [JobId]
+queryJobIds :: (Slurm :> es) => BuildKey -> Eff es [JobId]
 queryJobIds (BuildKey key) = do
-    (exitCode, stdout, _) <- readProcessWithExitCode "squeue" ["-h", "-n", key, "-o", "%i"] ""
-    pure $ case exitCode of
-        ExitSuccess -> map JobId (filter (not . null) (lines stdout))
-        ExitFailure _ -> []
+    result <- querySlurm (JobIdsByName key)
+    pure $ case result of
+        Right stdout -> map JobId (filter (not . null) (lines stdout))
+        Left _ -> []
 
 {- | Every job currently visible in the queue, unfiltered, as
 (id, name, comment, state).  Used on backend restart to discover jobs that
 were submitted before the restart without knowing their names in advance.
 -}
-querySlurmJobs :: IO [SlurmJob]
+querySlurmJobs :: (Slurm :> es) => Eff es [SlurmJob]
 querySlurmJobs = do
-    (exitCode, stdout, _) <- readProcessWithExitCode "squeue" ["-h", "-o", "%i|%j|%k|%T"] ""
-    pure $ case exitCode of
-        ExitSuccess -> mapMaybe parseSlurmJobLine (lines stdout)
-        ExitFailure _ -> []
+    result <- querySlurm AllJobs
+    pure $ case result of
+        Right stdout -> mapMaybe parseSlurmJobLine (lines stdout)
+        Left _ -> []
 
 -- | Parse one @squeue -o "%i|%j|%k|%T"@ line.  Jobs without a comment print
 -- @(null)@ for the comment field.
@@ -192,65 +198,48 @@ splitOn sep = go []
         | c == sep = reverse acc : go [] rest
         | otherwise = go (c : acc) rest
 
-cancel :: BuildKey -> IO ()
-cancel (BuildKey key) = do
-    _ <- readProcessWithExitCode "scancel" ["--name=" ++ key] ""
-    pure ()
+cancel :: (Slurm :> es) => BuildKey -> Eff es ()
+cancel (BuildKey key) = cancelJob key
 
-submitNewJob :: StepRequirements -> BuildKey -> String -> [String] -> IO ExitCode
+submitNewJob :: (Slurm :> es, IOE :> es) => StepRequirements -> BuildKey -> String -> [String] -> Eff es ExitCode
 submitNewJob requirements (BuildKey key) comment command = do
-    slurm <- configSlurm <$> (resolveConfigPath >>= loadConfig)
-    (exitCode, _, _) <-
-        readProcessWithExitCode
-            "sbatch"
-            ( [ "--wait"
-              , "--parsable"
-              , "--job-name=" ++ key
-              , "--comment=" ++ comment
-              , "--output=/dev/null"
-              , "--error=/dev/null"
-              ]
-                ++ requirementSlurmArgs slurm requirements
-                ++ slurmArgs slurm
-                ++ ["--wrap=" ++ shellCommand command]
-            )
-            ""
-    pure exitCode
+    slurm <- liftIO $ configSlurm <$> (resolveConfigPath >>= loadConfig)
+    result <-
+        Effects.submitJob
+            SubmitRequest
+                { submitJobName = key
+                , submitComment = comment
+                , submitOptions = requirementSlurmArgs slurm requirements ++ slurmArgs slurm
+                , submitDependencies = []
+                , submitCommand = command
+                , submitWait = True
+                }
+    pure $ case result of
+        Right _ -> ExitSuccess
+        Left _ -> ExitFailure 1
 
 {- | Submit a job without waiting for completion. Non-empty @depJobIds@
 become @afterok@ dependency edges; the job is killed if any of them fails.
 -}
-submitJob :: StepRequirements -> BuildKey -> [JobId] -> String -> [String] -> IO (Either String JobId)
+submitJob :: (Slurm :> es, IOE :> es) => StepRequirements -> BuildKey -> [JobId] -> String -> [String] -> Eff es (Either String JobId)
 submitJob requirements (BuildKey key) depJobIds comment command = do
-    slurm <- configSlurm <$> (resolveConfigPath >>= loadConfig)
-    (exitCode, stdout, stderr) <-
-        readProcessWithExitCode
-            "sbatch"
-            ( [ "--parsable"
-              , "--job-name=" ++ key
-              , "--comment=" ++ comment
-              , "--output=/dev/null"
-              , "--error=/dev/null"
-              ]
-                ++ dependencyArgs depJobIds
-                ++ requirementSlurmArgs slurm requirements
-                ++ slurmArgs slurm
-                ++ ["--wrap=" ++ shellCommand command]
-            )
-            ""
-    pure $ case exitCode of
-        ExitSuccess ->
+    slurm <- liftIO $ configSlurm <$> (resolveConfigPath >>= loadConfig)
+    result <-
+        Effects.submitJob
+            SubmitRequest
+                { submitJobName = key
+                , submitComment = comment
+                , submitOptions = requirementSlurmArgs slurm requirements ++ slurmArgs slurm
+                , submitDependencies = map unJobId depJobIds
+                , submitCommand = command
+                , submitWait = False
+                }
+    pure $ case result of
+        Right stdout ->
             case parseJobId stdout of
                 Just jobId -> Right jobId
                 Nothing -> Left ("sbatch produced no job id: " ++ show stdout)
-        ExitFailure code -> Left ("sbatch failed (exit " ++ show code ++ "): " ++ stderr)
-
-dependencyArgs :: [JobId] -> [String]
-dependencyArgs [] = []
-dependencyArgs jobIds =
-    [ "--dependency=afterok:" ++ intercalate ":" (map unJobId jobIds)
-    , "--kill-on-invalid-dep=yes"
-    ]
+        Left err -> Left err
 
 -- | @--parsable@ prints @jobid@ or @jobid;cluster@ on the first line.
 parseJobId :: String -> Maybe JobId
@@ -264,12 +253,12 @@ parseJobId out =
 {- | Poll until no queued or running job with this name remains. Completion
 does not imply success; callers must check the expected store path.
 -}
-waitForCompletion :: BuildKey -> IO ()
+waitForCompletion :: (Slurm :> es, IOE :> es) => BuildKey -> Eff es ()
 waitForCompletion key = do
     state <- queryState key
     case state of
         BRunning -> do
-            threadDelay pollDelayMicros
+            liftIO $ threadDelay pollDelayMicros
             waitForCompletion key
         _ -> pure ()
 

@@ -19,12 +19,17 @@ library
     Agent.WarmSession
     Api
     ApiTypes
+    App
     BuildLog
     BuildRunner
     Bus
     ClusterBus
     Config
     Docs.OpenApi
+    EffectRunner
+    Effects
+    Fixture.Document
+    Fixture.Server
     Handlers.Agent
     Handlers.Autocomplete
     Handlers.CommitHash
@@ -43,9 +48,12 @@ library
     Handlers.Store
     Handlers.Upload
     Handlers.Zip
+    Interpreters.Fixture
+    Interpreters.Production
     NixEvaluator
     NixUtils
     OutPaths
+    Processes
     Sse
     UserRepo
 
@@ -63,6 +71,7 @@ library
     , containers
     , data-fix
     , directory
+    , effectful
     , filelock
     , filepath
     , hnix
@@ -85,6 +94,7 @@ library
     , text
     , time
     , tomland
+    , transformers
     , unix
     , vector
     , scientific
@@ -96,6 +106,10 @@ library
 
   hs-source-dirs:   src
   default-language: Haskell2010
+  default-extensions:
+    ConstraintKinds
+    FlexibleContexts
+    TypeOperators
 
 executable backend
   import:           warnings
@@ -122,6 +136,20 @@ executable backend
     , wai-cors
     , wai-extra
     , warp
+
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
+executable pointy-fixture-server
+  import:           warnings
+  main-is:          FixtureMain.hs
+  ghc-options:      -threaded
+  build-depends:
+    , backend
+    , base
+    , directory
+    , filepath
+    , text
 
   hs-source-dirs:   app
   default-language: Haskell2010

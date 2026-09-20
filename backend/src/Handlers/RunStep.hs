@@ -1,5 +1,8 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Handlers.RunStep (
     buildExtras,
@@ -19,34 +22,37 @@ import Control.Monad (foldM, void, when)
 
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (eitherDecode)
 import Data.List (foldl', isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import EffectRunner (runAppEffects)
+import Effectful (Eff, IOE, (:>))
+import Effects (App, AppEffects, AppM, Eval, Nix, registerGcRoot, pathValid)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects)
-import NixUtils (isValidStorePath)
-import System.Process (readProcessWithExitCode)
-import Servant (Handler, NoContent (..), err404, err500, errBody)
+import Servant (NoContent (..), err404, err500, errBody)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
-runStepHandler :: Int -> Maybe T.Text -> Handler NoContent
+runStepHandler :: Int -> Maybe T.Text -> AppM NoContent
 runStepHandler eid commit = do
-    _ <- liftIO $ forkIO $ runStepSync eid commit
+    _ <- liftIO $ forkIO $ runAppEffects $ runStepSync eid commit
     return NoContent
 
-stopStepHandler :: Int -> Maybe T.Text -> Handler NoContent
+stopStepHandler :: Int -> Maybe T.Text -> AppM NoContent
 stopStepHandler eid commit = do
-    liftIO $ stopStepSync eid commit
+    lift $ stopStepSync eid commit
     return NoContent
 
-runStepSync :: Int -> Maybe T.Text -> IO ()
+runStepSync :: App es => Int -> Maybe T.Text -> Eff es ()
 runStepSync eid commit = do
     result <- runExceptT $ do
         (repoPath, targetCommit) <-
@@ -58,24 +64,23 @@ runStepSync eid commit = do
         graph <- getDependencyGraph ctx eid
         stepIds <- liftEither $ topoOrder graph
 
-        liftIO $ do
-            outcomes <- submitGraph ctx graph stepIds
-            mapConcurrently_ (finishStep ctx) (Map.toList outcomes)
+        outcomes <- lift $ submitGraph ctx graph stepIds
+        liftIO $ mapConcurrently_ (runAppEffects . finishStep ctx) (Map.toList outcomes)
 
     case result of
-        Left err -> putStrLn $ "runStepAsync error: " ++ err
+        Left err -> liftIO $ putStrLn $ "runStepAsync error: " ++ err
         Right _ -> return ()
 
-stepLogHandler :: Int -> Maybe T.Text -> Handler T.Text
+stepLogHandler :: Int -> Maybe T.Text -> AppM T.Text
 stepLogHandler eid commit = do
-    result <- liftIO $ runExceptT $ do
+    result <- lift $ runExceptT $ do
         (repoPath, targetCommit) <-
             ExceptT $
                 withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) ->
                     return (repoPath, maybe commitHash T.unpack commit)
 
         let ctx = ReadRepoContext repoPath targetCommit
-        liftIO $ resolveBuildLog (stepInstallable ctx eid)
+        lift $ resolveBuildLog (stepInstallable ctx eid)
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
@@ -118,14 +123,14 @@ data SubmitOutcome
 @afterok@ edges so a dependent never builds a dependency's derivation
 inside its own allocation.
 -}
-submitGraph :: ReadRepoContext -> Map.Map Int [Int] -> [Int] -> IO (Map.Map Int SubmitOutcome)
+submitGraph :: App es => ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
 submitGraph ctx graph = foldM submitOne Map.empty
   where
     submitOne outcomes sid = do
         outcome <- submitStep ctx outcomes (Map.findWithDefault [] sid graph) sid
         return $ Map.insert sid outcome outcomes
 
-submitStep :: ReadRepoContext -> Map.Map Int SubmitOutcome -> [Int] -> Int -> IO SubmitOutcome
+submitStep :: App es => ReadRepoContext -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Eff es SubmitOutcome
 submitStep ctx outcomes deps sid
     | not (null blockedOn) =
         return $ NotSubmitted $ "dependency step(s) " ++ show blockedOn ++ " could not be scheduled"
@@ -133,18 +138,18 @@ submitStep ctx outcomes deps sid
         result <- runExceptT $ do
             outPathText <- getStepOutPath ctx sid
             let outPath = T.unpack outPathText
-            built <- liftIO $ isBuilt outPath
+            built <- lift $ isBuilt outPath
             let buildKey = buildKeyForOutPath outPath
             if built
                 then return $ AlreadyBuilt outPath
                 else do
-                    existing <- liftIO $ queryJobIds buildKey
+                    existing <- lift $ queryJobIds buildKey
                     if not (null existing)
                         then return $ Enqueued outPath buildKey existing
                         else do
                             requirements <- getStepRequirements ctx sid
                             submitted <-
-                                liftIO $
+                                lift $
                                     submitJob
                                         requirements
                                         buildKey
@@ -166,7 +171,7 @@ submitStep ctx outcomes deps sid
 Success is judged by the store path; slurm reports no usable exit status
 for jobs not submitted with @--wait@.
 -}
-finishStep :: ReadRepoContext -> (Int, SubmitOutcome) -> IO ()
+finishStep :: App es => ReadRepoContext -> (Int, SubmitOutcome) -> Eff es ()
 finishStep ctx (sid, outcome) = case outcome of
     AlreadyBuilt outPath -> do
         broadcastSingleStepForProjects sid targetCommitText outPath
@@ -184,7 +189,7 @@ finishStep ctx (sid, outcome) = case outcome of
                 buildExtras ctx sid
             else broadcastFailedStepForProjects sid targetCommitText
     NotSubmitted err -> do
-        putStrLn $ "buildStep error: " ++ err
+        liftIO $ putStrLn $ "buildStep error: " ++ err
         broadcastKnownStepStatus sid targetCommitText ("failure", Just (T.pack err))
   where
     targetCommitText = T.pack (readCommitHash ctx)
@@ -192,21 +197,21 @@ finishStep ctx (sid, outcome) = case outcome of
 {- | Attempt to build the extras derivation for a step.  Errors are non-fatal
 (logged only) because extras are supplementary metadata.
 -}
-buildExtras :: ReadRepoContext -> Int -> IO ()
+buildExtras :: App es => ReadRepoContext -> Int -> Eff es ()
 buildExtras ctx eid = do
     result <- runExceptT $ do
         mExtrasPath <- getExtrasOutPath ctx eid
         case mExtrasPath of
             Nothing -> return ()
             Just extrasPath -> do
-                built <- liftIO $ isBuilt extrasPath
+                built <- lift $ isBuilt extrasPath
                 if built
-                    then liftIO $ registerGcRootForOutPath extrasPath
+                    then lift $ registerGcRootForOutPath extrasPath
                     else do
                         requirements <- getExtrasRequirements ctx eid
                         let buildKey = buildKeyForOutPath extrasPath
                         exitCode <-
-                            liftIO $
+                            lift $
                                 submitAndWait
                                     requirements
                                     buildKey
@@ -214,14 +219,14 @@ buildExtras ctx eid = do
                                     ["nix", "build", "--no-link", "--no-eval-cache", extrasInstallable ctx eid]
                         case exitCode of
                             ExitSuccess -> do
-                                nowBuilt <- liftIO $ isBuilt extrasPath
-                                if nowBuilt then liftIO $ registerGcRootForOutPath extrasPath else return ()
+                                nowBuilt <- lift $ isBuilt extrasPath
+                                if nowBuilt then lift $ registerGcRootForOutPath extrasPath else return ()
                             ExitFailure _ -> return ()
     case result of
-        Left err -> putStrLn $ "buildExtras error for step " ++ show eid ++ ": " ++ err
+        Left err -> liftIO $ putStrLn $ "buildExtras error for step " ++ show eid ++ ": " ++ err
         Right _ -> return ()
 
-getStepOutPath :: ReadRepoContext -> Int -> ExceptT String IO T.Text
+getStepOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) T.Text
 getStepOutPath ctx eid = do
     output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
     return $ T.pack output
@@ -229,10 +234,10 @@ getStepOutPath ctx eid = do
 {- | Resolve the extras outPath.  Returns Nothing when the step has no extras
 attribute (i.e. the eval result is not a valid store path).
 -}
-getExtrasOutPath :: ReadRepoContext -> Int -> ExceptT String IO (Maybe FilePath)
+getExtrasOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) (Maybe FilePath)
 getExtrasOutPath ctx eid = do
     result <-
-        liftIO $
+        lift $
             runExceptT $
                 runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".meta.pointy.extras.outPath")
     case result of
@@ -242,10 +247,10 @@ getExtrasOutPath ctx eid = do
                 then return Nothing
                 else return (Just path)
 
-getExtrasRequirements :: ReadRepoContext -> Int -> ExceptT String IO StepRequirements
+getExtrasRequirements :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) StepRequirements
 getExtrasRequirements ctx eid = do
     let attr = "#pointy.steps." ++ show eid ++ ".meta.pointy.extras.requirements"
-    result <- liftIO $ runExceptT $ runNixEvalJsonInRepo ctx attr
+    result <- lift $ runExceptT $ runNixEvalJsonInRepo ctx attr
     case result of
         Left _ ->
             -- No extras.requirements: use conservative defaults.
@@ -253,7 +258,7 @@ getExtrasRequirements ctx eid = do
         Right output ->
             decodeAndValidateRequirements attr output
 
-getStepRequirements :: ReadRepoContext -> Int -> ExceptT String IO StepRequirements
+getStepRequirements :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) StepRequirements
 getStepRequirements ctx eid = do
     let attr = "#pointy.steps." ++ show eid ++ ".requirements"
     output <- runNixEvalJsonInRepo ctx attr
@@ -264,7 +269,7 @@ would produce malformed slurm arguments (negative cpu, delimiters in
 ram/ior/iow). Used by both the main step and extras paths so they share
 the same validation contract.
 -}
-decodeAndValidateRequirements :: String -> String -> ExceptT String IO StepRequirements
+decodeAndValidateRequirements :: String -> String -> ExceptT String (Eff es) StepRequirements
 decodeAndValidateRequirements attr output = do
     requirements <-
         case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
@@ -287,7 +292,7 @@ validateStepRequirements requirements
 {- | Transitive step dependency graph rooted at a step: every reachable
 step mapped to its direct dependencies.
 -}
-getDependencyGraph :: ReadRepoContext -> Int -> ExceptT String IO (Map.Map Int [Int])
+getDependencyGraph :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) (Map.Map Int [Int])
 getDependencyGraph ctx root = go Map.empty [root]
   where
     go acc [] = return acc
@@ -312,9 +317,9 @@ topoOrder graph = go Set.empty [] (Map.keys graph)
 {- | Direct dependencies of a step. A missing @pointy.dependencies@ attribute
 (or one that fails to decode) is treated as "no dependencies".
 -}
-getDependencies :: ReadRepoContext -> Int -> ExceptT String IO [Int]
+getDependencies :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) [Int]
 getDependencies ctx stepId = do
-    result <- liftIO $ runExceptT $ runNixEvalJsonInRepo ctx ("#pointy.dependencies." ++ show stepId)
+    result <- lift $ runExceptT $ runNixEvalJsonInRepo ctx ("#pointy.dependencies." ++ show stepId)
     case result of
         Left _ -> return []
         Right stdout ->
@@ -322,19 +327,18 @@ getDependencies ctx stepId = do
                 Left _ -> return []
                 Right ids -> return $ map read ids
 
-isBuilt :: FilePath -> IO Bool
-isBuilt = isValidStorePath
+isBuilt :: (Nix :> es) => FilePath -> Eff es Bool
+isBuilt = pathValid
 
-registerGcRootForOutPath :: FilePath -> IO ()
+registerGcRootForOutPath :: (Nix :> es, IOE :> es) => FilePath -> Eff es ()
 registerGcRootForOutPath outPath = do
-    home <- getHomeDirectory
+    home <- liftIO getHomeDirectory
     let gcRootDir = home </> ".local" </> "state" </> "pointy" </> "gc-roots"
         gcRootPath = gcRootDir </> takeFileName outPath
-    createDirectoryIfMissing True gcRootDir
-    _ <- readProcessWithExitCode "nix-store" ["--add-root", gcRootPath, "--realise", outPath] ""
-    return ()
+    liftIO $ createDirectoryIfMissing True gcRootDir
+    registerGcRoot gcRootPath outPath
 
-stopStepSync :: Int -> Maybe T.Text -> IO ()
+stopStepSync :: App es => Int -> Maybe T.Text -> Eff es ()
 stopStepSync eid commit = do
     result <- runExceptT $ do
         (repoPath, targetCommit) <-
@@ -348,16 +352,16 @@ stopStepSync eid commit = do
         -- Cancel extras first: if we cancelled main only, Nix dependency
         -- resolution in the extras build could restart the main build.
         mExtrasPath <- getExtrasOutPath ctx eid
-        liftIO $ case mExtrasPath of
+        lift $ case mExtrasPath of
             Just extrasPath -> cancel (buildKeyForOutPath extrasPath)
             Nothing -> return ()
 
         outPathText <- getStepOutPath ctx eid
-        liftIO $ cancel $ buildKeyForOutPath $ T.unpack outPathText
-        liftIO $ broadcastStatusForStepProjects eid targetCommit Nothing
+        lift $ cancel $ buildKeyForOutPath $ T.unpack outPathText
+        lift $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of
-        Left err -> putStrLn $ "stopStep error: " ++ err
+        Left err -> liftIO $ putStrLn $ "stopStep error: " ++ err
         Right _ -> return ()
 
 {- | Re-attach completion watchers to slurm jobs that were submitted before a
@@ -374,23 +378,27 @@ build the user is watching.
 The scan's step ids are passed through 'restoreRunningStepIds' so the cluster
 dock's running set survives the restart without clobbering live updates.
 -}
-restoreJobsFromSlurm :: IO ()
+restoreJobsFromSlurm :: App es => Eff es ()
 restoreJobsFromSlurm = do
     eRepo <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> return repoPath
     case eRepo of
-        Left err -> putStrLn $ "restoreJobsFromSlurm: cannot access repo: " ++ err
+        Left err -> liftIO $ putStrLn $ "restoreJobsFromSlurm: cannot access repo: " ++ err
         Right repoPath ->
-            restoreRunningStepIds $
-                scanJobs repoPath
-                    `catch` \e -> do
-                        putStrLn $ "restoreJobsFromSlurm failed: " ++ show (e :: SomeException)
-                        return Set.empty
+            liftIO $
+                void $
+                    restoreRunningStepIds $
+                        scanJobs repoPath
+                            `catch` \e -> do
+                                putStrLn $ "restoreJobsFromSlurm failed: " ++ show (e :: SomeException)
+                                return Set.empty
   where
+    scanJobs :: FilePath -> IO (Set Int)
     scanJobs repoPath = do
-        jobs <- querySlurmJobs
+        jobs <- runAppEffects querySlurmJobs
         let pointyJobs = [job | job <- jobs, isPointyJob (slurmJobName job)]
         attachWatchers repoPath pointyJobs
 
+    attachWatchers :: FilePath -> [SlurmJob] -> IO (Set Int)
     attachWatchers repoPath = go Set.empty
       where
         go _ [] = return Set.empty
@@ -401,6 +409,7 @@ restoreJobsFromSlurm = do
                 restRecovered <- go (Set.insert (slurmJobName job) seen) rest
                 return (Set.union recovered restRecovered)
 
+    attachOne :: FilePath -> SlurmJob -> IO (Set Int)
     attachOne repoPath job = case decodeJobComment =<< slurmJobComment job of
         Nothing -> do
             putStrLn $ "restoreJobsFromSlurm: no job comment on " ++ slurmJobName job ++ ", skipping"
@@ -431,7 +440,7 @@ restoreJobsFromSlurm = do
                         -- scan under mask, and forkIO children inherit the
                         -- parent's masked state; the watcher waits for hours
                         -- and must stay interruptible.
-                        void $ forkIOWithUnmask $ \unmask -> unmask $ watchRestoredJob ctx comment job
+                        void $ forkIOWithUnmask $ \unmask -> unmask $ runAppEffects $ watchRestoredJob ctx comment job
                         return $
                             if isRunningState (slurmJobState job)
                                 then Set.singleton (jobCommentStep comment)
@@ -441,7 +450,7 @@ restoreJobsFromSlurm = do
 -- commit.  Mirror of 'finishStep' for the live path.  squeue only reports
 -- pending/running/completing jobs, so every enumerated job is expected to be
 -- active; the state guard is defensive against squeue behavior drift.
-watchRestoredJob :: ReadRepoContext -> JobComment -> SlurmJob -> IO ()
+watchRestoredJob :: App es => ReadRepoContext -> JobComment -> SlurmJob -> Eff es ()
 watchRestoredJob ctx comment job = do
     let commitText = T.pack (jobCommentCommit comment)
         outPath = jobCommentOutPath comment

@@ -48,8 +48,9 @@ import Data.Text (Text)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
+import Interpreters.Production (runProduction)
 import Servant (Handler, NoContent (..), err400, err404, err409, err500, errBody, throwError)
-import UserRepo (withUserRepoExclusive)
+import UserRepo (withUserRepoExclusiveIO)
 
 data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
@@ -140,7 +141,7 @@ usageHandler = liftIO getAgentUsage
 
 runLockedAction :: ExceptT String IO a -> Handler a
 runLockedAction action = do
-    result <- liftIO $ withUserRepoExclusive action
+    result <- liftIO $ withUserRepoExclusiveIO action
     either throwAgentError return result
 
 runAgentAction :: ExceptT String IO a -> Handler a

@@ -4,13 +4,14 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text, pack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Interpreters.Production (runProduction)
 import Servant (Handler, throwError)
 import Servant.Server (err500, errBody)
-import UserRepo (ReadRepoContext (..), withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), withReadRepoTransactionIO)
 
 getCommitHashHandler :: Handler Text
 getCommitHashHandler = do
-    result <- liftIO $ withReadRepoTransaction $ \(ReadRepoContext _ commitHash) ->
+    result <- liftIO $ withReadRepoTransactionIO $ \(ReadRepoContext _ commitHash) ->
         return commitHash
     case result of
         Right hash -> return (pack hash)
