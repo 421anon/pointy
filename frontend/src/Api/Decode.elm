@@ -496,11 +496,13 @@ fieldWidget =
                         Decode.map WSelect (Decode.field "shape" (Decode.field "options" (Decode.list option)))
 
                     ( WTokens hook, "list" ) ->
-                        Decode.field "shape" (Decode.field "element" (Decode.field "shape" (Decode.field "kind" Decode.string)))
+                        Decode.map2 Tuple.pair
+                            (Decode.field "shape" (Decode.field "element" (Decode.field "shape" (Decode.field "kind" Decode.string))))
+                            (Decode.field "shape" (Decode.field "element" (Decode.field "widget" (maybe (Decode.field "hook" Decode.string)))))
                             |> Decode.andThen
-                                (\elementShape ->
+                                (\( elementShape, elementHook ) ->
                                     if elementShape == "text" then
-                                        Decode.succeed (WTokens hook)
+                                        Decode.succeed (WTokens (declaredHook hook elementHook))
 
                                     else
                                         Decode.fail "A token list needs a text element"
@@ -521,6 +523,21 @@ fieldWidget =
                     ( _, other ) ->
                         Decode.fail ("Unsupported value shape: " ++ other)
             )
+
+
+{-| A field's own widget names the hook for the control it renders. Token lists
+are rendered by that control rather than by their elements, so a hook a template
+declares on the list's knobs (which arrives on the element) only stands in when
+the field names none.
+-}
+declaredHook : Maybe String -> Maybe String -> Maybe String
+declaredHook fieldHook elementHook =
+    case fieldHook of
+        Just _ ->
+            fieldHook
+
+        Nothing ->
+            elementHook
 
 
 argField : Decoder Field
