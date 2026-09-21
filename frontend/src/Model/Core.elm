@@ -647,10 +647,10 @@ appendChatLine rawLine entries =
     in
     case prefix of
         "stdout" ->
-            appendToCurrentAssistant body entries
+            appendAssistantLine body entries
 
         "stderr" ->
-            appendToCurrentAssistant body entries
+            appendAssistantLine body entries
 
         "steering" ->
             case Decode.decodeString Decode.string (String.trim body) of
@@ -705,6 +705,26 @@ appendToCurrentAssistant body =
                         last.assistant ++ "\n" ++ body
             }
         )
+
+
+{-| Assistant prose from the turn log, minus the narration markers the backend
+used to write. Older turn logs still carry those markers, so replaying a chat
+must drop them too.
+-}
+appendAssistantLine : String -> List ChatEntry -> List ChatEntry
+appendAssistantLine body entries =
+    if List.member (String.trim body) retiredNarrationMarkers then
+        entries
+
+    else
+        appendToCurrentAssistant body entries
+
+
+retiredNarrationMarkers : List String
+retiredNarrationMarkers =
+    [ "*Loading the project context*"
+    , "*Thinking*"
+    ]
 
 
 pendingQuestionAfterLine : String -> Maybe PendingQuestion -> Maybe PendingQuestion

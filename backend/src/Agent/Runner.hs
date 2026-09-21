@@ -355,9 +355,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn =
         appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> tid)
         mWarmResult <-
             if isFirstTurn
-                then do
-                    appendLogLine cfg (turnLogPath turn) "stdout" "*Loading the project context*"
-                    getOrBuildWarmSession cfg (baseCommit session_) (void . attachRunnerProcess sid tid)
+                then getOrBuildWarmSession cfg (baseCommit session_) (void . attachRunnerProcess sid tid)
                 else return Nothing
         case mWarmResult of
             Just (Left err) ->
@@ -740,8 +738,6 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
     number name = maybe "?" (T.pack . show) (event ^? key name . _Integer)
     assistant = messageText "role" == "assistant"
     eventLines kind = case kind of
-        "message_update" ->
-            visible ["*Thinking*" | assistant, event ^. key "assistantMessageEvent" . key "type" . _String == "thinking_start"]
         "message_end"
             | assistant ->
                 let failed = messageText "stopReason" `elem` ["error", "aborted"]
@@ -779,6 +775,7 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
     silent =
         [ "session"
         , "message_start"
+        , "message_update"
         , "agent_start"
         , "agent_end"
         , "turn_start"
