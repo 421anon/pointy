@@ -3080,9 +3080,22 @@ sessionViewFetching sessionId =
     has (sessionViewDataAt sessionId << just << ApiData.loadingState)
 
 
+{-| The chat list still has to settle even when no chat is open, so this reads
+the selection as a Maybe: `Flow.forAll ... << just` runs on a 0-threaded branch
+when the optic misses, and a 0-threaded flow drops whatever is chained after it
+(here: the panel's restore of the last chat, leaving "Loading chat" up).
+-}
 ensureSelectedAgentSessionView : Flow Model ()
 ensureSelectedAgentSessionView =
-    Flow.forAll (agent << selectedSessionId << just) ensureAgentSessionView
+    Flow.try (agent << selectedSessionId << just)
+        (\mSessionId ->
+            case mSessionId of
+                Just sessionId ->
+                    ensureAgentSessionView sessionId
+
+                Nothing ->
+                    Flow.pure ()
+        )
 
 
 loadAgentSessions : Flow Model ()
