@@ -32,8 +32,6 @@ map f apiData =
             Error error
 
 
-{-| Merges 2 ApiDatas. The loading state of the new one takes precedence.
--}
 update : (a -> b -> a) -> ApiData a -> ApiData b -> ApiData a
 update f new old =
     case ( new, old ) of

@@ -24,10 +24,6 @@ import Servant (Header, Headers, addHeader)
 import qualified Servant.Types.SourceT as S
 import qualified Sse
 
-{- | Query SLURM via sinfo to determine cluster availability.
-Returns Unavailable if sinfo is not reachable, Available if all
-partitions report "up", Degraded otherwise.
--}
 checkClusterStatus :: (Slurm :> es) => Eff es ClusterStatus
 checkClusterStatus = do
     result <- clusterAvailability
@@ -42,9 +38,6 @@ checkClusterStatus = do
                             then Available
                             else Degraded
 
-{- | Synchronously check cluster status and store it, then fork a
-background loop that re-checks every 30 seconds.
--}
 startClusterPoller :: IO ()
 startClusterPoller = do
     status <- runAppEffects checkClusterStatus

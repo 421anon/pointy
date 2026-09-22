@@ -108,9 +108,10 @@ getProjectReviewHandler projectId commit = do
         viewed <- maybe (pure context) (commitContextEff (readRepoPath context)) commit
         stepIds <- projectStepIds viewed projectId
         reviews <- (<> Map.fromList [(stepId, Nothing) | stepId <- stepIds]) <$> stepReviews context stepIds
-        reviewedOutputs <- reviewedOutPaths (readRepoPath context) reviews
+        reviewedOutputs <- reviewedPaths (readRepoPath context) stepOutPaths reviews
         comparisons <- stepComparisons viewed reviews reviewedOutputs
-        statuses <- mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedOutputs
+        reviewedCertificates <- reviewedPaths (readRepoPath context) stepCertificates reviews
+        statuses <- mapM (either (const $ pure ("not-started", Nothing)) (lift . checkStatus)) reviewedCertificates
         let stepReport stepId review = StepReviewReport review (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
     orFail err500 result
@@ -129,7 +130,7 @@ reviewStepHandler stepId mCommit request = do
                 commitAndPushChanges context $ "review step " ++ show stepId ++ " by " ++ T.unpack by
                 pure False
         review <- stepReview context stepId
-        reviewedOutputs <- reviewedOutPaths repoPath (Map.singleton stepId review)
+        reviewedOutputs <- reviewedPaths repoPath stepOutPaths (Map.singleton stepId review)
         comparison <- Map.findWithDefault NoReview stepId <$> stepComparisons viewed (Map.singleton stepId review) reviewedOutputs
         case comparison of
             DifferentContent -> pure True
@@ -185,9 +186,6 @@ reviewDiffHandler stepId mCommit = Tagged $ \_ respond -> do
             ]
             (TLE.encodeUtf8 (TL.fromStrict html))
 
-{- | The returned file is diffoscope's own output: the cache is keyed by the two
-store hashes, which decide what it holds rather than who reads it.
--}
 renderReport :: (Nix :> es, IOE :> es) => Int -> FilePath -> FilePath -> ExceptT String (Eff es) FilePath
 renderReport stepId reviewed viewed = do
     hashes <- storeHashes [reviewed, viewed]
@@ -210,9 +208,6 @@ renderReport stepId reviewed viewed = do
         words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
             ++ ["--html", out, reviewed, viewed]
 
-{- | Applied on the way out: only the comparison is cached, so a report rendered
-before any of this was here reads the same as a fresh one.
--}
 dressReport :: Int -> FilePath -> FilePath -> Text -> Text
 dressReport stepId reviewed viewed =
     injectStyles . source viewed "viewed" . source reviewed "reviewed" . retitle
@@ -226,11 +221,6 @@ dressReport stepId reviewed viewed =
         let (before, rest) = T.breakOn "</head>" html
          in before <> reportStyles <> rest
 
-{- | Diffoscope dresses its report as a page of its own; a reviewer reads it
-inside a step row, so it is dressed for the app instead. The palette mirrors
-frontend/styles/_tokens.scss, and the light values answer to the colour scheme
-the embedding frame carries, since a report cannot read the root's theme.
--}
 reportStyles :: Text
 reportStyles =
     T.unlines
@@ -287,7 +277,6 @@ reportStyles =
         , "  }"
         , "}"
         , ""
-        , "/* The root difference is the report; the ones inside it are the files. */"
         , ".diffoscope .difference {"
         , "  border: 1px solid var(--border-color);"
         , "  border-radius: var(--radius-sm);"
@@ -489,22 +478,30 @@ stepReview ctx stepId = stepReviews ctx [stepId] >>= maybe (throwError ("Step " 
 stepReviews :: (RepoContext ctx, Eval :> es) => ctx -> [Int] -> ExceptT String (Eff es) StepReviews
 stepReviews _ [] = pure Map.empty
 stepReviews ctx stepIds = do
-    looked <- decodeNix "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames reviewOfExistingStep stepIds) "#pointy.stepDefs"
+    looked <- decodeNix "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames "steps" reviewOfExistingStep stepIds) "#pointy.stepDefs"
     pure $ Map.mapMaybe listToMaybe $ Map.fromList $ zip stepIds (looked :: [[Maybe Review]])
   where
     reviewOfExistingStep =
         "if builtins.hasAttr name steps then [ (let step = steps.${name}; in if (step.reviewedRevision or null) != null then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
 
-reviewedOutPaths :: (IOE :> es, Eval :> es) => FilePath -> StepReviews -> ExceptT String (Eff es) StepOutPaths
-reviewedOutPaths repoPath reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)
+reviewedPaths :: (IOE :> es, Eval :> es) => FilePath -> (ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths) -> StepReviews -> ExceptT String (Eff es) StepOutPaths
+reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)
   where
     grouped = Map.fromListWith (++) [(reviewedRevision review, [stepId]) | (stepId, Just review) <- Map.toList reviews]
     revisionPaths (revision, stepIds) = do
         viewedEither <- liftIO $ runExceptT $ commitContext repoPath revision
         result <- case viewedEither of
             Left err -> pure (Left err)
-            Right viewed -> lift $ runExceptT $ stepOutPaths viewed stepIds
+            Right viewed -> lift $ runExceptT $ resolve viewed stepIds
         pure $ either (\err -> Map.fromList [(stepId, Left err) | stepId <- stepIds]) id result
+
+stepCertificates :: (Eval :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths
+stepCertificates context stepIds = do
+    resolved <- decodeNix "Failed to decode step certificates" =<< runNixEvalJsonApplyInRepo context (mapStepNames "certificates" certificateExpression stepIds) "#pointy.certificates"
+    pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
+  where
+    certificateExpression = "let path = builtins.tryEval (builtins.unsafeDiscardStringContext (toString certificates.${name}.certificate)); in if path.success then path.value else null"
+    entry = maybe (Left ("The certificate of a step could not be evaluated at " ++ readCommitHash context ++ ".")) (Right . T.unpack . T.strip)
 
 stepOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) FilePath
 stepOutPath context stepId = stepOutPaths context [stepId] >>= either throwError pure . lookupOutPath stepId
@@ -514,14 +511,14 @@ lookupOutPath stepId = Map.findWithDefault (Left ("Step " ++ show stepId ++ " ha
 
 stepOutPaths :: (Eval :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths
 stepOutPaths context stepIds = do
-    resolved <- decodeNix "Failed to decode step output paths" =<< runNixEvalJsonApplyInRepo context (mapStepNames outPathExpression stepIds) "#pointy.steps"
+    resolved <- decodeNix "Failed to decode step output paths" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" outPathExpression stepIds) "#pointy.steps"
     pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
   where
     outPathExpression = "let path = builtins.tryEval (builtins.unsafeDiscardStringContext (toString steps.${name}.outPath)); in if path.success then path.value else null"
     entry = maybe (Left ("The output path of a step could not be evaluated at " ++ readCommitHash context ++ ".")) (Right . T.unpack . T.strip)
 
-mapStepNames :: String -> [Int] -> String
-mapStepNames expression stepIds = "steps: map (name: " ++ expression ++ ") [ " ++ unwords [show (show stepId) | stepId <- stepIds] ++ " ]"
+mapStepNames :: String -> String -> [Int] -> String
+mapStepNames subject expression stepIds = subject ++ ": map (name: " ++ expression ++ ") [ " ++ unwords [show (show stepId) | stepId <- stepIds] ++ " ]"
 
 storeHashes :: (Nix :> es) => [FilePath] -> ExceptT String (Eff es) (Map FilePath Text)
 storeHashes [] = pure Map.empty

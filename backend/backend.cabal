@@ -115,11 +115,6 @@ executable backend
   import:           warnings
   main-is:          Main.hs
 
-  -- The -threaded flag is CRITICAL here. We use blocking file locks (flock) to synchronize
-  -- access to the git repository. Without this flag, the app runs on a single OS thread.
-  -- If one request waits for a lock, it puts that single OS thread to sleep, freezing the
-  -- entire app. This includes the request that currently holds the lock, meaning it can
-  -- never finish its work and release the lock, resulting in a permanent freeze.
   ghc-options:      -threaded
   build-depends:
     , backend
@@ -183,7 +178,6 @@ test-suite turn-stream
   import:           warnings
   type:             exitcode-stdio-1.0
   main-is:          TurnStream.hs
-  -- registerDelay (used by the stream heartbeat) requires -threaded.
   ghc-options:      -threaded
   build-depends:
     , backend
@@ -200,11 +194,25 @@ test-suite turn-stream
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite certificate-status
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          CertificateStatus.hs
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , containers
+    , stm
+    , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite status-stream
   import:           warnings
   type:             exitcode-stdio-1.0
   main-is:          StatusStreamTest.hs
-  -- registerDelay (used by the stream heartbeat) requires -threaded.
   ghc-options:      -threaded
   build-depends:
     , backend
@@ -221,7 +229,6 @@ test-suite dialog
   import:           warnings
   type:             exitcode-stdio-1.0
   main-is:          Dialog.hs
-  -- The timeout around a blocking pipe read requires -threaded.
   ghc-options:      -threaded
   build-depends:
     , aeson

@@ -39,10 +39,6 @@ instance Accept EventStream where
 instance MimeRender EventStream BS.ByteString where
     mimeRender _ = LBS.fromStrict
 
-{- | A single app-global SSE stream carrying snapshot and heartbeat events
-for every project's steps, unfiltered.  Clients open this stream once;
-completion toasts then fire regardless of which page is open.
--}
 stepStatusStreamHandler :: AppM (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (S.SourceT IO BS.ByteString))
 stepStatusStreamHandler = do
     busChan <- liftIO subscribe
@@ -58,11 +54,6 @@ stepStatusStreamHandler = do
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
 
-{- | Re-evaluate a project's step statuses and broadcast them on the global
-step status stream.  The target commit defaults to the current repo head
-when omitted; the evaluation runs in a forked thread so the request
-returns immediately.
--}
 projectStatusHandler :: Int -> Maybe Text -> AppM NoContent
 projectStatusHandler projectId commit = do
     targetCommit <-

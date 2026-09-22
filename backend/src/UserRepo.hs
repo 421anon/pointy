@@ -112,8 +112,6 @@ userRepoLockPath = do
     homeDir <- getHomeDirectory
     return $ homeDir </> "user-repo.lock"
 
--- Note: This function uses blocking file locks (flock) under the hood.
--- See comment at the `-threaded` flag in backend.cabal.
 withRepoLock :: (IOE :> es) => FilePath -> RepoAccess -> Eff es a -> Eff es a
 withRepoLock lockPath access action =
     bracket
@@ -260,9 +258,6 @@ commitContext repoPath hash = do
     when (exitCode /= ExitSuccess) $ throwError ("Commit " ++ commit ++ " is not in the local user repository.")
     pure $ ReadRepoContext repoPath (T.unpack (T.strip (T.pack resolved)))
 
-{- | Ensure a pinned commit exists in the local bare repository. Fetch only
-when the object is absent so cached project evaluations stay network-free.
--}
 ensureRepoCommit :: String -> ExceptT String IO ()
 ensureRepoCommit commit = do
     repoPath <- liftIO userRepoPath

@@ -98,5 +98,4 @@ titleFromOutput output = do
         then Nothing
         else Just title
   where
-    -- Models wrap a title in quotes, bullets, bold markers and punctuation.
     isNoise char = char `elem` ("\"'`*#_.,:;- \t" :: String)

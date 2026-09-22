@@ -197,8 +197,6 @@ type alias AgentPreparedApply =
 
 
 
--- | RFC3339 "updatedAt" with the nanosecond fraction kept, so renames that
--- | land within the same millisecond still order correctly.
 
 
 type alias SessionTimestamp =
@@ -209,7 +207,6 @@ type alias SessionTimestamp =
 
 sessionTimestampAtLeast : SessionTimestamp -> SessionTimestamp -> Bool
 sessionTimestampAtLeast a b =
-    -- Compare millis directly (// wraps at 2^31); the fraction lives in nanos.
     Time.posixToMillis a.posix
         > Time.posixToMillis b.posix
         || (Time.posixToMillis a.posix == Time.posixToMillis b.posix && a.nanos >= b.nanos)
@@ -779,10 +776,6 @@ appendToCurrentAssistant body =
         )
 
 
-{-| Assistant prose from the turn log, minus the narration markers the backend
-used to write. Older turn logs still carry those markers, so replaying a chat
-must drop them too.
--}
 appendAssistantLine : String -> List ChatEntry -> List ChatEntry
 appendAssistantLine body entries =
     if List.member (String.trim body) retiredNarrationMarkers then
@@ -1776,9 +1769,6 @@ padDelimitedCells targetLength cells =
         cells ++ List.repeat (targetLength - List.length cells) ""
 
 
-{-| Per-column maximum cell length, starting from the header titles and
-folding in every row, so the width covers the whole column, not a sample.
--}
 maxLengthsByColumn : List (List String) -> List String -> List Int
 maxLengthsByColumn rows header =
     List.foldl
@@ -1787,9 +1777,6 @@ maxLengthsByColumn rows header =
         rows
 
 
-{-| Column width in pixels: wide enough for the longest cell, and never
-narrower than 88px. No upper bound — a long value gets a wide column.
--}
 delimitedColumnWidth : Int -> Int
 delimitedColumnWidth maxChars =
     max 88 ((maxChars + 2) * 9)

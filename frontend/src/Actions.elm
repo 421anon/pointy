@@ -322,8 +322,6 @@ applyStatusSnapshot snapshotCommit newStatus rs =
                 )
                 rs
     in
-    -- A save broadcasts its pre-run status asynchronously. Keep the pending marker
-    -- until a terminal run status arrives so that stale save snapshots cannot win.
     if pendingRun && newStatus == StatusNotStarted then
         rs
 
@@ -843,8 +841,6 @@ replaceRoute targetRoute =
 
 
 
--- | A target that already names a chat (e.g. a permalink) is authoritative;
--- | otherwise the open chat rides along across page navigations.
 
 
 inheritChat : Route -> Route -> Route
@@ -1263,8 +1259,6 @@ shareEntity projectId entityId target pathSegments mRange =
         |> Flow.seq (addToast True "Share link copied to clipboard")
 
 
-{-| Call an API. Adds an error toast and convenience updates over a lens.
--}
 callApi : An_Optic pr ls Model (ApiData a) -> FlowError Http.Error Model a -> FlowError Http.Error Model a
 callApi =
     callApiMerge always
@@ -1288,9 +1282,6 @@ callApiMerge merge lens apiCall =
             )
 
 
-{-| Run a call for its side effects: keep @callApi@'s error toast, then
-discard the result on both branches.
--}
 ignoreResult : FlowError Http.Error Model a -> Flow Model ()
 ignoreResult =
     FlowError.foldResult (\_ -> Flow.pure ()) (\_ -> Flow.pure ())
@@ -1918,11 +1909,6 @@ toggleOutputEntry recordId mOpen path =
 
                             else
                                 let
-                                    -- Ensure extras has fully resolved before deciding column
-                                    -- metadata. The folder action fires fetchExtras after the
-                                    -- directory listing, so a fast click on a file races against
-                                    -- that response; reading the lens at click-time would snapshot
-                                    -- Loading and bake `Nothing` metadata into the grid.
                                     ensureExtras =
                                         Flow.forAll parentExtrasLens
                                             (\extras ->
@@ -1931,9 +1917,6 @@ toggleOutputEntry recordId mOpen path =
                                                         Flow.pure (Ok ())
 
                                                     ApiData.Error _ ->
-                                                        -- Respect a prior failure rather than retrying
-                                                        -- on every file click; the grid degrades to
-                                                        -- string-typed columns.
                                                         Flow.pure (Ok ())
 
                                                     _ ->
@@ -1946,9 +1929,6 @@ toggleOutputEntry recordId mOpen path =
                                     (ensureExtras
                                         |> Flow.andThen
                                             (\_ ->
-                                                -- Extras errors are non-blocking; the grid simply
-                                                -- falls back to string-typed columns. Always proceed
-                                                -- to fetch the file content.
                                                 callApi (allStepTables << fileContentAt recordId path)
                                                     (Api.fetchFileContents recordId (Just commit_) path)
                                             )
@@ -2876,8 +2856,6 @@ markSessionViewLoading sessionId =
 
 
 
--- | Drop the chat from the current URL; the resulting onUrlChange closes
--- | the open chat.
 
 
 closeAgentChat : Flow Model ()
@@ -2887,8 +2865,6 @@ closeAgentChat =
 
 
 
--- | Push the current route's rendered URL (used after the route's chat
--- | widget changed).
 
 
 pushCurrentUrl : Flow Model ()
@@ -2901,7 +2877,6 @@ pushCurrentUrl =
 
 
 
--- | Replace the current URL with the current route's rendered form.
 
 
 replaceCurrentUrl : Flow Model ()
@@ -3082,11 +3057,6 @@ sessionViewFetching sessionId =
     has (sessionViewDataAt sessionId << just << ApiData.loadingState)
 
 
-{-| The chat list still has to settle even when no chat is open, so this reads
-the selection as a Maybe: `Flow.forAll ... << just` runs on a 0-threaded branch
-when the optic misses, and a 0-threaded flow drops whatever is chained after it
-(here: the panel's restore of the last chat, leaving "Loading chat" up).
--}
 ensureSelectedAgentSessionView : Flow Model ()
 ensureSelectedAgentSessionView =
     Flow.try (agent << selectedSessionId << just)
@@ -3665,7 +3635,6 @@ sendSteer sessionId { wire, shown } =
         |> FlowError.foldResult
             (\() -> Flow.pure ())
             (\err ->
-                -- Clear first, or the refresh keeps the live transcript.
                 setPendingSteer sessionId Nothing
                     |> Flow.seq (clearRequestIfMatches (Model.SteeringAgentTurn sessionId))
                     |> Flow.seq (addToast False (Http.errorMessage err))

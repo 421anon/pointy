@@ -3,7 +3,6 @@
 @use "components/select";
 @use "components/agent-panel";
 
-// Base styles
 * {
   box-sizing: border-box;
 }
@@ -276,7 +275,6 @@ body {
   display: flex;
   gap: var(--spacing-xs);
   align-items: center;
-  // reset popover attributes:
   margin: 0;
   padding: 0;
   border: none;
@@ -623,7 +621,6 @@ body {
   font-size: 18px;
 }
 
-/* ── Delimited grid viewer ── */
 
 $delimited-grid-row-height: 28px;
 
@@ -872,8 +869,6 @@ $delimited-grid-row-height: 28px;
   flex: 1 1 auto;
   padding: 0 var(--spacing-sm);
   white-space: pre;
-  // Must stay in sync with `plainLineHeight` in Model/Core.elm — the
-  // virtualized gutter positions line numbers using that constant.
   line-height: 17px;
 }
 
@@ -962,10 +957,6 @@ $delimited-grid-row-height: 28px;
   resize: vertical;
 }
 
-// The review diff is sized by iframe-fit.js and reads the app's colour scheme
-// through prefers-color-scheme, which the frame carries: a report is a document
-// of its own and cannot follow the root element's theme. It sits on the surface
-// the app shows files on.
 .iframe-zoom-wrapper-fit {
   height: auto;
   resize: none;
@@ -1062,7 +1053,6 @@ $delimited-grid-row-height: 28px;
   font-size: var(--font-size-sm);
 }
 
-// Button components
 .btn,
 .small-btn {
   @include mixins.button-base;
@@ -1178,13 +1168,11 @@ $delimited-grid-row-height: 28px;
 }
 
 .step-review-revision {
-  // A term with an explanation, not a control.
   cursor: help;
 }
 
 .step-review-revision-hash {
   font-family: monospace;
-  // Not a link: a dashed line marks it as a term with an explanation.
   text-decoration: underline dashed;
   text-underline-offset: 3px;
 }
@@ -1242,7 +1230,6 @@ $delimited-grid-row-height: 28px;
   color: var(--text-secondary);
 }
 
-// Form components
 $form-vertical-gap: var(--spacing-md);
 
 .form {
@@ -1658,7 +1645,6 @@ $readonly-disabled-targets: (
   }
 }
 
-// Page layout components
 .page {
   max-width: var(--notebook-max-width);
   margin: 0 auto;
@@ -1711,7 +1697,6 @@ $readonly-disabled-targets: (
 }
 
 
-// Icon styling
 .material-symbols-outlined {
   font-size: 18px;
   vertical-align: middle;
@@ -1722,7 +1707,6 @@ $readonly-disabled-targets: (
   }
 }
 
-// Field change indicators
 .field-changed,
 input.field-changed,
 textarea.field-changed,
@@ -1737,7 +1721,6 @@ select.field-changed,
   }
 }
 
-// Status indicator
 .status-indicator-wrapper {
   display: inline flex;
   align-items: center;
@@ -1920,7 +1903,6 @@ select.field-changed,
   height: 9px;
   border-radius: 50%;
 
-  // 3D effect
   box-shadow:
     inset -1px -1px 2px rgba(0, 0, 0, 0.2),
     inset 1px 1px 2px rgba(255, 255, 255, 0.6),
@@ -2005,7 +1987,6 @@ select.field-changed,
   }
 }
 
-// Dialog
 .dialog {
   border: none;
   border-radius: var(--radius-sm);
@@ -2057,7 +2038,6 @@ body:has(dialog[open]) {
   }
 }
 
-// Toast system
 .toast-container {
   position: fixed;
   top: var(--spacing-xl);
@@ -2399,7 +2379,6 @@ body:has(dialog[open]) {
   row-gap: 0;
 }
 
-// Bottom status bar
 .status-bar-dock {
   position: fixed;
   inset: auto 0 0;
@@ -2749,7 +2728,6 @@ body:has(dialog[open]) {
   border-color: var(--line-color);
 }
 
-// Upload progress
 .upload-progress {
   display: grid;
   grid-auto-flow: column;

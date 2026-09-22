@@ -1,14 +1,5 @@
 module Components.Markdown exposing (plain, toHtml)
 
-{-| Markdown rendering for text the app does not author itself: agent replies and
-field notices.
-
-Agent replies stream in token by token, so a partially written one can fail to
-parse (a trailing `<div>` with no closing tag, for example). Parse failures and
-raw HTML outside the allow-list fall back to the raw text, so the message stays
-readable instead of disappearing.
-
--}
 
 import Html exposing (Html)
 import Markdown.Html
@@ -16,8 +7,6 @@ import Markdown.Parser
 import Markdown.Renderer
 
 
-{-| Render `raw` as GFM markdown, with `toText` rendering every text run.
--}
 toHtml : (String -> Html msg) -> String -> List (Html msg)
 toHtml toText raw =
     case Markdown.Parser.parse raw of
@@ -29,8 +18,6 @@ toHtml toText raw =
                 |> Result.withDefault [ Html.text raw ]
 
 
-{-| Render `raw` as GFM markdown with plain text runs.
--}
 plain : String -> List (Html msg)
 plain =
     toHtml Html.text
@@ -45,9 +32,6 @@ renderer toText =
     { base | html = htmlRenderer, text = toText }
 
 
-{-| Raw HTML renders only for the tags below, and without attributes, so agent
-output cannot set classes, styles, or handlers on the app's DOM.
--}
 htmlRenderer : Markdown.Html.Renderer (List (Html msg) -> Html msg)
 htmlRenderer =
     passthroughTags

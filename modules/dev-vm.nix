@@ -26,16 +26,15 @@ in
         from = "host";
         host.port = 8080;
         guest.port = 80;
-      } # nginx
+      } 
       {
         from = "host";
         host.port = 2222;
         guest.port = 22;
-      } # SSH
+      } 
     ];
     writableStoreUseTmpfs = false;
     sharedDirectories = {
-      # fetch and fingerprint caches
       cache = {
         source = "$HOME/.cache/nix";
         target = "/var/cache/nix";
@@ -51,28 +50,18 @@ in
     };
   };
 
-  # Nix's libgit2-based fetcher writes packfile indexes via writable MAP_SHARED
-  # mmap. The default 9p mount (cache=none) rejects those with EINVAL
-  # ("appending to git packfile index: failed to mmap"), so opt this share into
-  # the v9fs mmap cache mode.
   virtualisation.fileSystems."/var/cache/nix".options = [ "cache=mmap" ];
 
   systemd.services.backend.environment.NIX_CACHE_HOME = "/var/cache/nix";
-  # Keep the dev scheduler permissive but low-concurrency: the backend's dev
-  # config records requirements as metadata-only, so one advertised CPU is enough
-  # to serialize jobs without rejecting large template CPU requirements.
   services.slurm.nodeName = lib.mkForce [
     "${config.networking.hostName} CPUs=4 RealMemory=${slurmRealMemory} State=UNKNOWN"
   ];
 
-  # Automatically return DOWN nodes to service after unexpected reboots.
-  # Value 2: resume as soon as slurmd re-registers, regardless of reason.
   services.slurm.extraConfig = "ReturnToService=2";
 
 
   nix.settings.store = "unix:///var/run/nix-daemon-socket";
 
-  # use the host store if exposed at port 5000
   systemd.services.host-nix-daemon-proxy = {
     wantedBy = [ "multi-user.target" ];
     wants = [ "network-online.target" ];
@@ -108,7 +97,6 @@ in
 
   '';
 
-  # Simple nginx configuration for dev
   services.nginx = {
     virtualHosts."localhost" = {
       locations."/api/".proxyPass = "http://127.0.0.1:3000/";

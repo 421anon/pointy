@@ -1,9 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Tests for the RPC dialog bridge: pi's @extension_ui_request@ events become
-chat questions, a multi-select question's rows (numbered into its options-less
-title) become a pick list, and no handler failure may take the reader down.
--}
 module Main (main) where
 
 import Agent.Runner (RunnerInput, SteerOutcome (..), handleDialog, handleRpcEventSafely, newRunnerInput, planSteer, streamHandle)
@@ -109,8 +105,6 @@ checkReaderSurvivesFailure dir = withInput $ \input -> do
         cfg = defaultAgentConfig
     reader <- async $ streamHandle cfg logPath "__BEGIN__" "stdout" (handleRpcEventSafely cfg logPath input) readerHandle
     TIO.hPutStrLn writer "__BEGIN__"
-    -- The same dialog twice: its reply cannot be written, and the next event is
-    -- still read.
     writeLine writer (selectEvent "d1")
     writeLine writer (selectEvent "d1")
     writeLine writer (object ["type" .= ("compaction_start" :: Text)])
@@ -138,7 +132,6 @@ checkDeclinedDialogKeepsOtherQuestion dir = withInput $ \input -> do
         Just _ -> fail "other: the open question should answer the steer rather than pass it on"
         Nothing -> fail "other: the open question should answer the steer"
 
--- | A runner input whose pipe has no reader: every write to pi fails.
 withInput :: (MVar (Maybe RunnerInput) -> IO a) -> IO a
 withInput action = do
     (readFd, writeFd) <- createPipe

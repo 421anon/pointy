@@ -1,7 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeOperators #-}
 
--- | The backend HTTP API, served by @Main@ and documented by @Docs.OpenApi@.
 module Api (API) where
 
 import Agent.Git (AgentApplyView, AgentSessionView, AgentUsage)
@@ -21,16 +20,12 @@ import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
 import Servant.Types.SourceT (SourceT)
 
--- | Required integer @id@ query parameter, shared by most resource routes.
 type ReqId = QueryParam' '[Required, Strict] "id" Int
 
 type ReqProjectId = QueryParam' '[Required, Strict] "project_id" Int
 
 type ReqEntityId = QueryParam' '[Required, Strict] "entity_id" Int
 
-{- | Standard SSE endpoint: unframed @text\/event-stream@ with the two
-headers that stop proxies from buffering or transforming events.
--}
 type SseStream =
     StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
 
@@ -424,7 +419,6 @@ type AgentTurnStream =
         :> Description "Streams output of an agent turn as server-sent events."
         :> SseStream
 
--- | The full served API, in handler order (matches @Main.server@).
 type API =
     GetCommitHash
         :<|> GetUserRepoInfo

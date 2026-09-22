@@ -20,27 +20,11 @@ withDefaults msg =
     { message = msg, stopPropagation = False, preventDefault = False }
 
 
-{-|
-
-
-# Deprecated.
-
-Stopping propagation removes the ability to detect events in parent elements.
-
--}
 withStopPropagation : msg -> CustomEvent msg
 withStopPropagation msg =
     { message = msg, stopPropagation = True, preventDefault = False }
 
 
-{-|
-
-
-# Deprecated.
-
-Stopping propagation removes the ability to detect events in parent elements.
-
--}
 withStopPrevent : msg -> CustomEvent msg
 withStopPrevent msg =
     { message = msg, stopPropagation = True, preventDefault = True }

@@ -32,9 +32,6 @@ type DirContext
     | SrcDir Int
 
 
-{-| An embedded document. `fitContent` frames take their height from the document
-they show, which is how the review diff is read: in a row, not in a box.
--}
 viewHtmlFrame : { id : String, src : String, zoom : Float -> Flow Model (), fitContent : Bool } -> Html (Flow Model ())
 viewHtmlFrame frame =
     Html.div

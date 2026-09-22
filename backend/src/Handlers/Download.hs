@@ -2,7 +2,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-{- | Download-kind step support: URL prefetch and hash injection. -}
 module Handlers.Download (
     discoverDownloadTemplates,
     prefetchFile,
@@ -36,14 +35,7 @@ import System.Exit (ExitCode (..))
 import System.Process (readProcessWithExitCode)
 import UserRepo (RepoContext, runNixEvalJsonInRepo)
 
------------------------------------------------------------------------------
--- URL validation
------------------------------------------------------------------------------
 
-{- | Validate that a URL uses the @http@ or @https@ scheme, is non-empty,
-has a non-empty host, and contains no whitespace.  Error messages never
-echo the potentially untrusted URL value.
--}
 validateHttpUrl :: Text -> Either String Text
 validateHttpUrl url
     | T.null url = Left "Download URL must not be empty"
@@ -60,9 +52,6 @@ validateHttpUrl url
                             | null (uriRegName auth) -> Left "Download URL has empty host"
                             | otherwise -> Right url
 
------------------------------------------------------------------------------
--- nix store prefetch-file
------------------------------------------------------------------------------
 
 newtype PrefetchResult = PrefetchResult Text
 
@@ -75,10 +64,6 @@ instance FromJSON PrefetchResult where
                 "Download hash missing sha256- prefix: " ++ T.unpack h
         return $ PrefetchResult h
 
-{- | Run @nix store prefetch-file --json --hash-type sha256 \<url\>@ using
-process arguments (never a shell).  Returns the validated hash and the
-current UTC time formatted as RFC 3339 on success.
--}
 prefetchFile :: Text -> IO (Either String (Text, Text))
 prefetchFile url = do
     (exitCode, stdout', stderr) <-
@@ -99,9 +84,6 @@ prefetchFile url = do
                     let ts = T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" now)
                     return $ Right (h, ts)
 
------------------------------------------------------------------------------
--- Step-config classification
------------------------------------------------------------------------------
 
 discoverDownloadTemplates :: (RepoContext ctx, Eval :> es) => ctx -> ExceptT String (Eff es) (Set Text)
 discoverDownloadTemplates ctx = do
@@ -120,14 +102,7 @@ discoverDownloadTemplates ctx = do
                 _ -> throwError "stepConfig has no `templates` object"
         Right _ -> throwError "stepConfig is not a JSON object"
 
------------------------------------------------------------------------------
--- JSON navigation helpers
------------------------------------------------------------------------------
 
-{- | Extract the top-level @args.url@ from a step JSON value (the field the
-browser sends).  This is the canonical download URL; the backend copies it
-into @args.downloaded.url@ alongside the prefetched hash.
--}
 extractDownloadUrl :: Value -> Maybe Text
 extractDownloadUrl val = do
     Object obj <- Just val
@@ -135,7 +110,6 @@ extractDownloadUrl val = do
     String url <- KM.lookup "url" args
     return url
 
--- | Extract @args.downloaded.hash@ from a step JSON value.
 extractDownloadHash :: Value -> Maybe Text
 extractDownloadHash val = do
     Object obj <- Just val
@@ -152,7 +126,6 @@ extractDownloadedAt val = do
     String ts <- KM.lookup "downloadedAt" downloaded
     return ts
 
--- | Extract the @type@ field from a step JSON value.
 extractReqType :: Value -> Maybe Text
 extractReqType (Object o) = case KM.lookup "type" o of
     Just (String t) -> Just t

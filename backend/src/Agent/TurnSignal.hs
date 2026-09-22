@@ -1,10 +1,3 @@
-{- | Wakeup channels for turn log streams.
-
-Writers signal after appending to a turn log (or saving final turn
-state) so connected streams can block on STM instead of polling the
-log file on a timer.  The log file remains the source of truth; the
-channels only carry wakeups.
--}
 module Agent.TurnSignal (
     registerTurnSignal,
     unregisterTurnSignal,
@@ -21,8 +14,6 @@ import System.IO.Unsafe (unsafePerformIO)
 signals :: TVar (Map FilePath (TChan ()))
 signals = unsafePerformIO $ newTVarIO Map.empty
 
-{- | Get a private wakeup channel for a turn log.
--}
 registerTurnSignal :: FilePath -> IO (TChan ())
 registerTurnSignal path = atomically $ do
     let key = normalise path
@@ -35,16 +26,10 @@ registerTurnSignal path = atomically $ do
             pure ch
     dupTChan broadcast
 
-{- | Stop tracking a turn log.  Idempotent; safe to call when the turn
-finishes even if no stream ever connected.
--}
 unregisterTurnSignal :: FilePath -> IO ()
 unregisterTurnSignal path =
     atomically $ modifyTVar' signals (Map.delete (normalise path))
 
-{- | Wake every stream watching this turn log.  No-op when nobody is
-watching.
--}
 signalTurnLog :: FilePath -> IO ()
 signalTurnLog path = atomically $ do
     m <- readTVar signals

@@ -179,8 +179,6 @@ sessionDecoder =
 
 
 
--- | Backend "updatedAt" is RFC3339 with a fractional part; parse the fraction
--- | separately so renames that land within the same millisecond stay ordered.
 
 
 updatedAtDecoder : Decoder Model.SessionTimestamp
@@ -203,7 +201,6 @@ decodeSessionTimestamp raw =
         ( basePart, fraction ) =
             case String.indexes "." raw of
                 dotIdx :: _ ->
-                    -- Iso8601.toTime requires the timezone, so keep the "Z".
                     ( String.left dotIdx raw ++ "Z", String.dropLeft (dotIdx + 1) (String.dropRight 1 raw) )
 
                 [] ->
@@ -211,8 +208,6 @@ decodeSessionTimestamp raw =
     in
     case Iso8601.toTime basePart of
         Ok posix ->
-            -- Normalize fractions to Aeson's picosecond width (12 digits) so
-            -- different digit counts compare on one scale.
             Maybe.map (Model.SessionTimestamp posix) (String.toInt (String.padRight 12 '0' (String.left 12 fraction)))
 
         Err _ ->

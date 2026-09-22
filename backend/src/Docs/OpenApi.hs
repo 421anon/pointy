@@ -8,11 +8,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-{- | OpenAPI 3 specification, generated from 'Api.API'.
-
-The instances here teach @servant-openapi3@ how to document the handful of
-real Servant combinators that carry no schema by default.
--}
 module Docs.OpenApi (pointyOpenApi) where
 
 import Agent.Git (AgentApplyView, AgentGitState, AgentSessionView, AgentUsage)
@@ -39,7 +34,6 @@ import Servant.Multipart (MultipartData, MultipartForm', Tmp)
 import Servant.OpenApi (HasOpenApi (..))
 import Servant.Types.SourceT (SourceT)
 
--- | Free-form JSON whose schema is defined in the user repository.
 instance ToSchema DynamicJson where
     declareNamedSchema _ = pure (NamedSchema (Just "DynamicJson") (mempty & example ?~ object []))
 
@@ -70,7 +64,6 @@ instance {-# OVERLAPPING #-} ToSchema (SourceT IO BS.ByteString) where
 instance {-# OVERLAPPING #-} (Typeable hs) => ToSchema (Headers hs (SourceT IO BS.ByteString)) where
     declareNamedSchema _ = declareNamedSchema (Proxy :: Proxy (SourceT IO BS.ByteString))
 
--- | @Raw@ has no HTTP method, but this API only uses it for GET behind @CaptureAll@.
 instance {-# OVERLAPPING #-} forall sym a. (KnownSymbol sym, ToParamSchema a) => HasOpenApi (CaptureAll sym a :> Raw) where
     toOpenApi _ = toOpenApi (Proxy :: Proxy (Capture sym a :> Get '[OctetStream] FileDownload))
 
@@ -112,8 +105,6 @@ uploadFormSchema =
             & items ?~ OpenApiItemsObject (Inline binaryFile)
     binaryFile = mempty & type_ ?~ OpenApiString & format ?~ "binary"
 
--- Agent request bodies are hand-written because the Haskell field names
--- differ from the wire JSON keys.
 
 stringField :: Referenced Schema
 stringField = Inline (mempty & type_ ?~ OpenApiString)
@@ -175,7 +166,6 @@ instance ToSchema StepReviewReport where
                 "StepReviewReport"
                 [("reviewedRevision", stringField), ("reviewedBy", stringField), ("reviewComments", stringField), ("reviewedStatus", stringField), ("reviewedStatusError", stringField), ("comparison", stringField), ("comparisonDetail", stringField)]
 
--- | The publicly documented OpenAPI specification.
 pointyOpenApi :: OpenApi
 pointyOpenApi =
     withPathTags $
@@ -187,14 +177,12 @@ pointyOpenApi =
                 & info . description ?~ "HTTP API served by the Pointy backend. All routes are mounted under the `/backend` prefix by the reverse proxy."
                 & servers .~ ["/backend"]
 
--- | The agent API is an internal UI integration, not part of the public API reference.
 withoutAgentApi :: OpenApi -> OpenApi
 withoutAgentApi = paths %~ fromList . filter ((/= "agent") . firstPathSegment . fst) . toList
 
 methodLenses :: [ALens' PathItem (Maybe Operation)]
 methodLenses = [get, put, post, delete, options, head_, patch, trace]
 
--- | Group operations by their first path segment so Sourcey renders API sections.
 withPathTags :: OpenApi -> OpenApi
 withPathTags = paths %~ imap tagOperations
   where

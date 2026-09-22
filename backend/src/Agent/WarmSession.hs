@@ -81,10 +81,6 @@ saveWarmMeta meta = do
     createDirectoryIfMissing True (takeDirectory path)
     LBS.writeFile path (encode meta)
 
-{- | Returns Nothing when bootstrap is disabled (empty prompt).
-Returns Just (Right meta) when a valid warm session is ready.
-Returns Just (Left err) when the build failed.
--}
 getOrBuildWarmSession :: AgentConfig -> Text -> (ProcessHandle -> IO ()) -> IO (Maybe (Either String WarmSessionMeta))
 getOrBuildWarmSession cfg baseCommit onProcessStarted = do
     let configuredPrompt = agentBootstrapPrompt cfg
@@ -115,17 +111,13 @@ buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted = do
     let worktreeDir = templateDir </> "worktree"
         home = templateDir </> "home"
         piSessionDir = home </> "pi-sessions"
-    -- Tear down any stale template
     result <- try (removePathForcibly templateDir) :: IO (Either IOException ())
     case result of
         Left err ->
             return $ Left $ "Failed to clean warm template dir: " ++ show err
         Right () -> do
-            -- Prune stale worktree registrations after removing the directory;
-            -- otherwise git worktree add sees a phantom registration and fails.
             _ <- runGitIn repoPath ["worktree", "prune"]
             createDirectoryIfMissing True piSessionDir
-            -- Create detached worktree at baseCommit
             worktreeResult <- createBootstrapWorktree repoPath worktreeDir baseCommit
             case worktreeResult of
                 Left err -> return $ Left err
@@ -179,7 +171,6 @@ runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessS
         args =
             map expand (agentSboxArgs cfg)
                 ++ bindPathReadOnly piConfigDir
-                -- The worktree's .git file resolves into the main repo inside sbox.
                 ++ bindPathReadOnly repoPath
                 ++ nixBind
                 ++ ["--"]
@@ -197,7 +188,6 @@ runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessS
     case mIn of
         Nothing -> return ()
         Just hin -> hClose hin
-    -- Drain stdout and stderr concurrently to prevent pipe buffer deadlock
     outDrainer <- async $ drainHandle mOut
     errDrainer <- async $ drainHandle mErr
     _ <- wait outDrainer
@@ -230,7 +220,6 @@ findSessionFile piSessionDir = do
                     let sorted = sortOn (Down . fst) withTimes
                     return $ fmap snd (listToMaybe sorted)
 
--- | Recursively collect all .jsonl files under a directory.
 findJsonlFiles :: FilePath -> IO [FilePath]
 findJsonlFiles dir = do
     entries <- listDirectory dir

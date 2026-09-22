@@ -86,8 +86,10 @@ runNixFixture state = interpret $ \_ -> \case
         pure (exists || path `elem` documentValidPaths (fixtureDocument state))
     RunNixCli args -> liftIO $ do
         answerNix (fixtureDocument state) args
-    RunNixStoreCli args -> do
-        pure (ExitFailure 1, "", "fixture: nix-store is not available")
+    RunNixStoreCli args -> pure $ case args of
+        ["--query", "--references", drv] -> storePathsAnswer "references" (documentReferences (fixtureDocument state)) drv
+        ["--query", "--outputs", drv] -> storePathsAnswer "outputs" (documentOutputs (fixtureDocument state)) drv
+        _ -> (ExitFailure 1, "", "fixture: unsupported nix-store invocation: " ++ unwords args)
     RegisterGcRoot _ _ -> pure ()
     AddFixed _ -> pure (Left "fixture: nix-store --add-fixed is not available")
     ProbeMimeType path -> liftIO $ do
@@ -112,6 +114,11 @@ answerNix document args = case args of
         pure $ case recorded of
             Just log -> (ExitSuccess, log, "")
             Nothing -> (ExitFailure 1, "", "fixture: no build log recorded for " ++ drv)
+
+storePathsAnswer :: String -> Map.Map FilePath [FilePath] -> FilePath -> (ExitCode, String, String)
+storePathsAnswer label recorded drv = case Map.lookup drv recorded of
+    Just paths -> (ExitSuccess, unlines paths, "")
+    Nothing -> (ExitFailure 1, "", "fixture: no " ++ label ++ " recorded for " ++ drv)
 
 pathInfoJson :: [FilePath] -> String
 pathInfoJson paths =

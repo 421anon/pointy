@@ -9,12 +9,6 @@ module Grid exposing
     , view
     )
 
-{-| Resizable, sortable, filterable data table for delimited text files.
-
-`Text` columns use case-insensitive string comparison; `Int`/`Float` columns
-parse cell values and sort unparseable rows after parsed ones.
-
--}
 
 import Array exposing (Array)
 import Dict exposing (Dict)
@@ -98,7 +92,6 @@ columnAt index columns =
 
 
 
--- VISIBLE ROWS (filter + sort)
 
 
 visibleRows : State -> List ( Int, Row )
@@ -120,10 +113,6 @@ visibleRows model =
             filtered
 
 
-{-| Recompute cached filtered/sorted rows after changes to columns, rows,
-filters, or sort. Scroll updates only `infiniteList` and must not run this
-O(n) path.
--}
 refreshVisible : State -> State
 refreshVisible state =
     { state | visible = Array.fromList (visibleRows state) }
@@ -202,7 +191,6 @@ reverseOrder order =
 
 
 
--- FILTER PARSING
 
 
 type alias FilterOps =
@@ -284,7 +272,6 @@ intOp op cell needle =
 
 
 
--- STATE TRANSITIONS
 
 
 toggleSort : Int -> State -> State
@@ -326,7 +313,6 @@ setFilter colIndex value model =
 
 
 
--- VIEW
 
 
 view : (Flow State () -> msg) -> (() -> Html msg) -> State -> Html msg
@@ -452,10 +438,6 @@ rowLabel count =
            )
 
 
-{-| Fixed body-row height in pixels. Must stay in sync with
-`$delimited-grid-row-height` in the stylesheet, since the virtual list
-positions rows using this constant.
--}
 rowHeight : Int
 rowHeight =
     28
@@ -481,9 +463,6 @@ setInfiniteList listModel state =
     { state | infiniteList = listModel }
 
 
-{-| Cell width uses JS-updated `--dg-col-N`, falling back to the model width
-before resize.
--}
 columnWidthStyle : Int -> Column -> Html.Attribute msg
 columnWidthStyle index col =
     Html.Attributes.style "width"

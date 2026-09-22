@@ -10,12 +10,6 @@ whenNotInside cls msg =
     when decodeClassList (not << List.member cls) <| map (Maybe.withDefault msg) <| optionalField "parentNode" <| lazy (\() -> whenNotInside cls msg)
 
 
-{-| Decodes [`Element.classList`](https://developer.mozilla.org/en-US/docs/Web/API/Element/classList).
-
-This property is not a regular array but a `DOMTokenList`, therefore `Json.Decode.Extra.collection`
-is needed instead of `Json.Decode.list`.
-
--}
 decodeClassList : Decoder (List String)
 decodeClassList =
     withDefault [] <| field "classList" <| collection string

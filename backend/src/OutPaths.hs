@@ -5,10 +5,10 @@
 {-# LANGUAGE TypeOperators #-}
 
 module OutPaths (
-    getProjectOutPaths,
-    warmProjectOutPaths,
-    warmProjectOutPathsForCommit,
-    scheduleProjectOutPathsWarm,
+    getProjectCertificates,
+    warmProjectCertificates,
+    warmProjectCertificatesForCommit,
+    scheduleProjectCertificatesWarm,
     withWriteRepoTransaction,
     ProjectDef (..),
     StepRef (..),
@@ -75,9 +75,9 @@ prefixedFieldOptions prefix =
             map toLower (fromMaybe field (stripPrefix prefix field))
         }
 
-getProjectOutPaths :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Map Int Text))
-getProjectOutPaths pid targetCommit = runExceptT $ do
-    let attr = projectOutPathAttr pid
+getProjectCertificates :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Map Int Text))
+getProjectCertificates pid targetCommit = runExceptT $ do
+    let attr = projectCertificateAttr pid
     withExceptT ("Failed to prepare project commit: " ++) $
         ExceptT $
             liftIO $
@@ -92,30 +92,30 @@ getProjectOutPaths pid targetCommit = runExceptT $ do
                 attr
     maybe (throwError $ "Failed to parse " ++ attr) pure $ decodeJson output
 
-scheduleProjectOutPathsWarm :: Int -> Text -> IO ()
-scheduleProjectOutPathsWarm pid commit = do
+scheduleProjectCertificatesWarm :: Int -> Text -> IO ()
+scheduleProjectCertificatesWarm pid commit = do
     repoPath <- userRepoPath
     let ctx = ReadRepoContext repoPath $ unpack commit
-    void $ forkIO $ runAppEffects $ void $ runExceptT $ runNixEvalJsonInRepoBackground ctx $ projectOutPathAttr pid
+    void $ forkIO $ runAppEffects $ void $ runExceptT $ runNixEvalJsonInRepoBackground ctx $ projectCertificateAttr pid
 
-warmProjectOutPaths :: (Eval :> es, IOE :> es) => Eff es ()
-warmProjectOutPaths = do
+warmProjectCertificates :: (Eval :> es, IOE :> es) => Eff es ()
+warmProjectCertificates = do
     repoPath <- liftIO userRepoPath
     withReadRepoTransaction (pure . pack . readCommitHash) >>= \case
-        Left err -> liftIO $ putStrLn $ "Project outPath warm skipped: " ++ err
+        Left err -> liftIO $ putStrLn $ "Project certificate warm skipped: " ++ err
         Right commit ->
-            runExceptT (warmProjectOutPathsForCommit $ ReadRepoContext repoPath $ unpack commit)
-                >>= either (liftIO . putStrLn . ("Project outPath warm failed: " ++)) pure
+            runExceptT (warmProjectCertificatesForCommit $ ReadRepoContext repoPath $ unpack commit)
+                >>= either (liftIO . putStrLn . ("Project certificate warm failed: " ++)) pure
 
-warmProjectOutPathsForCommit :: (Eval :> es) => ReadRepoContext -> ExceptT String (Eff es) ()
-warmProjectOutPathsForCommit ctx = do
+warmProjectCertificatesForCommit :: (Eval :> es) => ReadRepoContext -> ExceptT String (Eff es) ()
+warmProjectCertificatesForCommit ctx = do
     attrs <- ExceptT $ revisionProjectExpressions ctx
     results <- ExceptT $ rewarmRepoJsonExpressions (readRepoSource ctx) $ toList attrs
     forM_ results $ \case
         (Nothing, result) ->
             either (throwError . ("Failed to warm #pointy.projects: " ++)) (const $ pure ()) result
         (Just pid, result) ->
-            void $ either throwError pure $ decodeOutPathResult pid result
+            void $ either throwError pure $ decodeCertificateResult pid result
 
 readRepoSource :: ReadRepoContext -> RepoSource
 readRepoSource (ReadRepoContext repoPath commitHash) =
@@ -126,22 +126,21 @@ revisionProjectExpressions ctx = runExceptT $ do
     projectsRaw <- runNixEvalJsonInRepo ctx "#pointy.projects"
     projectDefs <-
         maybe (throwError "Failed to parse #pointy.projects") pure (decodeJson projectsRaw :: Maybe (Map String ProjectDef))
-    pure $ (Nothing, "#pointy.projects") :| [(Just pid, projectOutPathAttr pid) | pid <- map projectDefId $ Map.elems projectDefs]
+    pure $ (Nothing, "#pointy.projects") :| [(Just pid, projectCertificateAttr pid) | pid <- map projectDefId $ Map.elems projectDefs]
 
-projectOutPathAttr :: Int -> String
-projectOutPathAttr pid = "#pointy.projectOutPaths." ++ show pid
+projectCertificateAttr :: Int -> String
+projectCertificateAttr pid = "#pointy.projectCertificates." ++ show pid
 
-decodeOutPathResult :: Int -> Either String String -> Either String (Map Int Text)
-decodeOutPathResult pid =
+decodeCertificateResult :: Int -> Either String String -> Either String (Map Int Text)
+decodeCertificateResult pid =
     either (Left . (("Failed to evaluate " ++ attr ++ ": ") ++)) $
         maybe (Left $ "Failed to parse " ++ attr) Right . decodeJson
   where
-    attr = projectOutPathAttr pid
+    attr = projectCertificateAttr pid
 
 decodeJson :: (FromJSON a) => String -> Maybe a
 decodeJson = decode . TLE.encodeUtf8 . TL.pack
 
--- Coalesce commit bursts so only the latest pending HEAD is rewarmed.
 data WarmState = WarmState
     { warmRunning :: Bool
     , warmPending :: Bool
@@ -162,11 +161,11 @@ scheduleWarm =
 
 runWarmSafely :: IO ()
 runWarmSafely =
-    runAppEffects warmProjectOutPaths `catch` handleWarmException
+    runAppEffects warmProjectCertificates `catch` handleWarmException
 
 handleWarmException :: SomeException -> IO ()
 handleWarmException err =
-    putStrLn $ "Project outPath warm crashed: " ++ show err
+    putStrLn $ "Project certificate warm crashed: " ++ show err
 
 warmWorker :: IO ()
 warmWorker = do

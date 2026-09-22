@@ -1,7 +1,3 @@
-{- | Writes the backend OpenAPI specification to a JSON file.
-
-Usage: @generate-openapi [OUTPUT_PATH]@ (defaults to @openapi.json@).
--}
 module Main (main) where
 
 import Data.Aeson.Encode.Pretty (encodePretty)

@@ -7,9 +7,6 @@
 let
   pointy = config.services.pointy.internal;
   slurmCpus = toString (config.virtualisation.cores or 1);
-  # Slurm invalidates a node when slurmd reports less memory than configured.
-  # QEMU guests report slightly less usable RAM than virtualisation.memorySize,
-  # so reserve 512 MiB for the OS/hypervisor rather than advertising all VM RAM.
   slurmRealMemory = toString ((config.virtualisation.memorySize or 1536) - 512);
   cfg = config.services.pointy-backend;
 
@@ -158,8 +155,6 @@ in
         RestartSec = 5;
         User = "backend";
         Group = "backend";
-        # Optional file for runtime secrets (e.g. DEEPSEEK_API_KEY=...).
-        # The leading dash makes it tolerant of the file being absent.
         EnvironmentFile = "-/home/backend/agent-env";
       };
     };

@@ -6,7 +6,6 @@ import "./molstar-viewer.js";
 import "./grid-resize.js";
 import "./iframe-fit.js";
 
-// Initialize the Elm app
 const app = Elm.Main.init({
   node: document.getElementById("app"),
   flags: {
@@ -17,7 +16,6 @@ const app = Elm.Main.init({
 
 connectPorts(app);
 
-// OS theme change listener (when no manual preference)
 window
   .matchMedia("(prefers-color-scheme: light)")
   .addEventListener("change", (e) => {
@@ -29,7 +27,6 @@ window
     }
   });
 
-// Auto-resize textarea functionality
 function setupTextarea(textarea) {
   textarea.style.height = "auto";
   textarea.style.height = textarea.scrollHeight + "px";
@@ -39,7 +36,6 @@ function setupTextarea(textarea) {
   };
 }
 
-// Initial setup and observe for new textareas
 setTimeout(
   () =>
     document

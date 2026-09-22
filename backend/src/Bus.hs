@@ -17,11 +17,6 @@ data ProjectSnapshot = ProjectSnapshot
 statusBus :: TChan ProjectSnapshot
 statusBus = unsafePerformIO newBroadcastTChanIO
 
-{- | Bounded history of the most recent snapshots.  @subscribe@ replays it
-onto each new channel so a client that connects (or the global status
-stream reconnecting) just after a broadcast does not lose it: broadcast
-channels hold no history of their own.
--}
 {-# NOINLINE recentSnapshots #-}
 recentSnapshots :: TVar [ProjectSnapshot]
 recentSnapshots = unsafePerformIO $ newTVarIO []

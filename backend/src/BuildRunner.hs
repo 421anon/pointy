@@ -61,10 +61,8 @@ data BuildState = BRunning | BSucceeded | BFailed | BAbsent deriving (Eq, Show)
 
 newtype BuildKey = BuildKey {unBuildKey :: String} deriving (Eq, Show)
 
--- | A slurm job id, as printed by @sbatch --parsable@ and @squeue -o %i@.
 newtype JobId = JobId {unJobId :: String} deriving (Eq, Show)
 
--- | A slurm job as listed by @squeue@: id, name, comment and state.
 data SlurmJob = SlurmJob
     { slurmJobId :: JobId
     , slurmJobName :: String
@@ -73,11 +71,6 @@ data SlurmJob = SlurmJob
     }
     deriving (Eq, Show)
 
-{- | JSON payload stored in the job comment at submission time so a restarted
-backend can map an in-flight job back to the step, commit and outPath it was
-submitted for. @kind@ is @"step"@ for main step builds and @"extras"@ for
-supplementary extras builds.
--}
 data JobComment = JobComment
     { jobCommentKind :: String
     , jobCommentStep :: Int
@@ -159,7 +152,6 @@ queryState (BuildKey key) = do
             | otherwise -> BRunning
         Left _ -> BAbsent
 
--- | Job ids of every queued or running job with the given name.
 queryJobIds :: (Slurm :> es) => BuildKey -> Eff es [JobId]
 queryJobIds (BuildKey key) = do
     result <- querySlurm (JobIdsByName key)
@@ -167,10 +159,6 @@ queryJobIds (BuildKey key) = do
         Right stdout -> map JobId (filter (not . null) (lines stdout))
         Left _ -> []
 
-{- | Every job currently visible in the queue, unfiltered, as
-(id, name, comment, state).  Used on backend restart to discover jobs that
-were submitted before the restart without knowing their names in advance.
--}
 querySlurmJobs :: (Slurm :> es) => Eff es [SlurmJob]
 querySlurmJobs = do
     result <- querySlurm AllJobs
@@ -178,8 +166,6 @@ querySlurmJobs = do
         Right stdout -> mapMaybe parseSlurmJobLine (lines stdout)
         Left _ -> []
 
--- | Parse one @squeue -o "%i|%j|%k|%T"@ line.  Jobs without a comment print
--- @(null)@ for the comment field.
 parseSlurmJobLine :: String -> Maybe SlurmJob
 parseSlurmJobLine line = case splitOn '|' line of
     [jobId, name, comment, state] | not (null jobId) && not (null name) ->
@@ -218,9 +204,6 @@ submitNewJob requirements (BuildKey key) comment command = do
         Right _ -> ExitSuccess
         Left _ -> ExitFailure 1
 
-{- | Submit a job without waiting for completion. Non-empty @depJobIds@
-become @afterok@ dependency edges; the job is killed if any of them fails.
--}
 submitJob :: (Slurm :> es, IOE :> es) => StepRequirements -> BuildKey -> [JobId] -> String -> [String] -> Eff es (Either String JobId)
 submitJob requirements (BuildKey key) depJobIds comment command = do
     slurm <- liftIO $ configSlurm <$> (resolveConfigPath >>= loadConfig)
@@ -241,7 +224,6 @@ submitJob requirements (BuildKey key) depJobIds comment command = do
                 Nothing -> Left ("sbatch produced no job id: " ++ show stdout)
         Left err -> Left err
 
--- | @--parsable@ prints @jobid@ or @jobid;cluster@ on the first line.
 parseJobId :: String -> Maybe JobId
 parseJobId out =
     case lines out of
@@ -250,9 +232,6 @@ parseJobId out =
              in if null jobId then Nothing else Just (JobId jobId)
         [] -> Nothing
 
-{- | Poll until no queued or running job with this name remains. Completion
-does not imply success; callers must check the expected store path.
--}
 waitForCompletion :: (Slurm :> es, IOE :> es) => BuildKey -> Eff es ()
 waitForCompletion key = do
     state <- queryState key

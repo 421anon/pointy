@@ -346,11 +346,9 @@ entryAtPath path =
             reversePrism folder
 
         segment :: [] ->
-            -- Final segment, just return the item (could be file or folder)
             children << entryAt segment
 
         segment :: rest ->
-            -- More segments, must be a folder to continue
             children << entryAt segment << folder << entryAtPath rest
 
 

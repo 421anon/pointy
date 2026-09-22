@@ -625,9 +625,6 @@ viewSessionTitle agent summary =
         session =
             summary.session
 
-        -- Rename is metadata-only and allowed in every session state; block
-        -- only a pending delete of this session (the rename would queue
-        -- behind the delete's lock and fail).
         renameBlocked =
             agent.request == Just (Model.DeletingAgentSession session.sessionId)
 

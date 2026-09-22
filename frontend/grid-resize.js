@@ -1,14 +1,9 @@
-// Column resize for delimited grid viewer.
-// Standalone DOM listeners — not in ffi.js because this is not called from Elm.
-// Virtual rows are created/destroyed as you scroll, so column widths live on
-// `.delimited-grid` CSS variables instead of rendered row cells.
 (function () {
   const MIN_COLUMN_WIDTH = 40;
 
   let active = null;
 
 
-  // Suppress click events on resize handles to avoid triggering sort.
   document.addEventListener(
     "click",
     (event) => {
@@ -32,7 +27,6 @@
     const cell = handle.closest(".delimited-grid-th");
     if (!grid || !cell) return;
 
-    // Prefer the inline width so repeated resizes accumulate from the last drag.
     const startWidth = cell.getBoundingClientRect().width;
     const startGridWidth =
       Number.parseFloat(grid.style.width) || grid.getBoundingClientRect().width;

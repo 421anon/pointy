@@ -72,10 +72,6 @@ snapshotAndSubscribe = atomically $ do
     chan <- dupTChan broadcastChan
     return (snap, chan)
 
--- | While the supplied scan runs, every 'updateRunningSteps' call records
--- its touched step IDs.  After the scan completes, only recovered IDs that
--- were /not/ touched by live updates are unioned into the running set.
--- The tracker is always cleared on exception so no stale state leaks.
 restoreRunningStepIds :: IO (Set Int) -> IO ()
 restoreRunningStepIds scan = mask $ \restore -> do
     atomically $ writeTVar restoreTracker (Just Set.empty)

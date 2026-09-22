@@ -1,11 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | SSE wire-format utilities shared by every server-sent stream: event
-framing, comment padding, and the heartbeat-racing broadcast loop.  The
-loop coalesces values queued since the last wake-up into one burst, and
-emits an empty @heartbeat@ event when the channel has been idle for 30
-seconds to keep the connection alive behind proxies.
--}
 module Sse (broadcastLoop, heartbeatDelayMicros, sseComment, sseEvent) where
 
 import Control.Concurrent.STM (STM, TChan, atomically, orElse, readTChan, readTVar, registerDelay, retry, tryReadTChan)

@@ -83,8 +83,6 @@ downloadSrcFilesHandler stepId mCommit rel = do
     downloadHandler (T.pack fullBasePath) rel
 
 
--- | Serves a source file inline (no download disposition) so HTML and other
--- renderable sources can be shown in preview iframes.
 srcRawHandler :: Int -> Maybe Text -> FilePath -> Tagged AppM Application
 srcRawHandler stepId mCommit rel =
     Tagged $ \request respond -> do
@@ -102,7 +100,6 @@ seekSrcFilesHandler stepId mCommit rel line byteOffset bytes = do
     seekHandler (T.pack fullBasePath) rel offset bytes
 
 
--- | Mutate a step's source file inside a write transaction; a 'False' result raises @falseErr@.
 mutateSrcFile :: Int -> FilePath -> String -> ServerError -> (FilePath -> IO Bool) -> AppM NoContent
 mutateSrcFile stepId rel verb falseErr action
     | isAbsolute rel || null segments || any (`elem` [".", ".."]) segments =

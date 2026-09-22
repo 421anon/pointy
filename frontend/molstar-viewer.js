@@ -3,13 +3,13 @@ let molstarPromise = null;
 function loadMolstar() {
   if (molstarPromise === null) {
     molstarPromise = Promise.all([
-      import(/* webpackChunkName: "molstar" */ "molstar/lib/apps/viewer/app"),
-      import(/* webpackChunkName: "molstar" */ "molstar/lib/mol-util/color/utils"),
+      import(  "molstar/lib/apps/viewer/app"),
+      import(  "molstar/lib/mol-util/color/utils"),
       import(
-        /* webpackChunkName: "molstar-light" */ "molstar/lib/mol-plugin-ui/skin/light.scss?lazy"
+          "molstar/lib/mol-plugin-ui/skin/light.scss?lazy"
       ),
       import(
-        /* webpackChunkName: "molstar-dark" */ "molstar/lib/mol-plugin-ui/skin/dark.scss?lazy"
+          "molstar/lib/mol-plugin-ui/skin/dark.scss?lazy"
       ),
     ]).then(([{ Viewer }, { decodeColor }, lightSkin, darkSkin]) => ({
       Viewer,

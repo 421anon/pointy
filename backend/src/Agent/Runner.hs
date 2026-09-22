@@ -81,7 +81,6 @@ import Text.Read (readMaybe)
 import UserRepo (userRepoPath, withUserRepoExclusiveIO)
 
 {-# NOINLINE activeRunners #-}
--- Nothing reserves an accepted turn before its process exists.
 activeRunners :: TVar (Map.Map Text (Text, Maybe ProcessHandle))
 activeRunners = unsafePerformIO $ newTVarIO Map.empty
 
@@ -201,13 +200,10 @@ steerAgentTurn sid rawPrompt = do
             Just (_, updated, SteerQueued) -> return (Just updated, SteerQueued)
             Just plan | Just control <- current -> sendSteerPlan control plan
             _ -> return (current, SteerFailed)
-    -- A message that never went out must not be recorded as an accepted steer
-    -- or a consumed answer: nothing will ever acknowledge it.
     sendSteerPlan :: RunnerInput -> (Aeson.Value, RunnerInput, SteerOutcome) -> IO (Maybe RunnerInput, SteerOutcome)
     sendSteerPlan control (message, updatedControl, outcome) =
         (try (writeToRunner control message) :: IO (Either IOException ()))
             >>= return . either (const (Just control, SteerFailed)) (const (Just updatedControl, outcome))
-    -- The chat renders "steering" log lines as user messages, so an answer names the row it picked.
     logAnsweredSteer tid answer = liftIO $ do
         cfg <- configAgent <$> (resolveConfigPath >>= loadConfig)
         logPath <- turnLogFilePath sid tid
@@ -264,10 +260,6 @@ startAgentTurn sid prompt = do
         existingTurns <- listTurns sid
         let isFirstTurn = null existingTurns
         saveTurn turn
-        -- A conflict-pending apply must survive the turn boundary: the turn is
-        -- how the agent resolves the conflict markers in the apply worktree.
-        -- Keep the pending apply (and its conflict summary) and stay in
-        -- "prepare_conflict" so the UI keeps showing the review state.
         let pendingApply =
                 case preparedApply freshSession of
                     Just p | applyConflictsPending p -> Just p
@@ -371,11 +363,6 @@ turnLogStreamHandler tid = do
                 )
     pure $ addHeader "no-transform" $ addHeader "no" source
 
-{- | Let the runner name a chat that has none. This runs beside the turn, not
-inside it: a throwaway completion on the opening request, so the name is there
-by the time the turn ends and a turn the user stops still gets one. Until it
-lands the UI shows the opening request, which is a prompt, not a title.
--}
 nameChat :: AgentConfig -> AgentSession -> FilePath -> Text -> IO ()
 nameChat cfg session_ logPath prompt =
     generateSessionTitle cfg session_ prompt
@@ -437,11 +424,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ runnerConfigArgs expand (agentRunnerArgs cfg)
         wrapperScript =
             "set -e; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
-        -- When forking a warm session, bind its file read-only into the sandbox.
-        -- The warm template path is outside the draft home so sbox won't include it otherwise.
         warmBindArgs = maybe [] bindPathReadOnly mWarmFile
-        -- When an apply is waiting for conflict resolution, expose the apply
-        -- worktree read-write so the agent can edit the conflict markers there.
         applyBindArgs =
             case preparedApply session_ of
                 Just pending | applyConflictsPending pending -> bindPath (candidateWorktree pending)
@@ -470,11 +453,6 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 , std_err = CreatePipe
                 }
     createDirectoryIfMissing True runnerHome
-    -- Seed the per-session pi config; without it pi falls back to its built-in
-    -- registry, whose deepseek default is deepseek-v4-pro. Note that models.json
-    -- alone cannot change that default (built-in models are always present);
-    -- settings.json carries the default model, and the runner args pass an
-    -- explicit --model that also overrides models recorded in session files.
     seedPiConfig runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (Just hin, Just hout, mErr, ph) <- createProcess process
@@ -503,7 +481,6 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
     run `finally` cleanup
 
--- | Copy the operator-provided pi agent config into a session's sandbox HOME.
 seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
     srcDir <- piAgentConfigDir
@@ -514,9 +491,6 @@ seedPiConfig runnerHome = do
         copyFile (srcDir </> name) (dstDir </> name)
     seedExtensions (srcDir </> "extensions") (dstDir </> "extensions")
 
-{- | Only symlinks are re-created: the module links a store path the sandbox
-already sees read-only.
--}
 seedExtensions :: FilePath -> FilePath -> IO ()
 seedExtensions src dst = do
     hasExtensions <- doesDirectoryExist src
@@ -551,11 +525,6 @@ withoutQuestionOf dialogId = mfilter ((/= dialogId) . questionDialogId)
 chosenIndex :: Int -> Text -> Maybe Int
 chosenIndex optionCount = mfilter (`elem` [1 .. optionCount]) . readMaybe . T.unpack . T.strip
 
-{- | Rows are numbered from 1, and the package appends its own "type something"
-row last and reads the reply back with parseInt: a reply that names none of the
-offered rows is sent as that last row's number, with the text kept for the
-follow-up dialog, because anything else cancels the whole questionnaire.
--}
 answerQuestion :: PendingQuestion -> Text -> (Aeson.Value, Maybe PendingQuestion, Text)
 answerQuestion question reply = (dialogResponse (questionDialogId question) dialogValue, carried, answerText)
   where
@@ -640,9 +609,6 @@ numberedBlock block =
         guard (not (T.null digits) && T.isPrefixOf ". " rest)
         readMaybe (T.unpack digits)
 
-{- | A second dialog arriving while one is open is declined: pi runs tool calls
-concurrently, and the chat shows one question at a time.
--}
 handleDialog :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleDialog cfg logPath input event =
     case (event ^? key "id" . _String, event ^? key "method" . _String) of
@@ -667,7 +633,6 @@ handleDialog cfg logPath input event =
             writeToRunner control (maybe (dialogDecline dialogId) (dialogResponse dialogId) stashed)
             return (Just $ maybe control (const control{inputQuestion = Nothing}) stashed, [])
 
--- Pi 0.75 emits agent_end before automatic retry/compaction events; check its state before EOF.
 handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleRpcEvent cfg logPath input event =
     case event ^? key "type" . _String of
@@ -676,7 +641,6 @@ handleRpcEvent cfg logPath input event =
             | event ^. key "message" . key "role" . _String == "user"
             , Just content <- event ^? key "message" . key "content" -> do
                 let prompt = content ^. (_String `failing` (values . key "text" . _String))
-                -- The initial prompt is already stored in turn metadata.
                 modifyMVar_ input $ traverse $ \control -> do
                     when (inputPromptSeen control) $
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
@@ -721,8 +685,6 @@ handleRpcEvent cfg logPath input event =
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
 
--- A failing handler must not kill the reader: pi writes into the pipe the reader
--- drains, and waits on the dialogs the reader answers.
 handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleRpcEventSafely cfg logPath input event =
     handleRpcEvent cfg logPath input event `catch` \(ex :: SomeException) ->
@@ -757,7 +719,6 @@ streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do
                                     usage = contextUsage =<< event
                                     high = maybe warned contextHalfFull usage
                                     label = if outputReady && isJust lines_ then visibleLabel else "runner"
-                                -- One warning per turn; the next poll reports the same pressure.
                                 unless (isJust usage && high && warned) $
                                     mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
                                 mapM_ onEvent event
@@ -881,11 +842,6 @@ finishTurn cfg _session turn exitCode = do
                         runnerError = if stopped || exitCode == ExitSuccess then Nothing else Just "runner_failed"
                         nextError = combineErrorMessages [runnerError, autoCommitError]
                         updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError}
-                    -- Pick up an agent-side conflict resolution in the apply
-                    -- worktree FIRST: the git commit is the important part, and
-                    -- it must survive even if the metadata writes below fail
-                    -- (observed: intermittent EBUSY on session.json writes). A
-                    -- later finalize pass converges on the committed resolution.
                     applyResolution <- liftIO $ Except.runExceptT $ finalizeApplyResolution updated
                     case applyResolution of
                         Left err ->
@@ -910,7 +866,6 @@ finishTurn cfg _session turn exitCode = do
     case saveResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Turn finalization error: " <> T.pack (show ex))
         Right _ -> return ()
-    -- Drop the registry entry so abandoned streams do not leak it.
     unregisterTurnSignal (turnLogPath turn)
 
 combineErrorMessages :: [Maybe Text] -> Maybe Text
@@ -944,11 +899,6 @@ safeFileSize path = do
         Left _ -> return 0
         Right size -> return size
 
-{- | Block on the turn log wakeup channel, racing against a 5-second
-heartbeat.  A log append (or a turn state save) fires a wakeup; the
-heartbeat keeps the connection alive during idle stretches.  The log
-file is re-read from the current offset on every wake.
--}
 heartbeatDelayMicros :: Int
 heartbeatDelayMicros = 5 * 1000000
 

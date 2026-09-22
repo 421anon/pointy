@@ -525,11 +525,6 @@ fieldWidget =
             )
 
 
-{-| A field's own widget names the hook for the control it renders. Token lists
-are rendered by that control rather than by their elements, so a hook a template
-declares on the list's knobs (which arrives on the element) only stands in when
-the field names none.
--}
 declaredHook : Maybe String -> Maybe String -> Maybe String
 declaredHook fieldHook elementHook =
     case fieldHook of

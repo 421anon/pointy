@@ -55,16 +55,10 @@ comparisonChip comparison =
         Model.DifferentContent ->
             Just (ComparisonChip "warning" "difference" "Differs" "This step's output changed since review. The reviewed version is still shown. Inspect the difference here.")
 
-        -- A review whose output is gone is a question for the reviewer, not a
-        -- row-level flag: the popover names it as the reason updates are off.
         Model.ReviewedOutputUnbuilt ->
             Nothing
 
 
-{-| Why the review cannot be updated here. Only the states the row cannot speak
-for are named: every comparison that carries a chip, and the failed check, are
-already explained in the row this popover hangs under.
--}
 blockedReason : ApiData.ApiData Model.ReviewComparison -> Maybe String
 blockedReason comparison =
     let
@@ -89,9 +83,6 @@ blockedReason comparison =
 viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
 viewReviewControls model spec stepId record =
     let
-        -- Record mtimes are scoped to the viewed revision while the review is
-        -- read at HEAD, so the mtime dates the review on the live view only:
-        -- history has no commit that added the pin.
         mReviewedAt =
             if isReadOnlyRoute model then
                 Nothing
@@ -251,9 +242,6 @@ viewReviewedRevision model mReviewedAt reviewedRevision =
         ]
 
 
-{-| A reviewed step is locked, so the record's mtime is the review commit's
-time: it is the only review timestamp the backend reports.
--}
 reviewedAtExplanation : Model -> Maybe Posix -> String -> String
 reviewedAtExplanation model mReviewedAt shortRevision =
     "Reviewed at revision "
@@ -269,9 +257,6 @@ reviewedAtExplanation model mReviewedAt shortRevision =
             mReviewedAt
 
 
-{-| `Iso8601.fromTime` always renders `YYYY-MM-DDTHH:MM:SS.sssZ`, and every
-other time in the app is UTC, so a reviewed-at time reads on the same clock.
--}
 formatUtcMinute : Posix -> String
 formatUtcMinute posix =
     Iso8601.fromTime posix

@@ -70,8 +70,6 @@ getProjectsHandler commit = do
         Right output -> return (DynamicJson output)
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
--- | Mtimes for a revision never change, while walking the repository history
--- costs hundreds of milliseconds, so keep the most recent revisions.
 {-# NOINLINE mtimeCacheRef #-}
 mtimeCacheRef :: MVar [(String, Map.Map FilePath T.Text)]
 mtimeCacheRef = unsafePerformIO (newMVar [])
@@ -122,7 +120,6 @@ patchProjectHandler projectId (DynamicJson jsonBody) = do
         Right _ -> return NoContent
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
--- | A single project record update within a batch request.
 data ProjectUpdate = ProjectUpdate
     { projectUpdateId :: Int
     , projectUpdateRecord :: Value

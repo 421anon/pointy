@@ -407,15 +407,12 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                     |> Maybe.andThen
                         (\r ->
                             if r.id == Nothing then
-                                -- Adding a new record
                                 Just r
 
                             else if table.addMode == AddFromOtherProject then
-                                -- Adding an existing record (show form so user can click Save)
                                 Just r
 
                             else
-                                -- This would be editing an existing record (handled elsewhere)
                                 Nothing
                         )
                     |> Maybe.map (viewAddOrEditRecordForm model spec table Html.nothing)
@@ -426,10 +423,6 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
     viewContent
 
 
-{-| A row places the badge twice and a viewport displays only one of the two, so
-each call site builds its own thunk: a lazy node caches its rendered node on
-itself, and one thunk in two positions would hand the same element to both.
--}
 viewMtimeBadge : Maybe Posix -> Posix -> Html msg
 viewMtimeBadge mPosix now =
     Html.viewMaybe
@@ -574,10 +567,6 @@ viewStatusApiData tableName currentRouteCommit logState mRecordId status =
         status
 
 
-{-| A failure row carries a build-log popover, so the status is built as its own
-node per row rather than inside the row's redraw. The log state arrives
-pre-resolved, so a log arriving for one step invalidates only that step's row.
--}
 viewStepRecordStatus : String -> StepConfigEntry -> Route.Page -> ApiData String -> StepRecord -> Html (Flow Model ())
 viewStepRecordStatus name entry page logState record =
     viewStatusApiData
@@ -605,9 +594,6 @@ viewRecordActionsPopover popoverId actions =
         actions
 
 
-{-| `Html.Lazy` compares references with `===`, so nothing here may capture the
-model: the memoized step variant rebuilds these actions from data alone.
--}
 viewRecordActions : TableSpec (BaseRecord a) -> Bool -> Maybe Int -> BaseRecord a -> List (Html (Flow Model ()))
 viewRecordActions spec isReadOnly mProjectId record =
     let
@@ -643,13 +629,11 @@ viewRecordActions spec isReadOnly mProjectId record =
                 |> Flow.seq loadSourceFiles
 
         recordActions =
-            [ -- Directory button
+            [ 
               { shouldShow = isSuccessStatus << TableSpec.getStatus spec
               , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
               }
-            , -- A locked record keeps its edit button, dead, ahead of the
-              -- inspection that stands in for it: what unlocks the record is
-              -- worth saying where the reviewer reaches for it.
+            , 
               { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
               , render = always (viewInactiveIconButtonWithTooltip "edit" "Remove review to edit")
               }
@@ -662,7 +646,7 @@ viewRecordActions spec isReadOnly mProjectId record =
                         else
                             viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" toggleRecordForm
               }
-            , -- Share button (shareable only)
+            , 
               { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
               , render =
                     \r ->
@@ -676,7 +660,7 @@ viewRecordActions spec isReadOnly mProjectId record =
                                 |> Maybe.withDefault Flow.none
                             )
               }
-            , -- Visibility toggle button
+            , 
               { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
               , render =
                     \r ->
@@ -696,11 +680,11 @@ viewRecordActions spec isReadOnly mProjectId record =
                             )
                             (Actions.toggleRecordVisibility spec mProjectId Nothing r)
               }
-            , -- Clone button (shareable only)
+            , 
               { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
               , render = \r -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec r)
               }
-            , -- Remove button
+            , 
               { shouldShow =
                     \r ->
                         let
@@ -760,9 +744,6 @@ viewRunStop spec record =
             []
 
 
-{-| Everything a row's actions need arrives as a value, because `Html.Lazy.lazy8`
-compares references with `===`: an unchanged row's popover is never rebuilt.
--}
 viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> Bool -> Html (Flow Model ())
 viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record uploading =
     let
@@ -2270,9 +2251,6 @@ viewIconButtonWithTooltip iconName filled tooltip action =
         ]
 
 
-{-| `aria-disabled` rather than `disabled`: a disabled control drops out of the
-tab order, and the explanation is all this button has to offer.
--}
 viewInactiveIconButtonWithTooltip : String -> String -> Html (Flow Model ())
 viewInactiveIconButtonWithTooltip iconName tooltip =
     Html.button

@@ -270,8 +270,6 @@ syncWorktreeToTarget session_ latest = do
     head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
     if head_ == baseCommit session_
         then do
-            -- No agent commits yet: stray uncommitted files are disposable
-            -- (same policy as confirmApplyCandidate), so jump straight to latest.
             _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
             _ <- runGitChecked (worktreePath session_) ["reset", "--hard", T.unpack latest]
             advanceBase $ "Updated session to latest `" <> targetBranch session_ <> "` state (" <> shortCommit latest <> ")"
@@ -315,10 +313,6 @@ prepareApplyCandidate sid = do
     repoPath <- liftIO userRepoPath
     let targetBranchName = T.unpack (targetBranch session_)
     targetHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", targetBranchName]
-    -- A pending apply (either awaiting conflict resolution or ready to
-    -- confirm) survives across turns; if it is still current, return it
-    -- unchanged so the UI can confirm the resolved candidate without
-    -- re-merging (which would discard the agent's resolution).
     stillCurrent <-
         maybe (return False) (\candidate -> applyCandidateCurrent candidate targetHead_) (preparedApply session_)
     if stillCurrent
@@ -353,10 +347,6 @@ prepareApplyCandidate sid = do
                     return ()
                 (ExitFailure _, mergeOut, mergeErr) -> do
                     conflictSummary <- collectConflictSummary applyWorktree mergeOut mergeErr
-                    -- Keep the apply worktree: the agent resolves the conflict
-                    -- markers there during a turn, and finalizeApplyResolution
-                    -- commits the squash merge once the markers are gone.
-                    -- candidateHead stays empty until that commit exists.
                     saveSessionUpdate
                         session_
                             { status = "prepare_conflict"
@@ -386,14 +376,6 @@ prepareApplyCandidate sid = do
                                 head_ <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
                                 return (head_ == candidateHead candidate)
 
--- | After an agent turn, check whether a conflict-pending apply has been
--- resolved. The agent edits the conflict markers in the apply worktree (kept
--- by prepareApplyCandidate) but cannot stage its resolution: the git dir is
--- read-only inside its sandbox. Once no conflicted path still contains marker
--- lines, stage the paths and commit the squash merge so the apply becomes
--- confirmable; the session base then advances when the candidate is confirmed.
--- Returns the new candidate head when a resolution was committed, Nothing
--- otherwise.
 finalizeApplyResolution :: AgentSession -> ExceptT String IO (Maybe Text)
 finalizeApplyResolution session_ =
     case preparedApply session_ of
@@ -403,8 +385,6 @@ finalizeApplyResolution session_ =
                 worktreeExists <- liftIO $ doesDirectoryExist applyWorktree
                 if not worktreeExists
                     then do
-                        -- The apply worktree is gone (purged, or a stale
-                        -- prepare); drop the pending apply.
                         saveSessionUpdate session_{preparedApply = Nothing, lastError = Nothing}
                         return Nothing
                     else do
@@ -412,8 +392,6 @@ finalizeApplyResolution session_ =
                         markers <- liftIO $ filterM (fileHasConflictMarkers applyWorktree) unmerged
                         if not (null markers)
                             then do
-                                -- Conflicts remain; keep the apply pending and
-                                -- refresh the conflict summary for the UI.
                                 conflictSummary <- collectConflictSummary applyWorktree "" ""
                                 saveSessionUpdate
                                     session_
@@ -422,8 +400,6 @@ finalizeApplyResolution session_ =
                                         }
                                 return Nothing
                             else do
-                                -- All marker lines are gone: stage the conflicted
-                                -- paths exactly as the agent left them and commit.
                                 unless (null unmerged) $
                                     void $
                                         runGitChecked applyWorktree (["add", "-A", "--"] ++ map T.unpack unmerged)
@@ -434,10 +410,6 @@ finalizeApplyResolution session_ =
                                             _ <- runGitChecked applyWorktree ["commit", "-m", applyCommitSubject session_]
                                             stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
                                         else do
-                                            -- Nothing staged: either everything was resolved back to the
-                                            -- target state, or a previous finalize already committed the
-                                            -- resolution (e.g. after a failed metadata write). Use the
-                                            -- actual worktree head so a stale retry converges.
                                             stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
                                 saveSessionUpdate
                                     session_
@@ -448,13 +420,11 @@ finalizeApplyResolution session_ =
                                 return (Just candidateHead_)
         _ -> return Nothing
 
--- | Unmerged (conflicted) paths in the index of a worktree.
 worktreeUnmergedPaths :: FilePath -> ExceptT String IO [Text]
 worktreeUnmergedPaths worktree = do
     output <- runGitChecked worktree ["diff", "--name-only", "--diff-filter=U"]
     return $ nub $ filter (not . T.null) $ T.lines output
 
--- | True if the working-tree file still contains git conflict marker lines.
 fileHasConflictMarkers :: FilePath -> Text -> IO Bool
 fileHasConflictMarkers worktree path = do
     let fullPath = worktree </> T.unpack path
@@ -473,11 +443,6 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
     candidate <- case preparedApply session_ of
         Nothing -> throwError "candidate_missing"
         Just c -> return c
-    -- An apply stuck on squash-merge conflicts has no confirmable candidate
-    -- yet: the agent resolves the conflict markers in the apply worktree
-    -- during a turn, and finalizeApplyResolution commits the resolution.
-    -- Return the conflict state with the merge error instead of failing the
-    -- request, so the UI shows what went wrong rather than a bare mismatch.
     if applyConflictsPending candidate
         then do
             conflictSummary <- collectConflictSummary (candidateWorktree candidate) "" ""
@@ -801,11 +766,6 @@ removeWorktreeIfExists repoPath path = do
 turnStartedAtCompat :: AgentTurn -> String
 turnStartedAtCompat = show . turnStartedAt
 
-{- | Reset stale turn metadata left by a backend exit. New sessions never persist
-session-level running state, but old metadata may still contain `status =
-"running"` or an `activeTurnId`; normalize those fields while repairing any
-unfinished turns because the new process has no live runner attached.
--}
 sweepStaleRunningSessions :: IO ()
 sweepStaleRunningSessions = do
     sessions <- listSessions

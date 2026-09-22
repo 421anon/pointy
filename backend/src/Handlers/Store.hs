@@ -92,8 +92,6 @@ stepDownloadHandler stepId mCommit rel = do
     outPath <- resolveStepOutPath stepId mCommit
     downloadHandler outPath rel
 
--- | Serves the file reached by appending @segments@ to @basePath@,
--- validating that the result stays inside the base.
 fromRawBase :: FilePath -> [String] -> Application
 fromRawBase basePath segments _ respond = do
     let baseSegments = drop 1 (splitPath basePath)
@@ -335,23 +333,12 @@ assertInside path base =
     unless (joinPath (splitPath (normalise base)) `isPrefixOf` joinPath (splitPath (normalise path))) $
         throwError err400{errBody = "Path traversal not allowed"}
 
-{- | GET /step-files/extras?id=<stepId>&commit=<commit>&path=<dirPath>
-Returns the meta.json for the given directory from the extras derivation.
-Returns {} when no extras attr exists or when meta.json is absent.
-Returns 500 when meta.json exists but is not a JSON object, or when the
-Nix evaluation itself fails for any reason other than the extras
-attribute being absent.
--}
 stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM DynamicJson
 stepExtrasHandler stepId mCommit mDirPath = do
     repoPath <- liftIO userRepoPath
     commitHash <- resolveCommitHash mCommit
     let ctx = ReadRepoContext repoPath commitHash
         stepAttr = "#pointy.steps." ++ show stepId
-        -- The `?` dotted path checks each segment safely and short-circuits,
-        -- so a missing meta.pointy.extras.outPath yields JSON null without a
-        -- Nix error.  Genuine eval failures (bad commit, unknown step id,
-        -- broken step expression) still surface as a Left from runNixEval...
         applyExpr = "(s: if s ? meta.pointy.extras.outPath then s.meta.pointy.extras.outPath else null)"
     extrasResult <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx applyExpr stepAttr
     extrasPath <- case extrasResult of
@@ -375,13 +362,6 @@ stepExtrasHandler stepId mCommit mDirPath = do
             exists <- liftIO $ doesFileExist metaPath
             if not exists
                 then do
-                    -- meta.json is absent for one of two reasons:
-                    --   (a) the extras derivation has not been realised yet, or
-                    --   (b) it was realised but emits no metadata for this dir.
-                    -- Enqueue a build in the background so subsequent requests
-                    -- can pick up the metadata; buildExtras short-circuits to a
-                    -- GC-root refresh when the derivation is already built, so
-                    -- case (b) costs only one Nix eval and one squeue check.
                     liftIO $ void $ forkIO $ runAppEffects $ buildExtras ctx stepId
                     return (DynamicJson "{}")
                 else do
@@ -396,7 +376,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
                         Right _ ->
                             throwError err500{errBody = "extras meta.json is not a JSON object"}
   where
-    maxExtrasJsonBytes = 10 * 1024 * 1024 -- 10 MiB
+    maxExtrasJsonBytes = 10 * 1024 * 1024 
 
 resolveCommitHash :: Maybe Text -> AppM String
 resolveCommitHash mCommit = case mCommit of
@@ -548,7 +528,6 @@ readSeekChunk path startOffset@(ByteOffset startValue) requestedBytes fileSize k
                 , eof = eof'
                 }
 
--- | For valid UTF-8 input, the output is a prefix ending at a complete codepoint.
 trimToValidUTF8 :: BS.ByteString -> BS.ByteString
 trimToValidUTF8 bs
     | BS.null bs = bs

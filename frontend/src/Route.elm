@@ -24,17 +24,6 @@ module Route exposing
     , toString
     )
 
-{-| `Route` is a full, lawful model of the URL: `fromUrl` and `toUrl` are
-inverses (`routeUrlIso`). The page-specific part is `Page`; `chat` is the
-first cross-cutting URL widget; every other query parameter is preserved
-verbatim in `extraQuery` so nothing the URL carries is ever dropped.
-
-Lawfulness: `fromUrl (toUrl r) == r` for every `r`; `toUrl (fromUrl u) == u`
-for every URL in the app's own canonical rendering (parameters the app
-renders are percent-encoded; hand-typed non-canonical encodings are
-normalized on first navigation).
-
--}
 
 import Accessors exposing (Iso, Lens, Prism, iso, lens, prism)
 import Html
@@ -135,9 +124,6 @@ chat =
     lens ".chat" .chat (\r c -> { r | chat = c })
 
 
-{-| The lawful `Url` <-> `Route` pair: `get routeUrlIso` is `fromUrl`,
-`set routeUrlIso` is `toUrl`. See the module docs for the exact laws.
--}
 routeUrlIso : Iso pr ls Url Route x y
 routeUrlIso =
     iso "route-url" fromUrl toUrl
@@ -157,9 +143,6 @@ project =
         )
 
 
-{-| A bare route with no chat and no extra URL state; used to build
-navigation targets. `host` is empty, so `toString` renders it relative.
--}
 fromPage : Page -> Route
 fromPage page_ =
     { page = page_
@@ -532,8 +515,6 @@ compareTargetQueryParts prefix compareTarget =
 
 
 
--- Chat widget: query pair surgery on the raw query string, so every other
--- parameter round-trips byte-for-byte.
 
 
 chatFromQuery : Maybe String -> Maybe ChatRef

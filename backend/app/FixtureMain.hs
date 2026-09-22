@@ -13,9 +13,9 @@ import qualified Data.Text.IO as TIO
 import Fixture.Document (FixtureDocument (..), loadDocument)
 import Fixture.Server (fixtureApp)
 import Interpreters.Fixture (newFixtureState, resetFixture, runFixture)
+import OutPaths (warmProjectCertificates)
 import Processes (cli)
-import OutPaths (warmProjectOutPaths)
-import System.Directory (createDirectoryIfMissing, getHomeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
+import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getArgs, setEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
@@ -89,10 +89,10 @@ run options = do
         (do
             putStrLn "Fixture server listening."
             void $ forkIO $ do
-                outcome <- try (runFixture state warmProjectOutPaths)
+                outcome <- try (runFixture state warmProjectCertificates)
                 case outcome of
                     Left err -> putStrLn ("Warm-up failed: " ++ show (err :: SomeException))
-                    Right () -> putStrLn "Warmed project out paths."
+                    Right () -> putStrLn "Warmed project certificates."
         )
 
 writeConfig :: FilePath -> FilePath -> FilePath -> T.Text -> IO ()
@@ -122,4 +122,3 @@ removePath path = do
             case fileOutcome of
                 Right () -> pure ()
                 Left (_ :: SomeException) -> pure ()
-

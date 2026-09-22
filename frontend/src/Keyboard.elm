@@ -58,22 +58,11 @@ type Modifier
     | Ctrl
 
 
-{-| Combine a list of shortcut - decoder pairs.
-Optionally pass a UserPlatform for combinations that use `CtrlOrCmd` to detect Cmd instead of Ctrl for MacOS systems.
-If none of the combinations use `CtrlOrCmd`, it's safe to pass `Nothing` as the first argument.
--}
 decodeCombinations : List ( Combination, Decoder msg ) -> Decoder msg
 decodeCombinations =
     Decode.firstMatching << List.map (uncurry decodeSingle)
 
 
-{-| If all event handlers:
-
-  - ignore the event object's content
-  - don't stop propagation and don't prevent default
-    Then this function offers a simpler way to define keyboard bindings.
-
--}
 simpleCombinations : List ( Combination, msg ) -> Decoder (CustomEvent msg)
 simpleCombinations =
     Decode.firstMatching << List.map (uncurry decodeSingle) << List.map (Tuple.mapSecond <| Decode.succeed << Events.withDefaults)
@@ -85,10 +74,6 @@ toName (Combination mods key) =
 
 
 
--- COMBINATIONS
--- Note that any modifiers that do not appear in the modifier list have to be explicitly NOT pressed.
--- If you want a shortcut that does not care about a modifier key, either use 2 combinations with the same result
--- or implement ternary logic in this module.
 
 
 ctrlC : Combination
@@ -127,7 +112,6 @@ escape =
 
 
 
--- PRIVATE
 
 
 toCode : Key -> Int
