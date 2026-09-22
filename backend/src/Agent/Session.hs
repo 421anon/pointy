@@ -44,8 +44,9 @@ import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Generics (Generic)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory)
-import System.FilePath (takeDirectory, (</>))
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory, renameFile)
+import System.FilePath (takeDirectory, takeFileName, (</>))
+import System.IO (hClose, openBinaryTempFile)
 import System.Posix.Process (getProcessID)
 
 data PreparedApply = PreparedApply
@@ -237,11 +238,19 @@ loadSession path = do
 loadSessionById :: Text -> IO (Either String AgentSession)
 loadSessionById sid = sessionMetadataPath sid >>= loadSession
 
+writeFileAtomic :: FilePath -> LBS.ByteString -> IO ()
+writeFileAtomic path bytes = do
+    let dir = takeDirectory path
+    createDirectoryIfMissing True dir
+    (tmp, handle) <- openBinaryTempFile dir (takeFileName path ++ ".tmp")
+    LBS.hPut handle bytes
+    hClose handle
+    renameFile tmp path
+
 saveSession :: AgentSession -> IO ()
 saveSession session = do
     path <- sessionMetadataPath (sessionId session)
-    createDirectoryIfMissing True (takeDirectory path)
-    LBS.writeFile path (encode (persistableSession session))
+    writeFileAtomic path (encode (persistableSession session))
 
 persistableSession :: AgentSession -> AgentSession
 persistableSession session =
@@ -268,8 +277,7 @@ listSessions = do
 saveTurn :: AgentTurn -> IO ()
 saveTurn turn = do
     path <- turnMetadataPath (turnSessionId turn) (turnId turn)
-    createDirectoryIfMissing True (takeDirectory path)
-    LBS.writeFile path (encode turn{turnLog = ""})
+    writeFileAtomic path (encode turn{turnLog = ""})
     -- Wake any connected turn log stream; the saved state (e.g. a finished
     -- turn) may matter to it even though no log line was appended.
     signalTurnLog (turnLogPath turn)

@@ -104,7 +104,7 @@ data AgentUsage = AgentUsage
     }
     deriving (Show, Eq, Generic, ToJSON)
 
-createAgentSession :: ExceptT String IO AgentSessionView
+createAgentSession :: ExceptT String IO Text
 createAgentSession = do
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     let target = userRepoBranch (configUserRepo cfg)
@@ -136,7 +136,7 @@ createAgentSession = do
                 , updatedAt = now
                 }
     liftIO $ saveSession session_
-    loadAgentSessionView sid
+    return sid
 
 listAgentSessions :: ExceptT String IO [AgentSessionView]
 listAgentSessions = do
@@ -151,14 +151,14 @@ loadAgentSessionView sid = do
     turns_ <- liftIO $ loadRepairedSessionTurns session_
     return $ AgentSessionView (deriveSessionRuntime session_ turns_) state turns_
 
-renameAgentSession :: Text -> Text -> ExceptT String IO AgentSessionView
+renameAgentSession :: Text -> Text -> ExceptT String IO Text
 renameAgentSession sid rawName = do
     session_ <- loadSessionOrThrow sid
     case normalizeSessionName rawName of
         Nothing -> throwError "empty_session_name"
         Just name -> do
             saveSessionUpdate session_{sessionName = Just name}
-            loadAgentSessionView sid
+            return sid
 
 nameUnnamedAgentSession :: Text -> Text -> ExceptT String IO ()
 nameUnnamedAgentSession sid title = do
@@ -275,7 +275,7 @@ syncWorktreeToTarget session_ latest = do
         saveSessionUpdate refreshed
         return (refreshed, note)
 
-prepareApplyCandidate :: Text -> ExceptT String IO AgentSessionView
+prepareApplyCandidate :: Text -> ExceptT String IO ()
 prepareApplyCandidate sid = do
     session_ <- requireEditableSession sid
     hasRunner <- sessionHasActiveRunner session_
@@ -294,7 +294,7 @@ prepareApplyCandidate sid = do
     stillCurrent <-
         maybe (return False) (\candidate -> applyCandidateCurrent candidate targetHead_) (preparedApply session_)
     if stillCurrent
-        then loadAgentSessionView sid
+        then return ()
         else do
             agentHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (agentBranch session_)]
             sessionRoot <- liftIO $ sessionDir sid
@@ -322,7 +322,7 @@ prepareApplyCandidate sid = do
                                         }
                             , lastError = Nothing
                             }
-                    loadAgentSessionView sid
+                    return ()
                 (ExitFailure _, mergeOut, mergeErr) -> do
                     conflictSummary <- collectConflictSummary applyWorktree mergeOut mergeErr
                     -- Keep the apply worktree: the agent resolves the conflict
@@ -342,7 +342,7 @@ prepareApplyCandidate sid = do
                                         }
                             , lastError = Just conflictSummary
                             }
-                    loadAgentSessionView sid
+                    return ()
   where
     applyCandidateCurrent candidate targetHead_ = do
         if targetHead candidate /= targetHead_
@@ -439,7 +439,7 @@ fileHasConflictMarkers worktree path = do
   where
     conflictMarkerBytes = ["<<<<<<<", "=======", ">>>>>>>"] :: [BS.ByteString]
 
-confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO AgentApplyView
+confirmApplyCandidate :: Text -> Text -> Text -> ExceptT String IO ([Int], [Int])
 confirmApplyCandidate sid requestedTarget requestedCandidate = do
     session_ <- requireEditableSession sid
     candidate <- case preparedApply session_ of
@@ -459,8 +459,7 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
                     , preparedApply = Just candidate
                     , lastError = Just conflictSummary
                     }
-            view_ <- loadAgentSessionView sid
-            return AgentApplyView{sessionView = view_, invalidatedProjectIds = [], invalidatedStepIds = []}
+            return ([], [])
         else do
             when (targetHead candidate /= requestedTarget || candidateHead candidate /= requestedCandidate) $ throwError "candidate_mismatch"
 
@@ -503,11 +502,10 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
                             , preparedApply = Nothing
                             , lastError = Nothing
                             }
-                    view_ <- loadAgentSessionView sid
-                    return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
+                    return (projectIds, stepIds)
                 (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
-discardAgentSession :: Text -> ExceptT String IO AgentSessionView
+discardAgentSession :: Text -> ExceptT String IO ()
 discardAgentSession sid = do
     session_ <- requireEditableSession sid
     hasRunner <- sessionHasActiveRunner session_
@@ -527,7 +525,7 @@ discardAgentSession sid = do
         ("Discarded this draft. No changes were applied to `" <> targetBranch session_ <> "`. You can continue from a clean state in this chat.")
         changesetDiff
     saveSessionUpdate session_{status = "open", baseCommit = latest, activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}
-    loadAgentSessionView sid
+    return ()
 
 appendLifecycleTurn :: Text -> Text -> Text -> Text -> ExceptT String IO ()
 appendLifecycleTurn sid prompt body changesetDiff = do
@@ -554,13 +552,13 @@ renderLifecycleLog :: Text -> Text -> Text
 renderLifecycleLog body changesetDiff =
     T.unlines $ ["[stdout] " <> body, "[system] changeset-diff"] ++ T.lines changesetDiff
 
-archiveAgentSession :: Text -> ExceptT String IO AgentSessionView
+archiveAgentSession :: Text -> ExceptT String IO ()
 archiveAgentSession sid = do
     session_ <- loadSessionOrThrow sid
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ throwError "runner_active"
     saveSessionUpdate session_{status = "archived", activeTurnId = Nothing}
-    loadAgentSessionView sid
+    return ()
 
 purgeAgentSession :: Text -> ExceptT String IO ()
 purgeAgentSession sid = do

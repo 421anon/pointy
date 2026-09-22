@@ -24,7 +24,7 @@ module Handlers.Agent (
 ) where
 
 import Agent.Git (
-    AgentApplyView,
+    AgentApplyView (..),
     AgentSessionView,
     AgentUsage,
     archiveAgentSession,
@@ -50,7 +50,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.Generics (Generic)
 import Interpreters.Production (runProduction)
 import Servant (Handler, NoContent (..), err400, err404, err409, err500, errBody, throwError)
-import UserRepo (withUserRepoExclusiveIO)
+import UserRepo (withUserRepoExclusiveIO, withUserRepoSharedIO)
 
 data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
@@ -100,13 +100,15 @@ instance FromJSON ConfirmApplyRequest where
             <*> obj .: "candidateHead"
 
 createSessionHandler :: Handler AgentSessionView
-createSessionHandler = runLockedAction createAgentSession
+createSessionHandler = do
+    sid <- runLockedAction createAgentSession
+    runSharedAction (loadAgentSessionView sid)
 
 listSessionsHandler :: Handler [AgentSessionView]
-listSessionsHandler = runLockedAction listAgentSessions
+listSessionsHandler = runSharedAction listAgentSessions
 
 getSessionHandler :: Text -> Handler AgentSessionView
-getSessionHandler sid = runAgentAction $ loadAgentSessionView sid
+getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
@@ -121,27 +123,41 @@ steerTurnHandler req =
     NoContent <$ runAgentAction (steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req))
 
 prepareApplyHandler :: SessionRequest -> Handler AgentSessionView
-prepareApplyHandler req =
-    runLockedAction $ prepareApplyCandidate (sessionRequestSessionId req)
+prepareApplyHandler req = do
+    let sid = sessionRequestSessionId req
+    _ <- runLockedAction (prepareApplyCandidate sid)
+    runSharedAction (loadAgentSessionView sid)
 
 confirmApplyHandler :: ConfirmApplyRequest -> Handler AgentApplyView
-confirmApplyHandler req =
-    runLockedAction $ confirmApplyCandidate (confirmSessionId req) (confirmTargetHead req) (confirmCandidateHead req)
+confirmApplyHandler req = do
+    (projectIds, stepIds) <-
+        runLockedAction $
+            confirmApplyCandidate (confirmSessionId req) (confirmTargetHead req) (confirmCandidateHead req)
+    view_ <- runSharedAction (loadAgentSessionView (confirmSessionId req))
+    return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
 
 discardSessionHandler :: SessionRequest -> Handler AgentSessionView
-discardSessionHandler req =
-    runLockedAction $ discardAgentSession (sessionRequestSessionId req)
+discardSessionHandler req = do
+    let sid = sessionRequestSessionId req
+    _ <- runLockedAction (discardAgentSession sid)
+    runSharedAction (loadAgentSessionView sid)
 
 renameSessionHandler :: RenameSessionRequest -> Handler AgentSessionView
-renameSessionHandler req =
-    runLockedAction $ renameAgentSession (renameSessionId req) (renameSessionName req)
+renameSessionHandler req = do
+    sid <- runLockedAction (renameAgentSession (renameSessionId req) (renameSessionName req))
+    runSharedAction (loadAgentSessionView sid)
 
 usageHandler :: Handler AgentUsage
-usageHandler = liftIO getAgentUsage
+usageHandler = liftIO $ withUserRepoSharedIO getAgentUsage
 
 runLockedAction :: ExceptT String IO a -> Handler a
 runLockedAction action = do
     result <- liftIO $ withUserRepoExclusiveIO action
+    either throwAgentError return result
+
+runSharedAction :: ExceptT String IO a -> Handler a
+runSharedAction action = do
+    result <- liftIO $ withUserRepoSharedIO (runExceptT action)
     either throwAgentError return result
 
 runAgentAction :: ExceptT String IO a -> Handler a
@@ -172,8 +188,10 @@ throwAgentError err =
         ]
 
 archiveSessionHandler :: SessionRequest -> Handler AgentSessionView
-archiveSessionHandler req =
-    runLockedAction $ archiveAgentSession (sessionRequestSessionId req)
+archiveSessionHandler req = do
+    let sid = sessionRequestSessionId req
+    _ <- runLockedAction (archiveAgentSession sid)
+    runSharedAction (loadAgentSessionView sid)
 
 purgeSessionHandler :: SessionRequest -> Handler NoContent
 purgeSessionHandler req =

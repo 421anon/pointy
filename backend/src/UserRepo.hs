@@ -22,8 +22,8 @@ module UserRepo (
     withReadRepoTransaction,
     withReadRepoTransactionIO,
     withWriteRepoTransactionRaw,
-    withUserRepoExclusive,
     withUserRepoExclusiveIO,
+    withUserRepoSharedIO,
     commitAndPushChanges,
     commitContext,
     fetchRepo,
@@ -125,15 +125,15 @@ lockMode :: RepoAccess -> SharedExclusive
 lockMode ReadOnly = Shared
 lockMode ReadWrite = Exclusive
 
-withUserRepoExclusive :: (IOE :> es) => ExceptT String (Eff es) a -> Eff es (Either String a)
-withUserRepoExclusive action = do
-    lockPath <- liftIO userRepoLockPath
-    withRepoLock lockPath ReadWrite (runExceptT action)
-
 withUserRepoExclusiveIO :: ExceptT String IO a -> IO (Either String a)
 withUserRepoExclusiveIO action = do
     lockPath <- userRepoLockPath
     System.FileLock.withFileLock lockPath Exclusive $ const (runExceptT action)
+
+withUserRepoSharedIO :: IO a -> IO a
+withUserRepoSharedIO action = do
+    lockPath <- userRepoLockPath
+    System.FileLock.withFileLock lockPath Shared (const action)
 
 withReadRepoTransactionIO :: (ReadRepoContext -> ExceptT String IO a) -> IO (Either String a)
 withReadRepoTransactionIO action = do
