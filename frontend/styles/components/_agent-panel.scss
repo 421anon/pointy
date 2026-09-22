@@ -66,6 +66,16 @@
   padding: 0;
 }
 
+.agent-panel .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+
+  &:hover {
+    background: none;
+    color: var(--text-muted);
+  }
+}
+
 .agent-panel__body,
 .agent-panel__empty {
   min-width: 0;
@@ -111,8 +121,25 @@
   }
 }
 
+.agent-panel__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  justify-content: center;
+}
+
+.agent-panel__empty-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2xs);
+}
+
 .agent-panel__empty--delayed {
   animation: agent-delayed-in 0s var(--loader-delay) both;
+}
+
+.agent-panel__creating {
+  color: var(--text-secondary);
 }
 
 @keyframes agent-delayed-in {
@@ -206,32 +233,11 @@
   background: var(--state-danger-outline);
 }
 
-.agent-panel__run-button .agent-panel__button-spinner,
-.small-btn .agent-panel__button-spinner {
-  font-size: var(--font-size-sm);
-}
-
-.agent-panel__session-title-actions .loading-icon {
-  font-size: var(--font-size-md);
-}
-
 .agent-panel__run-hint {
   font-size: 10px;
   font-weight: 400;
   opacity: 0.8;
   line-height: 1.2;
-}
-
-.agent-panel__button-content {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-2xs);
-}
-
-.agent-panel__button-spinner {
-  flex: 0 0 auto;
-  animation: spin 1s linear infinite;
 }
 
 .agent-panel__error {
@@ -351,19 +357,22 @@
   &--skeleton {
     cursor: default;
     pointer-events: none;
+    animation: agent-delayed-in 0s var(--loader-delay) both;
 
-    .agent-panel__session-name {
-      max-width: 60%;
+    .agent-panel__skeleton-line:first-child {
+      width: 55%;
+    }
+
+    .agent-panel__skeleton-line:nth-child(2) {
+      width: 22%;
     }
   }
 }
 
-.agent-panel__refreshing,
-.agent-panel__syncing {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2xs);
+.agent-panel__refreshing {
+  padding: var(--spacing-2xs) var(--spacing-xs);
   color: var(--text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .agent-panel__stream-warning {
@@ -372,24 +381,6 @@
   background: var(--state-warning-outline);
   color: var(--state-warning);
   font-size: var(--font-size-sm);
-}
-
-.agent-panel__refreshing {
-  padding: var(--spacing-2xs) var(--spacing-xs);
-  font-size: var(--font-size-sm);
-}
-
-.agent-panel__syncing {
-  border-radius: 999px;
-  padding: 0 var(--spacing-xs);
-  background: var(--bg-elevated);
-  font-size: var(--font-size-sm);
-}
-
-.agent-panel__refreshing .agent-panel__button-spinner,
-.agent-panel__syncing .agent-panel__button-spinner,
-.agent-panel__question-hint .agent-panel__button-spinner {
-  font-size: 1em;
 }
 
 .agent-panel__session-name {
@@ -786,6 +777,62 @@
   }
 }
 
+.agent-panel__chat-bubble--user.is-sending {
+  opacity: 0.7;
+}
+
+.agent-panel__chat-sending {
+  padding: 0 var(--spacing-xs);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.agent-panel__prompt--skeleton,
+.agent-panel__run-button--skeleton {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.agent-panel .agent-panel__run-button--skeleton {
+  border: 1px solid var(--line-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.agent-panel__chat-bubble--skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2xs);
+  background: var(--bg-secondary);
+}
+
+.agent-panel__skeleton-line {
+  height: 10px;
+  max-width: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--shimmer-base) 20%,
+    var(--shimmer-shine) 50%,
+    var(--shimmer-base) 80%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.2s linear infinite;
+  opacity: 0.55;
+}
+
+.agent-panel__skeleton-line:first-child {
+  width: 230px;
+}
+
+.agent-panel__skeleton-line:nth-child(2) {
+  width: 180px;
+}
+
+.agent-panel__skeleton-line:nth-child(3) {
+  width: 120px;
+}
+
 .agent-panel__chat-cursor {
   display: inline-block;
   margin-left: 2px;
@@ -1142,15 +1189,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-panel .shimmer-text,
-  .agent-panel__chat-cursor,
-  .agent-panel__button-spinner {
+  .agent-panel__chat-cursor {
     animation: none;
-  }
-
-  .agent-panel .shimmer-text {
-    background: none;
-    color: var(--text-secondary);
-    -webkit-text-fill-color: currentColor;
   }
 }

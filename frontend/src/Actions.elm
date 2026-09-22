@@ -255,25 +255,23 @@ toggleRecordVisibility spec mProjectId mHidden record =
 
 loadProjects : Flow Model ()
 loadProjects =
-    Flow.forAll (stepConfig << success)
-        (\stepConfig_ ->
-            Flow.forAll (presets << success)
-                (\presets_ ->
-                    Flow.get
-                        |> Flow.andThen
-                            (\model ->
-                                let
-                                    mCommit_ =
-                                        try (route << Route.page << Route.project << mCommit << just) model
-                                in
-                                callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
-                                    |> ignoreResult
-                                    |> Flow.seq (Flow.async replayStepStatusBuffer)
-                                    |> Flow.seq (Flow.async loadProjectReviews)
-                            )
-                )
-        )
-        |> Flow.return ()
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case ( try (stepConfig << success) model, try (presets << success) model ) of
+                    ( Just stepConfig_, Just presets_ ) ->
+                        let
+                            mCommit_ =
+                                try (route << Route.page << Route.project << mCommit << just) model
+                        in
+                        callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
+                            |> ignoreResult
+                            |> Flow.seq (Flow.async replayStepStatusBuffer)
+                            |> Flow.seq (Flow.async loadProjectReviews)
+
+                    _ ->
+                        Flow.pure ()
+            )
 
 
 replayStepStatusBuffer : Flow Model ()
@@ -2459,8 +2457,12 @@ addToast isSuccess message =
             (\nextId ->
                 Flow.over toasts ((::) <| Toast message nextId isSuccess)
                     |> Flow.seq (Flow.over nextToastId (\_ -> nextId + 1))
-                    |> Flow.seq (Flow.lift (Task.perform identity (Process.sleep 3500)))
-                    |> Flow.seq (Flow.over toasts (List.removeWhen <| (==) nextId << .id))
+                    |> Flow.seq
+                        (Flow.async
+                            (Flow.lift (Task.perform identity (Process.sleep 3500))
+                                |> Flow.seq (Flow.over toasts (List.removeWhen <| (==) nextId << .id))
+                            )
+                        )
             )
 
 
@@ -2685,37 +2687,41 @@ agentSessionLoaded sessionId agentState =
 
 applyAgentChatFromUrl : Bool -> Flow Model ()
 applyAgentChatFromUrl openPanel =
-    deleteBlankAgentChat
+    pruneBlankAgentChats
         |> Flow.seq (selectAgentChatFromUrl openPanel)
 
 
-abandonedAgentChat : Maybe String -> Model.AgentState -> Maybe Model.AgentSessionView
-abandonedAgentChat keptSessionId agentState =
-    Model.selectedSessionView agentState
-        |> Maybe.filter
-            (\view ->
-                (Just view.session.sessionId /= keptSessionId)
-                    && List.isEmpty view.turns
-                    && List.isEmpty (sessionEntries view agentState)
-                    && Maybe.isNothing view.session.sessionName
-                    && not (Model.agentSessionArchived view.session.status)
+pruneBlankAgentChats : Flow Model ()
+pruneBlankAgentChats =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    agentState =
+                        Model.getAgent model
+
+                    openChatId =
+                        Maybe.map .sessionId (get (route << Route.chat) model)
+
+                    abandoned view =
+                        Just view.session.sessionId /= openChatId && agentSessionBlank view agentState
+
+                    chatBeingCreated =
+                        agentState.request == Just Model.CreatingAgentSession
+                in
+                Flow.unless chatBeingCreated
+                    (ApiData.withDefault [] agentState.sessions
+                        |> List.filter abandoned
+                        |> Flow.traverse dropBlankAgentChat
+                        |> Flow.return ()
+                    )
             )
 
 
-deleteBlankAgentChat : Flow Model ()
-deleteBlankAgentChat =
-    Flow.forAll (route << Route.chat)
-        (\mChat ->
-            Flow.forAll agent
-                (\agentState ->
-                    abandonedAgentChat (Maybe.map .sessionId mChat) agentState
-                        |> Maybe.unwrap (Flow.pure ())
-                            (\view ->
-                                Flow.over agent (removeAgentSessionView view.session.sessionId)
-                                    |> Flow.seq (Flow.async (AgentApi.delete_ view.session.sessionId))
-                            )
-                )
-        )
+dropBlankAgentChat : Model.AgentSessionView -> Flow Model ()
+dropBlankAgentChat view =
+    Flow.over agent (removeAgentSessionView view.session.sessionId)
+        |> Flow.seq (Flow.async (AgentApi.delete_ view.session.sessionId))
 
 
 selectAgentChatFromUrl : Bool -> Flow Model ()
@@ -2740,21 +2746,29 @@ selectAgentChatFromUrl openPanel =
                     Flow.forAll agent
                         (\agentState ->
                             if agentState.selectedSessionId == Just chat.sessionId then
-                                Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel, highlightTurnId = chat.mTurnId })
+                                Flow.over agent (\s -> { s | highlightTurnId = chat.mTurnId })
                                     |> Flow.seq (scrollToAgentTurn chat.mTurnId)
 
                             else
                                 Flow.over agent (\s -> { s | isPanelOpen = s.isPanelOpen || openPanel })
                                     |> Flow.seq (Flow.when (ApiData.toMaybe agentState.sessions == Nothing) loadAgentSessions)
-                                    |> Flow.seq
-                                        (Flow.forAll agent
-                                            (\loadedAgentState ->
-                                                Flow.when (agentSessionLoaded chat.sessionId loadedAgentState)
-                                                    (selectAgentSessionAt chat.sessionId chat.mTurnId)
-                                            )
-                                        )
+                                    |> Flow.seq (selectAgentChatIfStillRouted chat)
                         )
         )
+
+
+selectAgentChatIfStillRouted : Route.ChatRef -> Flow Model ()
+selectAgentChatIfStillRouted chat =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    stillRouted =
+                        Maybe.map .sessionId (get (route << Route.chat) model) == Just chat.sessionId
+                in
+                Flow.when (stillRouted && agentSessionLoaded chat.sessionId (Model.getAgent model))
+                    (selectAgentSessionAt chat.sessionId chat.mTurnId)
+            )
 
 
 scrollToAgentTurn : Maybe String -> Flow Model ()
@@ -2766,6 +2780,24 @@ scrollToAgentTurn =
 scrollAgentChatToBottom : Flow Model ()
 scrollAgentChatToBottom =
     Flow.attemptTask (Scroll.scrollElementY agentChatId agentChatEndId 1 1)
+
+
+agentChatAtBottom : Flow Model Bool
+agentChatAtBottom =
+    let
+        slackInPixels =
+            80
+    in
+    Flow.attemptTaskWith
+        (\result ->
+            case result of
+                Ok { scene, viewport } ->
+                    Flow.pure (scene.height - (viewport.y + viewport.height) < slackInPixels)
+
+                Err _ ->
+                    Flow.pure False
+        )
+        (Dom.getViewportOf agentChatId)
 
 
 setAgentSessions : ApiData (List Model.AgentSessionView) -> Flow Model ()
@@ -2880,7 +2912,7 @@ mergeSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentStat
 mergeSessionView view agentState =
     let
         currentList =
-            ApiData.withDefault [] agentState.sessions
+            Maybe.withDefault [] (ApiData.toMaybe agentState.sessions)
 
         merged =
             if List.any (\v -> v.session.sessionId == view.session.sessionId) currentList then
@@ -2958,40 +2990,43 @@ applyAgentSessionView view agentState =
         merged =
             mergeSessionView view agentState
 
-        settled =
-            over refreshingSessions (Set.remove sessionId) merged
+        live =
+            try (liveTurnAt sessionId << just) merged
     in
-    if try (liveTurnAt sessionId << just << turnId) merged == view.session.activeTurnId then
-        settled
+    if Maybe.unwrap True (Model.liveTurnSurvives view.session.activeTurnId) live then
+        merged
 
     else
-        set (liveTurnAt sessionId) Nothing settled
+        set (liveTurnAt sessionId) Nothing merged
 
 
-handleAgentSessionResult : String -> Result Http.Error Model.AgentSessionView -> Flow Model ()
-handleAgentSessionResult sessionId result =
+handleAgentSessionResult : Result Http.Error Model.AgentSessionView -> Flow Model ()
+handleAgentSessionResult result =
     case result of
         Ok view ->
-            Flow.get
+            agentChatAtBottom
                 |> Flow.andThen
-                    (\model ->
-                        let
-                            entriesBefore =
-                                selectedChatEntries model
-                        in
-                        Flow.over agent (applyAgentSessionView view)
-                            |> Flow.seq
-                                (Flow.get
-                                    |> Flow.andThen
-                                        (\after ->
-                                            Flow.when (entriesBefore /= selectedChatEntries after) scrollAgentChatToBottom
-                                        )
+                    (\atBottom ->
+                        Flow.get
+                            |> Flow.andThen
+                                (\model ->
+                                    let
+                                        entriesBefore =
+                                            selectedChatEntries model
+                                    in
+                                    Flow.over agent (applyAgentSessionView view)
+                                        |> Flow.seq
+                                            (Flow.get
+                                                |> Flow.andThen
+                                                    (\after ->
+                                                        Flow.when (atBottom && entriesBefore /= selectedChatEntries after) scrollAgentChatToBottom
+                                                    )
+                                            )
                                 )
                     )
 
         Err err ->
-            Flow.over (agent << refreshingSessions) (Set.remove sessionId)
-                |> Flow.seq (addToast False (Http.errorMessage err))
+            addToast False (Http.errorMessage err)
 
 
 selectedChatEntries : Model -> List Model.ChatEntry
@@ -3005,16 +3040,10 @@ selectedChatEntries model =
         |> Maybe.withDefault []
 
 
-loadAgentSession : String -> Flow Model ()
-loadAgentSession sessionId =
-    Flow.over (agent << refreshingSessions) (Set.insert sessionId)
-        |> Flow.seq (fetchAgentSession sessionId)
-
-
 fetchAgentSession : String -> Flow Model ()
 fetchAgentSession sessionId =
     AgentApi.fetchSession sessionId
-        |> Flow.andThen (handleAgentSessionResult sessionId)
+        |> Flow.andThen handleAgentSessionResult
 
 
 loadAgentSessions : Flow Model ()
@@ -3026,6 +3055,7 @@ loadAgentSessions =
                 case result of
                     Ok views ->
                         setAgentSessions (Success views)
+                            |> Flow.seq pruneBlankAgentChats
                             |> Flow.seq watchSelectedAgentTurn
 
                     Err err ->
@@ -3039,15 +3069,9 @@ selectAgentSession sessionId =
     openAgentChat sessionId
 
 
-
--- | The single way to open a chat: set the chat widget in the current
--- | route and navigate to the rendered URL. The resulting onUrlChange
--- | applies the selection.
-
-
 openAgentChat : String -> Flow Model ()
 openAgentChat sessionId =
-    Flow.over agent (\s -> { s | isSessionListOpen = False })
+    selectAgentSessionAt sessionId Nothing
         |> Flow.seq (Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing }))
         |> Flow.seq pushCurrentUrl
 
@@ -3065,11 +3089,17 @@ selectAgentSessionAt sessionId mTurnId =
             }
         )
         |> Flow.seq scrollAgentChatToBottom
-        |> Flow.seq (loadAgentSession sessionId)
+        |> Flow.seq (refreshAgentSession sessionId)
         |> Flow.seq watchSelectedAgentTurn
         |> Flow.seq (scrollToAgentTurn mTurnId)
         |> Flow.seq (Flow.over agent (\s -> { s | lastChat = Just sessionId }))
         |> Flow.seq (callJs "storeLastChat" Encode.string (Decode.succeed ()) sessionId)
+
+
+anchorAgentChatUnlessHighlighting : Flow Model ()
+anchorAgentChatUnlessHighlighting =
+    Flow.forAll agent
+        (\agentState -> Flow.when (agentState.highlightTurnId == Nothing) scrollAgentChatToBottom)
 
 
 toggleAgentPanel : Flow Model ()
@@ -3092,8 +3122,9 @@ toggleAgentPanel =
                         , isRestoringChat = needsRestore
                     }
                 )
+                |> Flow.seq restoreLastChat
                 |> Flow.seq (Flow.when nextOpen loadAgentSessions)
-                |> Flow.seq (Flow.when needsRestore restoreLastChat)
+                |> Flow.seq restoreLastChat
                 |> Flow.seq (Flow.when (not nextOpen) closeAgentChat)
         )
 
@@ -3102,13 +3133,28 @@ restoreLastChat : Flow Model ()
 restoreLastChat =
     Flow.forAll agent
         (\agentState ->
-            case Maybe.filter (\sessionId -> agentSessionLoaded sessionId agentState) agentState.lastChat of
-                Just sessionId ->
-                    Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing })
-                        |> Flow.seq replaceCurrentUrl
+            let
+                restorable =
+                    Maybe.filter (\sessionId -> agentSessionLoaded sessionId agentState) agentState.lastChat
+            in
+            Flow.when agentState.isRestoringChat
+                (case restorable of
+                    Just sessionId ->
+                        Flow.get
+                            |> Flow.andThen
+                                (\model ->
+                                    if Maybe.map .sessionId (get (route << Route.chat) model) == Just sessionId then
+                                        selectAgentSessionAt sessionId Nothing
 
-                Nothing ->
-                    Flow.over agent (\s -> { s | isRestoringChat = False })
+                                    else
+                                        Flow.over (route << Route.chat) (\_ -> Just { sessionId = sessionId, mTurnId = Nothing })
+                                            |> Flow.seq replaceCurrentUrl
+                                )
+
+                    Nothing ->
+                        Flow.when (ApiData.settled agentState.sessions)
+                            (Flow.over agent (\s -> { s | isRestoringChat = False }))
+                )
         )
 
 
@@ -3377,6 +3423,11 @@ clearChangesetOperation sessionId =
         )
 
 
+setPendingSteer : String -> Maybe String -> Flow Model ()
+setPendingSteer sessionId prompt =
+    Flow.setAll (agent << liveTurnAt sessionId << just << pendingSteer) prompt
+
+
 createAgentSession : Flow Model ()
 createAgentSession =
     withAgentRequest Model.CreatingAgentSession
@@ -3475,7 +3526,6 @@ withSelectedAgentSession fn =
             )
 
 
-
 stopAgentTurn : Flow Model ()
 stopAgentTurn =
     withSelectedAgentSession
@@ -3556,7 +3606,7 @@ sendAgentTurn view promptSource =
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
                                 |> Flow.seq (openAgentTurnStream sessionId turn.turnId)
-                                |> Flow.seq (loadAgentSession sessionId)
+                                |> Flow.seq (refreshAgentSession sessionId)
                         )
                         (\err ->
                             let
@@ -3576,53 +3626,68 @@ steerAgentTurn view promptSource =
     let
         sessionId =
             view.session.sessionId
-
-        request =
-            Model.SendingAgentPrompt sessionId
     in
-    withAgentRequest request
+    withAgentRequest (Model.SteeringAgentTurn sessionId)
         (withAgentPrompt promptSource
             (\prompt ->
-                AgentApi.steer sessionId prompt
-                    |> FlowError.foldResult
-                        (\() -> clearAgentPrompt)
-                        (\err ->
-                            -- Clear first, or the refresh keeps the live transcript.
-                            clearRequestIfMatches request
-                                |> Flow.seq
-                                    (addToast False
-                                        (case err of
-                                            Http.BadStatus 409 ->
-                                                "The agent isn't accepting steering right now; your message was kept."
-
-                                            _ ->
-                                                Http.errorMessage err
-                                        )
-                                    )
-                                |> Flow.seq (refreshAgentSession sessionId)
-                        )
+                sendSteer sessionId
+                    { wire = prompt
+                    , shown = prompt
+                    , conflict = "The agent isn't accepting steering right now; your message was kept."
+                    , accepted = clearAgentPrompt
+                    }
             )
         )
 
 
-answerAgentQuestion : String -> String -> Flow Model ()
-answerAgentQuestion sessionId answer =
-    Flow.when (not (String.isEmpty answer))
-        (withAgentRequest (Model.SendingAgentPrompt sessionId)
-            (AgentApi.steer sessionId answer
-                |> FlowError.foldResult (always (Flow.pure ()))
-                    (\err ->
-                        addToast False
+sendSteer : String -> { wire : String, shown : String, conflict : String, accepted : Flow Model () } -> Flow Model ()
+sendSteer sessionId { wire, shown, conflict, accepted } =
+    setPendingSteer sessionId (Just shown)
+        |> Flow.seq scrollAgentChatToBottom
+        |> Flow.seq (AgentApi.steer sessionId wire)
+        |> FlowError.foldResult
+            (\() -> accepted)
+            (\err ->
+                -- Clear first, or the refresh keeps the live transcript.
+                setPendingSteer sessionId Nothing
+                    |> Flow.seq (clearRequestIfMatches (Model.SteeringAgentTurn sessionId))
+                    |> Flow.seq
+                        (addToast False
                             (case err of
                                 Http.BadStatus 409 ->
-                                    "The question is no longer open."
+                                    conflict
 
                                 _ ->
                                     Http.errorMessage err
                             )
-                    )
+                        )
+                    |> Flow.seq (refreshAgentSession sessionId)
+            )
+
+
+answerAgentQuestion : String -> String -> String -> Flow Model ()
+answerAgentQuestion sessionId wire shown =
+    Flow.when (not (String.isEmpty wire))
+        (withAgentRequest (Model.SteeringAgentTurn sessionId)
+            (sendSteer sessionId
+                { wire = wire
+                , shown = shown
+                , conflict = "The question is no longer open."
+                , accepted = Flow.pure ()
+                }
             )
         )
+
+
+pickAgentQuestionOption : String -> Model.PendingQuestion -> Int -> Flow Model ()
+pickAgentQuestionOption sessionId question optionNumber =
+    if question.multi then
+        toggleAgentQuestionOption sessionId optionNumber
+
+    else
+        Flow.over (agent << liveTurnAt sessionId << just << pendingQuestion)
+            (Maybe.map (\pending -> { pending | picked = Set.singleton optionNumber }))
+            |> Flow.seq (answerAgentQuestion sessionId (String.fromInt optionNumber) (Model.questionAnswerLabel question [ optionNumber ]))
 
 
 toggleAgentQuestionOption : String -> Int -> Flow Model ()
@@ -3632,7 +3697,7 @@ toggleAgentQuestionOption sessionId optionNumber =
 
 submitAgentQuestion : String -> Model.PendingQuestion -> Flow Model ()
 submitAgentQuestion sessionId question =
-    answerAgentQuestion sessionId (pickedQuestionNumbers question)
+    answerAgentQuestion sessionId (pickedQuestionNumbers question) (Model.questionAnswerLabel question (Set.toList question.picked))
 
 
 pickedQuestionNumbers : Model.PendingQuestion -> String
@@ -3664,6 +3729,7 @@ investigateStepWithAgent stepId log =
                             Flow.over agent (applyAgentSessionView view)
                                 |> Flow.seq (openAgentChat view.session.sessionId)
                                 |> Flow.seq (applyAgentChatFromUrl True)
+                                |> Flow.seq (clearRequestIfMatches Model.CreatingAgentSession)
                                 |> Flow.seq (submitAgentPromptFrom (Flow.pure (investigateStepPrompt stepId log)))
                         )
                         (\err -> addToast False (Http.errorMessage err))
@@ -3708,10 +3774,10 @@ applyAgentChanges =
                                                                     case confirmResult of
                                                                         Ok applyView ->
                                                                             Flow.over agent (applyAgentSessionView applyView.sessionView)
+                                                                                |> Flow.seq (clearChangesetOperation sessionId)
                                                                                 |> Flow.seq (markInvalidatedStatusesLoading applyView)
                                                                                 |> Flow.seq reloadWorkspaceData
                                                                                 |> Flow.seq loadAgentSessions
-                                                                                |> Flow.seq (clearChangesetOperation sessionId)
 
                                                                         Err err ->
                                                                             clearChangesetOperation sessionId
@@ -3735,12 +3801,15 @@ markInvalidatedStatusesLoading : Model.AgentApplyView -> Flow Model ()
 markInvalidatedStatusesLoading applyView =
     let
         wipeProject projectId =
-            Flow.setAll (projects << records << success << by .id (Just projectId) << projectStepRecords << runState) (ApiData.loading Nothing)
+            set (projects << records << success << by .id (Just projectId) << projectStepRecords << runState) (ApiData.loading Nothing)
 
         wipeStep stepId =
-            Flow.setAll (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState) (ApiData.loading Nothing)
+            set (projects << records << success << each << tables << values << records << success << by .id (Just stepId) << runState) (ApiData.loading Nothing)
     in
-    Flow.batchM (List.map wipeProject applyView.invalidatedProjectIds ++ List.map wipeStep applyView.invalidatedStepIds)
+    Flow.modify
+        (\model ->
+            List.foldl wipeStep (List.foldl wipeProject model applyView.invalidatedProjectIds) applyView.invalidatedStepIds
+        )
 
 
 discardAgentSession : Flow Model ()
@@ -3760,8 +3829,8 @@ discardAgentSession =
                                     case result of
                                         Ok discardedView ->
                                             Flow.over agent (applyAgentSessionView discardedView)
-                                                |> Flow.seq loadAgentSessions
                                                 |> Flow.seq (clearChangesetOperation sessionId)
+                                                |> Flow.seq loadAgentSessions
 
                                         Err err ->
                                             clearChangesetOperation sessionId
@@ -3783,13 +3852,19 @@ onAgentTurnIn value =
         Ok (Model.AgentTurnChunk { sessionId, chunk }) ->
             Flow.forAll agent
                 (\agentState ->
-                    Flow.over (agent << liveTurnAt sessionId << just) (Model.ingestLiveChunk chunk)
-                        |> Flow.seq (Flow.when (agentState.selectedSessionId == Just sessionId) scrollAgentChatToBottom)
+                    Flow.if_ (agentState.selectedSessionId == Just sessionId)
+                        agentChatAtBottom
+                        (Flow.pure False)
+                        |> Flow.andThen
+                            (\atBottom ->
+                                Flow.over (agent << liveTurnAt sessionId << just) (Model.ingestLiveChunk chunk)
+                                    |> Flow.seq (Flow.when atBottom scrollAgentChatToBottom)
+                            )
                 )
 
         Ok (Model.AgentTurnDone sessionId) ->
             Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
-                |> Flow.seq (loadAgentSession sessionId)
+                |> Flow.seq (refreshAgentSession sessionId)
 
         Ok Model.AgentTurnHeartbeat ->
             Flow.pure ()

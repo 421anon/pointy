@@ -56,14 +56,15 @@ init flags url key =
 
 initializeWorkspace : Flow Model ()
 initializeWorkspace =
-    Actions.loadUserRepoInfo
+    Flow.async Actions.listenAndProcessAgentTurns
+        |> Flow.seq Actions.loadUserRepoInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
+        |> Flow.seq Actions.anchorAgentChatUnlessHighlighting
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
         |> Flow.seq (Flow.async Actions.startClusterStatusStream)
         |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
-        |> Flow.seq (Flow.async Actions.listenAndProcessAgentTurns)
 
 
 applyRouteFromUrl : Bool -> Url -> Flow Model ()

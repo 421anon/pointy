@@ -125,6 +125,19 @@ toMaybe apiData =
             Nothing
 
 
+settled : ApiData a -> Bool
+settled apiData =
+    case apiData of
+        NotAsked ->
+            False
+
+        Loading _ ->
+            False
+
+        _ ->
+            True
+
+
 unwrap : b -> (a -> b) -> ApiData a -> b
 unwrap default f apiData =
     case apiData of

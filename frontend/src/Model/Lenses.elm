@@ -777,11 +777,6 @@ liveTurnAt sessionId =
     liveTurns << Dict.Accessors.at sessionId
 
 
-refreshingSessions : Lens ls AgentState (Set String) x y
-refreshingSessions =
-    lens ".refreshingSessions" .refreshingSessions (\s refreshing_ -> { s | refreshingSessions = refreshing_ })
-
-
 turnId : Lens ls { a | turnId : b } b x y
 turnId =
     lens ".turnId" .turnId (\t turnId_ -> { t | turnId = turnId_ })
@@ -805,6 +800,11 @@ pendingQuestion =
 streamError : Lens ls { a | streamError : b } b x y
 streamError =
     lens ".streamError" .streamError (\t error -> { t | streamError = error })
+
+
+pendingSteer : Lens ls { a | pendingSteer : b } b x y
+pendingSteer =
+    lens ".pendingSteer" .pendingSteer (\t steer -> { t | pendingSteer = steer })
 
 
 sessionViewAt : String -> Traversal AgentState AgentSessionView x y
@@ -839,10 +839,25 @@ sessionEntries view agentState =
         |> Maybe.withDefault (Model.persistedTranscript view)
 
 
+agentSessionBlank : AgentSessionView -> AgentState -> Bool
+agentSessionBlank view agentState =
+    List.isEmpty view.turns
+        && List.isEmpty (sessionEntries view agentState)
+        && (view.session.sessionName == Nothing)
+        && (view.session.activeTurnId == Nothing)
+        && not (Model.agentSessionArchived view.session.status)
+
+
 sessionPendingQuestion : AgentSessionView -> AgentState -> Maybe PendingQuestion
 sessionPendingQuestion view agentState =
     try (liveTurnAt view.session.sessionId << just << pendingQuestion) agentState
         |> Maybe.withDefault (Model.persistedQuestion view)
+
+
+sessionPendingSteer : AgentSessionView -> AgentState -> Maybe String
+sessionPendingSteer view agentState =
+    try (liveTurnAt view.session.sessionId << just << pendingSteer) agentState
+        |> Maybe.withDefault Nothing
 
 
 now : Lens ls Model Time.Posix x y

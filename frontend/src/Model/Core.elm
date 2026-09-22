@@ -317,6 +317,7 @@ type alias AgentSessionNameEdit =
 type AgentRequest
     = CreatingAgentSession
     | SendingAgentPrompt String
+    | SteeringAgentTurn String
     | ArchivingAgentSession String
     | DeletingAgentSession String
     | StoppingAgentTurn String
@@ -327,6 +328,13 @@ type alias PendingQuestion =
     , options : List String
     , picked : Set Int
     }
+
+
+questionAnswerLabel : PendingQuestion -> List Int -> String
+questionAnswerLabel question numbers =
+    numbers
+        |> List.filterMap (\number -> List.getAt (number - 1) question.options)
+        |> String.join ", "
 
 
 keepPicksForSameQuestion : Maybe PendingQuestion -> Maybe PendingQuestion -> Maybe PendingQuestion
@@ -350,6 +358,7 @@ type alias AgentLiveTurn =
     , chunkBuffer : String
     , pendingQuestion : Maybe PendingQuestion
     , streamError : Maybe String
+    , pendingSteer : Maybe String
     }
 
 
@@ -361,13 +370,18 @@ liveTurnFor turnId view =
     , chunkBuffer = ""
     , pendingQuestion = persistedQuestion view
     , streamError = Nothing
+    , pendingSteer = Nothing
     }
+
+
+liveTurnSurvives : Maybe String -> AgentLiveTurn -> Bool
+liveTurnSurvives activeTurnId live =
+    String.isEmpty live.turnId || Just live.turnId == activeTurnId
 
 
 type alias AgentState =
     { sessions : ApiData (List AgentSessionView)
     , liveTurns : Dict String AgentLiveTurn
-    , refreshingSessions : Set String
     , selectedSessionId : Maybe String
     , isPanelOpen : Bool
     , isSessionListOpen : Bool
@@ -387,7 +401,6 @@ initAgentState : AgentState
 initAgentState =
     { sessions = NotAsked
     , liveTurns = Dict.empty
-    , refreshingSessions = Set.empty
     , selectedSessionId = Nothing
     , isPanelOpen = False
     , isSessionListOpen = False
@@ -441,6 +454,7 @@ ingestLiveChunk chunk live =
         | chunkBuffer = remainder
         , entries = List.foldl appendChatLine live.entries keptLines
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
+        , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
         , streamError = Nothing
     }
 
@@ -735,6 +749,23 @@ pendingQuestionAfterLine rawLine pending =
                 |> Result.toMaybe
                 |> keepPicksForSameQuestion pending
 
+        ( "steering", _ ) ->
+            Nothing
+
+        ( "system", body ) ->
+            if isTurnFinishedLine body then
+                Nothing
+
+            else
+                pending
+
+        _ ->
+            pending
+
+
+pendingSteerAfterLine : String -> Maybe String -> Maybe String
+pendingSteerAfterLine rawLine pending =
+    case splitLogPrefix rawLine of
         ( "steering", _ ) ->
             Nothing
 

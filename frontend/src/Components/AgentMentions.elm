@@ -68,13 +68,12 @@ mentionTarget model entityId fixed candidates =
                     (\route ->
                         case route.page of
                             Route.Project params ->
-                                (resolved route
-                                        (mentionRunAction model params.projectId stepId)
-                                        (try (Lenses.projectStep (Just params.projectId) (Just stepId)) model |> Maybe.map .name)
-                                    )
+                                resolved route
+                                    (mentionRunAction model params.projectId stepId)
+                                    (try (Lenses.projectStep (Just params.projectId) (Just stepId)) model |> Maybe.map .name)
 
                             _ ->
-                                (resolved route Nothing Nothing)
+                                resolved route Nothing Nothing
                     )
 
         ProjectId projectId ->
@@ -142,8 +141,11 @@ mentionRunAction model projectId stepId =
                                 Just Model.StatusSuccess ->
                                     Nothing
 
-                                _ ->
+                                Just _ ->
                                     Just (Actions.runStep spec stepId)
+
+                                Nothing ->
+                                    Nothing
                         )
             )
 
