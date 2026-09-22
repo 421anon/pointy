@@ -849,7 +849,7 @@ sessionAt sessionId =
 
 agentSessionRunning : String -> AgentState -> Bool
 agentSessionRunning sessionId agentState =
-    (try (liveTurnAt sessionId << just << finished) agentState |> Maybe.unwrap True not)
+    (try (liveTurnAt sessionId << just << finished) agentState |> Maybe.unwrap False not)
         || (try (sessionAt sessionId) agentState |> Maybe.unwrap False sessionHasRunner)
 
 
