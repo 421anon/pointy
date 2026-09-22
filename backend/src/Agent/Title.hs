@@ -15,7 +15,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode (..))
-import System.IO (Handle, hClose)
+import System.IO (Handle)
 import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 
@@ -38,12 +38,13 @@ generateSessionTitle cfg session_ request = do
     let paths = sessionPaths session_
         runnerHome = sandboxHome paths
         expand = expandSandboxArg paths
+        titlePrompt = agentTitlePrompt cfg <> "\n\nUser request:\n" <> request
         runnerArgs =
             agentRunnerCommand cfg
                 : ["--no-session", "--no-tools"]
                 ++ runnerConfigArgs expand (agentRunnerArgs cfg)
                 ++ ["--system-prompt", T.unpack titleSystemPrompt]
-                ++ ["-p", T.unpack (agentTitlePrompt cfg)]
+                ++ ["-p", T.unpack titlePrompt]
         args =
             map expand (agentSboxArgs cfg)
                 ++ bindPathReadOnly piConfigDir
@@ -60,21 +61,17 @@ generateSessionTitle cfg session_ request = do
             (proc (agentSboxCommand cfg) args)
                 { cwd = Just runnerHome
                 , env = Just runnerEnv
-                , std_in = CreatePipe
+                , std_in = NoStream
                 , std_out = CreatePipe
                 , std_err = CreatePipe
                 }
     spawned <- try (createProcess process)
     case spawned of
         Left (err :: IOException) -> return $ Left ("runner failed to start: " ++ show err)
-        Right (Just hin, Just hout, Just herr, ph) -> do
-            writer <- async $ do
-                _ <- try (TIO.hPutStr hin request) :: IO (Either IOException ())
-                try (hClose hin) :: IO (Either IOException ())
+        Right (_, Just hout, Just herr, ph) -> do
             outReader <- async (readHandleText hout)
             errReader <- async (readHandleText herr)
             finished <- timeout (titleTimeoutSeconds * 1000000) (waitForProcess ph)
-            _ <- wait writer
             output <- wait outReader
             _ <- wait errReader
             case finished of
