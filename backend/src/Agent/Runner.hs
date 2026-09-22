@@ -44,7 +44,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
-import Control.Concurrent.STM (TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
+import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, catch, displayException, finally, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
@@ -92,6 +92,7 @@ stopRequestedTurns = unsafePerformIO $ newTVarIO Set.empty
 data RunnerInput = RunnerInput
     { inputHandle :: Handle
     , inputPending :: Maybe (Text, TMVar Bool)
+    , inputWaiting :: [Text]
     , inputPromptSeen :: Bool
     , inputRetrying :: Bool
     , inputQuestion :: Maybe PendingQuestion
@@ -104,6 +105,7 @@ newRunnerInput handle =
             RunnerInput
                 { inputHandle = handle
                 , inputPending = Nothing
+                , inputWaiting = []
                 , inputPromptSeen = False
                 , inputRetrying = False
                 , inputQuestion = Nothing
@@ -113,23 +115,61 @@ newRunnerInput handle =
 runnerInputs :: TVar (Map.Map Text (MVar (Maybe RunnerInput)))
 runnerInputs = unsafePerformIO $ newTVarIO Map.empty
 
+{-# NOINLINE waitingSteers #-}
+waitingSteers :: TVar (Map.Map Text [Text])
+waitingSteers = unsafePerformIO $ newTVarIO Map.empty
+
+holdSteer :: Text -> Text -> IO ()
+holdSteer sid prompt = do
+    atomically $ modifyTVar' waitingSteers $ Map.insertWith (flip (++)) sid [prompt]
+    mInput <- atomically $ Map.lookup sid <$> readTVar runnerInputs
+    forM_ mInput (takeWaitingSteers sid)
+
+takeWaitingSteers :: Text -> MVar (Maybe RunnerInput) -> IO ()
+takeWaitingSteers sid input = do
+    waiting <- atomically $ do
+        held <- fromMaybe [] . Map.lookup sid <$> readTVar waitingSteers
+        modifyTVar' waitingSteers $ Map.delete sid
+        return held
+    modifyMVar_ input $ traverse $ \control -> flushWaiting control{inputWaiting = inputWaiting control ++ waiting}
+
+retireTurn :: Text -> STM ()
+retireTurn sid = do
+    modifyTVar' activeRunners $ Map.delete sid
+    modifyTVar' waitingSteers $ Map.delete sid
+
 steerAckTimeoutMicros :: Int
 steerAckTimeoutMicros = 10 * 1000000
 
-data SteerOutcome = SteerFailed | SteerAnsweredQuestion Text | SteerSentToAgent
+data SteerOutcome = SteerFailed | SteerAnsweredQuestion Text | SteerSentToAgent | SteerQueued
 
 planSteer :: Text -> Text -> TMVar Bool -> RunnerInput -> Maybe (Aeson.Value, RunnerInput, SteerOutcome)
 planSteer prompt requestId reply control = case inputQuestion control of
     Just question ->
         let (response, carriedQuestion, answerText) = answerQuestion question prompt
          in Just (response, control{inputQuestion = carriedQuestion}, SteerAnsweredQuestion answerText)
-    Nothing ->
-        (steerCommand requestId prompt, control{inputPending = Just (requestId, reply)}, SteerSentToAgent)
-            <$ guard (isNothing (inputPending control))
+    Nothing
+        | inputPromptSeen control && isNothing (inputPending control) ->
+            Just (command, control{inputPending = Just (requestId, reply)}, SteerSentToAgent)
+        | otherwise ->
+            Just (command, control{inputWaiting = inputWaiting control ++ [prompt]}, SteerQueued)
+      where
+        command = steerCommand requestId prompt
 
 steerCommand :: Text -> Text -> Aeson.Value
 steerCommand requestId prompt =
     Aeson.object ["id" Aeson..= requestId, "type" Aeson..= ("prompt" :: Text), "message" Aeson..= prompt, "streamingBehavior" Aeson..= ("steer" :: Text)]
+
+flushWaiting :: RunnerInput -> IO RunnerInput
+flushWaiting control
+    | not (inputPromptSeen control) || isJust (inputPending control) = return control
+    | otherwise = case inputWaiting control of
+        [] -> return control
+        prompt : rest -> do
+            requestId <- newTurnId
+            reply <- newEmptyTMVarIO
+            (try (writeToRunner control (steerCommand requestId prompt)) :: IO (Either IOException ()))
+                >>= return . either (const control) (const control{inputWaiting = rest, inputPending = Just (requestId, reply)})
 
 jsonLine :: (Aeson.ToJSON a) => a -> Text
 jsonLine = TE.decodeUtf8 . LBS.toStrict . Aeson.encode
@@ -141,19 +181,24 @@ steerAgentTurn sid rawPrompt = do
     (tid, _) <- lookupForSession "runner_not_active" activeRunners
     stopped <- liftIO $ turnStopRequested tid
     when stopped $ Except.throwError "runner_stopping"
-    input <- lookupForSession "runner_not_ready" runnerInputs
-    (requestId, reply) <- liftIO $ (,) <$> newTurnId <*> newEmptyTMVarIO
-    outcome <- liftIO $ modifyMVar input (steerStep prompt requestId reply)
-    case outcome of
-        SteerFailed -> Except.throwError "steering_failed"
-        SteerAnsweredQuestion answer -> logAnsweredSteer tid answer
-        SteerSentToAgent -> awaitSteerAck reply
+    mInput <- liftIO $ atomically $ Map.lookup sid <$> readTVar runnerInputs
+    case mInput of
+        Nothing -> liftIO $ holdSteer sid prompt
+        Just input -> do
+            (requestId, reply) <- liftIO $ (,) <$> newTurnId <*> newEmptyTMVarIO
+            outcome <- liftIO $ modifyMVar input (steerStep prompt requestId reply)
+            case outcome of
+                SteerFailed -> Except.throwError "steering_failed"
+                SteerAnsweredQuestion answer -> logAnsweredSteer tid answer
+                SteerSentToAgent -> awaitSteerAck reply
+                SteerQueued -> return ()
   where
     lookupForSession err var =
         liftIO (atomically (Map.lookup sid <$> readTVar var))
             >>= maybe (Except.throwError err) return
     steerStep prompt requestId reply current =
         case current >>= planSteer prompt requestId reply of
+            Just (_, updated, SteerQueued) -> return (Just updated, SteerQueued)
             Just plan | Just control <- current -> sendSteerPlan control plan
             _ -> return (current, SteerFailed)
     -- A message that never went out must not be recorded as an accepted steer
@@ -247,7 +292,9 @@ startAgentTurn sid prompt = do
                         <> T.pack (candidateWorktree pending)
                         <> " (the apply worktree is bound into your sandbox); the backend stages and commits your resolution automatically when this turn ends."
             Nothing -> return ()
-        atomically $ modifyTVar' activeRunners $ Map.insert sid (tid, Nothing)
+        atomically $ do
+            modifyTVar' activeRunners $ Map.insert sid (tid, Nothing)
+            modifyTVar' waitingSteers $ Map.delete sid
         let unnamed = isNothing (sessionName freshSession >>= normalizeSessionName)
             titling = not (T.null (T.strip (agentTitlePrompt (configAgent cfg))))
         when (unnamed && titling) $
@@ -342,7 +389,7 @@ nameChat cfg session_ logPath prompt =
 runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> IO ()
 runTurnProcess cfg session_ turn prompt isFirstTurn =
     continueUnlessStopped run
-        `finally` atomically (modifyTVar' activeRunners (Map.delete sid))
+        `finally` atomically (retireTurn sid)
   where
     sid = sessionId session_
     tid = turnId turn
@@ -441,6 +488,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText]
                 writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
                 atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
+                takeWaitingSteers (sessionId session_) input
             outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
             errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr" (const $ return ())) mErr
             mExit <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
@@ -632,7 +680,7 @@ handleRpcEvent cfg logPath input event =
                 modifyMVar_ input $ traverse $ \control -> do
                     when (inputPromptSeen control) $
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
-                    return control{inputPromptSeen = True}
+                    flushWaiting control{inputPromptSeen = True}
         Just "extension_ui_request" -> handleDialog cfg logPath input event
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True

@@ -3636,37 +3636,24 @@ steerAgentTurn view promptSource =
     withAgentRequest (Model.SteeringAgentTurn sessionId)
         (withAgentPrompt promptSource
             (\prompt ->
-                sendSteer sessionId
-                    { wire = prompt
-                    , shown = prompt
-                    , conflict = "The agent isn't accepting steering right now; your message was kept."
-                    , accepted = clearAgentPrompt
-                    }
+                sendSteer sessionId { wire = prompt, shown = prompt }
+                    |> Flow.seq clearAgentPrompt
             )
         )
 
 
-sendSteer : String -> { wire : String, shown : String, conflict : String, accepted : Flow Model () } -> Flow Model ()
-sendSteer sessionId { wire, shown, conflict, accepted } =
+sendSteer : String -> { wire : String, shown : String } -> Flow Model ()
+sendSteer sessionId { wire, shown } =
     setPendingSteer sessionId (Just shown)
         |> Flow.seq scrollAgentChatToBottom
         |> Flow.seq (AgentApi.steer sessionId wire)
         |> FlowError.foldResult
-            (\() -> accepted)
+            (\() -> Flow.pure ())
             (\err ->
                 -- Clear first, or the refresh keeps the live transcript.
                 setPendingSteer sessionId Nothing
                     |> Flow.seq (clearRequestIfMatches (Model.SteeringAgentTurn sessionId))
-                    |> Flow.seq
-                        (addToast False
-                            (case err of
-                                Http.BadStatus 409 ->
-                                    conflict
-
-                                _ ->
-                                    Http.errorMessage err
-                            )
-                        )
+                    |> Flow.seq (addToast False (Http.errorMessage err))
                     |> Flow.seq (refreshAgentSession sessionId)
             )
 
@@ -3675,13 +3662,7 @@ answerAgentQuestion : String -> String -> String -> Flow Model ()
 answerAgentQuestion sessionId wire shown =
     Flow.when (not (String.isEmpty wire))
         (withAgentRequest (Model.SteeringAgentTurn sessionId)
-            (sendSteer sessionId
-                { wire = wire
-                , shown = shown
-                , conflict = "The question is no longer open."
-                , accepted = Flow.pure ()
-                }
-            )
+            (sendSteer sessionId { wire = wire, shown = shown })
         )
 
 

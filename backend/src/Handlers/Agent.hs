@@ -181,7 +181,6 @@ throwAgentError err =
         , "session_archived"
         , "runner_active"
         , "runner_not_active"
-        , "runner_not_ready"
         , "runner_stopping"
         , "steering_failed"
         , "step_reviewed"
