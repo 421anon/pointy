@@ -16,6 +16,7 @@ import Maybe.Extra as Maybe
 import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
 import Route exposing (Route)
 import Set exposing (Set)
+import String.Extra
 import Time
 import Toast exposing (Toast)
 
@@ -255,6 +256,61 @@ type alias AgentSessionView =
     }
 
 
+type alias AgentSessionSummary =
+    { session : AgentSession
+    , title : String
+    , turnCount : Int
+    , hasCommits : Bool
+    }
+
+
+summaryFromView : AgentSessionView -> AgentSessionSummary
+summaryFromView view =
+    { session = view.session
+    , title = chatTitle view.session view.turns
+    , turnCount = List.length view.turns
+    , hasCommits = view.gitState.hasAgentCommits
+    }
+
+
+chatTitle : AgentSession -> List AgentTurn -> String
+chatTitle session turns_ =
+    session.sessionName
+        |> Maybe.andThen normalizeChatName
+        |> Maybe.orElse (firstPrompt turns_)
+        |> Maybe.withDefault ""
+
+
+firstPrompt : List AgentTurn -> Maybe String
+firstPrompt =
+    List.filterMap (.turnPrompt >> normalizeChatName) >> List.head
+
+
+displayName : AgentSessionSummary -> String
+displayName =
+    .title >> normalizeChatName >> Maybe.withDefault "New chat"
+
+
+isSession : String -> AgentSessionSummary -> Bool
+isSession sessionId =
+    .session >> .sessionId >> (==) sessionId
+
+
+sessionSummary : String -> AgentState -> Maybe AgentSessionSummary
+sessionSummary sessionId =
+    .sessions >> ApiData.withDefault [] >> List.find (isSession sessionId)
+
+
+normalizeChatName : String -> Maybe String
+normalizeChatName =
+    String.words >> String.join " " >> String.left chatNameMaxLength >> String.Extra.nonEmpty
+
+
+chatNameMaxLength : Int
+chatNameMaxLength =
+    80
+
+
 type alias AgentApplyView =
     { sessionView : AgentSessionView
     , invalidatedProjectIds : List Int
@@ -380,7 +436,8 @@ liveTurnSurvives activeTurnId live =
 
 
 type alias AgentState =
-    { sessions : ApiData (List AgentSessionView)
+    { sessions : ApiData (List AgentSessionSummary)
+    , sessionViews : Dict String (ApiData AgentSessionView)
     , liveTurns : Dict String AgentLiveTurn
     , selectedSessionId : Maybe String
     , isPanelOpen : Bool
@@ -400,6 +457,7 @@ type alias AgentState =
 initAgentState : AgentState
 initAgentState =
     { sessions = NotAsked
+    , sessionViews = Dict.empty
     , liveTurns = Dict.empty
     , selectedSessionId = Nothing
     , isPanelOpen = False
@@ -830,15 +888,19 @@ agentSessionArchived status =
     status == "archived" || status == "discarded" || status == "applied"
 
 
+selectedSessionSummary : AgentState -> Maybe AgentSessionSummary
+selectedSessionSummary agentState =
+    agentState.selectedSessionId |> Maybe.andThen (\sessionId -> sessionSummary sessionId agentState)
+
+
 selectedSessionView : AgentState -> Maybe AgentSessionView
-selectedSessionView agentState =
-    agentState.selectedSessionId
-        |> Maybe.andThen
-            (\sid ->
-                agentState.sessions
-                    |> ApiData.toMaybe
-                    |> Maybe.andThen (List.head << List.filter (\view -> view.session.sessionId == sid))
-            )
+selectedSessionView =
+    selectedSessionViewData >> Maybe.andThen ApiData.toMaybe
+
+
+selectedSessionViewData : AgentState -> Maybe (ApiData AgentSessionView)
+selectedSessionViewData agentState =
+    agentState.selectedSessionId |> Maybe.andThen (\sessionId -> Dict.get sessionId agentState.sessionViews)
 
 
 type alias AutocompleteJob =

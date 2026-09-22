@@ -38,13 +38,22 @@ createSession =
             }
 
 
-listSessions : Flow s (Result Http.Error (List Model.AgentSessionView))
+listSessions : Flow s (Result Http.Error (List Model.AgentSessionSummary))
 listSessions =
     Flow.lift <|
         Http.get
             { url = baseUrl ++ "/sessions"
-            , expect = Http.expectJson identity (Decode.list sessionViewDecoder)
+            , expect = Http.expectJson identity (Decode.list sessionSummaryDecoder)
             }
+
+
+sessionSummaryDecoder : Decoder Model.AgentSessionSummary
+sessionSummaryDecoder =
+    Decode.succeed Model.AgentSessionSummary
+        |> required "session" sessionDecoder
+        |> required "title" Decode.string
+        |> required "turnCount" Decode.int
+        |> required "hasCommits" Decode.bool
 
 
 fetchSession : String -> Flow s (Result Http.Error Model.AgentSessionView)

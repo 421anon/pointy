@@ -1,6 +1,6 @@
 module Components.AgentPanel exposing (view)
 
-import Accessors exposing (get)
+import Accessors exposing (get, just, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Components.AgentMentions as AgentMentions
@@ -11,6 +11,7 @@ import Html.Attributes exposing (attribute, class, classList, disabled, id, plac
 import Html.Events as Events
 import Html.Extra as Html
 import Html.Lazy
+import Http
 import Json.Decode as Decode
 import Keyboard
 import List.Extra as List
@@ -70,8 +71,8 @@ viewHeader agent =
                 ( "Focus agent panel", "open_in_full" )
 
         openChatBlank =
-            Model.selectedSessionView agent
-                |> Maybe.map (\sessionView -> agentSessionBlank sessionView agent)
+            Model.selectedSessionSummary agent
+                |> Maybe.map (\summary -> agentSessionBlank summary agent)
                 |> Maybe.withDefault False
     in
     Html.div [ class "agent-panel__header" ]
@@ -136,7 +137,7 @@ viewRowAction blocked label iconName action =
 viewSessionBody : Bool -> AgentMentions.Resolver -> Model.AgentState -> Html (Flow Model ())
 viewSessionBody mentionsAwaited resolveMention agent =
     let
-        loaded =
+        listed =
             Maybe.withDefault [] (ApiData.toMaybe agent.sessions)
     in
     Html.div
@@ -145,7 +146,7 @@ viewSessionBody mentionsAwaited resolveMention agent =
             , ( "is-session-list-open", agent.isSessionListOpen )
             ]
         ]
-        [ viewSessionSidebar agent loaded
+        [ viewSessionSidebar agent listed
         , if agent.isRestoringChat then
             viewSessionsLoading
 
@@ -158,7 +159,7 @@ viewSessionBody mentionsAwaited resolveMention agent =
                     viewSessionsLoading
 
                 _ ->
-                    viewSessionDetail mentionsAwaited resolveMention agent loaded
+                    viewSessionDetail mentionsAwaited resolveMention agent listed
         ]
 
 
@@ -227,17 +228,17 @@ isCreatingAgentSession agent =
     agent.request == Just Model.CreatingAgentSession
 
 
-viewSessionSidebar : Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
-viewSessionSidebar agent loaded =
+viewSessionSidebar : Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionSidebar agent listed =
     Html.div
         [ class "agent-panel__sidebar"
         , id "agent-panel-sidebar"
         ]
-        (viewSessionSidebarContent agent loaded)
+        (viewSessionSidebarContent agent listed)
 
 
-viewSessionSidebarContent : Model.AgentState -> List Model.AgentSessionView -> List (Html (Flow Model ()))
-viewSessionSidebarContent agent loaded =
+viewSessionSidebarContent : Model.AgentState -> List Model.AgentSessionSummary -> List (Html (Flow Model ()))
+viewSessionSidebarContent agent listed =
     let
         firstLoad =
             case agent.sessions of
@@ -267,9 +268,9 @@ viewSessionSidebarContent agent loaded =
                     Nothing
 
         ( active, archived ) =
-            loaded
-                |> List.filter (\v -> not (agentSessionBlank v agent))
-                |> List.partition (\v -> not (Model.agentSessionArchived v.session.status))
+            listed
+                |> List.filter (\summary -> not (agentSessionBlank summary agent))
+                |> List.partition (\summary -> not (Model.agentSessionArchived summary.session.status))
 
         activeRows =
             (if isCreatingAgentSession agent then
@@ -337,43 +338,9 @@ viewSessionRowSkeleton =
         ]
 
 
-sessionDisplayName : Model.AgentSessionView -> String
-sessionDisplayName sessionView =
-    case sessionView.session.sessionName |> Maybe.andThen nonBlankName of
-        Just name ->
-            name
-
-        Nothing ->
-            sessionView.turns
-                |> List.filterMap (.turnPrompt >> chatNameFromText)
-                |> List.head
-                |> Maybe.withDefault "New chat"
-
-
-chatNameFromText : String -> Maybe String
-chatNameFromText raw =
-    nonBlankName raw
-        |> Maybe.map (String.left chatNameMaxLength)
-
-
-nonBlankName : String -> Maybe String
-nonBlankName raw =
-    let
-        normalized =
-            raw
-                |> String.words
-                |> String.join " "
-    in
-    if String.isEmpty normalized then
-        Nothing
-
-    else
-        Just normalized
-
-
-chatNameMaxLength : Int
-chatNameMaxLength =
-    80
+sessionDisplayName : Model.AgentSessionSummary -> String
+sessionDisplayName =
+    Model.displayName
 
 
 viewCreatingSessionRow : Html msg
@@ -389,11 +356,11 @@ viewCreatingSessionRow =
         ]
 
 
-viewSessionRow : Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
-viewSessionRow agent sessionView =
+viewSessionRow : Model.AgentState -> Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionRow agent summary =
     let
         session =
-            sessionView.session
+            summary.session
 
         isSelected =
             not (isCreatingAgentSession agent) && agent.selectedSessionId == Just session.sessionId
@@ -402,7 +369,7 @@ viewSessionRow agent sessionView =
             Model.agentSessionArchived session.status
 
         displayName =
-            sessionDisplayName sessionView
+            sessionDisplayName summary
 
         isRunning =
             agentSessionRunning session.sessionId agent
@@ -449,7 +416,7 @@ viewSessionRow agent sessionView =
             [ Html.div [ class "agent-panel__session-name" ] [ Html.text displayName ]
             , Html.viewIf (statusLabel /= "Ready" && statusLabel /= "Archived")
                 (Html.div [ class "agent-panel__session-meta" ] [ Html.text statusLabel ])
-            , Html.viewIf sessionView.gitState.hasAgentCommits
+            , Html.viewIf summary.hasCommits
                 (Html.span [ class "agent-panel__pill" ] [ Html.text "changes" ])
             ]
         , Html.div [ class "agent-panel__session-row-actions" ]
@@ -490,50 +457,75 @@ liveStatusLabel agent sessionId =
             Nothing
 
 
-viewSessionDetail : Bool -> AgentMentions.Resolver -> Model.AgentState -> List Model.AgentSessionView -> Html (Flow Model ())
-viewSessionDetail mentionsAwaited resolveMention agent loaded =
-    case ( isCreatingAgentSession agent, Model.selectedSessionView agent ) of
+viewSessionDetail : Bool -> AgentMentions.Resolver -> Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionDetail mentionsAwaited resolveMention agent listed =
+    case ( isCreatingAgentSession agent, Model.selectedSessionSummary agent ) of
         ( True, _ ) ->
             viewCreatingSession
 
-        ( False, Just sessionView ) ->
-            viewSession mentionsAwaited resolveMention agent sessionView
+        ( False, Just summary ) ->
+            Model.selectedSessionView agent
+                |> Maybe.map (viewSession mentionsAwaited resolveMention agent summary)
+                |> Maybe.withDefault (viewSessionUnavailable agent)
 
         ( False, Nothing ) ->
-            Html.div [ class "agent-panel__empty" ]
-                [ Html.p []
-                    [ Html.text
-                        (case ( agent.sessions, List.isEmpty loaded ) of
-                            ( Error err, _ ) ->
-                                Http.errorMessage err
+            viewNoChat agent listed
 
-                            ( _, True ) ->
-                                "No chats yet."
 
-                            ( _, False ) ->
-                                "Open a chat from the history, or start a new one."
-                        )
-                    ]
-                , Html.div [ class "agent-panel__empty-actions" ]
-                    [ Html.button
-                        [ class "btn"
-                        , disabled (Model.agentMutationPending agent)
-                        , Events.onClick Actions.createAgentSession
-                        ]
-                        [ View.Icons.icon False "add"
-                        , Html.span [] [ Html.text "New chat" ]
-                        ]
-                    , Html.viewIf (not (List.isEmpty loaded))
-                        (Html.button
-                            [ class "btn"
-                            , Events.onClick Actions.toggleAgentSessionList
-                            ]
-                            [ View.Icons.icon False "history"
-                            , Html.span [] [ Html.text "Open chat history" ]
-                            ]
-                        )
-                    ]
+viewSessionUnavailable : Model.AgentState -> Html (Flow Model ())
+viewSessionUnavailable =
+    viewSessionLoadError
+        >> Maybe.map viewSessionLoadErrorNode
+        >> Maybe.withDefault viewSessionsLoading
+
+
+viewSessionLoadError : Model.AgentState -> Maybe Http.Error
+viewSessionLoadError =
+    Model.selectedSessionViewData >> Maybe.andThen (try ApiData.failure)
+
+
+viewSessionLoadErrorNode : Http.Error -> Html (Flow Model ())
+viewSessionLoadErrorNode err =
+    Html.div [ class "agent-panel__empty" ] [ Html.p [] [ Html.text (Http.errorMessage err) ] ]
+
+
+viewNoChat : Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
+viewNoChat agent listed =
+    Html.div [ class "agent-panel__empty" ]
+        [ Html.p []
+            [ Html.text
+                (case agent.sessions of
+                    Error err ->
+                        Http.errorMessage err
+
+                    _ ->
+                        if List.isEmpty listed then
+                            "No chats yet."
+
+                        else
+                            "Open a chat from the history, or start a new one."
+                )
+            ]
+        , Html.div [ class "agent-panel__empty-actions" ]
+            [ Html.button
+                [ class "btn"
+                , disabled (Model.agentMutationPending agent)
+                , Events.onClick Actions.createAgentSession
                 ]
+                [ View.Icons.icon False "add"
+                , Html.span [] [ Html.text "New chat" ]
+                ]
+            , Html.viewIf (not (List.isEmpty listed))
+                (Html.button
+                    [ class "btn"
+                    , Events.onClick Actions.toggleAgentSessionList
+                    ]
+                    [ View.Icons.icon False "history"
+                    , Html.span [] [ Html.text "Open chat history" ]
+                    ]
+                )
+            ]
+        ]
 
 
 viewCreatingSession : Html (Flow Model ())
@@ -574,11 +566,11 @@ viewChatBody attrs parts =
         [ parts.title, parts.error, parts.chat, parts.composer ]
 
 
-viewSession : Bool -> AgentMentions.Resolver -> Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
-viewSession mentionsAwaited resolveMention agent sessionView =
+viewSession : Bool -> AgentMentions.Resolver -> Model.AgentState -> Model.AgentSessionSummary -> Model.AgentSessionView -> Html (Flow Model ())
+viewSession mentionsAwaited resolveMention agent summary sessionView =
     let
         session =
-            sessionView.session
+            summary.session
 
         sessionId =
             session.sessionId
@@ -593,7 +585,7 @@ viewSession mentionsAwaited resolveMention agent sessionView =
             Model.agentSessionArchived session.status
     in
     viewChatBody []
-        { title = viewSessionTitle agent sessionView
+        { title = viewSessionTitle agent summary
         , error = viewError session
         , chat =
             if mentionsAwaited then
@@ -627,11 +619,11 @@ viewSession mentionsAwaited resolveMention agent sessionView =
         }
 
 
-viewSessionTitle : Model.AgentState -> Model.AgentSessionView -> Html (Flow Model ())
-viewSessionTitle agent sessionView =
+viewSessionTitle : Model.AgentState -> Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionTitle agent summary =
     let
         session =
-            sessionView.session
+            summary.session
 
         -- Rename is metadata-only and allowed in every session state; block
         -- only a pending delete of this session (the rename would queue
@@ -659,7 +651,7 @@ viewSessionTitle agent sessionView =
             Nothing ->
                 let
                     displayName =
-                        sessionDisplayName sessionView
+                        sessionDisplayName summary
                 in
                 Html.div [ class "agent-panel__session-title-row" ]
                     [ Html.div [ class "agent-panel__session-title-main" ]
@@ -667,7 +659,7 @@ viewSessionTitle agent sessionView =
                         , Html.div [ class "agent-panel__session-title-meta" ]
                             [ Html.span [] [ Html.text (chatStatusLabel session.status) ]
                             , Html.span [ title session.sessionId ] [ Html.text ("#" ++ shortSha session.sessionId) ]
-                            , Html.viewIf sessionView.gitState.hasAgentCommits
+                            , Html.viewIf summary.hasCommits
                                 (Html.span [] [ Html.text "changes" ])
                             , Html.viewMaybe
                                 (\message ->
@@ -711,7 +703,7 @@ viewSessionTitleEditor renameBlocked edit =
             , type_ "text"
             , value edit.value
             , disabled (renameBlocked || edit.saving)
-            , attribute "maxlength" (String.fromInt chatNameMaxLength)
+            , attribute "maxlength" (String.fromInt Model.chatNameMaxLength)
             , attribute "aria-label" "Chat name"
             , Events.onInput Actions.updateAgentSessionNameEdit
             , Events.on "keydown" <|

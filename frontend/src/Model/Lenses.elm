@@ -14,7 +14,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSessionView, AgentState, ChatEntry, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), PendingQuestion, ProjectRecord, ReviewDraft, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), PendingQuestion, ProjectRecord, ReviewDraft, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -762,9 +762,44 @@ agent =
     lens ".agent" Model.getAgent (\(Model m) agent_ -> Model { m | agent = agent_ })
 
 
-sessions : Lens ls AgentState (ApiData (List AgentSessionView)) x y
+sessions : Lens ls AgentState (ApiData (List AgentSessionSummary)) x y
 sessions =
     lens ".sessions" .sessions (\s sessions_ -> { s | sessions = sessions_ })
+
+
+sessionViews : Lens ls AgentState (Dict String (ApiData AgentSessionView)) x y
+sessionViews =
+    lens ".sessionViews" .sessionViews (\s views -> { s | sessionViews = views })
+
+
+sessionViewDataAt : String -> Lens ls AgentState (Maybe (ApiData AgentSessionView)) x y
+sessionViewDataAt sessionId =
+    sessionViews << Dict.Accessors.at sessionId
+
+
+sessionRenames : Lens ls AgentState (Dict String ( String, SessionTimestamp )) x y
+sessionRenames =
+    lens ".sessionRenames" .sessionRenames (\s renames -> { s | sessionRenames = renames })
+
+
+selectedSessionId : Lens ls AgentState (Maybe String) x y
+selectedSessionId =
+    lens ".selectedSessionId" .selectedSessionId (\s sessionId -> { s | selectedSessionId = sessionId })
+
+
+session : Lens ls AgentSessionSummary AgentSession x y
+session =
+    lens ".session" .session (\summary session_ -> { summary | session = session_ })
+
+
+title : Lens ls AgentSessionSummary String x y
+title =
+    lens ".title" .title (\summary title_ -> { summary | title = title_ })
+
+
+sessionName : Lens ls AgentSession (Maybe String) x y
+sessionName =
+    lens ".sessionName" .sessionName (\session_ name_ -> { session_ | sessionName = name_ })
 
 
 liveTurns : Lens ls AgentState (Dict String AgentLiveTurn) x y
@@ -807,30 +842,30 @@ pendingSteer =
     lens ".pendingSteer" .pendingSteer (\t steer -> { t | pendingSteer = steer })
 
 
-sessionViewAt : String -> Traversal AgentState AgentSessionView x y
-sessionViewAt sessionId =
+sessionAt : String -> Traversal AgentState AgentSessionSummary x y
+sessionAt sessionId =
     sessions << success << by (.session >> .sessionId) sessionId
 
 
 agentSessionRunning : String -> AgentState -> Bool
 agentSessionRunning sessionId agentState =
-    (try (liveTurnAt sessionId << just << finished) agentState
-        |> Maybe.withDefault True
-        |> not
-    )
-        || (try (sessionViewAt sessionId) agentState
-                |> Maybe.map
-                    (\view ->
-                        (view.session.activeTurnId /= Nothing)
-                            || (view.session.status == "running")
-                    )
-                |> Maybe.withDefault False
-           )
+    (try (liveTurnAt sessionId << just << finished) agentState |> Maybe.unwrap True not)
+        || (try (sessionAt sessionId) agentState |> Maybe.unwrap False sessionHasRunner)
+
+
+sessionHasRunner : AgentSessionSummary -> Bool
+sessionHasRunner summary =
+    (summary.session.activeTurnId /= Nothing) || (summary.session.status == "running")
 
 
 agentSessionBlocked : String -> AgentState -> Bool
 agentSessionBlocked sessionId agentState =
     Model.agentMutationPending agentState || agentSessionRunning sessionId agentState
+
+
+liveEntries : String -> AgentState -> List ChatEntry
+liveEntries sessionId =
+    try (liveTurnAt sessionId << just << entries) >> Maybe.withDefault []
 
 
 sessionEntries : AgentSessionView -> AgentState -> List ChatEntry
@@ -839,13 +874,13 @@ sessionEntries view agentState =
         |> Maybe.withDefault (Model.persistedTranscript view)
 
 
-agentSessionBlank : AgentSessionView -> AgentState -> Bool
-agentSessionBlank view agentState =
-    List.isEmpty view.turns
-        && List.isEmpty (sessionEntries view agentState)
-        && (view.session.sessionName == Nothing)
-        && (view.session.activeTurnId == Nothing)
-        && not (Model.agentSessionArchived view.session.status)
+agentSessionBlank : AgentSessionSummary -> AgentState -> Bool
+agentSessionBlank summary agentState =
+    (summary.turnCount == 0)
+        && List.isEmpty (liveEntries summary.session.sessionId agentState)
+        && (summary.session.sessionName == Nothing)
+        && (summary.session.activeTurnId == Nothing)
+        && not (Model.agentSessionArchived summary.session.status)
 
 
 sessionPendingQuestion : AgentSessionView -> AgentState -> Maybe PendingQuestion

@@ -228,6 +228,34 @@ reloading =
         )
 
 
+loadingState : Prism pr (ApiData a) (Maybe a) x y
+loadingState =
+    prism ">Loading"
+        Loading
+        (\apiData ->
+            case apiData of
+                Loading mv ->
+                    Ok mv
+
+                _ ->
+                    Err apiData
+        )
+
+
+failure : Prism pr (ApiData a) Http.Error x y
+failure =
+    prism ">Error"
+        Error
+        (\apiData ->
+            case apiData of
+                Error err ->
+                    Ok err
+
+                _ ->
+                    Err apiData
+        )
+
+
 foldVisible : b -> (Maybe a -> b) -> (a -> b) -> (Http.Error -> b) -> ApiData a -> b
 foldVisible onNotAsked onLoading onSuccess onError apiData =
     case apiData of

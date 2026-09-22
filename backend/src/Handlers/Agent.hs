@@ -39,7 +39,7 @@ import Agent.Git (
     renameAgentSession,
  )
 import Agent.Runner (startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
-import Agent.Session (AgentTurn)
+import Agent.Session (AgentSessionSummary, AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), withObject, (.:))
@@ -104,7 +104,7 @@ createSessionHandler = do
     sid <- runLockedAction createAgentSession
     runSharedAction (loadAgentSessionView sid)
 
-listSessionsHandler :: Handler [AgentSessionView]
+listSessionsHandler :: Handler [AgentSessionSummary]
 listSessionsHandler = runSharedAction listAgentSessions
 
 getSessionHandler :: Text -> Handler AgentSessionView

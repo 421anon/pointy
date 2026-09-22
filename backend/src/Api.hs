@@ -5,7 +5,7 @@
 module Api (API) where
 
 import Agent.Git (AgentApplyView, AgentSessionView, AgentUsage)
-import Agent.Session (AgentTurn)
+import Agent.Session (AgentSessionSummary, AgentTurn)
 import ApiTypes (DynamicJson)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
@@ -149,7 +149,7 @@ type ListAgentSessions =
     "agent"
         :> "sessions"
         :> Description "Lists all agent sessions."
-        :> Get '[JSON] [AgentSessionView]
+        :> Get '[JSON] [AgentSessionSummary]
 
 type GetAgentSession =
     "agent"

@@ -4,6 +4,7 @@
 
 module Agent.Session (
     AgentSession (..),
+    AgentSessionSummary (..),
     PreparedApply (..),
     applyConflictsPending,
     AgentTurn (..),
@@ -80,6 +81,14 @@ data AgentSession = AgentSession
     , lastError :: Maybe Text
     , createdAt :: UTCTime
     , updatedAt :: UTCTime
+    }
+    deriving (Show, Eq, Generic, ToJSON)
+
+data AgentSessionSummary = AgentSessionSummary
+    { session :: AgentSession
+    , title :: Text
+    , turnCount :: Int
+    , hasCommits :: Bool
     }
     deriving (Show, Eq, Generic, ToJSON)
 
@@ -248,17 +257,17 @@ writeFileAtomic path bytes = do
     renameFile tmp path
 
 saveSession :: AgentSession -> IO ()
-saveSession session = do
-    path <- sessionMetadataPath (sessionId session)
-    writeFileAtomic path (encode (persistableSession session))
+saveSession session_ = do
+    path <- sessionMetadataPath (sessionId session_)
+    writeFileAtomic path (encode (persistableSession session_))
 
 persistableSession :: AgentSession -> AgentSession
-persistableSession session =
-    session
+persistableSession session_ =
+    session_
         { status =
-            if status session == "running"
+            if status session_ == "running"
                 then "open"
-                else status session
+                else status session_
         , activeTurnId = Nothing
         }
 
@@ -339,9 +348,9 @@ findTurn tid = do
     return $ findByTurnId tid turns
 
 touchSession :: AgentSession -> IO AgentSession
-touchSession session = do
+touchSession session_ = do
     now <- getCurrentTime
-    return session{updatedAt = now}
+    return session_{updatedAt = now}
 
 eitherToMaybe :: Either a b -> Maybe b
 eitherToMaybe (Right b) = Just b

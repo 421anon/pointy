@@ -2678,11 +2678,9 @@ shareAgentChat sessionId =
         )
 
 
-agentSessionLoaded : String -> Model.AgentState -> Bool
-agentSessionLoaded sessionId agentState =
-    agentState.sessions
-        |> ApiData.toMaybe
-        |> Maybe.unwrap False (List.any (\view -> view.session.sessionId == sessionId))
+agentSessionListed : String -> Model.AgentState -> Bool
+agentSessionListed sessionId =
+    has (sessionAt sessionId)
 
 
 applyAgentChatFromUrl : Bool -> Flow Model ()
@@ -2703,8 +2701,8 @@ pruneBlankAgentChats =
                     openChatId =
                         Maybe.map .sessionId (get (route << Route.chat) model)
 
-                    abandoned view =
-                        Just view.session.sessionId /= openChatId && agentSessionBlank view agentState
+                    abandoned summary =
+                        Just summary.session.sessionId /= openChatId && agentSessionBlank summary agentState
 
                     chatBeingCreated =
                         agentState.request == Just Model.CreatingAgentSession
@@ -2718,10 +2716,10 @@ pruneBlankAgentChats =
             )
 
 
-dropBlankAgentChat : Model.AgentSessionView -> Flow Model ()
-dropBlankAgentChat view =
-    Flow.over agent (removeAgentSessionView view.session.sessionId)
-        |> Flow.seq (Flow.async (AgentApi.delete_ view.session.sessionId))
+dropBlankAgentChat : Model.AgentSessionSummary -> Flow Model ()
+dropBlankAgentChat summary =
+    Flow.over agent (dropAgentSession summary.session.sessionId)
+        |> Flow.seq (Flow.async (AgentApi.delete_ summary.session.sessionId))
 
 
 selectAgentChatFromUrl : Bool -> Flow Model ()
@@ -2766,7 +2764,7 @@ selectAgentChatIfStillRouted chat =
                     stillRouted =
                         Maybe.map .sessionId (get (route << Route.chat) model) == Just chat.sessionId
                 in
-                Flow.when (stillRouted && agentSessionLoaded chat.sessionId (Model.getAgent model))
+                Flow.when (stillRouted && agentSessionListed chat.sessionId (Model.getAgent model))
                     (selectAgentSessionAt chat.sessionId chat.mTurnId)
             )
 
@@ -2800,20 +2798,14 @@ agentChatAtBottom =
         (Dom.getViewportOf agentChatId)
 
 
-setAgentSessions : ApiData (List Model.AgentSessionView) -> Flow Model ()
+setAgentSessions : ApiData (List Model.AgentSessionSummary) -> Flow Model ()
 setAgentSessions data =
-    Flow.over agent
-        (\agentState ->
-            { agentState
-                | sessions =
-                    case data of
-                        Success views ->
-                            Success (List.map (applySessionRenameOverride agentState.sessionRenames) views)
+    Flow.over agent (\agentState -> set sessions (withRenames agentState.sessionRenames data) agentState)
 
-                        other ->
-                            other
-            }
-        )
+
+withRenames : Dict String ( String, Model.SessionTimestamp ) -> ApiData (List Model.AgentSessionSummary) -> ApiData (List Model.AgentSessionSummary)
+withRenames renames =
+    ApiData.map (List.map (applySessionRenameOverride renames))
 
 
 setAgentSessionsLoading : Flow Model ()
@@ -2865,9 +2857,20 @@ clearRequestIfMatches expected =
         )
 
 
-removeAgentSessionView : String -> Model.AgentState -> Model.AgentState
-removeAgentSessionView sessionId agentState =
-    { agentState | sessions = ApiData.map (List.filter (\view -> view.session.sessionId /= sessionId)) agentState.sessions }
+dropAgentSession : String -> Model.AgentState -> Model.AgentState
+dropAgentSession sessionId =
+    set (sessionViewDataAt sessionId) Nothing
+        >> over sessions (ApiData.map (List.filter (not << Model.isSession sessionId)))
+
+
+setSessionView : String -> ApiData Model.AgentSessionView -> Model.AgentState -> Model.AgentState
+setSessionView sessionId =
+    set (sessionViewDataAt sessionId) << Just
+
+
+markSessionViewLoading : String -> Model.AgentState -> Model.AgentState
+markSessionViewLoading sessionId =
+    over (sessionViewDataAt sessionId) (Just << ApiData.toLoading << Maybe.withDefault NotAsked)
 
 
 
@@ -2908,31 +2911,34 @@ replaceCurrentUrl =
         )
 
 
-mergeSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
-mergeSessionView view agentState =
+mergeSessionSummary : Model.AgentSessionSummary -> Model.AgentState -> Model.AgentState
+mergeSessionSummary summary agentState =
     let
-        currentList =
-            Maybe.withDefault [] (ApiData.toMaybe agentState.sessions)
+        sessionId =
+            summary.session.sessionId
+
+        current =
+            ApiData.withDefault [] agentState.sessions
 
         merged =
-            if List.any (\v -> v.session.sessionId == view.session.sessionId) currentList then
-                List.map
-                    (\v ->
-                        if v.session.sessionId == view.session.sessionId then
-                            view
-
-                        else
-                            v
-                    )
-                    currentList
+            if List.any (Model.isSession sessionId) current then
+                List.map (upsertSession summary) current
 
             else
-                view :: currentList
+                summary :: current
     in
-    { agentState
-        | sessions =
-            Success (List.map (applySessionRenameOverride agentState.sessionRenames) merged)
-    }
+    over sessions
+        (ApiData.update always (Success (List.map (applySessionRenameOverride agentState.sessionRenames) merged)))
+        agentState
+
+
+upsertSession : Model.AgentSessionSummary -> Model.AgentSessionSummary -> Model.AgentSessionSummary
+upsertSession summary existing =
+    if Model.isSession summary.session.sessionId existing then
+        summary
+
+    else
+        existing
 
 
 watchAgentTurn : Model.AgentSessionView -> Flow Model ()
@@ -2982,26 +2988,23 @@ stopWatchingSession sessionId =
 
 
 applyAgentSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
-applyAgentSessionView view agentState =
-    let
-        sessionId =
-            view.session.sessionId
+applyAgentSessionView view =
+    mergeSessionSummary (Model.summaryFromView view)
+        >> setSessionView view.session.sessionId (Success view)
+        >> dropStaleLiveTurn view.session.sessionId view.session.activeTurnId
 
-        merged =
-            mergeSessionView view agentState
 
-        live =
-            try (liveTurnAt sessionId << just) merged
-    in
-    if Maybe.unwrap True (Model.liveTurnSurvives view.session.activeTurnId) live then
-        merged
+dropStaleLiveTurn : String -> Maybe String -> Model.AgentState -> Model.AgentState
+dropStaleLiveTurn sessionId activeTurnId agentState =
+    if try (liveTurnAt sessionId << just) agentState |> Maybe.unwrap True (Model.liveTurnSurvives activeTurnId) then
+        agentState
 
     else
-        set (liveTurnAt sessionId) Nothing merged
+        set (liveTurnAt sessionId) Nothing agentState
 
 
-handleAgentSessionResult : Result Http.Error Model.AgentSessionView -> Flow Model ()
-handleAgentSessionResult result =
+handleAgentSessionResult : String -> Result Http.Error Model.AgentSessionView -> Flow Model ()
+handleAgentSessionResult sessionId result =
     case result of
         Ok view ->
             agentChatAtBottom
@@ -3022,11 +3025,23 @@ handleAgentSessionResult result =
                                                         Flow.when (atBottom && entriesBefore /= selectedChatEntries after) scrollAgentChatToBottom
                                                     )
                                             )
+                                        |> Flow.seq watchSelectedAgentTurn
                                 )
                     )
 
         Err err ->
-            addToast False (Http.errorMessage err)
+            Flow.over (agent << sessionViewDataAt sessionId) (sessionViewAfterError err)
+                |> Flow.seq (addToast False (Http.errorMessage err))
+
+
+sessionViewAfterError : Http.Error -> Maybe (ApiData Model.AgentSessionView) -> Maybe (ApiData Model.AgentSessionView)
+sessionViewAfterError err =
+    Just << failedSessionView err << Maybe.withDefault NotAsked
+
+
+failedSessionView : Http.Error -> ApiData Model.AgentSessionView -> ApiData Model.AgentSessionView
+failedSessionView err =
+    Maybe.unwrap (Error err) Success << ApiData.toMaybe
 
 
 selectedChatEntries : Model -> List Model.ChatEntry
@@ -3043,7 +3058,31 @@ selectedChatEntries model =
 fetchAgentSession : String -> Flow Model ()
 fetchAgentSession sessionId =
     AgentApi.fetchSession sessionId
-        |> Flow.andThen handleAgentSessionResult
+        |> Flow.andThen (handleAgentSessionResult sessionId)
+
+
+refreshAgentSession : String -> Flow Model ()
+refreshAgentSession sessionId =
+    Flow.over agent (markSessionViewLoading sessionId)
+        |> Flow.seq (fetchAgentSession sessionId)
+
+
+ensureAgentSessionView : String -> Flow Model ()
+ensureAgentSessionView sessionId =
+    Flow.forAll agent
+        (\agentState ->
+            Flow.unless (sessionViewFetching sessionId agentState) (refreshAgentSession sessionId)
+        )
+
+
+sessionViewFetching : String -> Model.AgentState -> Bool
+sessionViewFetching sessionId =
+    has (sessionViewDataAt sessionId << just << ApiData.loadingState)
+
+
+ensureSelectedAgentSessionView : Flow Model ()
+ensureSelectedAgentSessionView =
+    Flow.forAll (agent << selectedSessionId << just) ensureAgentSessionView
 
 
 loadAgentSessions : Flow Model ()
@@ -3053,9 +3092,10 @@ loadAgentSessions =
         |> Flow.andThen
             (\result ->
                 case result of
-                    Ok views ->
-                        setAgentSessions (Success views)
+                    Ok summaries ->
+                        setAgentSessions (Success summaries)
                             |> Flow.seq pruneBlankAgentChats
+                            |> Flow.seq ensureSelectedAgentSessionView
                             |> Flow.seq watchSelectedAgentTurn
 
                     Err err ->
@@ -3089,7 +3129,7 @@ selectAgentSessionAt sessionId mTurnId =
             }
         )
         |> Flow.seq scrollAgentChatToBottom
-        |> Flow.seq (refreshAgentSession sessionId)
+        |> Flow.seq (ensureAgentSessionView sessionId)
         |> Flow.seq watchSelectedAgentTurn
         |> Flow.seq (scrollToAgentTurn mTurnId)
         |> Flow.seq (Flow.over agent (\s -> { s | lastChat = Just sessionId }))
@@ -3135,7 +3175,7 @@ restoreLastChat =
         (\agentState ->
             let
                 restorable =
-                    Maybe.filter (\sessionId -> agentSessionLoaded sessionId agentState) agentState.lastChat
+                    Maybe.filter (\sessionId -> agentSessionListed sessionId agentState) agentState.lastChat
             in
             Flow.when agentState.isRestoringChat
                 (case restorable of
@@ -3255,53 +3295,24 @@ setSessionNameEditSaving sessionId saving agentState =
 
 
 applyAgentSessionRename : String -> Model.AgentSessionView -> Model.AgentState -> Model.AgentState
-applyAgentSessionRename sessionId renamedView agentState =
-    let
-        updateView view =
-            if view.session.sessionId == sessionId then
-                let
-                    session =
-                        view.session
-                in
-                { view | session = { session | sessionName = renamedView.session.sessionName } }
-
-            else
-                view
-
-        renames =
-            case renamedView.session.sessionName of
-                Just name ->
-                    Dict.insert sessionId ( name, renamedView.session.updatedAt ) agentState.sessionRenames
-
-                Nothing ->
-                    agentState.sessionRenames
-    in
-    { agentState
-        | sessions = ApiData.map (List.map updateView) agentState.sessions
-        , sessionRenames = renames
-    }
+applyAgentSessionRename sessionId renamedView =
+    recordSessionRename sessionId renamedView.session
+        >> mergeSessionSummary (Model.summaryFromView renamedView)
 
 
+recordSessionRename : String -> Model.AgentSession -> Model.AgentState -> Model.AgentState
+recordSessionRename sessionId session agentState =
+    session.sessionName
+        |> Maybe.map (\name -> set (sessionRenames << Dict.Accessors.at sessionId) (Just ( name, session.updatedAt )) agentState)
+        |> Maybe.withDefault agentState
 
--- | Override the recorded name only when the view is not newer than the rename.
 
-
-applySessionRenameOverride : Dict String ( String, Model.SessionTimestamp ) -> Model.AgentSessionView -> Model.AgentSessionView
-applySessionRenameOverride renames view =
-    case Dict.get view.session.sessionId renames of
-        Just ( name, renamedAt ) ->
-            if Model.sessionTimestampAtLeast renamedAt view.session.updatedAt then
-                let
-                    session =
-                        view.session
-                in
-                { view | session = { session | sessionName = Just name } }
-
-            else
-                view
-
-        Nothing ->
-            view
+applySessionRenameOverride : Dict String ( String, Model.SessionTimestamp ) -> Model.AgentSessionSummary -> Model.AgentSessionSummary
+applySessionRenameOverride renames summary =
+    Dict.get summary.session.sessionId renames
+        |> Maybe.filter (\( _, renamedAt ) -> Model.sessionTimestampAtLeast renamedAt summary.session.updatedAt)
+        |> Maybe.map (\( name, _ ) -> summary |> over title (always name) |> over (session << sessionName) (always (Just name)))
+        |> Maybe.withDefault summary
 
 
 clearSessionNameEdit : String -> Model.AgentState -> Model.AgentState
@@ -3352,7 +3363,7 @@ deleteAgentSession sessionId =
                 (\result ->
                     case result of
                         Ok () ->
-                            Flow.over agent (removeAgentSessionView sessionId)
+                            Flow.over agent (dropAgentSession sessionId)
                                 |> Flow.seq (stopWatchingSession sessionId)
                                 |> Flow.seq
                                     (Flow.forAll agent
@@ -3454,27 +3465,20 @@ createAgentSession =
         )
 
 
-refreshAgentSession : String -> Flow Model ()
-refreshAgentSession sessionId =
-    fetchAgentSession sessionId
+archivedSummary : Model.AgentSessionSummary -> Bool
+archivedSummary =
+    .session >> .status >> Model.agentSessionArchived
 
 
 refreshSelectedAgentSession : Flow Model ()
 refreshSelectedAgentSession =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case Model.selectedSessionView (Model.getAgent model) of
-                    Just view ->
-                        if Model.agentSessionArchived view.session.status then
-                            Flow.pure ()
-
-                        else
-                            refreshAgentSession view.session.sessionId
-
-                    Nothing ->
-                        Flow.pure ()
-            )
+    Flow.forAll agent
+        (\agentState ->
+            agentState
+                |> Model.selectedSessionSummary
+                |> Maybe.filter (not << archivedSummary)
+                |> Maybe.unwrap (Flow.pure ()) (.session >> .sessionId >> ensureAgentSessionView)
+        )
 
 
 refreshVisibleAgentSession : Flow Model ()
@@ -3490,26 +3494,28 @@ refreshVisibleAgentSession =
                                     Model.getAgent model
 
                                 selected =
-                                    Model.selectedSessionView state
-                                        |> Maybe.filter (\view -> not (Model.agentSessionArchived view.session.status))
+                                    Model.selectedSessionSummary state
+                                        |> Maybe.filter (not << archivedSummary)
                                         |> Maybe.map (.session >> .sessionId)
                                         |> Maybe.toList
 
                                 watched =
                                     all (liveTurns << Dict.Accessors.eachIdx) state
-                                        |> List.filterMap
-                                            (\( sessionId, live ) ->
-                                                if live.finished then
-                                                    Just sessionId
-
-                                                else
-                                                    Nothing
-                                            )
+                                        |> List.filterMap unfinishedSession
                             in
-                            Flow.batchM (List.map refreshAgentSession (List.unique (selected ++ watched)))
+                            Flow.batchM (List.map ensureAgentSessionView (List.unique (selected ++ watched)))
                         )
                 )
         )
+
+
+unfinishedSession : ( String, Model.AgentLiveTurn ) -> Maybe String
+unfinishedSession ( sessionId, live ) =
+    if live.finished then
+        Nothing
+
+    else
+        Just sessionId
 
 
 withSelectedAgentSession : (Model.AgentSessionView -> Flow Model ()) -> Flow Model ()

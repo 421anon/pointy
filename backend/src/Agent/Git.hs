@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Agent.Git (
@@ -28,6 +29,7 @@ module Agent.Git (
 import Agent.Policy (appliedProjectId, appliedStepId, isAgentOutputPath)
 import Agent.Session (
     AgentSession (..),
+    AgentSessionSummary (AgentSessionSummary),
     AgentTurn (..),
     PreparedApply (..),
     applyConflictsPending,
@@ -35,6 +37,7 @@ import Agent.Session (
     inferTurnExitCode,
     latestUnfinishedTurn,
     listSessions,
+    listTurns,
     listTurnsWithLogs,
     loadSessionById,
     newSessionId,
@@ -49,6 +52,7 @@ import Agent.Session (
     turnLogHasFinalizationFailure,
  )
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
+import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
 import Control.Monad (filterM, unless, void, when)
@@ -57,7 +61,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import Data.Char (isControl)
 import Data.List (nub, sortOn)
-import Data.Maybe (isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.ByteString as BS
 import Data.Text (Text)
@@ -138,11 +142,35 @@ createAgentSession = do
     liftIO $ saveSession session_
     return sid
 
-listAgentSessions :: ExceptT String IO [AgentSessionView]
-listAgentSessions = do
-    sessions <- liftIO listSessions
-    let ordered = sortOn (Down . createdAt) sessions
-    mapM (loadAgentSessionView . sessionId) ordered
+listAgentSessions :: ExceptT String IO [AgentSessionSummary]
+listAgentSessions =
+    mapM loadAgentSessionSummary . sortOn (Down . createdAt) =<< liftIO listSessions
+
+loadAgentSessionSummary :: AgentSession -> ExceptT String IO AgentSessionSummary
+loadAgentSessionSummary session_ = do
+    turns_ <- liftIO $ sortOn turnStartedAtCompat <$> listTurns (sessionId session_)
+    AgentSessionSummary (deriveSessionRuntime session_ turns_) (sessionDisplayTitle session_ turns_) (length turns_)
+        <$> sessionHasAgentCommits session_
+
+sessionDisplayTitle :: AgentSession -> [AgentTurn] -> Text
+sessionDisplayTitle session_ turns_ =
+    fromMaybe "" $ (normalizeSessionName =<< sessionName session_) <|> promptTitle turns_
+
+promptTitle :: [AgentTurn] -> Maybe Text
+promptTitle =
+    listToMaybe . mapMaybe (normalizeSessionName . turnPrompt)
+
+sessionHasAgentCommits :: AgentSession -> ExceptT String IO Bool
+sessionHasAgentCommits session_ = do
+    usable <- liftIO $ isWorktreeCheckout worktree
+    if usable
+        then commitsBeyondBase =<< baseCommitReachable worktree (baseCommit session_)
+        else return False
+  where
+    worktree = worktreePath session_
+    commitsBeyondBase reachable
+        | reachable = not . T.null . T.strip <$> runGitChecked worktree ["rev-list", "--max-count=1", commitRange session_]
+        | otherwise = (/= baseCommit session_) . stripOutput <$> runGitChecked worktree ["rev-parse", "HEAD"]
 
 loadAgentSessionView :: Text -> ExceptT String IO AgentSessionView
 loadAgentSessionView sid = do
@@ -610,8 +638,8 @@ collectGitState session_ = do
             (log_, diff_, hasCommits) <-
                 if baseReachable
                     then do
-                        l <- runGitChecked (worktreePath session_) ["log", "--oneline", T.unpack (baseCommit session_) ++ "..HEAD"]
-                        d <- runGitChecked (worktreePath session_) ["diff", T.unpack (baseCommit session_) ++ "..HEAD"]
+                        l <- runGitChecked (worktreePath session_) ["log", "--oneline", commitRange session_]
+                        d <- runGitChecked (worktreePath session_) ["diff", commitRange session_]
                         return (l, d, not (T.null (T.strip l)))
                     else
                         return
@@ -626,6 +654,11 @@ collectGitState session_ = do
                     , branchDiff = diff_
                     , hasAgentCommits = hasCommits
                     }
+
+
+commitRange :: AgentSession -> String
+commitRange =
+    (++ "..HEAD") . T.unpack . baseCommit
 
 
 isWorktreeCheckout :: FilePath -> IO Bool

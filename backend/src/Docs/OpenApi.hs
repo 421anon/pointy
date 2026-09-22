@@ -16,7 +16,7 @@ real Servant combinators that carry no schema by default.
 module Docs.OpenApi (pointyOpenApi) where
 
 import Agent.Git (AgentApplyView, AgentGitState, AgentSessionView, AgentUsage)
-import Agent.Session (AgentSession, AgentTurn, PreparedApply)
+import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedApply)
 import Api (API)
 import ApiTypes (DynamicJson)
 import Control.Lens (ALens', cloneLens, imap, (%~), (&), (.~), (?~), _Just)
@@ -159,6 +159,7 @@ instance ToSchema PreparedApply
 instance ToSchema AgentSession
 instance ToSchema AgentTurn
 instance ToSchema AgentGitState
+instance ToSchema AgentSessionSummary
 instance ToSchema AgentSessionView
 instance ToSchema AgentApplyView
 instance ToSchema AgentUsage
