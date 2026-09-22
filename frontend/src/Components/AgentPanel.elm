@@ -839,7 +839,7 @@ viewSubmitButton steering busy submitBlocked =
             )
         ]
         [ Html.text label
-        , Html.viewIf (not working && not submitBlocked)
+        , Html.viewIf (not working)
             (Html.span [ class "agent-panel__run-hint" ] [ Html.text "Ctrl/⌘+Enter" ])
         ]
 
