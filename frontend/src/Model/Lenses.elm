@@ -524,6 +524,10 @@ nextToastId =
     lens ".nextToastId" Model.getNextToastId (\(Model t) nextToastId_ -> Model { t | nextToastId = nextToastId_ })
 
 
+needsIntro : Lens ls { a | needsIntro : b } b x y
+needsIntro =
+    lens ".needsIntro" .needsIntro (\t needsIntro_ -> { t | needsIntro = needsIntro_ })
+
 nextClientId : Lens ls Model Int x y
 nextClientId =
     lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })

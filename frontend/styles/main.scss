@@ -2063,30 +2063,80 @@ body:has(dialog[open]) {
   top: var(--spacing-xl);
   right: var(--spacing-xl);
   z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
+
+  > :nth-child(1) {
+    z-index: 2;
+    top: 0;
+  }
+
+  > :nth-child(2) {
+    z-index: 1;
+    top: 2px;
+  }
+
+  > * {
+    position: relative;
+    z-index: 0;
+    top: 4px;
+    transition: top .2s linear;
+  }
+}
+
+.toast-wrapper {
+  height: 0;
 }
 
 .toast {
+  position: relative;
+  left: 0;
+  top: 0;
   background: var(--bg-secondary);
   border: 1px solid var(--state-danger-outline);
   border-radius: var(--radius-xs);
   padding: var(--spacing-sm);
   box-shadow: var(--shadow-elevated);
   max-width: 350px;
-  animation: toast-lifetime 3.5s;
 
   &.toast-success {
     border-color: var(--state-success);
   }
+
+  :first-child > & {
+    animation: toast-out .2s linear 3.5s;
+
+    .toast-container:hover & {
+      animation: none;
+    }
+
+    &.needs-intro {
+      animation: toast-in .2s, toast-out .2s linear 3.5s;
+
+      .toast-container:hover & {
+        animation: toast-in .2s;
+      }
+    }
+  }
 }
 
-.toast-container:hover .toast {
-  animation-name: none;
+@keyframes toast-in {
+  from {
+    top: -100px;
+  }
+  to {
+    top: 0;
+  }
 }
 
-@keyframes toast-lifetime {}
+@keyframes toast-out {
+
+  from {
+    left: 0;
+  }
+  to {
+    left: 400px;
+  }
+
+}
 
 .toast-message {
   color: var(--text-primary);

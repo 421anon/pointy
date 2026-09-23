@@ -2450,18 +2450,22 @@ overRouteReplace fn =
 
 addToast : Bool -> String -> Flow Model ()
 addToast isSuccess message =
-    Flow.get
-        |> Flow.map (get nextToastId)
-        |> Flow.andThen
-            (\nextId ->
-                Flow.over toasts ((::) <| Toast message nextId isSuccess)
-                    |> Flow.seq (Flow.over nextToastId (\_ -> nextId + 1))
-            )
+    Flow.forAll nextToastId
+        (\nextId ->
+            Flow.setAll (toasts << each << needsIntro) False
+                |> Flow.seq (Flow.over toasts ((::) <| Toast message nextId isSuccess True))
+                |> Flow.seq (Flow.over nextToastId (\_ -> nextId + 1))
+        )
 
 
 dismissToast : Int -> Flow Model ()
 dismissToast toastId =
     Flow.over toasts (List.removeWhen <| (==) toastId << .id)
+
+
+resetNeedsIntro : Int -> Flow Model ()
+resetNeedsIntro toastId =
+    Flow.setAll (toasts << by .id toastId << needsIntro) False
 
 
 dndMsgToIO : Maybe Int -> TableSpec (BaseRecord a) -> DnDList.Msg -> Flow Model ()
