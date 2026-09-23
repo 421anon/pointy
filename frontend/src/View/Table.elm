@@ -215,6 +215,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                     let
                         itemId =
                             Maybe.unwrap (TableSpec.getName spec ++ "-new") String.fromInt record.id
+
                         cmap =
                             List.map (map (Actions.dndMsgToIO mProjectId spec))
 
@@ -713,7 +714,15 @@ viewRecordActions spec isReadOnly mProjectId record =
               }
             ]
     in
-    List.filterMap (\recordActionBtn -> if recordActionBtn.shouldShow record then Just (recordActionBtn.render record) else Nothing) recordActions
+    List.filterMap
+        (\recordActionBtn ->
+            if recordActionBtn.shouldShow record then
+                Just (recordActionBtn.render record)
+
+            else
+                Nothing
+        )
+        recordActions
 
 
 viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
@@ -1782,7 +1791,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                             recordFields
                         )
 
-
         viewField : Field -> Html (Flow Model ())
         viewField field =
             let
@@ -2242,6 +2250,7 @@ listFieldTagWrapper config =
                )
         )
 
+
 fieldChanged : (b -> c) -> c -> Maybe b -> Bool
 fieldChanged get currentValue maybeOriginal =
     maybeOriginal
@@ -2351,8 +2360,6 @@ dirButton isOpen dirPath recordId =
         (Actions.toggleOutputEntry recordId Nothing dirPath |> Flow.map (always ()))
 
 
-
-
 recordAutocompleteStateKey : String -> String -> String -> List StepArgValue -> Int -> StepArgValue -> String
 recordAutocompleteStateKey tableId paramName fieldName recordValues idx recordValue =
     let
@@ -2387,7 +2394,13 @@ stepArgValueKey value =
             keyPart "int" (String.fromInt n)
 
         TBoolValue b ->
-            keyPart "bool" (if b then "true" else "false")
+            keyPart "bool"
+                (if b then
+                    "true"
+
+                 else
+                    "false"
+                )
 
         TStepValue stepId ->
             keyPart "step" (String.fromInt stepId)

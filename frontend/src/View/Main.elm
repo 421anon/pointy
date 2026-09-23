@@ -11,6 +11,7 @@ import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
 import Html.Extra as Html
+import Html.Keyed
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (currentProject, isReadOnlyRoute, name)
 import Model.Lib as Lib
@@ -88,8 +89,8 @@ view model =
                     [ Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
                     , AgentPanel.view model
                     ]
-                , Html.div [ Html.Attributes.class "toast-container" ] <|
-                    List.map Toast.view (Model.getToasts model)
+                , Html.Keyed.node "div" [ Html.Attributes.class "toast-container" ] <|
+                    List.map (\toast -> ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) toast )) (Model.getToasts model)
                 , Dialog.viewConfirm (Model.getModalConfirm model)
                 , Compare.viewCompareDialog model
                 , StatusBar.view model
