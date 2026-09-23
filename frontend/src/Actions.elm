@@ -33,7 +33,6 @@ import Model.Lib exposing (sortProjects)
 import Model.Shadow exposing (StepArgValue)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
 import Ports
-import Process
 import Route exposing (Route)
 import Scroll
 import Set exposing (Set)
@@ -2457,13 +2456,12 @@ addToast isSuccess message =
             (\nextId ->
                 Flow.over toasts ((::) <| Toast message nextId isSuccess)
                     |> Flow.seq (Flow.over nextToastId (\_ -> nextId + 1))
-                    |> Flow.seq
-                        (Flow.async
-                            (Flow.lift (Task.perform identity (Process.sleep 3500))
-                                |> Flow.seq (Flow.over toasts (List.removeWhen <| (==) nextId << .id))
-                            )
-                        )
             )
+
+
+dismissToast : Int -> Flow Model ()
+dismissToast toastId =
+    Flow.over toasts (List.removeWhen <| (==) toastId << .id)
 
 
 dndMsgToIO : Maybe Int -> TableSpec (BaseRecord a) -> DnDList.Msg -> Flow Model ()

@@ -6,6 +6,8 @@ module Toast exposing
 import Flow exposing (Flow)
 import Html exposing (Html, div, span, text)
 import Html.Attributes exposing (class, classList)
+import Html.Events as Events
+import Json.Decode as Decode
 
 
 type alias Toast =
@@ -15,7 +17,7 @@ type alias Toast =
     }
 
 
-view : Toast -> Html (Flow s ())
-view toast =
-    div [ class "toast", classList [ ( "toast-success", toast.isSuccess ) ] ]
+view : (Int -> Flow s ()) -> Toast -> Html (Flow s ())
+view dismiss toast =
+    div [ class "toast", classList [ ( "toast-success", toast.isSuccess ) ], Events.on "animationend" (Decode.succeed (dismiss toast.id)) ]
         [ span [ class "toast-message" ] [ text toast.message ] ]

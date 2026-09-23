@@ -2075,11 +2075,18 @@ body:has(dialog[open]) {
   padding: var(--spacing-sm);
   box-shadow: var(--shadow-elevated);
   max-width: 350px;
+  animation: toast-lifetime 3.5s;
 
   &.toast-success {
     border-color: var(--state-success);
   }
 }
+
+.toast-container:hover .toast {
+  animation-play-state: paused;
+}
+
+@keyframes toast-lifetime {}
 
 .toast-message {
   color: var(--text-primary);
