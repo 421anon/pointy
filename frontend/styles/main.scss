@@ -2083,7 +2083,7 @@ body:has(dialog[open]) {
 }
 
 .toast-container:hover .toast {
-  animation-play-state: paused;
+  animation-name: none;
 }
 
 @keyframes toast-lifetime {}
