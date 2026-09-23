@@ -846,7 +846,7 @@ pendingSteer =
 
 sessionAt : String -> Traversal AgentState AgentSessionSummary x y
 sessionAt sessionId =
-    sessions << success << by (.session >> .sessionId) sessionId
+    sessions << orElseT success ApiData.reloading << by (.session >> .sessionId) sessionId
 
 
 agentSessionRunning : String -> AgentState -> Bool

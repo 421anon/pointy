@@ -295,7 +295,7 @@ isSession sessionId =
 
 sessionSummary : String -> AgentState -> Maybe AgentSessionSummary
 sessionSummary sessionId =
-    .sessions >> ApiData.withDefault [] >> List.find (isSession sessionId)
+    .sessions >> ApiData.toMaybe >> Maybe.andThen (List.find (isSession sessionId))
 
 
 normalizeChatName : String -> Maybe String

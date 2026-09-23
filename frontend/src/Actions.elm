@@ -2895,7 +2895,7 @@ mergeSessionSummary summary agentState =
             summary.session.sessionId
 
         current =
-            ApiData.withDefault [] agentState.sessions
+            all (sessions << orElseT success ApiData.reloading << each) agentState
 
         merged =
             if List.any (Model.isSession sessionId) current then

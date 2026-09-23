@@ -26,7 +26,11 @@ import View.Lib exposing (boolText)
 
 view : Model -> Html (Flow Model ())
 view model =
-    viewPanel (mentionsPending model) (AgentMentions.mentionTarget (Lib.lastKnownWorkspace model)) (Model.getAgent model)
+    let
+        workspace =
+            Lib.lastKnownWorkspace model
+    in
+    viewPanel (mentionsPending workspace) (AgentMentions.mentionTarget workspace) (Model.getAgent model)
 
 
 mentionsPending : Model -> Bool
