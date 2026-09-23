@@ -27,6 +27,7 @@ import Agent.Session (
     findTurn,
     listTurns,
     loadSessionById,
+    loadTurn,
     newTurnId,
     normalizeSessionName,
     saveSession,
@@ -35,17 +36,18 @@ import Agent.Session (
     turnIsUnfinished,
     turnLogFilePath,
     turnLogHasFinalizationFailure,
+    turnMetadataPath,
  )
 import Agent.Title (generateSessionTitle)
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
 import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
-import Control.Exception (IOException, SomeException, catch, displayException, finally, try)
+import Control.Exception (IOException, SomeException, catch, displayException, finally, fromException, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
@@ -801,6 +803,9 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
             clipped = if T.length cleaned > 100 then T.take 100 cleaned <> "..." else cleaned
          in if T.null cleaned then "" else " `" <> clipped <> "`"
 
+sessionFinalizationAttempts :: Int
+sessionFinalizationAttempts = 3
+
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
 finishTurn cfg _session turn exitCode = do
     stopped <- atomically $ do
@@ -817,8 +822,8 @@ finishTurn cfg _session turn exitCode = do
             | otherwise = "failed"
     when stopped $ appendLogLine cfg (turnLogPath turn) "system" "Stopped by user"
     appendLogLine cfg (turnLogPath turn) "system" ("Agent turn finished with exit code " <> T.pack (show exitCodeInt))
-    finishResult <-
-        ( try
+    let attemptFinalization =
+            try
                 ( withUserRepoExclusiveIO $ do
                     loaded <- ExceptT $ loadSessionById (turnSessionId turn)
                     autoCommitResult <- liftIO $ Except.runExceptT $ commitAgentTurnOutputs loaded turn
@@ -855,7 +860,7 @@ finishTurn cfg _session turn exitCode = do
                     liftIO $ saveSession touched
                 ) ::
                 IO (Either SomeException (Either String ()))
-            )
+    finishResult <- finalizeWithRetry cfg turn 1 attemptFinalization
     case finishResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
         Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
@@ -867,6 +872,26 @@ finishTurn cfg _session turn exitCode = do
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Turn finalization error: " <> T.pack (show ex))
         Right _ -> return ()
     unregisterTurnSignal (turnLogPath turn)
+
+finalizeWithRetry :: AgentConfig -> AgentTurn -> Int -> IO (Either SomeException a) -> IO (Either SomeException a)
+finalizeWithRetry cfg turn attempt runAttempt = do
+    result <- runAttempt
+    case result of
+        Left ex
+            | attempt < sessionFinalizationAttempts
+            , isJust (fromException ex :: Maybe IOException) -> do
+                let note =
+                        "Session finalization attempt "
+                            <> T.pack (show attempt)
+                            <> " of "
+                            <> T.pack (show sessionFinalizationAttempts)
+                            <> " failed: "
+                            <> T.pack (show ex)
+                            <> "; retrying"
+                void (try (appendLogLine cfg (turnLogPath turn) "system" note) :: IO (Either IOException ()))
+                threadDelay (attempt * 1000000)
+                finalizeWithRetry cfg turn (attempt + 1) runAttempt
+        _ -> return result
 
 combineErrorMessages :: [Maybe Text] -> Maybe Text
 combineErrorMessages messages =
@@ -921,13 +946,13 @@ streamLoop turn offset signal = return $ S.Effect $ do
                     (sseEvent "chunk" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn, "chunk" Aeson..= chunk])))
                     (S.Effect (streamLoop turn newOffset signal))
         else do
-            mTurn <- findTurn (turnId turn)
+            reloaded <- loadTurn =<< turnMetadataPath (turnSessionId turn) (turnId turn)
             let finalizationFailed = turnLogHasFinalizationFailure content
                 done =
-                    maybe
-                        True
+                    either
+                        (const True)
                         (\savedTurn -> not (turnIsUnfinished savedTurn) || finalizationFailed)
-                        mTurn
+                        reloaded
             if done
                 then do
                     unregisterTurnSignal (turnLogPath turn)

@@ -31,13 +31,19 @@ module Agent.Session (
     listTurns,
     listTurnsWithLogs,
     findTurn,
+    forgetSessionTurns,
     touchSession,
 ) where
 
 import Agent.TurnSignal (signalTurnLog)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Monad (filterM)
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.!=), (.:), (.:?), (.=))
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.Char (isAlphaNum, isAscii)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -48,7 +54,12 @@ import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory, renameFile)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose, openBinaryTempFile)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Process (getProcessID)
+
+{-# NOINLINE turnIndex #-}
+turnIndex :: MVar (Map FilePath (Map Text AgentTurn))
+turnIndex = unsafePerformIO (newMVar Map.empty)
 
 data PreparedApply = PreparedApply
     { targetHead :: Text
@@ -235,7 +246,7 @@ loadSession path = do
     exists <- doesFileExist path
     if not exists
         then return $ Left "session_not_found"
-        else eitherDecode <$> LBS.readFile path
+        else eitherDecodeStrict <$> BS.readFile path
 
 loadSessionById :: Text -> IO (Either String AgentSession)
 loadSessionById sid = sessionMetadataPath sid >>= loadSession
@@ -279,7 +290,10 @@ listSessions = do
 saveTurn :: AgentTurn -> IO ()
 saveTurn turn = do
     path <- turnMetadataPath (turnSessionId turn) (turnId turn)
-    writeFileAtomic path (encode turn{turnLog = ""})
+    let stored = turn{turnLog = ""}
+    modifyMVar_ turnIndex $ \index -> do
+        writeFileAtomic path (encode stored)
+        return $ Map.adjust (Map.insert (turnId turn) stored) (takeDirectory path) index
     signalTurnLog (turnLogPath turn)
 
 loadTurn :: FilePath -> IO (Either String AgentTurn)
@@ -287,14 +301,7 @@ loadTurn path = do
     exists <- doesFileExist path
     if not exists
         then return $ Left $ "turn metadata not found: " ++ path
-        else eitherDecode <$> LBS.readFile path
-
-loadTurnWithLog :: FilePath -> IO (Either String AgentTurn)
-loadTurnWithLog path = do
-    loaded <- loadTurn path
-    case loaded of
-        Left err -> return (Left err)
-        Right turn -> Right <$> hydrateTurnLog turn
+        else eitherDecodeStrict <$> BS.readFile path
 
 hydrateTurnLog :: AgentTurn -> IO AgentTurn
 hydrateTurnLog turn = do
@@ -311,32 +318,58 @@ readTurnLog turn = do
 listTurns :: Text -> IO [AgentTurn]
 listTurns sid = do
     dir <- turnsDir sid
-    exists <- doesDirectoryExist dir
-    if not exists
-        then return []
-        else do
-            names <- listDirectory dir
-            let jsonFiles = filter (T.isSuffixOf ".json" . T.pack) names
-            parsed <- mapM (loadTurn . (dir </>)) jsonFiles
-            return $ catMaybes $ map eitherToMaybe parsed
+    Map.elems <$> modifyMVar turnIndex (loadSessionTurnIndex dir)
+
+loadSessionTurnIndex :: FilePath -> Map FilePath (Map Text AgentTurn) -> IO (Map FilePath (Map Text AgentTurn), Map Text AgentTurn)
+loadSessionTurnIndex dir index =
+    case Map.lookup dir index of
+        Just turns -> return (index, turns)
+        Nothing -> do
+            exists <- doesDirectoryExist dir
+            if not exists
+                then return (index, Map.empty)
+                else do
+                    names <- listDirectory dir
+                    let jsonFiles = filter (T.isSuffixOf ".json" . T.pack) names
+                    parsed <- mapM (loadTurn . (dir </>)) jsonFiles
+                    let turns = Map.fromList [(turnId turn, turn) | turn <- catMaybes (map eitherToMaybe parsed)]
+                    return (Map.insert dir turns index, turns)
 
 listTurnsWithLogs :: Text -> IO [AgentTurn]
-listTurnsWithLogs sid = do
-    dir <- turnsDir sid
-    exists <- doesDirectoryExist dir
-    if not exists
-        then return []
-        else do
-            names <- listDirectory dir
-            let jsonFiles = filter (T.isSuffixOf ".json" . T.pack) names
-            parsed <- mapM (loadTurnWithLog . (dir </>)) jsonFiles
-            return $ catMaybes $ map eitherToMaybe parsed
+listTurnsWithLogs sid = listTurns sid >>= mapM hydrateTurnLog
 
 findTurn :: Text -> IO (Maybe AgentTurn)
-findTurn tid = do
-    sessions <- listSessions
-    turns <- concat <$> mapM (listTurns . sessionId) sessions
-    return $ findByTurnId tid turns
+findTurn tid
+    | not (isSafeTurnId tid) = return Nothing
+    | otherwise = do
+        root <- agentSessionsRoot
+        exists <- doesDirectoryExist root
+        if not exists
+            then return Nothing
+            else do
+                names <- listDirectory root
+                lookupTurnFile root names
+  where
+    lookupTurnFile _ [] = return Nothing
+    lookupTurnFile rootDir (name : rest) = do
+        let path = rootDir </> name </> "turns" </> (T.unpack tid ++ ".json")
+        exists <- doesFileExist path
+        if exists
+            then do
+                loaded <- loadTurn path
+                return $ case loaded of
+                    Right turn | turnId turn == tid -> Just turn
+                    _ -> Nothing
+            else lookupTurnFile rootDir rest
+
+forgetSessionTurns :: Text -> IO ()
+forgetSessionTurns sid = do
+    dir <- turnsDir sid
+    modifyMVar_ turnIndex (return . Map.delete dir)
+
+isSafeTurnId :: Text -> Bool
+isSafeTurnId tid =
+    not (T.null tid) && T.all (\c -> isAscii c && (isAlphaNum c || c == '-')) tid
 
 touchSession :: AgentSession -> IO AgentSession
 touchSession session_ = do
@@ -346,9 +379,3 @@ touchSession session_ = do
 eitherToMaybe :: Either a b -> Maybe b
 eitherToMaybe (Right b) = Just b
 eitherToMaybe (Left _) = Nothing
-
-findByTurnId :: Text -> [AgentTurn] -> Maybe AgentTurn
-findByTurnId _ [] = Nothing
-findByTurnId tid (turn : rest)
-    | turnId turn == tid = Just turn
-    | otherwise = findByTurnId tid rest

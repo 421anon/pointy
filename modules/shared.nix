@@ -156,6 +156,7 @@ in
         User = "backend";
         Group = "backend";
         EnvironmentFile = "-/home/backend/agent-env";
+        LimitNOFILE = 65536;
       };
     };
 

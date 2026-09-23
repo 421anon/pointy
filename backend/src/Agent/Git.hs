@@ -33,6 +33,7 @@ import Agent.Session (
     AgentTurn (..),
     PreparedApply (..),
     applyConflictsPending,
+    forgetSessionTurns,
     freshSessionLayout,
     inferTurnExitCode,
     latestUnfinishedTurn,
@@ -566,6 +567,7 @@ purgeAgentSession sid = do
     _ <- liftIO $ runGitIn repoPath ["branch", "-D", T.unpack (agentBranch session_)]
     sessionRoot <- liftIO $ sessionDir sid
     liftIO $ removePathForcibly sessionRoot
+    liftIO $ forgetSessionTurns sid
 
 getAgentUsage :: IO AgentUsage
 getAgentUsage = do
