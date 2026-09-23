@@ -22,7 +22,10 @@ type Widget
 
 
 type alias Artifact =
-    { accepts : Maybe (List String), create : Bool }
+    { accepts : Maybe (List String)
+    , proven : Maybe (List String)
+    , create : Bool
+    }
 
 
 type alias Field =

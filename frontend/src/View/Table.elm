@@ -761,8 +761,8 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
 
         prefill widget_ =
             let
-                wire accepts toValue =
-                    if Maybe.unwrap True (List.member record.type_) accepts then
+                wire proven toValue =
+                    if List.member record.type_ (Maybe.withDefault [] proven) then
                         Maybe.map toValue record.id
 
                     else
@@ -771,14 +771,14 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
             case widget_ of
                 WStep artifact ->
                     if artifact.create then
-                        wire artifact.accepts TStepValue
+                        wire artifact.proven TStepValue
 
                     else
                         Nothing
 
                 WSteps artifact ->
                     if artifact.create then
-                        wire artifact.accepts (TListValue << List.singleton << TStepValue)
+                        wire artifact.proven (TListValue << List.singleton << TStepValue)
 
                     else
                         Nothing

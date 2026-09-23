@@ -448,13 +448,14 @@ widget =
 
 emptyArtifact : Artifact
 emptyArtifact =
-    { accepts = Nothing, create = False }
+    { accepts = Nothing, proven = Nothing, create = False }
 
 
 artifact : Decoder Artifact
 artifact =
     Decode.succeed Artifact
         |> required "accepts" (maybe (Decode.list Decode.string))
+        |> optional "proven" (maybe (Decode.list Decode.string)) Nothing
         |> optional "create" Decode.bool False
 
 
