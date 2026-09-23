@@ -90,7 +90,7 @@ view model =
                     , AgentPanel.view model
                     ]
                 , Html.Keyed.node "div" [ Html.Attributes.class "toast-container" ] <|
-                    List.map (\toast -> ( String.fromInt toast.id, Toast.view Actions.dismissToast toast )) (Model.getToasts model)
+                    List.map (\toast -> ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) toast )) (Model.getToasts model)
                 , Dialog.viewConfirm (Model.getModalConfirm model)
                 , Compare.viewCompareDialog model
                 , StatusBar.view model

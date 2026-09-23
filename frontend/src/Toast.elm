@@ -17,7 +17,7 @@ type alias Toast =
     }
 
 
-view : (Int -> Flow s ()) -> Toast -> Html (Flow s ())
+view : Flow s () -> Toast -> Html (Flow s ())
 view dismiss toast =
-    div [ class "toast", classList [ ( "toast-success", toast.isSuccess ) ], Events.on "animationend" (Decode.succeed (dismiss toast.id)) ]
+    div [ class "toast", classList [ ( "toast-success", toast.isSuccess ) ], Events.on "animationend" (Decode.succeed dismiss) ]
         [ span [ class "toast-message" ] [ text toast.message ] ]
