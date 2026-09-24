@@ -542,8 +542,8 @@ settleReview stepId mReview message result =
 
         Ok False ->
             Flow.setAll (stepRecordById stepId << review) mReview
-                |> Flow.seq (Flow.when (Maybe.isNothing mReview) (resetRunStateToViewed stepId))
                 |> Flow.seq refreshReviews
+                |> Flow.seq (Flow.when (Maybe.isNothing mReview) (refreshViewedStepStatus stepId))
                 |> Flow.seq (Flow.setAll reviewDraft Nothing)
                 |> Flow.seq (Flow.async (addToast True message))
 
@@ -551,18 +551,10 @@ settleReview stepId mReview message result =
             Flow.async (addToast False (Http.errorMessage err))
 
 
-resetRunStateToViewed : Int -> Flow Model ()
-resetRunStateToViewed stepId =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case Model.viewedRevision model of
-                    Just revision ->
-                        Flow.over (stepRecordById stepId << runState) (applyStepStatus revision NotAsked)
-
-                    Nothing ->
-                        Flow.pure ()
-            )
+refreshViewedStepStatus : Int -> Flow Model ()
+refreshViewedStepStatus stepId =
+    Flow.over (stepRecordById stepId << runState << success << status) ApiData.toLoading
+        |> Flow.seq (Flow.forAll currentProjectId (Flow.try viewedRevision << requestProjectStatus))
 
 
 reviewStep : Model.ReviewDraft -> Flow Model ()

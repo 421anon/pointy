@@ -52,12 +52,24 @@ resolveStepSrcFiles mCommit stepId = do
     result <-
         withReadRepoTransaction $ \ctx -> do
             target <- maybe (pure ctx) (\commit -> ExceptT $ liftIO $ runExceptT $ commitContext (readRepoPath ctx) commit) mCommit
-            output <- runNixEvalJsonApplyInRepo target "step: step.srcFiles or null" ("#pointy.steps." ++ show stepId)
+            output <- runNixEvalJsonApplyInRepo target (srcFilesExpression stepId) "#pointy"
             either (throwError . ("Failed to decode the source files path: " ++)) pure $
                 eitherDecode (TLE.encodeUtf8 (TL.pack output))
     pure $ either (Left . srcFilesError) Right result
   where
     srcFilesError err = err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate the source files of step " ++ show stepId ++ ": " ++ err))}
+
+
+srcFilesExpression :: Int -> String
+srcFilesExpression stepId =
+    unwords
+        [ "pointy:"
+        , "let"
+        , "stepFiles = pointy.steps.\"" ++ show stepId ++ "\".srcFiles or null;"
+        , "root = pointy.srcFiles or null;"
+        , "legacy = if builtins.isPath root || builtins.isString root then (let dir = root + \"/" ++ show stepId ++ "\"; in if builtins.pathExists dir then dir else null) else null;"
+        , "in if stepFiles == null then legacy else stepFiles"
+        ]
 
 noSrcFiles :: Int -> ServerError
 noSrcFiles stepId = err404{errBody = TLE.encodeUtf8 (TL.pack ("Step " ++ show stepId ++ " has no source files"))}
