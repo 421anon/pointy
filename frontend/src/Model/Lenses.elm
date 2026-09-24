@@ -591,6 +591,12 @@ stepRevisionById stepId model =
     try (stepRecordById stepId) model |> Maybe.andThen (Model.stepRevision model)
 
 
+viewedRevision : Traversal Model String x y
+viewedRevision =
+    orElseT (route << Route.page << Route.project << mCommit << just)
+        (commitHash << orElseT success ApiData.reloading)
+
+
 stepShownRevision : Int -> Traversal Model String x y
 stepShownRevision stepId =
     currentProject << success << tables << values << recordById stepId << runState << success << commit
