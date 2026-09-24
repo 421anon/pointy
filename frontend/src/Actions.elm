@@ -4022,33 +4022,38 @@ onClusterStatusIn : Decode.Value -> Flow Model ()
 onClusterStatusIn value =
     let
         decoder =
-            Decode.map2
-                (\statusStr ids ->
-                    ( case statusStr of
-                        "available" ->
-                            Model.ClusterAvailable
-
-                        "degraded" ->
-                            Model.ClusterDegraded
-
-                        "unavailable" ->
-                            Model.ClusterUnavailable
-
-                        _ ->
-                            Model.ClusterUnknown
-                    , ids
-                    )
+            Decode.map3
+                (\statusStr detail ids ->
+                    ( clusterStatusFromString statusStr, detail, ids )
                 )
                 (Decode.field "status" Decode.string)
+                (Decode.maybe (Decode.field "detail" Decode.string))
                 (Decode.field "runningStepIds" (Decode.list Decode.int))
     in
     case Decode.decodeValue decoder value of
-        Ok ( status, ids ) ->
-            Flow.setAll clusterStatus status
+        Ok ( status, detail, ids ) ->
+            Flow.setAll clusterStatus (ApiData.Success status)
+                |> Flow.seq (Flow.setAll clusterDetail detail)
                 |> Flow.seq (Flow.setAll runningStepIds ids)
 
         Err _ ->
             Flow.pure ()
+
+
+clusterStatusFromString : String -> Model.ClusterStatus
+clusterStatusFromString statusStr =
+    case statusStr of
+        "available" ->
+            Model.ClusterAvailable
+
+        "degraded" ->
+            Model.ClusterDegraded
+
+        "unavailable" ->
+            Model.ClusterUnavailable
+
+        _ ->
+            Model.ClusterUnknown
 
 
 toggleStatusBar : Flow Model ()

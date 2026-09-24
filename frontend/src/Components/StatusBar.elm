@@ -2,7 +2,7 @@ module Components.StatusBar exposing (view)
 
 import Accessors exposing (just, set, try)
 import Actions
-import Api.ApiData as ApiData
+import Api.ApiData as ApiData exposing (ApiData)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, disabled, href, id, rel, target, title, type_)
@@ -56,8 +56,17 @@ view model =
 viewMainControl : Model -> Int -> Bool -> Html (Flow Model ())
 viewMainControl model runningCount isOpen =
     let
-        ( stateClass, stateText ) =
-            clusterState (Model.getClusterStatus model)
+        status =
+            Model.getClusterStatus model
+
+        state =
+            clusterState status (Model.getClusterDetail model)
+
+        runningLabel =
+            runningText runningCount
+
+        pending =
+            not (ApiData.settled status)
     in
     Html.button
         ([ class "status-bar__main"
@@ -65,12 +74,16 @@ viewMainControl model runningCount isOpen =
          , Events.onClick Actions.toggleStatusBar
          , disabled (runningCount == 0)
          , attribute "aria-expanded" (boolText isOpen)
+         , title state.sentence
          , attribute "aria-label"
-            (if runningCount == 0 then
-                stateText ++ ", Idle"
+            (if pending then
+                state.sentence
+
+             else if runningCount == 0 then
+                state.sentence ++ ", Idle"
 
              else
-                stateText ++ ", " ++ runningText runningCount ++ ". Toggle running steps"
+                state.sentence ++ ", " ++ runningLabel ++ ". Toggle running steps"
             )
          ]
             ++ (if isOpen then
@@ -83,7 +96,7 @@ viewMainControl model runningCount isOpen =
         [ Html.span
             [ classList
                 [ ( "status-bar__state", True )
-                , ( "status-bar__state--" ++ stateClass, True )
+                , ( "status-bar__state--" ++ state.className, True )
                 ]
             ]
             [ Html.span
@@ -91,12 +104,23 @@ viewMainControl model runningCount isOpen =
                 , attribute "aria-hidden" "true"
                 ]
                 []
+            , case state.text of
+                Just label ->
+                    Html.span [ class "status-bar__state-detail" ]
+                        [ Html.text label ]
+
+                Nothing ->
+                    Html.nothing
             ]
-        , Html.span
-            [ class "status-bar__running-count"
-            , attribute "aria-live" "polite"
-            ]
-            [ Html.text (runningText runningCount) ]
+        , if pending then
+            Html.nothing
+
+          else
+            Html.span
+                [ class "status-bar__running-count"
+                , attribute "aria-live" "polite"
+                ]
+                [ Html.text runningLabel ]
         , if runningCount > 0 then
             iconCustom False
                 (if isOpen then
@@ -265,20 +289,73 @@ viewRunningStep summary =
         ]
 
 
-clusterState : ClusterStatus -> ( String, String )
-clusterState status =
-    case status of
-        ClusterAvailable ->
-            ( "available", "Cluster available" )
+type alias ClusterState =
+    { className : String
+    , sentence : String
+    , text : Maybe String
+    }
 
-        ClusterDegraded ->
-            ( "degraded", "Cluster degraded" )
 
-        ClusterUnavailable ->
-            ( "unavailable", "Cluster unavailable" )
+clusterState : ApiData ClusterStatus -> Maybe String -> ClusterState
+clusterState apiStatus detail =
+    let
+        ( className, baseSentence, label ) =
+            case apiStatus of
+                ApiData.NotAsked ->
+                    ( "loading", "Loading cluster status", Just "Loading" )
 
-        ClusterUnknown ->
-            ( "unknown", "Cluster status unknown" )
+                ApiData.Loading _ ->
+                    ( "loading", "Loading cluster status", Just "Loading" )
+
+                ApiData.Error _ ->
+                    ( "unknown", "Cluster status unknown", Nothing )
+
+                ApiData.Success status ->
+                    case status of
+                        ClusterAvailable ->
+                            ( "available", "Cluster available", Nothing )
+
+                        ClusterDegraded ->
+                            ( "degraded", "Cluster degraded", Just "Degraded" )
+
+                        ClusterUnavailable ->
+                            ( "unavailable", "Cluster unavailable", Just "Unavailable" )
+
+                        ClusterUnknown ->
+                            ( "unknown", "Cluster status unknown", Nothing )
+
+        reported =
+            Maybe.andThen nonEmptyDetail detail
+    in
+    { className = className
+    , sentence =
+        case reported of
+            Just text ->
+                baseSentence ++ ": " ++ text
+
+            Nothing ->
+                baseSentence
+    , text =
+        Maybe.map
+            (\visibleLabel ->
+                case reported of
+                    Just text ->
+                        visibleLabel ++ " · " ++ text
+
+                    Nothing ->
+                        visibleLabel
+            )
+            label
+    }
+
+
+nonEmptyDetail : String -> Maybe String
+nonEmptyDetail detail =
+    if String.isEmpty (String.trim detail) then
+        Nothing
+
+    else
+        Just detail
 
 
 runningText : Int -> String

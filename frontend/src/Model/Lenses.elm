@@ -934,9 +934,14 @@ hideOrphans =
     lens ".hideOrphans" .hideOrphans (\p b -> { p | hideOrphans = b })
 
 
-clusterStatus : Lens ls Model ClusterStatus x y
+clusterStatus : Lens ls Model (ApiData ClusterStatus) x y
 clusterStatus =
     lens ".clusterStatus" Model.getClusterStatus (\(Model m) s -> Model { m | clusterStatus = s })
+
+
+clusterDetail : Lens ls Model (Maybe String) x y
+clusterDetail =
+    lens ".clusterDetail" Model.getClusterDetail (\(Model m) d -> Model { m | clusterDetail = d })
 
 
 runningStepIds : Lens ls Model (List Int) x y

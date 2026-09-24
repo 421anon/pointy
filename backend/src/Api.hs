@@ -414,7 +414,7 @@ type Upload =
 
 type ClusterStatusStream =
     "cluster-status-stream"
-        :> Description "Streams the current SLURM cluster availability and subsequent status changes."
+        :> Description "Streams the current SLURM cluster availability, the reason for any degradation, and subsequent status changes."
         :> SseStream
 
 type AgentTurnStream =

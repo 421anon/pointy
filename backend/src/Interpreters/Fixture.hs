@@ -160,4 +160,4 @@ runSlurmFixture state = interpret $ \_ -> \case
     CancelJob key -> liftIO $ do
         atomically $ modifyTVar' (fixtureJobs state) (Map.delete key)
         markJobsEnded [key]
-    ClusterAvailability -> pure (Right "up\n")
+    ClusterAvailability -> pure (Right "pointy*|up|node1|idle\n")

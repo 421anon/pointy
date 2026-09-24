@@ -2453,9 +2453,10 @@ body:has(dialog[open]) {
 
 .status-bar__state {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   align-items: center;
   gap: var(--spacing-sm);
+  min-width: 0;
   font-weight: 600;
 
   &--available {
@@ -2472,6 +2473,23 @@ body:has(dialog[open]) {
 
   &--unknown {
     color: var(--text-muted);
+  }
+}
+
+.status-bar__state-detail {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar__state--loading {
+  color: var(--text-muted);
+
+  .status-bar__state-indicator {
+    animation: pulse-running 1.5s ease-in-out infinite;
   }
 }
 

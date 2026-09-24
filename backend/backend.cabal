@@ -257,6 +257,20 @@ test-suite status-stream
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite cluster-status
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          ClusterStatus.hs
+  build-depends:
+    , backend
+    , base
+    , bytestring
+    , containers
+    , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite dialog
   import:           warnings
   type:             exitcode-stdio-1.0

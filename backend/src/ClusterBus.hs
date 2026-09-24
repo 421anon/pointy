@@ -23,12 +23,13 @@ data ClusterStatus = Available | Degraded | Unavailable deriving (Eq, Show)
 
 data ClusterSnapshot = ClusterSnapshot
     { clusterStatus :: ClusterStatus
+    , clusterDetail :: Maybe Text
     , runningStepIds :: Set Int
     } deriving (Eq, Show)
 
 {-# NOINLINE snapshotVar #-}
 snapshotVar :: TVar ClusterSnapshot
-snapshotVar = unsafePerformIO $ newTVarIO (ClusterSnapshot Available Set.empty)
+snapshotVar = unsafePerformIO $ newTVarIO (ClusterSnapshot Available Nothing Set.empty)
 
 {-# NOINLINE broadcastChan #-}
 broadcastChan :: TChan ClusterSnapshot
@@ -38,10 +39,10 @@ broadcastChan = unsafePerformIO newBroadcastTChanIO
 restoreTracker :: TVar (Maybe (Set Int))
 restoreTracker = unsafePerformIO $ newTVarIO Nothing
 
-setClusterStatus :: ClusterStatus -> IO ()
-setClusterStatus newStatus = atomically $ do
+setClusterStatus :: ClusterStatus -> Maybe Text -> IO ()
+setClusterStatus newStatus newDetail = atomically $ do
     snap <- readTVar snapshotVar
-    let newSnap = snap {clusterStatus = newStatus}
+    let newSnap = snap {clusterStatus = newStatus, clusterDetail = newDetail}
     when (newSnap /= snap) $ do
         writeTVar snapshotVar newSnap
         writeTChan broadcastChan newSnap

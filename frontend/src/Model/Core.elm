@@ -950,7 +950,8 @@ type Model
         , compareState : CompareState
         , now : Time.Posix
         , agent : AgentState
-        , clusterStatus : ClusterStatus
+        , clusterStatus : ApiData ClusterStatus
+        , clusterDetail : Maybe String
         , runningStepIds : List Int
         , statusBarOpen : Bool
         }
@@ -1042,9 +1043,14 @@ getRoute (Model model) =
     model.route
 
 
-getClusterStatus : Model -> ClusterStatus
+getClusterStatus : Model -> ApiData ClusterStatus
 getClusterStatus (Model model) =
     model.clusterStatus
+
+
+getClusterDetail : Model -> Maybe String
+getClusterDetail (Model model) =
+    model.clusterDetail
 
 
 getRunningStepIds : Model -> List Int
@@ -1360,7 +1366,8 @@ initialModel key route flags =
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
         , agent = { initAgentState | lastChat = flags.lastChat }
-        , clusterStatus = ClusterUnknown
+        , clusterStatus = ApiData.Loading Nothing
+        , clusterDetail = Nothing
         , runningStepIds = []
         , statusBarOpen = False
         }

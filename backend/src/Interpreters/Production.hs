@@ -78,7 +78,7 @@ runSlurmProduction = interpret $ \_ -> \case
         _ <- liftIO $ cli "scancel" ["--name=" ++ key]
         pure ()
     ClusterAvailability -> do
-        (code, stdout, stderr) <- liftIO $ cli "sinfo" ["-h", "-o", "%a"]
+        (code, stdout, stderr) <- liftIO $ cli "sinfo" ["-h", "-N", "-o", "%P|%a|%N|%T"]
         pure $ case code of
             ExitSuccess -> Right stdout
             ExitFailure _ -> Left stderr
