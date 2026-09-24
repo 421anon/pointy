@@ -7,7 +7,6 @@
 
 module Handlers.Statuses (
     checkStatus,
-    getRawStatuses,
     partitionImmediateStatuses,
     resolveStepStatus,
     broadcastProjectStatus,
@@ -27,8 +26,7 @@ import ClusterBus (restoreRunningStepIds)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException)
-import qualified Control.Exception as Exception
-import Control.Monad (forM_, void, when)
+import Control.Monad (filterM, forM_, void, when)
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -126,11 +124,6 @@ getBatchedStatuses pid targetCommit = do
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
 
-getRawStatuses :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text)))
-getRawStatuses pid targetCommit = do
-    result <- getBatchedStatuses pid targetCommit
-    return $ fmap (\(statuses, _, _) -> statuses) result
-
 resolveStatusesFor :: (Nix :> es, IOE :> es) => Text -> Map Int Text -> Maybe StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesFor targetCommit certificates mStore statuses = case mStore of
     Just store -> do
@@ -225,9 +218,9 @@ restoreRunningStatuses = do
         Left err -> liftIO $ putStrLn $ "restoreRunningStatuses: cannot read HEAD: " ++ err
         Right targetCommit ->
             liftIO $
-                restoreRunningStepIds $ do
-                    eProjects <-
-                        runAppEffects $
+                restoreRunningStepIds $
+                    runAppEffects $ do
+                        eProjects <-
                             withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
                                 let ctx = ReadRepoContext repoPath (unpack targetCommit)
                                 output <- evalProjectDefinitions ctx
@@ -236,31 +229,34 @@ restoreRunningStatuses = do
                                         liftIO $ putStrLn $ "restoreRunningStatuses: error parsing projects: " ++ err
                                         return []
                                     Right projects -> return $ filter (not . projectDefHidden) (Map.elems projects)
-                    case eProjects of
-                        Left err -> do
-                            putStrLn $ "restoreRunningStatuses: transaction error: " ++ err
-                            return Set.empty
-                        Right projects
-                            | null projects -> return Set.empty
-                            | otherwise -> do
-                                results <-
-                                    mapConcurrently
-                                        ( \p -> do
-                                            let pid = projectDefId p
-                                            rawResult <-
-                                                runAppEffects (getRawStatuses pid targetCommit)
-                                                    `Exception.catch` \(e :: SomeException) -> do
-                                                        putStrLn $ "restoreRunningStatuses: error for project " ++ show pid ++ ": " ++ show e
-                                                        return (Right Map.empty)
-                                            case rawResult of
-                                                Left err -> do
-                                                    putStrLn $ "restoreRunningStatuses: raw status error for project " ++ show pid ++ ": " ++ err
-                                                    return Set.empty
-                                                Right statuses ->
-                                                    return $ Map.keysSet $ Map.filter (\(st, _) -> st == pack "running") statuses
-                                        )
-                                        projects
-                                return $ Set.unions results
+                        case eProjects of
+                            Left err -> do
+                                liftIO $ putStrLn $ "restoreRunningStatuses: transaction error: " ++ err
+                                return Set.empty
+                            Right projects -> buildingStepIds targetCommit projects
+
+buildingStepIds :: App es => Text -> [ProjectDef] -> Eff es (Set Int)
+buildingStepIds targetCommit projects = do
+    runningKeys <- runningBuildKeys
+    if Set.null runningKeys
+        then return Set.empty
+        else do
+            candidates <- Map.unions <$> mapM (buildingCertificates targetCommit runningKeys) projects
+            uncertified <- filterM (fmap not . pathValid . unpack . snd) (Map.toList candidates)
+            return $ Set.fromList (map fst uncertified)
+
+buildingCertificates :: App es => Text -> Set String -> ProjectDef -> Eff es (Map Int Text)
+buildingCertificates targetCommit runningKeys project = do
+    result <-
+        getProjectCertificates pid targetCommit
+            `catch` \(err :: SomeException) -> return (Left (show err))
+    case result of
+        Left err -> do
+            liftIO $ putStrLn $ "restoreRunningStatuses: certificates unavailable for project " ++ show pid ++ ": " ++ err
+            return Map.empty
+        Right certificates -> return $ Map.filter (isCertificateBuilding runningKeys) certificates
+  where
+    pid = projectDefId project
 
 projectContainsStep :: Int -> ProjectDef -> Bool
 projectContainsStep sid p =
