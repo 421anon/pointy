@@ -561,6 +561,11 @@ review =
     lens "review" .review (\t r -> { t | review = r })
 
 
+reviewRevision : Lens ls { a | revision : b } b x y
+reviewRevision =
+    lens "reviewRevision" .revision (\reviewed revision_ -> { reviewed | revision = revision_ })
+
+
 comparison : Lens ls { a | comparison : b } b x y
 comparison =
     lens "comparison" .comparison (\t c -> { t | comparison = c })
@@ -599,7 +604,8 @@ viewedRevision =
 
 stepShownRevision : Int -> Traversal Model String x y
 stepShownRevision stepId =
-    currentProject << success << tables << values << recordById stepId << runState << success << commit
+    orElseT (currentProject << success << tables << values << recordById stepId << runState << success << commit)
+        (orElseT (stepRecordById stepId << review << just << reviewRevision) viewedRevision)
 
 
 sortKey : Lens ls { a | sortKey : b } b x y
