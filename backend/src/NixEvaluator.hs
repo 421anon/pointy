@@ -17,17 +17,17 @@ module NixEvaluator (
     rewarmRevision,
 ) where
 
-import Config (NixEvaluatorConfig (..), configNixEvaluator, loadConfig, resolveConfigPath)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, readMVar, tryPutMVar)
 import Control.Concurrent.STM (TMVar, TQueue, atomically, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, takeTMVar, writeTQueue)
 import Control.Exception (SomeException, catch, finally, try)
-import Control.Monad (forM, forever, unless, void, when)
+import Control.Monad (forM, forever, join, unless, void, when)
 import Data.Char (ord)
 import Data.Either (isLeft, isRight)
 import Data.Foldable (for_)
 import Data.List (find, foldl')
+import Data.Maybe (catMaybes)
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map.Strict as Map
@@ -68,7 +68,7 @@ data ReplShard = ReplShard
     , replShardSession :: MVar (Maybe ReplSession)
     , replShardInteractive :: TQueue QueuedEval
     , replShardBackground :: TQueue QueuedEval
-    , replShardMemoryLimitBytes :: MVar Integer
+    , replShardMemoryLimitBytes :: MVar (Maybe Integer)
     , replShardSessionGeneration :: MVar Int
     , replShardReplacementActive :: MVar Bool
     }
@@ -108,19 +108,18 @@ pureReplShardCount = 4
 maxCachedRevisionCount :: Int
 maxCachedRevisionCount = 8
 
+warmedMemoryHeadroom :: Integer
+warmedMemoryHeadroom = 3
+
 {-# NOINLINE defaultNixEvaluator #-}
 defaultNixEvaluator :: NixEvaluator
-defaultNixEvaluator = unsafePerformIO $ do
-    path <- resolveConfigPath
-    config <- loadConfig path
-    let bytes = fromIntegral (nixEvaluatorInitialShardMemoryLimitMiB $ configNixEvaluator config) * 1024 * 1024
-    newNixEvaluator bytes
+defaultNixEvaluator = unsafePerformIO newNixEvaluator
 
-newNixEvaluator :: Integer -> IO NixEvaluator
-newNixEvaluator initialBytes =
+newNixEvaluator :: IO NixEvaluator
+newNixEvaluator =
     NixEvaluator
-        <$> newWorker PureRepl pureReplShardCount initialBytes
-        <*> newWorker ImpureRepl 1 initialBytes
+        <$> newWorker PureRepl pureReplShardCount
+        <*> newWorker ImpureRepl 1
         <*> newMVar (RevisionResultCache Nothing [] Map.empty)
 
 repoSource :: String -> RepoSource
@@ -184,7 +183,7 @@ rewarmRevision evaluator source resolveExpressions = do
             warmed <- rewarmWorker worker $ fmap (\(_, warm, _) -> warm) pending
             results <- forM pending (\(key, _, response) -> fmap ((,) key) $ atomically $ takeTMVar response)
             initialWarm <- readMVar $ replWorkerInitialWarm worker
-            when (initialWarm && warmed && all (isRight . snd) results) $ finishInitialWarm worker
+            when (initialWarm && warmed && all (isRight . snd) results) $ finishInitialWarm evaluator
             pure $ Right results
 
 activateRevisionResults :: NixEvaluator -> RepoSource -> IO ()
@@ -258,8 +257,8 @@ repoEvaluation (RepoSource _ installable) repoExpr =
             , evalTarget = EvalInstallable installable $ expressionAttr repoExpr
             }
 
-newWorker :: ReplKind -> Int -> Integer -> IO ReplWorker
-newWorker kind shardCount initialBytes = do
+newWorker :: ReplKind -> Int -> IO ReplWorker
+newWorker kind shardCount = do
     shards <- mapM newShard [0 .. shardCount - 1]
     warmRevision <- newMVar (0, Nothing)
     initialWarm <- newMVar $ kind == PureRepl
@@ -272,7 +271,7 @@ newWorker kind shardCount initialBytes = do
             <$> newMVar Nothing
             <*> newTQueueIO
             <*> newTQueueIO
-            <*> newMVar initialBytes
+            <*> newMVar Nothing
             <*> newMVar 0
             <*> newMVar False
 replShardLoop :: ReplWorker -> ReplShard -> IO ()
@@ -349,14 +348,23 @@ runWarmEvaluation worker shard pending = do
         callback result `catch` \(_ :: SomeException) -> pure ()
     pure result
 
-finishInitialWarm :: ReplWorker -> IO ()
-finishInitialWarm worker = do
-    mapM_ raiseLimit $ replWorkerShards worker
-    modifyMVar_ (replWorkerInitialWarm worker) $ const $ pure False
-  where
-    raiseLimit shard =
-        readMVar (replShardSession shard)
-            >>= mapM_ (\session -> readSessionMemoryBytes session >>= mapM_ (growShardMemoryLimit worker shard "initial warm"))
+finishInitialWarm :: NixEvaluator -> IO ()
+finishInitialWarm evaluator = do
+    let worker = pureWorker evaluator
+    warmedBytes <-
+        catMaybes
+            <$> mapM (\shard -> readMVar (replShardSession shard) >>= fmap join . traverse readSessionMemoryBytes) (replWorkerShards worker)
+    unless (null warmedBytes) $ do
+        let largest = maximum warmedBytes
+            limit = largest * warmedMemoryHeadroom
+        for_ (replWorkerShards worker ++ replWorkerShards (impureWorker evaluator)) $ \shard ->
+            modifyMVar_ (replShardMemoryLimitBytes shard) $ const $ pure $ Just limit
+        modifyMVar_ (replWorkerInitialWarm worker) $ const $ pure False
+        putStrLn $
+            "Nix evaluator memory baseline: largest warmed shard uses "
+                ++ formatMiB largest
+                ++ "; replacing shards above "
+                ++ formatMiB limit
 
 scheduleReplacementCheck :: ReplWorker -> ReplShard -> IO ()
 scheduleReplacementCheck worker shard = do
@@ -378,8 +386,8 @@ checkShardMemory worker shard = do
     for_ snapshot $ \(generation, session) -> do
         memoryBytes <- readSessionMemoryBytes session
         memoryLimit <- readMVar $ replShardMemoryLimitBytes shard
-        for_ memoryBytes $ \bytes ->
-            when (bytes > memoryLimit) $
+        for_ ((,) <$> memoryBytes <*> memoryLimit) $ \(bytes, limit) ->
+            when (bytes > limit) $
                 replaceSession worker shard generation bytes
 
 replaceSession :: ReplWorker -> ReplShard -> Int -> Integer -> IO ()
@@ -436,7 +444,7 @@ replaceSession worker shard oldGeneration oldMemoryBytes =
             `catch` \(err :: SomeException) -> pure (ReplDied $ show err)
 
     growLimitForStandby standby =
-        readSessionMemoryBytes standby >>= mapM_ (growShardMemoryLimit worker shard "warmed replacement")
+        readSessionMemoryBytes standby >>= mapM_ (growShardMemoryLimit worker shard)
 
     replacementPrefix =
         show (replWorkerKind worker)
@@ -444,26 +452,24 @@ replaceSession worker shard oldGeneration oldMemoryBytes =
             ++ show (replShardId shard)
             ++ " RAM replacement "
 
-growShardMemoryLimit :: ReplWorker -> ReplShard -> String -> Integer -> IO ()
-growShardMemoryLimit worker shard reason memoryBytes =
-    modifyMVar_ (replShardMemoryLimitBytes shard) $ \memoryLimit ->
-        if memoryBytes <= memoryLimit
-            then pure memoryLimit
-            else do
+growShardMemoryLimit :: ReplWorker -> ReplShard -> Integer -> IO ()
+growShardMemoryLimit worker shard memoryBytes =
+    modifyMVar_ (replShardMemoryLimitBytes shard) $ \case
+        Just memoryLimit
+            | memoryBytes > memoryLimit -> do
                 let grownLimit = until (> memoryBytes) (* 2) memoryLimit
                 logWarning $
                     show (replWorkerKind worker)
                         ++ " shard "
                         ++ show (replShardId shard)
-                        ++ " "
-                        ++ reason
-                        ++ " uses "
+                        ++ " warmed replacement uses "
                         ++ formatMiB memoryBytes
                         ++ "; growing limit from "
                         ++ formatMiB memoryLimit
                         ++ " to "
                         ++ formatMiB grownLimit
-                pure grownLimit
+                pure $ Just grownLimit
+        memoryLimit -> pure memoryLimit
 
 bumpSessionGeneration :: ReplShard -> IO ()
 bumpSessionGeneration shard =

@@ -6,7 +6,6 @@ module Config (
     UserRepoConfig (..),
     SlurmConfig (..),
     AgentConfig (..),
-    NixEvaluatorConfig (..),
     defaultAgentConfig,
     loadConfig,
     defaultConfigPath,
@@ -62,16 +61,8 @@ defaultAgentConfig =
         , agentTitlePrompt = "Name the chat that opens with the request in this message. Reply with the title only: five words at most, no quotes, no punctuation, no explanation."
         }
 
-data NixEvaluatorConfig = NixEvaluatorConfig
-    { nixEvaluatorInitialShardMemoryLimitMiB :: Int
-    }
-    deriving (Show)
-
-defaultNixEvaluatorConfig :: NixEvaluatorConfig
-defaultNixEvaluatorConfig = NixEvaluatorConfig 1024
-
 data Config where
-    Config :: {configUserRepo :: UserRepoConfig, configSlurm :: SlurmConfig, configAgent :: AgentConfig, configNixEvaluator :: NixEvaluatorConfig} -> Config
+    Config :: {configUserRepo :: UserRepoConfig, configSlurm :: SlurmConfig, configAgent :: AgentConfig} -> Config
     deriving (Show)
 
 userRepoCodec :: TomlCodec UserRepoConfig
@@ -126,20 +117,14 @@ agentCodec =
             , agentTitlePrompt = fromMaybe (agentTitlePrompt defaultAgentConfig) mtitle
             }
 
-nixEvaluatorCodec :: TomlCodec NixEvaluatorConfig
-nixEvaluatorCodec =
-    NixEvaluatorConfig . fromMaybe 1024
-        <$> Toml.dioptional (Toml.int "initial-shard-memory-limit-mib") .= (Just . nixEvaluatorInitialShardMemoryLimitMiB)
-
 configCodec :: TomlCodec Config
 configCodec =
     mkConfig
         <$> Toml.table userRepoCodec "user-repo" .= configUserRepo
         <*> Toml.dimap Just (fromMaybe defaultSlurmConfig) (Toml.dioptional (Toml.table slurmCodec "slurm")) .= configSlurm
         <*> Toml.dioptional (Toml.table agentCodec "agent") .= (Just . configAgent)
-        <*> Toml.dioptional (Toml.table nixEvaluatorCodec "nix-evaluator") .= (Just . configNixEvaluator)
   where
-    mkConfig userRepo slurm mAgent mNix = Config userRepo slurm (fromMaybe defaultAgentConfig mAgent) (fromMaybe defaultNixEvaluatorConfig mNix)
+    mkConfig userRepo slurm mAgent = Config userRepo slurm (fromMaybe defaultAgentConfig mAgent)
 
 defaultConfigPath :: FilePath
 defaultConfigPath = "/home/backend/config.toml"
@@ -152,7 +137,4 @@ loadConfig path = do
     result <- Toml.decodeFileEither configCodec path
     case result of
         Left errs -> error $ "Failed to parse config: " ++ show errs
-        Right config
-            | nixEvaluatorInitialShardMemoryLimitMiB (configNixEvaluator config) < 1 ->
-                error "nix-evaluator.initial-shard-memory-limit-mib must be >= 1"
-            | otherwise -> pure config
+        Right config -> pure config
