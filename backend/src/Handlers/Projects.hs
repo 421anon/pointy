@@ -29,7 +29,7 @@ import Effectful (Eff, IOE, (:>))
 import Effects (AppM, Eval)
 import GHC.Generics (Generic)
 import Network.HTTP.Media ((//))
-import OutPaths (withWriteRepoTransaction)
+import OutPaths (evalProjectDefinition, evalProjectDefinitions, withWriteRepoTransaction)
 import Servant (Accept (..), MimeRender (..), MimeUnrender (..), NoContent (..))
 import Servant.Server (err400, err500, errBody)
 import System.Directory (doesDirectoryExist, listDirectory)
@@ -38,7 +38,7 @@ import System.FilePath (takeBaseName, (</>))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalImpureJsonExpr, runNixEvalJsonInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalImpureJsonExpr, withReadRepoTransaction)
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -59,7 +59,7 @@ getProjectsHandler commit = do
     result <- lift $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
         let targetCommit = maybe commitHash T.unpack commit
             targetCtx = ReadRepoContext repoPath targetCommit
-        output <- runNixEvalJsonInRepo targetCtx "#pointy.projects"
+        output <- evalProjectDefinitions targetCtx
         mtimes <- liftIO $ readRecordMtimes repoPath targetCommit
         case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of
             Left err -> ExceptT $ return $ Left $ "decoding #pointy.projects failed: " ++ err
@@ -156,7 +156,7 @@ postProjectHandler (DynamicJson jsonBody) = do
     result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
         projectId <- saveProject ctx Nothing jsonBody
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx ("#pointy.projects." ++ show projectId)) $ \err -> do
+        output <- catchError (TLE.encodeUtf8 . TL.pack <$> evalProjectDefinition ctx projectId) $ \err -> do
             let outputPath = worktreePath </> "projects" </> show projectId ++ ".nix"
             _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err

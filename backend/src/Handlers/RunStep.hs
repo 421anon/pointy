@@ -23,7 +23,7 @@ import Control.Monad (foldM, void, when)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (eitherDecode)
+import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:))
 import Data.List (foldl', isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
@@ -40,7 +40,7 @@ import Servant (NoContent (..), err404, err500, errBody)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
-import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
 runStepHandler :: Int -> Maybe T.Text -> AppM NoContent
 runStepHandler eid commit = do
@@ -80,7 +80,8 @@ stepLogHandler eid commit = do
                     return (repoPath, maybe commitHash T.unpack commit)
 
         let ctx = ReadRepoContext repoPath targetCommit
-        lift $ resolveBuildLog (certificateInstallable ctx eid)
+        target <- resolveStepTarget ctx eid
+        lift $ resolveBuildLog (stepTargetInstallable ctx eid target)
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
@@ -101,11 +102,31 @@ repoInstallable :: ReadRepoContext -> String -> String
 repoInstallable (ReadRepoContext repoPath targetCommit) fragment =
     "git+file://" ++ repoPath ++ "?rev=" ++ targetCommit ++ "&allRefs=true#" ++ fragment
 
-certificateInstallable :: ReadRepoContext -> Int -> String
-certificateInstallable ctx eid = repoInstallable ctx ("pointy.certificates." ++ show eid ++ ".certificate")
+stepAttr :: Int -> String
+stepAttr eid = "pointy.steps." ++ show eid
+
+data StepTarget = StepTarget
+    { stepTargetCertified :: Bool
+    , stepTargetPath :: FilePath
+    }
+
+instance FromJSON StepTarget where
+    parseJSON = withObject "StepTarget" $ \o -> StepTarget <$> o .: "certified" <*> o .: "path"
+
+resolveStepTarget :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) StepTarget
+resolveStepTarget ctx eid = do
+    output <- runNixEvalJsonApplyInRepo ctx certificateOrLegacyStep ('#' : stepAttr eid)
+    either (throwError . (("Failed to decode the build target of step " ++ show eid ++ ": ") ++)) pure $
+        eitherDecode (TLE.encodeUtf8 (TL.pack output))
+  where
+    certificateOrLegacyStep = "step: { certified = step ? certificate; path = builtins.unsafeDiscardStringContext (step.certificate or step).outPath; }"
+
+stepTargetInstallable :: ReadRepoContext -> Int -> StepTarget -> String
+stepTargetInstallable ctx eid target =
+    repoInstallable ctx $ stepAttr eid ++ if stepTargetCertified target then ".certificate" else ""
 
 extrasInstallable :: ReadRepoContext -> Int -> String
-extrasInstallable ctx eid = repoInstallable ctx ("pointy.steps." ++ show eid ++ ".meta.pointy.extras")
+extrasInstallable ctx eid = repoInstallable ctx (stepAttr eid ++ ".meta.pointy.extras")
 
 data SubmitOutcome
     = AlreadyCertified FilePath
@@ -125,7 +146,8 @@ submitStep ctx outcomes deps sid
         return $ NotSubmitted $ "dependency step(s) " ++ show blockedOn ++ " could not be scheduled"
     | otherwise = do
         result <- runExceptT $ do
-            certificate <- T.unpack <$> getStepCertificate ctx sid
+            target <- resolveStepTarget ctx sid
+            let certificate = stepTargetPath target
             certified <- lift $ isBuilt certificate
             let buildKey = buildKeyForOutPath certificate
             if certified
@@ -143,7 +165,7 @@ submitStep ctx outcomes deps sid
                                         buildKey
                                         depJobIds
                                         (encodeJobComment (JobComment "step" sid (readCommitHash ctx) certificate))
-                                        ["nix", "build", "--no-link", "--no-eval-cache", certificateInstallable ctx sid]
+                                        ["nix", "build", "--no-link", "--no-eval-cache", stepTargetInstallable ctx sid target]
                             case submitted of
                                 Left err -> throwError err
                                 Right jobId -> return $ Enqueued certificate buildKey [jobId]
@@ -218,11 +240,6 @@ getStepOutPath ctx eid = do
     output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
     return $ T.pack output
 
-getStepCertificate :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) T.Text
-getStepCertificate ctx eid = do
-    output <- runNixEvalRawInRepo ctx ("#pointy.certificates." ++ show eid ++ ".certificate.outPath")
-    return $ T.pack output
-
 getExtrasOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) (Maybe FilePath)
 getExtrasOutPath ctx eid = do
     result <-
@@ -295,7 +312,7 @@ topoOrder graph = go Set.empty [] (Map.keys graph)
 
 getDependencies :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) [Int]
 getDependencies ctx stepId = do
-    result <- lift $ runExceptT $ runNixEvalJsonInRepo ctx ("#pointy.dependencies." ++ show stepId)
+    result <- lift $ runExceptT $ runNixEvalJsonInRepo ctx ('#' : stepAttr stepId ++ ".dependencies")
     case result of
         Left _ -> return []
         Right stdout ->
@@ -330,8 +347,8 @@ stopStepSync eid commit = do
             Just extrasPath -> cancel (buildKeyForOutPath extrasPath)
             Nothing -> return ()
 
-        certificate <- getStepCertificate ctx eid
-        lift $ cancel $ buildKeyForOutPath $ T.unpack certificate
+        target <- resolveStepTarget ctx eid
+        lift $ cancel $ buildKeyForOutPath $ stepTargetPath target
         lift $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of

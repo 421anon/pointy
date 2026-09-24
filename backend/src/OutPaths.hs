@@ -9,6 +9,9 @@ module OutPaths (
     warmProjectCertificates,
     warmProjectCertificatesForCommit,
     scheduleProjectCertificatesWarm,
+    evalProjectDefinitions,
+    evalProjectDefinition,
+    decodeProjectDefinitions,
     withWriteRepoTransaction,
     ProjectDef (..),
     StepRef (..),
@@ -22,7 +25,7 @@ import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, genericParseJSON)
+import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, eitherDecode, genericParseJSON)
 import Data.Char (toLower)
 import Data.Either (isRight)
 import Data.List (stripPrefix)
@@ -39,7 +42,7 @@ import Effects (Eval)
 import GHC.Generics (Generic)
 import NixEvaluator (RepoSource, repoSource)
 import System.IO.Unsafe (unsafePerformIO)
-import UserRepo (ReadRepoContext (..), WriteRepoContext, ensureRepoCommit, rewarmRepoJsonExpressions, runNixEvalJsonInRepo, runNixEvalJsonInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
+import UserRepo (ReadRepoContext (..), RepoContext, WriteRepoContext, ensureRepoCommit, rewarmRepoJsonExpressions, runNixEvalJsonApplyInRepo, runNixEvalJsonApplyInRepoBackground, userRepoPath, withReadRepoTransaction, withWriteRepoTransactionRaw)
 
 data ProjectDef = ProjectDef
     { projectDefId :: Int
@@ -77,7 +80,7 @@ prefixedFieldOptions prefix =
 
 getProjectCertificates :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Map Int Text))
 getProjectCertificates pid targetCommit = runExceptT $ do
-    let attr = projectCertificateAttr pid
+    let attr = projectAttr pid
     withExceptT ("Failed to prepare project commit: " ++) $
         ExceptT $
             liftIO $
@@ -87,8 +90,9 @@ getProjectCertificates pid targetCommit = runExceptT $ do
     repoPath <- liftIO userRepoPath
     output <-
         withExceptT (("Failed to evaluate " ++ attr ++ ": ") ++) $
-            runNixEvalJsonInRepo
+            runNixEvalJsonApplyInRepo
                 (ReadRepoContext repoPath $ unpack targetCommit)
+                certificatesOrLegacyOutPaths
                 attr
     maybe (throwError $ "Failed to parse " ++ attr) pure $ decodeJson output
 
@@ -96,7 +100,7 @@ scheduleProjectCertificatesWarm :: Int -> Text -> IO ()
 scheduleProjectCertificatesWarm pid commit = do
     repoPath <- userRepoPath
     let ctx = ReadRepoContext repoPath $ unpack commit
-    void $ forkIO $ runAppEffects $ void $ runExceptT $ runNixEvalJsonInRepoBackground ctx $ projectCertificateAttr pid
+    void $ forkIO $ runAppEffects $ void $ runExceptT $ runNixEvalJsonApplyInRepoBackground ctx certificatesOrLegacyOutPaths $ projectAttr pid
 
 warmProjectCertificates :: (Eval :> es, IOE :> es) => Eff es ()
 warmProjectCertificates = do
@@ -109,11 +113,11 @@ warmProjectCertificates = do
 
 warmProjectCertificatesForCommit :: (Eval :> es) => ReadRepoContext -> ExceptT String (Eff es) ()
 warmProjectCertificatesForCommit ctx = do
-    attrs <- ExceptT $ revisionProjectExpressions ctx
-    results <- ExceptT $ rewarmRepoJsonExpressions (readRepoSource ctx) $ toList attrs
+    expressions <- ExceptT $ revisionProjectExpressions ctx
+    results <- ExceptT $ rewarmRepoJsonExpressions (readRepoSource ctx) $ toList expressions
     forM_ results $ \case
         (Nothing, result) ->
-            either (throwError . ("Failed to warm #pointy.projects: " ++)) (const $ pure ()) result
+            either (throwError . (("Failed to warm " ++ projectsAttr ++ ": ") ++)) (const $ pure ()) result
         (Just pid, result) ->
             void $ either throwError pure $ decodeCertificateResult pid result
 
@@ -121,22 +125,43 @@ readRepoSource :: ReadRepoContext -> RepoSource
 readRepoSource (ReadRepoContext repoPath commitHash) =
     repoSource $ "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
 
-revisionProjectExpressions :: (Eval :> es) => ReadRepoContext -> Eff es (Either String (NonEmpty (Maybe Int, String)))
+revisionProjectExpressions :: (Eval :> es) => ReadRepoContext -> Eff es (Either String (NonEmpty (Maybe Int, String, String)))
 revisionProjectExpressions ctx = runExceptT $ do
-    projectsRaw <- runNixEvalJsonInRepo ctx "#pointy.projects"
-    projectDefs <-
-        maybe (throwError "Failed to parse #pointy.projects") pure (decodeJson projectsRaw :: Maybe (Map String ProjectDef))
-    pure $ (Nothing, "#pointy.projects") :| [(Just pid, projectCertificateAttr pid) | pid <- map projectDefId $ Map.elems projectDefs]
+    projectDefs <- ExceptT . pure . decodeProjectDefinitions =<< evalProjectDefinitions ctx
+    pure $
+        (Nothing, projectDefinitions, projectsAttr)
+            :| [(Just pid, certificatesOrLegacyOutPaths, projectAttr pid) | pid <- map projectDefId $ Map.elems projectDefs]
 
-projectCertificateAttr :: Int -> String
-projectCertificateAttr pid = "#pointy.projectCertificates." ++ show pid
+evalProjectDefinitions :: (RepoContext ctx, Eval :> es) => ctx -> ExceptT String (Eff es) String
+evalProjectDefinitions ctx = runNixEvalJsonApplyInRepo ctx projectDefinitions projectsAttr
+
+evalProjectDefinition :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) String
+evalProjectDefinition ctx pid = runNixEvalJsonApplyInRepo ctx projectDefinition (projectAttr pid)
+
+decodeProjectDefinitions :: String -> Either String (Map String ProjectDef)
+decodeProjectDefinitions = either (Left . (("Failed to parse " ++ projectsAttr ++ ": ") ++)) Right . eitherDecode . TLE.encodeUtf8 . TL.pack
+
+projectsAttr :: String
+projectsAttr = "#pointy.projects"
+
+projectAttr :: Int -> String
+projectAttr pid = projectsAttr ++ "." ++ show pid
+
+projectDefinitions :: String
+projectDefinitions = "builtins.mapAttrs (_: " ++ projectDefinition ++ ")"
+
+projectDefinition :: String
+projectDefinition = "project: builtins.removeAttrs project [ \"outPaths\" \"certificates\" ]"
+
+certificatesOrLegacyOutPaths :: String
+certificatesOrLegacyOutPaths = "project: project.certificates or project.outPaths"
 
 decodeCertificateResult :: Int -> Either String String -> Either String (Map Int Text)
 decodeCertificateResult pid =
     either (Left . (("Failed to evaluate " ++ attr ++ ": ") ++)) $
         maybe (Left $ "Failed to parse " ++ attr) Right . decodeJson
   where
-    attr = projectCertificateAttr pid
+    attr = projectAttr pid
 
 decodeJson :: (FromJSON a) => String -> Maybe a
 decodeJson = decode . TLE.encodeUtf8 . TL.pack

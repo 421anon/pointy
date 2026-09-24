@@ -67,7 +67,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                     Nothing -> throwError $ err400{errBody = "Download step requires args.url"}
                     Just newUrl -> do
                         existingResult <- lift $ withReadRepoTransaction $ \ctx -> do
-                            existingJson <- runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)
+                            existingJson <- runNixEvalJsonInRepo ctx (stepDefAttr stepId)
                             case eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack existingJson))) of
                                 Left err -> throwError $ "Failed to decode existing step: " ++ err
                                 Right v -> return v
@@ -104,7 +104,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
 
         case mExistingVal of
             Just existingVal -> do
-                currentJson <- runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)
+                currentJson <- runNixEvalJsonInRepo ctx (stepDefAttr stepId)
                 currentVal <- case eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack currentJson))) of
                     Left err -> throwError $ "Failed to decode current step: " ++ err
                     Right v -> return v
@@ -122,7 +122,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
 
         case mDownloaded of
             Just _ -> do
-                _ <- runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)
+                _ <- runNixEvalJsonInRepo ctx (stepDefAttr stepId)
                 return ()
             Nothing -> return ()
 
@@ -132,6 +132,9 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
             liftIO $ forkBroadcastStatusForStepProjectsAtHead stepId
             return NoContent
         Left err -> throwError $ err409{errBody = TLE.encodeUtf8 (TL.pack err)}
+
+stepDefAttr :: Int -> String
+stepDefAttr stepId = "#pointy.steps." ++ show stepId ++ ".def"
 
 postStepHandler :: Maybe Int -> Maybe Int -> DynamicJson -> AppM DynamicJson
 postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
@@ -174,7 +177,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
         case maybeProjectId of
             Just projectId -> assignRecordToProject ctx projectId stepId
             Nothing -> return ()
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx ("#pointy.stepDefs." ++ show stepId)) $ \err -> do
+        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx (stepDefAttr stepId)) $ \err -> do
             let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
             _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
             throwError err

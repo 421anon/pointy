@@ -28,16 +28,16 @@ runProduction action = runEff (runSlurmProduction (runNixProduction (runEvalProd
 
 runEvalProduction :: (IOE :> es) => Eff (Eval : es) a -> Eff es a
 runEvalProduction = interpret $ \_ -> \case
-    EvalJson priority source attr -> liftIO $ evaluate defaultNixEvaluator priority source (jsonExpression attr)
+    EvalJson source attr -> liftIO $ evaluate defaultNixEvaluator Interactive source (jsonExpression attr)
     EvalRaw source attr -> liftIO $ evaluate defaultNixEvaluator Interactive source (rawExpression attr)
-    EvalJsonApply source applyExpr attr -> liftIO $ evaluate defaultNixEvaluator Interactive source (jsonAppliedExpression applyExpr attr)
+    EvalJsonApply priority source applyExpr attr -> liftIO $ evaluate defaultNixEvaluator priority source (jsonAppliedExpression applyExpr attr)
     EvalImpure expression -> liftIO $ evaluateImpure defaultNixEvaluator expression
     Rewarm source attrs -> do
         result <- liftIO $ rewarmRevision defaultNixEvaluator source (pure $ Right (expressions attrs))
         pure (fmap NonEmpty.toList result)
   where
-    expressions :: [(Maybe Int, String)] -> NonEmpty (Maybe Int, RepoExpression)
-    expressions = NonEmpty.fromList . map (\(key, attr) -> (key, jsonExpression attr))
+    expressions :: [(Maybe Int, String, String)] -> NonEmpty (Maybe Int, RepoExpression)
+    expressions = NonEmpty.fromList . map (\(key, applyExpr, attr) -> (key, jsonAppliedExpression applyExpr attr))
 
 runNixProduction :: (IOE :> es) => Eff (Nix : es) a -> Eff es a
 runNixProduction = interpret $ \_ -> \case

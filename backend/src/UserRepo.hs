@@ -8,7 +8,7 @@ module UserRepo (
     ensureUserRepo,
     runNix,
     runNixEvalJsonInRepo,
-    runNixEvalJsonInRepoBackground,
+    runNixEvalJsonApplyInRepoBackground,
     runNixEvalRawInRepo,
     runNixEvalJsonApplyInRepo,
     runNixEvalImpureJsonExpr,
@@ -85,21 +85,21 @@ runNix args = ExceptT $ do
         ExitFailure _ -> Left stderr
 
 runNixEvalJsonInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
-runNixEvalJsonInRepo ctx attr = ExceptT $ evalJson Interactive (evaluatorSource ctx) attr
+runNixEvalJsonInRepo ctx attr = ExceptT $ evalJson (evaluatorSource ctx) attr
 
-runNixEvalJsonInRepoBackground :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
-runNixEvalJsonInRepoBackground ctx attr = ExceptT $ evalJson Background (evaluatorSource ctx) attr
+runNixEvalJsonApplyInRepoBackground :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) String
+runNixEvalJsonApplyInRepoBackground ctx applyExpr attr = ExceptT $ evalJsonApply Background (evaluatorSource ctx) applyExpr attr
 
 runNixEvalRawInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
 runNixEvalRawInRepo ctx attr = ExceptT $ evalRaw (evaluatorSource ctx) attr
 
 runNixEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) String
-runNixEvalJsonApplyInRepo ctx applyExpr attr = ExceptT $ evalJsonApply (evaluatorSource ctx) applyExpr attr
+runNixEvalJsonApplyInRepo ctx applyExpr attr = ExceptT $ evalJsonApply Interactive (evaluatorSource ctx) applyExpr attr
 
 runNixEvalImpureJsonExpr :: (Eval :> es) => String -> ExceptT String (Eff es) String
 runNixEvalImpureJsonExpr = ExceptT . evalImpure
 
-rewarmRepoJsonExpressions :: (Eval :> es) => RepoSource -> [(Maybe Int, String)] -> Eff es (Either String [(Maybe Int, Either String String)])
+rewarmRepoJsonExpressions :: (Eval :> es) => RepoSource -> [(Maybe Int, String, String)] -> Eff es (Either String [(Maybe Int, Either String String)])
 rewarmRepoJsonExpressions = rewarm
 
 userRepoPath :: IO FilePath

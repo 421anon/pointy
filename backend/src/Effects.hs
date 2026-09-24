@@ -55,11 +55,11 @@ toHandler :: (forall x. Eff AppEffects x -> IO x) -> AppM a -> Handler a
 toHandler runEffects = Handler . mapExceptT runEffects
 
 data Eval :: Effect where
-    EvalJson :: EvalPriority -> RepoSource -> String -> Eval m (Either String String)
+    EvalJson :: RepoSource -> String -> Eval m (Either String String)
     EvalRaw :: RepoSource -> String -> Eval m (Either String String)
-    EvalJsonApply :: RepoSource -> String -> String -> Eval m (Either String String)
+    EvalJsonApply :: EvalPriority -> RepoSource -> String -> String -> Eval m (Either String String)
     EvalImpure :: String -> Eval m (Either String String)
-    Rewarm :: RepoSource -> [(Maybe Int, String)] -> Eval m (Either String [(Maybe Int, Either String String)])
+    Rewarm :: RepoSource -> [(Maybe Int, String, String)] -> Eval m (Either String [(Maybe Int, Either String String)])
 
 type instance DispatchOf Eval = Dynamic
 
@@ -95,19 +95,19 @@ data SlurmQuery
     | JobIdsByName String
     | AllJobs
 
-evalJson :: (Eval :> es) => EvalPriority -> RepoSource -> String -> Eff es (Either String String)
-evalJson priority source attr = send (EvalJson priority source attr)
+evalJson :: (Eval :> es) => RepoSource -> String -> Eff es (Either String String)
+evalJson source attr = send (EvalJson source attr)
 
 evalRaw :: (Eval :> es) => RepoSource -> String -> Eff es (Either String String)
 evalRaw source attr = send (EvalRaw source attr)
 
-evalJsonApply :: (Eval :> es) => RepoSource -> String -> String -> Eff es (Either String String)
-evalJsonApply source applyExpr attr = send (EvalJsonApply source applyExpr attr)
+evalJsonApply :: (Eval :> es) => EvalPriority -> RepoSource -> String -> String -> Eff es (Either String String)
+evalJsonApply priority source applyExpr attr = send (EvalJsonApply priority source applyExpr attr)
 
 evalImpure :: (Eval :> es) => String -> Eff es (Either String String)
 evalImpure = send . EvalImpure
 
-rewarm :: (Eval :> es) => RepoSource -> [(Maybe Int, String)] -> Eff es (Either String [(Maybe Int, Either String String)])
+rewarm :: (Eval :> es) => RepoSource -> [(Maybe Int, String, String)] -> Eff es (Either String [(Maybe Int, Either String String)])
 rewarm source attrs = send (Rewarm source attrs)
 
 runNixCli :: (Nix :> es) => [String] -> Eff es (ExitCode, String, String)

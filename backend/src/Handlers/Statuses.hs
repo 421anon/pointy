@@ -32,20 +32,17 @@ import Control.Monad (forM_, void, when)
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (eitherDecode)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import Data.Text (Text, pack, unpack)
 import qualified Data.Set as Set
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effectful.Exception (catch)
 import Effects (App, AppEffects, Nix, Slurm, pathValid)
-import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), getProjectCertificates)
-import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, userRepoPath, withReadRepoTransaction)
+import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), decodeProjectDefinitions, evalProjectDefinitions, getProjectCertificates)
+import UserRepo (ReadRepoContext (..), userRepoPath, withReadRepoTransaction)
 
 checkStatus :: (Nix :> es, Slurm :> es) => FilePath -> Eff es (Text, Maybe Text)
 checkStatus certificate = do
@@ -168,10 +165,9 @@ withStepProjects :: App es => Int -> Text -> (Int -> ReadRepoContext -> Eff es (
 withStepProjects sid targetCommit action = do
     result <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
         let ctx = ReadRepoContext repoPath (unpack targetCommit)
-        output <- runNixEvalJsonInRepo ctx "#pointy.projects"
-        let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
-        case decodeResult of
-            Left err -> liftIO $ putStrLn $ "Error parsing #pointy.projects for step " ++ show sid ++ ": " ++ err
+        output <- evalProjectDefinitions ctx
+        case decodeProjectDefinitions output of
+            Left err -> liftIO $ putStrLn $ "Error for step " ++ show sid ++ ": " ++ err
             Right projects -> do
                 let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
                 lift $
@@ -234,9 +230,8 @@ restoreRunningStatuses = do
                         runAppEffects $
                             withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
                                 let ctx = ReadRepoContext repoPath (unpack targetCommit)
-                                output <- runNixEvalJsonInRepo ctx "#pointy.projects"
-                                let decodeResult = eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Map String ProjectDef)
-                                case decodeResult of
+                                output <- evalProjectDefinitions ctx
+                                case decodeProjectDefinitions output of
                                     Left err -> do
                                         liftIO $ putStrLn $ "restoreRunningStatuses: error parsing projects: " ++ err
                                         return []

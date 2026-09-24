@@ -110,8 +110,8 @@ getProjectReviewHandler projectId commit = do
         reviews <- (<> Map.fromList [(stepId, Nothing) | stepId <- stepIds]) <$> stepReviews context stepIds
         reviewedOutputs <- reviewedPaths (readRepoPath context) stepOutPaths reviews
         comparisons <- stepComparisons viewed reviews reviewedOutputs
-        reviewedCertificates <- reviewedPaths (readRepoPath context) stepCertificates reviews
-        statuses <- mapM (either (const $ pure ("not-started", Nothing)) (lift . checkStatus)) reviewedCertificates
+        reviewedCertificates <- reviewedPaths (readRepoPath context) stepCertificatesOrLegacyOutPaths reviews
+        statuses <- mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedCertificates
         let stepReport stepId review = StepReviewReport review (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
     orFail err500 result
@@ -478,11 +478,11 @@ stepReview ctx stepId = stepReviews ctx [stepId] >>= maybe (throwError ("Step " 
 stepReviews :: (RepoContext ctx, Eval :> es) => ctx -> [Int] -> ExceptT String (Eff es) StepReviews
 stepReviews _ [] = pure Map.empty
 stepReviews ctx stepIds = do
-    looked <- decodeNix "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames "steps" reviewOfExistingStep stepIds) "#pointy.stepDefs"
+    looked <- decodeNix "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames "steps" reviewOfExistingStep stepIds) "#pointy.steps"
     pure $ Map.mapMaybe listToMaybe $ Map.fromList $ zip stepIds (looked :: [[Maybe Review]])
   where
     reviewOfExistingStep =
-        "if builtins.hasAttr name steps then [ (let step = steps.${name}; in if (step.reviewedRevision or null) != null then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
+        "if builtins.hasAttr name steps then [ (let step = steps.${name}.def; in if (step.reviewedRevision or null) != null then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
 
 reviewedPaths :: (IOE :> es, Eval :> es) => FilePath -> (ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths) -> StepReviews -> ExceptT String (Eff es) StepOutPaths
 reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)
@@ -495,12 +495,12 @@ reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.
             Right viewed -> lift $ runExceptT $ resolve viewed stepIds
         pure $ either (\err -> Map.fromList [(stepId, Left err) | stepId <- stepIds]) id result
 
-stepCertificates :: (Eval :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths
-stepCertificates context stepIds = do
-    resolved <- decodeNix "Failed to decode step certificates" =<< runNixEvalJsonApplyInRepo context (mapStepNames "certificates" certificateExpression stepIds) "#pointy.certificates"
+stepCertificatesOrLegacyOutPaths :: (Eval :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths
+stepCertificatesOrLegacyOutPaths context stepIds = do
+    resolved <- decodeNix "Failed to decode step certificates" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" certificateExpression stepIds) "#pointy.steps"
     pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
   where
-    certificateExpression = "let path = builtins.tryEval (builtins.unsafeDiscardStringContext (toString certificates.${name}.certificate)); in if path.success then path.value else null"
+    certificateExpression = "let path = builtins.tryEval (builtins.unsafeDiscardStringContext (toString (steps.${name}.certificate or steps.${name}).outPath)); in if path.success then path.value else null"
     entry = maybe (Left ("The certificate of a step could not be evaluated at " ++ readCommitHash context ++ ".")) (Right . T.unpack . T.strip)
 
 stepOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) FilePath

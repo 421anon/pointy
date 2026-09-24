@@ -11,11 +11,11 @@ module Fixture.Document (
     pseudoHash,
 ) where
 
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecode, toJSON, withObject, (.:), (.:?), (.!=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecode, object, toJSON, withObject, (.:), (.:?), (.!=), (.=))
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit, ord)
-import Data.List (isInfixOf, isSuffixOf, stripPrefix)
+import Data.List (isInfixOf)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
@@ -66,32 +66,24 @@ loadDocument path = eitherDecode <$> LBS.readFile path
 
 jsonAnswer :: FixtureDocument -> String -> Either String String
 jsonAnswer document attr =
-    case Map.lookup attr (documentJson document) of
-        Just value -> Right (encodeValue value)
-        Nothing -> case projectIdOf attr of
-            Just pid -> Right (encodeValue (projectCertificates document pid))
-            Nothing -> Left ("fixture has no answer for " ++ attr)
+    maybe (Left ("fixture has no answer for " ++ attr)) (Right . encodeValue) (Map.lookup attr (documentJson document))
 
 rawAnswer :: FixtureDocument -> String -> Either String String
 rawAnswer document attr =
-    case Map.lookup attr (documentRaw document) of
-        Just value -> Right (T.unpack value)
-        Nothing -> case certificateStepOf attr of
-            Just stepId ->
-                maybe
-                    (Left ("fixture has no certificate answer for " ++ attr))
-                    (Right . T.unpack)
-                    (Map.lookup stepId (documentCertificates document))
-            Nothing -> Left ("fixture has no raw answer for " ++ attr)
+    maybe (Left ("fixture has no raw answer for " ++ attr)) (Right . T.unpack) (Map.lookup attr (documentRaw document))
 
 appliedAnswer :: FixtureDocument -> String -> String -> Either String String
 appliedAnswer document applyExpr attr
+    | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
+    | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
+    | "certified" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
+    | "srcFiles" `isInfixOf` applyExpr = Right (either (const (encodeValue Null)) id (jsonAnswer document (attr ++ ".srcFiles")))
     | "presets" `isInfixOf` applyExpr = Right (encodeValue (documentPresets document))
     | "notices" `isInfixOf` applyExpr = Right (encodeValue (entry (documentNotices document)))
     | "extras.outPath" `isInfixOf` applyExpr = Right (encodeValue extrasValue)
     | "step.def.id" `isInfixOf` applyExpr = Right (encodeValue (maybe Null (entryOf (documentProjectStepIds document)) (listToMaybe (idsIn applyExpr))))
     | "reviewedRevision" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (\id_ -> [entryOf (documentReviews document) id_]) (idsIn applyExpr))))
-    | "certificate" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (pathOf (documentCertificates document)) (idsIn applyExpr))))
+    | "certificate" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (maybe Null String . statusPathOf document) (idsIn applyExpr))))
     | "tryEval" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (pathOf (documentOutPaths document)) (idsIn applyExpr))))
     | otherwise = Left ("fixture has no answer for " ++ applyExpr ++ " on " ++ attr)
   where
@@ -102,18 +94,23 @@ appliedAnswer document applyExpr attr
     extrasValue = case Map.lookup key (documentExtrasOutPaths document) of
         Just (Just path) -> String path
         _ -> Null
+    stepTarget path = object ["certified" .= certified document, "path" .= path]
 
-projectCertificates :: FixtureDocument -> String -> Value
-projectCertificates document pid =
+certified :: FixtureDocument -> Bool
+certified = not . Map.null . documentCertificates
+
+statusPathOf :: FixtureDocument -> String -> Maybe Text
+statusPathOf document stepId =
+    Map.lookup stepId (if certified document then documentCertificates document else documentOutPaths document)
+
+projectStatusPaths :: FixtureDocument -> String -> Value
+projectStatusPaths document pid =
     toJSON $
         Map.fromList
-            [ (stepId, certificateOf stepId)
+            [ (stepId, fromMaybe "/invalid" (statusPathOf document stepId))
             | stepValue <- projectStepValues document pid
             , Just stepId <- [valueId stepValue]
             ]
-  where
-    certificateOf stepId =
-        maybe (String "/invalid") String (Map.lookup stepId (documentCertificates document))
 
 projectStepValues :: FixtureDocument -> String -> [Value]
 projectStepValues document pid =
@@ -126,18 +123,6 @@ valueId :: Value -> Maybe String
 valueId (String text) = Just (T.unpack text)
 valueId (Number number) = Just (show (floor number :: Integer))
 valueId _ = Nothing
-
-projectIdOf :: String -> Maybe String
-projectIdOf attr = stripPrefix "#pointy.projectCertificates." attr
-
-certificateStepOf :: String -> Maybe String
-certificateStepOf attr = do
-    rest <- stripPrefix "#pointy.certificates." attr
-    if certificateSuffix `isSuffixOf` rest
-        then Just (take (length rest - length certificateSuffix) rest)
-        else Nothing
-  where
-    certificateSuffix = ".certificate.outPath"
 
 lastSegment :: String -> String
 lastSegment attr = case break (== '.') (reverse attr) of

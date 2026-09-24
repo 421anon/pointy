@@ -12,7 +12,7 @@ import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (ToJSON)
+import Data.Aeson (ToJSON, eitherDecode)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -29,11 +29,11 @@ import Handlers.StepReview (ensureStepUnreviewed)
 import Network.HTTP.Types (mkStatus)
 import Network.Wai (Application, responseLBS)
 import OutPaths (withWriteRepoTransaction)
-import Servant (Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, throwError)
+import Servant (Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, (</>))
-import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, commitContext, runNixEvalRawInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, commitContext, runNixEvalJsonApplyInRepo, withReadRepoTransaction)
 
 data UserRepoInfo = UserRepoInfo
     { url :: Text
@@ -47,57 +47,50 @@ getUserRepoInfoHandler = do
     let userRepo = configUserRepo cfg
     return $ UserRepoInfo (userRepoUrl userRepo) (userRepoBranch userRepo)
 
-resolveSrcFilesBasePath :: (IOE :> es, Eval :> es) => Maybe Text -> Eff es (Either ServerError Text)
-resolveSrcFilesBasePath mCommit = do
+resolveStepSrcFiles :: (IOE :> es, Eval :> es) => Maybe Text -> Int -> Eff es (Either ServerError (Maybe FilePath))
+resolveStepSrcFiles mCommit stepId = do
     result <-
         withReadRepoTransaction $ \ctx -> do
             target <- maybe (pure ctx) (\commit -> ExceptT $ liftIO $ runExceptT $ commitContext (readRepoPath ctx) commit) mCommit
-            output <- runNixEvalRawInRepo target "#pointy.srcFiles"
-            return $ T.strip (T.pack output)
-    pure $ either (Left . srcFilesBaseError) Right result
+            output <- runNixEvalJsonApplyInRepo target "step: step.srcFiles or null" ("#pointy.steps." ++ show stepId)
+            either (throwError . ("Failed to decode the source files path: " ++)) pure $
+                eitherDecode (TLE.encodeUtf8 (TL.pack output))
+    pure $ either (Left . srcFilesError) Right result
+  where
+    srcFilesError err = err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate the source files of step " ++ show stepId ++ ": " ++ err))}
 
-srcFilesBaseError :: String -> ServerError
-srcFilesBaseError err =
-    err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate pointy.srcFiles: " <> err))}
-
-getSrcFilesBasePath :: Maybe Text -> AppM Text
-getSrcFilesBasePath mCommit =
-    lift (resolveSrcFilesBasePath mCommit) >>= either throwError return
+noSrcFiles :: Int -> ServerError
+noSrcFiles stepId = err404{errBody = TLE.encodeUtf8 (TL.pack ("Step " ++ show stepId ++ " has no source files"))}
 
 getStepSrcFilesPath :: Maybe Text -> Int -> AppM FilePath
-getStepSrcFilesPath mCommit stepId = do
-    basePath <- getSrcFilesBasePath mCommit
-    return (T.unpack basePath </> show stepId)
+getStepSrcFilesPath mCommit stepId =
+    lift (resolveStepSrcFiles mCommit stepId) >>= either throwError (maybe (throwError (noSrcFiles stepId)) return)
 
 listSrcFilesHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM [DirEntry]
-listSrcFilesHandler stepId mCommit mRel = do
-    fullBasePath <- getStepSrcFilesPath mCommit stepId
-    exists <- liftIO $ doesDirectoryExist fullBasePath
-    if exists
-        then listHandler (T.pack fullBasePath) mRel
-        else return []
+listSrcFilesHandler stepId mCommit mRel =
+    lift (resolveStepSrcFiles mCommit stepId) >>= either throwError (maybe (return []) (\basePath -> listHandler (T.pack basePath) mRel))
 
 downloadSrcFilesHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadSrcFilesHandler stepId mCommit rel = do
-    fullBasePath <- getStepSrcFilesPath mCommit stepId
-    downloadHandler (T.pack fullBasePath) rel
+    basePath <- getStepSrcFilesPath mCommit stepId
+    downloadHandler (T.pack basePath) rel
 
 
 srcRawHandler :: Int -> Maybe Text -> FilePath -> Tagged AppM Application
 srcRawHandler stepId mCommit rel =
     Tagged $ \request respond -> do
-        resolution <- runAppEffects (resolveSrcFilesBasePath mCommit)
-        case resolution of
+        resolution <- runAppEffects (resolveStepSrcFiles mCommit stepId)
+        case resolution >>= maybe (Left (noSrcFiles stepId)) Right of
             Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
-            Right basePath -> fromRawBase (T.unpack basePath </> show stepId) (splitDirectories rel) request respond
+            Right basePath -> fromRawBase basePath (splitDirectories rel) request respond
 
 
 
 seekSrcFilesHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> Int -> AppM FileChunk
 seekSrcFilesHandler stepId mCommit rel line byteOffset bytes = do
     offset <- parseSeekOffset line byteOffset bytes
-    fullBasePath <- getStepSrcFilesPath mCommit stepId
-    seekHandler (T.pack fullBasePath) rel offset bytes
+    basePath <- getStepSrcFilesPath mCommit stepId
+    seekHandler (T.pack basePath) rel offset bytes
 
 
 mutateSrcFile :: Int -> FilePath -> String -> ServerError -> (FilePath -> IO Bool) -> AppM NoContent
