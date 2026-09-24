@@ -28,6 +28,7 @@ import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, Eval (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Fixture.Document (FixtureDocument (..), appliedAnswer, derivationAnswer, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
+import JobWatch (markJobsEnded)
 import Processes (cli)
 
 import System.Directory (doesPathExist)
@@ -53,9 +54,13 @@ newFixtureState document =
         <*> newTVarIO 1
 
 resetFixture :: FixtureState -> IO ()
-resetFixture state = atomically $ do
-    writeTVar (fixtureJobs state) Map.empty
-    writeTVar (fixtureNextJob state) 1
+resetFixture state = do
+    names <- atomically $ do
+        jobs <- readTVar (fixtureJobs state)
+        writeTVar (fixtureJobs state) Map.empty
+        writeTVar (fixtureNextJob state) 1
+        pure (Map.keys jobs)
+    markJobsEnded names
 
 runFixture :: FixtureState -> Eff AppEffects a -> IO a
 runFixture state action =
@@ -154,4 +159,5 @@ runSlurmFixture state = interpret $ \_ -> \case
                     AllJobs -> unlines [intercalate "|" [jobId job, jobName job, jobComment job, jobState job] | job <- jobs]
     CancelJob key -> liftIO $ do
         atomically $ modifyTVar' (fixtureJobs state) (Map.delete key)
+        markJobsEnded [key]
     ClusterAvailability -> pure (Right "up\n")

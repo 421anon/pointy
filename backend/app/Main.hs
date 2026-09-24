@@ -4,8 +4,10 @@ module Main (main) where
 
 import Agent.Git (sweepStaleRunningSessions)
 import App (runServer)
+import BuildRunner (reconcileWatchedJobs)
 import Config (loadConfig, resolveConfigPath)
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Monad (forever)
 import Control.Monad.Except (runExceptT)
 import Handlers.ClusterStream (startClusterPoller)
 import Handlers.RunStep (restoreJobsFromSlurm)
@@ -49,3 +51,11 @@ main = do
             putStrLn "Running statuses restored."
         putStrLn "Starting cluster status poller..."
         startClusterPoller
+        putStrLn "Starting Slurm job reconciler..."
+        _ <- forkIO $ forever $ do
+            threadDelay reconcileDelayMicros
+            runProduction reconcileWatchedJobs
+        pure ()
+
+reconcileDelayMicros :: Int
+reconcileDelayMicros = 30000000

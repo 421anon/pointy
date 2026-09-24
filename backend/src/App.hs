@@ -19,7 +19,7 @@ import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (batchUpdateProjectsHandler, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
-import Handlers.RunStep (restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
+import Handlers.RunStep (jobEndedHandler, restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
@@ -78,6 +78,7 @@ server =
         :<|> runStepHandler
         :<|> stopStepHandler
         :<|> stepLogHandler
+        :<|> jobEndedHandler
         :<|> uploadHandler
         :<|> clusterStatusStreamHandler
         :<|> liftHandler createSessionHandler

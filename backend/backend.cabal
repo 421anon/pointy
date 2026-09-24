@@ -50,6 +50,7 @@ library
     Handlers.Zip
     Interpreters.Fixture
     Interpreters.Production
+    JobWatch
     NixEvaluator
     NixUtils
     OutPaths

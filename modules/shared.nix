@@ -24,6 +24,15 @@ let
     mkdir -p -m u=rwx,go= /home/backend/.pi/agent/extensions
     ln -sfn ${rpivExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
   '';
+
+  jobEndedHook = pkgs.writeShellScript "pointy-job-ended" ''
+    case "$JOBNAME" in
+      pointy-nix-build-*)
+        exec ${pkgs.curl}/bin/curl -fsS --max-time 2 -o /dev/null -X POST -G \
+          --data-urlencode "name=$JOBNAME" http://127.0.0.1:8081/job-ended
+        ;;
+    esac
+  '';
 in
 {
 
@@ -101,6 +110,10 @@ in
       controlMachine = config.networking.hostName;
       nodeName = [ "${config.networking.hostName} CPUs=${slurmCpus} RealMemory=${slurmRealMemory} State=UNKNOWN" ];
       partitionName = [ "pointy Nodes=${config.networking.hostName} Default=YES MaxTime=INFINITE State=UP" ];
+      extraConfig = ''
+        JobCompType=jobcomp/script
+        JobCompLoc=${jobEndedHook}
+      '';
     };
 
     users.users.backend = {

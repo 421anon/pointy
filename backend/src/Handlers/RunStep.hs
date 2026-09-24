@@ -6,6 +6,7 @@
 
 module Handlers.RunStep (
     buildExtras,
+    jobEndedHandler,
     restoreJobsFromSlurm,
     runStepHandler,
     stepLogHandler,
@@ -13,7 +14,7 @@ module Handlers.RunStep (
 ) where
 
 import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
-import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
+import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
 import ClusterBus (restoreRunningStepIds)
 import Control.Concurrent (forkIO, forkIOWithUnmask)
 import Control.Concurrent.Async (mapConcurrently_)
@@ -50,6 +51,11 @@ runStepHandler eid commit = do
 stopStepHandler :: Int -> Maybe T.Text -> AppM NoContent
 stopStepHandler eid commit = do
     lift $ stopStepSync eid commit
+    return NoContent
+
+jobEndedHandler :: String -> AppM NoContent
+jobEndedHandler name = do
+    lift $ notifyJobEnded (BuildKey name)
     return NoContent
 
 runStepSync :: App es => Int -> Maybe T.Text -> Eff es ()
