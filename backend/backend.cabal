@@ -226,6 +226,20 @@ test-suite certificate-status
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite submit-comment
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          SubmitComment.hs
+  build-depends:
+    , backend
+    , base
+    , effectful
+    , filepath
+    , temporary
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite status-stream
   import:           warnings
   type:             exitcode-stdio-1.0

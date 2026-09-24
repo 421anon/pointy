@@ -255,7 +255,6 @@ requirementSlurmArgs slurm requirements =
                 ++ T.unpack (ior requirements)
                 ++ ",POINTY_REQ_IOW="
                 ++ T.unpack (iow requirements)
-           , "--comment=" ++ requirementComment requirements
            ]
 
 enforcedResourceArgs :: SlurmConfig -> StepRequirements -> [String]
@@ -264,16 +263,6 @@ enforcedResourceArgs slurm requirements
     | otherwise = ["--cpus-per-task=" ++ show (cpu requirements)] ++ memArg
   where
     memArg = ["--mem=" ++ T.unpack (ram requirements) | not (T.null (ram requirements))]
-
-requirementComment :: StepRequirements -> String
-requirementComment requirements =
-    unwords
-        [ "pointy-requirements"
-        , "cpu=" ++ show (cpu requirements)
-        , "ram=" ++ T.unpack (ram requirements)
-        , "ior=" ++ T.unpack (ior requirements)
-        , "iow=" ++ T.unpack (iow requirements)
-        ]
 
 slurmArgs :: SlurmConfig -> [String]
 slurmArgs slurm =

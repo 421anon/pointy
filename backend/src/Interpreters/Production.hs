@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Interpreters.Production (runProduction) where
+module Interpreters.Production (runProduction, submitArgs) where
 
 import BuildRunner (shellCommand)
 import Data.List.NonEmpty (NonEmpty)
