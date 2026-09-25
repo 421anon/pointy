@@ -335,8 +335,10 @@ assertNixStorePath path =
 
 assertInside :: FilePath -> FilePath -> AppM ()
 assertInside path base =
-    unless (joinPath (splitPath (normalise base)) `isPrefixOf` joinPath (splitPath (normalise path))) $
+    unless (".." `notElem` pathSegments && splitDirectories (normalise base) `isPrefixOf` pathSegments) $
         throwError err400{errBody = "Path traversal not allowed"}
+  where
+    pathSegments = splitDirectories (normalise path)
 
 stepExtrasHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM DynamicJson
 stepExtrasHandler stepId mCommit mDirPath = do

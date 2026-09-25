@@ -182,6 +182,20 @@ test-suite download-metadata
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite store-path-traversal
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          StorePathTraversal.hs
+  build-depends:
+    , backend
+    , base
+    , mtl
+    , servant-server
+    , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite turn-stream
   import:           warnings
   type:             exitcode-stdio-1.0
