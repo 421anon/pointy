@@ -1,15 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 module NixStore (
     NixStore (..),
     nixStore,
-    realStorePath,
+    rootedPath,
+    resolveStorePath,
 ) where
 
+import Control.Exception (IOException, try)
 import Data.List (stripPrefix)
 import Network.URI (unEscapeString)
+import System.Directory (getSymbolicLinkTarget, pathIsSymbolicLink)
 import System.Environment (lookupEnv)
-import System.FilePath ((</>))
+import System.FilePath (isAbsolute, joinPath, splitDirectories, (</>))
 import System.IO.Unsafe (unsafePerformIO)
 
 data NixStore = NixStore
@@ -54,12 +58,50 @@ queryParams = map pair . filter (not . null) . splitOn '&'
         (chunk, []) -> [chunk]
         (chunk, _ : rest) -> chunk : splitOn separator rest
 
-realStorePath :: FilePath -> FilePath
-realStorePath path = case storeRoot nixStore of
+rootedPath :: FilePath -> FilePath
+rootedPath path = case storeRoot nixStore of
     Nothing -> path
-    Just root -> case stripPrefix logicalStoreDir path of
-        Nothing -> path
-        Just rest -> root </> "nix" </> "store" </> dropWhile (== '/') rest
+    Just root -> rootedUnder root path
 
-logicalStoreDir :: FilePath
-logicalStoreDir = "/nix/store"
+rootedUnder :: FilePath -> FilePath -> FilePath
+rootedUnder root path = case stripPrefix logicalNixDir path of
+    Just rest@('/' : _) -> root </> "nix" </> dropWhile (== '/') rest
+    _ -> path
+
+resolveStorePath :: FilePath -> IO FilePath
+resolveStorePath path = case storeRoot nixStore of
+    Nothing -> pure path
+    Just root -> resolveUnder root path
+
+resolveUnder :: FilePath -> FilePath -> IO FilePath
+resolveUnder root = walk maxSymlinks [] . splitDirectories
+  where
+    walk _ resolved [] = pure (rootedUnder root (logical resolved))
+    walk budget resolved (component : rest) = case component of
+        "/" -> walk budget [] rest
+        "." -> walk budget resolved rest
+        ".." -> walk budget (dropLast resolved) rest
+        name -> do
+            let candidate = resolved ++ [name]
+            target <- symlinkTarget (rootedUnder root (logical candidate))
+            case target of
+                Nothing -> walk budget candidate rest
+                Just _ | budget <= 0 -> ioError (userError ("too many levels of symbolic links: " ++ logical candidate))
+                Just link
+                    | isAbsolute link -> walk (budget - 1) [] (splitDirectories link ++ rest)
+                    | otherwise -> walk (budget - 1) resolved (splitDirectories link ++ rest)
+    logical = joinPath . ("/" :)
+    dropLast = reverse . drop 1 . reverse
+
+symlinkTarget :: FilePath -> IO (Maybe FilePath)
+symlinkTarget path = do
+    isLink <- try @IOException (pathIsSymbolicLink path)
+    case isLink of
+        Right True -> Just <$> getSymbolicLinkTarget path
+        _ -> pure Nothing
+
+maxSymlinks :: Int
+maxSymlinks = 40
+
+logicalNixDir :: FilePath
+logicalNixDir = "/nix"

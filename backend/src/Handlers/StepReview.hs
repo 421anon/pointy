@@ -40,6 +40,7 @@ import Handlers.Projects (rewriteNixFile)
 import Handlers.Statuses (checkStatus, forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseLBS)
+import NixStore (resolveStorePath)
 import OutPaths (withWriteRepoTransaction)
 import Servant (NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
@@ -195,18 +196,23 @@ renderReport stepId reviewed viewed = do
     dir <- (</> ".local/state/pointy/diff-reports") <$> liftIO getHomeDirectory
     let reportPath = dir </> "step-" ++ show stepId ++ "-" ++ storeHash reviewed ++ "-" ++ storeHash viewed ++ ".html"
     cached <- liftIO $ createDirectoryIfMissing True dir >> doesFileExist reportPath
-    unless cached $ ExceptT $ liftIO $ withTempDirectory dir "report-" $ \stagingDir -> runExceptT $ do
-        let staging = stagingDir </> "report.html"
-        (code, _, stderr) <- liftIO $ readProcessWithExitCode "diffoscope" (comparisonArgs staging) ""
-        unless (code `elem` [ExitSuccess, ExitFailure 1]) $
-            throwError ("Output comparison failed: " ++ take 300 (unwords (words stderr)))
-        liftIO $ renameFile staging reportPath
+    unless cached $ do
+        reviewedSource <- liftIO $ resolveStorePath reviewed
+        viewedSource <- liftIO $ resolveStorePath viewed
+        let relabel = T.replace (T.pack viewedSource) (T.pack viewed) . T.replace (T.pack reviewedSource) (T.pack reviewed)
+        ExceptT $ liftIO $ withTempDirectory dir "report-" $ \stagingDir -> runExceptT $ do
+            let staging = stagingDir </> "report.html"
+            (code, _, stderr) <- liftIO $ readProcessWithExitCode "diffoscope" (comparisonArgs staging reviewedSource viewedSource) ""
+            unless (code `elem` [ExitSuccess, ExitFailure 1]) $
+                throwError ("Output comparison failed: " ++ take 300 (unwords (words stderr)))
+            liftIO $ TIO.writeFile staging . relabel =<< TIO.readFile staging
+            liftIO $ renameFile staging reportPath
     pure reportPath
   where
     storeHash = take 32 . takeFileName
-    comparisonArgs out =
+    comparisonArgs out reviewedSource viewedSource =
         words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
-            ++ ["--html", out, reviewed, viewed]
+            ++ ["--html", out, reviewedSource, viewedSource]
 
 dressReport :: Int -> FilePath -> FilePath -> Text -> Text
 dressReport stepId reviewed viewed =

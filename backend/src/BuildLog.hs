@@ -30,6 +30,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Effectful (Eff, IOE, (:>))
 import Effects (Nix, pathValid, runNixStoreCli)
+import NixStore (rootedPath)
 import System.Directory (doesDirectoryExist, doesFileExist)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
@@ -405,7 +406,7 @@ readLocalLog drv = do
                 _ -> Nothing
 
 logRoot :: FilePath
-logRoot = "/nix/var/log/nix/drvs"
+logRoot = rootedPath "/nix/var/log/nix/drvs"
 
 logPathFor :: FilePath -> Maybe FilePath
 logPathFor drv = do
