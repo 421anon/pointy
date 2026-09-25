@@ -2768,6 +2768,121 @@ body:has(dialog[open]) {
   transition: width 0.15s ease;
 }
 
+.upload-progress-fill--indeterminate {
+  width: 40%;
+  animation: upload-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes upload-progress-indeterminate {
+  0% {
+    margin-left: 0;
+  }
+
+  50% {
+    margin-left: 60%;
+  }
+
+  100% {
+    margin-left: 0;
+  }
+}
+
+.dialog.scratch-picker-dialog {
+  width: min(520px, calc(100vw - var(--spacing-xl) - var(--spacing-xl)));
+  max-height: 80vh;
+}
+
+.scratch-picker-content {
+  gap: var(--spacing-md);
+}
+
+.scratch-picker-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.scratch-picker-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+}
+
+.scratch-picker-crumb {
+  @include mixins.button-base;
+
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-secondary);
+
+  &:hover {
+    color: var(--text-primary);
+  }
+}
+
+.scratch-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2xs);
+  min-height: 8rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-xs);
+}
+
+.scratch-picker-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  color: var(--text-primary);
+}
+
+.scratch-picker-entry--directory {
+  @include mixins.button-base;
+
+  background: none;
+  border: none;
+
+  &:hover {
+    background: var(--bg-primary);
+  }
+}
+
+.scratch-picker-entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scratch-picker-entry-size,
+.scratch-picker-status {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.scratch-picker-status--error,
+.scratch-picker-error {
+  color: var(--color-error, #c0392b);
+  font-size: var(--font-size-sm);
+}
+
+.scratch-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
 .shimmer-text {
   --shimmer-duration: 2.2s;
 

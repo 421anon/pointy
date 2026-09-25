@@ -96,7 +96,7 @@ runNixFixture state = interpret $ \_ -> \case
         ["--query", "--outputs", drv] -> storePathsAnswer "outputs" (documentOutputs (fixtureDocument state)) drv
         _ -> (ExitFailure 1, "", "fixture: unsupported nix-store invocation: " ++ unwords args)
     RegisterGcRoot _ _ -> pure ()
-    AddFixed _ -> pure (Left "fixture: nix-store --add-fixed is not available")
+    IngestDirectory _ _ _ -> pure (Left "fixture: the ingest program is not available")
     ProbeMimeType path -> liftIO $ do
         (code, stdout, _) <- cli "file" ["-b", "-L", "--mime-type", path]
         pure $ case code of

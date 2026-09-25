@@ -1,36 +1,27 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Handlers.Upload (uploadHandler) where
 
+import Control.Exception (IOException, try)
 import Control.Monad (forM_, when)
-import Control.Monad.Except (ExceptT (..), liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Class (lift)
-import Data.Aeson (Value (..), decode)
-import qualified Data.Aeson.KeyMap as KM
-import Data.Foldable (toList)
-import Data.Maybe (listToMaybe)
-import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Effectful (Eff, IOE, (:>))
-import Effectful.Exception (bracket)
-import Effects (AppM, Eval, addFixed)
-import Handlers.StepReview (ensureStepUnreviewed, requireStepUnreviewed)
-import OutPaths (withWriteRepoTransaction)
-import Servant (err400, err409, errBody, throwError)
+import Data.Text (Text)
+import Effects (AppM)
+import Handlers.StepReview (requireStepUnreviewed)
+import IngestJobs (IngestRequest (..), discardDirectory, startIngestJob)
+import Servant (err400, err409, err500, errBody, throwError)
 import Servant.Multipart (FileData (fdFileName, fdPayload), MultipartData (files), Tmp)
-import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, renameFile)
-import System.FilePath ((</>))
-import System.IO.Error (catchIOError)
-import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
-import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNix, runNixEvalImpureJsonExpr)
-
-import Handlers.Projects (jsonToNix)
+import Storage (uploadStagingRoot)
+import System.Directory (createDirectoryIfMissing, renameFile)
+import System.FilePath (takeFileName, (</>))
+import System.IO.Temp (createTempDirectory)
 
 uploadHandler :: Int -> MultipartData Tmp -> AppM Text
 uploadHandler stepId multipartData = do
@@ -38,53 +29,29 @@ uploadHandler stepId multipartData = do
     when (null uploadedFiles) $ throwError err400{errBody = "No files found"}
     requireStepUnreviewed stepId
 
-    hash <- lift $ bracket
-        (liftIO $ getCanonicalTemporaryDirectory >>= \dir -> createTempDirectory dir ("upload_" ++ show stepId))
-        (\tmpDir -> liftIO (removeDirectoryRecursive tmpDir `catchIOError` \_ -> pure ()))
-        $ \tmpDir -> do
-            let storeRefDir = tmpDir </> "store-ref"
-            liftIO $ createDirectoryIfMissing True storeRefDir
-
-            liftIO $ forM_ uploadedFiles $ \file -> do
-                let fileName = T.unpack $ fdFileName file
-                    filePath = storeRefDir </> fileName
-                    tempFilePath = fdPayload file
-                renameFile tempFilePath filePath
-
-            storePathResult <- addFixed storeRefDir
-            storePath <- case storePathResult of
-                Left err -> error err
-                Right out -> return (T.unpack $ T.strip $ T.pack out)
-
-            hashOutput <- runExceptT $ do
-                jsonOut <- runNix ["path-info", "--json", storePath]
-                case decode (TLE.encodeUtf8 (TL.pack jsonOut)) >>= extractNarHash of
-                    Just h -> return h
-                    Nothing -> ExceptT $ return $ Left $ "Could not parse narHash from: " ++ jsonOut
-            case hashOutput of
-                Left err -> error $ "nix path-info failed: " ++ err
-                Right h -> return h
-
-    result <- lift $ withWriteRepoTransaction $ \ctx -> do
-        ensureStepUnreviewed ctx stepId
-        updateStepNixFile ctx stepId hash
-        commitAndPushChanges ctx $ "Upload files for step " ++ show stepId
-    case result of
-        Left err -> throwError err409{errBody = TLE.encodeUtf8 (TL.pack err)}
-        Right _ -> return $ "Uploaded " <> T.pack (show (length uploadedFiles)) <> " files with hash: " <> hash
-
-extractNarHash :: Value -> Maybe Text
-extractNarHash (Object outerObj) = do
-    Object innerObj <- listToMaybe (toList outerObj)
-    String h <- KM.lookup "narHash" innerObj
-    return h
-extractNarHash _ = Nothing
-
-updateStepNixFile :: (Eval :> es, IOE :> es) => WriteRepoContext -> Int -> Text -> ExceptT String (Eff es) ()
-updateStepNixFile (WriteRepoContext worktreePath) stepId hash = do
-    let nixFilePath = worktreePath </> "steps" </> show stepId ++ ".nix"
-        nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in orig // { args = orig.args // { uploaded = (orig.args.uploaded or {}) // { hash = \"" <> hash <> "\"; }; }; }"
-
-    output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
-    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
-    liftIO $ TIO.writeFile nixFilePath nixResult
+    root <- liftIO uploadStagingRoot
+    staging <- liftIO $ createTempDirectory root ("step-" ++ show stepId ++ "-")
+    let storeRefDir = staging </> "store-ref"
+    staged <- liftIO $ try @IOException $ do
+        createDirectoryIfMissing True storeRefDir
+        forM_ uploadedFiles $ \file -> renameFile (fdPayload file) (storeRefDir </> takeFileName (T.unpack (fdFileName file)))
+    case staged of
+        Left err -> do
+            liftIO $ discardDirectory staging
+            throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to stage upload: " ++ show err))}
+        Right () -> do
+            started <-
+                liftIO $
+                    startIngestJob
+                        IngestRequest
+                            { ingestRequestStepId = stepId
+                            , ingestRequestDirectory = storeRefDir
+                            , ingestRequestPath = Nothing
+                            , ingestRequestMessage = "Upload files for step " ++ show stepId
+                            , ingestRequestStaging = Just staging
+                            }
+            case started of
+                Nothing -> do
+                    liftIO $ discardDirectory staging
+                    throwError err409{errBody = "An ingest job is already running for this step."}
+                Just _ -> pure "Ingest job started"

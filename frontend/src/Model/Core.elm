@@ -182,6 +182,60 @@ type alias UploadProgress =
     }
 
 
+type IngestSource
+    = IngestUpload
+    | IngestScratch
+
+
+type IngestState
+    = IngestRunning
+    | IngestSucceeded
+    | IngestFailed
+
+
+type alias IngestJob =
+    { id : Int
+    , stepId : Int
+    , source : IngestSource
+    , path : Maybe String
+    , state : IngestState
+    , done : Maybe Int
+    , total : Maybe Int
+    , hash : Maybe String
+    , error : Maybe String
+    }
+
+
+type alias ScratchEntry =
+    { name : String
+    , directory : Bool
+    , size : Maybe Int
+    }
+
+
+type alias ScratchListing =
+    { path : String
+    , entries : List ScratchEntry
+    }
+
+
+type alias ScratchState =
+    { root : ApiData (Maybe String)
+    , pickerStepId : Maybe Int
+    , listing : ApiData ScratchListing
+    , error : Maybe String
+    }
+
+
+initScratchState : ScratchState
+initScratchState =
+    { root = NotAsked
+    , pickerStepId = Nothing
+    , listing = NotAsked
+    , error = Nothing
+    }
+
+
 type alias UserRepoInfo =
     { url : String
     , branch : String
@@ -937,6 +991,9 @@ type Model
         , commitHash : ApiData String
         , userRepoInfo : ApiData UserRepoInfo
         , uploadProgress : Dict Int UploadProgress
+        , ingestJobs : Dict Int IngestJob
+        , pendingIngestSteps : Set Int
+        , scratch : ScratchState
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
@@ -1235,6 +1292,21 @@ getUploadProgress (Model model) =
     model.uploadProgress
 
 
+getIngestJobs : Model -> Dict Int IngestJob
+getIngestJobs (Model model) =
+    model.ingestJobs
+
+
+getPendingIngestSteps : Model -> Set Int
+getPendingIngestSteps (Model model) =
+    model.pendingIngestSteps
+
+
+getScratchState : Model -> ScratchState
+getScratchState (Model model) =
+    model.scratch
+
+
 getStepStatusHooks : Model -> Dict Int (Flow Model ())
 getStepStatusHooks (Model model) =
     model.stepStatusHooks
@@ -1355,6 +1427,9 @@ initialModel key route flags =
         , stepLogs = Dict.empty
         , notices = Dict.empty
         , uploadProgress = Dict.empty
+        , ingestJobs = Dict.empty
+        , pendingIngestSteps = Set.empty
+        , scratch = initScratchState
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
         , pendingBuilds = Dict.empty

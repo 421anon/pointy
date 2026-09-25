@@ -16,7 +16,9 @@ import Agent.Session (AgentSession (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import System.Directory (doesFileExist, getHomeDirectory)
+import NixStore (NixStore (..), nixStore)
+import Storage (scratchDirectory)
+import System.Directory (doesFileExist, doesPathExist, getHomeDirectory)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 
@@ -25,11 +27,27 @@ nixCompatSocket = "/run/nix-daemon-socket"
 
 nixDaemonBindArgs :: IO [String]
 nixDaemonBindArgs = do
-    exists <- doesFileExist nixCompatSocket
-    return $
-        if exists
-            then ["--bind", nixCompatSocket, "/var/run/nix-daemon-socket"]
-            else []
+    compatArgs <- compatBindArgs
+    remoteArgs <- remoteBindArgs
+    scratchArgs <- maybe [] bindPathReadOnly <$> scratchDirectory
+    return (compatArgs ++ remoteArgs ++ scratchArgs)
+  where
+    compatBindArgs = do
+        exists <- doesFileExist nixCompatSocket
+        return $
+            if exists
+                then ["--bind", nixCompatSocket, "/var/run/nix-daemon-socket"]
+                else []
+    remoteBindArgs = case storeSocketPath nixStore of
+        Nothing -> pure []
+        Just socket -> do
+            socketExists <- doesPathExist socket
+            rootArgs <- case storeRoot nixStore of
+                Nothing -> pure []
+                Just root -> do
+                    rootExists <- doesPathExist root
+                    pure (if rootExists then ["--ro-bind", root, root] else [])
+            pure ((if socketExists then ["--bind", socket, socket] else []) ++ rootArgs)
 
 bindPath :: FilePath -> [String]
 bindPath path = ["--bind", path, path]
@@ -70,9 +88,11 @@ runnerEnvironment ownVars = do
     return $
         ("PATH", fromMaybe fallbackPath (lookup "PATH" baseEnv))
             : ownVars
+            ++ remoteVars
             ++ filter ((`elem` passthroughKeys) . fst) baseEnv
   where
     fallbackPath = "/run/current-system/sw/bin:/usr/bin:/bin"
+    remoteVars = maybe [] (\remote -> [("NIX_REMOTE", remote)]) (storeRemote nixStore)
     passthroughKeys =
         [ "USER"
         , "LOGNAME"

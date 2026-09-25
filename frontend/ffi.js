@@ -57,6 +57,22 @@ function openClusterStatusStream(app) {
   });
 }
 
+let ingestJobsSource = null;
+
+function openIngestStream(app) {
+  if (ingestJobsSource && ingestJobsSource.readyState !== EventSource.CLOSED) {
+    return;
+  }
+  ingestJobsSource = new EventSource("/backend/ingest-stream");
+  ingestJobsSource.addEventListener("ingest-jobs", (event) => {
+    try {
+      if (app.ports && app.ports.ingestJobsIn) {
+        app.ports.ingestJobsIn.send(JSON.parse(event.data));
+      }
+    } catch (_) {}
+  });
+}
+
 let elmApp = null;
 let stepStatusSource = null;
 const AGENT_TURN_INITIAL_RETRY_DELAY = 1000;
@@ -292,9 +308,14 @@ export function connectPorts(app) {
     app.ports.openClusterStatusStream.subscribe(() => openClusterStatusStream(app));
   }
 
+  if (app.ports && app.ports.openIngestStream) {
+    app.ports.openIngestStream.subscribe(() => openIngestStream(app));
+  }
+
   window.addEventListener("beforeunload", () => {
     closeStepStatusStream();
     closeAllAgentTurnStreams();
     if (clusterStatusSource) clusterStatusSource.close();
+    if (ingestJobsSource) ingestJobsSource.close();
   });
 }

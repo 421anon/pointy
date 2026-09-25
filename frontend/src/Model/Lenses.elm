@@ -14,7 +14,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), Model(..), PendingQuestion, ProjectRecord, ReviewDraft, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, Model(..), PendingQuestion, ProjectRecord, ReviewDraft, ScratchState, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -676,6 +676,41 @@ mHighlight =
 uploadProgress : Lens ls Model (Dict Int UploadProgress) x y
 uploadProgress =
     lens ".uploadProgress" Model.getUploadProgress (\(Model m) up -> Model { m | uploadProgress = up })
+
+
+ingestJobs : Lens ls Model (Dict Int IngestJob) x y
+ingestJobs =
+    lens ".ingestJobs" Model.getIngestJobs (\(Model m) jobs -> Model { m | ingestJobs = jobs })
+
+
+pendingIngestSteps : Lens ls Model (Set Int) x y
+pendingIngestSteps =
+    lens ".pendingIngestSteps" Model.getPendingIngestSteps (\(Model m) steps -> Model { m | pendingIngestSteps = steps })
+
+
+scratch : Lens ls Model ScratchState x y
+scratch =
+    lens ".scratch" Model.getScratchState (\(Model m) state -> Model { m | scratch = state })
+
+
+scratchRoot : Lens ls Model (ApiData (Maybe String)) x y
+scratchRoot =
+    scratch << lens ".root" .root (\state root -> { state | root = root })
+
+
+scratchListing : Lens ls Model (ApiData Model.ScratchListing) x y
+scratchListing =
+    scratch << lens ".listing" .listing (\state listing -> { state | listing = listing })
+
+
+scratchError : Lens ls Model (Maybe String) x y
+scratchError =
+    scratch << lens ".error" .error (\state error -> { state | error = error })
+
+
+scratchPickerStepId : Lens ls Model (Maybe Int) x y
+scratchPickerStepId =
+    scratch << lens ".pickerStepId" .pickerStepId (\state stepId -> { state | pickerStepId = stepId })
 
 
 stepStatusHooks : Lens ls Model (Dict Int (Flow Model ())) x y

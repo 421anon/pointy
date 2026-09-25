@@ -17,6 +17,7 @@ import qualified Data.Text as T
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, Eval (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
+import Ingest (runIngest)
 import Processes (cli)
 import NixEvaluator (EvalPriority (..), RepoExpression, defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression, rewarmRevision)
 import System.Exit (ExitCode (..))
@@ -49,18 +50,12 @@ runNixProduction = interpret $ \_ -> \case
     RegisterGcRoot gcRootPath outPath -> do
         _ <- liftIO $ cli "nix-store" ["--add-root", gcRootPath, "--realise", outPath]
         pure ()
-    AddFixed directory -> do
-        (code, stdout, stderr) <- liftIO $ cli "nix-store" ["--add-fixed", "--recursive", "sha256", directory]
-        pure $ case code of
-            ExitSuccess | not (null (trim stdout)) -> Right (trim stdout)
-            _ -> Left ("nix-store --add-fixed failed: " ++ stderr)
+    IngestDirectory directory name reportProgress -> liftIO $ runIngest directory name reportProgress
     ProbeMimeType path -> do
         (code, stdout, _) <- liftIO $ cli "file" ["-b", "-L", "--mime-type", path]
         pure $ case code of
             ExitSuccess -> Just (T.strip (T.pack stdout))
             ExitFailure _ -> Nothing
-  where
-    trim = T.unpack . T.strip . T.pack
 
 runSlurmProduction :: (IOE :> es) => Eff (Slurm : es) a -> Eff es a
 runSlurmProduction = interpret $ \_ -> \case

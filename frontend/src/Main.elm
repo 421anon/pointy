@@ -8,6 +8,7 @@ import Browser.Navigation as Nav
 import Dict
 import Flow exposing (Flow)
 import Http
+import Ingest
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
@@ -65,6 +66,8 @@ initializeWorkspace =
         |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
         |> Flow.seq (Flow.async Actions.startClusterStatusStream)
         |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
+        |> Flow.seq (Flow.async Ingest.startIngestStream)
+        |> Flow.seq Ingest.loadScratch
 
 
 applyRouteFromUrl : Bool -> Url -> Flow Model ()
@@ -244,6 +247,6 @@ uploadProgressSubscription model =
         |> List.map
             (\stepId ->
                 Http.track ("upload-" ++ String.fromInt stepId)
-                    (Actions.onUploadProgress stepId)
+                    (Ingest.onUploadProgress stepId)
             )
         |> Sub.batch

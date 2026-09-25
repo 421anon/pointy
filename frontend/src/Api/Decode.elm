@@ -746,3 +746,79 @@ withSrcFiles =
                 else
                     WithoutSrcFiles
             )
+
+
+ingestJobs : Decoder (List Model.IngestJob)
+ingestJobs =
+    Decode.field "jobs" (Decode.list ingestJob)
+
+
+ingestJob : Decoder Model.IngestJob
+ingestJob =
+    Decode.succeed Model.IngestJob
+        |> required "id" Decode.int
+        |> required "stepId" Decode.int
+        |> required "source" ingestSource
+        |> optional "path" (Decode.nullable Decode.string) Nothing
+        |> required "state" ingestState
+        |> optional "done" (Decode.nullable Decode.int) Nothing
+        |> optional "total" (Decode.nullable Decode.int) Nothing
+        |> optional "hash" (Decode.nullable Decode.string) Nothing
+        |> optional "error" (Decode.nullable Decode.string) Nothing
+
+
+ingestSource : Decoder Model.IngestSource
+ingestSource =
+    Decode.string
+        |> Decode.andThen
+            (\source ->
+                case source of
+                    "upload" ->
+                        Decode.succeed Model.IngestUpload
+
+                    "scratch" ->
+                        Decode.succeed Model.IngestScratch
+
+                    other ->
+                        Decode.fail ("Unknown ingest source: " ++ other)
+            )
+
+
+ingestState : Decoder Model.IngestState
+ingestState =
+    Decode.string
+        |> Decode.andThen
+            (\state ->
+                case state of
+                    "running" ->
+                        Decode.succeed Model.IngestRunning
+
+                    "succeeded" ->
+                        Decode.succeed Model.IngestSucceeded
+
+                    "failed" ->
+                        Decode.succeed Model.IngestFailed
+
+                    other ->
+                        Decode.fail ("Unknown ingest state: " ++ other)
+            )
+
+
+scratchRoot : Decoder (Maybe String)
+scratchRoot =
+    Decode.maybe (Decode.field "root" Decode.string)
+
+
+scratchListing : Decoder Model.ScratchListing
+scratchListing =
+    Decode.succeed Model.ScratchListing
+        |> required "path" Decode.string
+        |> required "entries" (Decode.list scratchEntry)
+
+
+scratchEntry : Decoder Model.ScratchEntry
+scratchEntry =
+    Decode.succeed Model.ScratchEntry
+        |> required "name" Decode.string
+        |> required "directory" Decode.bool
+        |> optional "size" (Decode.nullable Decode.int) Nothing

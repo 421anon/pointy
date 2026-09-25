@@ -23,6 +23,7 @@ import View.Compare as Compare
 import View.Dialog as Dialog
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Project exposing (viewCurrentProject)
+import View.Scratch exposing (viewScratchPicker)
 import View.Table exposing (actionsPopoverId, viewRecordActions, viewRecordActionsPopover, viewTable)
 
 
@@ -93,6 +94,7 @@ view model =
                     List.map (\toast -> ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) toast )) (Model.getToasts model)
                 , Dialog.viewConfirm (Model.getModalConfirm model)
                 , Compare.viewCompareDialog model
+                , viewScratchPicker model
                 , StatusBar.view model
                 ]
     }

@@ -33,6 +33,25 @@ let
         ;;
     esac
   '';
+
+  nixCopyIngest = pkgs.writeShellApplication {
+    name = "pointy-ingest";
+    runtimeInputs = [
+      pkgs.nix
+      pkgs.jq
+    ];
+    text = ''
+      store_path=$(nix --extra-experimental-features nix-command store add --mode nar --hash-algo sha256 --name "$2" "$1")
+      nix --extra-experimental-features nix-command path-info --json "$store_path" \
+        | jq -c --arg path "$store_path" \
+          '[.[]][0] | {ok: true, store_path: $path, nar_hash: .narHash, nar_size: .narSize, references_source: false}'
+    '';
+  };
+
+  backendEnvironment =
+    lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
+    // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
+    // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; };
 in
 {
 
@@ -59,6 +78,52 @@ in
         Defaults to backend/pi from this flake.
       '';
       example = lib.literalExpression "./pi-config";
+    };
+
+    ingestPackage = lib.mkOption {
+      type = lib.types.package;
+      default = nixCopyIngest;
+      defaultText = lib.literalMD "a `pointy-ingest` that copies the directory into the store with `nix store add`";
+      description = ''
+        Package providing `bin/pointy-ingest DIR NAME`, which turns a directory into a
+        content-addressed store path in the store the backend builds with. It runs as the
+        backend user and prints JSON lines: optional `{"progress":{"done":N,"total":N}}`,
+        then `{"ok":true,"store_path":…,"nar_hash":…,"nar_size":N,"references_source":B}`
+        or `{"ok":false,"error":…}`. With `references_source = true` the store path keeps
+        reading the source bytes, so the backend never deletes the source.
+      '';
+    };
+
+    storeUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Nix store the backend, its evaluators, its agents and its Slurm build jobs use,
+        exported as NIX_REMOTE. For `unix://SOCKET?root=ROOT` the backend reads store
+        contents from ROOT/nix/store. Null uses the host store.
+      '';
+      example = "unix:///run/pointy-store/daemon.sock?root=/var/lib/pointy-store/root";
+    };
+
+    scratchDirectory = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Directory users browse to wrap a whole subdirectory into a file-upload step.
+        Anything the backend user can read inside it can be wrapped. Null disables wrapping.
+      '';
+      example = "/data";
+    };
+
+    uploadDirectory = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Directory that receives uploaded files before ingest. Uploads stay here when the
+        ingest program references its source, so it must be persistent in that case.
+        Null stages uploads in the system temporary directory.
+      '';
+      example = "/data/pointy-uploads";
     };
   };
 
@@ -123,6 +188,10 @@ in
     };
     users.groups.backend = { };
 
+    systemd.tmpfiles.rules = lib.optional (
+      cfg.uploadDirectory != null
+    ) "d ${cfg.uploadDirectory} 0750 backend backend -";
+
     systemd.slices."pointy-builds" = {
       description = "Slice for background nix builds";
     };
@@ -155,8 +224,12 @@ in
         ++ [
           pointy.packages.sbox
           pointy.packages.pi
+          cfg.ingestPackage
         ];
-      environment.SLURM_CONF = "${config.services.slurm.etcSlurm}/slurm.conf";
+      environment = {
+        SLURM_CONF = "${config.services.slurm.etcSlurm}/slurm.conf";
+      }
+      // backendEnvironment;
       preStart = lib.mkBefore ''
         ${agentEnvLink}
         ${piConfigLink}

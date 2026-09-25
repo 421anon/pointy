@@ -28,7 +28,7 @@ module Effects (
     runNixStoreCli,
     pathValid,
     registerGcRoot,
-    addFixed,
+    ingestDirectory,
     probeMimeType,
     submitJob,
     querySlurm,
@@ -41,6 +41,7 @@ import Data.Text (Text)
 import System.Exit (ExitCode)
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, MonadIO, type (:>))
 import Effectful.Dispatch.Dynamic (send)
+import Ingest (IngestResult)
 import NixEvaluator (EvalPriority, RepoSource)
 import Servant.Server (ServerError)
 import Servant.Server.Internal.Handler (Handler (..))
@@ -68,7 +69,7 @@ data Nix :: Effect where
     RunNixStoreCli :: [String] -> Nix m (ExitCode, String, String)
     PathValid :: FilePath -> Nix m Bool
     RegisterGcRoot :: FilePath -> FilePath -> Nix m ()
-    AddFixed :: FilePath -> Nix m (Either String String)
+    IngestDirectory :: FilePath -> String -> (Integer -> Integer -> IO ()) -> Nix m (Either String IngestResult)
     ProbeMimeType :: FilePath -> Nix m (Maybe Text)
 
 type instance DispatchOf Nix = Dynamic
@@ -122,8 +123,8 @@ pathValid = send . PathValid
 registerGcRoot :: (Nix :> es) => FilePath -> FilePath -> Eff es ()
 registerGcRoot gcRootPath outPath = send (RegisterGcRoot gcRootPath outPath)
 
-addFixed :: (Nix :> es) => FilePath -> Eff es (Either String String)
-addFixed = send . AddFixed
+ingestDirectory :: (Nix :> es) => FilePath -> String -> (Integer -> Integer -> IO ()) -> Eff es (Either String IngestResult)
+ingestDirectory directory name reportProgress = send (IngestDirectory directory name reportProgress)
 
 probeMimeType :: (Nix :> es) => FilePath -> Eff es (Maybe Text)
 probeMimeType = send . ProbeMimeType

@@ -25,6 +25,7 @@ import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Projects (ProjectUpdate)
 import Handlers.Autocomplete (AutocompleteRequest)
+import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
@@ -109,6 +110,9 @@ uploadFormSchema =
 stringField :: Referenced Schema
 stringField = Inline (mempty & type_ ?~ OpenApiString)
 
+nullableField :: OpenApiType -> Referenced Schema
+nullableField openApiType = Inline (mempty & type_ ?~ openApiType & nullable ?~ True)
+
 objectSchema :: Text -> [(Text, Referenced Schema)] -> NamedSchema
 objectSchema typeName fields =
     NamedSchema (Just typeName) $
@@ -144,6 +148,33 @@ instance ToSchema ByteOffset where
 
 instance ToSchema DirEntry
 instance ToSchema FileChunk
+instance ToSchema ScratchRootResponse where
+    declareNamedSchema _ =
+        pure $ objectSchema "ScratchRootResponse" [("root", nullableField OpenApiString)]
+
+instance ToSchema ScratchEntry where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "ScratchEntry"
+                [ ("name", stringField)
+                , ("directory", Inline (mempty & type_ ?~ OpenApiBoolean))
+                , ("size", nullableField OpenApiInteger)
+                ]
+
+instance ToSchema ScratchListing where
+    declareNamedSchema _ = do
+        entrySchema <- declareSchemaRef (Proxy :: Proxy ScratchEntry)
+        pure $
+            objectSchema
+                "ScratchListing"
+                [ ("path", stringField)
+                , ("entries", Inline (mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject entrySchema))
+                ]
+
+instance ToSchema ScratchWrapRequest where
+    declareNamedSchema _ = pure $ objectSchema "ScratchWrapRequest" [("path", stringField)]
+
 instance ToSchema UserRepoInfo
 instance ToSchema AutocompleteRequest
 instance ToSchema PreparedApply

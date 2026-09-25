@@ -17,6 +17,8 @@ module Api.Api exposing
     , fetchPresets
     , fetchProjectReviews
     , fetchProjects
+    , fetchScratchListing
+    , fetchScratchRoot
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchSrcFileSeek
@@ -39,6 +41,7 @@ module Api.Api exposing
     , stopStep
     , unassignRecordFromProject
     , uploadFiles
+    , wrapScratch
     )
 
 import Api.Decode as Decode
@@ -50,7 +53,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, StepRecord)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, ScratchListing, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -291,6 +294,38 @@ uploadFiles stepId files =
             , timeout = Nothing
             , tracker = Just ("upload-" ++ String.fromInt stepId)
             }
+
+
+fetchScratchRoot : Flow s (Result Http.Error (Maybe String))
+fetchScratchRoot =
+    Flow.lift <|
+        Http.get
+            { url = "/backend/scratch"
+            , expect = Http.expectJson identity Decode.scratchRoot
+            }
+
+
+fetchScratchListing : String -> Flow s (Result Http.Error ScratchListing)
+fetchScratchListing path =
+    Flow.lift <|
+        Http.request
+            { method = "GET"
+            , headers = []
+            , url = UrlBuilder.absolute [ "backend", "scratch", "list" ] [ UrlBuilder.string "path" path ]
+            , body = Http.emptyBody
+            , expect =
+                Http.expectStringResponse (Result.andThen identity)
+                    (stringResponse (Json.Decode.decodeString Decode.scratchListing >> Result.mapError (Json.Decode.errorToString >> Http.BadBody)))
+            , timeout = Nothing
+            , tracker = Nothing
+            }
+
+
+wrapScratch : Int -> String -> Flow s (Result Http.Error ())
+wrapScratch stepId path =
+    request "POST"
+        ("/backend/scratch/wrap?id=" ++ String.fromInt stepId)
+        (Http.jsonBody (Json.Encode.object [ ( "path", Json.Encode.string path ) ]))
 
 
 fetchProjects : Maybe String -> Presets -> StepConfig -> Flow s (Result Http.Error (Dict String ProjectRecord))

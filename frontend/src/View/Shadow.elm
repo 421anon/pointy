@@ -4,7 +4,6 @@ import Accessors exposing (get, has, just, snd, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData
-import Basics.Extra exposing (flip)
 import Dict
 import Extra.Accessors exposing (where_)
 import Extra.Http as Http
@@ -23,13 +22,14 @@ import Model.Lenses as Lenses exposing (currentProject, currentProjectId, isRead
 import Model.Shadow exposing (StepConfigEntry)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
+import Set
 import Specs
 import Time exposing (Posix)
 import Time.Distance
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
+import View.Table exposing (routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
 
 
 type alias ComparisonChip =
@@ -498,6 +498,16 @@ viewSection model sectionName entry steps =
         uploads =
             Model.getUploadProgress model
 
+        runningIngestJobs =
+            Model.getIngestJobs model
+                |> Dict.filter (\_ job -> job.state == Model.IngestRunning)
+
+        pendingIngestSteps =
+            Model.getPendingIngestSteps model
+
+        scratchAvailable =
+            ApiData.unwrap False Maybe.isJust (Model.getScratchState model).root
+
         page =
             (Model.getRoute model).page
 
@@ -534,13 +544,29 @@ viewSection model sectionName entry steps =
                     projectIdKey
                     page
                     record
-                    (has (recordId << just << where_ (flip Dict.member uploads)) record)
+                    { uploading = has (recordId << just << where_ (\stepId -> Dict.member stepId uploads || Dict.member stepId runningIngestJobs || Set.member stepId pendingIngestSteps)) record
+                    , scratchAvailable = scratchAvailable
+                    }
         , alwaysVisibleRecordActions =
             \r ->
                 Maybe.values
                     [ r.id |> Maybe.andThen (\stepId -> viewReviewControls model spec stepId r)
                     , r.id
                         |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
+                    , r.id
+                        |> Maybe.andThen
+                            (\id ->
+                                case Dict.get id runningIngestJobs of
+                                    Just job ->
+                                        Just (viewIngestProgress { done = job.done, total = job.total })
+
+                                    Nothing ->
+                                        if Set.member id pendingIngestSteps then
+                                            Just (viewIngestProgress { done = Nothing, total = Nothing })
+
+                                        else
+                                            Nothing
+                            )
                     ]
         , directorySection = FileBrowser.viewDirectorySection model spec
         , srcFilesSection = FileBrowser.viewSrcFilesSection model entry.stepType spec

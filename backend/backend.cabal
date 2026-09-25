@@ -35,10 +35,12 @@ library
     Handlers.CommitHash
     Handlers.ClusterStream
     Handlers.Download
+    Handlers.IngestStream
     Handlers.Presets
     Handlers.ProjectEntities
     Handlers.Projects
     Handlers.RunStep
+    Handlers.Scratch
     Handlers.SrcFiles
     Handlers.Statuses
     Handlers.StatusStream
@@ -48,14 +50,19 @@ library
     Handlers.Store
     Handlers.Upload
     Handlers.Zip
+    Ingest
+    IngestBus
+    IngestJobs
     Interpreters.Fixture
     Interpreters.Production
     JobWatch
     NixEvaluator
+    NixStore
     NixUtils
     OutPaths
     Processes
     Sse
+    Storage
     UserRepo
 
   other-modules:

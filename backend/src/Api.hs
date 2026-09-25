@@ -12,6 +12,7 @@ import Data.Text (Text)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
+import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
@@ -25,6 +26,8 @@ type ReqId = QueryParam' '[Required, Strict] "id" Int
 type ReqProjectId = QueryParam' '[Required, Strict] "project_id" Int
 
 type ReqEntityId = QueryParam' '[Required, Strict] "entity_id" Int
+
+type AcceptedText = Verb 'POST 202 '[PlainText] Text
 
 type SseStream =
     StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
@@ -407,10 +410,35 @@ type GetNotices =
 
 type Upload =
     "upload"
-        :> Description "Uploads files into a step's source directory."
+        :> Description "Stages files uploaded into a step's source directory and starts an ingest job."
         :> ReqId
         :> MultipartForm Tmp (MultipartData Tmp)
-        :> Post '[PlainText] Text
+        :> AcceptedText
+
+type GetScratchRoot =
+    "scratch"
+        :> Description "Returns the configured scratch directory root, or null when scratch is not configured."
+        :> Get '[JSON] ScratchRootResponse
+
+type ListScratch =
+    "scratch"
+        :> "list"
+        :> Description "Lists the entries of a directory inside the scratch root, directories first."
+        :> QueryParam "path" FilePath
+        :> Get '[JSON] ScratchListing
+
+type WrapScratch =
+    "scratch"
+        :> "wrap"
+        :> Description "Starts an ingest job that wraps a directory inside the scratch root into a step."
+        :> ReqId
+        :> ReqBody '[JSON] ScratchWrapRequest
+        :> AcceptedText
+
+type IngestStream =
+    "ingest-stream"
+        :> Description "Streams ingest job snapshots and progress updates as server-sent events."
+        :> SseStream
 
 type ClusterStatusStream =
     "cluster-status-stream"
@@ -466,6 +494,10 @@ type API =
         :<|> StepLog
         :<|> JobEnded
         :<|> Upload
+        :<|> GetScratchRoot
+        :<|> ListScratch
+        :<|> WrapScratch
+        :<|> IngestStream
         :<|> ClusterStatusStream
         :<|> CreateAgentSession
         :<|> ListAgentSessions

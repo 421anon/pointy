@@ -19,7 +19,6 @@ import Extra.Accessors exposing (A_Traversal, by, orElseT, remkT, where_)
 import Extra.FlowError as FlowError exposing (FlowError)
 import Extra.Http as Http
 import Extra.List as List
-import File.Select as Select
 import Flow exposing (Flow)
 import Grid
 import Http
@@ -2544,35 +2543,6 @@ onSelectSearch mProjectId stepId =
             )
 
 
-uploadFiles : StepSpec -> List String -> Int -> Flow Model ()
-uploadFiles spec types stepId =
-    Flow.lift (Select.files types (\file files -> Api.uploadFiles stepId (file :: files)))
-        |> Flow.andThen
-            (\cmd ->
-                Flow.over uploadProgress (Dict.insert stepId { sent = 0, size = 0 })
-                    |> Flow.seq
-                        (callApi void cmd
-                            |> FlowError.foldResult
-                                (\_ ->
-                                    Flow.over uploadProgress (Dict.remove stepId)
-                                        |> Flow.seq refreshReviews
-                                        |> Flow.seq (runStep spec stepId)
-                                )
-                                (\_ -> Flow.over uploadProgress (Dict.remove stepId))
-                        )
-            )
-
-
-onUploadProgress : Int -> Http.Progress -> Flow Model ()
-onUploadProgress stepId progress =
-    case progress of
-        Http.Sending p ->
-            Flow.over uploadProgress (Dict.insert stepId { sent = p.sent, size = p.size })
-
-        Http.Receiving _ ->
-            Flow.pure ()
-
-
 callJs : String -> (a -> Encode.Value) -> Decode.Decoder b -> a -> Flow Model b
 callJs =
     Flow.ffi Ports.ffiOut Ports.ffiIn
@@ -2596,14 +2566,6 @@ closeDialog id =
 toggleTheme : Flow Model ()
 toggleTheme =
     callJs "toggleTheme" (\_ -> Encode.null) (Decode.succeed ()) ()
-
-
-cancelUpload : Int -> Flow Model ()
-cancelUpload stepId =
-    Flow.batchM
-        [ Flow.lift (Http.cancel ("upload-" ++ String.fromInt stepId))
-        , Flow.over uploadProgress (Dict.remove stepId)
-        ]
 
 
 saveProject : Int -> FlowError Http.Error Model ()

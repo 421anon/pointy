@@ -38,6 +38,7 @@ import Handlers.RunStep (buildExtras)
 import qualified Handlers.Zip as Zip
 import Network.HTTP.Types (mkStatus, status200)
 import Network.Wai (Application, Response, ResponseReceived, responseFile, responseLBS)
+import NixStore (realStorePath)
 import Servant (
     Header,
     Headers,
@@ -119,7 +120,7 @@ storeFilesHandler' segments respond = do
             rel = joinPath (drop 3 segments)
         assertNixStorePath absPath
         assertInside absPath basePath
-        mZip <- liftIO $ resolveZipPath basePath rel
+        mZip <- liftIO $ resolveZipPath (realStorePath basePath) rel
         case mZip of
             Just (zipPath, internalPath)
                 | null internalPath -> throwError err404
@@ -127,15 +128,15 @@ storeFilesHandler' segments respond = do
                     (_, lbs) <- liftZip err404 $ Zip.readZipFile zipPath internalPath
                     pure $ Right (lbs, fromMaybe "application/octet-stream" (mimeTypeByExtension internalPath))
             Nothing -> do
-                exists <- liftIO $ doesFileExist absPath
+                exists <- liftIO $ doesFileExist (realStorePath absPath)
                 unless exists $ throwError err404
-                mime <- lift $ resolvedMimeType absPath
+                mime <- lift $ resolvedMimeType (realStorePath absPath)
                 pure $ Left (absPath, mime)
     case result of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
         Right (Left (path, mime)) -> do
             let headers = [("Content-Type", TE.encodeUtf8 mime)]
-            respond $ responseFile status200 headers path Nothing
+            respond $ responseFile status200 headers (realStorePath path) Nothing
         Right (Right (lbs, mime)) -> do
             let headers = [("Content-Type", TE.encodeUtf8 mime)]
             respond $ responseLBS status200 headers lbs
@@ -147,13 +148,13 @@ listHandler outPathText mRel = do
     let rel = fromMaybe "" mRel
         absPath = normalise (basePath </> rel)
     assertInside absPath basePath
-    mZipResult <- liftIO $ resolveZipPath basePath rel
+    mZipResult <- liftIO $ resolveZipPath (realStorePath basePath) rel
     case mZipResult of
         Just (zipPath, internalPath) ->
             map zipItemToDirEntry <$> liftZip err400 (Zip.listZipDirectory zipPath internalPath)
         Nothing -> do
-            names <- liftIO $ listDirectory absPath
-            liftIO $ mapConcurrently (runAppEffects . buildDirEntry absPath) names
+            names <- liftIO $ listDirectory (realStorePath absPath)
+            liftIO $ mapConcurrently (runAppEffects . buildDirEntry (realStorePath absPath)) names
 
 buildDirEntry :: (Nix :> es, IOE :> es) => FilePath -> FilePath -> Eff es DirEntry
 buildDirEntry absPath n = do
@@ -221,7 +222,7 @@ downloadHandler outPathText rel = do
             fileSize <- liftIO $ getFileSize path
             let source = readFileChunked path
             return $ addHeader disposition $ addHeader fileSize source
-    mZip <- liftIO $ resolveZipPath basePath rel
+    mZip <- liftIO $ resolveZipPath (realStorePath basePath) rel
     case mZip of
         Just (zipPath, internalPath)
             | null internalPath -> serveFile zipPath
@@ -230,9 +231,9 @@ downloadHandler outPathText rel = do
                 let source = S.source (LBS.toChunks lbs)
                 return $ addHeader disposition $ addHeader size source
         Nothing -> do
-            isFile <- liftIO $ doesFileExist absPath
+            isFile <- liftIO $ doesFileExist (realStorePath absPath)
             unless isFile $ throwError err404
-            serveFile absPath
+            serveFile (realStorePath absPath)
 
 fileChunkSize :: Int
 fileChunkSize = 2 * 1024 * 1024
@@ -284,15 +285,15 @@ storeFilesHandler segments = Tagged $ \_ respond -> do
             basePath = normalise $ "/" ++ intercalate "/" (take 3 segments)
         assertNixStorePath absPath
         assertInside absPath basePath
-        exists <- liftIO $ doesFileExist absPath
+        exists <- liftIO $ doesFileExist (realStorePath absPath)
         unless exists $ throwError err404
-        mime <- lift $ resolvedMimeType absPath
+        mime <- lift $ resolvedMimeType (realStorePath absPath)
         pure (absPath, mime)
     case result of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 $ T.pack $ errReasonPhrase err)) (errHeaders err) (errBody err)
         Right (path, mime) -> do
             let headers = [("Content-Type", TE.encodeUtf8 mime)]
-            respond $ responseFile status200 headers path Nothing
+            respond $ responseFile status200 headers (realStorePath path) Nothing
 
 checkViewableAndMime :: (Nix :> es) => FilePath -> Integer -> Eff es (Bool, Bool, Maybe Text)
 checkViewableAndMime path sz = do
@@ -359,16 +360,16 @@ stepExtrasHandler stepId mCommit mDirPath = do
             let dirPath = fromMaybe "" mDirPath
                 metaPath = normalise (extrasPath_ </> dirPath </> "meta.json")
             assertInside metaPath extrasPath_
-            exists <- liftIO $ doesFileExist metaPath
+            exists <- liftIO $ doesFileExist (realStorePath metaPath)
             if not exists
                 then do
                     liftIO $ void $ forkIO $ runAppEffects $ buildExtras ctx stepId
                     return (DynamicJson "{}")
                 else do
-                    sz <- liftIO $ getFileSize metaPath
+                    sz <- liftIO $ getFileSize (realStorePath metaPath)
                     when (sz > maxExtrasJsonBytes) $
                         throwError err400{errBody = "extras meta.json exceeds 10 MiB size limit"}
-                    content <- liftIO $ LBS.readFile metaPath
+                    content <- liftIO $ LBS.readFile (realStorePath metaPath)
                     case eitherDecode content of
                         Left err ->
                             throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("extras meta.json parse error: " ++ err))}
@@ -434,15 +435,15 @@ seekHandler basePathText rel offset bytes = do
     assertNixStorePath basePath
     let absPath = normalise (basePath </> rel)
     assertInside absPath basePath
-    isFile <- liftIO $ doesFileExist absPath
+    isFile <- liftIO $ doesFileExist (realStorePath absPath)
     unless isFile $ throwError err404
-    fileSize <- liftIO $ getFileSize absPath
+    fileSize <- liftIO $ getFileSize (realStorePath absPath)
     case offset of
         Right (ByteOffset value)
             | fromIntegral value > fileSize ->
                 throwError err400{errBody = "seek offset beyond end of file"}
         _ -> return ()
-    liftIO $ seekFileChunk absPath offset bytes fileSize
+    liftIO $ seekFileChunk (realStorePath absPath) offset bytes fileSize
 
 seekFileChunk :: FilePath -> Either LineOffset ByteOffset -> Int -> Integer -> IO FileChunk
 seekFileChunk path offset bytes fileSize = do

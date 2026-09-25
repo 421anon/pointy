@@ -1,4 +1,4 @@
-module View.Table exposing (actionsPopoverId, routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (actionsPopoverId, routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewScratchButton, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 import Accessors exposing (all, each, has, just, key, lens, over, set, try)
 import Actions
@@ -21,6 +21,7 @@ import Html.Extra as Html
 import Html.Keyed
 import Html.Lazy
 import Iso8601
+import Ingest
 import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Keyboard
@@ -744,8 +745,8 @@ viewRunStop spec record =
             []
 
 
-viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> Bool -> Html (Flow Model ())
-viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record uploading =
+viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool } -> Html (Flow Model ())
+viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record flags =
     let
         spec =
             Specs.steps name entry
@@ -798,13 +799,19 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
                     []
 
         uploadActions =
-            if isReadOnly || uploading || Maybe.isJust record.review then
+            if isReadOnly || flags.uploading || Maybe.isJust record.review then
                 []
 
             else
                 case entry.stepType of
                     FileUpload types ->
-                        [ Html.viewMaybe (viewUploadButton << Actions.uploadFiles spec (Maybe.withDefault [] types)) record.id ]
+                        [ Html.viewMaybe (viewUploadButton << Ingest.uploadFiles (Maybe.withDefault [] types)) record.id ]
+                            ++ (if flags.scratchAvailable then
+                                    [ Html.viewMaybe (viewScratchButton << Ingest.openScratchPicker) record.id ]
+
+                                else
+                                    []
+                               )
 
                     Derivation _ _ ->
                         []
@@ -2299,28 +2306,59 @@ viewUploadButton =
     viewIconButtonWithTooltip "upload_file" True "Upload files"
 
 
+viewScratchButton : Flow Model () -> Html (Flow Model ())
+viewScratchButton =
+    viewIconButtonWithTooltip "folder_open" True "From scratch"
+
+
 viewUploadProgress : Int -> UploadProgress -> Html (Flow Model ())
 viewUploadProgress stepId { sent, size } =
+    viewProgressBar { done = Just sent, total = Just size } (Just (Ingest.cancelUpload stepId))
+
+
+viewIngestProgress : { done : Maybe Int, total : Maybe Int } -> Html (Flow Model ())
+viewIngestProgress progress =
+    viewProgressBar progress Nothing
+
+
+viewProgressBar : { done : Maybe Int, total : Maybe Int } -> Maybe (Flow Model ()) -> Html (Flow Model ())
+viewProgressBar { done, total } mCancel =
     let
         pct =
-            if size == 0 then
-                0
+            Maybe.map2
+                (\d t ->
+                    if t == 0 then
+                        0
 
-            else
-                toFloat sent / toFloat size * 100
+                    else
+                        toFloat d / toFloat t * 100
+                )
+                done
+                total
+
+        fillAttrs =
+            case pct of
+                Just value ->
+                    [ style "width" (String.fromInt (round value) ++ "%") ]
+
+                Nothing ->
+                    [ class "upload-progress-fill--indeterminate" ]
+
+        progressTitle =
+            case pct of
+                Just value ->
+                    String.fromInt (round value) ++ "%"
+
+                Nothing ->
+                    "In progress"
     in
     Html.div
         [ class "upload-progress"
-        , title (String.fromInt (round pct) ++ "%")
+        , title progressTitle
         ]
         [ Html.div [ class "upload-progress-bar" ]
-            [ Html.div
-                [ class "upload-progress-fill"
-                , style "width" (String.fromInt (round pct) ++ "%")
-                ]
-                []
-            ]
-        , viewIconButtonWithTooltip "close" False "Cancel upload" (Actions.cancelUpload stepId)
+            [ Html.div (class "upload-progress-fill" :: fillAttrs) [] ]
+        , Html.viewMaybe (viewIconButtonWithTooltip "close" False "Cancel upload") mCancel
         ]
 
 

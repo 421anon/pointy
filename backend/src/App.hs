@@ -16,10 +16,12 @@ import Handlers.Agent (archiveSessionHandler, confirmApplyHandler, createSession
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
+import Handlers.IngestStream (ingestStreamHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectEntities (assignRecordHandler, batchAssignRecordsHandler, unassignRecordHandler)
 import Handlers.Projects (batchUpdateProjectsHandler, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (jobEndedHandler, restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
+import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
@@ -36,7 +38,8 @@ import Control.Monad.Except (mapExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Servant (Context (..), Handler (..), Proxy (..), ServerT, hoistServer, serveWithContext, (:<|>) (..))
 import Network.Wai.Parse (setMaxRequestNumFiles)
-import Servant.Multipart (MultipartOptions, Tmp, defaultMultipartOptions, generalOptions)
+import Servant.Multipart (MultipartOptions, Tmp, TmpBackendOptions (..), backendOptions, defaultMultipartOptions, generalOptions)
+import Storage (uploadStagingRoot)
 
 server :: ServerT API AppM
 server =
@@ -80,6 +83,10 @@ server =
         :<|> stepLogHandler
         :<|> jobEndedHandler
         :<|> uploadHandler
+        :<|> scratchRootHandler
+        :<|> scratchListHandler
+        :<|> scratchWrapHandler
+        :<|> ingestStreamHandler
         :<|> clusterStatusStreamHandler
         :<|> liftHandler createSessionHandler
         :<|> liftHandler listSessionsHandler
@@ -238,6 +245,20 @@ corsPolicy req = case pathInfo req of
                 , corsMethods = ["POST", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
+    ("scratch" : _) ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["GET", "POST", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["ingest-stream"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type", "Last-Event-ID"]
+                , corsMethods = ["GET", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
     ["cluster-status-stream"] ->
         Just $
             simpleCorsResourcePolicy
@@ -251,7 +272,8 @@ multipartOptions :: MultipartOptions Tmp
 multipartOptions =
     let opts = defaultMultipartOptions (Proxy :: Proxy Tmp)
         parserOpts = setMaxRequestNumFiles 100 (generalOptions opts)
-     in opts{generalOptions = parserOpts}
+        backendOpts = backendOptions opts
+     in opts{generalOptions = parserOpts, backendOptions = backendOpts{getTmpDir = uploadStagingRoot}}
 
 stripBackendPrefix :: Application -> Application
 stripBackendPrefix application request respond =
