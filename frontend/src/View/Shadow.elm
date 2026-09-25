@@ -518,6 +518,18 @@ viewSection model sectionName entry steps =
             record.id
                 |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id (Model.stepRevision model record)) stepLogs)
                 |> Maybe.unwrap ApiData.NotAsked identity
+
+        isIngesting =
+            has
+                (recordId
+                    << just
+                    << where_
+                        (\stepId ->
+                            Dict.member stepId uploads
+                                || Dict.member stepId runningIngestJobs
+                                || Set.member stepId pendingIngestSteps
+                        )
+                )
     in
     viewTable
         { model = model
@@ -525,10 +537,11 @@ viewSection model sectionName entry steps =
         , table = steps
         , recordStatusPill =
             \record ->
-                Html.Lazy.lazy4 viewStepRecordStatus
+                Html.Lazy.lazy5 viewStepRecordStatus
                     sectionName
                     entry
                     (recordLog record)
+                    (isIngesting record)
                     record
         , recordActionsPopover =
             \record ->
@@ -540,7 +553,7 @@ viewSection model sectionName entry steps =
                     projectIdKey
                     page
                     record
-                    { uploading = has (recordId << just << where_ (\stepId -> Dict.member stepId uploads || Dict.member stepId runningIngestJobs || Set.member stepId pendingIngestSteps)) record
+                    { uploading = isIngesting record
                     , scratchAvailable = scratchAvailable
                     }
         , alwaysVisibleRecordActions =

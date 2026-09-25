@@ -560,13 +560,18 @@ viewStatusApiData tableName logState mRecordId status =
         status
 
 
-viewStepRecordStatus : String -> StepConfigEntry -> ApiData String -> StepRecord -> Html (Flow Model ())
-viewStepRecordStatus name entry logState record =
+viewStepRecordStatus : String -> StepConfigEntry -> ApiData String -> Bool -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatus name entry logState ingesting record =
     viewStatusApiData
         name
         logState
         record.id
-        (TableSpec.getStatus (Specs.steps name entry) record)
+        (if ingesting then
+            Success StatusRunning
+
+         else
+            TableSpec.getStatus (Specs.steps name entry) record
+        )
 
 
 actionsPopoverId : String -> BaseRecord a -> String
