@@ -1,4 +1,4 @@
-module View.Table exposing (actionsPopoverId, routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewScratchButton, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
+module View.Table exposing (actionsPopoverId, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewQuickCreateButton, viewRecordActions, viewRecordActionsPopover, viewRunButton, viewScratchButton, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewTable, viewUploadButton, viewUploadProgress)
 
 import Accessors exposing (all, each, has, just, key, lens, over, set, try)
 import Actions
@@ -126,9 +126,6 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
     let
         lens =
             TableSpec.getLens spec
-
-        currentRouteCommit =
-            routeCommit (Model.getRoute model).page
 
         highlightedEntityId =
             case (Model.getRoute model).page of
@@ -442,13 +439,8 @@ viewMtimeBadge mPosix now =
         mPosix
 
 
-routeCommit : Route.Page -> Maybe String
-routeCommit =
-    try (Route.project << mCommit << just)
-
-
-viewStatusApiData : String -> Maybe String -> ApiData String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
-viewStatusApiData tableName currentRouteCommit logState mRecordId status =
+viewStatusApiData : String -> ApiData String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
+viewStatusApiData tableName logState mRecordId status =
     let
         viewStatusPill s =
             let
@@ -568,11 +560,10 @@ viewStatusApiData tableName currentRouteCommit logState mRecordId status =
         status
 
 
-viewStepRecordStatus : String -> StepConfigEntry -> Route.Page -> ApiData String -> StepRecord -> Html (Flow Model ())
-viewStepRecordStatus name entry page logState record =
+viewStepRecordStatus : String -> StepConfigEntry -> ApiData String -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatus name entry logState record =
     viewStatusApiData
         name
-        (routeCommit page)
         logState
         record.id
         (TableSpec.getStatus (Specs.steps name entry) record)

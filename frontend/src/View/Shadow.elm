@@ -29,7 +29,7 @@ import Time.Distance
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (routeCommit, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
+import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
 
 
 type alias ComparisonChip =
@@ -511,15 +511,12 @@ viewSection model sectionName entry steps =
         page =
             (Model.getRoute model).page
 
-        currentRouteCommit =
-            routeCommit page
-
         stepLogs =
             Model.getStepLogs model
 
         recordLog record =
             record.id
-                |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id currentRouteCommit) stepLogs)
+                |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id (Model.stepRevision model record)) stepLogs)
                 |> Maybe.unwrap ApiData.NotAsked identity
     in
     viewTable
@@ -528,10 +525,9 @@ viewSection model sectionName entry steps =
         , table = steps
         , recordStatusPill =
             \record ->
-                Html.Lazy.lazy5 viewStepRecordStatus
+                Html.Lazy.lazy4 viewStepRecordStatus
                     sectionName
                     entry
-                    page
                     (recordLog record)
                     record
         , recordActionsPopover =
