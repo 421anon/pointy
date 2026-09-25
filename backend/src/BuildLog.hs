@@ -12,29 +12,26 @@ module BuildLog (
     buildStepStore,
     rawStatusesBatched,
     resolveStatusesBatched,
-    logDirectoryAvailable,
 ) where
 
+import Control.Concurrent.Async (mapConcurrently)
 import Control.Monad (forM_, guard, unless)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), Value, eitherDecode, withObject, (.:), (.:?), (.!=))
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Aeson (FromJSON (..), Value (Null), eitherDecode, withObject, (.:), (.:?), (.!=))
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effects (Nix, pathValid, runNixStoreCli)
-import NixStore (rootedPath)
-import System.Directory (doesDirectoryExist, doesFileExist)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeFileName, (</>))
 import UserRepo (runNix)
 
 data LogSource
@@ -170,6 +167,22 @@ data StepStore = StepStore
 isStorePath :: FilePath -> Bool
 isStorePath path = "/nix/store/" `isPrefixOf` path
 
+validPaths :: (Nix :> es) => [FilePath] -> Eff es (Maybe (Set FilePath))
+validPaths [] = return (Just Set.empty)
+validPaths paths = do
+    result <- runExceptT $ runNix (["path-info", "--offline", "--json"] ++ paths)
+    return $ case result of
+        Right output -> parsedValidity output
+        Left _ -> Nothing
+  where
+    parsedValidity output = do
+        validity <- decodeValidity output
+        guard (Set.fromList (map pack paths) `Set.isSubsetOf` Map.keysSet validity)
+        return $ Set.fromList (map unpack (Map.keys (Map.filter (/= Null) validity)))
+
+decodeValidity :: String -> Maybe (Map Text Value)
+decodeValidity = either (const Nothing) Just . eitherDecode . TLE.encodeUtf8 . TL.pack
+
 buildStepStore :: (Nix :> es, IOE :> es) => Map Int Text -> Eff es StepStore
 buildStepStore certificates = do
     nodes <- queryDerivations (filter isStorePath (map unpack (Map.elems certificates)))
@@ -185,10 +198,17 @@ buildStepStore certificates = do
     return StepStore{ssDrvOf = drvOf, ssPlan = plan, ssCache = cache}
 
 rawStatusesBatched :: (Nix :> es, IOE :> es) => StepStore -> (Text -> Bool) -> Map Int Text -> Eff es (Map Int (Text, Maybe Text))
-rawStatusesBatched store isRunning certificates = Map.traverseWithKey classify certificates
+rawStatusesBatched store isRunning certificates = do
+    nodes <- liftIO $ readIORef (ssCache store)
+    let probed = Map.filterWithKey (\sid certificate -> needsProbe nodes sid (unpack certificate)) certificates
+    known <- validPaths (map unpack (Map.elems probed))
+    let probe certificate = case known of
+            Just valid -> return (Set.member certificate valid)
+            Nothing -> pathValid certificate
+    Map.traverseWithKey (classify nodes probe) certificates
   where
-    classify sid certificate = do
-        certified <- certificateValid sid (unpack certificate)
+    classify nodes probe sid certificate = do
+        certified <- certificateValid nodes probe sid (unpack certificate)
         return $
             if certified
                 then ("success", Nothing)
@@ -197,37 +217,38 @@ rawStatusesBatched store isRunning certificates = Map.traverseWithKey classify c
                         then ("running", Nothing)
                         else ("not-started", Nothing)
 
-    certificateValid sid certificate
+    needsProbe nodes sid certificate
+        | not (isStorePath certificate) = False
+        | otherwise = case Map.lookup sid (ssDrvOf store) of
+            Nothing -> True
+            Just drv -> maybe False ((> 1) . length . dnOutputs) (Map.lookup drv nodes)
+
+    certificateValid nodes probe sid certificate
         | not (isStorePath certificate) = return False
         | otherwise = case Map.lookup sid (ssDrvOf store) of
             Nothing -> probe certificate
-            Just drv -> do
-                node <- Map.lookup drv <$> liftIO (readIORef (ssCache store))
-                case node of
-                    Just node_ | length (dnOutputs node_) > 1 -> probe certificate
-                    _ ->
-                        return $
-                            not
-                                ( Set.member drv (spBuild (ssPlan store))
-                                    || Set.member certificate (spFetch (ssPlan store))
-                                )
-
-    probe path = pathValid path
+            Just drv -> case Map.lookup drv nodes of
+                Just node | length (dnOutputs node) > 1 -> probe certificate
+                _ ->
+                    return $
+                        not
+                            ( Set.member drv (spBuild (ssPlan store))
+                                || Set.member certificate (spFetch (ssPlan store))
+                            )
 
 resolveStatusesBatched :: (Nix :> es, IOE :> es) => StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesBatched store statuses = do
     logCache <- liftIO $ newIORef Map.empty
-    resolved <- liftIO $ newIORef Map.empty
     let seeds =
             [ (sid, drv)
             | (sid, (state, _)) <- Map.toList statuses
             , state == "failure" || state == "not-started"
             , Just drv <- [Map.lookup sid (ssDrvOf store)]
             ]
-    forM_ seeds $ \(sid, drv) -> do
-        mOwnLog <- cachedLog readLocalLog logCache drv
-        forM_ mOwnLog $ \logText ->
-            liftIO $ modifyIORef' resolved (Map.insert sid ("failure", lastMeaningfulLine logText))
+    ownLogs <-
+        withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
+            mapConcurrently (unlift . seedFailureLog logCache) seeds
+    resolved <- liftIO $ newIORef (Map.fromList (catMaybes ownLogs))
     seedNodes <- fetchNodes (ssCache store) (map snd seeds)
     visited <- liftIO $ newIORef (Map.fromList [(sid, Set.singleton drv) | (sid, drv) <- seeds])
     frontierRef <-
@@ -243,24 +264,36 @@ resolveStatusesBatched store statuses = do
             let levelNodes = Set.fromList [drv | queue <- Map.elems frontier, (drv, _) <- queue]
             unless (Set.null levelNodes) $ do
                 level <- fetchNodes (ssCache store) (Set.toList levelNodes)
+                done <- liftIO $ readIORef resolved
+                seen <- liftIO $ readIORef visited
+                walked <-
+                    withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
+                        mapConcurrently
+                            ( \(sid, queue) ->
+                                fmap ((,) sid) (unlift (walkQueue store logCache level (Map.findWithDefault Set.empty sid seen) queue))
+                            )
+                            [ (sid, queue)
+                            | (sid, queue) <- Map.toList frontier
+                            , not (Map.member sid done)
+                            ]
                 nextFrontier <- liftIO $ newIORef Map.empty
-                forM_ (Map.toList frontier) $ \(sid, queue) -> do
-                    done <- Map.member sid <$> liftIO (readIORef resolved)
-                    unless done $ do
-                        seen <- Map.findWithDefault Set.empty sid <$> liftIO (readIORef visited)
-                        (mLog, seen', expanded) <- walkQueue store logCache level seen queue
-                        liftIO $ modifyIORef' visited (Map.insert sid seen')
-                        case mLog of
-                            Just logText ->
-                                liftIO $ modifyIORef' resolved (Map.insert sid ("failure", lastMeaningfulLine logText))
-                            Nothing ->
-                                unless (null expanded) $
-                                    liftIO $ modifyIORef' nextFrontier (Map.insert sid expanded)
+                forM_ walked $ \(sid, (mLog, seen', expanded)) -> do
+                    liftIO $ modifyIORef' visited (Map.insert sid seen')
+                    case mLog of
+                        Just logText ->
+                            liftIO $ modifyIORef' resolved (Map.insert sid ("failure", lastMeaningfulLine logText))
+                        Nothing ->
+                            unless (null expanded) $
+                                liftIO $ modifyIORef' nextFrontier (Map.insert sid expanded)
                 liftIO $ writeIORef frontierRef =<< readIORef nextFrontier
                 levelLoop
     levelLoop
     resolvedMap <- liftIO $ readIORef resolved
     return $ Map.union resolvedMap statuses
+  where
+    seedFailureLog logCache (sid, drv) = do
+        mLog <- cachedLog fetchInputLog logCache drv
+        return $ fmap (\logText -> (sid, ("failure", lastMeaningfulLine logText))) mLog
 
 walkQueue :: (Nix :> es, IOE :> es) => StepStore -> IORef (Map FilePath (Maybe String)) -> Map FilePath DrvNode -> Set FilePath -> [(FilePath, Int)] -> Eff es (Maybe String, Set FilePath, [(FilePath, Int)])
 walkQueue store logCache level seen queue = go seen [] queue
@@ -274,7 +307,7 @@ walkQueue store logCache level seen queue = go seen [] queue
         | otherwise = case Map.lookup drv level of
             Nothing -> go (Set.insert drv visited) expanded rest
             Just node -> do
-                mLog <- cachedLog readLocalLog logCache drv
+                mLog <- cachedLog fetchInputLog logCache drv
                 case mLog of
                     Just logText -> do
                         allInvalid <- outputsAllInvalid node
@@ -306,7 +339,7 @@ cachedLog fetch cacheRef drv = do
         Just result -> return result
         Nothing -> do
             result <- fetch drv
-            liftIO $ modifyIORef' cacheRef (Map.insert drv result)
+            liftIO $ atomicModifyIORef' cacheRef (\entries -> (Map.insert drv result entries, ()))
             return result
 
 fetchNodes :: (Nix :> es, IOE :> es) => IORef (Map FilePath DrvNode) -> [FilePath] -> Eff es (Map FilePath DrvNode)
@@ -382,29 +415,3 @@ parseStorePlan = go False (StorePlan Set.empty Set.empty) . lines
         [path] | "/nix/store/" `isPrefixOf` path -> Just path
         _ -> Nothing
 
-logDirectoryAvailable :: IO Bool
-logDirectoryAvailable = doesDirectoryExist logRoot
-
-readLocalLog :: (Nix :> es, IOE :> es) => FilePath -> Eff es (Maybe String)
-readLocalLog drv = do
-    present <- liftIO $ maybe (return False) doesFileExist (logPathFor drv)
-    if not present
-        then return Nothing
-        else do
-            result <- runExceptT $ runNix ["--offline", "log", drv]
-            return $ case result of
-                Right output | not (null output) -> Just output
-                _ -> Nothing
-
-logRoot :: FilePath
-logRoot = rootedPath "/nix/var/log/nix/drvs"
-
-logPathFor :: FilePath -> Maybe FilePath
-logPathFor drv = do
-    let file = takeFileName drv
-    guard (".drv" `isSuffixOf` file)
-    let stem = take (length file - 4) file
-        (hash, rest) = break (== '-') stem
-    guard (length hash == 32)
-    guard (not (null rest))
-    return $ logRoot </> take 2 hash </> (drop 2 hash ++ rest ++ ".drv.bz2")

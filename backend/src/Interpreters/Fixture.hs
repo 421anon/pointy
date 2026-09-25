@@ -111,7 +111,7 @@ answerNix document args = case args of
         Just drv -> (ExitSuccess, drv ++ "\n", "")
         Nothing -> (ExitFailure 1, "", "fixture: no derivation recorded for " ++ path)
     ("--offline" : "path-info" : "--json" : paths) | not (null paths) ->
-        pure (ExitSuccess, pathInfoJson paths, "")
+        pure (ExitSuccess, pathInfoJson document paths, "")
     _ -> pure (ExitFailure 1, "", "fixture: unsupported nix invocation: " ++ unwords args)
   where
     logFor drv = do
@@ -125,10 +125,14 @@ storePathsAnswer label recorded drv = case Map.lookup drv recorded of
     Just paths -> (ExitSuccess, unlines paths, "")
     Nothing -> (ExitFailure 1, "", "fixture: no " ++ label ++ " recorded for " ++ drv)
 
-pathInfoJson :: [FilePath] -> String
-pathInfoJson paths =
+pathInfoJson :: FixtureDocument -> [FilePath] -> String
+pathInfoJson document paths =
     T.unpack . TE.decodeUtf8 . LBS.toStrict . A.encode $
-        object [Key.fromText (T.pack path) .= object ["narHash" .= pseudoHash path, "valid" .= True] | path <- paths]
+        object [Key.fromText (T.pack path) .= validity path | path <- paths]
+  where
+    validity path
+        | path `elem` documentValidPaths document = object ["narHash" .= pseudoHash path, "valid" .= True]
+        | otherwise = A.Null
 
 
 runSlurmFixture :: (IOE :> es) => FixtureState -> Eff (Slurm : es) a -> Eff es a

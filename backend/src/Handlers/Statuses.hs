@@ -19,7 +19,7 @@ module Handlers.Statuses (
     restoreRunningStatuses,
 ) where
 
-import BuildLog (ResolvedLog (..), StepStore, buildStepStore, lastMeaningfulLine, logDirectoryAvailable, lookupDeriver, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
+import BuildLog (ResolvedLog (..), StepStore, buildStepStore, lastMeaningfulLine, lookupDeriver, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
 import BuildRunner (BuildKey (..), BuildState (..), buildKeyForOutPath, queryState, querySlurmJobs, slurmJobName)
 import Bus (broadcastSnapshot)
 import ClusterBus (restoreRunningStepIds)
@@ -127,11 +127,7 @@ getBatchedStatuses pid targetCommit = do
 
 resolveStatusesFor :: (Nix :> es, IOE :> es) => Text -> Map Int Text -> Maybe StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesFor targetCommit certificates mStore statuses = case mStore of
-    Just store -> do
-        batchable <- liftIO logDirectoryAvailable
-        if batchable
-            then resolveStatusesBatched store statuses
-            else resolveStatusesAtCommitWithCertificates targetCommit certificates statuses
+    Just store -> resolveStatusesBatched store statuses
     Nothing -> resolveStatusesAtCommitWithCertificates targetCommit certificates statuses
 
 broadcastProjectStatus :: App es => Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> Eff es ()
