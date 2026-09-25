@@ -2803,6 +2803,11 @@ body:has(dialog[open]) {
   gap: var(--spacing-md);
 }
 
+.scratch-picker-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .scratch-picker-breadcrumb {
   display: flex;
   flex-wrap: wrap;

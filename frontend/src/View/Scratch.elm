@@ -50,6 +50,8 @@ viewContent model =
                         ]
                         [ icon True "close" ]
                     ]
+                , Html.div [ class "scratch-picker-hint" ]
+                    [ Html.text "Choose a directory as a step. Indexing it will take some time, but nothing is copied or moved." ]
                 , viewBreadcrumb state
                 , Html.viewMaybe (\error -> Html.div [ class "scratch-picker-error" ] [ Html.text error ]) state.error
                 , viewListing state
