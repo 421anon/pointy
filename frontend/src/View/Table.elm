@@ -167,22 +167,6 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
         editable record =
             not isReadOnly && not (TableSpec.getIsLocked spec record)
 
-        isStepTable =
-            case TableSpec.getTag spec of
-                TagSteps _ _ ->
-                    True
-
-                TagProjects ->
-                    False
-
-        fromScratchSpace record =
-            isStepTable
-                && (record.id
-                        |> Maybe.andThen (\id -> Dict.get id (Model.getIngestJobs model))
-                        |> Maybe.map (\job -> job.source == Model.IngestScratch && job.state /= Model.IngestFailed)
-                        |> Maybe.withDefault False
-                   )
-
         viewRecord index record =
             let
                 isHighlighted =
@@ -210,9 +194,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                         Html.span
                             [ class "record-name-container"
                             ]
-                            [ Html.viewIf (fromScratchSpace record) <|
-                                iconCustom False "strikethrough_s" [ class "scratch-step-icon", title "From scratch space" ]
-                            , Html.text record.name
+                            [ Html.text record.name
                             , Html.viewMaybe
                                 (\id_ ->
                                     Html.span [ class "table-record-id", title <| "id: " ++ String.fromInt id_ ]
