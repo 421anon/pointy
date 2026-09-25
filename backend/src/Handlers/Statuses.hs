@@ -17,6 +17,7 @@ module Handlers.Statuses (
     forkBroadcastProjectStatusAtHead,
     forkBroadcastStatusForStepProjectsAtHead,
     restoreRunningStatuses,
+    projectContainsStep,
 ) where
 
 import BuildLog (ResolvedLog (..), StepStore, buildStepStore, lastMeaningfulLine, lookupDeriver, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
@@ -243,7 +244,7 @@ restoreRunningStatuses = do
                                     Left err -> do
                                         liftIO $ putStrLn $ "restoreRunningStatuses: error parsing projects: " ++ err
                                         return []
-                                    Right projects -> return $ filter (not . projectDefHidden) (Map.elems projects)
+                                    Right projects -> return (Map.elems projects)
                         case eProjects of
                             Left err -> do
                                 liftIO $ putStrLn $ "restoreRunningStatuses: transaction error: " ++ err
@@ -274,7 +275,4 @@ buildingCertificates targetCommit runningKeys project = do
     pid = projectDefId project
 
 projectContainsStep :: Int -> ProjectDef -> Bool
-projectContainsStep sid p =
-    not (projectDefHidden p) && any isTargetStep (projectDefSteps p)
-  where
-    isTargetStep s = not (stepRefHidden s) && stepDefId (stepRefDef s) == sid
+projectContainsStep sid p = any ((== sid) . stepDefId . stepRefDef) (projectDefSteps p)

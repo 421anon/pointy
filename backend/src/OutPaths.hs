@@ -51,7 +51,6 @@ import UserRepo (ReadRepoContext (..), RepoContext, WriteRepoContext, ensureRepo
 
 data ProjectDef = ProjectDef
     { projectDefId :: Int
-    , projectDefHidden :: Bool
     , projectDefSteps :: [StepRef]
     }
     deriving (Show, Generic)
@@ -59,9 +58,8 @@ data ProjectDef = ProjectDef
 instance FromJSON ProjectDef where
     parseJSON = genericParseJSON $ prefixedFieldOptions "projectDef"
 
-data StepRef = StepRef
-    { stepRefHidden :: Bool
-    , stepRefDef :: StepDef
+newtype StepRef = StepRef
+    { stepRefDef :: StepDef
     }
     deriving (Show, Generic)
 
