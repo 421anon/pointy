@@ -34,13 +34,11 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
-import Effectful (Eff, IOE, (:>))
-import Effects (App, AppM, Eval, Nix, registerGcRoot, pathValid)
+import Effectful (Eff, (:>))
+import Effects (App, AppM, Eval, Nix, pathValid, rootStorePath)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects)
 import Servant (NoContent (..), err404, err500, errBody)
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeFileName, (</>))
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
 runStepHandler :: Int -> Maybe T.Text -> AppM NoContent
@@ -187,6 +185,7 @@ submitStep ctx outcomes deps sid
 finishStep :: App es => ReadRepoContext -> (Int, SubmitOutcome) -> Eff es ()
 finishStep ctx (sid, outcome) = case outcome of
     AlreadyCertified certificate -> do
+        rootStorePath certificate
         broadcastSingleStepForProjects sid targetCommitText certificate
         buildExtras ctx sid
     Enqueued certificate buildKey _ -> do
@@ -329,14 +328,6 @@ getDependencies ctx stepId = do
 
 isBuilt :: (Nix :> es) => FilePath -> Eff es Bool
 isBuilt = pathValid
-
-rootStorePath :: (Nix :> es, IOE :> es) => FilePath -> Eff es ()
-rootStorePath path = do
-    home <- liftIO getHomeDirectory
-    let gcRootDir = home </> ".local" </> "state" </> "pointy" </> "gc-roots"
-        gcRootPath = gcRootDir </> takeFileName path
-    liftIO $ createDirectoryIfMissing True gcRootDir
-    registerGcRoot gcRootPath path
 
 stopStepSync :: App es => Int -> Maybe T.Text -> Eff es ()
 stopStepSync eid commit = do

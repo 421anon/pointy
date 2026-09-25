@@ -18,6 +18,7 @@ module OutPaths (
     StepDef (..),
 ) where
 
+import BuildLog (validPaths)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 
 import Control.Concurrent (forkIO)
@@ -25,6 +26,7 @@ import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, eitherDecode, genericParseJSON)
 import Data.Char (toLower)
 import Data.Either (isRight)
@@ -33,12 +35,14 @@ import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, (:>))
-import Effects (Eval)
+import Effects (Eval, Nix, rootStorePath)
 import GHC.Generics (Generic)
 import NixEvaluator (RepoSource, repoSource)
 import System.IO.Unsafe (unsafePerformIO)
@@ -102,7 +106,7 @@ scheduleProjectCertificatesWarm pid commit = do
     let ctx = ReadRepoContext repoPath $ unpack commit
     void $ forkIO $ runAppEffects $ void $ runExceptT $ runNixEvalJsonApplyInRepoBackground ctx certificatesOrLegacyOutPaths $ projectAttr pid
 
-warmProjectCertificates :: (Eval :> es, IOE :> es) => Eff es ()
+warmProjectCertificates :: (Eval :> es, Nix :> es, IOE :> es) => Eff es ()
 warmProjectCertificates = do
     repoPath <- liftIO userRepoPath
     withReadRepoTransaction (pure . pack . readCommitHash) >>= \case
@@ -111,15 +115,19 @@ warmProjectCertificates = do
             runExceptT (warmProjectCertificatesForCommit $ ReadRepoContext repoPath $ unpack commit)
                 >>= either (liftIO . putStrLn . ("Project certificate warm failed: " ++)) pure
 
-warmProjectCertificatesForCommit :: (Eval :> es) => ReadRepoContext -> ExceptT String (Eff es) ()
+warmProjectCertificatesForCommit :: (Eval :> es, Nix :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) ()
 warmProjectCertificatesForCommit ctx = do
     expressions <- ExceptT $ revisionProjectExpressions ctx
     results <- ExceptT $ rewarmRepoJsonExpressions (readRepoSource ctx) $ toList expressions
-    forM_ results $ \case
+    certificates <- Set.unions <$> traverse projectCertificates results
+    known <- lift $ validPaths (map unpack $ Set.toList certificates)
+    forM_ (maybe [] Set.toList known) (lift . rootStorePath)
+  where
+    projectCertificates = \case
         (Nothing, result) ->
-            either (throwError . (("Failed to warm " ++ projectsAttr ++ ": ") ++)) (const $ pure ()) result
+            either (throwError . (("Failed to warm " ++ projectsAttr ++ ": ") ++)) (const $ pure Set.empty) result
         (Just pid, result) ->
-            void $ either throwError pure $ decodeCertificateResult pid result
+            Set.fromList . Map.elems <$> either throwError pure (decodeCertificateResult pid result)
 
 readRepoSource :: ReadRepoContext -> RepoSource
 readRepoSource (ReadRepoContext repoPath commitHash) =

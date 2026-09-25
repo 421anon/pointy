@@ -28,6 +28,7 @@ module Effects (
     runNixStoreCli,
     pathValid,
     registerGcRoot,
+    rootStorePath,
     ingestDirectory,
     probeMimeType,
     submitJob,
@@ -37,8 +38,11 @@ module Effects (
 ) where
 
 import Control.Monad.Except (ExceptT, MonadError, mapExceptT)
+import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
+import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode)
+import System.FilePath (takeFileName, (</>))
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, MonadIO, type (:>))
 import Effectful.Dispatch.Dynamic (send)
 import Ingest (IngestResult)
@@ -122,6 +126,14 @@ pathValid = send . PathValid
 
 registerGcRoot :: (Nix :> es) => FilePath -> FilePath -> Eff es ()
 registerGcRoot gcRootPath outPath = send (RegisterGcRoot gcRootPath outPath)
+
+rootStorePath :: (Nix :> es, IOE :> es) => FilePath -> Eff es ()
+rootStorePath path = do
+    home <- liftIO getHomeDirectory
+    let gcRootDir = home </> ".local" </> "state" </> "pointy" </> "gc-roots"
+        gcRootPath = gcRootDir </> takeFileName path
+    liftIO $ createDirectoryIfMissing True gcRootDir
+    registerGcRoot gcRootPath path
 
 ingestDirectory :: (Nix :> es) => FilePath -> String -> (Integer -> Integer -> IO ()) -> Eff es (Either String IngestResult)
 ingestDirectory directory name reportProgress = send (IngestDirectory directory name reportProgress)

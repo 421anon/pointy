@@ -6,6 +6,7 @@ module BuildLog (
     ResolvedLog (..),
     LogSource (..),
     resolveBuildLog,
+    validPaths,
     lookupDeriver,
     lastMeaningfulLine,
     StepStore,
