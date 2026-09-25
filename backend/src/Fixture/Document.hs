@@ -94,7 +94,7 @@ appliedAnswer document applyExpr attr
     extrasValue = case Map.lookup key (documentExtrasOutPaths document) of
         Just (Just path) -> String path
         _ -> Null
-    stepTarget path = object ["certified" .= certified document, "path" .= path]
+    stepTarget path = object ["certified" .= certified document, "path" .= path, "drv" .= (path <> ".drv")]
 
 certified :: FixtureDocument -> Bool
 certified = not . Map.null . documentCertificates

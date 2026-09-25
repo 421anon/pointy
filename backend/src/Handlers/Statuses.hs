@@ -19,7 +19,7 @@ module Handlers.Statuses (
     restoreRunningStatuses,
 ) where
 
-import BuildLog (ResolvedLog (..), StepStore, buildStepStore, lastMeaningfulLine, logDirectoryAvailable, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
+import BuildLog (ResolvedLog (..), StepStore, buildStepStore, lastMeaningfulLine, logDirectoryAvailable, lookupDeriver, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
 import BuildRunner (BuildKey (..), BuildState (..), buildKeyForOutPath, queryState, querySlurmJobs, slurmJobName)
 import Bus (broadcastSnapshot)
 import ClusterBus (restoreRunningStepIds)
@@ -61,7 +61,7 @@ isImmediateStatus (state, _) = state == "success" || state == "running"
 partitionImmediateStatuses :: Map Int (Text, Maybe Text) -> (Map Int (Text, Maybe Text), Map Int (Text, Maybe Text))
 partitionImmediateStatuses = Map.partition isImmediateStatus
 
-resolveStepStatus :: (Nix :> es) => ReadRepoContext -> Maybe FilePath -> (Int, (Text, Maybe Text)) -> Eff es (Int, (Text, Maybe Text))
+resolveStepStatus :: (Nix :> es, IOE :> es) => ReadRepoContext -> Maybe FilePath -> (Int, (Text, Maybe Text)) -> Eff es (Int, (Text, Maybe Text))
 resolveStepStatus _ _ entry@(_, status_)
     | isImmediateStatus status_ = return entry
 resolveStepStatus _ Nothing entry@(_, (state, _))
@@ -69,7 +69,8 @@ resolveStepStatus _ Nothing entry@(_, (state, _))
 resolveStepStatus _ Nothing entry = return entry
 resolveStepStatus _ (Just certificate) entry@(sid, (state, _))
     | state == "failure" || state == "not-started" = do
-        mResolved <- resolveBuildLog certificate
+        mDrv <- lookupDeriver certificate
+        mResolved <- maybe (return Nothing) resolveBuildLog mDrv
         return $ case mResolved of
             Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
             Nothing -> entry

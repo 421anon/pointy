@@ -87,7 +87,7 @@ stepLogHandler eid commit = do
 
         let ctx = ReadRepoContext repoPath targetCommit
         target <- resolveStepTarget ctx eid
-        lift $ resolveBuildLog (stepTargetInstallable ctx eid target)
+        lift $ resolveBuildLog (stepTargetDrv target)
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
@@ -114,10 +114,11 @@ stepAttr eid = "pointy.steps." ++ show eid
 data StepTarget = StepTarget
     { stepTargetCertified :: Bool
     , stepTargetPath :: FilePath
+    , stepTargetDrv :: FilePath
     }
 
 instance FromJSON StepTarget where
-    parseJSON = withObject "StepTarget" $ \o -> StepTarget <$> o .: "certified" <*> o .: "path"
+    parseJSON = withObject "StepTarget" $ \o -> StepTarget <$> o .: "certified" <*> o .: "path" <*> o .: "drv"
 
 resolveStepTarget :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) StepTarget
 resolveStepTarget ctx eid = do
@@ -125,7 +126,7 @@ resolveStepTarget ctx eid = do
     either (throwError . (("Failed to decode the build target of step " ++ show eid ++ ": ") ++)) pure $
         eitherDecode (TLE.encodeUtf8 (TL.pack output))
   where
-    certificateOrLegacyStep = "step: { certified = step ? certificate; path = builtins.unsafeDiscardStringContext (step.certificate or step).outPath; }"
+    certificateOrLegacyStep = "step: { certified = step ? certificate; path = builtins.unsafeDiscardStringContext (step.certificate or step).outPath; drv = builtins.unsafeDiscardStringContext (step.certificate or step).drvPath; }"
 
 stepTargetInstallable :: ReadRepoContext -> Int -> StepTarget -> String
 stepTargetInstallable ctx eid target =

@@ -6,6 +6,7 @@ module BuildLog (
     ResolvedLog (..),
     LogSource (..),
     resolveBuildLog,
+    lookupDeriver,
     lastMeaningfulLine,
     StepStore,
     buildStepStore,
@@ -48,19 +49,58 @@ data ResolvedLog = ResolvedLog
     }
     deriving (Eq, Show)
 
-resolveBuildLog :: (Nix :> es) => String -> Eff es (Maybe ResolvedLog)
-resolveBuildLog target = do
-    mDrv <- lookupDeriver target
-    case mDrv of
-        Nothing -> return Nothing
-        Just stepDrv -> do
-            mOwn <- fetchStepLog stepDrv
-            case mOwn of
-                Just logText ->
-                    return (Just (ResolvedLog stepDrv logText StepDrv))
-                Nothing -> do
-                    inputs <- inputDrvs stepDrv
-                    bfs (Set.singleton stepDrv) [(d, 1) | d <- inputs]
+resolveBuildLog :: (Nix :> es, IOE :> es) => FilePath -> Eff es (Maybe ResolvedLog)
+resolveBuildLog stepDrv = do
+    logCache <- liftIO $ newIORef Map.empty
+    nodeCache <- liftIO $ newIORef Map.empty
+    mOwn <- cachedLog fetchStepLog logCache stepDrv
+    case mOwn of
+        Just logText ->
+            return (Just (ResolvedLog stepDrv logText StepDrv))
+        Nothing -> do
+            nodes <- fetchNodes nodeCache [stepDrv]
+            bfs nodeCache logCache (Set.singleton stepDrv) [(input, 1) | input <- maybe [] dnInputs (Map.lookup stepDrv nodes)]
+  where
+    bfs _ _ _ [] = return Nothing
+    bfs nodeCache logCache visited level = do
+        plan <- queryStorePlan (map fst level)
+        (found, unbuilt) <- logOfFirstUnbuilt logCache plan level
+        case found of
+            Just resolved ->
+                return (Just resolved)
+            Nothing -> do
+                nodes <- fetchNodes nodeCache (map fst unbuilt)
+                bfs nodeCache logCache seen $
+                    dedupe seen
+                        [ (input, depth + 1)
+                        | (drv, depth) <- unbuilt
+                        , depth < maxBfsDepth
+                        , Just node <- [Map.lookup drv nodes]
+                        , input <- dnInputs node
+                        ]
+      where
+        seen = visited <> Set.fromList (map fst level)
+
+    logOfFirstUnbuilt logCache plan = go []
+      where
+        go unbuilt [] = return (Nothing, reverse unbuilt)
+        go unbuilt ((drv, depth) : rest)
+            | drv `Set.member` spBuild plan = do
+                mLog <- cachedLog fetchInputLog logCache drv
+                case mLog of
+                    Just logText ->
+                        return $
+                            ( Just (ResolvedLog drv logText (InputDrv drv depth))
+                            , []
+                            )
+                    Nothing -> go ((drv, depth) : unbuilt) rest
+            | otherwise = go unbuilt rest
+
+dedupe :: Set FilePath -> [(FilePath, Int)] -> [(FilePath, Int)]
+dedupe _ [] = []
+dedupe excluded ((drv, depth) : rest)
+    | drv `Set.member` excluded = dedupe excluded rest
+    | otherwise = (drv, depth) : dedupe (Set.insert drv excluded) rest
 
 lastMeaningfulLine :: String -> Maybe Text
 lastMeaningfulLine output =
@@ -70,32 +110,6 @@ lastMeaningfulLine output =
 
 maxBfsDepth :: Int
 maxBfsDepth = 6
-
-bfs :: (Nix :> es) => Set FilePath -> [(FilePath, Int)] -> Eff es (Maybe ResolvedLog)
-bfs _ [] = return Nothing
-bfs visited ((drv, depth) : rest)
-    | drv `Set.member` visited = bfs visited rest
-    | depth > maxBfsDepth = bfs (Set.insert drv visited) rest
-    | otherwise = do
-        let visited' = Set.insert drv visited
-        outputs <- drvOutputs drv
-        valid <- anyOutputValid outputs
-        if valid
-            then bfs visited' rest
-            else do
-                mLog <- fetchInputLog drv
-                case mLog of
-                    Just logText ->
-                        return $
-                            Just (ResolvedLog drv logText (InputDrv drv depth))
-                    Nothing -> do
-                        inputs <- inputDrvs drv
-                        let next =
-                                [ (d, depth + 1)
-                                | d <- inputs
-                                , d `Set.notMember` visited'
-                                ]
-                        bfs visited' (rest ++ next)
 
 lookupDeriver :: (Nix :> es) => String -> Eff es (Maybe FilePath)
 lookupDeriver target = do
@@ -120,29 +134,6 @@ fetchInputLog drv = do
     return $ case result of
         Right output | not (null output) -> Just output
         _ -> Nothing
-
-drvOutputs :: (Nix :> es) => FilePath -> Eff es [FilePath]
-drvOutputs drv = do
-    (code, out, _) <- runNixStoreCli ["--query", "--outputs", drv]
-    return $ case code of
-        ExitSuccess -> filter (not . null) (lines out)
-        _ -> []
-
-inputDrvs :: (Nix :> es) => FilePath -> Eff es [FilePath]
-inputDrvs drv = do
-    (code, out, _) <- runNixStoreCli ["--query", "--references", drv]
-    return $ case code of
-        ExitSuccess -> filter (".drv" `isSuffixOf`) (lines out)
-        _ -> []
-
-anyOutputValid :: (Nix :> es) => [FilePath] -> Eff es Bool
-anyOutputValid [] = return True
-anyOutputValid outputs = go outputs
-  where
-    go [] = return False
-    go (p : ps) = do
-        valid <- pathValid p
-        if valid then return True else go ps
 
 data DrvNode = DrvNode
     { dnOutputs :: [FilePath]
@@ -234,10 +225,10 @@ resolveStatusesBatched store statuses = do
             , Just drv <- [Map.lookup sid (ssDrvOf store)]
             ]
     forM_ seeds $ \(sid, drv) -> do
-        mOwnLog <- cachedLog logCache drv
+        mOwnLog <- cachedLog readLocalLog logCache drv
         forM_ mOwnLog $ \logText ->
             liftIO $ modifyIORef' resolved (Map.insert sid ("failure", lastMeaningfulLine logText))
-    seedNodes <- fetchNodes store (map snd seeds)
+    seedNodes <- fetchNodes (ssCache store) (map snd seeds)
     visited <- liftIO $ newIORef (Map.fromList [(sid, Set.singleton drv) | (sid, drv) <- seeds])
     frontierRef <-
         liftIO $
@@ -251,7 +242,7 @@ resolveStatusesBatched store statuses = do
             frontier <- liftIO $ readIORef frontierRef
             let levelNodes = Set.fromList [drv | queue <- Map.elems frontier, (drv, _) <- queue]
             unless (Set.null levelNodes) $ do
-                level <- fetchNodes store (Set.toList levelNodes)
+                level <- fetchNodes (ssCache store) (Set.toList levelNodes)
                 nextFrontier <- liftIO $ newIORef Map.empty
                 forM_ (Map.toList frontier) $ \(sid, queue) -> do
                     done <- Map.member sid <$> liftIO (readIORef resolved)
@@ -283,7 +274,7 @@ walkQueue store logCache level seen queue = go seen [] queue
         | otherwise = case Map.lookup drv level of
             Nothing -> go (Set.insert drv visited) expanded rest
             Just node -> do
-                mLog <- cachedLog logCache drv
+                mLog <- cachedLog readLocalLog logCache drv
                 case mLog of
                     Just logText -> do
                         allInvalid <- outputsAllInvalid node
@@ -308,19 +299,19 @@ outputsAllInvalid node = case dnOutputs node of
     [_] -> return True
     outputs -> and <$> mapM (fmap not . pathValid) outputs
 
-cachedLog :: (Nix :> es, IOE :> es) => IORef (Map FilePath (Maybe String)) -> FilePath -> Eff es (Maybe String)
-cachedLog cacheRef drv = do
+cachedLog :: (Nix :> es, IOE :> es) => (FilePath -> Eff es (Maybe String)) -> IORef (Map FilePath (Maybe String)) -> FilePath -> Eff es (Maybe String)
+cachedLog fetch cacheRef drv = do
     cached <- Map.lookup drv <$> liftIO (readIORef cacheRef)
     case cached of
         Just result -> return result
         Nothing -> do
-            result <- readLocalLog drv
+            result <- fetch drv
             liftIO $ modifyIORef' cacheRef (Map.insert drv result)
             return result
 
-fetchNodes :: (Nix :> es, IOE :> es) => StepStore -> [FilePath] -> Eff es (Map FilePath DrvNode)
-fetchNodes store paths = do
-    cached <- liftIO $ readIORef (ssCache store)
+fetchNodes :: (Nix :> es, IOE :> es) => IORef (Map FilePath DrvNode) -> [FilePath] -> Eff es (Map FilePath DrvNode)
+fetchNodes cacheRef paths = do
+    cached <- liftIO $ readIORef cacheRef
     let wanted = Set.fromList paths
         missing = Set.toList (wanted `Set.difference` Map.keysSet cached)
     fetched <-
@@ -328,7 +319,7 @@ fetchNodes store paths = do
             then return Map.empty
             else do
                 nodes <- queryDerivations missing
-                liftIO $ modifyIORef' (ssCache store) (Map.union nodes)
+                liftIO $ modifyIORef' cacheRef (Map.union nodes)
                 return nodes
     return $ Map.union fetched (Map.restrictKeys cached wanted)
 
