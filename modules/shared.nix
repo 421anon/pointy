@@ -102,7 +102,7 @@ in
         exported as NIX_REMOTE. For `unix://SOCKET?root=ROOT` the backend reads store
         contents from ROOT/nix/store. Null uses the host store.
       '';
-      example = "unix:///run/pointy-store/daemon.sock?root=/var/lib/pointy-store/root";
+      example = "unix:///nix/var/nix/daemon-socket/socket?root=/var/lib/pointy-scratch-store/root&real=/var/lib/pointy-scratch-store/root/nix/store";
     };
 
     scratchDirectory = lib.mkOption {
