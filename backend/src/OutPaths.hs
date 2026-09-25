@@ -6,6 +6,7 @@
 
 module OutPaths (
     getProjectCertificates,
+    getStepCertificate,
     warmProjectCertificates,
     warmProjectCertificatesForCommit,
     scheduleProjectCertificatesWarm,
@@ -23,7 +24,7 @@ import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 
 import Control.Concurrent (forkIO)
 import Control.Exception (SomeException, catch)
-import Control.Monad (forM_, void, when)
+import Control.Monad (forM_, join, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -34,7 +35,7 @@ import Data.List (stripPrefix)
 import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
@@ -100,6 +101,29 @@ getProjectCertificates pid targetCommit = runExceptT $ do
                 attr
     maybe (throwError $ "Failed to parse " ++ attr) pure $ decodeJson output
 
+getStepCertificate :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Maybe Text))
+getStepCertificate sid targetCommit = runExceptT $ do
+    let attr = stepsAttr ++ "." ++ show sid ++ ".certificate"
+    withExceptT ("Failed to prepare step commit: " ++) $
+        ExceptT $
+            liftIO $
+                runExceptT $
+                    ensureRepoCommit $
+                        unpack targetCommit
+    repoPath <- liftIO userRepoPath
+    output <-
+        withExceptT (("Failed to evaluate " ++ attr ++ ": ") ++) $
+            runNixEvalJsonApplyInRepo
+                (ReadRepoContext repoPath $ unpack targetCommit)
+                stepCertificateExpression
+                stepsAttr
+    maybe (throwError $ "Failed to parse " ++ attr) (pure . join . listToMaybe) (decodeJson output :: Maybe [Maybe Text])
+  where
+    stepCertificateExpression =
+        "steps: map (name: let path = builtins.tryEval (builtins.unsafeDiscardStringContext (toString (steps.${name}.certificate or steps.${name}).outPath)); in if path.success then path.value else null) [ "
+            ++ show (show sid)
+            ++ " ]"
+
 scheduleProjectCertificatesWarm :: Int -> Text -> IO ()
 scheduleProjectCertificatesWarm pid commit = do
     repoPath <- userRepoPath
@@ -151,6 +175,9 @@ decodeProjectDefinitions = either (Left . (("Failed to parse " ++ projectsAttr +
 
 projectsAttr :: String
 projectsAttr = "#pointy.projects"
+
+stepsAttr :: String
+stepsAttr = "#pointy.steps"
 
 projectAttr :: Int -> String
 projectAttr pid = projectsAttr ++ "." ++ show pid

@@ -39,7 +39,7 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effectful.Exception (catch)
 import Effects (App, AppEffects, Nix, Slurm, pathValid)
-import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), decodeProjectDefinitions, evalProjectDefinitions, getProjectCertificates)
+import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), decodeProjectDefinitions, evalProjectDefinitions, getProjectCertificates, getStepCertificate)
 import UserRepo (ReadRepoContext (..), userRepoPath, withReadRepoTransaction)
 
 checkStatus :: (Nix :> es, Slurm :> es) => FilePath -> Eff es (Text, Maybe Text)
@@ -167,6 +167,19 @@ withStepProjects sid targetCommit action = do
         Left err -> liftIO $ putStrLn $ "Error in withStepProjects for step " ++ show sid ++ ": " ++ err
         Right _ -> return ()
 
+broadcastStepCertificateForProjects :: App es => Int -> Text -> Eff es ()
+broadcastStepCertificateForProjects sid targetCommit = do
+    eCertificate <- getStepCertificate sid targetCommit
+    case eCertificate of
+        Left err -> liftIO $ putStrLn $ "Step certificate probe skipped for step " ++ show sid ++ ": " ++ err
+        Right certificate -> do
+            rawStatus <- case certificate of
+                Just path -> checkStatus (unpack path) `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
+                Nothing -> pure ("not-started", Nothing)
+            withStepProjects sid targetCommit $ \pid ctx -> do
+                (_, resolvedStatus) <- resolveStepStatus ctx (unpack <$> certificate) (sid, rawStatus)
+                liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+
 broadcastStatusForStepProjects :: App es => Int -> Text -> Maybe (Text, Maybe Text) -> Eff es ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride =
     withStepProjects sid targetCommit $ \pid _ ->
@@ -206,7 +219,12 @@ forkBroadcastStatusForStepProjectsAtHead sid = do
     eHead <- runAppEffects $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
     case eHead of
         Left err -> putStrLn $ "forkBroadcastStatusForStepProjectsAtHead skipped: " ++ err
-        Right c -> void $ forkIO $ runAppEffects $ broadcastStatusForStepProjects sid c Nothing
+        Right c ->
+            void $
+                forkIO $
+                    runAppEffects $ do
+                        broadcastStepCertificateForProjects sid c
+                        broadcastStatusForStepProjects sid c Nothing
 
 restoreRunningStatuses :: App es => Eff es ()
 restoreRunningStatuses = do
