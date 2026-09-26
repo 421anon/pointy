@@ -24,6 +24,8 @@ module UserRepo (
     withUserRepoExclusiveIO,
     withUserRepoSharedIO,
     commitAndPushChanges,
+    commitRepoChanges,
+    pushRepoChanges,
     commitContext,
     fetchRepo,
     fetchRepoStrict,
@@ -401,10 +403,14 @@ withWriteRepoTransactionRaw action = do
         pure res
 
 commitAndPushChanges :: (IOE :> es) => WriteRepoContext -> String -> ExceptT String (Eff es) ()
-commitAndPushChanges (WriteRepoContext worktreePath) message = ExceptT $ liftIO $ do
-    cfg <- resolveConfigPath >>= loadConfig
-    let keyfile = userRepoKeyfile (configUserRepo cfg)
-        branch = T.unpack $ userRepoBranch (configUserRepo cfg)
+commitAndPushChanges ctx message = do
+    committed <- commitRepoChanges ctx message
+    case committed of
+        Nothing -> return ()
+        Just _ -> pushRepoChanges ctx
+
+commitRepoChanges :: (IOE :> es) => WriteRepoContext -> String -> ExceptT String (Eff es) (Maybe String)
+commitRepoChanges (WriteRepoContext worktreePath) message = ExceptT $ liftIO $ do
     (addCode, addOut, addErr) <- runGitIn worktreePath ["add", "-A"]
     case addCode of
         ExitFailure code -> return $ Left $ formatGitFailure "git add" code addOut addErr
@@ -412,11 +418,15 @@ commitAndPushChanges (WriteRepoContext worktreePath) message = ExceptT $ liftIO 
             (statusCode, statusOut, statusErr) <- runGitIn worktreePath ["status", "--porcelain"]
             case statusCode of
                 ExitFailure code -> return $ Left $ formatGitFailure "git status" code statusOut statusErr
-                ExitSuccess | null statusOut -> return $ Right ()
+                ExitSuccess | null statusOut -> return $ Right Nothing
                 ExitSuccess -> do
                     (commitCode, commitOut, commitErr) <- runGitIn worktreePath ["commit", "-m", message]
                     case commitCode of
-                        ExitSuccess -> pushWithRetry worktreePath keyfile branch
+                        ExitSuccess -> do
+                            (revCode, revOut, revErr) <- runGitIn worktreePath ["rev-parse", "HEAD"]
+                            case revCode of
+                                ExitSuccess -> return $ Right $ Just $ filter (`notElem` ("\n\r" :: String)) revOut
+                                ExitFailure code -> return $ Left $ formatGitFailure "git rev-parse" code revOut revErr
                         ExitFailure code -> return $ Left $ formatGitFailure "git commit" code commitOut commitErr
   where
     formatGitFailure command code stdout stderr =
@@ -426,6 +436,13 @@ commitAndPushChanges (WriteRepoContext worktreePath) message = ExceptT $ liftIO 
         (if null stdout then "" else "\nstdout:\n" ++ stdout)
             ++ (if null stderr then "" else "\nstderr:\n" ++ stderr)
 
+pushRepoChanges :: (IOE :> es) => WriteRepoContext -> ExceptT String (Eff es) ()
+pushRepoChanges (WriteRepoContext worktreePath) = ExceptT $ liftIO $ do
+    cfg <- resolveConfigPath >>= loadConfig
+    let keyfile = userRepoKeyfile (configUserRepo cfg)
+        branch = T.unpack $ userRepoBranch (configUserRepo cfg)
+    pushWithRetry worktreePath keyfile branch
+  where
     pushWithRetry wp kf br = do
         (exitCode, _, stderr) <- runGitWithSshKey kf wp ["push", "origin", "HEAD:" ++ br]
         case exitCode of

@@ -13,6 +13,7 @@ module Handlers.Statuses (
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
     forkBroadcastStatusForStepProjectsAtHead,
+    forkWarmStepCertificate,
     forkReporting,
     restoreRunningStatuses,
     projectContainsStep,
@@ -22,12 +23,13 @@ import BuildLog (StepStore, buildStepStore, rawStatusesBatched, resolveStatusesB
 import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName)
 import BuildStatus (checkStatus, partitionImmediateStatuses, resolveStepStatus)
 import Bus (broadcastSnapshot)
-import Certificates (ProjectDef (..), StepDef (..), StepRef (..), decodeProjectDefinitions, evalProjectDefinitions, getProjectCertificates, getStepCertificate)
+import Certificates (ProjectDef (..), StepDef (..), StepRef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate)
 import ClusterBus (restoreRunningStepIds)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (SomeException)
 import Control.Monad (filterM, forM_, void, when)
+import Control.Monad.Except (runExceptT)
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -40,7 +42,7 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effectful.Exception (catch, try)
 import Effects (App, AppEffects, Nix, Slurm, pathValid)
-import UserRepo (ReadRepoContext (..), withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), userRepoPath, withReadRepoTransaction)
 
 resolveStatusesAtCommitWithCertificates :: (Nix :> es, IOE :> es) => Map Int Text -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesAtCommitWithCertificates certificates statuses =
@@ -117,21 +119,18 @@ withStepProjects :: App es => Int -> Text -> (Int -> Eff es ()) -> Eff es ()
 withStepProjects sid targetCommit action = do
     result <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
         let ctx = ReadRepoContext repoPath (unpack targetCommit)
-        output <- evalProjectDefinitions ctx
-        case decodeProjectDefinitions output of
-            Left err -> liftIO $ putStrLn $ "Error for step " ++ show sid ++ ": " ++ err
-            Right projects -> do
-                let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
-                lift $
-                    withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
-                        forM_ targetProjects $ \p ->
-                            void $
-                                forkIO $
-                                    unlift $ do
-                                        outcome <- try (action (projectDefId p))
-                                        case outcome of
-                                            Left (err :: SomeException) -> liftIO $ putStrLn $ "Step status broadcast for step " ++ show sid ++ " failed: " ++ show err
-                                            Right () -> return ()
+        projects <- cachedProjectDefinitions ctx
+        let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
+        lift $
+            withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
+                forM_ targetProjects $ \p ->
+                    void $
+                        forkIO $
+                            unlift $ do
+                                outcome <- try (action (projectDefId p))
+                                case outcome of
+                                    Left (err :: SomeException) -> liftIO $ putStrLn $ "Step status broadcast for step " ++ show sid ++ " failed: " ++ show err
+                                    Right () -> return ()
     case result of
         Left err -> liftIO $ putStrLn $ "Error in withStepProjects for step " ++ show sid ++ ": " ++ err
         Right _ -> return ()
@@ -208,6 +207,22 @@ forkBroadcastStatusForStepProjectsAtHead sid = do
                 broadcastStepCertificateForProjects sid c
                 broadcastStatusForStepProjects sid c Nothing
 
+warmStepCertificate :: Int -> Text -> Eff AppEffects ()
+warmStepCertificate sid targetCommit = do
+    repoPath <- liftIO userRepoPath
+    let ctx = ReadRepoContext repoPath (unpack targetCommit)
+    membership <- runExceptT $ cachedProjectDefinitions ctx
+    certificate <- getStepCertificate sid targetCommit
+    liftIO $
+        case (membership, certificate) of
+            (_, Left err) -> putStrLn $ "Step warm skipped for step " ++ show sid ++ ": " ++ err
+            (Left err, _) -> putStrLn $ "Step membership warm skipped for step " ++ show sid ++ ": " ++ err
+            _ -> return ()
+
+forkWarmStepCertificate :: Int -> Text -> IO ()
+forkWarmStepCertificate sid targetCommit =
+    forkReporting ("Step warm for step " ++ show sid) (warmStepCertificate sid targetCommit)
+
 restoreRunningStatuses :: App es => Eff es ()
 restoreRunningStatuses = do
     eHead <- withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
@@ -220,12 +235,7 @@ restoreRunningStatuses = do
                         eProjects <-
                             withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
                                 let ctx = ReadRepoContext repoPath (unpack targetCommit)
-                                output <- evalProjectDefinitions ctx
-                                case decodeProjectDefinitions output of
-                                    Left err -> do
-                                        liftIO $ putStrLn $ "restoreRunningStatuses: error parsing projects: " ++ err
-                                        return []
-                                    Right projects -> return (Map.elems projects)
+                                Map.elems <$> cachedProjectDefinitions ctx
                         case eProjects of
                             Left err -> do
                                 liftIO $ putStrLn $ "restoreRunningStatuses: transaction error: " ++ err

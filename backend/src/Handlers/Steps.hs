@@ -23,7 +23,7 @@ import Effects (AppM)
 import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extractDownloadUrl, extractDownloadedAt, extractReqType, injectDownloaded, prefetchFile, validateHttpUrl)
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (jsonToNix)
-import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
+import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead, forkWarmStepCertificate)
 import Handlers.StepReview (ensureStepUnreviewed, requireStepUnreviewed)
 import Certificates (withWriteRepoTransaction)
 import Servant (NoContent (..), throwError)
@@ -32,7 +32,7 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist,
 import System.FilePath (takeBaseName, (</>))
 import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction, writeRepoHeadContext)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, commitRepoChanges, pushRepoChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction, writeRepoHeadContext)
 
 prefetchDownloadUrl :: T.Text -> AppM (T.Text, T.Text)
 prefetchDownloadUrl url = do
@@ -127,7 +127,11 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                 return ()
             Nothing -> return ()
 
-        commitAndPushChanges ctx $ "Update step " ++ show stepId
+        mCommit <- commitRepoChanges ctx ("Update step " ++ show stepId)
+        case mCommit of
+            Just commit -> liftIO $ forkWarmStepCertificate stepId (T.pack commit)
+            Nothing -> return ()
+        pushRepoChanges ctx
     case result of
         Right _ -> do
             liftIO $ forkBroadcastStatusForStepProjectsAtHead stepId

@@ -10,6 +10,7 @@ module Certificates (
     getStepCertificate,
     evalProjectDefinitions,
     evalProjectDefinition,
+    cachedProjectDefinitions,
     decodeProjectDefinitions,
     withWriteRepoTransaction,
     ProjectDef (..),
@@ -233,6 +234,34 @@ runJson ctx attr applyExpr = do
 
 evalProjectDefinitions :: (RepoContext ctx, Eval :> es) => ctx -> ExceptT String (Eff es) String
 evalProjectDefinitions ctx = runNixEvalJsonApplyInRepo ctx projectDefinitions projectsAttr
+
+cachedProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map String ProjectDef)
+cachedProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
+    cached <- liftIO $ lookupCachedProjectDefinitions repoPath commit
+    case cached of
+        Just definitions -> return definitions
+        Nothing -> do
+            output <- evalProjectDefinitions ctx
+            definitions <- either throwError return (decodeProjectDefinitions output)
+            liftIO $ insertCachedProjectDefinitions repoPath commit definitions
+            return definitions
+
+{-# NOINLINE projectDefinitionsCacheRef #-}
+projectDefinitionsCacheRef :: MVar [((FilePath, String), Map String ProjectDef)]
+projectDefinitionsCacheRef = unsafePerformIO (newMVar [])
+
+projectDefinitionsCacheLimit :: Int
+projectDefinitionsCacheLimit = 4
+
+lookupCachedProjectDefinitions :: FilePath -> String -> IO (Maybe (Map String ProjectDef))
+lookupCachedProjectDefinitions repoPath commit = do
+    cache <- readMVar projectDefinitionsCacheRef
+    return $ lookup (repoPath, commit) cache
+
+insertCachedProjectDefinitions :: FilePath -> String -> Map String ProjectDef -> IO ()
+insertCachedProjectDefinitions repoPath commit definitions = do
+    modifyMVar_ projectDefinitionsCacheRef $ \entries ->
+        return $ take projectDefinitionsCacheLimit $ ((repoPath, commit), definitions) : filter ((/= (repoPath, commit)) . fst) entries
 
 evalProjectDefinition :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) String
 evalProjectDefinition ctx pid = runNixEvalJsonApplyInRepo ctx projectDefinition (projectAttr pid)
