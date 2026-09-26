@@ -28,7 +28,7 @@ import Handlers.Store (DirEntry, FileChunk, downloadHandler, fromRawBase, listHa
 import Handlers.StepReview (ensureStepUnreviewed)
 import Network.HTTP.Types (mkStatus)
 import Network.Wai (Application, responseLBS)
-import OutPaths (withWriteRepoTransaction)
+import Certificates (withWriteRepoTransaction)
 import Servant (Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)

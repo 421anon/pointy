@@ -5,15 +5,13 @@ module Main (main) where
 
 import App (runServer)
 import Config (loadConfig)
-import Control.Concurrent (forkIO)
 import Control.Exception (SomeException, try)
-import Control.Monad (void, when)
+import Control.Monad (when)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Fixture.Document (FixtureDocument (..), loadDocument)
 import Fixture.Server (fixtureApp)
 import Interpreters.Fixture (newFixtureState, resetFixture, runFixture)
-import OutPaths (warmProjectCertificates)
 import Processes (cli)
 import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getArgs, setEnv)
@@ -86,14 +84,7 @@ run options = do
         (runFixture state)
         (fixtureApp state (optionFrontend options) reset)
         (optionPort options)
-        (do
-            putStrLn "Fixture server listening."
-            void $ forkIO $ do
-                outcome <- try (runFixture state warmProjectCertificates)
-                case outcome of
-                    Left err -> putStrLn ("Warm-up failed: " ++ show (err :: SomeException))
-                    Right () -> putStrLn "Warmed project certificates."
-        )
+        (putStrLn "Fixture server listening.")
 
 writeConfig :: FilePath -> FilePath -> FilePath -> T.Text -> IO ()
 writeConfig configPath origin keyfile branch =

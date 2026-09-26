@@ -6,9 +6,6 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Handlers.Statuses (
-    checkStatus,
-    partitionImmediateStatuses,
-    resolveStepStatus,
     broadcastProjectStatus,
     broadcastSingleStepForProjects,
     broadcastFailedStepForProjects,
@@ -20,9 +17,11 @@ module Handlers.Statuses (
     projectContainsStep,
 ) where
 
-import BuildLog (ResolvedLog (..), StepStore, buildStepStore, lastMeaningfulLine, lookupDeriver, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
-import BuildRunner (BuildKey (..), BuildState (..), buildKeyForOutPath, queryState, querySlurmJobs, slurmJobName)
+import BuildLog (StepStore, buildStepStore, rawStatusesBatched, resolveStatusesBatched)
+import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName)
+import BuildStatus (checkStatus, partitionImmediateStatuses, resolveStepStatus)
 import Bus (broadcastSnapshot)
+import Certificates (ProjectDef (..), StepDef (..), StepRef (..), decodeProjectDefinitions, evalProjectDefinitions, getProjectCertificates, getStepCertificate)
 import ClusterBus (restoreRunningStepIds)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
@@ -40,52 +39,15 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effectful.Exception (catch)
 import Effects (App, AppEffects, Nix, Slurm, pathValid)
-import OutPaths (ProjectDef (..), StepDef (..), StepRef (..), decodeProjectDefinitions, evalProjectDefinitions, getProjectCertificates, getStepCertificate)
-import UserRepo (ReadRepoContext (..), userRepoPath, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), withReadRepoTransaction)
 
-checkStatus :: (Nix :> es, Slurm :> es) => FilePath -> Eff es (Text, Maybe Text)
-checkStatus certificate = do
-    valid <- pathValid certificate
-    if valid
-        then return ("success", Nothing)
-        else do
-            state <- queryState $ buildKeyForOutPath certificate
-            return $ case state of
-                BRunning -> ("running", Nothing)
-                BAbsent -> ("not-started", Nothing)
-                BSucceeded -> ("success", Nothing)
-                BFailed -> ("failure", Nothing)
-
-isImmediateStatus :: (Text, Maybe Text) -> Bool
-isImmediateStatus (state, _) = state == "success" || state == "running"
-
-partitionImmediateStatuses :: Map Int (Text, Maybe Text) -> (Map Int (Text, Maybe Text), Map Int (Text, Maybe Text))
-partitionImmediateStatuses = Map.partition isImmediateStatus
-
-resolveStepStatus :: (Nix :> es, IOE :> es) => ReadRepoContext -> Maybe FilePath -> (Int, (Text, Maybe Text)) -> Eff es (Int, (Text, Maybe Text))
-resolveStepStatus _ _ entry@(_, status_)
-    | isImmediateStatus status_ = return entry
-resolveStepStatus _ Nothing entry@(_, (state, _))
-    | state == "failure" || state == "not-started" = return entry
-resolveStepStatus _ Nothing entry = return entry
-resolveStepStatus _ (Just certificate) entry@(sid, (state, _))
-    | state == "failure" || state == "not-started" = do
-        mDrv <- lookupDeriver certificate
-        mResolved <- maybe (return Nothing) resolveBuildLog mDrv
-        return $ case mResolved of
-            Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
-            Nothing -> entry
-    | otherwise = return entry
-
-resolveStatusesAtCommitWithCertificates :: (Nix :> es, IOE :> es) => Text -> Map Int Text -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
-resolveStatusesAtCommitWithCertificates targetCommit certificates statuses = do
-    repoPath <- liftIO userRepoPath
-    let ctx = ReadRepoContext repoPath (unpack targetCommit)
-    Map.fromList <$> liftIO (mapConcurrently (runAppEffects . resolveOne ctx certificates) (Map.toList statuses))
+resolveStatusesAtCommitWithCertificates :: (Nix :> es, IOE :> es) => Map Int Text -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
+resolveStatusesAtCommitWithCertificates certificates statuses =
+    Map.fromList <$> liftIO (mapConcurrently (runAppEffects . resolveOne certificates) (Map.toList statuses))
   where
-    resolveOne :: ReadRepoContext -> Map Int Text -> (Int, (Text, Maybe Text)) -> Eff AppEffects (Int, (Text, Maybe Text))
-    resolveOne ctx' certificates' (sid, entry) =
-        resolveStepStatus ctx' (fmap unpack $ Map.lookup sid certificates') (sid, entry)
+    resolveOne :: Map Int Text -> (Int, (Text, Maybe Text)) -> Eff AppEffects (Int, (Text, Maybe Text))
+    resolveOne certificates' (sid, entry) =
+        resolveStepStatus (fmap unpack $ Map.lookup sid certificates') (sid, entry)
 
 runningBuildKeys :: (Slurm :> es) => Eff es (Set String)
 runningBuildKeys = do
@@ -126,10 +88,10 @@ getBatchedStatuses pid targetCommit = do
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
 
-resolveStatusesFor :: (Nix :> es, IOE :> es) => Text -> Map Int Text -> Maybe StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
-resolveStatusesFor targetCommit certificates mStore statuses = case mStore of
+resolveStatusesFor :: (Nix :> es, IOE :> es) => Map Int Text -> Maybe StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
+resolveStatusesFor certificates mStore statuses = case mStore of
     Just store -> resolveStatusesBatched store statuses
-    Nothing -> resolveStatusesAtCommitWithCertificates targetCommit certificates statuses
+    Nothing -> resolveStatusesAtCommitWithCertificates certificates statuses
 
 broadcastProjectStatus :: App es => Int -> Text -> Maybe (Int, (Text, Maybe Text)) -> Eff es ()
 broadcastProjectStatus pid targetCommit mStatusOverride = do
@@ -147,12 +109,12 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
                     liftIO $
                         forkIO $
                             runAppEffects $ do
-                                resolved <- resolveStatusesFor targetCommit certificates store pending
+                                resolved <- resolveStatusesFor certificates store pending
                                 liftIO $
                                     forM_ (Map.toList resolved) $ \(sid, status_) ->
                                         broadcastSnapshot pid targetCommit (Map.singleton sid status_)
 
-withStepProjects :: App es => Int -> Text -> (Int -> ReadRepoContext -> Eff es ()) -> Eff es ()
+withStepProjects :: App es => Int -> Text -> (Int -> Eff es ()) -> Eff es ()
 withStepProjects sid targetCommit action = do
     result <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> do
         let ctx = ReadRepoContext repoPath (unpack targetCommit)
@@ -163,7 +125,7 @@ withStepProjects sid targetCommit action = do
                 let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
                 lift $
                     withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
-                        forM_ targetProjects $ \p -> void $ forkIO $ unlift $ action (projectDefId p) ctx
+                        forM_ targetProjects $ \p -> void $ forkIO $ unlift $ action (projectDefId p)
     case result of
         Left err -> liftIO $ putStrLn $ "Error in withStepProjects for step " ++ show sid ++ ": " ++ err
         Right _ -> return ()
@@ -177,35 +139,35 @@ broadcastStepCertificateForProjects sid targetCommit = do
             rawStatus <- case certificate of
                 Just path -> checkStatus (unpack path) `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
                 Nothing -> pure ("not-started", Nothing)
-            withStepProjects sid targetCommit $ \pid ctx -> do
-                (_, resolvedStatus) <- resolveStepStatus ctx (unpack <$> certificate) (sid, rawStatus)
+            withStepProjects sid targetCommit $ \pid -> do
+                (_, resolvedStatus) <- resolveStepStatus (unpack <$> certificate) (sid, rawStatus)
                 liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
 
 broadcastStatusForStepProjects :: App es => Int -> Text -> Maybe (Text, Maybe Text) -> Eff es ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride =
-    withStepProjects sid targetCommit $ \pid _ ->
+    withStepProjects sid targetCommit $ \pid ->
         broadcastProjectStatus pid targetCommit (fmap (sid,) mStatusOverride)
 
 broadcastSingleStepForProjects :: App es => Int -> Text -> FilePath -> Eff es ()
 broadcastSingleStepForProjects sid targetCommit certificate = do
     rawStatus <- checkStatus certificate `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
-    withStepProjects sid targetCommit $ \pid ctx -> do
-        (_, resolvedStatus) <- resolveStepStatus ctx (Just certificate) (sid, rawStatus)
+    withStepProjects sid targetCommit $ \pid -> do
+        (_, resolvedStatus) <- resolveStepStatus (Just certificate) (sid, rawStatus)
         liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
 
 broadcastFailedStepForProjects :: App es => Int -> Text -> Eff es ()
 broadcastFailedStepForProjects sid targetCommit =
-    withStepProjects sid targetCommit $ \pid ctx -> do
+    withStepProjects sid targetCommit $ \pid -> do
         certificatesResult <- getProjectCertificates pid targetCommit
         let mCertificate = case certificatesResult of
                 Right certificates -> fmap unpack (Map.lookup sid certificates)
                 Left _ -> Nothing
-        (_, status) <- resolveStepStatus ctx mCertificate (sid, ("failure", Nothing))
+        (_, status) <- resolveStepStatus mCertificate (sid, ("failure", Nothing))
         liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
 broadcastKnownStepStatus :: App es => Int -> Text -> (Text, Maybe Text) -> Eff es ()
 broadcastKnownStepStatus sid targetCommit status =
-    withStepProjects sid targetCommit $ \pid _ ->
+    withStepProjects sid targetCommit $ \pid ->
         liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
 forkBroadcastProjectStatusAtHead :: Int -> IO ()

@@ -8,7 +8,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import Handlers.StatusStream (streamLoop)
 import Handlers.Statuses (projectContainsStep)
-import OutPaths (ProjectDef (..), decodeProjectDefinitions)
+import Certificates (ProjectDef (..), decodeProjectDefinitions)
 import Servant.Types.SourceT (StepT (..))
 import System.Timeout (timeout)
 

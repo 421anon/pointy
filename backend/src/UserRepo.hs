@@ -8,11 +8,9 @@ module UserRepo (
     ensureUserRepo,
     runNix,
     runNixEvalJsonInRepo,
-    runNixEvalJsonApplyInRepoBackground,
     runNixEvalRawInRepo,
     runNixEvalJsonApplyInRepo,
     runNixEvalImpureJsonExpr,
-    rewarmRepoJsonExpressions,
     runGit,
     runGitIn,
     runGitWithSshKey,
@@ -42,8 +40,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket, finally)
-import Effects (App, Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, rewarm, runNixCli)
-import NixEvaluator (EvalPriority (..), RepoExpression, RepoSource, jsonExpression, mutableRepoSource, repoSource)
+import Effects (App, Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, runNixCli)
+import NixEvaluator (RepoSource (..))
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -72,10 +70,10 @@ class RepoContext ctx where
 
 instance RepoContext ReadRepoContext where
     evaluatorSource (ReadRepoContext repoPath commitHash) =
-        repoSource $ "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
+        RepoSource $ "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
 
 instance RepoContext WriteRepoContext where
-    evaluatorSource = mutableRepoSource . writeWorktreePath
+    evaluatorSource = RepoSource . writeWorktreePath
 
 runNix :: (Nix :> es) => [String] -> ExceptT String (Eff es) String
 runNix args = ExceptT $ do
@@ -87,20 +85,14 @@ runNix args = ExceptT $ do
 runNixEvalJsonInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
 runNixEvalJsonInRepo ctx attr = ExceptT $ evalJson (evaluatorSource ctx) attr
 
-runNixEvalJsonApplyInRepoBackground :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) String
-runNixEvalJsonApplyInRepoBackground ctx applyExpr attr = ExceptT $ evalJsonApply Background (evaluatorSource ctx) applyExpr attr
-
 runNixEvalRawInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
 runNixEvalRawInRepo ctx attr = ExceptT $ evalRaw (evaluatorSource ctx) attr
 
 runNixEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) String
-runNixEvalJsonApplyInRepo ctx applyExpr attr = ExceptT $ evalJsonApply Interactive (evaluatorSource ctx) applyExpr attr
+runNixEvalJsonApplyInRepo ctx applyExpr attr = ExceptT $ evalJsonApply (evaluatorSource ctx) applyExpr attr
 
 runNixEvalImpureJsonExpr :: (Eval :> es) => String -> ExceptT String (Eff es) String
 runNixEvalImpureJsonExpr = ExceptT . evalImpure
-
-rewarmRepoJsonExpressions :: (Eval :> es) => RepoSource -> [(Maybe Int, String, String)] -> Eff es (Either String [(Maybe Int, Either String String)])
-rewarmRepoJsonExpressions = rewarm
 
 userRepoPath :: IO FilePath
 userRepoPath = do

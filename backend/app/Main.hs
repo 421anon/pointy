@@ -13,7 +13,6 @@ import Handlers.ClusterStream (startClusterPoller)
 import Handlers.RunStep (restoreJobsFromSlurm)
 import Handlers.Statuses (restoreRunningStatuses)
 import Interpreters.Production (runProduction)
-import OutPaths (warmProjectCertificates)
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo, fetchRepo)
 
@@ -35,14 +34,11 @@ main = do
         Right () -> putStrLn "Repository fetched successfully."
 
     putStrLn "Starting server on port 8081..."
-    runServer runProduction id 8081 warmAfterServerStart
+    runServer runProduction id 8081 afterServerStart
   where
-    warmAfterServerStart = do
+    afterServerStart = do
         putStrLn "Server listening on port 8081."
         _ <- forkIO $ do
-            putStrLn "Warming project certificates..."
-            runProduction warmProjectCertificates
-            putStrLn "Project certificates warmed."
             putStrLn "Restoring slurm jobs..."
             runProduction restoreJobsFromSlurm
             putStrLn "Slurm jobs restored."

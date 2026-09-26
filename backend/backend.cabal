@@ -59,7 +59,9 @@ library
     NixEvaluator
     NixStore
     NixUtils
-    OutPaths
+    BuildStatus
+    Certificates
+    CertificateStore
     Processes
     Sse
     Storage

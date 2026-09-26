@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import Fixture.Document (FixtureDocument (..))
-import Handlers.Statuses (checkStatus)
+import BuildStatus (checkStatus)
 import Interpreters.Fixture (FixtureJob (..), FixtureState (..), newFixtureState, runFixture)
 
 main :: IO ()

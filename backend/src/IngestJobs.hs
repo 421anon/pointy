@@ -28,7 +28,7 @@ import Handlers.Projects (jsonToNix)
 import Handlers.StepReview (ensureStepUnreviewed)
 import Ingest (IngestResult (..), storeRefName)
 import qualified IngestBus
-import OutPaths (withWriteRepoTransaction)
+import Certificates (withWriteRepoTransaction)
 import System.Directory (removeDirectoryRecursive)
 import System.FilePath ((</>))
 import System.IO.Error (catchIOError)

@@ -9,8 +9,6 @@
 module Interpreters.Production (runProduction, submitArgs) where
 
 import BuildRunner (shellCommand)
-import Data.List.NonEmpty (NonEmpty)
-import qualified Data.List.NonEmpty as NonEmpty
 import Data.List (intercalate)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -19,7 +17,7 @@ import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, Eval (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Ingest (runIngest)
 import Processes (cli)
-import NixEvaluator (EvalPriority (..), RepoExpression, defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression, rewarmRevision)
+import NixEvaluator (defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression)
 import System.Exit (ExitCode (..))
 
 
@@ -29,16 +27,10 @@ runProduction action = runEff (runSlurmProduction (runNixProduction (runEvalProd
 
 runEvalProduction :: (IOE :> es) => Eff (Eval : es) a -> Eff es a
 runEvalProduction = interpret $ \_ -> \case
-    EvalJson source attr -> liftIO $ evaluate defaultNixEvaluator Interactive source (jsonExpression attr)
-    EvalRaw source attr -> liftIO $ evaluate defaultNixEvaluator Interactive source (rawExpression attr)
-    EvalJsonApply priority source applyExpr attr -> liftIO $ evaluate defaultNixEvaluator priority source (jsonAppliedExpression applyExpr attr)
+    EvalJson source attr -> liftIO $ evaluate defaultNixEvaluator source (jsonExpression attr)
+    EvalRaw source attr -> liftIO $ evaluate defaultNixEvaluator source (rawExpression attr)
+    EvalJsonApply source applyExpr attr -> liftIO $ evaluate defaultNixEvaluator source (jsonAppliedExpression applyExpr attr)
     EvalImpure expression -> liftIO $ evaluateImpure defaultNixEvaluator expression
-    Rewarm source attrs -> do
-        result <- liftIO $ rewarmRevision defaultNixEvaluator source (pure $ Right (expressions attrs))
-        pure (fmap NonEmpty.toList result)
-  where
-    expressions :: [(Maybe Int, String, String)] -> NonEmpty (Maybe Int, RepoExpression)
-    expressions = NonEmpty.fromList . map (\(key, applyExpr, attr) -> (key, jsonAppliedExpression applyExpr attr))
 
 runNixProduction :: (IOE :> es) => Eff (Nix : es) a -> Eff es a
 runNixProduction = interpret $ \_ -> \case

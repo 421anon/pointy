@@ -25,7 +25,7 @@ import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (jsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead)
 import Handlers.StepReview (ensureStepUnreviewed, requireStepUnreviewed)
-import OutPaths (scheduleProjectCertificatesWarm, withWriteRepoTransaction)
+import Certificates (withWriteRepoTransaction)
 import Servant (NoContent (..), throwError)
 import Servant.Server (err400, err409, err500, errBody)
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
@@ -191,12 +191,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
     case result of
         Right output -> do
             case maybeProjectId of
-                Just projectId -> do
-                    eHead <- lift $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (T.pack hash)
-                    case eHead of
-                        Right headCommit -> liftIO $ scheduleProjectCertificatesWarm projectId headCommit
-                        Left _ -> return ()
-                    liftIO $ forkBroadcastProjectStatusAtHead projectId
+                Just projectId -> liftIO $ forkBroadcastProjectStatusAtHead projectId
                 Nothing -> return ()
             return (DynamicJson output)
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}

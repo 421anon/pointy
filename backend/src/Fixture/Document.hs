@@ -18,6 +18,7 @@ import Data.Char (isDigit, ord)
 import Data.List (isInfixOf)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Text.Read (readMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -82,12 +83,18 @@ appliedAnswer document applyExpr attr
     | "notices" `isInfixOf` applyExpr = Right (encodeValue (entry (documentNotices document)))
     | "extras.outPath" `isInfixOf` applyExpr = Right (encodeValue extrasValue)
     | "step.def.id" `isInfixOf` applyExpr = Right (encodeValue (maybe Null (entryOf (documentProjectStepIds document)) (listToMaybe (idsIn applyExpr))))
+    | "s.def.id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (map stepIdNumber (projectStepIds document (fromMaybe "" (listToMaybe (idsIn applyExpr))))))))
     | "reviewedRevision" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (\id_ -> [entryOf (documentReviews document) id_]) (idsIn applyExpr))))
+    | "toString id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (Map.fromList [(stepId, fixtureKey stepId) | stepId <- idsIn applyExpr]))))
+    | ".key; in if t.success" `isInfixOf` applyExpr = Right (encodeValue (keyAnswer applyExpr))
     | "certificate" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (maybe Null String . statusPathOf document) (idsIn applyExpr))))
     | "tryEval" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (pathOf (documentOutPaths document)) (idsIn applyExpr))))
     | otherwise = Left ("fixture has no answer for " ++ applyExpr ++ " on " ++ attr)
   where
     key = lastSegment attr
+    versioned value = object ["version" .= (1 :: Int), "value" .= value]
+    stepIdNumber :: String -> Int
+    stepIdNumber stepId = fromMaybe 0 (readMaybe stepId)
     entry mapping = fromMaybe Null (Map.lookup key mapping)
     entryOf mapping id_ = fromMaybe Null (Map.lookup id_ mapping)
     pathOf mapping id_ = maybe Null String (Map.lookup id_ mapping)
@@ -95,6 +102,19 @@ appliedAnswer document applyExpr attr
         Just (Just path) -> String path
         _ -> Null
     stepTarget path = object ["certified" .= certified document, "path" .= path, "drv" .= (path <> ".drv")]
+
+keyAnswer :: String -> Value
+keyAnswer applyExpr = versioned (maybe Null fixtureKey (listToMaybe (idsIn applyExpr)))
+  where
+    versioned value = object ["version" .= (1 :: Int), "value" .= value]
+
+fixtureKey :: String -> Value
+fixtureKey stepId = String ("fixture-key-" <> T.pack stepId)
+
+projectStepIds :: FixtureDocument -> String -> [String]
+projectStepIds document pid =
+    [ stepId | stepValue <- projectStepValues document pid, Just stepId <- [valueId stepValue] ]
+
 
 certified :: FixtureDocument -> Bool
 certified = not . Map.null . documentCertificates

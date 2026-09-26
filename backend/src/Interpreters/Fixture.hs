@@ -70,9 +70,8 @@ runEvalFixture :: (IOE :> es) => FixtureState -> Eff (Eval : es) a -> Eff es a
 runEvalFixture state = interpret $ \_ -> \case
     EvalJson _ attr -> pure (jsonAnswer (fixtureDocument state) attr)
     EvalRaw _ attr -> pure (rawAnswer (fixtureDocument state) attr)
-    EvalJsonApply _ _ applyExpr attr -> pure (appliedAnswer (fixtureDocument state) applyExpr attr)
+    EvalJsonApply _ applyExpr attr -> pure (appliedAnswer (fixtureDocument state) applyExpr attr)
     EvalImpure expression -> liftIO $ evalNixJson state expression
-    Rewarm _ expressions -> pure $ Right [(key, appliedAnswer (fixtureDocument state) applyExpr attr) | (key, applyExpr, attr) <- expressions]
 
 
 evalNixJson :: FixtureState -> String -> IO (Either String String)
