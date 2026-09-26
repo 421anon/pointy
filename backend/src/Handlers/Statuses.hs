@@ -13,6 +13,7 @@ module Handlers.Statuses (
     broadcastStatusForStepProjects,
     forkBroadcastProjectStatusAtHead,
     forkBroadcastStatusForStepProjectsAtHead,
+    forkReporting,
     restoreRunningStatuses,
     projectContainsStep,
 ) where
@@ -37,7 +38,7 @@ import Data.Text (Text, pack, unpack)
 import qualified Data.Set as Set
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
-import Effectful.Exception (catch)
+import Effectful.Exception (catch, try)
 import Effects (App, AppEffects, Nix, Slurm, pathValid)
 import UserRepo (ReadRepoContext (..), withReadRepoTransaction)
 
@@ -105,14 +106,12 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
             let (immediate, pending) = partitionImmediateStatuses finalStats
             liftIO $ broadcastSnapshot pid targetCommit immediate
             when (not (Map.null pending)) $
-                void $
-                    liftIO $
-                        forkIO $
-                            runAppEffects $ do
-                                resolved <- resolveStatusesFor certificates store pending
-                                liftIO $
-                                    forM_ (Map.toList resolved) $ \(sid, status_) ->
-                                        broadcastSnapshot pid targetCommit (Map.singleton sid status_)
+                liftIO $
+                    forkReporting ("Pending status resolution for project " ++ show pid) $ do
+                        resolved <- resolveStatusesFor certificates store pending
+                        liftIO $
+                            forM_ (Map.toList resolved) $ \(sid, status_) ->
+                                broadcastSnapshot pid targetCommit (Map.singleton sid status_)
 
 withStepProjects :: App es => Int -> Text -> (Int -> Eff es ()) -> Eff es ()
 withStepProjects sid targetCommit action = do
@@ -125,7 +124,14 @@ withStepProjects sid targetCommit action = do
                 let targetProjects = filter (projectContainsStep sid) (Map.elems projects)
                 lift $
                     withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
-                        forM_ targetProjects $ \p -> void $ forkIO $ unlift $ action (projectDefId p)
+                        forM_ targetProjects $ \p ->
+                            void $
+                                forkIO $
+                                    unlift $ do
+                                        outcome <- try (action (projectDefId p))
+                                        case outcome of
+                                            Left (err :: SomeException) -> liftIO $ putStrLn $ "Step status broadcast for step " ++ show sid ++ " failed: " ++ show err
+                                            Right () -> return ()
     case result of
         Left err -> liftIO $ putStrLn $ "Error in withStepProjects for step " ++ show sid ++ ": " ++ err
         Right _ -> return ()
@@ -170,12 +176,22 @@ broadcastKnownStepStatus sid targetCommit status =
     withStepProjects sid targetCommit $ \pid ->
         liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid status)
 
+forkReporting :: String -> Eff AppEffects () -> IO ()
+forkReporting label action =
+    void $
+        forkIO $
+            runAppEffects $ do
+                outcome <- try action
+                case outcome of
+                    Left (err :: SomeException) -> liftIO $ putStrLn $ label ++ " failed: " ++ show err
+                    Right () -> return ()
+
 forkBroadcastProjectStatusAtHead :: Int -> IO ()
 forkBroadcastProjectStatusAtHead pid = do
     eHead <- runAppEffects $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return (pack hash)
     case eHead of
         Left err -> putStrLn $ "forkBroadcastProjectStatusAtHead skipped: " ++ err
-        Right c -> void $ forkIO $ runAppEffects $ broadcastProjectStatus pid c Nothing
+        Right c -> forkReporting ("Project status broadcast for " ++ show pid) (broadcastProjectStatus pid c Nothing)
 
 forkBroadcastStatusForStepProjectsAtHead :: Int -> IO ()
 forkBroadcastStatusForStepProjectsAtHead sid = do
@@ -183,11 +199,9 @@ forkBroadcastStatusForStepProjectsAtHead sid = do
     case eHead of
         Left err -> putStrLn $ "forkBroadcastStatusForStepProjectsAtHead skipped: " ++ err
         Right c ->
-            void $
-                forkIO $
-                    runAppEffects $ do
-                        broadcastStepCertificateForProjects sid c
-                        broadcastStatusForStepProjects sid c Nothing
+            forkReporting ("Step status broadcast for step " ++ show sid) $ do
+                broadcastStepCertificateForProjects sid c
+                broadcastStatusForStepProjects sid c Nothing
 
 restoreRunningStatuses :: App es => Eff es ()
 restoreRunningStatuses = do

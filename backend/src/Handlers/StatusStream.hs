@@ -7,9 +7,7 @@ module Handlers.StatusStream (EventStream, stepStatusStreamHandler, projectStatu
 
 import Bus (ProjectSnapshot, subscribe)
 import qualified Bus
-import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TChan)
-import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (encode, object, (.=))
@@ -20,9 +18,9 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text, pack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import EffectRunner (runAppEffects)
+
 import Effects (AppM)
-import Handlers.Statuses (broadcastProjectStatus)
+import Handlers.Statuses (broadcastProjectStatus, forkReporting)
 import Network.HTTP.Media ((//))
 import Servant (Header, Headers, NoContent (..), addHeader, throwError)
 import Servant.API.ContentTypes (Accept (..), MimeRender (..))
@@ -62,7 +60,10 @@ projectStatusHandler projectId commit = do
             Nothing -> do
                 result <- lift $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> pure (pack hash)
                 either (\err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}) pure result
-    liftIO $ void $ forkIO $ runAppEffects $ broadcastProjectStatus projectId targetCommit Nothing
+    liftIO $
+        forkReporting
+            ("Project status broadcast for " ++ show projectId)
+            (broadcastProjectStatus projectId targetCommit Nothing)
     pure NoContent
 
 streamLoop :: TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
