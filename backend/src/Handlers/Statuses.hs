@@ -145,9 +145,15 @@ broadcastStepCertificateForProjects sid targetCommit = do
             rawStatus <- case certificate of
                 Just path -> checkStatus (unpack path) `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
                 Nothing -> pure ("not-started", Nothing)
-            withStepProjects sid targetCommit $ \pid -> do
-                (_, resolvedStatus) <- resolveStepStatus (unpack <$> certificate) (sid, rawStatus)
-                liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+            withStepProjects sid targetCommit $ \pid ->
+                broadcastStepStatusResolved pid targetCommit sid (unpack <$> certificate) rawStatus
+
+broadcastStepStatusResolved :: App es => Int -> Text -> Int -> Maybe FilePath -> (Text, Maybe Text) -> Eff es ()
+broadcastStepStatusResolved pid targetCommit sid certificate rawStatus = do
+    liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid rawStatus)
+    (_, resolvedStatus) <- resolveStepStatus certificate (sid, rawStatus)
+    when (resolvedStatus /= rawStatus) $
+        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
 
 broadcastStatusForStepProjects :: App es => Int -> Text -> Maybe (Text, Maybe Text) -> Eff es ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride =
@@ -157,9 +163,8 @@ broadcastStatusForStepProjects sid targetCommit mStatusOverride =
 broadcastSingleStepForProjects :: App es => Int -> Text -> FilePath -> Eff es ()
 broadcastSingleStepForProjects sid targetCommit certificate = do
     rawStatus <- checkStatus certificate `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
-    withStepProjects sid targetCommit $ \pid -> do
-        (_, resolvedStatus) <- resolveStepStatus (Just certificate) (sid, rawStatus)
-        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+    withStepProjects sid targetCommit $ \pid ->
+        broadcastStepStatusResolved pid targetCommit sid (Just certificate) rawStatus
 
 broadcastFailedStepForProjects :: App es => Int -> Text -> Eff es ()
 broadcastFailedStepForProjects sid targetCommit =

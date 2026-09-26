@@ -20,6 +20,7 @@ module UserRepo (
     withReadRepoTransaction,
     withReadRepoTransactionIO,
     withWriteRepoTransactionRaw,
+    writeRepoHeadContext,
     withUserRepoExclusiveIO,
     withUserRepoSharedIO,
     commitAndPushChanges,
@@ -359,6 +360,14 @@ fetchAndWarn context = do
     case result of
         Left err -> putStrLn $ "Warning: Failed to fetch " ++ context ++ ": " ++ err
         Right () -> return ()
+
+writeRepoHeadContext :: (IOE :> es) => WriteRepoContext -> Eff es (Either String ReadRepoContext)
+writeRepoHeadContext (WriteRepoContext worktreePath) = do
+    repoPath <- liftIO userRepoPath
+    (code, out, err) <- liftIO $ runGitIn worktreePath ["rev-parse", "HEAD"]
+    pure $ case code of
+        ExitSuccess -> Right $ ReadRepoContext repoPath (filter (`notElem` ("\n\r" :: String)) out)
+        ExitFailure _ -> Left ("git rev-parse HEAD failed in worktree: " ++ err)
 
 withWriteRepoTransactionRaw :: (IOE :> es) => (WriteRepoContext -> ExceptT String (Eff es) a) -> Eff es (Either String a)
 withWriteRepoTransactionRaw action = do

@@ -32,7 +32,7 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist,
 import System.FilePath (takeBaseName, (</>))
 import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction, writeRepoHeadContext)
 
 prefetchDownloadUrl :: T.Text -> AppM (T.Text, T.Text)
 prefetchDownloadUrl url = do
@@ -96,15 +96,16 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
             Nothing -> DynamicJson jsonBody
 
     result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
-        templatesW <- discoverDownloadTemplates ctx
+        headCtx <- liftEither =<< lift (writeRepoHeadContext ctx)
+        templatesW <- discoverDownloadTemplates headCtx
         let isDownloadW = maybe False (\t -> Set.member t templatesW) mReqType
         when (isDownload /= isDownloadW) $
             throwError "Step kind classification changed; retry"
-        ensureStepUnreviewed ctx stepId
+        ensureStepUnreviewed headCtx stepId
 
         case mExistingVal of
             Just existingVal -> do
-                currentJson <- runNixEvalJsonInRepo ctx (stepDefAttr stepId)
+                currentJson <- runNixEvalJsonInRepo headCtx (stepDefAttr stepId)
                 currentVal <- case eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack currentJson))) of
                     Left err -> throwError $ "Failed to decode current step: " ++ err
                     Right v -> return v
