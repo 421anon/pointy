@@ -70,10 +70,10 @@ class RepoContext ctx where
 
 instance RepoContext ReadRepoContext where
     evaluatorSource (ReadRepoContext repoPath commitHash) =
-        RepoSource $ "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
+        RepoRef $ "git+file://" ++ repoPath ++ "?rev=" ++ commitHash ++ "&allRefs=true"
 
 instance RepoContext WriteRepoContext where
-    evaluatorSource = RepoSource . writeWorktreePath
+    evaluatorSource = RepoWorktree . writeWorktreePath
 
 runNix :: (Nix :> es) => [String] -> ExceptT String (Eff es) String
 runNix args = ExceptT $ do

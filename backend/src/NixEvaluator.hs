@@ -22,7 +22,9 @@ import Data.Maybe (fromMaybe)
 import NixEvaluator.NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), ReplKind (..), ReplOutcome (..), ReplSession, closeSession, openSession, readSessionMemoryBytes, runRequest)
 import System.IO.Unsafe (unsafePerformIO)
 
-newtype RepoSource = RepoSource String
+data RepoSource
+    = RepoRef String
+    | RepoWorktree FilePath
     deriving (Eq, Ord)
 
 data RepoExpression = RepoExpression
@@ -70,14 +72,24 @@ expression :: NixEvalOutput -> Maybe String -> String -> RepoExpression
 expression output applyExpr attr = RepoExpression output applyExpr attr
 
 evaluate :: NixEvaluator -> RepoSource -> RepoExpression -> IO (Either String String)
-evaluate evaluator (RepoSource installable) repoExpr =
+evaluate evaluator source repoExpr =
     evaluateRequest evaluator $
         NixEvalRequest
-            { evalImpure = False
+            { evalImpure = sourceImpure source
             , evalOutput = expressionOutput repoExpr
             , evalApply = expressionApply repoExpr
-            , evalTarget = EvalInstallable installable (expressionAttr repoExpr)
+            , evalTarget = EvalInstallable (sourceInstallable source) (expressionAttr repoExpr)
             }
+
+sourceInstallable :: RepoSource -> String
+sourceInstallable = \case
+    RepoRef reference -> reference
+    RepoWorktree path -> path
+
+sourceImpure :: RepoSource -> Bool
+sourceImpure = \case
+    RepoRef _ -> False
+    RepoWorktree _ -> True
 
 evaluateImpure :: NixEvaluator -> String -> IO (Either String String)
 evaluateImpure evaluator expr =
