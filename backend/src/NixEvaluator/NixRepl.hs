@@ -13,7 +13,6 @@ module NixEvaluator.NixRepl (
     runRequest,
     readSessionMemoryBytes,
     closeSession,
-    outcomeResult,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -55,6 +54,9 @@ data NixEvalRequest = NixEvalRequest
 data ReplKind = PureRepl | ImpureRepl
     deriving (Eq, Show)
 
+replSystem :: String
+replSystem = "x86_64-linux"
+
 data ReplSession = ReplSession
     { replName :: String
     , replPid :: Maybe Int
@@ -79,15 +81,13 @@ data ReplOutcome
     | ReplDied String
     deriving (Eq, Show)
 
-outcomeResult :: ReplOutcome -> Either String String
-outcomeResult (ReplSucceeded output) = Right output
-outcomeResult (ReplFailed err) = Left err
-outcomeResult (ReplDied err) = Left err
-
 openSession :: ReplKind -> IO ReplSession
 openSession kind = do
     events <- newTQueueIO
-    let args = ["repl", "--extra-experimental-features", "nix-command flakes"] ++ ["--impure" | kind == ImpureRepl]
+    let args =
+            ["repl", "--extra-experimental-features", "nix-command flakes"]
+                ++ (if kind == PureRepl then ["--option", "pure-eval", "true"] else [])
+                ++ ["--impure" | kind == ImpureRepl]
         cp =
             (proc "nix" args)
                 { std_in = CreatePipe
@@ -256,7 +256,9 @@ renderFlakeInstallableExpression flakeVar attr =
         ++ "; "
         ++ "resolve = set: builtins.foldl' (acc: name: if acc ? value && builtins.isAttrs acc.value && builtins.hasAttr name acc.value then { value = acc.value.${name}; } else { }) { value = set; } attrPath; "
         ++ "top = resolve flake; "
-        ++ "system = builtins.currentSystem; "
+        ++ "system = "
+        ++ nixString replSystem
+        ++ "; "
         ++ "packages = if flake ? packages && flake.packages ? ${system} then resolve flake.packages.${system} else { }; "
         ++ "legacyPackages = if flake ? legacyPackages && flake.legacyPackages ? ${system} then resolve flake.legacyPackages.${system} else { }; "
         ++ "in "

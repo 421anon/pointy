@@ -12,7 +12,6 @@ module Certificates (
     evalProjectDefinition,
     decodeProjectDefinitions,
     withWriteRepoTransaction,
-    scheduleCertificateRefresh,
     ProjectDef (..),
     StepRef (..),
     StepDef (..),
@@ -22,7 +21,7 @@ import BuildStatus (checkStatus, resolveStepStatus)
 import Bus (broadcastSnapshot)
 import CertificateStore (lookupCertificate, storeCertificate)
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Exception (SomeException)
 import qualified Control.Exception as Exception
 import Control.Monad (forM, forM_, unless, void, when)
@@ -102,7 +101,7 @@ getProjectCertificates pid targetCommit = runExceptT $ do
     declared <-
         withExceptT ("Failed to evaluate project step ids: " ++) $
             runJson ctx "#pointy" (projectStepIdsExpression pid)
-    let ids = versionedValue declared
+    let ids = Set.toList (Set.fromList (versionedValue declared))
     paths <-
         if versionedSchema declared >= schemaVersionWithKeys
             then do
@@ -128,8 +127,8 @@ resolveKeys ctx ids = do
     case outcome of
         Right output -> case decodeJson output of
             Just keys
-                | Map.size (versionedValue keys) == length ids -> pure (versionedValue keys)
-            _ -> throwError "Failed to parse the step key evaluation"
+                | Map.size (versionedValue keys) == Set.size (Set.fromList ids) -> pure (versionedValue keys)
+            _ -> splitOrReportKeys ctx "the evaluation returned the wrong number of keys" ids
         Left err -> splitOrReportKeys ctx err ids
 
 splitOrReportKeys :: (Eval :> es, IOE :> es) => ReadRepoContext -> String -> [Int] -> ExceptT String (Eff es) (Map Int (Maybe Text))
@@ -143,8 +142,10 @@ splitOrReportKeys ctx err ids = case ids of
 
 scheduleRefreshIfMissing :: Text -> [Text] -> IO ()
 scheduleRefreshIfMissing commit keys = do
-    stored <- mapM lookupCertificate keys
-    when (any isNothing stored) $ scheduleCertificateRefresh commit
+    settled <- refreshIsSettled commit
+    when (not settled) $ do
+        stored <- mapM lookupCertificate keys
+        when (any isNothing stored) $ scheduleCertificateRefresh commit
 
 getStepCertificate :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Maybe Text))
 getStepCertificate sid targetCommit = runExceptT $ do
@@ -309,11 +310,23 @@ certificateBatchSize = 512
 data RefreshState = RefreshState
     { refreshRunning :: Bool
     , refreshPending :: Maybe Text
+    , refreshSettled :: Set.Set Text
     }
 
 {-# NOINLINE refreshStateRef #-}
 refreshStateRef :: MVar RefreshState
-refreshStateRef = unsafePerformIO (newMVar (RefreshState False Nothing))
+refreshStateRef = unsafePerformIO (newMVar (RefreshState False Nothing Set.empty))
+
+refreshSettledRevisions :: Int
+refreshSettledRevisions = 64
+
+markRefreshSettled :: MVar RefreshState -> Text -> IO ()
+markRefreshSettled ref commit =
+    modifyMVar_ ref $ \state ->
+        pure state{refreshSettled = Set.fromList (take refreshSettledRevisions (commit : Set.toList (refreshSettled state)))}
+
+refreshIsSettled :: Text -> IO Bool
+refreshIsSettled commit = Set.member commit . refreshSettled <$> readMVar refreshStateRef
 
 scheduleCertificateRefresh :: Text -> IO ()
 scheduleCertificateRefresh commit =
@@ -327,6 +340,7 @@ scheduleCertificateRefresh commit =
 refreshWorker :: Text -> IO ()
 refreshWorker commit = do
     Exception.catch (runAppEffects (runCertificateRefresh commit)) failure
+    markRefreshSettled refreshStateRef commit
     next <- modifyMVar refreshStateRef $ \state ->
         case refreshPending state of
             Just pending -> pure (state{refreshPending = Nothing}, Just pending)

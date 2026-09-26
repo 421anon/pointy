@@ -118,7 +118,7 @@ runRequestWithSession mayRetry worker request = do
         eSession <- maybe openActiveSession (pure . Right) mSession
         case eSession of
             Left (err :: SomeException) ->
-                pure (Nothing, Left $ "failed to start " ++ show (replWorkerKind worker) ++ " nix repl: " ++ show err)
+                pure (Nothing, ReplDied $ "failed to start " ++ show (replWorkerKind worker) ++ " nix repl: " ++ show err)
             Right session -> do
                 result <-
                     runRequest session request
@@ -126,12 +126,13 @@ runRequestWithSession mayRetry worker request = do
                 case result of
                     ReplDied err -> do
                         closeQuietly session
-                        pure (Nothing, Left err)
-                    ReplSucceeded output -> pure (Just session, Right output)
-                    ReplFailed err -> pure (Just session, Left err)
+                        pure (Nothing, ReplDied err)
+                    ReplSucceeded output -> pure (Just session, ReplSucceeded output)
+                    ReplFailed err -> pure (Just session, ReplFailed err)
     case outcome of
-        Right output -> pure $ Right output
-        Left err
+        ReplSucceeded output -> pure $ Right output
+        ReplFailed err -> pure $ Left err
+        ReplDied err
             | mayRetry -> runRequestWithSession False worker request
             | otherwise -> pure $ Left err
   where

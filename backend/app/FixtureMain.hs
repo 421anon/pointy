@@ -65,6 +65,7 @@ run options = do
     removePath origin
     removePath (home </> "user-repo.git")
     removePath (home </> "user-repo.lock")
+    removePath (home </> ".local" </> "state" </> "pointy")
     cloneRepo (optionRepoSource options) origin
     writeConfig configPath origin keyfile (documentBranch document)
     setEnv "POINTY_CONFIG_PATH" configPath
@@ -75,6 +76,7 @@ run options = do
     let reset = do
             resetFixture state
             removePath origin
+            removePath (home </> ".local" </> "state" </> "pointy")
             cloneRepo (optionRepoSource options) origin
             removePath (home </> "user-repo.git")
             removePath (home </> "user-repo.lock")

@@ -11,13 +11,13 @@ module Fixture.Document (
     pseudoHash,
 ) where
 
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecode, object, toJSON, withObject, (.:), (.:?), (.!=), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecode, object, toJSON, withObject, (.:?), (.!=), (.=))
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit, ord)
 import Data.List (isInfixOf)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Text.Read (readMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -86,7 +86,7 @@ appliedAnswer document applyExpr attr
     | "s.def.id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (map stepIdNumber (projectStepIds document (fromMaybe "" (listToMaybe (idsIn applyExpr))))))))
     | "reviewedRevision" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (\id_ -> [entryOf (documentReviews document) id_]) (idsIn applyExpr))))
     | "toString id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (Map.fromList [(stepId, fixtureKey stepId) | stepId <- idsIn applyExpr]))))
-    | ".key; in if t.success" `isInfixOf` applyExpr = Right (encodeValue (keyAnswer applyExpr))
+    | ".key); in if t.success" `isInfixOf` applyExpr = Right (encodeValue (keyAnswer applyExpr))
     | "certificate" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (maybe Null String . statusPathOf document) (idsIn applyExpr))))
     | "tryEval" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (pathOf (documentOutPaths document)) (idsIn applyExpr))))
     | otherwise = Left ("fixture has no answer for " ++ applyExpr ++ " on " ++ attr)

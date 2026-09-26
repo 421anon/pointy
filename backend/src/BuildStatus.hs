@@ -5,7 +5,6 @@
 
 module BuildStatus (
     checkStatus,
-    isImmediateStatus,
     partitionImmediateStatuses,
     resolveStepStatus,
 ) where
@@ -16,7 +15,6 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Text (Text)
 import Effectful (Eff, IOE, (:>))
-import Effectful.Exception (catch)
 import Effects (Nix, Slurm, pathValid)
 
 checkStatus :: (Nix :> es, Slurm :> es) => FilePath -> Eff es (Text, Maybe Text)
