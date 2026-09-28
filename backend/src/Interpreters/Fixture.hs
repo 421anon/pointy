@@ -106,6 +106,8 @@ answerNix :: FixtureDocument -> [String] -> IO (ExitCode, String, String)
 answerNix document args = case args of
     ["log", drv] -> logFor drv
     ["--offline", "log", drv] -> logFor drv
+    ["--option", "substituters", "", "log", drv] -> logFor drv
+    ["--option", "substituters", "", "--offline", "log", drv] -> logFor drv
     ["path-info", "--derivation", path] -> pure $ case derivationAnswer document path of
         Just drv -> (ExitSuccess, drv ++ "\n", "")
         Nothing -> (ExitFailure 1, "", "fixture: no derivation recorded for " ++ path)

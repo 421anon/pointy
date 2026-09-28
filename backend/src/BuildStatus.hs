@@ -12,7 +12,7 @@ module BuildStatus (
     resolveStepStatus,
 ) where
 
-import BuildLog (ResolvedLog (..), isStorePath, lastMeaningfulLine, lookupDeriver, resolveBuildLog, validPaths)
+import BuildLog (LogAccess (..), ResolvedLog (..), isStorePath, lastMeaningfulLine, lookupDeriver, resolveBuildLog, validPaths)
 import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
 import Control.Monad ((<=<))
 import Data.Aeson (FromJSON (..), withObject, (.:))
@@ -58,7 +58,7 @@ resolveStepStatus Nothing entry = return entry
 resolveStepStatus (Just certificate) entry@(sid, (state, _))
     | state == "failure" || state == "not-started" = do
         mDrv <- lookupDeriver certificate
-        mResolved <- maybe (return Nothing) resolveBuildLog mDrv
+        mResolved <- maybe (return Nothing) (resolveBuildLog LocalLogs) mDrv
         return $ case mResolved of
             Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
             Nothing -> entry

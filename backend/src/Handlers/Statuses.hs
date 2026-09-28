@@ -6,6 +6,7 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Handlers.Statuses (
+    rawStatusesFor,
     broadcastProjectStatus,
     broadcastSingleStepForProjects,
     broadcastFailedStepForProjects,
@@ -21,11 +22,11 @@ module Handlers.Statuses (
     projectContainsStep,
 ) where
 
-import BuildLog (StepStore, buildStepStore, rawStatusesBatched, resolveStatusesBatched)
-import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName, waitForCompletion)
+import BuildLog (StepStore, resolveStatusesBatched)
+import BuildRunner (buildKeyForOutPath, waitForCompletion)
 import BuildStatus (StepPaths (..), checkStatus, markBuiltOutputs, partitionImmediateStatuses, resolveStatuses, resolveStepStatus)
 import Bus (broadcastSnapshot)
-import Certificates (ProjectDef (..), StepDef (..), StepRef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate)
+import Certificates (ProjectDef (..), StepDef (..), StepRef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate, isCertificateBuilding, rawStatusesFor, runningBuildKeys)
 import ClusterBus (beginBuild, endBuild)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
@@ -44,7 +45,7 @@ import qualified Data.Set as Set
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effectful.Exception (bracket_, catch, try)
-import Effects (App, AppEffects, Nix, Slurm, pathValid)
+import Effects (App, AppEffects, Nix, pathValid)
 import UserRepo (ReadRepoContext (..), userRepoPath, withReadRepoTransaction)
 
 resolveStatusesAtCommitWithCertificates :: (Nix :> es, IOE :> es) => Map Int Text -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
@@ -55,15 +56,6 @@ resolveStatusesAtCommitWithCertificates certificates statuses =
     resolveOne certificates' (sid, entry) =
         resolveStepStatus (fmap unpack $ Map.lookup sid certificates') (sid, entry)
 
-runningBuildKeys :: (Slurm :> es) => Eff es (Set String)
-runningBuildKeys = do
-    jobs <- querySlurmJobs
-    return $ Set.fromList (map slurmJobName jobs)
-
-isCertificateBuilding :: Set String -> Text -> Bool
-isCertificateBuilding runningKeys certificate =
-    Set.member (unBuildKey (buildKeyForOutPath (unpack certificate))) runningKeys
-
 getBatchedStatuses :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text), Map Int StepPaths, Maybe StepStore))
 getBatchedStatuses pid targetCommit = do
     result <- getProjectCertificates pid targetCommit
@@ -71,7 +63,7 @@ getBatchedStatuses pid targetCommit = do
         Left err -> return $ Left err
         Right certificates -> do
             batched <-
-                (Right <$> buildBatched (Map.map (pack . stepCertificate) certificates))
+                (Right <$> rawStatusesFor (Map.map (pack . stepCertificate) certificates))
                     `catch` \(err :: SomeException) -> do
                         liftIO $ putStrLn $ "Batched status probe failed, falling back to per-step probes: " ++ show err
                         statuses <- Map.fromList <$> liftIO (mapConcurrently (runAppEffects . getStatusForStep) (Map.toList certificates))
@@ -80,13 +72,6 @@ getBatchedStatuses pid targetCommit = do
                 Right (statuses, store) -> return $ Right (statuses, certificates, Just store)
                 Left statuses -> return $ Right (statuses, certificates, Nothing)
   where
-    buildBatched :: (Nix :> es', Slurm :> es', IOE :> es') => Map Int Text -> Eff es' (Map Int (Text, Maybe Text), StepStore)
-    buildBatched certificates = do
-        store <- buildStepStore certificates
-        runningKeys <- runningBuildKeys
-        statuses <- rawStatusesBatched store (isCertificateBuilding runningKeys) certificates
-        return (statuses, store)
-
     getStatusForStep :: (Int, StepPaths) -> Eff AppEffects (Int, (Text, Maybe Text))
     getStatusForStep (sid, paths) = do
         status_ <-
