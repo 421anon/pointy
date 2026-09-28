@@ -87,6 +87,7 @@ appliedAnswer document applyExpr attr
     | "reviewedRevision" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (\id_ -> [entryOf (documentReviews document) id_]) (idsIn applyExpr))))
     | "toString id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (Map.fromList [(stepId, fixtureKey stepId) | stepId <- idsIn applyExpr]))))
     | ".key); in if t.success" `isInfixOf` applyExpr = Right (encodeValue (keyAnswer applyExpr))
+    | "certificate.success" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (stepPathsValue document) (idsIn applyExpr))))
     | "certificate" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (maybe Null String . statusPathOf document) (idsIn applyExpr))))
     | "tryEval" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (pathOf (documentOutPaths document)) (idsIn applyExpr))))
     | otherwise = Left ("fixture has no answer for " ++ applyExpr ++ " on " ++ attr)
@@ -123,11 +124,16 @@ statusPathOf :: FixtureDocument -> String -> Maybe Text
 statusPathOf document stepId =
     Map.lookup stepId (if certified document then documentCertificates document else documentOutPaths document)
 
+stepPathsValue :: FixtureDocument -> String -> Value
+stepPathsValue document stepId = case statusPathOf document stepId of
+    Nothing -> Null
+    Just certificate -> object ["certificate" .= certificate, "output" .= Map.findWithDefault certificate stepId (documentOutPaths document)]
+
 projectStatusPaths :: FixtureDocument -> String -> Value
 projectStatusPaths document pid =
     toJSON $
         Map.fromList
-            [ (stepId, fromMaybe "/invalid" (statusPathOf document stepId))
+            [ (stepId, stepPathsValue document stepId)
             | stepValue <- projectStepValues document pid
             , Just stepId <- [valueId stepValue]
             ]

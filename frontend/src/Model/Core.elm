@@ -26,6 +26,30 @@ type Status
     | StatusRunning
     | StatusSuccess
     | StatusFailure (Maybe String)
+    | StatusBuiltNotCertified
+    | StatusCertificationFailed (Maybe String)
+
+
+hasBuiltOutput : Status -> Bool
+hasBuiltOutput status =
+    case status of
+        StatusNotStarted ->
+            False
+
+        StatusRunning ->
+            False
+
+        StatusSuccess ->
+            True
+
+        StatusFailure _ ->
+            False
+
+        StatusBuiltNotCertified ->
+            True
+
+        StatusCertificationFailed _ ->
+            True
 
 
 type ClusterStatus

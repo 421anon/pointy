@@ -41,9 +41,9 @@ import Time.Distance
 import View.Icons exposing (icon, iconCustom)
 
 
-isSuccessStatus : ApiData Status -> Bool
-isSuccessStatus =
-    has (ApiData.success << where_ ((==) StatusSuccess))
+hasBrowsableOutput : ApiData Status -> Bool
+hasBrowsableOutput =
+    has (ApiData.success << where_ Model.hasBuiltOutput)
 
 
 sortBySortKey : List (BaseRecord a) -> List (BaseRecord a)
@@ -71,6 +71,9 @@ viewStatusCountBadge spec allRecords =
                     { counts | done = counts.done + 1 }
 
                 Just Model.StatusNotStarted ->
+                    counts
+
+                Just Model.StatusBuiltNotCertified ->
                     counts
 
                 Just _ ->
@@ -236,7 +239,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                                 , ( "no-status", isProjectsTag && List.isEmpty validationErrors )
                                 ]
                              ]
-                                ++ (if Maybe.isJust record.id && (isProjectsTag || isSuccessStatus recordStatus) then
+                                ++ (if Maybe.isJust record.id && (isProjectsTag || hasBrowsableOutput recordStatus) then
                                         Maybe.unwrap []
                                             (\action ->
                                                 [ Events.on "click" (Decode.field "target" (Decode.whenNotInside actionsContainerClass action))
@@ -444,16 +447,16 @@ viewStatusApiData tableName logState mRecordId status =
     let
         viewStatusPill s =
             let
-                ( colorClass, statusText ) =
+                ( colorClass, statusText, showsLog ) =
                     case s of
                         StatusNotStarted ->
-                            ( "status-not-started", "Not Started" )
+                            ( "status-not-started", "Not Started", False )
 
                         StatusRunning ->
-                            ( "status-running", "Running" )
+                            ( "status-running", "Running", False )
 
                         StatusSuccess ->
-                            ( "status-success", "Success" )
+                            ( "status-success", "Success", False )
 
                         StatusFailure mError ->
                             ( "status-failure"
@@ -463,15 +466,22 @@ viewStatusApiData tableName logState mRecordId status =
 
                                 Nothing ->
                                     "Failure"
+                            , True
                             )
+
+                        StatusBuiltNotCertified ->
+                            ( "status-built-not-certified", "Not Certified", False )
+
+                        StatusCertificationFailed _ ->
+                            ( "status-certification-failed", "Certification Failed", True )
             in
-            case ( s, mRecordId ) of
-                ( StatusFailure _, Just stepId ) ->
+            case ( showsLog, mRecordId ) of
+                ( True, Just stepId ) ->
                     let
                         popoverId =
                             "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
                     in
-                    Html.span []
+                    Html.span [ Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True )) ]
                         [ Html.button
                             [ class "status-indicator-wrapper status-log-trigger"
                             , title statusText
@@ -627,7 +637,7 @@ viewRecordActions spec isReadOnly mProjectId record =
 
         recordActions =
             [ 
-              { shouldShow = isSuccessStatus << TableSpec.getStatus spec
+              { shouldShow = hasBrowsableOutput << TableSpec.getStatus spec
               , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
               }
             , 

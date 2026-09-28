@@ -3,7 +3,9 @@
 
 module CertificateStore (
     lookupCertificate,
+    lookupOutput,
     storeCertificate,
+    storeOutput,
 ) where
 
 import Control.Exception (SomeException, catch)
@@ -41,6 +43,12 @@ storeCertificate key certificate = do
         writeFile tempPath (certificate ++ "\n")
         renameFile tempPath path
             `catch` \(_ :: SomeException) -> removeFile tempPath `catch` \(_ :: SomeException) -> pure ()
+
+lookupOutput :: Text -> IO (Maybe FilePath)
+lookupOutput key = lookupCertificate (key <> ".output")
+
+storeOutput :: Text -> FilePath -> IO ()
+storeOutput key = storeCertificate (key <> ".output")
 
 certificatePath :: Text -> IO FilePath
 certificatePath key = do

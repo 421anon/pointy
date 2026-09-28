@@ -321,7 +321,7 @@ applyStatusSnapshot snapshotCommit newStatus rs =
                 )
                 rs
     in
-    if pendingRun && newStatus == StatusNotStarted then
+    if pendingRun && List.member newStatus [ StatusNotStarted, StatusBuiltNotCertified ] then
         rs
 
     else
@@ -1114,13 +1114,16 @@ runStep spec id =
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq
                         (registerStepStatusHook id
-                            (addToast True
-                                (case try (table << recordById id << name) model of
-                                    Just stepName ->
-                                        "Step '" ++ stepName ++ "' completed"
+                            (Flow.forAll (table << recordById id << runState << success << status << success << where_ ((==) StatusSuccess))
+                                (\_ ->
+                                    addToast True
+                                        (case try (table << recordById id << name) model of
+                                            Just stepName ->
+                                                "Step '" ++ stepName ++ "' completed"
 
-                                    Nothing ->
-                                        "Step completed"
+                                            Nothing ->
+                                                "Step completed"
+                                        )
                                 )
                             )
                         )
@@ -2265,7 +2268,7 @@ openHighlightedEntry highlight =
 deepOpenOutputEntryOrDefer : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenOutputEntryOrDefer id path mRange =
     Flow.try
-        (projects << records << success << each << tables << values << records << success << by .id (Just id) << runState << success << status << success << where_ ((==) StatusSuccess))
+        (projects << records << success << each << tables << values << records << success << by .id (Just id) << runState << success << status << success << where_ Model.hasBuiltOutput)
         (\mStatus ->
             case mStatus of
                 Just _ ->
@@ -2279,7 +2282,7 @@ deepOpenOutputEntryOrDefer id path mRange =
 
 deepOpenOutputEntry : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenOutputEntry stepId path mRange =
-    Flow.forAll (currentProject << success << tables << values << recordById stepId << runState << success << status << success << where_ ((==) StatusSuccess))
+    Flow.forAll (currentProject << success << tables << values << recordById stepId << runState << success << status << success << where_ Model.hasBuiltOutput)
         (\_ ->
             deepOpenEntryWith Route.Output toggleOutputEntry stepId path mRange
         )
@@ -3863,7 +3866,7 @@ applyListedStatuses statuses model =
 
         hooks =
             statuses
-                |> Dict.filter (\_ -> succeeded)
+                |> Dict.filter (\_ -> Model.hasBuiltOutput << Tuple.second)
                 |> Dict.keys
                 |> List.map runAndClearStepStatusHook
 
@@ -3954,6 +3957,12 @@ settlePendingBuild snapshotCommit stepId status_ =
 
                 StatusFailure Nothing ->
                     Just (addToast False "Building this revision failed.")
+
+                StatusCertificationFailed mError ->
+                    Just
+                        (Flow.async loadProjectReviews
+                            |> Flow.seq (addToast False ("The viewed revision is built but its certification failed" ++ Maybe.unwrap "." ((++) ": ") mError))
+                        )
 
                 _ ->
                     Nothing
