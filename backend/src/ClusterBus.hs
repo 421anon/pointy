@@ -2,22 +2,23 @@ module ClusterBus
     ( ClusterStatus (..)
     , ClusterSnapshot (..)
     , setClusterStatus
-    , updateRunningSteps
+    , beginBuild
+    , endBuild
+    , buildingSteps
+    , buildingStepsAt
+    , requestStop
+    , takeStopRequest
     , snapshotAndSubscribe
-    , restoreRunningStepIds
     ) where
 import Control.Concurrent.STM
-import Control.Exception (mask, onException)
 import Control.Monad (when)
 import Data.Map.Strict (Map)
-import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Text (Text)
 import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import qualified Data.Text as T
 
 data ClusterStatus = Available | Degraded | Unavailable deriving (Eq, Show)
 
@@ -35,9 +36,19 @@ snapshotVar = unsafePerformIO $ newTVarIO (ClusterSnapshot Available Nothing Set
 broadcastChan :: TChan ClusterSnapshot
 broadcastChan = unsafePerformIO newBroadcastTChanIO
 
-{-# NOINLINE restoreTracker #-}
-restoreTracker :: TVar (Maybe (Set Int))
-restoreTracker = unsafePerformIO $ newTVarIO Nothing
+{-# NOINLINE runningBuilds #-}
+runningBuilds :: TVar (Map Int (Map Text Int))
+runningBuilds = unsafePerformIO $ newTVarIO Map.empty
+
+{-# NOINLINE stopRequests #-}
+stopRequests :: TVar (Set Int)
+stopRequests = unsafePerformIO $ newTVarIO Set.empty
+
+requestStop :: Int -> IO ()
+requestStop stepId = atomically $ modifyTVar' stopRequests (Set.insert stepId)
+
+takeStopRequest :: Int -> IO Bool
+takeStopRequest stepId = atomically $ stateTVar stopRequests (\requests -> (Set.member stepId requests, Set.delete stepId requests))
 
 setClusterStatus :: ClusterStatus -> Maybe Text -> IO ()
 setClusterStatus newStatus newDetail = atomically $ do
@@ -47,22 +58,29 @@ setClusterStatus newStatus newDetail = atomically $ do
         writeTVar snapshotVar newSnap
         writeTChan broadcastChan newSnap
 
-updateRunningSteps :: Map Int (Text, Maybe Text) -> STM ()
-updateRunningSteps steps = do
+beginBuild :: Int -> Text -> IO ()
+beginBuild stepId commit =
+    updateRunningBuilds (Map.insertWith (Map.unionWith (+)) stepId (Map.singleton commit 1))
+
+endBuild :: Int -> Text -> IO ()
+endBuild stepId commit =
+    updateRunningBuilds (Map.update (nonEmpty . Map.update release commit) stepId)
+  where
+    release count = if count > 1 then Just (count - 1) else Nothing
+    nonEmpty counts = if Map.null counts then Nothing else Just counts
+
+buildingStepsAt :: Text -> STM (Set Int)
+buildingStepsAt commit = Map.keysSet . Map.filter (Map.member commit) <$> readTVar runningBuilds
+
+buildingSteps :: STM (Set Int)
+buildingSteps = Map.keysSet <$> readTVar runningBuilds
+
+updateRunningBuilds :: (Map Int (Map Text Int) -> Map Int (Map Text Int)) -> IO ()
+updateRunningBuilds change = atomically $ do
+    modifyTVar' runningBuilds change
+    builds <- readTVar runningBuilds
     snap <- readTVar snapshotVar
-    let newIds = Map.foldlWithKey'
-            (\acc k (statusText, _) ->
-                if statusText == T.pack "running"
-                    then Set.insert k acc
-                    else Set.delete k acc)
-            (runningStepIds snap)
-            steps
-        newSnap = snap {runningStepIds = newIds}
-    mTracker <- readTVar restoreTracker
-    case mTracker of
-        Just touched ->
-            writeTVar restoreTracker (Just (Set.union touched (Map.keysSet steps)))
-        Nothing -> return ()
+    let newSnap = snap {runningStepIds = Map.keysSet builds}
     when (newSnap /= snap) $ do
         writeTVar snapshotVar newSnap
         writeTChan broadcastChan newSnap
@@ -72,19 +90,3 @@ snapshotAndSubscribe = atomically $ do
     snap <- readTVar snapshotVar
     chan <- dupTChan broadcastChan
     return (snap, chan)
-
-restoreRunningStepIds :: IO (Set Int) -> IO ()
-restoreRunningStepIds scan = mask $ \restore -> do
-    atomically $ writeTVar restoreTracker (Just Set.empty)
-    recovered <- restore scan
-        `onException` atomically (writeTVar restoreTracker Nothing)
-    atomically $ do
-        mTouched <- readTVar restoreTracker
-        let touched = fromMaybe Set.empty mTouched
-            toRestore = Set.difference recovered touched
-        when (not (Set.null toRestore)) $ do
-            snap <- readTVar snapshotVar
-            let newSnap = snap {runningStepIds = Set.union (runningStepIds snap) toRestore}
-            writeTVar snapshotVar newSnap
-            writeTChan broadcastChan newSnap
-        writeTVar restoreTracker Nothing

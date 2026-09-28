@@ -1921,17 +1921,29 @@ getRunningStepSummaries (Model model) =
     let
         projectsList =
             model.projects.records
-                |> ApiData.withDefault []
+                |> ApiData.toMaybe
+                |> Maybe.withDefault []
                 |> List.sortBy getSortKey
+
+        projectSteps project =
+            Dict.values project.tables
+                |> List.concatMap (\t -> ApiData.toMaybe t.records |> Maybe.withDefault [])
+
+        ingesting stepId =
+            Dict.member stepId model.uploadProgress
+                || Maybe.unwrap False (.state >> (==) IngestRunning) (Dict.get stepId model.ingestJobs)
+                || Set.member stepId model.pendingIngestSteps
+
+        shownStatus step =
+            if Maybe.unwrap False ingesting step.id then
+                Just StatusRunning
+
+            else
+                ApiData.unwrap Nothing (.status >> ApiData.toMaybe) step.runState
 
         stepInProject : Int -> ProjectRecord -> Maybe RunningStepSummary
         stepInProject stepId project =
-            let
-                allSteps =
-                    Dict.values project.tables
-                        |> List.concatMap (\t -> ApiData.withDefault [] t.records)
-            in
-            case List.filter (\s -> s.id == Just stepId) allSteps of
+            case List.filter (\s -> s.id == Just stepId && Maybe.unwrap True ((==) StatusRunning) (shownStatus s)) (projectSteps project) of
                 first :: _ ->
                     project.id
                         |> Maybe.map
@@ -1946,7 +1958,7 @@ getRunningStepSummaries (Model model) =
                 [] ->
                     Nothing
     in
-    model.runningStepIds
+    (model.runningStepIds ++ List.filterMap .id (List.filter (shownStatus >> (==) (Just StatusRunning)) (List.concatMap projectSteps projectsList)))
         |> List.unique
         |> List.filterMap (\stepId -> List.findMap (stepInProject stepId) projectsList)
 

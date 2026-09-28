@@ -1107,14 +1107,10 @@ runStep spec id =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    revision =
-                        stepRevisionById id model
-                in
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
                     |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
-                    |> Flow.seq (clearStepLog id revision)
+                    |> Flow.seq (Flow.get |> Flow.andThen (clearStepLog id << stepRevisionById id))
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq
                         (registerStepStatusHook id
@@ -1128,7 +1124,7 @@ runStep spec id =
                                 )
                             )
                         )
-                    |> Flow.seq (callApi void (Api.runStep id revision))
+                    |> Flow.seq (Flow.get |> Flow.andThen (callApi void << Api.runStep id << stepRevisionById id))
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
@@ -1217,7 +1213,7 @@ cloneStep spec record =
     in
     Flow.getAll (TableSpec.getLens spec << records << success << each << name)
         (\existingNames ->
-            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) record)
+            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) { record | runState = NotAsked })
                 |> FlowError.andThen
                     (\newRecord ->
                         Flow.assertJust (Flow.pure newRecord.id)
