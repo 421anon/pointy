@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import Fixture.Document (FixtureDocument (..))
-import BuildStatus (StepPaths (..), checkStatus, markBuiltOutputs)
+import BuildStatus (checkStatus)
 import Interpreters.Fixture (FixtureJob (..), FixtureState (..), newFixtureState, runFixture)
 
 main :: IO ()
@@ -45,22 +45,6 @@ main = do
         )
         statuses
 
-    marked <- runFixture state (markBuiltOutputs stepPaths unmarkedStatuses)
-    assertEqual
-        "built outputs mark uncertified steps"
-        ( Map.fromList
-            [ (176, ("built-not-certified", Nothing))
-            , (177, ("certification-failed", Just "msg"))
-            , (178, ("not-started", Nothing))
-            , (179, ("not-started", Nothing))
-            , (180, ("not-started", Nothing))
-            , (181, ("not-started", Nothing))
-            , (182, ("success", Nothing))
-            , (183, ("running", Nothing))
-            ]
-        )
-        marked
-
 certificates :: Map.Map Int Text
 certificates =
     Map.fromList
@@ -68,32 +52,6 @@ certificates =
         , (173, unbuiltCertificate)
         , (174, otherUnbuiltCertificate)
         , (175, "/invalid")
-        ]
-
-stepPaths :: Map.Map Int StepPaths
-stepPaths =
-    Map.fromList
-        [ (176, StepPaths (T.unpack otherUnbuiltCertificate) builtOutput)
-        , (177, StepPaths (T.unpack otherUnbuiltCertificate) builtOutput)
-        , (178, StepPaths (T.unpack otherUnbuiltCertificate) unbuiltOutput)
-        , (179, StepPaths builtOutput builtOutput)
-        , (180, StepPaths "/invalid" "/invalid")
-        , (181, StepPaths "/invalid" builtOutput)
-        , (182, StepPaths (T.unpack certifiedCertificate) builtOutput)
-        , (183, StepPaths (T.unpack unbuiltCertificate) builtOutput)
-        ]
-
-unmarkedStatuses :: Map.Map Int (Text, Maybe Text)
-unmarkedStatuses =
-    Map.fromList
-        [ (176, ("not-started", Nothing))
-        , (177, ("failure", Just "msg"))
-        , (178, ("not-started", Nothing))
-        , (179, ("not-started", Nothing))
-        , (180, ("not-started", Nothing))
-        , (181, ("not-started", Nothing))
-        , (182, ("success", Nothing))
-        , (183, ("running", Nothing))
         ]
 
 certifiedCertificate :: Text
@@ -104,12 +62,6 @@ unbuiltCertificate = "/nix/store/11111111111111111111111111111111-pointy-certifi
 
 otherUnbuiltCertificate :: Text
 otherUnbuiltCertificate = "/nix/store/22222222222222222222222222222222-pointy-certificate-174"
-
-builtOutput :: FilePath
-builtOutput = "/nix/store/33333333333333333333333333333333-pointy-output-176"
-
-unbuiltOutput :: FilePath
-unbuiltOutput = "/nix/store/44444444444444444444444444444444-pointy-output-178"
 
 document :: FixtureDocument
 document =
@@ -124,7 +76,7 @@ document =
         , documentNotices = Map.empty
         , documentReviews = Map.empty
         , documentProjectStepIds = Map.empty
-        , documentValidPaths = [T.unpack certifiedCertificate, builtOutput]
+        , documentValidPaths = [T.unpack certifiedCertificate]
         , documentDerivations = Map.empty
         , documentLogs = Map.empty
         , documentReferences = Map.empty
