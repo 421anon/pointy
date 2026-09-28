@@ -507,7 +507,7 @@ stepCertificatesOrLegacyOutPaths context stepIds = do
     resolved <- decodeNix "Failed to decode step certificates" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" certificateExpression stepIds) "#pointy.steps"
     pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
   where
-    certificateExpression = "let path = builtins.tryEval (builtins.unsafeDiscardStringContext (toString (steps.${name}.certificate or steps.${name}).outPath)); in if path.success then path.value else null"
+    certificateExpression = "let path = builtins.tryEval (toString (steps.${name}.certificate or steps.${name}).outPath); in if path.success then path.value else null"
     entry = maybe (Left ("The certificate of a step could not be evaluated at " ++ readCommitHash context ++ ".")) (Right . T.unpack . T.strip)
 
 stepOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) FilePath
@@ -521,7 +521,7 @@ stepOutPaths context stepIds = do
     resolved <- decodeNix "Failed to decode step output paths" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" outPathExpression stepIds) "#pointy.steps"
     pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
   where
-    outPathExpression = "let path = builtins.tryEval (builtins.unsafeDiscardStringContext (toString steps.${name}.outPath)); in if path.success then path.value else null"
+    outPathExpression = "let path = builtins.tryEval (toString steps.${name}.outPath); in if path.success then path.value else null"
     entry = maybe (Left ("The output path of a step could not be evaluated at " ++ readCommitHash context ++ ".")) (Right . T.unpack . T.strip)
 
 mapStepNames :: String -> String -> [Int] -> String

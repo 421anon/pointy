@@ -128,7 +128,7 @@ resolveStepTarget ctx eid = do
     either (throwError . (("Failed to decode the build target of step " ++ show eid ++ ": ") ++)) pure $
         eitherDecode (TLE.encodeUtf8 (TL.pack output))
   where
-    certificateOrLegacyStep = "step: { certified = step ? certificate; path = builtins.unsafeDiscardStringContext (step.certificate or step).outPath; drv = builtins.unsafeDiscardStringContext (step.certificate or step).drvPath; }"
+    certificateOrLegacyStep = "step: { certified = step ? certificate; path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; }"
 
 stepTargetInstallable :: ReadRepoContext -> Int -> StepTarget -> String
 stepTargetInstallable ctx eid target =

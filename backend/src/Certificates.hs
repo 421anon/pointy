@@ -324,7 +324,7 @@ keyGuard selection =
 
 stepCertificatesExpression :: [Int] -> String
 stepCertificatesExpression ids =
-    "steps: map (id: let t = builtins.tryEval (builtins.unsafeDiscardStringContext (toString (steps.${id}.certificate or steps.${id}).outPath)); in if t.success then t.value else null) "
+    "steps: map (id: let t = builtins.tryEval (toString (steps.${id}.certificate or steps.${id}).outPath); in if t.success then t.value else null) "
         ++ renderIdList ids
 
 renderIdList :: [Int] -> String
