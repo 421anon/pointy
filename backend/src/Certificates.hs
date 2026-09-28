@@ -23,8 +23,9 @@ module Certificates (
 
 import BuildLog (StepStore, buildStepStore, rawStatusesBatched)
 import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName)
+import BuildStatus (StepPaths (..), markBuiltOutputs)
 import Bus (broadcastSnapshot)
-import CertificateStore (lookupCertificate, storeCertificate)
+import CertificateStore (lookupCertificate, lookupOutput, storeCertificate, storeOutput)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Exception (SomeException)
@@ -84,7 +85,7 @@ prefixedFieldOptions prefix =
             map toLower (fromMaybe field (stripPrefix prefix field))
         }
 
-invalidCertificate :: Text
+invalidCertificate :: FilePath
 invalidCertificate = "/invalid"
 
 schemaVersionWithKeys :: Int
@@ -99,7 +100,7 @@ instance (FromJSON a) => FromJSON (Versioned a) where
     parseJSON = withObject "Versioned" $ \object ->
         Versioned <$> object .: "version" <*> object .: "value"
 
-getProjectCertificates :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Map Int Text))
+getProjectCertificates :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Map Int StepPaths))
 getProjectCertificates pid targetCommit = runExceptT $ do
     ctx <- prepareCommit targetCommit
     declared <-
@@ -115,14 +116,14 @@ getProjectCertificates pid targetCommit = runExceptT $ do
                 resolveCertificates ctx known
             else
                 withExceptT ("Failed to evaluate project certificates: " ++) $
-                    fmap (Map.mapMaybe (fmap unpack)) $
+                    fmap (Map.mapMaybe id) $
                         runJson ctx (projectAttr pid) legacyProjectCertificates
     pure $
-        Map.union (Map.map pack paths) $
-            Map.fromList [(sid, invalidCertificate) | sid <- ids, Map.notMember sid paths]
+        Map.union paths $
+            Map.fromList [(sid, StepPaths invalidCertificate invalidCertificate) | sid <- ids, Map.notMember sid paths]
 
 legacyProjectCertificates :: String
-legacyProjectCertificates = "project: project.certificates or project.outPaths"
+legacyProjectCertificates = "project: builtins.mapAttrs (id: certificate: if certificate == null then null else { inherit certificate; output = project.outPaths.${id} or certificate; }) (project.certificates or project.outPaths)"
 
 resolveKeys :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) (Map Int (Maybe Text))
 resolveKeys _ [] = pure Map.empty
@@ -151,7 +152,7 @@ scheduleRefreshIfMissing commit keys = do
         stored <- mapM lookupCertificate keys
         when (any isNothing stored) $ scheduleCertificateRefresh commit
 
-getStepCertificate :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Maybe Text))
+getStepCertificate :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Maybe StepPaths))
 getStepCertificate sid targetCommit = runExceptT $ do
     ctx <- prepareCommit targetCommit
     resolved <-
@@ -159,30 +160,28 @@ getStepCertificate sid targetCommit = runExceptT $ do
             runJson ctx "#pointy" (stepKeyExpression sid)
     case versionedValue resolved of
         Just key | versionedSchema resolved >= schemaVersionWithKeys ->
-            fmap pack <$> Map.lookup sid <$> resolveCertificates ctx [(sid, key)]
+            Map.lookup sid <$> resolveCertificates ctx [(sid, key)]
         _ -> do
             evaluated <- resolveCertificatePaths ctx [sid]
             pure $ case lookup sid evaluated of
                 Just (Just path) -> Just path
                 _ -> Nothing
 
-resolveCertificates :: (Eval :> es, IOE :> es) => ReadRepoContext -> [(Int, Text)] -> ExceptT String (Eff es) (Map Int FilePath)
+resolveCertificates :: (Eval :> es, IOE :> es) => ReadRepoContext -> [(Int, Text)] -> ExceptT String (Eff es) (Map Int StepPaths)
 resolveCertificates _ [] = pure Map.empty
 resolveCertificates ctx keys = do
-    stored <- liftIO $ forM keys $ \(sid, key) -> do
-        path <- lookupCertificate key
-        pure (sid, path)
-    let fromStore = Map.fromList [(sid, path) | (sid, Just path) <- stored]
-        missing = [sid | (sid, Nothing) <- stored]
+    stored <- liftIO $ forM keys $ \(sid, key) -> (,,) sid <$> lookupCertificate key <*> lookupOutput key
+    let fromStore = Map.fromList [(sid, StepPaths certificate (fromMaybe certificate output)) | (sid, Just certificate, output) <- stored]
+        missing = [sid | (sid, certificate, output) <- stored, isNothing certificate || isNothing output]
     if null missing
         then pure fromStore
         else do
             evaluated <- resolveCertificatePaths ctx missing
-            let evaluatedPaths = Map.mapMaybe (fmap unpack) $ Map.fromList evaluated
+            let evaluatedPaths = Map.mapMaybe id (Map.fromList evaluated)
             liftIO $ storeNew keys (Map.toList evaluatedPaths)
             pure $ Map.union evaluatedPaths fromStore
 
-resolveCertificatePaths :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) [(Int, Maybe Text)]
+resolveCertificatePaths :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) [(Int, Maybe StepPaths)]
 resolveCertificatePaths _ [] = pure []
 resolveCertificatePaths ctx ids = do
     outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepCertificatesExpression ids) "#pointy.steps"
@@ -193,7 +192,7 @@ resolveCertificatePaths ctx ids = do
             _ -> throwError "Failed to parse the certificate evaluation"
         Left err -> splitOrReport ctx err ids
 
-splitOrReport :: (Eval :> es, IOE :> es) => ReadRepoContext -> String -> [Int] -> ExceptT String (Eff es) [(Int, Maybe Text)]
+splitOrReport :: (Eval :> es, IOE :> es) => ReadRepoContext -> String -> [Int] -> ExceptT String (Eff es) [(Int, Maybe StepPaths)]
 splitOrReport ctx err ids = case ids of
     [single] -> do
         liftIO $ putStrLn $ "Step " ++ show single ++ " has no certificate: " ++ errorSummary err
@@ -212,11 +211,11 @@ errorSummary text = case filter isErrorLine (lines text) of
 firstLine :: String -> String
 firstLine = takeWhile (/= '\n')
 
-storeNew :: [(Int, Text)] -> [(Int, FilePath)] -> IO ()
+storeNew :: [(Int, Text)] -> [(Int, StepPaths)] -> IO ()
 storeNew keys paths =
-    forM_ paths $ \(sid, path) ->
+    forM_ paths $ \(sid, StepPaths certificate output) ->
         case lookup sid keys of
-            Just key -> storeCertificate key path
+            Just key -> storeCertificate key certificate >> storeOutput key output
             Nothing -> pure ()
 
 prepareCommit :: (Eval :> es, IOE :> es) => Text -> ExceptT String (Eff es) ReadRepoContext
@@ -327,7 +326,7 @@ keyGuard selection =
 
 stepCertificatesExpression :: [Int] -> String
 stepCertificatesExpression ids =
-    "steps: map (id: let t = builtins.tryEval (toString (steps.${id}.certificate or steps.${id}).outPath); in if t.success then t.value else null) "
+    "steps: map (id: let tryOutPath = drv: builtins.tryEval (toString drv.outPath); certificate = tryOutPath (steps.${id}.certificate or steps.${id}); output = tryOutPath steps.${id}; in if certificate.success then { certificate = certificate.value; output = (if output.success then output else certificate).value; } else null) "
         ++ renderIdList ids
 
 renderIdList :: [Int] -> String
@@ -407,21 +406,22 @@ refreshMissing commit keys = do
         case paths of
             Left err -> liftIO $ putStrLn $ "Certificate refresh for " ++ unpack commit ++ " failed: " ++ err
             Right evaluated -> do
-                let resolved = Map.mapMaybe (fmap unpack) (Map.fromList evaluated)
+                let resolved = Map.mapMaybe id (Map.fromList evaluated)
                 liftIO $ storeNew known (Map.toList resolved)
-                broadcastRefreshed commit (Map.map pack resolved)
+                broadcastRefreshed commit resolved
 
-broadcastRefreshed :: App es => Text -> Map Int Text -> Eff es ()
+broadcastRefreshed :: App es => Text -> Map Int StepPaths -> Eff es ()
 broadcastRefreshed commit certificates = do
     membership <- projectMembershipAt commit
     case membership of
         Left err -> liftIO $ putStrLn $ "Certificate refresh for " ++ unpack commit ++ " could not read projects: " ++ err
         Right projects -> do
-            (statuses, _) <- rawStatusesFor certificates
+            (statuses, _) <- rawStatusesFor (Map.map (pack . stepCertificate) certificates)
+            marked <- markBuiltOutputs certificates statuses
             forM_ (Map.toList projects) $ \(pid, stepIds) -> do
-                let targets = Set.intersection (Set.fromList stepIds) (Map.keysSet statuses)
+                let targets = Set.intersection (Set.fromList stepIds) (Map.keysSet marked)
                 when (not (Set.null targets)) $
-                    liftIO $ broadcastSnapshot pid commit (Map.restrictKeys statuses targets)
+                    liftIO $ broadcastSnapshot pid commit (Map.restrictKeys marked targets)
 
 rawStatusesFor :: App es => Map Int Text -> Eff es (Map Int (Text, Maybe Text), StepStore)
 rawStatusesFor certificates = do
@@ -478,7 +478,7 @@ splitOrReportKeysAt commit failure ids = case ids of
         Left err -> errorSummary err
         Right _ -> "the evaluation returned the wrong number of keys"
 
-certificatePathsAt :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String [(Int, Maybe Text)])
+certificatePathsAt :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String [(Int, Maybe StepPaths)])
 certificatePathsAt commit = go []
   where
     go acc [] = pure $ Right (reverse acc)
@@ -489,16 +489,16 @@ certificatePathsAt commit = go []
             Left err -> pure $ Left err
             Right evaluated -> go (reverse evaluated ++ acc) rest
 
-certificatePathsFor :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String [(Int, Maybe Text)])
+certificatePathsFor :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String [(Int, Maybe StepPaths)])
 certificatePathsFor _ [] = pure $ Right []
 certificatePathsFor commit ids = do
     result <- nixEvalJson commit "pointy.steps" (stepCertificatesExpression ids)
     case result of
-        Right (paths :: [Maybe Text])
+        Right (paths :: [Maybe StepPaths])
             | length paths == length ids -> pure $ Right (zip ids paths)
         failure -> splitOrReportPaths commit failure ids
 
-splitOrReportPaths :: (Nix :> es, IOE :> es) => Text -> Either String [Maybe Text] -> [Int] -> Eff es (Either String [(Int, Maybe Text)])
+splitOrReportPaths :: (Nix :> es, IOE :> es) => Text -> Either String [Maybe StepPaths] -> [Int] -> Eff es (Either String [(Int, Maybe StepPaths)])
 splitOrReportPaths commit failure ids = case ids of
     [single] -> do
         liftIO $ putStrLn $ "Step " ++ show single ++ " has no certificate: " ++ describe

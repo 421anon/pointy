@@ -8,6 +8,7 @@ module BuildLog (
     LogAccess (..),
     resolveBuildLog,
     validPaths,
+    isStorePath,
     lookupDeriver,
     lastMeaningfulLine,
     StepStore,

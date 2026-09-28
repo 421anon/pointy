@@ -25,7 +25,7 @@ import Extra.Accessors exposing (A_Traversal, orElseT, remkT, where_)
 import Flow exposing (Flow)
 import Json.Decode
 import Json.Encode
-import Model.Core exposing (DirectoryFolder, Model, Status(..), StepRecord, Table, TableTag)
+import Model.Core exposing (DirectoryFolder, Model, Status(..), StepRecord, Table, TableTag, hasBuiltOutput)
 
 
 type TableSpec a
@@ -101,7 +101,7 @@ getShareable (TableSpec spec) =
 
 isShareableStatus : Status -> Bool
 isShareableStatus status =
-    status == StatusSuccess || status == StatusRunning
+    hasBuiltOutput status || status == StatusRunning
 
 
 getDirectoryView : TableSpec a -> a -> Maybe DirectoryFolder

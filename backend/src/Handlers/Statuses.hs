@@ -24,7 +24,7 @@ module Handlers.Statuses (
 
 import BuildLog (StepStore, resolveStatusesBatched)
 import BuildRunner (buildKeyForOutPath, waitForCompletion)
-import BuildStatus (checkStatus, partitionImmediateStatuses, resolveStepStatus)
+import BuildStatus (StepPaths (..), checkStatus, markBuiltOutputs, partitionImmediateStatuses, resolveStatuses, resolveStepStatus)
 import Bus (broadcastSnapshot)
 import Certificates (ProjectDef (..), StepDef (..), StepRef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate, isCertificateBuilding, rawStatusesFor, runningBuildKeys)
 import ClusterBus (beginBuild, endBuild)
@@ -36,6 +36,7 @@ import Control.Monad.Except (runExceptT)
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
+import Data.Either (fromRight)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -55,14 +56,14 @@ resolveStatusesAtCommitWithCertificates certificates statuses =
     resolveOne certificates' (sid, entry) =
         resolveStepStatus (fmap unpack $ Map.lookup sid certificates') (sid, entry)
 
-getBatchedStatuses :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text), Map Int Text, Maybe StepStore))
+getBatchedStatuses :: App es => Int -> Text -> Eff es (Either String (Map Int (Text, Maybe Text), Map Int StepPaths, Maybe StepStore))
 getBatchedStatuses pid targetCommit = do
     result <- getProjectCertificates pid targetCommit
     case result of
         Left err -> return $ Left err
         Right certificates -> do
             batched <-
-                (Right <$> rawStatusesFor certificates)
+                (Right <$> rawStatusesFor (Map.map (pack . stepCertificate) certificates))
                     `catch` \(err :: SomeException) -> do
                         liftIO $ putStrLn $ "Batched status probe failed, falling back to per-step probes: " ++ show err
                         statuses <- Map.fromList <$> liftIO (mapConcurrently (runAppEffects . getStatusForStep) (Map.toList certificates))
@@ -71,10 +72,10 @@ getBatchedStatuses pid targetCommit = do
                 Right (statuses, store) -> return $ Right (statuses, certificates, Just store)
                 Left statuses -> return $ Right (statuses, certificates, Nothing)
   where
-    getStatusForStep :: (Int, Text) -> Eff AppEffects (Int, (Text, Maybe Text))
-    getStatusForStep (sid, certificate) = do
+    getStatusForStep :: (Int, StepPaths) -> Eff AppEffects (Int, (Text, Maybe Text))
+    getStatusForStep (sid, paths) = do
         status_ <-
-            checkStatus (unpack certificate)
+            checkStatus (stepCertificate paths)
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
 
@@ -97,7 +98,7 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
             when (not (Map.null pending)) $
                 liftIO $
                     forkReporting ("Pending status resolution for project " ++ show pid) $ do
-                        resolved <- resolveStatusesFor certificates store pending
+                        resolved <- markBuiltOutputs certificates =<< resolveStatusesFor (Map.map (pack . stepCertificate) certificates) store pending
                         liftIO $
                             forM_ (Map.toList resolved) $ \(sid, status_) ->
                                 broadcastSnapshot pid targetCommit (Map.singleton sid status_)
@@ -129,17 +130,19 @@ broadcastStepCertificateForProjects sid targetCommit = do
         Left err -> liftIO $ putStrLn $ "Step certificate probe skipped for step " ++ show sid ++ ": " ++ err
         Right certificate -> do
             rawStatus <- case certificate of
-                Just path -> checkStatus (unpack path) `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
+                Just paths -> checkStatus (stepCertificate paths) `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
                 Nothing -> pure ("not-started", Nothing)
             withStepProjects sid targetCommit $ \pid ->
-                broadcastStepStatusResolved pid targetCommit sid (unpack <$> certificate) rawStatus
+                broadcastStepStatusResolved pid targetCommit sid certificate rawStatus
 
-broadcastStepStatusResolved :: App es => Int -> Text -> Int -> Maybe FilePath -> (Text, Maybe Text) -> Eff es ()
+broadcastStepStatusResolved :: App es => Int -> Text -> Int -> Maybe StepPaths -> (Text, Maybe Text) -> Eff es ()
 broadcastStepStatusResolved pid targetCommit sid certificate rawStatus = do
-    liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid rawStatus)
-    (_, resolvedStatus) <- resolveStepStatus certificate (sid, rawStatus)
+    broadcastMarked rawStatus
+    (_, resolvedStatus) <- resolveStepStatus (stepCertificate <$> certificate) (sid, rawStatus)
     when (resolvedStatus /= rawStatus) $
-        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid resolvedStatus)
+        broadcastMarked resolvedStatus
+  where
+    broadcastMarked status = liftIO . broadcastSnapshot pid targetCommit =<< markBuiltOutputs (foldMap (Map.singleton sid) certificate) (Map.singleton sid status)
 
 broadcastStatusForStepProjects :: App es => Int -> Text -> Maybe (Text, Maybe Text) -> Eff es ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride =
@@ -150,17 +153,13 @@ broadcastSingleStepForProjects :: App es => Int -> Text -> FilePath -> Eff es ()
 broadcastSingleStepForProjects sid targetCommit certificate = do
     rawStatus <- checkStatus certificate `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
     withStepProjects sid targetCommit $ \pid ->
-        broadcastStepStatusResolved pid targetCommit sid (Just certificate) rawStatus
+        broadcastStepStatusResolved pid targetCommit sid (Just (StepPaths certificate certificate)) rawStatus
 
 broadcastFailedStepForProjects :: App es => Int -> Text -> Eff es ()
 broadcastFailedStepForProjects sid targetCommit =
     withStepProjects sid targetCommit $ \pid -> do
-        certificatesResult <- getProjectCertificates pid targetCommit
-        let mCertificate = case certificatesResult of
-                Right certificates -> fmap unpack (Map.lookup sid certificates)
-                Left _ -> Nothing
-        (_, status) <- resolveStepStatus mCertificate (sid, ("failure", Nothing))
-        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid status)
+        certificates <- fromRight Map.empty <$> getProjectCertificates pid targetCommit
+        liftIO . broadcastSnapshot pid targetCommit =<< resolveStatuses certificates (Map.singleton sid ("failure", Nothing))
 
 broadcastKnownStepStatus :: App es => Int -> Text -> (Text, Maybe Text) -> Eff es ()
 broadcastKnownStepStatus sid targetCommit status =
@@ -256,7 +255,7 @@ buildingCertificates targetCommit runningKeys project = do
         Left err -> do
             liftIO $ putStrLn $ "restoreRunningStatuses: certificates unavailable for project " ++ show pid ++ ": " ++ err
             return Map.empty
-        Right certificates -> return $ Map.filter (isCertificateBuilding runningKeys) certificates
+        Right certificates -> return $ Map.filter (isCertificateBuilding runningKeys) (Map.map (pack . stepCertificate) certificates)
   where
     pid = projectDefId project
 

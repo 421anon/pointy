@@ -1932,6 +1932,26 @@ select.field-changed,
         var(--color-red-400) 60%);
   }
 
+  &.status-built-not-certified {
+    background:
+      radial-gradient(circle at 30% 30%,
+        rgba(255, 255, 255, 0.4),
+        transparent 60%),
+      linear-gradient(90deg,
+        var(--color-green-400) 50%,
+        var(--color-gray-400) 50%);
+  }
+
+  &.status-certification-failed {
+    background:
+      radial-gradient(circle at 30% 30%,
+        rgba(255, 255, 255, 0.4),
+        transparent 60%),
+      linear-gradient(90deg,
+        var(--color-green-400) 50%,
+        var(--color-red-400) 50%);
+  }
+
   &.status-running {
     animation: pulse-running 1.5s ease-in-out infinite;
   }
@@ -1954,6 +1974,14 @@ select.field-changed,
 
   &.status-failure {
     background: #cf222e;
+  }
+
+  &.status-built-not-certified {
+    background: linear-gradient(90deg, #1a7f37 50%, #6e7781 50%);
+  }
+
+  &.status-certification-failed {
+    background: linear-gradient(90deg, #1a7f37 50%, #cf222e 50%);
   }
 }
 

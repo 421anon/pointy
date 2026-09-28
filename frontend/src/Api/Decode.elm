@@ -59,6 +59,9 @@ applyError st mErr =
         StatusFailure _ ->
             StatusFailure mErr
 
+        StatusCertificationFailed _ ->
+            StatusCertificationFailed mErr
+
         other ->
             other
 
@@ -80,6 +83,12 @@ status =
 
                     "failure" ->
                         Decode.succeed (StatusFailure Nothing)
+
+                    "built-not-certified" ->
+                        Decode.succeed StatusBuiltNotCertified
+
+                    "certification-failed" ->
+                        Decode.succeed (StatusCertificationFailed Nothing)
 
                     _ ->
                         Decode.fail ("Unknown status: " ++ str)

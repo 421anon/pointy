@@ -37,7 +37,7 @@ import EffectRunner (runAppEffects)
 import Effects (AppEffects, AppM, Eval, Nix)
 import GHC.Generics (Generic)
 import Handlers.Projects (rewriteNixFile)
-import BuildStatus (checkStatus)
+import BuildStatus (StepPaths (..), checkStatus, resolveStatuses)
 import Handlers.Statuses (forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseLBS)
@@ -113,7 +113,8 @@ getProjectReviewHandler projectId commit = do
         reviewedOutputs <- reviewedPaths (readRepoPath context) stepOutPaths reviews
         comparisons <- stepComparisons viewed reviews reviewedOutputs
         reviewedCertificates <- reviewedPaths (readRepoPath context) stepCertificatesOrLegacyOutPaths reviews
-        statuses <- mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedCertificates
+        let reviewedStepPaths = Map.mapMaybe (either (const Nothing) Just) (Map.intersectionWith (liftA2 StepPaths) reviewedCertificates reviewedOutputs)
+        statuses <- lift . resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedCertificates
         let stepReport stepId review = StepReviewReport review (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
     orFail err500 result
