@@ -15,11 +15,12 @@ module Handlers.RunStep (
 
 import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
 import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
-import ClusterBus (restoreRunningStepIds)
-import Control.Concurrent (forkIO, forkIOWithUnmask)
+import ClusterBus (buildingSteps, requestStop, takeStopRequest)
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
+import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, catch)
-import Control.Monad (foldM, void, when)
+import Control.Monad (foldM, unless, void, when)
 
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -28,7 +29,6 @@ import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:))
 import Data.List (foldl', isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
-import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -36,7 +36,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
 import Effectful (Eff, (:>))
 import Effects (App, AppM, Eval, Nix, pathValid, rootStorePath)
-import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects)
+import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import Servant (NoContent (..), err404, err500, errBody)
 import System.Exit (ExitCode (..))
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
@@ -65,10 +65,14 @@ runStepSync eid commit = do
                     return (repoPath, maybe commitHash T.unpack commit)
 
         let ctx = ReadRepoContext repoPath targetCommit
-        graph <- getDependencyGraph ctx eid
-        stepIds <- liftEither $ topoOrder graph
-
-        outcomes <- lift $ submitGraph ctx graph stepIds
+        outcomes <- ExceptT $ trackBuild eid (T.pack targetCommit) $ runExceptT $ do
+            _ <- liftIO $ takeStopRequest eid
+            graph <- getDependencyGraph ctx eid
+            stepIds <- liftEither $ topoOrder graph
+            submitted <- lift $ submitGraph ctx graph stepIds
+            stopped <- liftIO $ takeStopRequest eid
+            when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _) <- [Map.lookup eid submitted]]
+            return submitted
         liftIO $ mapConcurrently_ (runAppEffects . finishStep ctx) (Map.toList outcomes)
 
     case result of
@@ -189,15 +193,17 @@ finishStep ctx (sid, outcome) = case outcome of
         broadcastSingleStepForProjects sid targetCommitText certificate
         buildExtras ctx sid
     Enqueued certificate buildKey _ -> do
-        broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
-        waitForCompletion buildKey
+        trackBuild sid targetCommitText $ do
+            broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
+            waitForCompletion buildKey
         certified <- isBuilt certificate
         if certified
             then do
                 registerCertificationRoots ctx sid certificate
                 broadcastSingleStepForProjects sid targetCommitText certificate
-                buildExtras ctx sid
             else broadcastFailedStepForProjects sid targetCommitText
+        broadcastStepCertificateAtMovedHead sid targetCommitText
+        when certified $ buildExtras ctx sid
     NotSubmitted err -> do
         liftIO $ putStrLn $ "buildStep error: " ++ err
         broadcastKnownStepStatus sid targetCommitText ("failure", Just (T.pack err))
@@ -331,6 +337,7 @@ isBuilt = pathValid
 
 stopStepSync :: App es => Int -> Maybe T.Text -> Eff es ()
 stopStepSync eid commit = do
+    liftIO $ requestStop eid
     result <- runExceptT $ do
         (repoPath, targetCommit) <-
             ExceptT $
@@ -346,8 +353,9 @@ stopStepSync eid commit = do
             Nothing -> return ()
 
         target <- resolveStepTarget ctx eid
+        building <- liftIO $ atomically buildingSteps
         lift $ cancel $ buildKeyForOutPath $ stepTargetPath target
-        lift $ broadcastStatusForStepProjects eid targetCommit Nothing
+        unless (Set.member eid building) $ lift $ broadcastStatusForStepProjects eid targetCommit Nothing
 
     case result of
         Left err -> liftIO $ putStrLn $ "stopStep error: " ++ err
@@ -360,47 +368,39 @@ restoreJobsFromSlurm = do
         Left err -> liftIO $ putStrLn $ "restoreJobsFromSlurm: cannot access repo: " ++ err
         Right repoPath ->
             liftIO $
-                void $
-                    restoreRunningStepIds $
-                        scanJobs repoPath
-                            `catch` \e -> do
-                                putStrLn $ "restoreJobsFromSlurm failed: " ++ show (e :: SomeException)
-                                return Set.empty
+                scanJobs repoPath
+                    `catch` \e -> putStrLn $ "restoreJobsFromSlurm failed: " ++ show (e :: SomeException)
   where
-    scanJobs :: FilePath -> IO (Set Int)
+    scanJobs :: FilePath -> IO ()
     scanJobs repoPath = do
         jobs <- runAppEffects querySlurmJobs
         let pointyJobs = [job | job <- jobs, isPointyJob (slurmJobName job)]
         attachWatchers repoPath pointyJobs
 
-    attachWatchers :: FilePath -> [SlurmJob] -> IO (Set Int)
+    attachWatchers :: FilePath -> [SlurmJob] -> IO ()
     attachWatchers repoPath = go Set.empty
       where
-        go _ [] = return Set.empty
+        go _ [] = return ()
         go seen (job : rest)
             | Set.member (slurmJobName job) seen = go seen rest
             | otherwise = do
-                recovered <- attachOne repoPath job
-                restRecovered <- go (Set.insert (slurmJobName job) seen) rest
-                return (Set.union recovered restRecovered)
+                attachOne repoPath job
+                go (Set.insert (slurmJobName job) seen) rest
 
-    attachOne :: FilePath -> SlurmJob -> IO (Set Int)
+    attachOne :: FilePath -> SlurmJob -> IO ()
     attachOne repoPath job = case decodeJobComment =<< slurmJobComment job of
-        Nothing -> do
-            putStrLn $ "restoreJobsFromSlurm: no job comment on " ++ slurmJobName job ++ ", skipping"
-            return Set.empty
+        Nothing -> putStrLn $ "restoreJobsFromSlurm: no job comment on " ++ slurmJobName job ++ ", skipping"
         Just comment
-            | jobCommentKind comment /= "step" -> return Set.empty
-            | buildKeyForOutPath (jobCommentOutPath comment) /= BuildKey (slurmJobName job) -> do
+            | jobCommentKind comment /= "step" -> return ()
+            | buildKeyForOutPath (jobCommentOutPath comment) /= BuildKey (slurmJobName job) ->
                 putStrLn $
                     "restoreJobsFromSlurm: job name mismatch for step "
                         ++ show (jobCommentStep comment)
                         ++ ", skipping"
-                return Set.empty
             | otherwise -> do
                 eReady <- runExceptT $ ensureRepoCommit (jobCommentCommit comment)
                 case eReady of
-                    Left err -> do
+                    Left err ->
                         putStrLn $
                             "restoreJobsFromSlurm: commit "
                                 ++ jobCommentCommit comment
@@ -408,21 +408,16 @@ restoreJobsFromSlurm = do
                                 ++ show (jobCommentStep comment)
                                 ++ ": "
                                 ++ err
-                        return Set.empty
                     Right () -> do
                         let ctx = ReadRepoContext repoPath (jobCommentCommit comment)
-                        void $ forkIOWithUnmask $ \unmask -> unmask $ runAppEffects $ watchRestoredJob ctx comment job
-                        return $
-                            if isRunningState (slurmJobState job)
-                                then Set.singleton (jobCommentStep comment)
-                                else Set.empty
+                        void $ forkIO $ runAppEffects $ watchRestoredJob ctx comment job
 
 watchRestoredJob :: App es => ReadRepoContext -> JobComment -> SlurmJob -> Eff es ()
 watchRestoredJob ctx comment job = do
     let commitText = T.pack (jobCommentCommit comment)
         certificate = jobCommentOutPath comment
         buildKey = buildKeyForOutPath certificate
-    when (isRunningState (slurmJobState job)) $ do
+    when (isRunningState (slurmJobState job)) $ trackBuild (jobCommentStep comment) commitText $ do
         broadcastKnownStepStatus (jobCommentStep comment) commitText ("running", Nothing)
         waitForCompletion buildKey
     certified <- isBuilt certificate
@@ -430,8 +425,9 @@ watchRestoredJob ctx comment job = do
         then do
             registerCertificationRoots ctx (jobCommentStep comment) certificate
             broadcastSingleStepForProjects (jobCommentStep comment) commitText certificate
-            buildExtras ctx (jobCommentStep comment)
         else broadcastFailedStepForProjects (jobCommentStep comment) commitText
+    broadcastStepCertificateAtMovedHead (jobCommentStep comment) commitText
+    when certified $ buildExtras ctx (jobCommentStep comment)
 
 isPointyJob :: String -> Bool
 isPointyJob name = "pointy-nix-build-" `isPrefixOf` name
