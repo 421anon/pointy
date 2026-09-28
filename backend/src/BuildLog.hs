@@ -5,6 +5,7 @@
 module BuildLog (
     ResolvedLog (..),
     LogSource (..),
+    LogAccess (..),
     resolveBuildLog,
     validPaths,
     lookupDeriver,
@@ -40,6 +41,11 @@ data LogSource
     | InputDrv FilePath Int
     deriving (Eq, Show)
 
+data LogAccess
+    = LocalLogs
+    | RemoteLogs
+    deriving (Eq, Show)
+
 data ResolvedLog = ResolvedLog
     { resolvedDrv :: FilePath
     , resolvedLog :: String
@@ -47,11 +53,11 @@ data ResolvedLog = ResolvedLog
     }
     deriving (Eq, Show)
 
-resolveBuildLog :: (Nix :> es, IOE :> es) => FilePath -> Eff es (Maybe ResolvedLog)
-resolveBuildLog stepDrv = do
+resolveBuildLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> Eff es (Maybe ResolvedLog)
+resolveBuildLog access stepDrv = do
     logCache <- liftIO $ newIORef Map.empty
     nodeCache <- liftIO $ newIORef Map.empty
-    mOwn <- cachedLog fetchStepLog logCache stepDrv
+    mOwn <- cachedLog (fetchStepLog access) logCache stepDrv
     case mOwn of
         Just logText ->
             return (Just (ResolvedLog stepDrv logText StepDrv))
@@ -84,7 +90,7 @@ resolveBuildLog stepDrv = do
         go unbuilt [] = return (Nothing, reverse unbuilt)
         go unbuilt ((drv, depth) : rest)
             | drv `Set.member` spBuild plan = do
-                mLog <- cachedLog fetchInputLog logCache drv
+                mLog <- cachedLog (fetchInputLog access) logCache drv
                 case mLog of
                     Just logText ->
                         return $
@@ -119,16 +125,20 @@ lookupDeriver target = do
                 _ -> Nothing
         Left _ -> Nothing
 
-fetchStepLog :: (Nix :> es) => FilePath -> Eff es (Maybe String)
-fetchStepLog drv = do
-    result <- runExceptT $ runNix ["log", drv]
+logArgs :: LogAccess -> [String] -> [String]
+logArgs LocalLogs args = ["--option", "substituters", ""] ++ args
+logArgs RemoteLogs args = args
+
+fetchStepLog :: (Nix :> es) => LogAccess -> FilePath -> Eff es (Maybe String)
+fetchStepLog access drv = do
+    result <- runExceptT $ runNix (logArgs access ["log", drv])
     return $ case result of
         Right output | not (null output) -> Just output
         _ -> Nothing
 
-fetchInputLog :: (Nix :> es) => FilePath -> Eff es (Maybe String)
-fetchInputLog drv = do
-    result <- runExceptT $ runNix ["--offline", "log", drv]
+fetchInputLog :: (Nix :> es) => LogAccess -> FilePath -> Eff es (Maybe String)
+fetchInputLog access drv = do
+    result <- runExceptT $ runNix (logArgs access ["--offline", "log", drv])
     return $ case result of
         Right output | not (null output) -> Just output
         _ -> Nothing
@@ -293,7 +303,7 @@ resolveStatusesBatched store statuses = do
     return $ Map.union resolvedMap statuses
   where
     seedFailureLog logCache (sid, drv) = do
-        mLog <- cachedLog fetchInputLog logCache drv
+        mLog <- cachedLog (fetchInputLog LocalLogs) logCache drv
         return $ fmap (\logText -> (sid, ("failure", lastMeaningfulLine logText))) mLog
 
 walkQueue :: (Nix :> es, IOE :> es) => StepStore -> IORef (Map FilePath (Maybe String)) -> Map FilePath DrvNode -> Set FilePath -> [(FilePath, Int)] -> Eff es (Maybe String, Set FilePath, [(FilePath, Int)])
@@ -308,7 +318,7 @@ walkQueue store logCache level seen queue = go seen [] queue
         | otherwise = case Map.lookup drv level of
             Nothing -> go (Set.insert drv visited) expanded rest
             Just node -> do
-                mLog <- cachedLog fetchInputLog logCache drv
+                mLog <- cachedLog (fetchInputLog LocalLogs) logCache drv
                 case mLog of
                     Just logText -> do
                         allInvalid <- outputsAllInvalid node

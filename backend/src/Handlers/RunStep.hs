@@ -13,7 +13,7 @@ module Handlers.RunStep (
     stopStepHandler,
 ) where
 
-import BuildLog (LogSource (..), ResolvedLog (..), resolveBuildLog)
+import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog)
 import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
 import ClusterBus (buildingSteps, requestStop, takeStopRequest)
 import Control.Concurrent (forkIO)
@@ -89,7 +89,7 @@ stepLogHandler eid commit = do
 
         let ctx = ReadRepoContext repoPath targetCommit
         target <- resolveStepTarget ctx eid
-        lift $ resolveBuildLog (stepTargetDrv target)
+        lift $ resolveBuildLog RemoteLogs (stepTargetDrv target)
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}

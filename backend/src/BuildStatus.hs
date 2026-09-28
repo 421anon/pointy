@@ -9,7 +9,7 @@ module BuildStatus (
     resolveStepStatus,
 ) where
 
-import BuildLog (ResolvedLog (..), lastMeaningfulLine, lookupDeriver, resolveBuildLog)
+import BuildLog (LogAccess (..), ResolvedLog (..), lastMeaningfulLine, lookupDeriver, resolveBuildLog)
 import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -43,7 +43,7 @@ resolveStepStatus Nothing entry = return entry
 resolveStepStatus (Just certificate) entry@(sid, (state, _))
     | state == "failure" || state == "not-started" = do
         mDrv <- lookupDeriver certificate
-        mResolved <- maybe (return Nothing) resolveBuildLog mDrv
+        mResolved <- maybe (return Nothing) (resolveBuildLog LocalLogs) mDrv
         return $ case mResolved of
             Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
             Nothing -> entry

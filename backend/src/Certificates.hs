@@ -13,12 +13,16 @@ module Certificates (
     cachedProjectDefinitions,
     decodeProjectDefinitions,
     withWriteRepoTransaction,
+    rawStatusesFor,
+    runningBuildKeys,
+    isCertificateBuilding,
     ProjectDef (..),
     StepRef (..),
     StepDef (..),
 ) where
 
-import BuildStatus (checkStatus, resolveStepStatus)
+import BuildLog (StepStore, buildStepStore, rawStatusesBatched)
+import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName)
 import Bus (broadcastSnapshot)
 import CertificateStore (lookupCertificate, storeCertificate)
 import Control.Concurrent (forkIO)
@@ -42,7 +46,6 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, (:>))
-import Effectful.Exception (catch)
 import Effects (App, Eval, Nix, Slurm, runNixCli)
 import GHC.Generics (Generic)
 import System.Exit (ExitCode (..))
@@ -413,20 +416,28 @@ broadcastRefreshed commit certificates = do
     membership <- projectMembershipAt commit
     case membership of
         Left err -> liftIO $ putStrLn $ "Certificate refresh for " ++ unpack commit ++ " could not read projects: " ++ err
-        Right projects ->
+        Right projects -> do
+            (statuses, _) <- rawStatusesFor certificates
             forM_ (Map.toList projects) $ \(pid, stepIds) -> do
-                let targets = Set.toList (Set.intersection (Set.fromList stepIds) (Map.keysSet certificates))
-                when (not (null targets)) $ do
-                    statuses <- Map.fromList <$> mapM (stepStatus certificates) targets
-                    liftIO $ broadcastSnapshot pid commit statuses
+                let targets = Set.intersection (Set.fromList stepIds) (Map.keysSet statuses)
+                when (not (Set.null targets)) $
+                    liftIO $ broadcastSnapshot pid commit (Map.restrictKeys statuses targets)
 
-stepStatus :: (Nix :> es, Slurm :> es, IOE :> es) => Map Int Text -> Int -> Eff es (Int, (Text, Maybe Text))
-stepStatus certificates sid = do
-    let certificate = Map.lookup sid certificates
-    raw <- case fmap unpack certificate of
-        Just path -> checkStatus path `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
-        Nothing -> pure ("not-started", Nothing)
-    resolveStepStatus (fmap unpack certificate) (sid, raw)
+rawStatusesFor :: App es => Map Int Text -> Eff es (Map Int (Text, Maybe Text), StepStore)
+rawStatusesFor certificates = do
+    store <- buildStepStore certificates
+    runningKeys <- runningBuildKeys
+    statuses <- rawStatusesBatched store (isCertificateBuilding runningKeys) certificates
+    return (statuses, store)
+
+runningBuildKeys :: (Slurm :> es) => Eff es (Set.Set String)
+runningBuildKeys = do
+    jobs <- querySlurmJobs
+    return $ Set.fromList (map slurmJobName jobs)
+
+isCertificateBuilding :: Set.Set String -> Text -> Bool
+isCertificateBuilding runningKeys certificate =
+    Set.member (unBuildKey (buildKeyForOutPath (unpack certificate))) runningKeys
 
 certificateKeysAt :: (Nix :> es, IOE :> es) => Text -> Eff es (Either String (Versioned [Int]))
 certificateKeysAt commit = do
