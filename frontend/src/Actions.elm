@@ -3527,7 +3527,17 @@ withAgentPrompt promptSource send =
 
 
 sendAgentTurn : Model.AgentSessionView -> Flow Model String -> Flow Model ()
-sendAgentTurn view promptSource =
+sendAgentTurn =
+    dispatchAgentTurn clearAgentPrompt
+
+
+resolveApplyConflictPrompt : String
+resolveApplyConflictPrompt =
+    "Resolve the conflicts that block applying this changeset."
+
+
+dispatchAgentTurn : Flow Model () -> Model.AgentSessionView -> Flow Model String -> Flow Model ()
+dispatchAgentTurn clearDraft view promptSource =
     let
         sessionId =
             view.session.sessionId
@@ -3543,7 +3553,7 @@ sendAgentTurn view promptSource =
                                     ++ [ Model.ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = Model.ChatPending } ]
                             )
                         )
-                    |> Flow.seq clearAgentPrompt
+                    |> Flow.seq clearDraft
                     |> Flow.seq scrollAgentChatToBottom
                     |> Flow.seq (AgentApi.sendTurn sessionId prompt)
                     |> FlowError.foldResult
@@ -3685,6 +3695,7 @@ applyAgentChanges =
                                             if preparedView.session.status == "prepare_conflict" then
                                                 Flow.over agent (applyAgentSessionView preparedView)
                                                     |> Flow.seq (clearChangesetOperation sessionId)
+                                                    |> Flow.seq (dispatchAgentTurn (Flow.pure ()) preparedView (Flow.pure resolveApplyConflictPrompt))
 
                                             else
                                                 case preparedView.session.preparedApply of
@@ -3788,7 +3799,11 @@ onAgentTurnIn value =
 
         Ok (Model.AgentTurnDone sessionId) ->
             Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
+                |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId << just << activity) Nothing)
                 |> Flow.seq (refreshAgentSession sessionId)
+
+        Ok (Model.AgentTurnActivity { sessionId, turnId, call }) ->
+            Flow.over (agent << liveTurnAt sessionId << just) (Model.setLiveActivity turnId call)
 
         Ok Model.AgentTurnHeartbeat ->
             Flow.pure ()

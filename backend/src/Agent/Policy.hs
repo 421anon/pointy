@@ -8,6 +8,7 @@ module Agent.Policy (
     appliedStepId,
     renderEmbeddedBootstrapPrompt,
     promptWithEvaluationFailure,
+    promptWithApplyConflict,
 ) where
 
 import Data.Maybe (isJust)
@@ -39,6 +40,7 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
             ++ [ "Do not edit outside this allowlist; those changes will be discarded."
                , "The backend refuses a changeset that introduces evaluation failures in the projects or in the steps it changes; failures that already exist on the target branch do not block it. When it refuses one, the failures are sent to you with the next message."
                , "Before ending a turn that edits steps/<id>.nix or projects/<id>.nix, run `nix-instantiate --parse <file>` on each edited file and fix any error it reports."
+               , "Every bash command without an explicit `timeout` is stopped after 120 seconds and returns the output it produced so far. Set `timeout` in seconds when you expect a command to run longer, and expect a search through /nix/store, /data or the git history to be stopped at that limit: narrow it with a path, -maxdepth, or a name pattern instead of scanning everything."
                , "Follow the Embedded agents only section in AGENTS.md."
                , "Use only these entity-reference formats in every response:"
                , "- Step: step <id>. This is the entire step reference; never include the step name."
@@ -55,6 +57,23 @@ promptWithEvaluationFailure failures prompt =
         ( "The backend refused to apply your last changeset because it introduces evaluation failures:"
             : map ("- " <>) (filter (not . T.null) (T.lines failures))
             ++ ["Fix these problems so the changeset can be applied.", "", "User message:"]
+        )
+        <> prompt
+
+promptWithApplyConflict :: Text -> FilePath -> Text -> Text -> Text
+promptWithApplyConflict target applyWorktree conflictSummary prompt =
+    T.unlines
+        ( [ "Your changeset cannot be applied: `" <> target <> "` gained commits that conflict with it."
+          , "The apply worktree " <> T.pack applyWorktree <> " holds the latest `" <> target <> "` with your changeset merged in. Git state:"
+          ]
+            ++ map ("  " <>) (filter (not . T.null) (T.lines conflictSummary))
+            ++ [ "Resolve the conflict by editing files in the apply worktree only; its git metadata is read-only, and the backend stages and commits the result when this turn ends."
+               , "The result must keep every change from `" <> target <> "` and every change from your changeset."
+               , "When both sides added the same steps/<id>.nix, projects/<id>.nix or srcFiles/<id>/, they are different records: keep the `" <> target <> "` version at that id, move yours to an id no file in the apply worktree uses, and update every reference to it in the files of your changeset, including path strings such as \"<id>/file\"."
+               , "Remove every conflict marker. Do not edit the session worktree for this; a commit there discards the apply worktree."
+               , ""
+               , "User message:"
+               ]
         )
         <> prompt
 

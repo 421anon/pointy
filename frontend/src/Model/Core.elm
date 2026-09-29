@@ -483,6 +483,14 @@ keepPicksForSameQuestion previous next =
             next
 
 
+type alias AgentToolCall =
+    { id : String
+    , name : String
+    , startedAt : Time.Posix
+    , text : String
+    }
+
+
 type alias AgentLiveTurn =
     { turnId : String
     , finished : Bool
@@ -491,6 +499,7 @@ type alias AgentLiveTurn =
     , pendingQuestion : Maybe PendingQuestion
     , streamError : Maybe String
     , pendingSteer : Maybe String
+    , activity : Maybe AgentToolCall
     }
 
 
@@ -503,12 +512,22 @@ liveTurnFor turnId view =
     , pendingQuestion = persistedQuestion view
     , streamError = Nothing
     , pendingSteer = Nothing
+    , activity = Nothing
     }
 
 
 liveTurnSurvives : Maybe String -> AgentLiveTurn -> Bool
 liveTurnSurvives activeTurnId live =
     String.isEmpty live.turnId || Just live.turnId == activeTurnId
+
+
+setLiveActivity : String -> Maybe AgentToolCall -> AgentLiveTurn -> AgentLiveTurn
+setLiveActivity turnId call live =
+    if String.isEmpty live.turnId || live.turnId == turnId then
+        { live | activity = call }
+
+    else
+        live
 
 
 type alias AgentState =
@@ -693,7 +712,7 @@ defaultChangesetDescription state =
             "Review this changeset, then apply it to the target branch or discard it."
 
         ChatChangesetNeedsReview _ ->
-            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the changeset."
+            "This changeset conflicts with newer changes. The agent resolves the conflict when you apply; apply again to retry, or discard the changeset."
 
         ChatChangesetRejected _ ->
             "This changeset was not applied because it introduces evaluation failures. Your next message sends the failures below to the agent so it can fix them."
@@ -1385,6 +1404,11 @@ getNow (Model model) =
     model.now
 
 
+hasRunningToolCall : Model -> Bool
+hasRunningToolCall (Model model) =
+    List.any (\live -> live.activity /= Nothing) (Dict.values model.agent.liveTurns)
+
+
 dndSystem : DnDList.System a DnDList.Msg
 dndSystem =
     let
@@ -1431,6 +1455,7 @@ type StepStatusEvent
 type AgentTurnEvent
     = AgentTurnChunk { sessionId : String, chunk : String }
     | AgentTurnDone String
+    | AgentTurnActivity { sessionId : String, turnId : String, call : Maybe AgentToolCall }
     | AgentTurnHeartbeat
     | AgentTurnError { sessionId : String, message : String }
 
