@@ -66,8 +66,8 @@ fetchSession sessionId =
             }
 
 
-sendTurn : String -> String -> Maybe Model.ProjectRecord -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt mCurrentProject =
+sendTurn : String -> String -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt mCurrentProjectId =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
@@ -76,8 +76,7 @@ sendTurn sessionId prompt mCurrentProject =
                     Encode.object
                         [ ( "sessionId", Encode.string sessionId )
                         , ( "prompt", Encode.string prompt )
-                        , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int (Maybe.andThen .id mCurrentProject) )
-                        , ( "currentProjectName", Maybe.unwrap Encode.null (.name >> Encode.string) mCurrentProject )
+                        , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
                         ]
             , expect = Http.expectJson identity turnDecoder
             }

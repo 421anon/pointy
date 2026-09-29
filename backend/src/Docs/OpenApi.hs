@@ -129,7 +129,6 @@ instance ToSchema TurnRequest where
                 [ ("sessionId", stringField)
                 , ("prompt", stringField)
                 , ("currentProjectId", nullableField OpenApiInteger)
-                , ("currentProjectName", nullableField OpenApiString)
                 ]
                 & schema . required .~ ["sessionId", "prompt"]
 

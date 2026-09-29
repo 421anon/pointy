@@ -55,7 +55,7 @@ import UserRepo (withUserRepoExclusiveIO, withUserRepoSharedIO)
 data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
     , turnRequestPrompt :: Text
-    , turnRequestCurrentProject :: Maybe (Int, Text)
+    , turnRequestCurrentProjectId :: Maybe Int
     }
     deriving (Show, Eq, Generic)
 
@@ -64,7 +64,7 @@ instance FromJSON TurnRequest where
         TurnRequest
             <$> obj .: "sessionId"
             <*> obj .: "prompt"
-            <*> (liftA2 (,) <$> obj .:? "currentProjectId" <*> obj .:? "currentProjectName")
+            <*> obj .:? "currentProjectId"
 
 data SessionRequest = SessionRequest
     { sessionRequestSessionId :: Text
@@ -114,7 +114,7 @@ getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProject req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req)
 
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =

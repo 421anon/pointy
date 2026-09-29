@@ -231,8 +231,8 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> Maybe (Int, Text) -> ExceptT String IO AgentTurn
-startAgentTurn sid prompt mCurrentProject = do
+startAgentTurn :: Text -> Text -> Maybe Int -> ExceptT String IO AgentTurn
+startAgentTurn sid prompt mCurrentProjectId = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
@@ -241,8 +241,8 @@ startAgentTurn sid prompt mCurrentProject = do
     when hasRunner $ Except.throwError "runner_active"
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     (freshSession, syncNotes) <- refreshSessionBase session_
-    let changedCurrentProject = mfilter ((/= agentCurrentProjectId freshSession) . Just . fst) mCurrentProject
-        agentPrompt = maybe prompt (\(projectId, projectName) -> renderCurrentProject projectId projectName <> "\n\n" <> prompt) changedCurrentProject
+    let changedCurrentProjectId = mfilter ((/= agentCurrentProjectId freshSession) . Just) mCurrentProjectId
+        agentPrompt = maybe prompt (\projectId -> renderCurrentProject projectId <> "\n\n" <> prompt) changedCurrentProjectId
     tid <- liftIO newTurnId
     logPath <- liftIO $ turnLogFilePath sid tid
     now <- liftIO getCurrentTime
@@ -277,7 +277,7 @@ startAgentTurn sid prompt mCurrentProject = do
                 if pendingApply /= Nothing
                     then lastError freshSession
                     else Nothing
-        touched <- touchSession freshSession{status = nextStatus, activeTurnId = Nothing, preparedApply = pendingApply, lastError = nextError, agentCurrentProjectId = fmap fst mCurrentProject <|> agentCurrentProjectId freshSession}
+        touched <- touchSession freshSession{status = nextStatus, activeTurnId = Nothing, preparedApply = pendingApply, lastError = nextError, agentCurrentProjectId = mCurrentProjectId <|> agentCurrentProjectId freshSession}
         startSaveResult <- try (saveSession touched) :: IO (Either SomeException ())
         case startSaveResult of
             Left ex -> appendLogLine (configAgent cfg) logPath "system" ("Session start metadata warning: " <> T.pack (show ex))
@@ -298,7 +298,7 @@ startAgentTurn sid prompt mCurrentProject = do
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProject)
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProjectId)
     return turn
 
 stopAgentTurn :: Text -> ExceptT String IO AgentSessionView

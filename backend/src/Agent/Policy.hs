@@ -47,13 +47,12 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
                ]
         )
 
-renderCurrentProject :: Int -> Text -> Text
-renderCurrentProject projectId projectName =
+renderCurrentProject :: Int -> Text
+renderCurrentProject projectId =
     T.intercalate
         "\n"
         [ "The currently open project is:"
         , "id: " <> T.pack (show projectId)
-        , "name: " <> projectName
         , "file: projects/" <> T.pack (show projectId) <> ".nix"
         ]
 
