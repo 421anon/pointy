@@ -549,6 +549,11 @@
     background: var(--state-warning-outline);
   }
 
+  &.is-rejected {
+    border-color: var(--state-danger);
+    background: var(--state-danger-outline);
+  }
+
   &.is-applied {
     border-color: var(--state-success);
     background: var(--state-success-outline);

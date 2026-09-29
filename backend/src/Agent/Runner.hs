@@ -18,6 +18,7 @@ module Agent.Runner (
 ) where
 
 import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Policy (promptWithEvaluationFailure)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sessionPaths)
 import Agent.Session (
     AgentSession (..),
@@ -279,6 +280,13 @@ startAgentTurn sid prompt = do
         case startSaveResult of
             Left ex -> appendLogLine (configAgent cfg) logPath "system" ("Session start metadata warning: " <> T.pack (show ex))
             Right _ -> return ()
+        let evaluationFailure =
+                if status freshSession == "evaluation_failed"
+                    then lastError freshSession
+                    else Nothing
+            agentPrompt = maybe prompt (`promptWithEvaluationFailure` prompt) evaluationFailure
+        when (isJust evaluationFailure) $
+            appendLogLine (configAgent cfg) logPath "system" "The evaluation failures from the last apply attempt were sent to the agent with this message."
         case pendingApply of
             Just pending ->
                 appendLogLine (configAgent cfg) logPath "system" $
@@ -295,7 +303,7 @@ startAgentTurn sid prompt = do
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn prompt isFirstTurn
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn
     return turn
 
 stopAgentTurn :: Text -> ExceptT String IO AgentSessionView

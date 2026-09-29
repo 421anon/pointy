@@ -7,6 +7,7 @@ module Agent.Policy (
     appliedProjectId,
     appliedStepId,
     renderEmbeddedBootstrapPrompt,
+    promptWithEvaluationFailure,
 ) where
 
 import Data.Maybe (isJust)
@@ -36,6 +37,8 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
           ]
             ++ map ("- " <>) agentOutputPathPatterns
             ++ [ "Do not edit outside this allowlist; those changes will be discarded."
+               , "The backend refuses a changeset that introduces evaluation failures in the projects or in the steps it changes; failures that already exist on the target branch do not block it. When it refuses one, the failures are sent to you with the next message."
+               , "Before ending a turn that edits steps/<id>.nix or projects/<id>.nix, run `nix-instantiate --parse <file>` on each edited file and fix any error it reports."
                , "Follow the Embedded agents only section in AGENTS.md."
                , "Use only these entity-reference formats in every response:"
                , "- Step: step <id>. This is the entire step reference; never include the step name."
@@ -45,6 +48,15 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
                , configuredPrompt
                ]
         )
+
+promptWithEvaluationFailure :: Text -> Text -> Text
+promptWithEvaluationFailure failures prompt =
+    T.unlines
+        ( "The backend refused to apply your last changeset because it introduces evaluation failures:"
+            : map ("- " <>) (filter (not . T.null) (T.lines failures))
+            ++ ["Fix these problems so the changeset can be applied.", "", "User message:"]
+        )
+        <> prompt
 
 appliedProjectId :: Text -> Maybe Int
 appliedProjectId path =

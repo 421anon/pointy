@@ -590,7 +590,12 @@ viewSession mentionsAwaited resolveMention agent summary sessionView =
     in
     viewChatBody []
         { title = viewSessionTitle agent summary
-        , error = viewError session
+        , error =
+            if changesetReportsError sessionView then
+                Html.nothing
+
+            else
+                viewError session
         , chat =
             if mentionsAwaited then
                 viewChatSkeletonBody
@@ -757,6 +762,9 @@ chatStatusLabel status =
         "prepare_conflict" ->
             "Needs review"
 
+        "evaluation_failed" ->
+            "Needs fix"
+
         _ ->
             "Ready"
 
@@ -764,6 +772,19 @@ chatStatusLabel status =
 viewError : Model.AgentSession -> Html msg
 viewError session =
     Html.viewMaybe (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text err ]) session.lastError
+
+
+changesetReportsError : Model.AgentSessionView -> Bool
+changesetReportsError sessionView =
+    case Maybe.map .state (pendingChangeset sessionView) of
+        Just (Model.ChatChangesetNeedsReview _) ->
+            True
+
+        Just (Model.ChatChangesetRejected _) ->
+            True
+
+        _ ->
+            False
 
 
 type ComposerBusy
@@ -1176,6 +1197,13 @@ pendingChangeset sessionView =
             in
             Just { state = state, description = Model.defaultChangesetDescription state, diff = diff }
 
+        else if session.status == "evaluation_failed" then
+            let
+                state =
+                    Model.ChatChangesetRejected (Maybe.withDefault "The changeset introduces evaluation failures." session.lastError)
+            in
+            Just { state = state, description = Model.defaultChangesetDescription state, diff = diff }
+
         else
             Just { state = Model.ChatChangesetProposed, description = Model.defaultChangesetDescription Model.ChatChangesetProposed, diff = diff }
 
@@ -1216,6 +1244,9 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
                     Model.ChatChangesetNeedsReview _ ->
                         "Needs review"
 
+                    Model.ChatChangesetRejected _ ->
+                        "Not applied"
+
                     Model.ChatChangesetApplied ->
                         "Applied"
 
@@ -1237,6 +1268,9 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
                 Model.ChatChangesetProposed ->
                     actionsAllowed
 
+                Model.ChatChangesetRejected _ ->
+                    actionsAllowed
+
                 _ ->
                     False
 
@@ -1248,12 +1282,23 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
                 Model.ChatChangesetNeedsReview _ ->
                     actionsAllowed
 
+                Model.ChatChangesetRejected _ ->
+                    actionsAllowed
+
                 _ ->
                     False
 
         isProposed =
             case state of
                 Model.ChatChangesetProposed ->
+                    True
+
+                _ ->
+                    False
+
+        isRejected =
+            case state of
+                Model.ChatChangesetRejected _ ->
                     True
 
                 _ ->
@@ -1302,6 +1347,9 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
                 Model.ChatChangesetNeedsReview err ->
                     Html.pre [ class "agent-panel__changeset-error" ] [ Html.text err ]
 
+                Model.ChatChangesetRejected err ->
+                    Html.pre [ class "agent-panel__changeset-error" ] [ Html.text err ]
+
                 _ ->
                     Html.nothing
     in
@@ -1310,6 +1358,7 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
             [ ( "agent-panel__changeset", True )
             , ( "is-proposed", isProposed )
             , ( "is-needs-review", isNeedsReview )
+            , ( "is-rejected", isRejected )
             , ( "is-applied", isApplied )
             , ( "is-discarded", isDiscarded )
             , ( "is-loading", isBusy )
@@ -1324,9 +1373,9 @@ viewChangesetBox interactionsBlocked activeOperation changeset =
         , Html.viewIf (not (String.isEmpty diff))
             (Html.Lazy.lazy viewChangesetDiff diff)
         , errorNode
-        , Html.viewIf (isProposed || isNeedsReview) <|
+        , Html.viewIf (isProposed || isNeedsReview || isRejected) <|
             Html.div [ class "agent-panel__changeset-actions" ]
-                [ Html.viewIf isProposed <|
+                [ Html.viewIf (isProposed || isRejected) <|
                     Html.button
                         [ class "small-btn"
                         , disabled (not canApply)

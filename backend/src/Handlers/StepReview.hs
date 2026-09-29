@@ -15,10 +15,11 @@ module Handlers.StepReview (
     reviewDiffHandler,
     reviewStepHandler,
     stepReviews,
+    readableStepReviews,
 ) where
 
 import Control.Monad (unless, when)
-import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), catchError, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, object, withObject, (.!=), (.:), (.:?), (.=))
@@ -42,7 +43,7 @@ import Handlers.Statuses (forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseLBS)
 import NixStore (resolveStorePath)
-import Certificates (withWriteRepoTransaction)
+import Certificates (evaluatedProjectStepIds, withWriteRepoTransaction)
 import Servant (NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Exit (ExitCode (..))
@@ -476,8 +477,9 @@ requireStepUnreviewed stepId = lift (withReadRepoTransaction (`ensureStepUnrevie
 
 projectStepIds :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) [Int]
 projectStepIds context projectId =
-    decodeNix "Failed to decode project step IDs" =<< runNixEvalJsonApplyInRepo context expression "#pointy.projects"
+    declared `catchError` \err -> evaluatedProjectStepIds context projectId `catchError` const (throwError err)
   where
+    declared = decodeNix "Failed to decode project step IDs" =<< runNixEvalJsonApplyInRepo context expression "#pointy.projects"
     expression = "projects: map (step: step.def.id) (projects." ++ show (show projectId) ++ ".steps or (throw \"Project " ++ show projectId ++ " does not exist.\"))"
 
 stepReview :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) (Maybe Review)
@@ -491,6 +493,12 @@ stepReviews ctx stepIds = do
   where
     reviewOfExistingStep =
         "if builtins.hasAttr name steps then [ (let step = steps.${name}.def; in if (step.reviewedRevision or null) != null then { inherit (step) reviewedRevision; reviewedBy = step.reviewedBy or \"\"; reviewComments = step.reviewComments or \"\"; } else null) ] else []"
+
+readableStepReviews :: (RepoContext ctx, Eval :> es) => ctx -> [Int] -> ExceptT String (Eff es) StepReviews
+readableStepReviews ctx stepIds =
+    stepReviews ctx stepIds `catchError` const (Map.unions <$> mapM readable stepIds)
+  where
+    readable stepId = stepReviews ctx [stepId] `catchError` const (pure Map.empty)
 
 reviewedPaths :: (IOE :> es, Eval :> es) => FilePath -> (ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths) -> StepReviews -> ExceptT String (Eff es) StepOutPaths
 reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)

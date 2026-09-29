@@ -411,6 +411,7 @@ type alias ChatTurn =
 type ChatChangesetState
     = ChatChangesetProposed
     | ChatChangesetNeedsReview String
+    | ChatChangesetRejected String
     | ChatChangesetApplied
     | ChatChangesetDiscarded
 
@@ -693,6 +694,9 @@ defaultChangesetDescription state =
 
         ChatChangesetNeedsReview _ ->
             "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the changeset."
+
+        ChatChangesetRejected _ ->
+            "This changeset was not applied because it introduces evaluation failures. Your next message sends the failures below to the agent so it can fix them."
 
         ChatChangesetApplied ->
             "This changeset was applied. You can continue the conversation from the applied state."
