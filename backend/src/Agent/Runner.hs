@@ -298,7 +298,7 @@ startAgentTurn sid prompt mCurrentProject = do
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProject)
     return turn
 
 stopAgentTurn :: Text -> ExceptT String IO AgentSessionView
@@ -378,8 +378,8 @@ nameChat cfg session_ logPath prompt =
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> IO ()
-runTurnProcess cfg session_ turn prompt isFirstTurn =
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Bool -> IO ()
+runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject =
     continueUnlessStopped run
         `finally` atomically (retireTurn sid)
   where
@@ -388,7 +388,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn =
     continueUnlessStopped action = do
         stopped <- turnStopRequested tid
         if stopped
-            then finishTurn cfg session_ turn (ExitFailure (-15))
+            then finishTurn cfg session_ turn sentCurrentProject (ExitFailure (-15))
             else action
     run = do
         appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> tid)
@@ -410,7 +410,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn =
                     appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
                     return $ ExitFailure 1
                 Right code -> return code
-            finishTurn cfg session_ turn exitCode
+            finishTurn cfg session_ turn sentCurrentProject exitCode
 
 runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> IO ExitCode
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
@@ -809,8 +809,8 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
 sessionFinalizationAttempts :: Int
 sessionFinalizationAttempts = 3
 
-finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> ExitCode -> IO ()
-finishTurn cfg _session turn exitCode = do
+finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> Bool -> ExitCode -> IO ()
+finishTurn cfg _session turn sentCurrentProject exitCode = do
     stopped <- atomically $ do
         pending <- readTVar stopRequestedTurns
         let wasStopped = Set.member (turnId turn) pending
@@ -849,7 +849,7 @@ finishTurn cfg _session turn exitCode = do
                     let nextStatus = if status loaded == "running" then "open" else status loaded
                         runnerError = if stopped || exitCode == ExitSuccess then Nothing else Just "runner_failed"
                         nextError = combineErrorMessages [runnerError, autoCommitError]
-                        nextCurrentProject = if finalStatus == "succeeded" then agentCurrentProjectId loaded else Nothing
+                        nextCurrentProject = if sentCurrentProject && finalStatus /= "succeeded" then Nothing else agentCurrentProjectId loaded
                         updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError, agentCurrentProjectId = nextCurrentProject}
                     applyResolution <- liftIO $ Except.runExceptT $ finalizeApplyResolution updated
                     case applyResolution of
