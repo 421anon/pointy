@@ -33,6 +33,7 @@ main = withSystemTempDirectory "turn-stream-test" $ \home -> do
             , lastError = Nothing
             , createdAt = now
             , updatedAt = now
+            , agentCurrentProjectId = Nothing
             }
     logPath <- turnLogFilePath "s1" "t1"
     let turn =

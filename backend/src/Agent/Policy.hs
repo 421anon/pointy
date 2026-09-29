@@ -7,6 +7,7 @@ module Agent.Policy (
     appliedProjectId,
     appliedStepId,
     renderEmbeddedBootstrapPrompt,
+    renderCurrentProject,
 ) where
 
 import Data.Maybe (isJust)
@@ -45,6 +46,16 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
                , configuredPrompt
                ]
         )
+
+renderCurrentProject :: Int -> Text -> Text
+renderCurrentProject projectId projectName =
+    T.intercalate
+        "\n"
+        [ "The currently open project is:"
+        , "id: " <> T.pack (show projectId)
+        , "name: " <> projectName
+        , "file: projects/" <> T.pack (show projectId) <> ".nix"
+        ]
 
 appliedProjectId :: Text -> Maybe Int
 appliedProjectId path =

@@ -123,7 +123,15 @@ objectSchema typeName fields =
 
 instance ToSchema TurnRequest where
     declareNamedSchema _ =
-        pure $ objectSchema "TurnRequest" [("sessionId", stringField), ("prompt", stringField)]
+        pure $
+            objectSchema
+                "TurnRequest"
+                [ ("sessionId", stringField)
+                , ("prompt", stringField)
+                , ("currentProjectId", nullableField OpenApiInteger)
+                , ("currentProjectName", nullableField OpenApiString)
+                ]
+                & schema . required .~ ["sessionId", "prompt"]
 
 instance ToSchema SessionRequest where
     declareNamedSchema _ =

@@ -20,6 +20,7 @@ import Iso8601
 import Json.Decode as Decode exposing (Decoder)
 import Json.Decode.Pipeline exposing (optional, required)
 import Json.Encode as Encode
+import Maybe.Extra as Maybe
 import Model.Core as Model
 
 
@@ -65,8 +66,8 @@ fetchSession sessionId =
             }
 
 
-sendTurn : String -> String -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt =
+sendTurn : String -> String -> Maybe Model.ProjectRecord -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt mCurrentProject =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
@@ -75,6 +76,8 @@ sendTurn sessionId prompt =
                     Encode.object
                         [ ( "sessionId", Encode.string sessionId )
                         , ( "prompt", Encode.string prompt )
+                        , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int (Maybe.andThen .id mCurrentProject) )
+                        , ( "currentProjectName", Maybe.unwrap Encode.null (.name >> Encode.string) mCurrentProject )
                         ]
             , expect = Http.expectJson identity turnDecoder
             }

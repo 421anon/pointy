@@ -42,7 +42,7 @@ import Agent.Runner (startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStrea
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), withObject, (.:))
+import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as TL
@@ -55,6 +55,7 @@ import UserRepo (withUserRepoExclusiveIO, withUserRepoSharedIO)
 data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
     , turnRequestPrompt :: Text
+    , turnRequestCurrentProject :: Maybe (Int, Text)
     }
     deriving (Show, Eq, Generic)
 
@@ -63,6 +64,7 @@ instance FromJSON TurnRequest where
         TurnRequest
             <$> obj .: "sessionId"
             <*> obj .: "prompt"
+            <*> (liftA2 (,) <$> obj .:? "currentProjectId" <*> obj .:? "currentProjectName")
 
 data SessionRequest = SessionRequest
     { sessionRequestSessionId :: Text
@@ -112,7 +114,7 @@ getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProject req)
 
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =
