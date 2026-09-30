@@ -121,7 +121,9 @@
           packages = {
             backend = pkgs.haskell.lib.dontHaddock (
               pkgs.haskell.lib.disableLibraryProfiling (
-                pkgs.haskellPackages.callCabal2nix "backend" ./backend { }
+                pkgs.haskell.lib.addTestToolDepends
+                  (pkgs.haskellPackages.callCabal2nix "backend" ./backend { })
+                  [ pkgs.git ]
               )
             );
             frontend = dream2nix.lib.evalModules {
