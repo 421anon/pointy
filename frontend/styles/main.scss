@@ -1187,6 +1187,10 @@ $delimited-grid-row-height: 28px;
   }
 }
 
+.icon-btn-spinner {
+  animation: spin 1s linear infinite;
+}
+
 .dir-item-icon-btn {
   @include mixins.icon-btn-base;
   color: var(--text-secondary);

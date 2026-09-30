@@ -1108,6 +1108,7 @@ runStep spec id =
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
                     |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
                     |> Flow.seq (Flow.get |> Flow.andThen (clearStepLog id << stepRevisionById id))
+                    |> Flow.seq (Flow.over pendingStops (Set.remove id))
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq
                         (registerStepStatusHook id
@@ -1154,7 +1155,8 @@ buildViewedRevision spec id =
 
 stopStep : StepSpec -> Int -> Flow Model ()
 stopStep spec id =
-    Flow.get
+    Flow.over pendingStops (Set.insert id)
+        |> Flow.seq Flow.get
         |> Flow.andThen
             (\model ->
                 setLocalStepStatus (TableSpec.getLens spec) id (Success StatusRunning)
@@ -1162,7 +1164,7 @@ stopStep spec id =
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
-            (\_ -> Flow.pure ())
+            (\_ -> Flow.over pendingStops (Set.remove id))
 
 
 setAddMode : A_Traversal s (Table (BaseRecord a)) -> BaseRecord a -> AddMode -> Flow s ()
@@ -3881,6 +3883,28 @@ applyListedStatuses statuses model =
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
         |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (unlisted buffer) (unlisted statuses)))
         |> Flow.seq (Flow.batchM (hooks ++ settles ++ reviewReloads))
+        |> Flow.seq settlePendingStops
+
+
+settlePendingStops : Flow Model ()
+settlePendingStops =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    stillRunning stepId =
+                        has
+                            (stepRecords
+                                << where_ (.id >> (==) (Just stepId))
+                                << runState
+                                << success
+                                << status
+                                << where_ (ApiData.toMaybe >> (==) (Just StatusRunning))
+                            )
+                            model
+                in
+                Flow.over pendingStops (Set.filter stillRunning)
+            )
 
 
 renewsReview : Dict Int ( String, Status ) -> StepRecord -> Bool

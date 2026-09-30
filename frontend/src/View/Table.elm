@@ -710,8 +710,8 @@ viewRecordActions spec isReadOnly mProjectId record =
         recordActions
 
 
-viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewRunStop spec record =
+viewRunStop : TableSpec StepRecord -> Bool -> StepRecord -> List (Html (Flow Model ()))
+viewRunStop spec stopping record =
     case record.id of
         Just id ->
             let
@@ -738,14 +738,15 @@ viewRunStop spec record =
                             True
             in
             [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-            , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
+            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep spec id))
+            , Html.viewIf (isRunning && stopping) viewStoppingIndicator
             ]
 
         Nothing ->
             []
 
 
-viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool } -> Html (Flow Model ())
+viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
 viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record flags =
     let
         spec =
@@ -790,10 +791,10 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
         runActions =
             case entry.stepType of
                 Derivation _ _ ->
-                    viewRunStop spec record
+                    viewRunStop spec flags.stopping record
 
                 Download _ ->
-                    viewRunStop spec record
+                    viewRunStop spec flags.stopping record
 
                 FileUpload _ ->
                     []
@@ -2299,6 +2300,19 @@ viewRunButton =
 viewStopButton : String -> Flow Model () -> Html (Flow Model ())
 viewStopButton =
     viewIconButtonWithTooltip "stop" True
+
+
+viewStoppingIndicator : Html (Flow Model ())
+viewStoppingIndicator =
+    Html.button
+        [ class "icon-btn icon-btn-inactive"
+        , attribute "aria-disabled" "true"
+        , attribute "aria-label" "Stopping"
+        , title "Stopping"
+        ]
+        [ iconCustom True "progress_activity" [ class "icon-btn-spinner" ]
+        , Html.span [ class "icon-btn-text" ] [ Html.text "Stopping" ]
+        ]
 
 
 viewUploadButton : Flow Model () -> Html (Flow Model ())

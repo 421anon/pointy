@@ -15,7 +15,7 @@ module Handlers.RunStep (
 
 import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog)
 import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
-import ClusterBus (buildingSteps, requestStop, takeStopRequest)
+import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.STM (atomically)
@@ -34,7 +34,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effects (App, AppM, Eval, Nix, pathValid, rootStorePath)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import Servant (NoContent (..), err404, err500, errBody)
@@ -65,14 +65,16 @@ runStepSync eid commit = do
                     return (repoPath, maybe commitHash T.unpack commit)
 
         let ctx = ReadRepoContext repoPath targetCommit
+            halted = stopRequested eid
         outcomes <- ExceptT $ trackBuild eid (T.pack targetCommit) $ runExceptT $ do
             _ <- liftIO $ takeStopRequest eid
-            graph <- getDependencyGraph ctx eid
+            graph <- getDependencyGraph halted ctx eid
             stepIds <- liftEither $ topoOrder graph
-            submitted <- lift $ submitGraph ctx graph stepIds
+            submitted <- lift $ submitGraph halted ctx graph stepIds
             stopped <- liftIO $ takeStopRequest eid
             when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _) <- [Map.lookup eid submitted]]
             return submitted
+        unless (Map.member eid outcomes) $ lift $ broadcastStatusForStepProjects eid (T.pack targetCommit) Nothing
         liftIO $ mapConcurrently_ (runAppEffects . finishStep ctx) (Map.toList outcomes)
 
     case result of
@@ -142,12 +144,16 @@ data SubmitOutcome
     | Enqueued FilePath BuildKey [JobId]
     | NotSubmitted String
 
-submitGraph :: App es => ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
-submitGraph ctx graph = foldM submitOne Map.empty
+submitGraph :: App es => IO Bool -> ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
+submitGraph halted ctx graph = foldM submitOne Map.empty
   where
     submitOne outcomes sid = do
-        outcome <- submitStep ctx outcomes (Map.findWithDefault [] sid graph) sid
-        return $ Map.insert sid outcome outcomes
+        stop <- liftIO halted
+        if stop
+            then return outcomes
+            else do
+                outcome <- submitStep ctx outcomes (Map.findWithDefault [] sid graph) sid
+                return $ Map.insert sid outcome outcomes
 
 submitStep :: App es => ReadRepoContext -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Eff es SubmitOutcome
 submitStep ctx outcomes deps sid
@@ -301,15 +307,19 @@ validateStepRequirements requirements
   where
     hasExportDelimiter = T.any (\c -> c == ',' || c == '\n' || c == '\r' || c == '\0')
 
-getDependencyGraph :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) (Map.Map Int [Int])
-getDependencyGraph ctx root = go Map.empty [root]
+getDependencyGraph :: (Eval :> es, IOE :> es) => IO Bool -> ReadRepoContext -> Int -> ExceptT String (Eff es) (Map.Map Int [Int])
+getDependencyGraph halted ctx root = go Map.empty [root]
   where
     go acc [] = return acc
     go acc (sid : rest)
         | Map.member sid acc = go acc rest
         | otherwise = do
-            deps <- nub <$> getDependencies ctx sid
-            go (Map.insert sid deps acc) (rest ++ deps)
+            stop <- liftIO halted
+            if stop
+                then return Map.empty
+                else do
+                    deps <- nub <$> getDependencies ctx sid
+                    go (Map.insert sid deps acc) (rest ++ deps)
 
 topoOrder :: Map.Map Int [Int] -> Either String [Int]
 topoOrder graph = go Set.empty [] (Map.keys graph)

@@ -1097,6 +1097,7 @@ type Model
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict Int ( String, Status )
         , pendingBuilds : Dict Int String
+        , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
         , reviewDraft : Maybe ReviewDraft
         , autocomplete : Dict String AutocompleteState
@@ -1420,6 +1421,11 @@ getPendingBuilds (Model model) =
     model.pendingBuilds
 
 
+getPendingStops : Model -> Set Int
+getPendingStops (Model model) =
+    model.pendingStops
+
+
 getOpenDiff : Model -> Maybe ( Int, Float )
 getOpenDiff (Model model) =
     model.openDiff
@@ -1550,6 +1556,7 @@ initialModel key route flags =
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
         , pendingBuilds = Dict.empty
+        , pendingStops = Set.empty
         , openDiff = Nothing
         , reviewDraft = Nothing
         , autocomplete = Dict.empty

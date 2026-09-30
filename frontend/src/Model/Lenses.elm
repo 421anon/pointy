@@ -728,6 +728,11 @@ pendingBuilds =
     lens ".pendingBuilds" Model.getPendingBuilds (\(Model m) builds -> Model { m | pendingBuilds = builds })
 
 
+pendingStops : Lens ls Model (Set Int) x y
+pendingStops =
+    lens ".pendingStops" Model.getPendingStops (\(Model m) stops -> Model { m | pendingStops = stops })
+
+
 openDiff : Lens ls Model (Maybe ( Int, Float )) x y
 openDiff =
     lens ".openDiff" Model.getOpenDiff (\(Model m) shown -> Model { m | openDiff = shown })

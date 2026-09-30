@@ -505,6 +505,9 @@ viewSection model sectionName entry steps =
         pendingIngestSteps =
             Model.getPendingIngestSteps model
 
+        pendingStops =
+            Model.getPendingStops model
+
         scratchAvailable =
             ApiData.unwrap False Maybe.isJust (Model.getScratchState model).root
 
@@ -555,6 +558,7 @@ viewSection model sectionName entry steps =
                     record
                     { uploading = isIngesting record
                     , scratchAvailable = scratchAvailable
+                    , stopping = Maybe.unwrap False (\id -> Set.member id pendingStops) record.id
                     }
         , alwaysVisibleRecordActions =
             \r ->
