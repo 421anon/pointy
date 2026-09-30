@@ -21,7 +21,6 @@ import Json.Decode as Decode exposing (Decoder)
 import Json.Decode.Pipeline exposing (optional, required)
 import Json.Encode as Encode
 import Model.Core as Model
-import Time
 
 
 baseUrl : String
@@ -262,17 +261,6 @@ turnEvent =
                         Decode.field "data"
                             (Decode.map Model.AgentTurnDone (Decode.field "sessionId" Decode.string))
 
-                    "activity" ->
-                        Decode.field "data"
-                            (Decode.succeed
-                                (\sessionId turnId call ->
-                                    Model.AgentTurnActivity { sessionId = sessionId, turnId = turnId, call = call }
-                                )
-                                |> required "sessionId" Decode.string
-                                |> required "turnId" Decode.string
-                                |> optional "call" (Decode.maybe toolCallDecoder) Nothing
-                            )
-
                     "heartbeat" ->
                         Decode.succeed Model.AgentTurnHeartbeat
 
@@ -286,20 +274,6 @@ turnEvent =
                     _ ->
                         Decode.fail ("Unknown agent turn event: " ++ type_)
             )
-
-
-toolCallDecoder : Decoder Model.AgentToolCall
-toolCallDecoder =
-    Decode.succeed Model.AgentToolCall
-        |> required "id" Decode.string
-        |> required "name" Decode.string
-        |> required "startedAt" startedAtDecoder
-        |> required "text" Decode.string
-
-
-startedAtDecoder : Decoder Time.Posix
-startedAtDecoder =
-    Decode.map (\seconds -> Time.millisToPosix (round (seconds * 1000))) Decode.float
 
 
 archive : String -> Flow s (Result Http.Error Model.AgentSessionView)

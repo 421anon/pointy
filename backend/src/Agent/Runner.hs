@@ -8,20 +8,13 @@ module Agent.Runner (
     steerAgentTurn,
     turnLogStreamHandler,
     streamLoop,
-    RunnerInput (..),
+    RunnerInput,
     SteerOutcome (..),
     handleDialog,
     handleRpcEventSafely,
     newRunnerInput,
     streamHandle,
     planSteer,
-    TurnBudgetPlan (..),
-    TurnBudgetStep (..),
-    turnBudgetPlan,
-    ActiveTool (..),
-    startActiveTool,
-    finishActiveTool,
-    visibleActivity,
     watchTurnBudget,
 ) where
 
@@ -53,9 +46,9 @@ import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.Async (async, race, wait)
+import Control.Concurrent.Async (async, wait, withAsync)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
-import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, readTVarIO, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
+import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, catch, displayException, finally, fromException, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
@@ -75,7 +68,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Interpreters.Production (runProduction)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
@@ -107,7 +100,6 @@ data RunnerInput = RunnerInput
     , inputPromptSeen :: Bool
     , inputRetrying :: Bool
     , inputQuestion :: Maybe PendingQuestion
-    , inputAwaitingUser :: Bool
     }
 
 newRunnerInput :: Handle -> IO (MVar (Maybe RunnerInput))
@@ -121,7 +113,6 @@ newRunnerInput handle =
                 , inputPromptSeen = False
                 , inputRetrying = False
                 , inputQuestion = Nothing
-                , inputAwaitingUser = False
                 }
 
 {-# NOINLINE runnerInputs #-}
@@ -151,42 +142,11 @@ retireTurn sid = do
     modifyTVar' activeRunners $ Map.delete sid
     modifyTVar' waitingSteers $ Map.delete sid
 
-budgetNoticeNumerator :: Int
-budgetNoticeNumerator = 3
-
-budgetNoticeDenominator :: Int
-budgetNoticeDenominator = 4
-
 budgetPollMicros :: Int
 budgetPollMicros = 1000000
 
 budgetAbortGraceMicros :: Int
 budgetAbortGraceMicros = 10 * 1000000
-
-data TurnBudgetStep = TurnBudgetStep
-    { stepChargedMicros :: Int
-    , stepPaused :: Bool
-    , stepWarned :: Bool
-    , stepStopped :: Bool
-    }
-
-data TurnBudgetPlan
-    = BudgetContinue TurnBudgetStep
-    | BudgetWarn TurnBudgetStep
-    | BudgetStop TurnBudgetStep
-
-turnBudgetPlan :: Int -> TurnBudgetStep -> TurnBudgetPlan
-turnBudgetPlan budget step
-    | stepStopped step = BudgetStop step
-    | stepPaused step = BudgetContinue step{stepPaused = False}
-    | spent >= budget = BudgetStop step{stepPaused = False}
-    | spent >= budget * budgetNoticeNumerator `div` budgetNoticeDenominator =
-        if stepWarned step
-            then BudgetContinue step{stepPaused = False}
-            else BudgetWarn step{stepPaused = False, stepWarned = True}
-    | otherwise = BudgetContinue step{stepPaused = False}
-  where
-    spent = stepChargedMicros step
 
 steerAckTimeoutMicros :: Int
 steerAckTimeoutMicros = 10 * 1000000
@@ -309,6 +269,7 @@ startAgentTurn sid prompt = do
         createDirectoryIfMissing True (takeDirectory logPath)
         TIO.writeFile logPath ""
         mapM_ (appendLogLine (configAgent cfg) logPath "system") syncNotes
+        noteDiscardedConflict (configAgent cfg) logPath refreshedSession freshSession
         existingTurns <- listTurns sid
         let isFirstTurn = null existingTurns
         saveTurn turn
@@ -526,7 +487,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
                 atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
                 takeWaitingSteers (sessionId session_) input
-            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEventSafely cfg (turnLogPath turn) (turnId turn) input) hout
+            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
             errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr" (const $ return ())) mErr
             exitCode <- watchTurnBudget cfg turn input ph (agentTimeoutSeconds cfg * 1000000)
             modelFailed <- wait outReader
@@ -535,58 +496,30 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     run `finally` cleanup
 
 watchTurnBudget :: AgentConfig -> AgentTurn -> MVar (Maybe RunnerInput) -> ProcessHandle -> Int -> IO ExitCode
-watchTurnBudget cfg turn input ph budgetMicros = do
-    started <- getCurrentTime
-    spent <-
-        race
-            (waitForProcess ph)
-            (budgetWatchdog cfg turn input started TurnBudgetStep{stepChargedMicros = 0, stepPaused = False, stepWarned = False, stepStopped = False})
-    either return (const (waitForProcess ph)) spent
+watchTurnBudget cfg turn input ph budgetMicros =
+    withAsync (charge 0) (const (waitForProcess ph))
   where
-    budgetWatchdog cfg_ turn_ input_ started_ initial = go started_ initial
-      where
-        go lastTick step = do
-            remaining <- registerDelay budgetPollMicros
-            atomically (readTVar remaining >>= \done -> unless done retry)
-            now <- getCurrentTime
-            paused <- runAwaitingUser input_
-            let charged =
-                    if paused
-                        then step{stepPaused = True}
-                        else step{stepChargedMicros = stepChargedMicros step + elapsedMicros lastTick now}
-            progressed <- case turnBudgetPlan budgetMicros charged of
-                BudgetStop planned -> do
-                    abortTurn
-                    return planned{stepStopped = True}
-                BudgetWarn warned -> do
-                    appendLogLine cfg_ (turnLogPath turn_) "system" "Agent turn is near its time limit; telling the agent to wrap up"
-                    sendBudgetNotice (budgetNotice budgetMicros warned)
-                    return warned
-                BudgetContinue stepped_ -> return stepped_
-            go now progressed
-    sendBudgetNotice text = do
-        void (try (holdSteer (turnSessionId turn) text) :: IO (Either SomeException ()))
+    charge spent
+        | spent >= budgetMicros = abortTurn
+        | otherwise = do
+            threadDelay budgetPollMicros
+            asking <- questionOpen input
+            charge (if asking then spent else spent + budgetPollMicros)
     abortTurn = do
         appendLogLine cfg (turnLogPath turn) "system" "Runner timed out; aborting the turn"
         void (try (withMVar input $ mapM_ (flip writeToRunner abortCommand)) :: IO (Either SomeException ()))
-        _ <- timeout budgetAbortGraceMicros (waitForProcess ph)
+        threadDelay budgetAbortGraceMicros
         closeRunnerInput input
         void (try (terminateProcess ph) :: IO (Either SomeException ()))
     abortCommand = Aeson.object ["type" Aeson..= ("abort" :: Text)]
 
-budgetNotice :: Int -> TurnBudgetStep -> Text
-budgetNotice budgetMicros step =
-    "The backend stops this turn after about "
-        <> T.pack (show remainingMinutes)
-        <> " more minutes of work. Finish what you can now: stop searching, write the files you already understand, and end the turn with a short summary of what is done and what is left."
-  where
-    remainingMinutes = max 1 (ceiling (fromIntegral (max 0 (budgetMicros - stepChargedMicros step)) / (60 * 1000000) :: Double))
+questionOpen :: MVar (Maybe RunnerInput) -> IO Bool
+questionOpen input = withMVar input (return . maybe False (isJust . inputQuestion))
 
-elapsedMicros :: UTCTime -> UTCTime -> Int
-elapsedMicros from to = max 0 (floor (realToFrac (diffUTCTime to from) * (1000000 :: Double)))
-
-runAwaitingUser :: MVar (Maybe RunnerInput) -> IO Bool
-runAwaitingUser input = withMVar input (return . maybe False inputAwaitingUser)
+noteDiscardedConflict :: AgentConfig -> FilePath -> AgentSession -> AgentSession -> IO ()
+noteDiscardedConflict cfg logPath before after =
+    when (maybe False applyConflictsPending (preparedApply before) && isNothing (preparedApply after)) $
+        appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; apply again to rebuild it."
 
 seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
@@ -773,8 +706,8 @@ handleDialog cfg logPath input event =
             writeToRunner control (maybe (dialogDecline dialogId) (dialogResponse dialogId) stashed)
             return (Just $ maybe control (const control{inputQuestion = Nothing}) stashed, [])
 
-handleRpcEvent :: AgentConfig -> FilePath -> Text -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
-handleRpcEvent cfg logPath tid input event =
+handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleRpcEvent cfg logPath input event =
     case event ^? key "type" . _String of
         Just "message_end" -> send "get_session_stats"
         Just "message_start"
@@ -787,11 +720,18 @@ handleRpcEvent cfg logPath tid input event =
                     flushWaiting control{inputPromptSeen = True}
         Just "extension_ui_request" -> handleDialog cfg logPath input event
         Just "tool_execution_start"
-            | Just callId <- event ^? key "toolCallId" . _String
-            , Just name <- event ^? key "toolName" . _String ->
-                getCurrentTime >>= \now ->
-                    startActiveTool logPath tid ActiveTool{activeToolId = callId, activeToolName = name, activeToolText = toolCallText event, activeToolStartedAt = now}
-        Just "tool_execution_end" -> finishActiveTool logPath tid
+            | Just callId <- event ^? key "toolCallId" . _String -> do
+                now <- getCurrentTime
+                logActivity
+                    [ "state" Aeson..= ("started" :: Text)
+                    , "id" Aeson..= callId
+                    , "name" Aeson..= (event ^. key "toolName" . _String)
+                    , "text" Aeson..= toolCallText event
+                    , "startedAt" Aeson..= (realToFrac (utcTimeToPOSIXSeconds now) :: Double)
+                    ]
+        Just "tool_execution_end"
+            | Just callId <- event ^? key "toolCallId" . _String ->
+                logActivity ["state" Aeson..= ("finished" :: Text), "id" Aeson..= callId]
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True
         Just "auto_retry_end" -> do
@@ -824,23 +764,17 @@ handleRpcEvent cfg logPath tid input event =
                                 , not (inputRetrying control) ->
                                     Nothing <$ hClose (inputHandle control)
                             _ -> return current
-                    | otherwise -> do
-                        modifyMVar_ input $ return . fmap (\control -> control{inputAwaitingUser = awaitingUser})
-                        return ()
                 _ -> return ()
         _ -> return ()
   where
-    awaitingUser =
-        stateFlag "isStreaming" == Just False
-            && stateFlag "isCompacting" /= Just True
-            && maybe False (> 0) (event ^? key "data" . key "pendingMessageCount" . _Integer)
     send command = withMVar input $ mapM_ (\control -> writeToRunner control (Aeson.object ["type" Aeson..= (command :: Text)]))
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
+    logActivity = appendLogLine cfg logPath "activity" . jsonLine . Aeson.object
 
-handleRpcEventSafely :: AgentConfig -> FilePath -> Text -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
-handleRpcEventSafely cfg logPath tid input event =
-    handleRpcEvent cfg logPath tid input event `catch` \(ex :: SomeException) ->
+handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleRpcEventSafely cfg logPath input event =
+    handleRpcEvent cfg logPath input event `catch` \(ex :: SomeException) ->
         void (try (noteFailed ex) :: IO (Either SomeException ()))
   where
     noteFailed ex = do
@@ -1008,6 +942,7 @@ finishTurn cfg _session turn exitCode = do
                             forM_ mResolved $ \candidateHead_ ->
                                 liftIO $
                                     appendLogLine cfg (turnLogPath turn) "system" ("Committed apply conflict resolution " <> T.take 12 candidateHead_)
+                            liftIO $ noteDiscardedConflict cfg (turnLogPath turn) updated resolvedSession
                             return resolvedSession
                     touched <- liftIO $ touchSession finalized
                     liftIO $ saveSession touched
@@ -1080,80 +1015,19 @@ safeFileSize path = do
 heartbeatDelayMicros :: Int
 heartbeatDelayMicros = 5 * 1000000
 
-activityVisibilityMicros :: Int
-activityVisibilityMicros = 20 * 1000000
-
-data ActiveTool = ActiveTool
-    { activeToolId :: Text
-    , activeToolName :: Text
-    , activeToolText :: Text
-    , activeToolStartedAt :: UTCTime
-    }
-
-{-# NOINLINE activeTools #-}
-activeTools :: TVar (Map.Map Text (Maybe ActiveTool))
-activeTools = unsafePerformIO $ newTVarIO Map.empty
-
-startActiveTool :: FilePath -> Text -> ActiveTool -> IO ()
-startActiveTool logPath tid tool = do
-    atomically $ modifyTVar' activeTools $ Map.insert tid (Just tool)
-    signalTurnLog logPath
-
-finishActiveTool :: FilePath -> Text -> IO ()
-finishActiveTool logPath tid = do
-    wasActive <- isJust . fromMaybe Nothing . Map.lookup tid <$> readTVarIO activeTools
-    atomically $ modifyTVar' activeTools $ Map.insert tid Nothing
-    when wasActive $ signalTurnLog logPath
-
-activeToolFor :: Text -> IO (Maybe ActiveTool)
-activeToolFor tid = fromMaybe Nothing . Map.lookup tid <$> readTVarIO activeTools
-
 toolCallText :: Aeson.Value -> Text
-toolCallText event =
-    case event ^? key "args" . key "command" . _String of
-        Just command -> clip (T.map flatten (T.strip command))
-        Nothing -> clip (jsonLine (fromMaybe Aeson.Null (event ^? key "args")))
+toolCallText event = T.take 160 (T.unwords (T.words (fromMaybe argsJson command)))
   where
-    flatten char = if char == '\n' then ' ' else char
-    clip = T.take 160
-
-visibleActivity :: Text -> IO (Maybe ActiveTool)
-visibleActivity tid = do
-    now <- getCurrentTime
-    activity <- activeToolFor tid
-    return $ case activity of
-        Just tool
-            | elapsedMicros (activeToolStartedAt tool) now >= activityVisibilityMicros -> Just tool
-        _ -> Nothing
-
-activityEvent :: Text -> Maybe ActiveTool -> BS.ByteString
-activityEvent tid activity = sseEvent "activity" (Aeson.encode (Aeson.object ["turnId" Aeson..= tid, "call" Aeson..= fmap callValue activity]))
-
-callValue :: ActiveTool -> Aeson.Value
-callValue tool =
-    Aeson.object
-        [ "id" Aeson..= activeToolId tool
-        , "name" Aeson..= activeToolName tool
-        , "startedAt" Aeson..= startedAt
-        , "text" Aeson..= activeToolText tool
-        ]
-  where
-    startedAt = realToFrac (utcTimeToPOSIXSeconds (activeToolStartedAt tool)) :: Double
+    command = event ^? key "args" . key "command" . _String
+    argsJson = jsonLine (fromMaybe Aeson.Null (event ^? key "args"))
 
 streamLoop :: AgentTurn -> Int -> TChan () -> IO (S.StepT IO BS.ByteString)
-streamLoop turn offset signal = do
-    activity <- visibleActivity (turnId turn)
-    return (S.Effect (streamStep turn offset signal Nothing activity))
-
-streamStep :: AgentTurn -> Int -> TChan () -> Maybe Text -> Maybe ActiveTool -> IO (S.StepT IO BS.ByteString)
-streamStep turn offset signal lastActivity activity = return $ S.Effect $ do
+streamLoop turn offset signal = return $ S.Effect $ do
     heartbeatDue <- registerDelay heartbeatDelayMicros
     _ <-
         atomically $
             (Just <$> readTChan signal)
                 `orElse` (readTVar heartbeatDue >>= \b -> if b then pure Nothing else retry)
-    activityNow <- visibleActivity (turnId turn)
-    let current = activeToolId <$> activityNow
     exists <- doesFileExist (turnLogPath turn)
     content <- if exists then TIO.readFile (turnLogPath turn) else return ""
     let contentLength = T.length content
@@ -1164,7 +1038,7 @@ streamStep turn offset signal lastActivity activity = return $ S.Effect $ do
             return $
                 S.Yield
                     (sseEvent "chunk" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn, "chunk" Aeson..= chunk])))
-                    (S.Effect (streamStep turn newOffset signal lastActivity activityNow))
+                    (S.Effect (streamLoop turn newOffset signal))
         else do
             reloaded <- loadTurn =<< turnMetadataPath (turnSessionId turn) (turnId turn)
             let finalizationFailed = turnLogHasFinalizationFailure content
@@ -1176,22 +1050,12 @@ streamStep turn offset signal lastActivity activity = return $ S.Effect $ do
             if done
                 then do
                     unregisterTurnSignal (turnLogPath turn)
-                    atomically $ modifyTVar' activeTools $ Map.delete (turnId turn)
                     return $
                         S.Yield
                             (sseEvent "done" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn])))
                             S.Stop
-                else do
+                else
                     return $
                         S.Yield
                             (sseEvent "heartbeat" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn])))
-                            (if current == lastActivity then S.Effect (streamStep turn newOffset signal lastActivity activityNow) else S.Effect (activityStep turn newOffset signal activityNow))
-
-activityStep :: AgentTurn -> Int -> TChan () -> Maybe ActiveTool -> IO (S.StepT IO BS.ByteString)
-activityStep turn offset signal activity = do
-    return $
-        S.Yield
-            (activityEvent (turnId turn) activity)
-            (S.Effect (streamStep turn offset signal (activeToolId <$> activity) activity))
-
-
+                            (S.Effect (streamLoop turn newOffset signal))

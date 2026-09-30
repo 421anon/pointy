@@ -3799,11 +3799,7 @@ onAgentTurnIn value =
 
         Ok (Model.AgentTurnDone sessionId) ->
             Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
-                |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId << just << activity) Nothing)
                 |> Flow.seq (refreshAgentSession sessionId)
-
-        Ok (Model.AgentTurnActivity { sessionId, turnId, call }) ->
-            Flow.over (agent << liveTurnAt sessionId << just) (Model.setLiveActivity turnId call)
 
         Ok Model.AgentTurnHeartbeat ->
             Flow.pure ()

@@ -499,7 +499,7 @@ type alias AgentLiveTurn =
     , pendingQuestion : Maybe PendingQuestion
     , streamError : Maybe String
     , pendingSteer : Maybe String
-    , activity : Maybe AgentToolCall
+    , runningCalls : List AgentToolCall
     }
 
 
@@ -512,22 +512,13 @@ liveTurnFor turnId view =
     , pendingQuestion = persistedQuestion view
     , streamError = Nothing
     , pendingSteer = Nothing
-    , activity = Nothing
+    , runningCalls = []
     }
 
 
 liveTurnSurvives : Maybe String -> AgentLiveTurn -> Bool
 liveTurnSurvives activeTurnId live =
     String.isEmpty live.turnId || Just live.turnId == activeTurnId
-
-
-setLiveActivity : String -> Maybe AgentToolCall -> AgentLiveTurn -> AgentLiveTurn
-setLiveActivity turnId call live =
-    if String.isEmpty live.turnId || live.turnId == turnId then
-        { live | activity = call }
-
-    else
-        live
 
 
 type alias AgentState =
@@ -608,6 +599,7 @@ ingestLiveChunk chunk live =
         , entries = List.foldl appendChatLine live.entries keptLines
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
+        , runningCalls = List.foldl runningCallsAfterLine live.runningCalls keptLines
         , streamError = Nothing
     }
 
@@ -855,6 +847,9 @@ splitLogPrefix line =
     else if String.startsWith "[question] " line then
         ( "question", String.dropLeft 11 line )
 
+    else if String.startsWith "[activity] " line then
+        ( "activity", String.dropLeft 11 line )
+
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )
 
@@ -930,6 +925,62 @@ pendingSteerAfterLine rawLine pending =
 
         _ ->
             pending
+
+
+runningCallsAfterLine : String -> List AgentToolCall -> List AgentToolCall
+runningCallsAfterLine rawLine calls =
+    case splitLogPrefix rawLine of
+        ( "activity", body ) ->
+            case Decode.decodeString toolActivityDecoder (String.trim body) of
+                Ok (ToolStarted call) ->
+                    List.filter (\running -> running.id /= call.id) calls ++ [ call ]
+
+                Ok (ToolFinished id) ->
+                    List.filter (\running -> running.id /= id) calls
+
+                Err _ ->
+                    calls
+
+        ( "system", body ) ->
+            if isTurnFinishedLine body then
+                []
+
+            else
+                calls
+
+        _ ->
+            calls
+
+
+type ToolActivity
+    = ToolStarted AgentToolCall
+    | ToolFinished String
+
+
+toolActivityDecoder : Decode.Decoder ToolActivity
+toolActivityDecoder =
+    Decode.field "state" Decode.string
+        |> Decode.andThen
+            (\state ->
+                case state of
+                    "started" ->
+                        Decode.map ToolStarted toolCallDecoder
+
+                    "finished" ->
+                        Decode.map ToolFinished (Decode.field "id" Decode.string)
+
+                    _ ->
+                        Decode.fail ("unknown tool activity state " ++ state)
+            )
+
+
+toolCallDecoder : Decode.Decoder AgentToolCall
+toolCallDecoder =
+    Decode.map4 AgentToolCall
+        (Decode.field "id" Decode.string)
+        (Decode.field "name" Decode.string)
+        (Decode.field "startedAt" (Decode.map (\seconds -> Time.millisToPosix (round (seconds * 1000))) Decode.float))
+        (Decode.field "text" Decode.string)
 
 
 pendingQuestionDecoder : Decode.Decoder PendingQuestion
@@ -1406,7 +1457,21 @@ getNow (Model model) =
 
 hasRunningToolCall : Model -> Bool
 hasRunningToolCall (Model model) =
-    List.any (\live -> live.activity /= Nothing) (Dict.values model.agent.liveTurns)
+    List.any (\live -> not live.finished && not (List.isEmpty live.runningCalls)) (Dict.values model.agent.liveTurns)
+
+
+visibleToolCalls : Time.Posix -> AgentLiveTurn -> List AgentToolCall
+visibleToolCalls now live =
+    if live.finished then
+        []
+
+    else
+        List.filter (\call -> Time.posixToMillis now - Time.posixToMillis call.startedAt >= toolCallVisibleAfterMillis) live.runningCalls
+
+
+toolCallVisibleAfterMillis : Int
+toolCallVisibleAfterMillis =
+    20000
 
 
 dndSystem : DnDList.System a DnDList.Msg
@@ -1455,7 +1520,6 @@ type StepStatusEvent
 type AgentTurnEvent
     = AgentTurnChunk { sessionId : String, chunk : String }
     | AgentTurnDone String
-    | AgentTurnActivity { sessionId : String, turnId : String, call : Maybe AgentToolCall }
     | AgentTurnHeartbeat
     | AgentTurnError { sessionId : String, message : String }
 

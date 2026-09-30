@@ -891,11 +891,6 @@ pendingSteer =
     lens ".pendingSteer" .pendingSteer (\t steer -> { t | pendingSteer = steer })
 
 
-activity : Lens ls { a | activity : b } b x y
-activity =
-    lens ".activity" .activity (\t activity_ -> { t | activity = activity_ })
-
-
 sessionAt : String -> Traversal AgentState AgentSessionSummary x y
 sessionAt sessionId =
     sessions << orElseT success ApiData.reloading << by (.session >> .sessionId) sessionId

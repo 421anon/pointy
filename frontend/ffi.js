@@ -142,19 +142,6 @@ function connectAgentTurnStream(turnId) {
     }
   });
 
-  source.addEventListener("activity", (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      emitAgentTurnEvent("activity", { sessionId, turnId, call: data.call });
-    } catch (err) {
-      emitAgentTurnEvent("error", {
-        sessionId,
-        turnId,
-        message: `Failed to parse agent activity: ${String(err)}`,
-      });
-    }
-  });
-
   source.addEventListener("done", () => {
     emitAgentTurnEvent("done", { sessionId, turnId });
     closeAgentTurnStream(turnId);

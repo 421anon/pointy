@@ -16,11 +16,6 @@ let
 
   rpivExtension = pkgs.callPackage ./rpiv-ask-user-question.nix { };
 
-  commandLimitExtension = pkgs.runCommand "pointy-command-limit-extension" { } ''
-    mkdir -p $out
-    cp ${../backend/pi/agent/extensions/pointy-command-limit/index.ts} $out/index.ts
-  '';
-
   piConfigLink = ''
     rm -rf /home/backend/.pi
     cp -r ${lib.escapeShellArg (toString cfg.piConfigDir)} /home/backend/.pi
@@ -28,7 +23,6 @@ let
     chmod -R u=rwX,go= /home/backend/.pi
     mkdir -p -m u=rwx,go= /home/backend/.pi/agent/extensions
     ln -sfn ${rpivExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
-    ln -sfn ${commandLimitExtension} /home/backend/.pi/agent/extensions/pointy-command-limit
   '';
 
   jobEndedHook = pkgs.writeShellScript "pointy-job-ended" ''

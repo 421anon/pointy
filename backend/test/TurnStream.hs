@@ -2,15 +2,13 @@
 
 module Main (main) where
 
-import Agent.Runner (ActiveTool (..), finishActiveTool, startActiveTool, streamLoop, visibleActivity)
-import Data.Maybe (isJust)
+import Agent.Runner (streamLoop)
 import Agent.Session (AgentSession (..), AgentTurn (..), saveSession, saveTurn, turnLogFilePath)
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog)
 import Control.Monad (unless)
 import qualified Data.ByteString as BS
 import qualified Data.Text.IO as TIO
-
-import Data.Time.Clock (addUTCTime, getCurrentTime)
+import Data.Time.Clock (getCurrentTime)
 import Servant.Types.SourceT (StepT (..))
 import System.Environment (setEnv)
 import System.FilePath ((</>))
@@ -83,14 +81,11 @@ main = withSystemTempDirectory "turn-stream-test" $ \home -> do
                         Nothing -> fail "stream stayed open after done"
                         Just _ -> fail "stream emitted an event after done"
 
-    activityIsReportedForLongTools home
-
 pullStep :: IO (StepT IO BS.ByteString) -> IO (Maybe (BS.ByteString, IO (StepT IO BS.ByteString)))
 pullStep mstep = do
     step <- mstep
     case step of
-        Yield bs rest -> do
-            pure (Just (bs, pure rest))
+        Yield bs rest -> pure (Just (bs, pure rest))
         Skip rest -> pullStep (pure rest)
         Effect m -> pullStep m
         Stop -> pure Nothing
@@ -103,77 +98,3 @@ assertEqual :: (Eq a, Show a) => String -> a -> a -> IO ()
 assertEqual label expected actual
     | actual == expected = pure ()
     | otherwise = fail $ label ++ ": expected " ++ show expected ++ ", got " ++ show actual
-
-activityIsReportedForLongTools :: FilePath -> IO ()
-activityIsReportedForLongTools home = do
-    now <- getCurrentTime
-    saveSession
-        AgentSession
-            { sessionId = "s2"
-            , sessionName = Nothing
-            , targetBranch = "main"
-            , agentBranch = "agent-branch"
-            , baseCommit = "abc123"
-            , worktreePath = home </> "worktree2"
-            , status = "open"
-            , preparedApply = Nothing
-            , activeTurnId = Nothing
-            , lastError = Nothing
-            , createdAt = now
-            , updatedAt = now
-            }
-    logPath <- turnLogFilePath "s2" "t2"
-    let turn =
-            AgentTurn
-                { turnId = "t2"
-                , turnSessionId = "s2"
-                , turnPrompt = "hello"
-                , turnStatus = "running"
-                , turnExitCode = Nothing
-                , turnStartedAt = now
-                , turnFinishedAt = Nothing
-                , turnLogPath = logPath
-                , turnLog = ""
-                }
-    saveTurn turn
-    TIO.writeFile logPath ""
-    signal <- registerTurnSignal logPath
-    startedLongAgo <- getCurrentTime
-    let tool =
-            ActiveTool
-                { activeToolId = "call_1"
-                , activeToolName = "bash"
-                , activeToolText = "grep -rln baseCommit /home"
-                , activeToolStartedAt = addUTCTime (-30) startedLongAgo
-                }
-    startActiveTool logPath "t2" tool
-    mFirst <- timeout 8000000 (pullStep (streamLoop turn 0 signal))
-    firstPull <- case mFirst of
-        Nothing -> fail "stream produced no first event"
-        Just Nothing -> fail "stream ended before the first event"
-        Just (Just (bytes, pullNext)) -> do
-            assertBool ("first event is the heartbeat, got: " ++ show bytes) ("event: heartbeat" `BS.isInfixOf` bytes)
-            pure pullNext
-    mActivity <- timeout 8000000 (pullStep firstPull)
-    activityPull <- case mActivity of
-        Nothing -> fail "activity event did not arrive for a long-running tool"
-        Just Nothing -> fail "stream ended before the activity event"
-        Just (Just (activityBytes, pullAfter)) -> do
-            assertBool ("activity event name, got: " ++ show activityBytes) ("event: activity" `BS.isInfixOf` activityBytes)
-            assertBool "activity carries the command" ("grep -rln baseCommit /home" `BS.isInfixOf` activityBytes)
-            pure pullAfter
-    finishActiveTool logPath "t2"
-    mCleared <- timeout 15000000 (pullUntilActivity activityPull)
-    case mCleared of
-        Nothing -> fail "activity clear did not arrive after the tool finished"
-        Just clearedBytes -> do
-            assertBool ("activity clear reports no call, got: " ++ show clearedBytes) ("\"call\":null" `BS.isInfixOf` clearedBytes)
-
-pullUntilActivity :: IO (StepT IO BS.ByteString) -> IO BS.ByteString
-pullUntilActivity step = do
-    pulled <- pullStep step
-    case pulled of
-        Nothing -> fail "stream ended before an activity event"
-        Just (bytes, rest)
-            | "event: activity" `BS.isInfixOf` bytes -> pure bytes
-            | otherwise -> pullUntilActivity rest

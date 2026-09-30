@@ -103,7 +103,7 @@ checkReaderSurvivesFailure dir = withInput $ \input -> do
     hSetBuffering writer LineBuffering
     let logPath = dir </> "reader.log"
         cfg = defaultAgentConfig
-    reader <- async $ streamHandle cfg logPath "__BEGIN__" "stdout" (handleRpcEventSafely cfg logPath "reader-turn" input) readerHandle
+    reader <- async $ streamHandle cfg logPath "__BEGIN__" "stdout" (handleRpcEventSafely cfg logPath input) readerHandle
     TIO.hPutStrLn writer "__BEGIN__"
     writeLine writer (selectEvent "d1")
     writeLine writer (selectEvent "d1")
@@ -124,7 +124,7 @@ checkDeclinedDialogKeepsOtherQuestion :: FilePath -> IO ()
 checkDeclinedDialogKeepsOtherQuestion dir = withInput $ \input -> do
     let logPath = dir </> "other.log"
     handleDialog defaultAgentConfig logPath input (selectEvent "d1")
-    handleRpcEventSafely defaultAgentConfig logPath "other-turn" input (selectEvent "d2")
+    handleRpcEventSafely defaultAgentConfig logPath input (selectEvent "d2")
     control <- latchedQuestion input
     reply <- newEmptyTMVarIO
     case planSteer "1" "steer-7" reply control of

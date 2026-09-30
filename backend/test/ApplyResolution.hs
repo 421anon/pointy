@@ -126,9 +126,6 @@ gitOut dir args = do
         ExitSuccess -> return (T.strip (T.pack out))
         ExitFailure _ -> fail ("git " ++ unwords args ++ ": " ++ err)
 
-assertBool :: String -> Bool -> IO ()
-assertBool label ok = unless ok (fail label)
-
 assertEqual :: (Eq a, Show a) => String -> a -> a -> IO ()
 assertEqual label expected actual
     | actual == expected = pure ()

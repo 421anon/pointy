@@ -102,7 +102,6 @@ library
     , stm
     , temporary
     , text
-    , servant
     , time
     , tomland
     , transformers
@@ -214,7 +213,6 @@ test-suite turn-stream
     , stm
     , temporary
     , text
-    , servant
     , time
 
   hs-source-dirs:   test
@@ -232,7 +230,6 @@ test-suite session-store
     , filepath
     , temporary
     , text
-    , servant
     , time
 
   hs-source-dirs:   test
@@ -251,19 +248,7 @@ test-suite apply-resolution
     , process
     , temporary
     , text
-    , servant
     , time
-
-  hs-source-dirs:   test
-  default-language: Haskell2010
-
-test-suite turn-budget
-  import:           warnings
-  type:             exitcode-stdio-1.0
-  main-is:          TurnBudget.hs
-  build-depends:
-    , backend
-    , base
 
   hs-source-dirs:   test
   default-language: Haskell2010
@@ -347,18 +332,17 @@ test-suite dialog
   hs-source-dirs:   test
   default-language: Haskell2010
 
-
 test-suite turn-watchdog
   import:           warnings
   type:             exitcode-stdio-1.0
   main-is:          TurnWatchdog.hs
   ghc-options:      -threaded
   build-depends:
+    , aeson
     , backend
     , base
-    , directory
-    , filepath
     , process
+    , stm
     , temporary
     , text
     , time

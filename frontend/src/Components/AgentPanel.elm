@@ -948,8 +948,7 @@ viewChatTurns now resolveMention agent sessionView runnerActive closedChat inter
 
         activityNodes =
             get (liveTurnAt sessionId) agent
-                |> Maybe.andThen .activity
-                |> Maybe.map (viewToolCall now >> List.singleton)
+                |> Maybe.map (Model.visibleToolCalls now >> List.map (viewToolCall now))
                 |> Maybe.withDefault []
 
         content =
@@ -1052,19 +1051,9 @@ viewToolCall now call =
                 ]
                 [ Html.text ("Running " ++ call.name ++ " · " ++ formatElapsed call.startedAt now) ]
             , Html.text " "
-            , Html.code [ title call.text ] [ Html.text (toolCallPreview call.text) ]
+            , Html.code [] [ Html.text call.text ]
             ]
         ]
-
-
-toolCallPreview : String -> String
-toolCallPreview =
-    String.words >> String.join " " >> String.left toolCallPreviewMaxLength
-
-
-toolCallPreviewMaxLength : Int
-toolCallPreviewMaxLength =
-    120
 
 
 formatElapsed : Time.Posix -> Time.Posix -> String

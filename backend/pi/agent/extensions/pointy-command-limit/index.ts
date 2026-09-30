@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const defaultTimeoutSeconds = Number(process.env.PI_COMMAND_TIMEOUT_SECONDS ?? 120);
+const defaultTimeoutSeconds = 120;
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", (event) => {

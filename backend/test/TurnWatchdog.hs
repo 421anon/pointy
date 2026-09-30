@@ -2,91 +2,62 @@
 
 module Main (main) where
 
-import Agent.Runner (RunnerInput (..), newRunnerInput, watchTurnBudget)
+import Agent.Runner (RunnerInput, handleDialog, newRunnerInput, planSteer, watchTurnBudget)
 import Agent.Session (AgentTurn (..))
 import Config (defaultAgentConfig)
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (MVar, modifyMVar_, newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent.STM (newEmptyTMVarIO)
 import Control.Monad (unless)
-import qualified Control.Concurrent.MVar as MVar
+import Data.Aeson (Value, object, (.=))
+import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
-import System.IO (Handle)
 import System.IO.Temp (withSystemTempDirectory)
-import System.Posix.IO (createPipe, fdToHandle)
+import System.Posix.IO (closeFd, createPipe, fdToHandle)
 import System.Process (ProcessHandle, createProcess, proc, waitForProcess)
 import System.Timeout (timeout)
 
 main :: IO ()
 main = withSystemTempDirectory "turn-watchdog-test" $ \dir -> do
     activeTimeStopsTheTurn dir
-    pausedTimeDoesNotStopTheTurn dir
+    openQuestionDoesNotStopTheTurn dir
 
 activeTimeStopsTheTurn :: FilePath -> IO ()
 activeTimeStopsTheTurn dir = do
     logPath <- writeTurnLog dir "active"
-    input <- runnerInput False
-    turn <- turnFor logPath
-    (_, _, _, ph) <- createProcess (proc "sleep" ["60"])
-    started <- getCurrentTime
-    _ <- timeout 60000000 (watchTurnBudget defaultAgentConfig turn input ph (2 * 1000000))
-    elapsed <- realToFrac . (`diffUTCTime` started) <$> getCurrentTime
-    assertBool "an active turn is stopped shortly after its budget" (elapsed < 40)
-    assertBool "an active turn is not stopped before its budget" (elapsed >= 2)
-    logged <- TIO.readFile logPath
-    assertContains "the timeout is recorded in the turn log" "Runner timed out" logged
+    input <- runnerInput
+    (abortedAfter, ph) <- watchSleeper logPath input
+    assertBool ("an active turn is aborted once its budget is spent, aborted after " ++ show abortedAfter) (abortedAfter >= 2 && abortedAfter < 4)
     alive <- processAlive ph
     assertBool "the runner process is gone" (not alive)
 
-pausedTimeDoesNotStopTheTurn :: FilePath -> IO ()
-pausedTimeDoesNotStopTheTurn dir = do
-    logPath <- writeTurnLog dir "paused"
-    input <- runnerInput True
-    turn <- turnFor logPath
+openQuestionDoesNotStopTheTurn :: FilePath -> IO ()
+openQuestionDoesNotStopTheTurn dir = do
+    logPath <- writeTurnLog dir "question"
+    input <- runnerInput
+    handleDialog defaultAgentConfig logPath input (selectEvent "d1")
+    _ <- forkIO (threadDelay 4000000 >> answerQuestion input)
+    (abortedAfter, _) <- watchSleeper logPath input
+    assertBool ("time waiting for the user's answer is not charged, aborted after " ++ show abortedAfter) (abortedAfter >= 4.5)
+
+watchSleeper :: FilePath -> MVar (Maybe RunnerInput) -> IO (Double, ProcessHandle)
+watchSleeper logPath input = do
     (_, _, _, ph) <- createProcess (proc "sleep" ["60"])
-    _ <- forkIO (threadDelay 4000000 >> resumeInput input)
     started <- getCurrentTime
-    _ <- timeout 60000000 (watchTurnBudget defaultAgentConfig turn input ph (2 * 1000000))
-    elapsed <- realToFrac . (`diffUTCTime` started) <$> getCurrentTime
-    assertBool "a paused turn is not stopped while it waits for the user" (elapsed >= 4)
-    logged <- TIO.readFile logPath
-    assertContains "the timeout is recorded after the pause ends" "Runner timed out" logged
-
-resumeInput :: MVar.MVar (Maybe RunnerInput) -> IO ()
-resumeInput input =
-    MVar.modifyMVar_ input (return . fmap (\control -> control{inputAwaitingUser = False}))
-
-runnerInput :: Bool -> IO (MVar.MVar (Maybe RunnerInput))
-runnerInput awaiting = do
-    handle <- unusedHandle
-    MVar.newMVar
-        ( Just
-            RunnerInput
-                { inputHandle = handle
-                , inputPending = Nothing
-                , inputWaiting = []
-                , inputPromptSeen = True
-                , inputRetrying = False
-                , inputQuestion = Nothing
-                , inputAwaitingUser = awaiting
-                }
-        )
-
-unusedHandle :: IO Handle
-unusedHandle = do
-    (readFd, _) <- createPipe
-    fdToHandle readFd
-
-writeTurnLog :: FilePath -> String -> IO FilePath
-writeTurnLog dir name = do
-    let path = dir ++ "/" ++ name ++ ".log"
-    TIO.writeFile path ""
-    return path
-
-turnFor :: FilePath -> IO AgentTurn
-turnFor logPath = do
-    now <- getCurrentTime
-    return
+    aborted <- newEmptyMVar
+    _ <- forkIO (awaitTimeoutLine started aborted)
+    _ <- timeout 60000000 (watchTurnBudget defaultAgentConfig (turnFor logPath started) input ph (2 * 1000000))
+    abortedAfter <- takeMVar aborted
+    return (abortedAfter, ph)
+  where
+    awaitTimeoutLine started aborted = do
+        logged <- TIO.readFile logPath
+        if "Runner timed out" `T.isInfixOf` logged
+            then getCurrentTime >>= putMVar aborted . realToFrac . (`diffUTCTime` started)
+            else threadDelay 50000 >> awaitTimeoutLine started aborted
+    turnFor path now =
         AgentTurn
             { turnId = "watchdog-turn"
             , turnSessionId = "watchdog-session"
@@ -95,9 +66,37 @@ turnFor logPath = do
             , turnExitCode = Nothing
             , turnStartedAt = now
             , turnFinishedAt = Nothing
-            , turnLogPath = logPath
+            , turnLogPath = path
             , turnLog = ""
             }
+
+answerQuestion :: MVar (Maybe RunnerInput) -> IO ()
+answerQuestion input = do
+    reply <- newEmptyTMVarIO
+    modifyMVar_ input $ \current ->
+        return (current >>= fmap (\(_, answered, _) -> answered) . planSteer "1" "answer" reply)
+
+runnerInput :: IO (MVar (Maybe RunnerInput))
+runnerInput = do
+    (readFd, writeFd) <- createPipe
+    closeFd readFd
+    newRunnerInput =<< fdToHandle writeFd
+
+selectEvent :: Text -> Value
+selectEvent dialogId =
+    object
+        [ "type" .= ("extension_ui_request" :: Text)
+        , "id" .= dialogId
+        , "method" .= ("select" :: Text)
+        , "title" .= ("Which layout?" :: Text)
+        , "options" .= (["1. Card", "2. Row", "3. Type something."] :: [Text])
+        ]
+
+writeTurnLog :: FilePath -> String -> IO FilePath
+writeTurnLog dir name = do
+    let path = dir ++ "/" ++ name ++ ".log"
+    TIO.writeFile path ""
+    return path
 
 processAlive :: ProcessHandle -> IO Bool
 processAlive ph = do
@@ -106,7 +105,3 @@ processAlive ph = do
 
 assertBool :: String -> Bool -> IO ()
 assertBool label ok = unless ok (fail label)
-
-assertContains :: String -> String -> T.Text -> IO ()
-assertContains label needle haystack =
-    unless (T.pack needle `T.isInfixOf` haystack) (fail (label ++ ": missing " ++ show needle))
