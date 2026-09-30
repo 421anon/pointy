@@ -20,8 +20,8 @@ import Html.Events as Events
 import Html.Extra as Html
 import Html.Keyed
 import Html.Lazy
-import Iso8601
 import Ingest
+import Iso8601
 import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Keyboard
@@ -320,7 +320,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                             ]
 
                     Nothing ->
-                        [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dragEvents index) (dndSystem.dropEvents index) ) ]
+                        [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dragEvents index) (always []) ) ]
                 )
 
         viewContent =
@@ -636,12 +636,10 @@ viewRecordActions spec isReadOnly mProjectId record =
                 |> Flow.seq loadSourceFiles
 
         recordActions =
-            [ 
-              { shouldShow = hasBrowsableOutput << TableSpec.getStatus spec
+            [ { shouldShow = hasBrowsableOutput << TableSpec.getStatus spec
               , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
               }
-            , 
-              { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
+            , { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
               , render = always (viewInactiveIconButtonWithTooltip "edit" "Remove review to edit")
               }
             , { shouldShow = Maybe.isJust << .id
@@ -653,8 +651,7 @@ viewRecordActions spec isReadOnly mProjectId record =
                         else
                             viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" toggleRecordForm
               }
-            , 
-              { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
+            , { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
               , render =
                     \r ->
                         viewIconButtonWithTooltip
@@ -667,8 +664,7 @@ viewRecordActions spec isReadOnly mProjectId record =
                                 |> Maybe.withDefault Flow.none
                             )
               }
-            , 
-              { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
+            , { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
               , render =
                     \r ->
                         viewIconButtonWithTooltip
@@ -687,12 +683,10 @@ viewRecordActions spec isReadOnly mProjectId record =
                             )
                             (Actions.toggleRecordVisibility spec mProjectId Nothing r)
               }
-            , 
-              { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
+            , { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
               , render = \r -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec r)
               }
-            , 
-              { shouldShow =
+            , { shouldShow =
                     \r ->
                         let
                             hasDependentInProject =

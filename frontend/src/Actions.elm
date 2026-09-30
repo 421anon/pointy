@@ -831,9 +831,6 @@ replaceRoute targetRoute =
         )
 
 
-
-
-
 inheritChat : Route -> Route -> Route
 inheritChat currentRoute targetRoute =
     case targetRoute.chat of
@@ -2808,16 +2805,10 @@ markSessionViewLoading sessionId =
     over (sessionViewDataAt sessionId) (Just << ApiData.toLoading << Maybe.withDefault NotAsked)
 
 
-
-
-
 closeAgentChat : Flow Model ()
 closeAgentChat =
     Flow.over (route << Route.chat) (\_ -> Nothing)
         |> Flow.seq replaceCurrentUrl
-
-
-
 
 
 pushCurrentUrl : Flow Model ()
@@ -2827,9 +2818,6 @@ pushCurrentUrl =
             Flow.forAll key
                 (\k -> Flow.async (Flow.lift (Nav.pushUrl k (Route.toString currentRoute))))
         )
-
-
-
 
 
 replaceCurrentUrl : Flow Model ()
@@ -4039,28 +4027,58 @@ toggleStatusBar =
     Flow.over statusBarOpen not
 
 
-stepOutputRoute : Model -> Int -> Maybe Route
-stepOutputRoute model stepId =
-    let
-        containing =
-            projectsContainingEntity stepId
+type alias StepLocation =
+    { projectId : Int
+    , step : StepRecord
+    }
 
-        openProjectId =
-            try currentProjectId model
-    in
-    try (containing << where_ (.id >> (==) openProjectId) << recordId << just) model
-        |> Maybe.orElse (try (containing << recordId << just) model)
-        |> Maybe.map
-            (\projectId ->
-                Route.fromPage
-                    (Route.Project
-                        { projectId = projectId
-                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                        , mCommit = Nothing
-                        , mCompare = Nothing
-                        }
-                    )
+
+stepLocations : Model -> Dict Int (List StepLocation)
+stepLocations model =
+    List.foldr addProjectStepLocations Dict.empty (all (projects << records << success << each) model)
+
+
+addProjectStepLocations : ProjectRecord -> Dict Int (List StepLocation) -> Dict Int (List StepLocation)
+addProjectStepLocations project locations =
+    case project.id of
+        Just projectId_ ->
+            List.foldr (addStepLocation projectId_) locations (all projectStepRecords project)
+
+        Nothing ->
+            locations
+
+
+addStepLocation : Int -> StepRecord -> Dict Int (List StepLocation) -> Dict Int (List StepLocation)
+addStepLocation projectId_ step locations =
+    case step.id of
+        Just stepId ->
+            Dict.update stepId (Maybe.withDefault [] >> (::) { projectId = projectId_, step = step } >> Just) locations
+
+        Nothing ->
+            locations
+
+
+stepOutputLocation : Maybe Int -> Dict Int (List StepLocation) -> Int -> Maybe StepLocation
+stepOutputLocation openProjectId locations stepId =
+    Dict.get stepId locations
+        |> Maybe.andThen
+            (\candidates ->
+                openProjectId
+                    |> Maybe.andThen (\open -> List.find (.projectId >> (==) open) candidates)
+                    |> Maybe.orElse (List.head candidates)
             )
+
+
+stepOutputRoute : Int -> Int -> Route
+stepOutputRoute projectId_ stepId =
+    Route.fromPage
+        (Route.Project
+            { projectId = projectId_
+            , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+            , mCommit = Nothing
+            , mCompare = Nothing
+            }
+        )
 
 
 knownProjectRoute : Model -> Int -> Maybe Route
@@ -4082,10 +4100,10 @@ openRunningStep stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                stepOutputRoute model stepId
+                stepOutputLocation (try currentProjectId model) (stepLocations model) stepId
                     |> Maybe.unwrap (Flow.pure ())
-                        (\route ->
+                        (\location ->
                             Flow.setAll statusBarOpen False
-                                |> Flow.seq (goToRoute route)
+                                |> Flow.seq (goToRoute (stepOutputRoute location.projectId stepId))
                         )
             )

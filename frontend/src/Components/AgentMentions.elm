@@ -1,4 +1,4 @@
-module Components.AgentMentions exposing (Resolver, mentionTarget, toHtml)
+module Components.AgentMentions exposing (Resolver, resolver, toHtml)
 
 import Accessors exposing (try)
 import Actions
@@ -13,6 +13,7 @@ import Html.Attributes exposing (attribute, class, title, type_)
 import Html.Events as Events
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses
+import Model.Shadow exposing (StepConfig)
 import Model.TableSpec as TableSpec
 import Regex exposing (Regex)
 import Route exposing (Route)
@@ -38,52 +39,58 @@ type alias Resolver =
     EntityId -> Bool -> List String -> Maybe ResolvedMention
 
 
-mentionTarget : Model -> EntityId -> Bool -> List String -> Maybe ResolvedMention
-mentionTarget model entityId fixed candidates =
+resolver : Model -> Resolver
+resolver model =
     let
-        resolved route runAction mName =
-            let
-                name =
-                    Maybe.withDefault (entityIdText entityId) mName
+        locations =
+            Actions.stepLocations model
 
-                label =
-                    case entityId of
-                        StepId _ ->
-                            entityIdText entityId
+        openProjectId =
+            try Lenses.currentProjectId model
 
-                        ProjectId _ ->
-                            name
-            in
-            { route = route
-            , runAction = runAction
-            , label = label
-            , tooltip = name
-            , suffixText = resolveSuffix fixed mName candidates
-            }
+        stepConfig =
+            try (Lenses.stepConfig << ApiData.success) model
     in
-    case entityId of
-        StepId stepId ->
-            Actions.stepOutputRoute model stepId
-                |> Maybe.map
-                    (\route ->
-                        case route.page of
-                            Route.Project params ->
-                                resolved route
-                                    (mentionRunAction model params.projectId stepId)
-                                    (try (Lenses.projectStep (Just params.projectId) (Just stepId)) model |> Maybe.map .name)
+    \entityId fixed candidates ->
+        let
+            resolved route runAction mName =
+                let
+                    name =
+                        Maybe.withDefault (entityIdText entityId) mName
 
-                            _ ->
-                                resolved route Nothing Nothing
-                    )
+                    label =
+                        case entityId of
+                            StepId _ ->
+                                entityIdText entityId
 
-        ProjectId projectId ->
-            Actions.knownProjectRoute model projectId
-                |> Maybe.map
-                    (\route ->
-                        resolved route
-                            Nothing
-                            (try (Lenses.projects << Lenses.records << ApiData.success << by .id (Just projectId)) model |> Maybe.map .name)
-                    )
+                            ProjectId _ ->
+                                name
+                in
+                { route = route
+                , runAction = runAction
+                , label = label
+                , tooltip = name
+                , suffixText = resolveSuffix fixed mName candidates
+                }
+        in
+        case entityId of
+            StepId stepId ->
+                Actions.stepOutputLocation openProjectId locations stepId
+                    |> Maybe.map
+                        (\location ->
+                            resolved (Actions.stepOutputRoute location.projectId stepId)
+                                (mentionRunAction stepConfig stepId location)
+                                (Just location.step.name)
+                        )
+
+            ProjectId projectId ->
+                Actions.knownProjectRoute model projectId
+                    |> Maybe.map
+                        (\route ->
+                            resolved route
+                                Nothing
+                                (try (Lenses.projects << Lenses.records << ApiData.success << by .id (Just projectId)) model |> Maybe.map .name)
+                        )
 
 
 resolveSuffix : Bool -> Maybe String -> List String -> String
@@ -124,29 +131,25 @@ namePrefixLength nameTokens candidates =
             0
 
 
-mentionRunAction : Model -> Int -> Int -> Maybe (Flow Model ())
-mentionRunAction model projectId stepId =
-    try (Lenses.projectStep (Just projectId) (Just stepId)) model
+mentionRunAction : Maybe StepConfig -> Int -> Actions.StepLocation -> Maybe (Flow Model ())
+mentionRunAction stepConfig stepId { projectId, step } =
+    stepConfig
+        |> Maybe.andThen (Dict.get step.type_)
         |> Maybe.andThen
-            (\step ->
-                try (Lenses.stepConfig << ApiData.success) model
-                    |> Maybe.andThen (Dict.get step.type_)
-                    |> Maybe.andThen
-                        (\entry ->
-                            let
-                                spec =
-                                    Specs.stepsInProject projectId step.type_ entry
-                            in
-                            case TableSpec.getStatus spec step |> ApiData.toMaybe of
-                                Just Model.StatusSuccess ->
-                                    Nothing
+            (\entry ->
+                let
+                    spec =
+                        Specs.stepsInProject projectId step.type_ entry
+                in
+                case TableSpec.getStatus spec step |> ApiData.toMaybe of
+                    Just Model.StatusSuccess ->
+                        Nothing
 
-                                Just _ ->
-                                    Just (Actions.runStep spec stepId)
+                    Just _ ->
+                        Just (Actions.runStep spec stepId)
 
-                                Nothing ->
-                                    Nothing
-                        )
+                    Nothing ->
+                        Nothing
             )
 
 

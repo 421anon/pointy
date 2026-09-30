@@ -31,7 +31,7 @@ view model =
         workspace =
             Lib.lastKnownWorkspace model
     in
-    viewPanel (Model.getNow model) (mentionsPending workspace) (AgentMentions.mentionTarget workspace) (Model.getAgent model)
+    viewPanel (Model.getNow model) (mentionsPending workspace) (AgentMentions.resolver workspace) (Model.getAgent model)
 
 
 mentionsPending : Model -> Bool
