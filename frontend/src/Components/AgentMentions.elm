@@ -1,4 +1,4 @@
-module Components.AgentMentions exposing (Resolver, resolver, toHtml)
+module Components.AgentMentions exposing (Sources, sources, toHtml)
 
 import Accessors exposing (try)
 import Actions
@@ -6,17 +6,18 @@ import Api.ApiData as ApiData
 import Browser.Dom as Dom
 import Components.Markdown as Markdown
 import Dict
-import Extra.Accessors exposing (by)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, title, type_)
 import Html.Events as Events
-import Model.Core as Model exposing (Model)
+import List.Extra as List
+import Model.Core as Model exposing (Model, ProjectRecord)
 import Model.Lenses as Lenses
 import Model.Shadow exposing (StepConfig)
 import Model.TableSpec as TableSpec
 import Regex exposing (Regex)
 import Route exposing (Route)
+import Set
 import Specs
 import View.Icons
 
@@ -39,21 +40,42 @@ type alias Resolver =
     EntityId -> Bool -> List String -> Maybe ResolvedMention
 
 
-resolver : Model -> Resolver
-resolver model =
+type alias Sources =
+    { projects : List ProjectRecord
+    , route : Route
+    , stepConfig : StepConfig
+    }
+
+
+sources : Model -> Sources
+sources model =
+    { projects = ApiData.withDefault [] (Model.getProjects model).records
+    , route = Model.getRoute model
+    , stepConfig = ApiData.withDefault Dict.empty (Model.getStepConfig model)
+    }
+
+
+resolver : List ProjectRecord -> Route -> StepConfig -> String -> Resolver
+resolver projects route stepConfig raw =
     let
+        candidateStepIds =
+            Regex.find digitsRegex raw
+                |> List.filterMap (.match >> String.toInt)
+                |> Set.fromList
+
         locations =
-            Actions.stepLocations model
+            if Set.isEmpty candidateStepIds then
+                Dict.empty
+
+            else
+                Actions.stepLocations (\stepId -> Set.member stepId candidateStepIds) projects
 
         openProjectId =
-            try Lenses.currentProjectId model
-
-        stepConfig =
-            try (Lenses.stepConfig << ApiData.success) model
+            try (Route.page << Lenses.projectRoute << Lenses.projectId) route
     in
     \entityId fixed candidates ->
         let
-            resolved route runAction mName =
+            resolved route_ runAction mName =
                 let
                     name =
                         Maybe.withDefault (entityIdText entityId) mName
@@ -66,7 +88,7 @@ resolver model =
                             ProjectId _ ->
                                 name
                 in
-                { route = route
+                { route = route_
                 , runAction = runAction
                 , label = label
                 , tooltip = name
@@ -84,13 +106,8 @@ resolver model =
                         )
 
             ProjectId projectId ->
-                Actions.knownProjectRoute model projectId
-                    |> Maybe.map
-                        (\route ->
-                            resolved route
-                                Nothing
-                                (try (Lenses.projects << Lenses.records << ApiData.success << by .id (Just projectId)) model |> Maybe.map .name)
-                        )
+                List.find (\project -> project.id == Just projectId) projects
+                    |> Maybe.map (\project -> resolved (Actions.projectPageRoute projectId) Nothing (Just project.name))
 
 
 resolveSuffix : Bool -> Maybe String -> List String -> String
@@ -131,10 +148,9 @@ namePrefixLength nameTokens candidates =
             0
 
 
-mentionRunAction : Maybe StepConfig -> Int -> Actions.StepLocation -> Maybe (Flow Model ())
+mentionRunAction : StepConfig -> Int -> Actions.StepLocation -> Maybe (Flow Model ())
 mentionRunAction stepConfig stepId { projectId, step } =
-    stepConfig
-        |> Maybe.andThen (Dict.get step.type_)
+    Dict.get step.type_ stepConfig
         |> Maybe.andThen
             (\entry ->
                 let
@@ -153,9 +169,14 @@ mentionRunAction stepConfig stepId { projectId, step } =
             )
 
 
-toHtml : Resolver -> String -> List (Html (Flow Model ()))
-toHtml resolve =
-    Markdown.toHtml (viewText resolve)
+toHtml : List ProjectRecord -> Route -> StepConfig -> String -> List (Html (Flow Model ()))
+toHtml projects route stepConfig raw =
+    Markdown.toHtml (viewText (resolver projects route stepConfig raw)) raw
+
+
+digitsRegex : Regex
+digitsRegex =
+    fromRegex "[0-9]+"
 
 
 nameToken : String

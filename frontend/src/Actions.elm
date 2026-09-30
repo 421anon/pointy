@@ -4033,26 +4033,30 @@ type alias StepLocation =
     }
 
 
-stepLocations : Model -> Dict Int (List StepLocation)
-stepLocations model =
-    List.foldr addProjectStepLocations Dict.empty (all (projects << records << success << each) model)
+stepLocations : (Int -> Bool) -> List ProjectRecord -> Dict Int (List StepLocation)
+stepLocations wanted projects_ =
+    List.foldr (addProjectStepLocations wanted) Dict.empty projects_
 
 
-addProjectStepLocations : ProjectRecord -> Dict Int (List StepLocation) -> Dict Int (List StepLocation)
-addProjectStepLocations project locations =
+addProjectStepLocations : (Int -> Bool) -> ProjectRecord -> Dict Int (List StepLocation) -> Dict Int (List StepLocation)
+addProjectStepLocations wanted project locations =
     case project.id of
         Just projectId_ ->
-            List.foldr (addStepLocation projectId_) locations (all projectStepRecords project)
+            Dict.foldr (\_ table acc -> List.foldr (addStepLocation wanted projectId_) acc (ApiData.withDefault [] table.records)) locations project.tables
 
         Nothing ->
             locations
 
 
-addStepLocation : Int -> StepRecord -> Dict Int (List StepLocation) -> Dict Int (List StepLocation)
-addStepLocation projectId_ step locations =
+addStepLocation : (Int -> Bool) -> Int -> StepRecord -> Dict Int (List StepLocation) -> Dict Int (List StepLocation)
+addStepLocation wanted projectId_ step locations =
     case step.id of
         Just stepId ->
-            Dict.update stepId (Maybe.withDefault [] >> (::) { projectId = projectId_, step = step } >> Just) locations
+            if wanted stepId then
+                Dict.update stepId (Maybe.withDefault [] >> (::) { projectId = projectId_, step = step } >> Just) locations
+
+            else
+                locations
 
         Nothing ->
             locations
@@ -4081,18 +4085,12 @@ stepOutputRoute projectId_ stepId =
         )
 
 
-knownProjectRoute : Model -> Int -> Maybe Route
-knownProjectRoute model projectId =
-    if has (projects << records << success << by .id (Just projectId)) model then
-        Just
-            (Route.fromPage
-                (Route.Project
-                    { projectId = projectId, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing }
-                )
-            )
-
-    else
-        Nothing
+projectPageRoute : Int -> Route
+projectPageRoute projectId_ =
+    Route.fromPage
+        (Route.Project
+            { projectId = projectId_, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing }
+        )
 
 
 openRunningStep : Int -> Flow Model ()
@@ -4100,7 +4098,7 @@ openRunningStep stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                stepOutputLocation (try currentProjectId model) (stepLocations model) stepId
+                stepOutputLocation (try currentProjectId model) (stepLocations ((==) stepId) (all (projects << records << success << each) model)) stepId
                     |> Maybe.unwrap (Flow.pure ())
                         (\location ->
                             Flow.setAll statusBarOpen False
