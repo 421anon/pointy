@@ -196,6 +196,11 @@ autocompleteDebounce =
     lens ".autocompleteDebounce" Model.getAutocompleteDebounce (\(Model m) autocompleteDebounce_ -> Model { m | autocompleteDebounce = autocompleteDebounce_ })
 
 
+stepChangeQueue : Lens ls Model Model.StepChangeQueue x y
+stepChangeQueue =
+    lens ".stepChangeQueue" Model.getStepChangeQueue (\(Model m) stepChangeQueue_ -> Model { m | stepChangeQueue = stepChangeQueue_ })
+
+
 isOpen : Lens ls { a | isOpen : b } b x y
 isOpen =
     lens ".isOpen" .isOpen (\t isOpen_ -> { t | isOpen = isOpen_ })
@@ -525,6 +530,7 @@ nextToastId =
 needsIntro : Lens ls { a | needsIntro : b } b x y
 needsIntro =
     lens ".needsIntro" .needsIntro (\t needsIntro_ -> { t | needsIntro = needsIntro_ })
+
 
 nextClientId : Lens ls Model Int x y
 nextClientId =

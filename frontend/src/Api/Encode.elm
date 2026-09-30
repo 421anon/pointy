@@ -4,8 +4,9 @@ import Api.ApiData as ApiData
 import Dict exposing (Dict)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..))
+import Model.Core exposing (ProjectRecord, ReviewDraft, StepChanges, StepRecord, TemplateSource(..))
 import Model.Shadow exposing (Field, StepType(..), StepArgValue(..), Widget(..))
+import Set
 
 
 stepArgValue : Widget -> StepArgValue -> Maybe Encode.Value
@@ -116,6 +117,19 @@ stepRef record =
         [ ( "id", Maybe.unwrap Encode.null Encode.int record.id )
         , ( "hidden", Encode.bool record.hidden )
         , ( "sortKey", Maybe.unwrap Encode.null Encode.int record.sortKey )
+        ]
+
+
+stepChanges : StepChanges -> Encode.Value
+stepChanges changes =
+    let
+        withVisibility hidden =
+            Dict.keys (Dict.filter (\_ -> (==) hidden) changes.visibility)
+    in
+    Encode.object
+        [ ( "hide", Encode.list Encode.int (withVisibility True) )
+        , ( "show", Encode.list Encode.int (withVisibility False) )
+        , ( "remove", Encode.list Encode.int (Set.toList changes.removals) )
         ]
 
 

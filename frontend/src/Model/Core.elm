@@ -117,6 +117,41 @@ type alias ReviewDraft =
     }
 
 
+type alias StepChanges =
+    { visibility : Dict Int Bool
+    , removals : Set Int
+    }
+
+
+type alias StepChangeQueue =
+    { pending : Dict Int StepChanges
+    , inFlight : Dict Int StepChanges
+    , debounce : Debounce ()
+    }
+
+
+noStepChanges : StepChanges
+noStepChanges =
+    { visibility = Dict.empty, removals = Set.empty }
+
+
+applyStepChanges : StepChanges -> List StepRecord -> List StepRecord
+applyStepChanges changes =
+    List.filterMap
+        (\step ->
+            case step.id of
+                Just stepId ->
+                    if Set.member stepId changes.removals then
+                        Nothing
+
+                    else
+                        Just (Maybe.unwrap step (\hidden -> { step | hidden = hidden }) (Dict.get stepId changes.visibility))
+
+                Nothing ->
+                    Just step
+        )
+
+
 type alias SrcFileDraft =
     { name : String
     , content : String
@@ -1102,6 +1137,7 @@ type Model
         , reviewDraft : Maybe ReviewDraft
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
+        , stepChangeQueue : StepChangeQueue
         , gutterDrag : Maybe GutterDrag
         , compareState : CompareState
         , now : Time.Posix
@@ -1441,6 +1477,11 @@ getAutocompleteDebounce (Model model) =
     model.autocompleteDebounce
 
 
+getStepChangeQueue : Model -> StepChangeQueue
+getStepChangeQueue (Model model) =
+    model.stepChangeQueue
+
+
 getGutterDrag : Model -> Maybe GutterDrag
 getGutterDrag (Model model) =
     model.gutterDrag
@@ -1561,6 +1602,7 @@ initialModel key route flags =
         , reviewDraft = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
+        , stepChangeQueue = { pending = Dict.empty, inFlight = Dict.empty, debounce = Debounce.init }
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0

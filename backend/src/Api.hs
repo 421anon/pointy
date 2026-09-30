@@ -11,6 +11,7 @@ import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
+import Handlers.ProjectEntities (StepChanges)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
@@ -102,12 +103,13 @@ type BatchAssignRecords =
         :> ReqBody '[JSON] [Int]
         :> Post '[JSON] NoContent
 
-type UnassignRecord =
+type ApplyStepChanges =
     "project-entities"
-        :> Description "Removes a record assignment from a project."
+        :> "changes"
+        :> Description "Hides, shows and removes steps of a project in a single commit."
         :> ReqProjectId
-        :> ReqEntityId
-        :> Delete '[JSON] NoContent
+        :> ReqBody '[JSON] StepChanges
+        :> Post '[JSON] NoContent
 
 type Autocomplete =
     "autocomplete"
@@ -476,7 +478,7 @@ type API =
         :<|> DeleteProject
         :<|> AssignRecord
         :<|> BatchAssignRecords
-        :<|> UnassignRecord
+        :<|> ApplyStepChanges
         :<|> StepStatusStream
         :<|> ProjectStatus
         :<|> GetStepConfig

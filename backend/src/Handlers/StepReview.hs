@@ -8,7 +8,7 @@
 module Handlers.StepReview (
     ReviewRequest (..),
     StepReviewReport (..),
-    ensureStepUnreviewed,
+    ensureStepsUnreviewed,
     getProjectReviewHandler,
     removeReviewHandler,
     requireStepUnreviewed,
@@ -467,13 +467,13 @@ reviewedOutputUnbuiltDetail :: Int -> FilePath -> Text
 reviewedOutputUnbuiltDetail stepId outPath =
     T.pack $ "Step " ++ show stepId ++ ": the reviewed revision has no built output (" ++ outPath ++ "). Rebuild the reviewed revision or remove the review."
 
-ensureStepUnreviewed :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) ()
-ensureStepUnreviewed ctx stepId = do
-    reviews <- stepReviews ctx [stepId]
+ensureStepsUnreviewed :: (RepoContext ctx, Eval :> es) => ctx -> [Int] -> ExceptT String (Eff es) ()
+ensureStepsUnreviewed ctx stepIds = do
+    reviews <- stepReviews ctx stepIds
     when (any isJust reviews) $ throwError "Reviewed steps cannot be edited. Remove the review first."
 
 requireStepUnreviewed :: Int -> AppM ()
-requireStepUnreviewed stepId = lift (withReadRepoTransaction (`ensureStepUnreviewed` stepId)) >>= orFail err409
+requireStepUnreviewed stepId = lift (withReadRepoTransaction (`ensureStepsUnreviewed` [stepId])) >>= orFail err409
 
 projectStepIds :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) [Int]
 projectStepIds context projectId =

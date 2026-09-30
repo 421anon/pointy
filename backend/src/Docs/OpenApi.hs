@@ -23,6 +23,7 @@ import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.ProjectEntities (StepChanges)
 import Handlers.Projects (ProjectUpdate)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -124,6 +125,12 @@ objectSchema typeName fields =
 instance ToSchema TurnRequest where
     declareNamedSchema _ =
         pure $ objectSchema "TurnRequest" [("sessionId", stringField), ("prompt", stringField)]
+
+instance ToSchema StepChanges where
+    declareNamedSchema _ =
+        pure $ objectSchema "StepChanges" [("hide", stepIdsField), ("show", stepIdsField), ("remove", stepIdsField)]
+      where
+        stepIdsField = Inline (mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline (mempty & type_ ?~ OpenApiInteger)))
 
 instance ToSchema SessionRequest where
     declareNamedSchema _ =

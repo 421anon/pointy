@@ -1,6 +1,7 @@
 module Api.Api exposing
     ( AutocompleteRequest
     , SeekAnchor(..)
+    , applyStepChanges
     , batchAssignRecordsToProject
     , createProject
     , createSrcFile
@@ -36,10 +37,10 @@ module Api.Api exposing
     , saveSrcFile
     , srcFileDownloadUrl
     , srcFileRawUrl
+    , stepChangesUrl
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
-    , unassignRecordFromProject
     , uploadFiles
     , wrapScratch
     )
@@ -53,7 +54,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, ScratchListing, StepRecord)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, ScratchListing, StepChanges, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -397,15 +398,14 @@ batchAssignRecordsToProject projectId recordIds =
     request "POST" url (Http.jsonBody (Json.Encode.list Json.Encode.int recordIds))
 
 
-unassignRecordFromProject : Int -> Int -> Flow s (Result Http.Error ())
-unassignRecordFromProject projectId recordId =
-    request "DELETE"
-        ("/backend/project-entities?project_id="
-            ++ String.fromInt projectId
-            ++ "&entity_id="
-            ++ String.fromInt recordId
-        )
-        Http.emptyBody
+stepChangesUrl : Int -> String
+stepChangesUrl projectId =
+    "/backend/project-entities/changes?project_id=" ++ String.fromInt projectId
+
+
+applyStepChanges : Int -> StepChanges -> Flow s (Result Http.Error ())
+applyStepChanges projectId changes =
+    request "POST" (stepChangesUrl projectId) (Http.jsonBody (Encode.stepChanges changes))
 
 
 runStep : Int -> Maybe String -> Flow s (Result Http.Error ())

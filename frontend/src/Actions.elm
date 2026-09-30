@@ -5,6 +5,7 @@ import Api.Agent as AgentApi
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Api.Decode as ApiDecode
+import Api.Encode as ApiEncode
 import Basics.Extra exposing (flip)
 import Browser
 import Browser.Dom as Dom
@@ -239,16 +240,22 @@ toggleRecordVisibility spec mProjectId mHidden record =
     let
         hiddenRecord =
             { record | hidden = Maybe.withDefault (not record.hidden) mHidden }
-
-        recordLens =
-            TableSpec.getLens spec << records << success << by .id hiddenRecord.id
     in
-    Flow.setAll recordLens hiddenRecord
-        |> Flow.seq (persistRecordChange mProjectId spec hiddenRecord)
-        |> FlowError.foldResult
-            (\_ -> refetchCommitHash)
-            (\_ -> Flow.setAll recordLens record)
-        |> Flow.return ()
+    case ( mProjectId, getTag spec, hiddenRecord.id ) of
+        ( Just projectId, TagSteps _ _, Just stepId ) ->
+            queueStepChange projectId (\changes -> { changes | visibility = Dict.insert stepId hiddenRecord.hidden changes.visibility })
+
+        _ ->
+            let
+                recordLens =
+                    TableSpec.getLens spec << records << success << by .id hiddenRecord.id
+            in
+            Flow.setAll recordLens hiddenRecord
+                |> Flow.seq (persistRecordChange mProjectId spec hiddenRecord)
+                |> FlowError.foldResult
+                    (\_ -> refetchCommitHash)
+                    (\_ -> Flow.setAll recordLens record)
+                |> Flow.return ()
 
 
 loadProjects : Flow Model ()
@@ -264,6 +271,7 @@ loadProjects =
                         in
                         callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
                             |> ignoreResult
+                            |> Flow.seq (Flow.when (mCommit_ == Nothing) applyQueuedStepChanges)
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async loadProjectReviews)
 
@@ -617,24 +625,120 @@ removeRecord spec recordId_ =
 
         TagSteps _ _ ->
             Flow.forAll currentProjectId
-                (\projectId ->
-                    let
-                        tableLens =
-                            projects << records << success << by .id (Just projectId) << tableInProject (TableSpec.getName spec) << records << success
-                    in
-                    Flow.forAll (tableLens << by .id (Just recordId_))
-                        (\recordToDelete ->
-                            Flow.over tableLens (List.filter (\r -> r.id /= Just recordId_))
-                                |> Flow.seq
-                                    (Flow.setting (projectStep (Just projectId) (Just recordId_) << isUpdating)
-                                        (callApi void (Api.unassignRecordFromProject projectId recordId_))
-                                        |> FlowError.andThen (\_ -> refetchCommitHash)
-                                        |> FlowError.foldResult
-                                            (always (Flow.pure ()))
-                                            (\_ -> Flow.over tableLens (\rs -> rs ++ [ recordToDelete ]))
-                                    )
+                (\projectId -> queueStepChange projectId (\changes -> { changes | removals = Set.insert recordId_ changes.removals }))
+
+
+stepChangesDebounceConfig : Debounce.Config (Flow Model ())
+stepChangesDebounceConfig =
+    { strategy = Debounce.later 5000
+    , transform = stepChangesDebounceMsg
+    }
+
+
+queueStepChange : Int -> (Model.StepChanges -> Model.StepChanges) -> Flow Model ()
+queueStepChange projectId change =
+    Flow.over stepChangeQueue
+        (\queue -> { queue | pending = Dict.update projectId (Maybe.withDefault Model.noStepChanges >> change >> Just) queue.pending })
+        |> Flow.seq applyQueuedStepChanges
+        |> Flow.seq publishUnsentStepChanges
+        |> Flow.seq scheduleStepChangesFlush
+
+
+applyQueuedStepChanges : Flow Model ()
+applyQueuedStepChanges =
+    Flow.forAll stepChangeQueue
+        (\queue ->
+            Flow.modify
+                (\model ->
+                    List.foldl
+                        (\( projectId, changes ) ->
+                            over (projects << records << success << by .id (Just projectId) << tables << values << records << success) (Model.applyStepChanges changes)
+                        )
+                        model
+                        (Dict.toList queue.inFlight ++ Dict.toList queue.pending)
+                )
+        )
+
+
+publishUnsentStepChanges : Flow Model ()
+publishUnsentStepChanges =
+    Flow.forAll stepChangeQueue
+        (\queue ->
+            callJs "setUnsentStepChanges"
+                (Encode.list
+                    (\( projectId, changes ) ->
+                        Encode.object
+                            [ ( "url", Encode.string (Api.stepChangesUrl projectId) )
+                            , ( "body", ApiEncode.stepChanges changes )
+                            ]
+                    )
+                )
+                (Decode.succeed ())
+                (Dict.toList queue.pending)
+        )
+
+
+scheduleStepChangesFlush : Flow Model ()
+scheduleStepChangesFlush =
+    Flow.forAll stepChangeQueue
+        (\queue ->
+            let
+                ( newDebounce, debounceCmd ) =
+                    Debounce.push stepChangesDebounceConfig () queue.debounce
+            in
+            Flow.setAll stepChangeQueue { queue | debounce = newDebounce }
+                |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+        )
+
+
+stepChangesDebounceMsg : Debounce.Msg -> Flow Model ()
+stepChangesDebounceMsg msg =
+    Flow.forAll stepChangeQueue
+        (\queue ->
+            let
+                flush () =
+                    Task.perform (\_ -> flushStepChanges) (Task.succeed ())
+
+                ( newDebounce, debounceCmd ) =
+                    Debounce.update stepChangesDebounceConfig (Debounce.takeLast flush) msg queue.debounce
+            in
+            Flow.setAll stepChangeQueue { queue | debounce = newDebounce }
+                |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+        )
+
+
+flushStepChanges : Flow Model ()
+flushStepChanges =
+    Flow.forAll stepChangeQueue
+        (\queue ->
+            Flow.when (Dict.isEmpty queue.inFlight && not (Dict.isEmpty queue.pending))
+                (Flow.setAll stepChangeQueue { queue | pending = Dict.empty, inFlight = queue.pending }
+                    |> Flow.seq publishUnsentStepChanges
+                    |> Flow.seq (Flow.traverse sendStepChanges (Dict.toList queue.pending))
+                    |> Flow.seq
+                        (Flow.forAll stepChangeQueue
+                            (\settled -> Flow.unless (Dict.isEmpty settled.pending) scheduleStepChangesFlush)
                         )
                 )
+        )
+
+
+sendStepChanges : ( Int, Model.StepChanges ) -> Flow Model ()
+sendStepChanges ( projectId, changes ) =
+    Api.applyStepChanges projectId changes
+        |> Flow.andThen
+            (\result ->
+                Flow.over stepChangeQueue (\queue -> { queue | inFlight = Dict.remove projectId queue.inFlight })
+                    |> Flow.seq
+                        (case result of
+                            Ok () ->
+                                refetchCommitHash
+
+                            Err err ->
+                                addToast False (Http.errorMessage err)
+                                    |> Flow.seq loadProjects
+                        )
+            )
 
 
 batchAssignRecordsToProject : List Int -> Int -> Flow Model ()

@@ -18,6 +18,24 @@ function copyToClipboard(text) {
   navigator.clipboard.writeText(text);
 }
 
+let unsentStepChanges = [];
+
+function setUnsentStepChanges(requests) {
+  unsentStepChanges = requests;
+}
+
+function sendUnsentStepChanges() {
+  for (const { url, body } of unsentStepChanges) {
+    fetch(url, {
+      method: "POST",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+  unsentStepChanges = [];
+}
+
 function zoomIframe({ id, zoom }) {
   const iframe = document.getElementById(id);
   if (!iframe) return;
@@ -285,6 +303,7 @@ export function connectPorts(app) {
     toggleTheme,
     agentPrompt,
     storeLastChat,
+    setUnsentStepChanges,
   };
 
   installGutterDragListeners(app);
@@ -318,4 +337,6 @@ export function connectPorts(app) {
     if (clusterStatusSource) clusterStatusSource.close();
     if (ingestJobsSource) ingestJobsSource.close();
   });
+
+  window.addEventListener("pagehide", sendUnsentStepChanges);
 }
