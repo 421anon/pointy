@@ -27,9 +27,9 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildKind(..), CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TableTag(..), TemplateSource(..), dndSystem)
 import Model.Lenses exposing (..)
-import Model.Lib exposing (sortProjects)
+import Model.Lib exposing (canonicalPathTo, linkProjects)
 import Model.Shadow exposing (StepArgValue)
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec, getTag)
 import Ports
@@ -99,7 +99,7 @@ toggleAddOrEditRecordForm spec mRecordId =
             { stashed | nameEditOnly = False, edited = newEdited }
 
         scrollAction =
-            Flow.attemptTask (Scroll.scrollY (Maybe.unwrap ("table-" ++ TableSpec.getName spec) String.fromInt mRecordId) 0 0)
+            Flow.attemptTask (Scroll.scrollY (Maybe.unwrap ("table-" ++ TableSpec.getName spec) (Model.rowDomId (Model.tagChildKind (getTag spec))) mRecordId) 0 0)
 
         focusAction =
             Flow.attemptTask (Dom.focus (TableSpec.getName spec ++ "-name-input"))
@@ -185,16 +185,19 @@ optimisticCreate tableLens record apiCall =
         )
 
 
-createProject : ProjectRecord -> FlowError Http.Error Model ProjectRecord
-createProject record =
+createProject : TableSpec ProjectRecord -> ProjectRecord -> FlowError Http.Error Model ProjectRecord
+createProject spec record =
     Flow.forAll (stepConfig << success)
         (\stepConfig_ ->
             Flow.forAll (presets << success)
                 (\presets_ ->
-                    optimisticCreate
-                        projects
-                        record
-                        (Api.createProject presets_ stepConfig_ record)
+                    Flow.forAll currentProjectId
+                        (\parentId ->
+                            optimisticCreate
+                                (TableSpec.getLens spec)
+                                record
+                                (Api.createProject presets_ stepConfig_ parentId record)
+                        )
                 )
         )
 
@@ -219,43 +222,21 @@ createStep mSourceId spec record =
         )
 
 
-persistRecordChange : Maybe Int -> TableSpec (BaseRecord a) -> BaseRecord a -> FlowError Http.Error Model ()
-persistRecordChange mProjectId spec record =
-    case ( mProjectId, getTag spec, record.id ) of
-        ( Just projectId, _, _ ) ->
-            saveProject projectId
-
-        ( Nothing, TagProjects, Just id ) ->
-            saveProject id
-
-        ( Nothing, TagSteps _ _, _ ) ->
-            callApi void (Api.saveRecord spec record)
-
-        _ ->
-            Flow.pure (Ok ())
-
-
-toggleRecordVisibility : TableSpec (BaseRecord a) -> Maybe Int -> Maybe Bool -> BaseRecord a -> Flow Model ()
-toggleRecordVisibility spec mProjectId mHidden record =
+toggleRecordVisibility : TableSpec (BaseRecord a) -> Maybe Bool -> BaseRecord a -> Flow Model ()
+toggleRecordVisibility spec mHidden record =
     let
-        hiddenRecord =
-            { record | hidden = Maybe.withDefault (not record.hidden) mHidden }
+        hidden =
+            Maybe.withDefault (not record.hidden) mHidden
     in
-    case ( mProjectId, getTag spec, hiddenRecord.id ) of
-        ( Just projectId, TagSteps _ _, Just stepId ) ->
-            queueStepChange projectId (\changes -> { changes | visibility = Dict.insert stepId hiddenRecord.hidden changes.visibility })
-
-        _ ->
-            let
-                recordLens =
-                    TableSpec.getLens spec << records << success << by .id hiddenRecord.id
-            in
-            Flow.setAll recordLens hiddenRecord
-                |> Flow.seq (persistRecordChange mProjectId spec hiddenRecord)
-                |> FlowError.foldResult
-                    (\_ -> refetchCommitHash)
-                    (\_ -> Flow.setAll recordLens record)
-                |> Flow.return ()
+    Flow.forAll currentProjectId
+        (\projectId ->
+            Flow.fromMaybe record.id
+                (\recordId_ ->
+                    queueChildChange projectId
+                        (Model.tagChildKind (getTag spec))
+                        (Model.updateEntry recordId_ (\update -> { update | hidden = Just hidden }))
+                )
+        )
 
 
 loadProjects : Flow Model ()
@@ -269,9 +250,9 @@ loadProjects =
                             mCommit_ =
                                 try (route << Route.page << Route.project << mCommit << just) model
                         in
-                        callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map sortProjects))
+                        callApiMerge Model.updateProjectRecordList (projects << records) (Api.fetchProjects mCommit_ presets_ stepConfig_ |> Flow.map (Result.map linkProjects))
                             |> ignoreResult
-                            |> Flow.seq (Flow.when (mCommit_ == Nothing) applyQueuedStepChanges)
+                            |> Flow.seq (Flow.when (mCommit_ == Nothing) applyQueuedChildChanges)
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async loadProjectReviews)
 
@@ -392,25 +373,25 @@ reloadWorkspaceData =
         |> Flow.seq loadProjects
 
 
-chooseProjectPreset : String -> Flow Model ()
-chooseProjectPreset =
-    Flow.setAll (projects << edited << just << templateSource) << FromPreset
+chooseProjectPreset : A_Traversal Model (Table ProjectRecord) -> String -> Flow Model ()
+chooseProjectPreset tableLens =
+    Flow.setAll (remkT tableLens << edited << just << templateSource) << FromPreset
 
 
-chooseProjectCustom : Flow Model ()
-chooseProjectCustom =
+chooseProjectCustom : A_Traversal Model (Table ProjectRecord) -> Flow Model ()
+chooseProjectCustom tableLens =
     Flow.forAll (presets << success)
         (\presets_ ->
-            Flow.over (projects << edited << just << templateSource)
+            Flow.over (remkT tableLens << edited << just << templateSource)
                 (CustomTemplates << Model.effectiveTemplates presets_)
         )
 
 
-addProjectTemplate : String -> Flow Model ()
-addProjectTemplate template =
+addProjectTemplate : A_Traversal Model (Table ProjectRecord) -> String -> Flow Model ()
+addProjectTemplate tableLens template =
     Flow.forAll (presets << success)
         (\presets_ ->
-            Flow.over (projects << edited << just << templateSource)
+            Flow.over (remkT tableLens << edited << just << templateSource)
                 (\source ->
                     let
                         current =
@@ -425,11 +406,11 @@ addProjectTemplate template =
         )
 
 
-removeProjectTemplate : String -> Flow Model ()
-removeProjectTemplate template =
+removeProjectTemplate : A_Traversal Model (Table ProjectRecord) -> String -> Flow Model ()
+removeProjectTemplate tableLens template =
     Flow.forAll (presets << success)
         (\presets_ ->
-            Flow.over (projects << edited << just << templateSource)
+            Flow.over (remkT tableLens << edited << just << templateSource)
                 (CustomTemplates
                     << List.filter ((/=) template)
                     << Model.effectiveTemplates presets_
@@ -608,51 +589,38 @@ removeReview stepId =
 
 removeRecord : TableSpec (BaseRecord a) -> Int -> Flow Model ()
 removeRecord spec recordId_ =
-    case getTag spec of
-        TagProjects ->
-            Flow.forAll (TableSpec.getLens spec << records << success << by .id (Just recordId_))
-                (\recordToDelete ->
-                    Flow.over (TableSpec.getLens spec << records << success)
-                        (List.filter (\r -> r.id /= Just recordId_))
-                        |> Flow.seq
-                            (callApi void (Api.deleteProject recordId_)
-                                |> FlowError.andThen (\_ -> refetchCommitHash)
-                                |> FlowError.foldResult
-                                    (always (Flow.pure ()))
-                                    (\_ -> Flow.over (TableSpec.getLens spec << records << success) (\rs -> rs ++ [ recordToDelete ]))
-                            )
-                )
-
-        TagSteps _ _ ->
-            Flow.forAll currentProjectId
-                (\projectId -> queueStepChange projectId (\changes -> { changes | removals = Set.insert recordId_ changes.removals }))
+    Flow.forAll currentProjectId
+        (\projectId -> queueChildChange projectId (Model.tagChildKind (getTag spec)) (Model.removeEntry recordId_))
 
 
-stepChangesDebounceConfig : Debounce.Config (Flow Model ())
-stepChangesDebounceConfig =
+childChangesDebounceConfig : Debounce.Config (Flow Model ())
+childChangesDebounceConfig =
     { strategy = Debounce.later 5000
-    , transform = stepChangesDebounceMsg
+    , transform = childChangesDebounceMsg
     }
 
 
-queueStepChange : Int -> (Model.StepChanges -> Model.StepChanges) -> Flow Model ()
-queueStepChange projectId change =
-    Flow.over stepChangeQueue
-        (\queue -> { queue | pending = Dict.update projectId (Maybe.withDefault Model.noStepChanges >> change >> Just) queue.pending })
-        |> Flow.seq applyQueuedStepChanges
-        |> Flow.seq publishUnsentStepChanges
-        |> Flow.seq scheduleStepChangesFlush
+queueChildChange : Int -> ChildKind -> (Model.EntryChanges -> Model.EntryChanges) -> Flow Model ()
+queueChildChange projectId kind change =
+    Flow.over childChangeQueue
+        (\queue -> { queue | pending = Dict.update projectId (Maybe.withDefault Model.noChildChanges >> over (entryChanges kind) change >> Just) queue.pending })
+        |> Flow.seq applyQueuedChildChanges
+        |> Flow.seq publishUnsentChildChanges
+        |> Flow.seq scheduleChildChangesFlush
 
 
-applyQueuedStepChanges : Flow Model ()
-applyQueuedStepChanges =
-    Flow.forAll stepChangeQueue
+applyQueuedChildChanges : Flow Model ()
+applyQueuedChildChanges =
+    Flow.forAll childChangeQueue
         (\queue ->
             Flow.modify
                 (\model ->
                     List.foldl
                         (\( projectId, changes ) ->
-                            over (projects << records << success << by .id (Just projectId) << tables << values << records << success) (Model.applyStepChanges changes)
+                            over (projects << records << success << by .id (Just projectId))
+                                (over (tables << values << records << success) (Model.applyEntryChanges changes.steps)
+                                    >> over (subProjects << records << success) (Model.applyEntryChanges changes.projects)
+                                )
                         )
                         model
                         (Dict.toList queue.inFlight ++ Dict.toList queue.pending)
@@ -660,16 +628,16 @@ applyQueuedStepChanges =
         )
 
 
-publishUnsentStepChanges : Flow Model ()
-publishUnsentStepChanges =
-    Flow.forAll stepChangeQueue
+publishUnsentChildChanges : Flow Model ()
+publishUnsentChildChanges =
+    Flow.forAll childChangeQueue
         (\queue ->
             callJs "setUnsentStepChanges"
                 (Encode.list
                     (\( projectId, changes ) ->
                         Encode.object
-                            [ ( "url", Encode.string (Api.stepChangesUrl projectId) )
-                            , ( "body", ApiEncode.stepChanges changes )
+                            [ ( "url", Encode.string (Api.childChangesUrl projectId) )
+                            , ( "body", ApiEncode.childChanges changes )
                             ]
                     )
                 )
@@ -678,57 +646,57 @@ publishUnsentStepChanges =
         )
 
 
-scheduleStepChangesFlush : Flow Model ()
-scheduleStepChangesFlush =
-    Flow.forAll stepChangeQueue
+scheduleChildChangesFlush : Flow Model ()
+scheduleChildChangesFlush =
+    Flow.forAll childChangeQueue
         (\queue ->
             let
                 ( newDebounce, debounceCmd ) =
-                    Debounce.push stepChangesDebounceConfig () queue.debounce
+                    Debounce.push childChangesDebounceConfig () queue.debounce
             in
-            Flow.setAll stepChangeQueue { queue | debounce = newDebounce }
+            Flow.setAll childChangeQueue { queue | debounce = newDebounce }
                 |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
         )
 
 
-stepChangesDebounceMsg : Debounce.Msg -> Flow Model ()
-stepChangesDebounceMsg msg =
-    Flow.forAll stepChangeQueue
+childChangesDebounceMsg : Debounce.Msg -> Flow Model ()
+childChangesDebounceMsg msg =
+    Flow.forAll childChangeQueue
         (\queue ->
             let
                 flush () =
-                    Task.perform (\_ -> flushStepChanges) (Task.succeed ())
+                    Task.perform (\_ -> flushChildChanges) (Task.succeed ())
 
                 ( newDebounce, debounceCmd ) =
-                    Debounce.update stepChangesDebounceConfig (Debounce.takeLast flush) msg queue.debounce
+                    Debounce.update childChangesDebounceConfig (Debounce.takeLast flush) msg queue.debounce
             in
-            Flow.setAll stepChangeQueue { queue | debounce = newDebounce }
+            Flow.setAll childChangeQueue { queue | debounce = newDebounce }
                 |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
         )
 
 
-flushStepChanges : Flow Model ()
-flushStepChanges =
-    Flow.forAll stepChangeQueue
+flushChildChanges : Flow Model ()
+flushChildChanges =
+    Flow.forAll childChangeQueue
         (\queue ->
             Flow.when (Dict.isEmpty queue.inFlight && not (Dict.isEmpty queue.pending))
-                (Flow.setAll stepChangeQueue { queue | pending = Dict.empty, inFlight = queue.pending }
-                    |> Flow.seq publishUnsentStepChanges
-                    |> Flow.seq (Flow.traverse sendStepChanges (Dict.toList queue.pending))
+                (Flow.setAll childChangeQueue { queue | pending = Dict.empty, inFlight = queue.pending }
+                    |> Flow.seq publishUnsentChildChanges
+                    |> Flow.seq (Flow.traverse sendChildChanges (Dict.toList queue.pending))
                     |> Flow.seq
-                        (Flow.forAll stepChangeQueue
-                            (\settled -> Flow.unless (Dict.isEmpty settled.pending) scheduleStepChangesFlush)
+                        (Flow.forAll childChangeQueue
+                            (\settled -> Flow.unless (Dict.isEmpty settled.pending) scheduleChildChangesFlush)
                         )
                 )
         )
 
 
-sendStepChanges : ( Int, Model.StepChanges ) -> Flow Model ()
-sendStepChanges ( projectId, changes ) =
-    Api.applyStepChanges projectId changes
+sendChildChanges : ( Int, Model.ChildChanges ) -> Flow Model ()
+sendChildChanges ( projectId, changes ) =
+    Api.applyChildChanges projectId changes
         |> Flow.andThen
             (\result ->
-                Flow.over stepChangeQueue (\queue -> { queue | inFlight = Dict.remove projectId queue.inFlight })
+                Flow.over childChangeQueue (\queue -> { queue | inFlight = Dict.remove projectId queue.inFlight })
                     |> Flow.seq
                         (case result of
                             Ok () ->
@@ -741,9 +709,9 @@ sendStepChanges ( projectId, changes ) =
             )
 
 
-batchAssignRecordsToProject : List Int -> Int -> Flow Model ()
-batchAssignRecordsToProject recordIds projectId =
-    callApi void (Api.batchAssignRecordsToProject projectId recordIds)
+batchAssignRecordsToProject : ChildKind -> List Int -> Int -> Flow Model ()
+batchAssignRecordsToProject kind recordIds projectId =
+    callApi void (Api.batchAssignRecordsToProject projectId kind recordIds)
         |> Flow.seq refetchCommitHash
         |> Flow.return ()
 
@@ -768,13 +736,26 @@ upsertProject spec =
                                         (\( edited_, addMode_ ) ->
                                             case ( edited_.id, addMode_ ) of
                                                 ( Nothing, AddNew ) ->
-                                                    createProject edited_ |> Flow.return ()
+                                                    createProject spec edited_
+                                                        |> FlowError.andThen (\_ -> loadProjects)
+                                                        |> Flow.return ()
 
                                                 ( Nothing, AddFromOtherProject ) ->
-                                                    Flow.pure ()
+                                                    Flow.forAll currentProjectId
+                                                        (\projectId ->
+                                                            Flow.setting (lens << isUpdating)
+                                                                (batchAssignRecordsToProject ProjectChild (all (lens << selectExistingSteps << selected << each << recordId << just) model) projectId)
+                                                                |> Flow.seq (Flow.setAll (lens << selectExistingSteps << selected) [])
+                                                                |> Flow.seq (endRecordEdit lens)
+                                                                |> Flow.seq loadProjects
+                                                        )
 
                                                 ( Just _, _ ) ->
-                                                    saveExistingRecord lens edited_ (always (Model.repartitionProjectSteps presets_ stepConfig_ edited_)) spec
+                                                    saveExistingRecord lens
+                                                        edited_
+                                                        (\current -> Model.repartitionProjectSteps presets_ stepConfig_ { current | name = edited_.name, templateSource = edited_.templateSource })
+                                                        spec
+                                                        |> Flow.seq loadProjects
                                         )
                             )
                 )
@@ -803,7 +784,7 @@ upsertStep spec =
 
                                         ( Nothing, AddFromOtherProject ) ->
                                             Flow.setting (TableSpec.getLens spec << isUpdating)
-                                                (batchAssignRecordsToProject (all (lens << selectExistingSteps << selected << each << recordId << just) model) projectId)
+                                                (batchAssignRecordsToProject StepChild (all (lens << selectExistingSteps << selected << each << recordId << just) model) projectId)
                                                 |> Flow.seq (Flow.setAll (lens << selectExistingSteps << selected) [])
                                                 |> Flow.seq (endRecordEdit lens)
                                                 |> Flow.seq loadProjects
@@ -1329,24 +1310,27 @@ cloneStep spec record =
         |> Flow.return ()
 
 
-shareEntity : Int -> Int -> Route.HighlightTarget -> List String -> Maybe Route.LineRange -> Flow Model ()
-shareEntity projectId entityId target pathSegments mRange =
+shareEntity : Int -> Route.HighlightTarget -> List String -> Maybe Route.LineRange -> Flow Model ()
+shareEntity entityId target pathSegments mRange =
     Flow.try (orElseT (route << Route.page << Route.project << mCommit << just) (commitHash << success))
         (\mCommit_ ->
-            Flow.forAll origin
-                (\origin_ ->
-                    let
-                        route_ =
-                            Route.fromPage
-                                (Route.Project
-                                    { projectId = projectId
-                                    , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
-                                    , mCommit = mCommit_
-                                    , mCompare = Nothing
-                                    }
-                                )
-                    in
-                    callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString route_)
+            Flow.forAll currentProjectPath
+                (\projectPath_ ->
+                    Flow.forAll origin
+                        (\origin_ ->
+                            let
+                                route_ =
+                                    Route.fromPage
+                                        (Route.Project
+                                            { projectPath = projectPath_
+                                            , mHighlight = Just { id = entityId, target = target, path = pathSegments, range = mRange }
+                                            , mCommit = mCommit_
+                                            , mCompare = Nothing
+                                            }
+                                        )
+                            in
+                            callJs "copyToClipboard" Encode.string (Decode.succeed ()) (origin_ ++ Route.toString route_)
+                        )
                 )
         )
         |> Flow.seq (addToast True "Share link copied to clipboard")
@@ -1428,12 +1412,12 @@ selectCompareFile right =
                         nextRoute =
                             case currentRoute.page of
                                 Route.Project params ->
-                                    { currentRoute | page = Route.Project { params | projectId = left.projectId, mCompare = Just comparison } }
+                                    { currentRoute | page = Route.Project { params | projectPath = left.projectPath, mCompare = Just comparison } }
 
                                 _ ->
                                     Route.fromPage
                                         (Route.Project
-                                            { projectId = left.projectId
+                                            { projectPath = left.projectPath
                                             , mHighlight = Nothing
                                             , mCommit = Nothing
                                             , mCompare = Just comparison
@@ -1446,8 +1430,8 @@ selectCompareFile right =
 syncCompareFromRoute : Route -> Flow Model ()
 syncCompareFromRoute route_ =
     case route_.page of
-        Route.Project { projectId, mCompare } ->
-            case Maybe.andThen (compareSelectionsFromRoute projectId) mCompare of
+        Route.Project { projectPath, mCompare } ->
+            case Maybe.andThen (compareSelectionsFromRoute projectPath) mCompare of
                 Just ( left, right ) ->
                     activateCompare left right
 
@@ -1458,18 +1442,18 @@ syncCompareFromRoute route_ =
             clearActiveCompareIfNeeded
 
 
-compareSelectionsFromRoute : Int -> Route.Comparison -> Maybe ( CompareSelection, CompareSelection )
-compareSelectionsFromRoute projectId comparison =
+compareSelectionsFromRoute : List Int -> Route.Comparison -> Maybe ( CompareSelection, CompareSelection )
+compareSelectionsFromRoute projectPath_ comparison =
     Maybe.map2 Tuple.pair
-        (compareSelectionFromTarget projectId comparison.left)
-        (compareSelectionFromTarget projectId comparison.right)
+        (compareSelectionFromTarget projectPath_ comparison.left)
+        (compareSelectionFromTarget projectPath_ comparison.right)
 
 
-compareSelectionFromTarget : Int -> Route.CompareTarget -> Maybe CompareSelection
-compareSelectionFromTarget projectId target =
+compareSelectionFromTarget : List Int -> Route.CompareTarget -> Maybe CompareSelection
+compareSelectionFromTarget projectPath_ target =
     let
         base =
-            { projectId = projectId
+            { projectPath = projectPath_
             , recordId = target.id
             , path = target.path
             , fileName = List.last target.path |> Maybe.withDefault ""
@@ -2379,7 +2363,7 @@ deepOpenOutputEntryOrDefer id path mRange =
 
                 Nothing ->
                     registerStepStatusHook id (deepOpenOutputEntry id path mRange)
-                        |> Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt id) 0 0))
+                        |> Flow.seq (Flow.attemptTask (Scroll.scrollY (Model.rowDomId StepChild id) 0 0))
         )
 
 
@@ -2424,7 +2408,7 @@ deepOpenEntryWith target toggleEntry stepId path mRange =
                 toggleEntry stepId (Just True) pathPart
                     |> Flow.seq (Flow.attemptTask (Scroll.scrollY (Route.highlightAnchor target stepId pathPart) 0 0))
             )
-        |> List.foldl Flow.seq (Flow.attemptTask (Scroll.scrollY (String.fromInt stepId) 0 0))
+        |> List.foldl Flow.seq (Flow.attemptTask (Scroll.scrollY (Model.rowDomId StepChild stepId) 0 0))
         |> Flow.seq scrollToRange
 
 
@@ -2541,8 +2525,8 @@ resetNeedsIntro toastId =
     Flow.setAll (toasts << by .id toastId << needsIntro) False
 
 
-dndMsgToIO : Maybe Int -> TableSpec (BaseRecord a) -> DnDList.Msg -> Flow Model ()
-dndMsgToIO maybeProjectId tableSpec msg =
+dndMsgToIO : TableSpec (BaseRecord a) -> DnDList.Msg -> Flow Model ()
+dndMsgToIO tableSpec msg =
     let
         lens =
             TableSpec.getLens tableSpec
@@ -2558,23 +2542,23 @@ dndMsgToIO maybeProjectId tableSpec msg =
                     |> Flow.seq (Flow.setAll (remkT lens << records << success) newItems)
                     |> Flow.seq
                         (if Maybe.isJust (dndSystem.info oldDnd) && Maybe.isNothing (dndSystem.info newDnd) then
-                            updateSortKeys maybeProjectId tableSpec newItems
+                            updateSortKeys tableSpec newItems
 
                          else
                             Flow.pure ()
                         )
-                    |> Flow.seq (Flow.lift (dndSystem.commands newDnd) |> Flow.andThen (dndMsgToIO maybeProjectId tableSpec))
+                    |> Flow.seq (Flow.lift (dndSystem.commands newDnd) |> Flow.andThen (dndMsgToIO tableSpec))
             )
         |> Flow.return ()
 
 
-dndSub : Model -> Maybe Int -> TableSpec (BaseRecord a) -> Sub (Flow Model ())
-dndSub model maybeProjectId tableSpec =
+dndSub : Model -> TableSpec (BaseRecord a) -> Sub (Flow Model ())
+dndSub model tableSpec =
     (List.map dndSystem.subscriptions <|
         all (remkT (TableSpec.getLens tableSpec) << dnd) model
     )
         |> Sub.batch
-        |> Sub.map (dndMsgToIO maybeProjectId tableSpec)
+        |> Sub.map (dndMsgToIO tableSpec)
 
 
 computeChangedSortRecords : List (BaseRecord a) -> List (BaseRecord a) -> List (BaseRecord a)
@@ -2590,42 +2574,29 @@ computeChangedSortRecords oldRecords newRecords =
             )
 
 
-updateSortKeys : Maybe Int -> TableSpec (BaseRecord a) -> List (BaseRecord a) -> Flow Model ()
-updateSortKeys mProjectId tableSpec records_ =
+updateSortKeys : TableSpec (BaseRecord a) -> List (BaseRecord a) -> Flow Model ()
+updateSortKeys tableSpec records_ =
     let
         allUpdatedRecords =
             List.indexedMap (\i -> set sortKey (Just i)) records_
+
+        changedRecords =
+            computeChangedSortRecords records_ allUpdatedRecords
+
+        queueSortKey record =
+            Maybe.unwrap identity (\id -> Model.updateEntry id (\update -> { update | sortKey = Just record.sortKey })) record.id
     in
     Flow.setAll (TableSpec.getLens tableSpec << records << success) allUpdatedRecords
         |> Flow.seq
-            (case mProjectId of
-                Just projectId ->
-                    saveProject projectId
-
-                Nothing ->
-                    let
-                        changedRecords =
-                            computeChangedSortRecords records_ allUpdatedRecords
-                    in
-                    if getTag tableSpec == TagProjects then
-                        changedRecords
-                            |> List.filterMap (\record -> Maybe.map (\id -> ( id, TableSpec.getEncodeRecord tableSpec record )) record.id)
-                            |> (\updated ->
-                                    if List.isEmpty updated then
-                                        Flow.pure (Ok ())
-
-                                    else
-                                        callApi void (Api.saveProjectsBatch updated)
-                               )
-                            |> Flow.seq refetchCommitHash
-                            |> Flow.return (Ok ())
-
-                    else
-                        Flow.batchM (List.map (persistRecordChange Nothing tableSpec) changedRecords)
-                            |> Flow.seq refetchCommitHash
-                            |> Flow.return (Ok ())
+            (Flow.unless (List.isEmpty changedRecords)
+                (Flow.forAll currentProjectId
+                    (\projectId ->
+                        queueChildChange projectId
+                            (Model.tagChildKind (getTag tableSpec))
+                            (\changes -> List.foldl queueSortKey changes changedRecords)
+                    )
+                )
             )
-        |> Flow.return ()
 
 
 onSelectSearch : Maybe Int -> Int -> Flow Model ()
@@ -2641,7 +2612,19 @@ onSelectSearch mProjectId stepId =
                         mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
                 in
                 pickedProjectId
-                    |> Maybe.unwrap (Flow.pure ()) (\pId -> goToRoute (Route.fromPage (Route.Project { projectId = pId, mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }, mCommit = mCommit_, mCompare = Nothing })))
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\pId ->
+                            goToRoute
+                                (Route.fromPage
+                                    (Route.Project
+                                        { projectPath = canonicalPathTo model pId
+                                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                                        , mCommit = mCommit_
+                                        , mCompare = Nothing
+                                        }
+                                    )
+                                )
+                        )
             )
 
 
@@ -2668,15 +2651,6 @@ closeDialog id =
 toggleTheme : Flow Model ()
 toggleTheme =
     callJs "toggleTheme" (\_ -> Encode.null) (Decode.succeed ()) ()
-
-
-saveProject : Int -> FlowError Http.Error Model ()
-saveProject projectId =
-    Flow.get
-        |> Flow.map (try (projects << records << success << by .id (Just projectId)))
-        |> Flow.assertJust
-        |> Flow.andThen (Api.saveProject projectId >> callApi void)
-        |> FlowError.andThen (\_ -> refetchCommitHash |> Flow.return ())
 
 
 agentChatId : String
@@ -4201,11 +4175,11 @@ stepOutputLocation openProjectId locations stepId =
             )
 
 
-stepOutputRoute : Int -> Int -> Route
-stepOutputRoute projectId_ stepId =
+stepOutputRoute : List Int -> Int -> Route
+stepOutputRoute projectPath_ stepId =
     Route.fromPage
         (Route.Project
-            { projectId = projectId_
+            { projectPath = projectPath_
             , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
             , mCommit = Nothing
             , mCompare = Nothing
@@ -4213,12 +4187,9 @@ stepOutputRoute projectId_ stepId =
         )
 
 
-projectPageRoute : Int -> Route
-projectPageRoute projectId_ =
-    Route.fromPage
-        (Route.Project
-            { projectId = projectId_, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing }
-        )
+projectPageRoute : List Int -> Route
+projectPageRoute projectPath_ =
+    Route.fromPage (Route.projectPage projectPath_ Nothing)
 
 
 openRunningStep : Int -> Flow Model ()
@@ -4230,6 +4201,6 @@ openRunningStep stepId =
                     |> Maybe.unwrap (Flow.pure ())
                         (\location ->
                             Flow.setAll statusBarOpen False
-                                |> Flow.seq (goToRoute (stepOutputRoute location.projectId stepId))
+                                |> Flow.seq (goToRoute (stepOutputRoute (canonicalPathTo model location.projectId) stepId))
                         )
             )

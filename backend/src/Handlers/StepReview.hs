@@ -44,6 +44,7 @@ import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseLBS)
 import NixStore (resolveStorePath)
 import Certificates (evaluatedProjectStepIds, withWriteRepoTransaction)
+import ProjectTree (projectStepEntries)
 import Servant (NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Exit (ExitCode (..))
@@ -480,7 +481,7 @@ projectStepIds context projectId =
     declared `catchError` \err -> evaluatedProjectStepIds context projectId `catchError` const (throwError err)
   where
     declared = decodeNix "Failed to decode project step IDs" =<< runNixEvalJsonApplyInRepo context expression "#pointy.projects"
-    expression = "projects: map (step: step.def.id) (projects." ++ show (show projectId) ++ ".steps or (throw \"Project " ++ show projectId ++ " does not exist.\"))"
+    expression = "projects: map (step: step.def.id) " ++ projectStepEntries "projects" projectId
 
 stepReview :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) (Maybe Review)
 stepReview ctx stepId = stepReviews ctx [stepId] >>= maybe (throwError ("Step " ++ show stepId ++ " does not exist.")) pure . Map.lookup stepId

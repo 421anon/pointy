@@ -19,7 +19,10 @@ module Route exposing
     , href
     , navigationTarget
     , page
+    , pathProjectId
     , project
+    , projectPage
+    , rootProjectId
     , routeUrlIso
     , toString
     )
@@ -28,8 +31,10 @@ module Route exposing
 import Accessors exposing (Iso, Lens, Prism, iso, lens, prism)
 import Html
 import Html.Attributes as Attr
+import List.Extra as List
+import Maybe.Extra as Maybe
 import Url exposing (Url)
-import Url.Parser as Parser exposing ((</>), (<?>), Parser)
+import Url.Parser as Parser exposing ((<?>), Parser)
 import Url.Parser.Query as Query
 
 
@@ -45,14 +50,13 @@ type alias Route =
 
 
 type Page
-    = Home
-    | Project ProjectParams
+    = Project ProjectParams
     | Artifact ArtifactParams
     | NotFound { path : String, query : Maybe String }
 
 
 type alias ProjectParams =
-    { projectId : Int
+    { projectPath : List Int
     , mHighlight : Maybe Highlight
     , mCommit : Maybe String
     , mCompare : Maybe Comparison
@@ -60,7 +64,7 @@ type alias ProjectParams =
 
 
 type alias ArtifactParams =
-    { projectId : Int
+    { projectPath : List Int
     , stepId : Int
     , commit : String
     , path : List String
@@ -143,6 +147,26 @@ project =
         )
 
 
+rootProjectId : Int
+rootProjectId =
+    0
+
+
+pathProjectId : List Int -> Int
+pathProjectId =
+    List.last >> Maybe.withDefault rootProjectId
+
+
+projectPage : List Int -> Maybe String -> Page
+projectPage projectPath mCommit =
+    Project
+        { projectPath = projectPath
+        , mHighlight = Nothing
+        , mCommit = mCommit
+        , mCompare = Nothing
+        }
+
+
 fromPage : Page -> Route
 fromPage page_ =
     { page = page_
@@ -165,7 +189,7 @@ fromUrl url =
             stripQueryKeys [ "chat", "turn" ] url.query
 
         ( page_, extraQuery ) =
-            case Parser.parse pageParser url of
+            case pageFromUrl url of
                 Just parsedPage ->
                     ( parsedPage, stripQueryKeys (pageQueryKeys parsedPage) queryWithoutChat )
 
@@ -187,9 +211,6 @@ toUrl route =
     let
         ( pagePath, pageQueryParts ) =
             case route.page of
-                Home ->
-                    ( "/", [] )
-
                 Project params ->
                     projectUrlParts params
 
@@ -264,51 +285,97 @@ navigationTarget route =
     }
 
 
-pageParser : Parser (Page -> a) a
-pageParser =
-    Parser.oneOf
-        [ Parser.map Home Parser.top
-        , Parser.map
-            (\id basicHi mCommit mLines leftRef leftCommit leftMime rightRef rightCommit rightMime ->
-                Project
-                    { projectId = id
-                    , mHighlight = Maybe.map (\hi -> { hi | range = mLines }) basicHi
-                    , mCommit = mCommit
-                    , mCompare =
-                        Maybe.map2
-                            (\left right -> { left = left, right = right })
-                            (compareTargetFromQuery leftRef leftCommit leftMime)
-                            (compareTargetFromQuery rightRef rightCommit rightMime)
-                    }
-            )
-            (Parser.s "project"
-                </> Parser.int
-                <?> Query.custom "hi" highlightParser
-                <?> Query.string "commit"
-                <?> Query.custom "lines" lineRangeParser
-                <?> Query.custom "compareLeft" compareTargetParser
-                <?> Query.string "compareLeftCommit"
-                <?> Query.string "compareLeftMime"
-                <?> Query.custom "compareRight" compareTargetParser
-                <?> Query.string "compareRightCommit"
-                <?> Query.string "compareRightMime"
-            )
-        , Parser.map
-            (\projectId stepId commit mPath ->
-                Artifact
-                    { projectId = projectId
-                    , stepId = stepId
-                    , commit = commit
-                    , path = Maybe.map (String.split "/") mPath |> Maybe.withDefault []
-                    }
-            )
-            (Parser.s "artifact"
-                </> Parser.int
-                </> Parser.int
-                </> Parser.string
-                <?> Query.string "path"
-            )
-        ]
+pathSegments : String -> List String
+pathSegments path =
+    let
+        withoutLeadingEmpty =
+            case String.split "/" path of
+                "" :: segments ->
+                    segments
+
+                segments ->
+                    segments
+    in
+    case List.reverse withoutLeadingEmpty of
+        "" :: reversedSegments ->
+            List.reverse reversedSegments
+
+        _ ->
+            withoutLeadingEmpty
+
+
+pageFromUrl : Url -> Maybe Page
+pageFromUrl url =
+    let
+        parseQuery queryParser =
+            Parser.parse queryParser { url | path = "/" }
+
+        projectIds =
+            List.map String.toInt >> Maybe.combine
+    in
+    case pathSegments url.path of
+        [] ->
+            parseQuery (projectQueryParser [])
+
+        "project" :: ((_ :: _) as ids) ->
+            projectIds ids
+                |> Maybe.andThen (parseQuery << projectQueryParser)
+
+        "artifact" :: segments ->
+            case List.reverse segments of
+                commit :: stepIdSegment :: reversedProjectPath ->
+                    Maybe.map2 (artifactQueryParser commit)
+                        (projectIds (List.reverse reversedProjectPath))
+                        (String.toInt stepIdSegment)
+                        |> Maybe.andThen parseQuery
+
+                _ ->
+                    Nothing
+
+        _ ->
+            Nothing
+
+
+projectQueryParser : List Int -> Parser (Page -> a) a
+projectQueryParser projectPath =
+    Parser.map
+        (\basicHi mCommit mLines leftRef leftCommit leftMime rightRef rightCommit rightMime ->
+            Project
+                { projectPath = projectPath
+                , mHighlight = Maybe.map (\hi -> { hi | range = mLines }) basicHi
+                , mCommit = mCommit
+                , mCompare =
+                    Maybe.map2
+                        (\left right -> { left = left, right = right })
+                        (compareTargetFromQuery leftRef leftCommit leftMime)
+                        (compareTargetFromQuery rightRef rightCommit rightMime)
+                }
+        )
+        (Parser.top
+            <?> Query.custom "hi" highlightParser
+            <?> Query.string "commit"
+            <?> Query.custom "lines" lineRangeParser
+            <?> Query.custom "compareLeft" compareTargetParser
+            <?> Query.string "compareLeftCommit"
+            <?> Query.string "compareLeftMime"
+            <?> Query.custom "compareRight" compareTargetParser
+            <?> Query.string "compareRightCommit"
+            <?> Query.string "compareRightMime"
+        )
+
+
+artifactQueryParser : String -> List Int -> Int -> Parser (Page -> a) a
+artifactQueryParser commit projectPath stepId =
+    Parser.map
+        (\mPath ->
+            Artifact
+                { projectPath = projectPath
+                , stepId = stepId
+                , commit = commit
+                , path = Maybe.map (String.split "/") mPath |> Maybe.withDefault []
+                }
+        )
+        (Parser.query (Query.string "path"))
 
 
 pageQueryKeys : Page -> List String
@@ -328,9 +395,6 @@ pageQueryKeys page_ =
 
         Artifact _ ->
             [ "path" ]
-
-        Home ->
-            []
 
         NotFound _ ->
             []
@@ -442,10 +506,15 @@ highlightMatches target recordId path highlight =
 
 
 projectUrlParts : ProjectParams -> ( String, List String )
-projectUrlParts { projectId, mHighlight, mCommit, mCompare } =
+projectUrlParts { projectPath, mHighlight, mCommit, mCompare } =
     let
         baseUrl =
-            "/project/" ++ String.fromInt projectId
+            case projectPath of
+                [] ->
+                    "/"
+
+                _ ->
+                    "/project/" ++ String.join "/" (List.map String.fromInt projectPath)
 
         hiStr =
             Maybe.map
@@ -486,8 +555,8 @@ projectUrlParts { projectId, mHighlight, mCommit, mCompare } =
 
 
 artifactUrlParts : ArtifactParams -> ( String, List String )
-artifactUrlParts { projectId, stepId, commit, path } =
-    ( "/artifact/" ++ String.fromInt projectId ++ "/" ++ String.fromInt stepId ++ "/" ++ commit
+artifactUrlParts { projectPath, stepId, commit, path } =
+    ( "/artifact/" ++ String.join "/" (List.map String.fromInt (projectPath ++ [ stepId ]) ++ [ commit ])
     , [ "path=" ++ Url.percentEncode (String.join "/" path) ]
     )
 

@@ -63,6 +63,7 @@ library
     Certificates
     CertificateStore
     Processes
+    ProjectTree
     Sse
     Storage
     UserRepo
@@ -155,6 +156,21 @@ executable pointy-fixture-server
     , directory
     , filepath
     , text
+
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
+executable pointy-migrate-project-tree
+  import:           warnings
+  main-is:          MigrateProjectTree.hs
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , directory
+    , filepath
+    , text
+    , vector
 
   hs-source-dirs:   app
   default-language: Haskell2010
@@ -288,12 +304,26 @@ test-suite status-stream
   main-is:          StatusStreamTest.hs
   ghc-options:      -threaded
   build-depends:
+    , aeson
     , backend
     , base
     , bytestring
     , containers
     , servant
     , stm
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite project-tree
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          ProjectTreeTest.hs
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , bytestring
 
   hs-source-dirs:   test
   default-language: Haskell2010

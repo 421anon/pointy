@@ -1,13 +1,12 @@
 module Api.Decode exposing (..)
 
 import Api.ApiData exposing (ApiData(..))
-import Components.Select as Select
 import Dict exposing (Dict)
 import Http
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (custom, optional, required)
-import Model.Core as Model exposing (DirectoryItem(..), FileView, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), initialTable)
+import Model.Core as Model exposing (ChildKind(..), DirectoryItem(..), FileView, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), blankProject, initialTable)
 import Model.Shadow exposing (Artifact, Field, Preset, Presets, StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), WithSrcFiles(..))
 
 
@@ -135,43 +134,36 @@ projectRecord presets_ stepConfig_ =
                 ( tablesByType, orphans ) =
                     Model.partitionStepsByTemplate effective fields.steps
             in
-            { id = Just fields.id
-            , clientId = Nothing
-            , hidden = fields.hidden
-            , sortKey = fields.sortKey
-            , name = fields.name
-            , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) tablesByType
-            , templateSource = source
-            , orphanedSteps = orphans
-            , validationErrors = fields.validationErrors
-            , hideOrphans = False
-            , presetSelect = Select.initSelectState
-            , templatesSelect = Select.initSelectState
-            , isUpdating = False
-            , lastModifiedAt = fields.lastModifiedAt
+            { blankProject
+                | id = Just fields.id
+                , name = fields.name
+                , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) tablesByType
+                , subProjects = Model.SubProjects { initialTable | records = Success fields.subProjects }
+                , templateSource = source
+                , orphanedSteps = orphans
+                , validationErrors = fields.validationErrors
+                , lastModifiedAt = fields.lastModifiedAt
             }
     in
     Decode.succeed
-        (\id name hidden sortKey lastModifiedAt mPreset mTemplates steps validationErrors ->
+        (\id name lastModifiedAt mPreset mTemplates steps subProjects validationErrors ->
             { id = id
             , name = name
-            , hidden = hidden
-            , sortKey = sortKey
             , lastModifiedAt = lastModifiedAt
             , mPreset = mPreset
             , mTemplates = mTemplates
             , steps = steps
+            , subProjects = subProjects
             , validationErrors = validationErrors
             }
         )
         |> required "id" Decode.int
         |> required "name" Decode.string
-        |> required "hidden" Decode.bool
-        |> required "sortKey" (maybe Decode.int)
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
         |> required "preset" (maybe Decode.string)
         |> required "templates" (maybe (Decode.list Decode.string))
-        |> required "steps" (Decode.list (stepRecord stepConfig_))
+        |> required "children" (childEntries StepChild (stepRecord stepConfig_))
+        |> required "children" (childEntries ProjectChild projectEntry)
         |> optional "validationErrors" (Decode.list Decode.string) []
         |> Decode.andThen
             (\fields ->
@@ -182,6 +174,28 @@ projectRecord presets_ stepConfig_ =
                     Err msg ->
                         Decode.fail msg
             )
+
+
+childEntries : ChildKind -> Decoder a -> Decoder (List a)
+childEntries kind decoder =
+    let
+        entryOf entryKind =
+            if entryKind == kind then
+                Decode.field (Model.childKindName entryKind) (Decode.map Just decoder)
+
+            else
+                Decode.field (Model.childKindName entryKind) (Decode.succeed Nothing)
+    in
+    Decode.list (Decode.oneOf (List.map entryOf Model.childKinds))
+        |> Decode.map (List.filterMap identity)
+
+
+projectEntry : Decoder ProjectRecord
+projectEntry =
+    Decode.succeed (\id hidden sortKey -> { blankProject | id = Just id, hidden = hidden, sortKey = sortKey })
+        |> required "id" Decode.int
+        |> required "hidden" Decode.bool
+        |> required "sortKey" (maybe Decode.int)
 
 
 stepRecord : StepConfig -> Decoder StepRecord

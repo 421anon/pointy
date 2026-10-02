@@ -14,7 +14,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, Model(..), PendingQuestion, ProjectRecord, ReviewDraft, ScratchState, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildChanges, ChildKind(..), ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), EntryChanges, IngestJob, Model(..), PendingQuestion, ProjectRecord, ReviewDraft, ScratchState, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -40,15 +40,15 @@ void =
 currentProject : Lens ls Model (ApiData ProjectRecord) x y
 currentProject =
     let
-        tryProjectId =
-            try (route << Route.page << projectRoute << projectId)
+        tryProjectPath =
+            try (route << Route.page << projectRoute << projectPath)
 
         get_ m =
             get (projects << records) m
-                |> ApiData.andThenMaybe (List.find (.id >> (==) (tryProjectId m))) (Http.BadUrl "Not a project route")
+                |> ApiData.andThenMaybe (\projects_ -> tryProjectPath m |> Maybe.andThen (Model.projectAtPath projects_)) (Http.BadUrl "Not a project route")
 
         set m project =
-            if project.id == tryProjectId m then
+            if project.id == Maybe.map Route.pathProjectId (tryProjectPath m) then
                 Accessors.set (projects << records << success << by .id project.id) project m
 
             else
@@ -60,6 +60,11 @@ currentProject =
 currentProjectId : Traversal Model Int x y
 currentProjectId =
     currentProject << success << recordId << just
+
+
+currentProjectPath : Traversal Model (List Int) x y
+currentProjectPath =
+    route << Route.page << projectRoute << projectPath
 
 
 isReadOnlyPage : Route.Page -> Bool
@@ -96,9 +101,9 @@ projectRoute =
         )
 
 
-projectId : Lens ls { a | projectId : Int } Int x y
-projectId =
-    lens ".projectId" .projectId (\p projectId_ -> { p | projectId = projectId_ })
+projectPath : Lens ls { a | projectPath : b } b x y
+projectPath =
+    lens ".projectPath" .projectPath (\p projectPath_ -> { p | projectPath = projectPath_ })
 
 
 projects : Lens ls Model (Table ProjectRecord) x y
@@ -114,6 +119,16 @@ currentTableOf key_ =
 tableInProject : String -> Traversal ProjectRecord (Table StepRecord) x y
 tableInProject key_ =
     tables << Dict.Accessors.at key_ << just
+
+
+subProjects : Lens ls { a | subProjects : Model.SubProjects } (Table ProjectRecord) x y
+subProjects =
+    lens ".subProjects" (.subProjects >> Model.subProjectsTable) (\p table -> { p | subProjects = Model.SubProjects table })
+
+
+currentSubProjects : Traversal Model (Table ProjectRecord) x y
+currentSubProjects =
+    currentProject << orElseT success ApiData.reloading << subProjects
 
 
 args : Lens ls { a | args : b } b x y
@@ -196,9 +211,19 @@ autocompleteDebounce =
     lens ".autocompleteDebounce" Model.getAutocompleteDebounce (\(Model m) autocompleteDebounce_ -> Model { m | autocompleteDebounce = autocompleteDebounce_ })
 
 
-stepChangeQueue : Lens ls Model Model.StepChangeQueue x y
-stepChangeQueue =
-    lens ".stepChangeQueue" Model.getStepChangeQueue (\(Model m) stepChangeQueue_ -> Model { m | stepChangeQueue = stepChangeQueue_ })
+childChangeQueue : Lens ls Model Model.ChildChangeQueue x y
+childChangeQueue =
+    lens ".childChangeQueue" Model.getChildChangeQueue (\(Model m) childChangeQueue_ -> Model { m | childChangeQueue = childChangeQueue_ })
+
+
+entryChanges : ChildKind -> Lens ls ChildChanges EntryChanges x y
+entryChanges kind =
+    case kind of
+        StepChild ->
+            lens ".steps" .steps (\changes steps_ -> { changes | steps = steps_ })
+
+        ProjectChild ->
+            lens ".projects" .projects (\changes projects_ -> { changes | projects = projects_ })
 
 
 isOpen : Lens ls { a | isOpen : b } b x y
@@ -360,6 +385,11 @@ entryAtPath path =
 projectsContainingEntity : Int -> Traversal Model ProjectRecord x y
 projectsContainingEntity entityId_ =
     projects << records << success << each << where_ (has (projectStepRecords << where_ (.id >> (==) (Just entityId_))))
+
+
+projectsContainingProject : Int -> Traversal Model ProjectRecord x y
+projectsContainingProject projectId_ =
+    projects << records << success << each << where_ (has (subProjects << records << success << each << where_ (.id >> (==) (Just projectId_))))
 
 
 recordDirectoryView : Int -> Traversal (Table StepRecord) DirectoryFolder x y

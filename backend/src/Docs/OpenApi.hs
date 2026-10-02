@@ -23,8 +23,8 @@ import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
-import Handlers.ProjectEntities (StepChanges)
 import Handlers.Projects (ProjectUpdate)
+import ProjectTree (ChildChanges, ChildRef, ChildUpdate, ProjectFields)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
@@ -40,7 +40,8 @@ instance ToSchema DynamicJson where
     declareNamedSchema _ = pure (NamedSchema (Just "DynamicJson") (mempty & example ?~ object []))
 
 instance ToSchema ProjectUpdate where
-    declareNamedSchema _ =
+    declareNamedSchema _ = do
+        fieldsSchema <- declareSchemaRef (Proxy :: Proxy ProjectFields)
         pure
             ( NamedSchema
                 (Just "ProjectUpdate")
@@ -50,10 +51,44 @@ instance ToSchema ProjectUpdate where
                     & properties
                         .~ fromList
                             [ ("id", Inline (mempty & type_ ?~ OpenApiInteger))
-                            , ("record", Inline (mempty & type_ ?~ OpenApiObject))
+                            , ("record", fieldsSchema)
                             ]
                 )
             )
+
+instance ToSchema ProjectFields where
+    declareNamedSchema _ =
+        pure . NamedSchema (Just "ProjectFields") $
+            mempty
+                & type_ ?~ OpenApiObject
+                & required .~ ["name"]
+                & properties .~ fromList [("name", stringField), ("preset", stringField), ("templates", arrayOf stringField)]
+                & description ?~ "A project's name and exactly one of preset or templates."
+
+instance ToSchema ChildRef where
+    declareNamedSchema _ =
+        pure . NamedSchema (Just "ChildRef") $
+            mempty
+                & oneOf ?~ [childSchema "step" [("id", integerField)], childSchema "project" [("id", integerField)]]
+                & description ?~ "A step or project child of a project."
+
+instance ToSchema ChildUpdate where
+    declareNamedSchema _ =
+        pure . NamedSchema (Just "ChildUpdate") $
+            mempty
+                & oneOf ?~ [childSchema "step" updateFields, childSchema "project" updateFields]
+                & description ?~ "A child reference plus the fields to set on its entry. An absent field is left unchanged; a null sortKey clears it."
+      where
+        updateFields = [("id", integerField), ("hidden", Inline (mempty & type_ ?~ OpenApiBoolean)), ("sortKey", nullableField OpenApiInteger)]
+
+instance ToSchema ChildChanges where
+    declareNamedSchema _ = do
+        updateSchema <- declareSchemaRef (Proxy :: Proxy ChildUpdate)
+        refSchema <- declareSchemaRef (Proxy :: Proxy ChildRef)
+        pure . NamedSchema (Just "ChildChanges") $
+            mempty
+                & type_ ?~ OpenApiObject
+                & properties .~ fromList [("update", arrayOf updateSchema), ("remove", arrayOf refSchema)]
 
 instance {-# OVERLAPPING #-} ToSchema (SourceT IO BS.ByteString) where
     declareNamedSchema _ =
@@ -114,6 +149,20 @@ stringField = Inline (mempty & type_ ?~ OpenApiString)
 nullableField :: OpenApiType -> Referenced Schema
 nullableField openApiType = Inline (mempty & type_ ?~ openApiType & nullable ?~ True)
 
+integerField :: Referenced Schema
+integerField = Inline (mempty & type_ ?~ OpenApiInteger)
+
+arrayOf :: Referenced Schema -> Referenced Schema
+arrayOf itemSchema = Inline (mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject itemSchema)
+
+childSchema :: Text -> [(Text, Referenced Schema)] -> Referenced Schema
+childSchema kind fields =
+    Inline $
+        mempty
+            & type_ ?~ OpenApiObject
+            & required .~ [kind]
+            & properties .~ fromList [(kind, Inline (mempty & type_ ?~ OpenApiObject & required .~ ["id"] & properties .~ fromList fields))]
+
 objectSchema :: Text -> [(Text, Referenced Schema)] -> NamedSchema
 objectSchema typeName fields =
     NamedSchema (Just typeName) $
@@ -125,12 +174,6 @@ objectSchema typeName fields =
 instance ToSchema TurnRequest where
     declareNamedSchema _ =
         pure $ objectSchema "TurnRequest" [("sessionId", stringField), ("prompt", stringField)]
-
-instance ToSchema StepChanges where
-    declareNamedSchema _ =
-        pure $ objectSchema "StepChanges" [("hide", stepIdsField), ("show", stepIdsField), ("remove", stepIdsField)]
-      where
-        stepIdsField = Inline (mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject (Inline (mempty & type_ ?~ OpenApiInteger)))
 
 instance ToSchema SessionRequest where
     declareNamedSchema _ =

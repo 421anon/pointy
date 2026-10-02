@@ -1,13 +1,13 @@
 module View.Project exposing (..)
 
-import Accessors exposing (get)
-import Api.ApiData as ApiData exposing (ApiData(..))
+import Accessors exposing (get, has, try)
+import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
 import Model.Core exposing (Model)
-import Model.Lenses exposing (currentProject, stepConfig)
+import Model.Lenses exposing (currentProject, currentProjectPath, projects, records, stepConfig)
 import Route
 import View.Shadow exposing (viewProject)
 
@@ -32,13 +32,25 @@ viewCurrentProject model =
                 |> Maybe.withDefault (Html.span [ class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading project..." ])
 
         Error _ ->
-            viewProjectNotFound
+            if try currentProjectPath model == Just [] && has (projects << records << success) model then
+                viewRootProjectMissing
+
+            else
+                viewProjectNotFound
+
+
+viewRootProjectMissing : Html (Flow Model ())
+viewRootProjectMissing =
+    Html.div []
+        [ Html.h2 [] [ Html.text "Root project missing" ]
+        , Html.p [] [ Html.text "The repository has no root project (projects/0.nix)." ]
+        ]
 
 
 viewProjectNotFound : Html (Flow Model ())
 viewProjectNotFound =
     Html.div []
         [ Html.h2 [] [ Html.text "Project not found" ]
-        , Html.p [] [ Html.text "The project ID you entered does not exist." ]
-        , Html.a [ Route.href (Route.fromPage Route.Home) ] [ Html.text "Go home" ]
+        , Html.p [] [ Html.text "The project path you entered does not exist." ]
+        , Html.a [ Route.href (Route.fromPage (Route.projectPage [] Nothing)) ] [ Html.text "Go home" ]
         ]

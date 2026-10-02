@@ -70,8 +70,14 @@ resolver projects route stepConfig raw =
             else
                 Actions.stepLocations (\stepId -> Set.member stepId candidateStepIds) projects
 
+        currentPath =
+            try (Route.page << Lenses.projectRoute << Lenses.projectPath) route
+
         openProjectId =
-            try (Route.page << Lenses.projectRoute << Lenses.projectId) route
+            Maybe.map Route.pathProjectId currentPath
+
+        canonicalPath =
+            Model.canonicalProjectPath (Maybe.withDefault [] currentPath) projects
     in
     \entityId fixed candidates ->
         let
@@ -100,14 +106,14 @@ resolver projects route stepConfig raw =
                 Actions.stepOutputLocation openProjectId locations stepId
                     |> Maybe.map
                         (\location ->
-                            resolved (Actions.stepOutputRoute location.projectId stepId)
+                            resolved (Actions.stepOutputRoute (canonicalPath location.projectId) stepId)
                                 (mentionRunAction stepConfig stepId location)
                                 (Just location.step.name)
                         )
 
             ProjectId projectId ->
                 List.find (\project -> project.id == Just projectId) projects
-                    |> Maybe.map (\project -> resolved (Actions.projectPageRoute projectId) Nothing (Just project.name))
+                    |> Maybe.map (\project -> resolved (Actions.projectPageRoute (canonicalPath projectId)) Nothing (Just project.name))
 
 
 resolveSuffix : Bool -> Maybe String -> List String -> String

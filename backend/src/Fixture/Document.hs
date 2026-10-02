@@ -24,6 +24,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as Vector
 import System.Directory (doesFileExist)
+import ProjectTree (stepEntries)
 
 data FixtureDocument = FixtureDocument
     { documentBranch :: Text
@@ -82,8 +83,7 @@ appliedAnswer document applyExpr attr
     | "presets" `isInfixOf` applyExpr = Right (encodeValue (documentPresets document))
     | "notices" `isInfixOf` applyExpr = Right (encodeValue (entry (documentNotices document)))
     | "extras.outPath" `isInfixOf` applyExpr = Right (encodeValue extrasValue)
-    | "step.def.id" `isInfixOf` applyExpr = Right (encodeValue (maybe Null (entryOf (documentProjectStepIds document)) (listToMaybe (idsIn applyExpr))))
-    | "s.def.id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (map stepIdNumber (projectStepIds document (fromMaybe "" (listToMaybe (idsIn applyExpr))))))))
+    | stepEntries "p" `isInfixOf` applyExpr = Right (encodeValue (projectStepIdsAnswer (toJSON (map stepIdNumber (projectStepIds document (fromMaybe "" (listToMaybe (idsIn applyExpr))))))))
     | "reviewedRevision" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (\id_ -> [entryOf (documentReviews document) id_]) (idsIn applyExpr))))
     | "toString id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (Map.fromList [(stepId, fixtureKey stepId) | stepId <- idsIn applyExpr]))))
     | ".key); in if t.success" `isInfixOf` applyExpr = Right (encodeValue (keyAnswer applyExpr))
@@ -94,6 +94,9 @@ appliedAnswer document applyExpr attr
   where
     key = lastSegment attr
     versioned value = object ["version" .= (1 :: Int), "value" .= value]
+    projectStepIdsAnswer
+        | "inherit version" `isInfixOf` applyExpr = versioned
+        | otherwise = id
     stepIdNumber :: String -> Int
     stepIdNumber stepId = fromMaybe 0 (readMaybe stepId)
     entry mapping = fromMaybe Null (Map.lookup key mapping)

@@ -18,7 +18,7 @@ import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
 import Handlers.Presets (getPresetsHandler)
-import Handlers.ProjectEntities (applyStepChangesHandler, assignRecordHandler, batchAssignRecordsHandler)
+import Handlers.ProjectEntities (applyChildChangesHandler, assignRecordHandler, batchAddChildrenHandler)
 import Handlers.Projects (batchUpdateProjectsHandler, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (jobEndedHandler, restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
@@ -64,8 +64,8 @@ server =
         :<|> batchUpdateProjectsHandler
         :<|> deleteProjectHandler
         :<|> assignRecordHandler
-        :<|> batchAssignRecordsHandler
-        :<|> applyStepChangesHandler
+        :<|> batchAddChildrenHandler
+        :<|> applyChildChangesHandler
         :<|> stepStatusStreamHandler
         :<|> projectStatusHandler
         :<|> getStepConfigHandler

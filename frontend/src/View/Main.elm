@@ -3,7 +3,7 @@ module View.Main exposing (view)
 import Accessors exposing (try)
 import Actions
 import Api.Api as Api
-import Api.ApiData as ApiData exposing (success)
+import Api.ApiData exposing (success)
 import Browser
 import Components.AgentPanel as AgentPanel
 import Components.StatusBar as StatusBar
@@ -13,52 +13,18 @@ import Html.Attributes
 import Html.Extra as Html
 import Html.Keyed
 import Model.Core as Model exposing (Model)
-import Model.Lenses as Lenses exposing (currentProject, isReadOnlyRoute, name)
+import Model.Lenses exposing (currentProject, name)
 import Model.Lib as Lib
-import Model.TableSpec as TableSpec
 import Route
-import Specs
 import Toast
 import View.Compare as Compare
 import View.Dialog as Dialog
-import View.Lib exposing (viewPage, viewSearchBox)
 import View.Project exposing (viewCurrentProject)
 import View.Scratch exposing (viewScratchPicker)
-import View.Table exposing (actionsPopoverId, viewRecordActions, viewRecordActionsPopover, viewTable)
 
 
 view : Model -> Browser.Document (Flow Model ())
 view model =
-    let
-        viewHome presets stepConfig =
-            let
-                spec =
-                    Specs.projects presets stepConfig
-
-                mProjectId =
-                    try Lenses.currentProjectId model
-            in
-            viewPage
-                { header = [ viewSearchBox model ]
-                , content =
-                    viewTable
-                        { model = model
-                        , spec = spec
-                        , table = Model.getProjects model
-                        , recordStatusPill = \_ -> Html.nothing
-                        , recordActionsPopover =
-                            \record ->
-                                viewRecordActionsPopover
-                                    (actionsPopoverId (TableSpec.getName spec) record)
-                                    (viewRecordActions spec (isReadOnlyRoute model) mProjectId record)
-                        , alwaysVisibleRecordActions = \_ -> []
-                        , directorySection = \_ -> Html.nothing
-                        , srcFilesSection = \_ -> Html.nothing
-                        , detailSection = \_ -> Html.nothing
-                        , onRecordClick = .id >> Maybe.map (\id -> Actions.goToRoute (Route.fromPage (Route.Project { projectId = id, mHighlight = Nothing, mCommit = Nothing, mCompare = Nothing })))
-                        }
-                }
-    in
     { title = try (currentProject << success << name) model |> Maybe.map (\n -> n ++ " • " ++ "Pointy Notebook") |> Maybe.withDefault "Pointy Notebook"
     , body =
         case (Model.getRoute model).page of
@@ -69,12 +35,6 @@ view model =
                 let
                     viewCurrentPage =
                         case (Model.getRoute model).page of
-                            Route.Home ->
-                                Maybe.map2 viewHome
-                                    (ApiData.toMaybe (Model.getPresets model))
-                                    (ApiData.toMaybe (Model.getStepConfig model))
-                                    |> Maybe.withDefault (Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading workspace..." ])
-
                             Route.Project _ ->
                                 viewCurrentProject model
 
@@ -106,7 +66,7 @@ viewArtifact artifact =
         pointyRoute =
             Route.fromPage
                 (Route.Project
-                    { projectId = artifact.projectId
+                    { projectPath = artifact.projectPath
                     , mHighlight = Just { id = artifact.stepId, target = Route.Output, path = artifact.path, range = Nothing }
                     , mCommit = Just artifact.commit
                     , mCompare = Nothing
@@ -133,5 +93,5 @@ view404 =
     Html.div []
         [ Html.h1 [] [ Html.text "404 - Page Not Found" ]
         , Html.p [] [ Html.text "The page you requested does not exist." ]
-        , Html.a [ Route.href (Route.fromPage Route.Home) ] [ Html.text "Go Home" ]
+        , Html.a [ Route.href (Route.fromPage (Route.projectPage [] Nothing)) ] [ Html.text "Go Home" ]
         ]

@@ -26,7 +26,7 @@ import BuildLog (StepStore, resolveStatusesBatched)
 import BuildRunner (buildKeyForOutPath, waitForCompletion)
 import BuildStatus (StepPaths (..), checkStatus, markBuiltOutputs, partitionImmediateStatuses, resolveStatuses, resolveStepStatus)
 import Bus (broadcastSnapshot)
-import Certificates (ProjectDef (..), StepDef (..), StepRef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate, isCertificateBuilding, rawStatusesFor, runningBuildKeys)
+import Certificates (ProjectDef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate, isCertificateBuilding, rawStatusesFor, runningBuildKeys)
 import ClusterBus (beginBuild, endBuild)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
@@ -260,4 +260,4 @@ buildingCertificates targetCommit runningKeys project = do
     pid = projectDefId project
 
 projectContainsStep :: Int -> ProjectDef -> Bool
-projectContainsStep sid p = any ((== sid) . stepDefId . stepRefDef) (projectDefSteps p)
+projectContainsStep sid p = sid `elem` projectDefStepIds p
