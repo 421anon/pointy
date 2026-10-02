@@ -5,7 +5,7 @@ import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData
 import Dict
-import Extra.Accessors exposing (where_)
+import Extra.Accessors exposing (by, orElseT, where_)
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
@@ -18,7 +18,7 @@ import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses as Lenses exposing (currentProject, currentProjectId, isReadOnlyRoute, recordId)
+import Model.Lenses as Lenses exposing (currentProject, isReadOnlyRoute, recordId)
 import Model.Shadow exposing (StepConfigEntry)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route
@@ -29,7 +29,7 @@ import Time.Distance
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
+import View.Table exposing (actionsPopoverId, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewRecordActions, viewRecordActionsPopover, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
 
 
 type alias ComparisonChip =
@@ -384,16 +384,22 @@ viewProject model proj =
         isReadOnly =
             isReadOnlyRoute model
 
+        mPresets =
+            ApiData.toMaybe (Model.getPresets model)
+
+        mStepConfig =
+            ApiData.toMaybe (Model.getStepConfig model)
+
         mProjectSpec =
-            Maybe.map2 Specs.projects
-                (ApiData.toMaybe (Model.getPresets model))
-                (ApiData.toMaybe (Model.getStepConfig model))
+            Maybe.map2 Specs.allProjects mPresets mStepConfig
+
+        mProjectsSpec =
+            Maybe.map2 Specs.projects mPresets mStepConfig
     in
     viewPage
         { header =
             [ Html.div [ Html.Attributes.class "project-header" ]
-                [ Html.a [ Route.href (Route.fromPage Route.Home), Html.Attributes.class "back-btn" ] [ iconCustom True "arrow_back" [ Html.Attributes.class "back-icon" ] ]
-                , Html.h2 [] [ Html.text proj.name ]
+                [ viewBreadcrumbs model proj
                 , Html.viewIf (not isReadOnly) <|
                     Html.viewMaybe
                         (\spec ->
@@ -458,6 +464,7 @@ viewProject model proj =
                         (projectEditForm
                             :: configErrors
                             :: orphanWarning
+                            :: Html.viewMaybe (viewProjectsSection model proj) mProjectsSpec
                             :: (proj.tables
                                     |> Dict.toList
                                     |> List.filterMap
@@ -476,6 +483,74 @@ viewProject model proj =
         }
 
 
+viewBreadcrumbs : Model -> ProjectRecord -> Html (Flow Model ())
+viewBreadcrumbs model proj =
+    let
+        projectPath_ =
+            try Lenses.currentProjectPath model |> Maybe.withDefault []
+
+        mCommit_ =
+            try (Lenses.route << Route.page << Route.project << Lenses.mCommit << just) model
+
+        projectName projectId_ =
+            if Just projectId_ == proj.id then
+                proj.name
+
+            else
+                try (Lenses.projects << Lenses.records << orElseT ApiData.success ApiData.reloading << by .id (Just projectId_) << Lenses.name) model
+                    |> Maybe.withDefault ("#" ++ String.fromInt projectId_)
+
+        crumb pathPrefix =
+            Html.a
+                [ Route.href (Route.fromPage (Route.projectPage pathPrefix mCommit_))
+                , Html.Attributes.class "project-breadcrumb"
+                ]
+                [ Html.text (projectName (Route.pathProjectId pathPrefix)) ]
+
+        ancestorPaths =
+            List.range 0 (List.length projectPath_ - 1)
+                |> List.map (\depth -> List.take depth projectPath_)
+    in
+    Html.nav [ Html.Attributes.class "project-breadcrumbs" ]
+        (List.concatMap (\pathPrefix -> [ crumb pathPrefix, iconCustom True "chevron_right" [ Html.Attributes.class "project-breadcrumb-separator" ] ]) ancestorPaths
+            ++ [ Html.h2 [] [ crumb projectPath_ ] ]
+        )
+
+
+viewProjectsSection : Model -> ProjectRecord -> TableSpec ProjectRecord -> Html (Flow Model ())
+viewProjectsSection model proj spec =
+    let
+        isReadOnly =
+            isReadOnlyRoute model
+
+        projectPath_ =
+            try Lenses.currentProjectPath model |> Maybe.withDefault []
+
+        mCommit_ =
+            try (Lenses.route << Route.page << Route.project << Lenses.mCommit << just) model
+
+        openProject childId =
+            Actions.goToRoute (Route.fromPage (Route.projectPage (projectPath_ ++ [ childId ]) mCommit_))
+    in
+    viewTable
+        { model = model
+        , spec = spec
+        , table = get Lenses.subProjects proj
+        , recordStatusPill = \_ -> Html.nothing
+        , recordActionsPopover =
+            \record ->
+                viewRecordActionsPopover
+                    (actionsPopoverId (TableSpec.getName spec) record)
+                    (viewRecordActions spec isReadOnly record)
+        , alwaysVisibleRecordActions = \_ -> []
+        , directorySection = \_ -> Html.nothing
+        , srcFilesSection = \_ -> Html.nothing
+        , detailSection = \_ -> Html.nothing
+        , onRecordClick = .id >> Maybe.map openProject
+        }
+
+
+
 viewSection : Model -> String -> StepConfigEntry -> Table StepRecord -> Html (Flow Model ())
 viewSection model sectionName entry steps =
     let
@@ -491,10 +566,6 @@ viewSection model sectionName entry steps =
                 |> Maybe.unwrap [] Dict.keys
                 |> String.join ","
 
-        projectIdKey =
-            try currentProjectId model
-                |> Maybe.unwrap "" String.fromInt
-
         uploads =
             Model.getUploadProgress model
 
@@ -504,6 +575,9 @@ viewSection model sectionName entry steps =
 
         pendingIngestSteps =
             Model.getPendingIngestSteps model
+
+        pendingStops =
+            Model.getPendingStops model
 
         scratchAvailable =
             ApiData.unwrap False Maybe.isJust (Model.getScratchState model).root
@@ -545,16 +619,16 @@ viewSection model sectionName entry steps =
                     record
         , recordActionsPopover =
             \record ->
-                Html.Lazy.lazy8 viewStepRecordActions
+                Html.Lazy.lazy7 viewStepRecordActions
                     sectionName
                     entry
                     stepConfig_
                     presentTypesKey
-                    projectIdKey
                     page
                     record
                     { uploading = isIngesting record
                     , scratchAvailable = scratchAvailable
+                    , stopping = Maybe.unwrap False (\id -> Set.member id pendingStops) record.id
                     }
         , alwaysVisibleRecordActions =
             \r ->

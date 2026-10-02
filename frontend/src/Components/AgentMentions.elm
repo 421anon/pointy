@@ -1,4 +1,4 @@
-module Components.AgentMentions exposing (Resolver, mentionTarget, toHtml)
+module Components.AgentMentions exposing (Sources, sources, toHtml)
 
 import Accessors exposing (try)
 import Actions
@@ -6,16 +6,18 @@ import Api.ApiData as ApiData
 import Browser.Dom as Dom
 import Components.Markdown as Markdown
 import Dict
-import Extra.Accessors exposing (by)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, title, type_)
 import Html.Events as Events
-import Model.Core as Model exposing (Model)
+import List.Extra as List
+import Model.Core as Model exposing (Model, ProjectRecord)
 import Model.Lenses as Lenses
+import Model.Shadow exposing (StepConfig)
 import Model.TableSpec as TableSpec
 import Regex exposing (Regex)
 import Route exposing (Route)
+import Set
 import Specs
 import View.Icons
 
@@ -38,52 +40,80 @@ type alias Resolver =
     EntityId -> Bool -> List String -> Maybe ResolvedMention
 
 
-mentionTarget : Model -> EntityId -> Bool -> List String -> Maybe ResolvedMention
-mentionTarget model entityId fixed candidates =
+type alias Sources =
+    { projects : List ProjectRecord
+    , route : Route
+    , stepConfig : StepConfig
+    }
+
+
+sources : Model -> Sources
+sources model =
+    { projects = ApiData.withDefault [] (Model.getProjects model).records
+    , route = Model.getRoute model
+    , stepConfig = ApiData.withDefault Dict.empty (Model.getStepConfig model)
+    }
+
+
+resolver : List ProjectRecord -> Route -> StepConfig -> String -> Resolver
+resolver projects route stepConfig raw =
     let
-        resolved route runAction mName =
-            let
-                name =
-                    Maybe.withDefault (entityIdText entityId) mName
+        candidateStepIds =
+            Regex.find digitsRegex raw
+                |> List.filterMap (.match >> String.toInt)
+                |> Set.fromList
 
-                label =
-                    case entityId of
-                        StepId _ ->
-                            entityIdText entityId
+        locations =
+            if Set.isEmpty candidateStepIds then
+                Dict.empty
 
-                        ProjectId _ ->
-                            name
-            in
-            { route = route
-            , runAction = runAction
-            , label = label
-            , tooltip = name
-            , suffixText = resolveSuffix fixed mName candidates
-            }
+            else
+                Actions.stepLocations (\stepId -> Set.member stepId candidateStepIds) projects
+
+        currentPath =
+            try (Route.page << Lenses.projectRoute << Lenses.projectPath) route
+
+        openProjectId =
+            Maybe.map Route.pathProjectId currentPath
+
+        canonicalPath =
+            Model.canonicalProjectPath (Maybe.withDefault [] currentPath) projects
     in
-    case entityId of
-        StepId stepId ->
-            Actions.stepOutputRoute model stepId
-                |> Maybe.map
-                    (\route ->
-                        case route.page of
-                            Route.Project params ->
-                                resolved route
-                                    (mentionRunAction model params.projectId stepId)
-                                    (try (Lenses.projectStep (Just params.projectId) (Just stepId)) model |> Maybe.map .name)
+    \entityId fixed candidates ->
+        let
+            resolved route_ runAction mName =
+                let
+                    name =
+                        Maybe.withDefault (entityIdText entityId) mName
 
-                            _ ->
-                                resolved route Nothing Nothing
-                    )
+                    label =
+                        case entityId of
+                            StepId _ ->
+                                entityIdText entityId
 
-        ProjectId projectId ->
-            Actions.knownProjectRoute model projectId
-                |> Maybe.map
-                    (\route ->
-                        resolved route
-                            Nothing
-                            (try (Lenses.projects << Lenses.records << ApiData.success << by .id (Just projectId)) model |> Maybe.map .name)
-                    )
+                            ProjectId _ ->
+                                name
+                in
+                { route = route_
+                , runAction = runAction
+                , label = label
+                , tooltip = name
+                , suffixText = resolveSuffix fixed mName candidates
+                }
+        in
+        case entityId of
+            StepId stepId ->
+                Actions.stepOutputLocation openProjectId locations stepId
+                    |> Maybe.map
+                        (\location ->
+                            resolved (Actions.stepOutputRoute (canonicalPath location.projectId) stepId)
+                                (mentionRunAction stepConfig stepId location)
+                                (Just location.step.name)
+                        )
+
+            ProjectId projectId ->
+                List.find (\project -> project.id == Just projectId) projects
+                    |> Maybe.map (\project -> resolved (Actions.projectPageRoute (canonicalPath projectId)) Nothing (Just project.name))
 
 
 resolveSuffix : Bool -> Maybe String -> List String -> String
@@ -124,35 +154,35 @@ namePrefixLength nameTokens candidates =
             0
 
 
-mentionRunAction : Model -> Int -> Int -> Maybe (Flow Model ())
-mentionRunAction model projectId stepId =
-    try (Lenses.projectStep (Just projectId) (Just stepId)) model
+mentionRunAction : StepConfig -> Int -> Actions.StepLocation -> Maybe (Flow Model ())
+mentionRunAction stepConfig stepId { projectId, step } =
+    Dict.get step.type_ stepConfig
         |> Maybe.andThen
-            (\step ->
-                try (Lenses.stepConfig << ApiData.success) model
-                    |> Maybe.andThen (Dict.get step.type_)
-                    |> Maybe.andThen
-                        (\entry ->
-                            let
-                                spec =
-                                    Specs.stepsInProject projectId step.type_ entry
-                            in
-                            case TableSpec.getStatus spec step |> ApiData.toMaybe of
-                                Just Model.StatusSuccess ->
-                                    Nothing
+            (\entry ->
+                let
+                    spec =
+                        Specs.stepsInProject projectId step.type_ entry
+                in
+                case TableSpec.getStatus spec step |> ApiData.toMaybe of
+                    Just Model.StatusSuccess ->
+                        Nothing
 
-                                Just _ ->
-                                    Just (Actions.runStep spec stepId)
+                    Just _ ->
+                        Just (Actions.runStep spec stepId)
 
-                                Nothing ->
-                                    Nothing
-                        )
+                    Nothing ->
+                        Nothing
             )
 
 
-toHtml : Resolver -> String -> List (Html (Flow Model ()))
-toHtml resolve =
-    Markdown.toHtml (viewText resolve)
+toHtml : List ProjectRecord -> Route -> StepConfig -> String -> List (Html (Flow Model ()))
+toHtml projects route stepConfig raw =
+    Markdown.toHtml (viewText (resolver projects route stepConfig raw)) raw
+
+
+digitsRegex : Regex
+digitsRegex =
+    fromRegex "[0-9]+"
 
 
 nameToken : String

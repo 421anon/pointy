@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -10,15 +9,15 @@ module Certificates (
     getStepCertificate,
     evalProjectDefinitions,
     evalProjectDefinition,
+    evaluatedProjectStepIds,
     cachedProjectDefinitions,
     decodeProjectDefinitions,
+    checkRevision,
     withWriteRepoTransaction,
     rawStatusesFor,
     runningBuildKeys,
     isCertificateBuilding,
     ProjectDef (..),
-    StepRef (..),
-    StepDef (..),
 ) where
 
 import BuildLog (StepStore, buildStepStore, rawStatusesBatched)
@@ -34,13 +33,15 @@ import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Options (fieldLabelModifier), decode, defaultOptions, eitherDecode, genericParseJSON, withObject, (.:))
-import Data.Char (toLower)
+import Data.Aeson (FromJSON (..), Object, Result (..), Value (..), decode, fromJSON, object, toJSON, withObject, (.:), (.=))
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Bool (bool)
 import Data.Either (isRight)
-import Data.List (isPrefixOf, stripPrefix)
+import Data.List (dropWhileEnd, find, intercalate, isPrefixOf, stripPrefix, tails)
 import Data.Map (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as TL
@@ -48,42 +49,21 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, (:>))
 import Effects (App, Eval, Nix, Slurm, runNixCli)
-import GHC.Generics (Generic)
+import ProjectTree (ChildRef (..), normalizeProject, normalizeProjects, projectStepEntries, stepEntries)
 import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), RepoContext, WriteRepoContext, ensureRepoCommit, runNixEvalJsonApplyInRepo, userRepoPath, withReadRepoTransactionIO, withWriteRepoTransactionRaw)
 
 data ProjectDef = ProjectDef
     { projectDefId :: Int
-    , projectDefSteps :: [StepRef]
+    , projectDefStepIds :: [Int]
     }
-    deriving (Show, Generic)
+    deriving (Show)
 
 instance FromJSON ProjectDef where
-    parseJSON = genericParseJSON $ prefixedFieldOptions "projectDef"
-
-newtype StepRef = StepRef
-    { stepRefDef :: StepDef
-    }
-    deriving (Show, Generic)
-
-instance FromJSON StepRef where
-    parseJSON = genericParseJSON $ prefixedFieldOptions "stepRef"
-
-newtype StepDef = StepDef
-    { stepDefId :: Int
-    }
-    deriving (Show, Generic)
-
-instance FromJSON StepDef where
-    parseJSON = genericParseJSON $ prefixedFieldOptions "stepDef"
-
-prefixedFieldOptions :: String -> Options
-prefixedFieldOptions prefix =
-    defaultOptions
-        { fieldLabelModifier = \field ->
-            map toLower (fromMaybe field (stripPrefix prefix field))
-        }
+    parseJSON = withObject "ProjectDef" $ \fields -> do
+        children <- fields .: "children"
+        ProjectDef <$> fields .: "id" <*> pure [stepId | StepChild stepId <- children]
 
 invalidCertificate :: FilePath
 invalidCertificate = "/invalid"
@@ -97,15 +77,13 @@ data Versioned a = Versioned
     }
 
 instance (FromJSON a) => FromJSON (Versioned a) where
-    parseJSON = withObject "Versioned" $ \object ->
-        Versioned <$> object .: "version" <*> object .: "value"
+    parseJSON = withObject "Versioned" $ \fields ->
+        Versioned <$> fields .: "version" <*> fields .: "value"
 
 getProjectCertificates :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Map Int StepPaths))
 getProjectCertificates pid targetCommit = runExceptT $ do
     ctx <- prepareCommit targetCommit
-    declared <-
-        withExceptT ("Failed to evaluate project step ids: " ++) $
-            runJson ctx "#pointy" (projectStepIdsExpression pid)
+    declared <- declaredProjectStepIds ctx pid
     let ids = Set.toList (Set.fromList (versionedValue declared))
     paths <-
         if versionedSchema declared >= schemaVersionWithKeys
@@ -115,9 +93,12 @@ getProjectCertificates pid targetCommit = runExceptT $ do
                 liftIO $ scheduleRefreshIfMissing targetCommit (map snd known)
                 resolveCertificates ctx known
             else
-                withExceptT ("Failed to evaluate project certificates: " ++) $
-                    fmap (Map.mapMaybe id) $
-                        runJson ctx (projectAttr pid) legacyProjectCertificates
+                if null ids
+                    then pure Map.empty
+                    else
+                        withExceptT ("Failed to evaluate project certificates: " ++) $
+                            fmap (Map.mapMaybe id) $
+                                runJson ctx (projectAttr pid) legacyProjectCertificates
     pure $
         Map.union paths $
             Map.fromList [(sid, StepPaths invalidCertificate invalidCertificate) | sid <- ids, Map.notMember sid paths]
@@ -202,14 +183,21 @@ splitOrReport ctx err ids = case ids of
         (++) <$> resolveCertificatePaths ctx left <*> resolveCertificatePaths ctx right
 
 errorSummary :: String -> String
-errorSummary text = case filter isErrorLine (lines text) of
-    [] -> firstLine text
-    linesWithError -> last linesWithError
+errorSummary text = case [rest | rest@(line : _) <- tails cleaned, "error:" `isPrefixOf` line] of
+    [] -> fromMaybe "" (find (not . null) cleaned)
+    matches -> describe (last matches)
   where
-    isErrorLine line = "error:" `isPrefixOf` dropWhile (== ' ') line
+    cleaned = map (dropWhile (== ' ') . withoutStderrPrefix) (lines text)
+    withoutStderrPrefix line = fromMaybe line (stripPrefix "stderr:" line)
+    describe (line : next) = unwords (dropWhile (== ' ') (drop (length ("error:" :: String)) line) : location next)
+    describe [] = ""
+    location (next : _) | Just path <- stripPrefix "at " next = ["at " ++ storeRelative (dropWhileEnd (== ':') path)]
+    location _ = []
 
-firstLine :: String -> String
-firstLine = takeWhile (/= '\n')
+storeRelative :: String -> String
+storeRelative path = case [rest | rest <- tails path, "/nix/store/" `isPrefixOf` rest] of
+    [] -> path
+    found -> drop 1 (dropWhile (/= '-') (drop (length ("/nix/store/" :: String)) (last found)))
 
 storeNew :: [(Int, Text)] -> [(Int, StepPaths)] -> IO ()
 storeNew keys paths =
@@ -229,13 +217,215 @@ prepareCommit targetCommit = do
     repoPath <- liftIO userRepoPath
     pure $ ReadRepoContext repoPath (unpack targetCommit)
 
-runJson :: (Eval :> es, FromJSON a) => ReadRepoContext -> String -> String -> ExceptT String (Eff es) a
+runJson :: (RepoContext ctx, Eval :> es, FromJSON a) => ctx -> String -> String -> ExceptT String (Eff es) a
 runJson ctx attr applyExpr = do
-    output <- runNixEvalJsonApplyInRepo ctx applyExpr attr
+    output <- withExceptT errorSummary (runNixEvalJsonApplyInRepo ctx applyExpr attr)
     maybe (throwError $ "Failed to parse the evaluation of " ++ attr) pure (decodeJson output)
 
-evalProjectDefinitions :: (RepoContext ctx, Eval :> es) => ctx -> ExceptT String (Eff es) String
-evalProjectDefinitions ctx = runNixEvalJsonApplyInRepo ctx projectDefinitions projectsAttr
+data ProjectsEvaluation = ProjectsEvaluation
+    { projectsValue :: Value
+    , projectsFailures :: [EvaluationFailure]
+    }
+
+data EvaluationFailure = EvaluationFailure
+    { failureSubject :: FailureSubject
+    , failureCause :: String
+    , failureMessage :: String
+    }
+
+data FailureSubject
+    = RevisionProjects
+    | ProjectSubject String
+    | StepSubject Int
+    deriving (Eq, Ord)
+
+data ProjectProblem = ProjectProblem
+    { problemCause :: String
+    , problemMessage :: String
+    }
+
+data ProjectOutcome
+    = ProjectEvaluated Value
+    | ProjectDegraded Value [ProjectProblem]
+    | ProjectFailed String
+
+data EntryList
+    = ChildEntries
+    | LegacyStepEntries
+
+evalProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) Value
+evalProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
+    evaluation <- evaluateProjectDefinitions ctx
+    unless (null (projectsFailures evaluation)) $
+        liftIO $
+            reportDegradedProjects repoPath commit (map failureMessage (projectsFailures evaluation))
+    pure (projectsValue evaluation)
+
+reportDegradedProjects :: FilePath -> String -> [String] -> IO ()
+reportDegradedProjects repoPath commit failures = do
+    firstReport <- modifyMVar degradedProjectsReportedRef $ \reported ->
+        pure (Set.insert (repoPath, commit) reported, Set.notMember (repoPath, commit) reported)
+    when firstReport $
+        putStrLn $
+            "Projects at " ++ take 8 commit ++ " are served with evaluation failures: " ++ intercalate "; " failures
+
+{-# NOINLINE degradedProjectsReportedRef #-}
+degradedProjectsReportedRef :: MVar (Set.Set (FilePath, String))
+degradedProjectsReportedRef = unsafePerformIO (newMVar Set.empty)
+
+evaluateProjectDefinitions :: (RepoContext ctx, Eval :> es) => ctx -> ExceptT String (Eff es) ProjectsEvaluation
+evaluateProjectDefinitions ctx =
+    lift (runExceptT (runJson ctx projectsAttr projectDefinitions)) >>= \case
+        Right projects -> pure (ProjectsEvaluation (normalizeProjects projects) [])
+        Left _ -> do
+            names <- runJson ctx projectsAttr "builtins.attrNames"
+            outcomes <- lift $ mapM (evaluateProject ctx) names
+            let entries = zip names outcomes
+            pure
+                ProjectsEvaluation
+                    { projectsValue = normalizeProjects (toJSON (Map.fromList [(name, value) | (name, outcome) <- entries, Just value <- [presentedProject name outcome]]))
+                    , projectsFailures = concatMap (uncurry projectOutcomeFailures) entries
+                    }
+
+evaluateProject :: (RepoContext ctx, Eval :> es) => ctx -> String -> Eff es ProjectOutcome
+evaluateProject ctx name =
+    runExceptT (runJson ctx attr projectDefinition) >>= \case
+        Right value -> pure (ProjectEvaluated value)
+        Left err ->
+            runExceptT (runJson ctx attr projectHeaderDefinition) >>= \case
+                Left headerErr -> pure (ProjectFailed headerErr)
+                Right header -> do
+                    (list, entries, failures) <- evaluateProjectEntries ctx attr
+                    pure $ ProjectDegraded (withEvaluatedEntries list header entries failures) (if null failures then [ProjectProblem err err] else failures)
+  where
+    attr = projectsAttr ++ "." ++ name
+
+evaluateProjectEntries :: (RepoContext ctx, Eval :> es) => ctx -> String -> Eff es (EntryList, [Value], [ProjectProblem])
+evaluateProjectEntries ctx attr = do
+    list <- either (const ChildEntries) (bool LegacyStepEntries ChildEntries) <$> runExceptT (runJson ctx attr "project: project ? children")
+    runExceptT (runJson ctx attr ("project: builtins.length project." ++ entryListName list)) >>= \case
+        Left err -> let message = "The " ++ entryListSubject list ++ " list does not evaluate: " ++ err in pure (list, [], [ProjectProblem message message])
+        Right count -> (\(entries, failures) -> (list, entries, failures)) <$> evaluateEntryRange ctx attr list 0 count
+
+evaluateEntryRange :: (RepoContext ctx, Eval :> es) => ctx -> String -> EntryList -> Int -> Int -> Eff es ([Value], [ProjectProblem])
+evaluateEntryRange ctx attr list start count
+    | count <= 0 = pure ([], [])
+    | otherwise =
+        runExceptT (runJson ctx attr (entryRangeExpression list start count)) >>= \case
+            Right entries -> pure (entries, [])
+            Left err
+                | count == 1 -> do
+                    entry <- failingEntry ctx attr list start
+                    pure ([], [ProjectProblem err (entry ++ " does not evaluate: " ++ err)])
+                | otherwise -> do
+                    let half = count `div` 2
+                    (<>) <$> evaluateEntryRange ctx attr list start half <*> evaluateEntryRange ctx attr list (start + half) (count - half)
+
+entryRangeExpression :: EntryList -> Int -> Int -> String
+entryRangeExpression list start count =
+    "project: builtins.genList (i: builtins.elemAt project." ++ entryListName list ++ " (i + " ++ show start ++ ")) " ++ show count
+
+failingEntry :: (RepoContext ctx, Eval :> es) => ctx -> String -> EntryList -> Int -> Eff es String
+failingEntry ctx attr list index = case list of
+    LegacyStepEntries -> pure ("Step at position " ++ position)
+    ChildEntries ->
+        either (const ("Child at position " ++ position)) (\stepId -> "Step " ++ show (stepId :: Int))
+            <$> runExceptT (runJson ctx attr ("project: (builtins.elemAt project.children " ++ show index ++ ").step.id"))
+  where
+    position = show (index + 1)
+
+entryListName :: EntryList -> String
+entryListName ChildEntries = "children"
+entryListName LegacyStepEntries = "steps"
+
+entryListSubject :: EntryList -> String
+entryListSubject ChildEntries = "child"
+entryListSubject LegacyStepEntries = "step"
+
+withEvaluatedEntries :: EntryList -> Object -> [Value] -> [ProjectProblem] -> Value
+withEvaluatedEntries list header entries failures =
+    Object $
+        KeyMap.insert (Key.fromString (entryListName list)) (toJSON entries) $
+            KeyMap.insert "validationErrors" (toJSON (declaredErrors ++ map problemMessage failures)) header
+  where
+    declaredErrors = case fromJSON <$> KeyMap.lookup "validationErrors" header of
+        Just (Success errors) -> errors
+        _ -> [] :: [String]
+
+presentedProject :: String -> ProjectOutcome -> Maybe Value
+presentedProject name = \case
+    ProjectEvaluated value -> Just value
+    ProjectDegraded value _ -> Just value
+    ProjectFailed failure -> placeholderProject failure <$> readInt name
+
+placeholderProject :: String -> Int -> Value
+placeholderProject failure pid =
+    object
+        [ "id" .= pid
+        , "name" .= ("Project " ++ show pid)
+        , "preset" .= Null
+        , "templates" .= ([] :: [String])
+        , "children" .= ([] :: [Value])
+        , "validationErrors" .= ["This project does not evaluate: " ++ failure]
+        ]
+
+projectOutcomeFailures :: String -> ProjectOutcome -> [EvaluationFailure]
+projectOutcomeFailures name = \case
+    ProjectEvaluated _ -> []
+    ProjectDegraded _ problems -> [projectFailure (problemCause problem) (problemMessage problem) | problem <- problems]
+    ProjectFailed failure -> [projectFailure failure failure]
+  where
+    projectFailure cause message = EvaluationFailure (ProjectSubject name) cause ("Project " ++ name ++ ": " ++ message)
+
+evaluatedProjectStepIds :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) [Int]
+evaluatedProjectStepIds ctx pid =
+    lift (evaluateProject ctx (show pid)) >>= \case
+        ProjectFailed failure -> throwError failure
+        ProjectEvaluated value -> stepIdsOf value
+        ProjectDegraded value _ -> stepIdsOf value
+  where
+    stepIdsOf value = case fromJSON (normalizeProject value) of
+        Success project -> pure (projectDefStepIds project)
+        Error err -> throwError err
+
+declaredProjectStepIds :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) (Versioned [Int])
+declaredProjectStepIds ctx pid =
+    lift (runExceptT (runJson ctx "#pointy" (projectStepIdsExpression pid))) >>= \case
+        Right declared -> pure declared
+        Left err ->
+            withExceptT (const ("Failed to evaluate project step ids: " ++ err)) $
+                Versioned <$> runJson ctx "#pointy" schemaVersionExpression <*> evaluatedProjectStepIds ctx pid
+
+checkRevision :: (Eval :> es) => ReadRepoContext -> ReadRepoContext -> [Int] -> ExceptT String (Eff es) ()
+checkRevision target candidate stepIds = do
+    candidateFailures <- lift (revisionFailures candidate stepIds)
+    unless (null candidateFailures) $ do
+        existing <- Set.fromList . map failureIdentity <$> lift (revisionFailures target stepIds)
+        case [failureMessage failure | failure <- candidateFailures, Set.notMember (failureIdentity failure) existing] of
+            [] -> pure ()
+            introduced -> throwError (intercalate "\n" introduced)
+
+failureIdentity :: EvaluationFailure -> (FailureSubject, String)
+failureIdentity failure = (failureSubject failure, failureCause failure)
+
+revisionFailures :: (Eval :> es) => ReadRepoContext -> [Int] -> Eff es [EvaluationFailure]
+revisionFailures ctx stepIds = do
+    projects <- runExceptT (evaluateProjectDefinitions ctx)
+    stepFailures <- catMaybes <$> mapM (stepDefinitionFailure ctx) stepIds
+    pure (either unevaluatedProjects projectsFailures projects ++ stepFailures)
+  where
+    unevaluatedProjects err = [EvaluationFailure RevisionProjects err ("Projects do not evaluate: " ++ err)]
+
+stepDefinitionFailure :: (Eval :> es) => ReadRepoContext -> Int -> Eff es (Maybe EvaluationFailure)
+stepDefinitionFailure ctx sid =
+    either (Just . failure . errorSummary) (const Nothing)
+        <$> runExceptT (runNixEvalJsonApplyInRepo ctx (stepDefinitionExpression sid) "#pointy")
+  where
+    failure cause = EvaluationFailure (StepSubject sid) cause ("Step " ++ show sid ++ " (steps/" ++ show sid ++ ".nix) does not evaluate: " ++ cause)
+
+stepDefinitionExpression :: Int -> String
+stepDefinitionExpression sid =
+    "pointy: if pointy.steps ? " ++ show (show sid) ++ " then pointy.steps." ++ show (show sid) ++ ".def else null"
 
 cachedProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map String ProjectDef)
 cachedProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
@@ -243,8 +433,8 @@ cachedProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
     case cached of
         Just definitions -> return definitions
         Nothing -> do
-            output <- evalProjectDefinitions ctx
-            definitions <- either throwError return (decodeProjectDefinitions output)
+            projects <- evalProjectDefinitions ctx
+            definitions <- either throwError return (decodeProjectDefinitions projects)
             liftIO $ insertCachedProjectDefinitions repoPath commit definitions
             return definitions
 
@@ -268,8 +458,10 @@ insertCachedProjectDefinitions repoPath commit definitions = do
 evalProjectDefinition :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) String
 evalProjectDefinition ctx pid = runNixEvalJsonApplyInRepo ctx projectDefinition (projectAttr pid)
 
-decodeProjectDefinitions :: String -> Either String (Map String ProjectDef)
-decodeProjectDefinitions = either (Left . (("Failed to parse " ++ projectsAttr ++ ": ") ++)) Right . eitherDecode . TLE.encodeUtf8 . TL.pack
+decodeProjectDefinitions :: Value -> Either String (Map String ProjectDef)
+decodeProjectDefinitions projects = case fromJSON projects of
+    Success definitions -> Right definitions
+    Error err -> Left ("Failed to parse " ++ projectsAttr ++ ": " ++ err)
 
 projectsAttr :: String
 projectsAttr = "#pointy.projects"
@@ -282,6 +474,9 @@ projectDefinitions = "builtins.mapAttrs (_: " ++ projectDefinition ++ ")"
 
 projectDefinition :: String
 projectDefinition = "project: builtins.removeAttrs project [ \"outPaths\" \"certificates\" ]"
+
+projectHeaderDefinition :: String
+projectHeaderDefinition = "project: builtins.removeAttrs project [ \"outPaths\" \"certificates\" \"steps\" \"children\" ]"
 
 stepKeyExpression :: Int -> String
 stepKeyExpression sid =
@@ -309,12 +504,15 @@ projectStepIdsExpression :: Int -> String
 projectStepIdsExpression pid =
     "pointy: "
         ++ schemaVersionPreamble
-        ++ "{ inherit version; value = builtins.map (s: s.def.id) pointy.projects."
-        ++ show (show pid)
-        ++ ".steps; }"
+        ++ "{ inherit version; value = builtins.map (s: s.def.id) "
+        ++ projectStepEntries "pointy.projects" pid
+        ++ "; }"
 
 schemaVersionPreamble :: String
 schemaVersionPreamble = "let version = let t = builtins.tryEval (pointy.schemaVersion or 0); in if t.success then t.value else 0; in "
+
+schemaVersionExpression :: String
+schemaVersionExpression = "pointy: " ++ schemaVersionPreamble ++ "version"
 
 keyGuard :: String -> String
 keyGuard selection =
@@ -333,7 +531,7 @@ renderIdList :: [Int] -> String
 renderIdList ids = "[ " ++ unwords (map (show . show) ids) ++ " ]"
 
 projectMembershipExpression :: String
-projectMembershipExpression = "projects: builtins.mapAttrs (_: p: builtins.map (s: s.def.id) p.steps) projects"
+projectMembershipExpression = "projects: builtins.mapAttrs (_: p: builtins.map (s: s.def.id) " ++ stepEntries "p" ++ ") projects"
 
 certificateBatchSize :: Int
 certificateBatchSize = 512
@@ -475,7 +673,7 @@ splitOrReportKeysAt commit failure ids = case ids of
         pure $ Map.union <$> leftResult <*> rightResult
   where
     describe = case failure of
-        Left err -> errorSummary err
+        Left err -> err
         Right _ -> "the evaluation returned the wrong number of keys"
 
 certificatePathsAt :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String [(Int, Maybe StepPaths)])
@@ -510,16 +708,20 @@ splitOrReportPaths commit failure ids = case ids of
         pure $ (++) <$> leftResult <*> rightResult
   where
     describe = case failure of
-        Left err -> errorSummary err
+        Left err -> err
         Right _ -> "the evaluation returned the wrong number of certificates"
 
-projectMembershipAt :: (Nix :> es, IOE :> es) => Text -> Eff es (Either String (Map Int [Int]))
+projectMembershipAt :: App es => Text -> Eff es (Either String (Map Int [Int]))
 projectMembershipAt commit = do
     result <- nixEvalJson commit "pointy.projects" projectMembershipExpression
-    pure $ case result of
-        Left err -> Left err
+    case result of
         Right (declared :: Map String [Int]) ->
-            Right $ Map.fromList [(pid, sids) | (key, sids) <- Map.toList declared, Just pid <- [readInt key]]
+            pure $ Right $ Map.fromList [(pid, sids) | (key, sids) <- Map.toList declared, Just pid <- [readInt key]]
+        Left _ -> do
+            repoPath <- liftIO userRepoPath
+            fmap (Map.fromList . map membership . Map.elems) <$> runExceptT (cachedProjectDefinitions (ReadRepoContext repoPath (unpack commit)))
+  where
+    membership project = (projectDefId project, projectDefStepIds project)
 
 readInt :: String -> Maybe Int
 readInt text = case reads text of
@@ -533,7 +735,7 @@ nixEvalJson commit attr applyExpr = do
     (code, stdout, stderr) <- runNixCli (nixEvalArgs installable attr applyExpr)
     pure $ case code of
         ExitSuccess -> maybe (Left "Failed to parse the evaluation output") Right (decodeJson stdout)
-        ExitFailure _ -> Left stderr
+        ExitFailure _ -> Left (errorSummary stderr)
 
 installableAt :: FilePath -> Text -> String
 installableAt repoPath commit = "git+file://" ++ repoPath ++ "?rev=" ++ unpack commit ++ "&allRefs=true"

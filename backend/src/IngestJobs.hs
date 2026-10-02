@@ -25,7 +25,7 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, (:>))
 import Effects (AppEffects, Eval, ingestDirectory)
 import Handlers.Projects (jsonToNix)
-import Handlers.StepReview (ensureStepUnreviewed)
+import Handlers.StepReview (ensureStepsUnreviewed)
 import Ingest (IngestResult (..), storeRefName)
 import qualified IngestBus
 import Certificates (withWriteRepoTransaction)
@@ -75,7 +75,7 @@ ingest ident request = do
         Left message -> pure (Left message)
         Right ingested -> do
             written <- withWriteRepoTransaction $ \context -> do
-                ensureStepUnreviewed context (ingestRequestStepId request)
+                ensureStepsUnreviewed context [ingestRequestStepId request]
                 updateStepNixFile context (ingestRequestStepId request) (ingestNarHash ingested)
                 commitAndPushChanges context (ingestRequestMessage request)
             pure $ case written of

@@ -10,7 +10,7 @@ import Components.Combobox as Combobox
 import Components.Markdown as Markdown
 import Components.Select as Select
 import Dict
-import Extra.Accessors exposing (by, where_)
+import Extra.Accessors exposing (A_Traversal, by, remkT, where_)
 import Extra.Decode as Decode
 import Extra.Http as Http
 import Flow exposing (Flow)
@@ -20,16 +20,16 @@ import Html.Events as Events
 import Html.Extra as Html
 import Html.Keyed
 import Html.Lazy
-import Iso8601
 import Ingest
+import Iso8601
 import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, Model, Status(..), StepRecord, Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
-import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentTableOf, dndAffected, edited, isReadOnlyPage, isReadOnlyRoute, mCommit, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, recordId, records, route, selectExistingSteps, tables, templatesSelect)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildKind(..), Model, ProjectRecord, Status(..), StepRecord, Table, TableTag(..), TemplateSource(..), UploadProgress, dndSystem, getSortKey)
+import Model.Lenses as Lenses exposing (allEntities, argSelectStates, args, currentProject, currentProjectId, currentSubProjects, currentTableOf, dndAffected, edited, isReadOnlyPage, isReadOnlyRoute, note, presetSelect, projectStepRecords, projects, projectsContainingEntity, projectsContainingProject, recordId, records, route, selectExistingSteps, tables, templatesSelect)
 import Model.Shadow exposing (Field, StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), tBoolValue, tEnumValue, tIntValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Route exposing (Route)
@@ -141,8 +141,11 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
         isReadOnly =
             isReadOnlyRoute model
 
+        rowKind =
+            Model.tagChildKind (TableSpec.getTag spec)
+
         isProjectsTag =
-            TableSpec.getTag spec == TagProjects
+            rowKind == ProjectChild
 
         hasHiddenRecords =
             has (records << ApiData.success << where_ (List.any .hidden)) table
@@ -158,9 +161,6 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                 ]
                 content
 
-        mProjectId =
-            try currentProjectId model
-
         mEditedId =
             try (edited << just << recordId << just) table
 
@@ -173,8 +173,10 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
         viewRecord index record =
             let
                 isHighlighted =
-                    Maybe.map2 (==) (Maybe.map .id highlightedEntityId) record.id
-                        |> Maybe.withDefault False
+                    not isProjectsTag
+                        && (Maybe.map2 (==) (Maybe.map .id highlightedEntityId) record.id
+                                |> Maybe.withDefault False
+                           )
 
                 recordNameEditable =
                     if recordIsEditing record && table.nameEditOnly && editable record then
@@ -215,10 +217,10 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                 viewUnmovedRecord attrs mkDragAttrs mkDropAttrs =
                     let
                         itemId =
-                            Maybe.unwrap (TableSpec.getName spec ++ "-new") String.fromInt record.id
+                            Maybe.unwrap (TableSpec.getName spec ++ "-new") (Model.rowDomId rowKind) record.id
 
                         cmap =
-                            List.map (map (Actions.dndMsgToIO mProjectId spec))
+                            List.map (map (Actions.dndMsgToIO spec))
 
                         actionsContainerClass =
                             "table-record-actions-container"
@@ -320,7 +322,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                             ]
 
                     Nothing ->
-                        [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dragEvents index) (dndSystem.dropEvents index) ) ]
+                        [ ( "record-" ++ String.fromInt index, viewUnmovedRecord [] (dndSystem.dragEvents index) (always []) ) ]
                 )
 
         viewContent =
@@ -396,7 +398,7 @@ viewTable { model, spec, table, recordStatusPill, recordActionsPopover, alwaysVi
                         , Html.viewIf (not isReadOnly && hasHiddenRecords) <|
                             tableActionBtn
                                 (ApiData.unwrap (Flow.pure ())
-                                    (Flow.batchM << List.map (Actions.toggleRecordVisibility spec mProjectId (Just False)))
+                                    (Flow.batchM << List.map (Actions.toggleRecordVisibility spec (Just False)))
                                     table.records
                                 )
                                 "btn"
@@ -601,8 +603,8 @@ viewRecordActionsPopover popoverId actions =
         actions
 
 
-viewRecordActions : TableSpec (BaseRecord a) -> Bool -> Maybe Int -> BaseRecord a -> List (Html (Flow Model ()))
-viewRecordActions spec isReadOnly mProjectId record =
+viewRecordActions : TableSpec (BaseRecord a) -> Bool -> BaseRecord a -> List (Html (Flow Model ()))
+viewRecordActions spec isReadOnly record =
     let
         editable r =
             not isReadOnly && not (TableSpec.getIsLocked spec r)
@@ -636,12 +638,10 @@ viewRecordActions spec isReadOnly mProjectId record =
                 |> Flow.seq loadSourceFiles
 
         recordActions =
-            [ 
-              { shouldShow = hasBrowsableOutput << TableSpec.getStatus spec
+            [ { shouldShow = hasBrowsableOutput << TableSpec.getStatus spec
               , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
               }
-            , 
-              { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
+            , { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
               , render = always (viewInactiveIconButtonWithTooltip "edit" "Remove review to edit")
               }
             , { shouldShow = Maybe.isJust << .id
@@ -653,22 +653,16 @@ viewRecordActions spec isReadOnly mProjectId record =
                         else
                             viewIconButtonWithTooltip "data_info_alert" True "Inspect Parameters" toggleRecordForm
               }
-            , 
-              { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
+            , { shouldShow = \r -> TableSpec.getShareable spec r && Maybe.isJust r.id
               , render =
                     \r ->
                         viewIconButtonWithTooltip
                             "share"
                             True
                             "Share"
-                            (Maybe.map2 (\projectId recordId -> Actions.shareEntity projectId recordId Route.Output [] Nothing)
-                                mProjectId
-                                r.id
-                                |> Maybe.withDefault Flow.none
-                            )
+                            (Maybe.unwrap Flow.none (\recordId -> Actions.shareEntity recordId Route.Output [] Nothing) r.id)
               }
-            , 
-              { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
+            , { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
               , render =
                     \r ->
                         viewIconButtonWithTooltip
@@ -685,14 +679,12 @@ viewRecordActions spec isReadOnly mProjectId record =
                              else
                                 "Hide"
                             )
-                            (Actions.toggleRecordVisibility spec mProjectId Nothing r)
+                            (Actions.toggleRecordVisibility spec Nothing r)
               }
-            , 
-              { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
+            , { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
               , render = \r -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec r)
               }
-            , 
-              { shouldShow =
+            , { shouldShow =
                     \r ->
                         let
                             hasDependentInProject =
@@ -716,8 +708,8 @@ viewRecordActions spec isReadOnly mProjectId record =
         recordActions
 
 
-viewRunStop : TableSpec StepRecord -> StepRecord -> List (Html (Flow Model ()))
-viewRunStop spec record =
+viewRunStop : TableSpec StepRecord -> Bool -> StepRecord -> List (Html (Flow Model ()))
+viewRunStop spec stopping record =
     case record.id of
         Just id ->
             let
@@ -744,24 +736,22 @@ viewRunStop spec record =
                             True
             in
             [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-            , Html.viewIf isRunning (viewStopButton "Stop" (Actions.stopStep spec id))
+            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep spec id))
+            , Html.viewIf (isRunning && stopping) viewStoppingIndicator
             ]
 
         Nothing ->
             []
 
 
-viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool } -> Html (Flow Model ())
-viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page record flags =
+viewStepRecordActions : String -> StepConfigEntry -> StepConfig -> String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
+viewStepRecordActions name entry stepConfig presentTypesKey page record flags =
     let
         spec =
             Specs.steps name entry
 
         isReadOnly =
             isReadOnlyPage page
-
-        mProjectId =
-            String.toInt projectIdKey
 
         presentTypes =
             String.split "," presentTypesKey
@@ -796,10 +786,10 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
         runActions =
             case entry.stepType of
                 Derivation _ _ ->
-                    viewRunStop spec record
+                    viewRunStop spec flags.stopping record
 
                 Download _ ->
-                    viewRunStop spec record
+                    viewRunStop spec flags.stopping record
 
                 FileUpload _ ->
                     []
@@ -860,7 +850,7 @@ viewStepRecordActions name entry stepConfig presentTypesKey projectIdKey page re
     in
     viewRecordActionsPopover
         (actionsPopoverId name record)
-        (uploadActions ++ runActions ++ quickCreateActions ++ viewRecordActions spec isReadOnly mProjectId record)
+        (uploadActions ++ runActions ++ quickCreateActions ++ viewRecordActions spec isReadOnly record)
 
 
 viewAddOrEditRecordForm : Model -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
@@ -882,15 +872,26 @@ viewAddOrEditRecordForm model spec table extraSection record =
                     [ viewStepExtraFormFields model readOnly key stepDef ]
 
                 TagProjects ->
-                    viewProjectExtraFormFields model
+                    viewProjectExtraFormFields model currentSubProjects
+
+                TagAllProjects ->
+                    viewProjectExtraFormFields model projects
 
         noteInput =
             case TableSpec.getTag spec of
                 TagSteps tableId _ ->
                     viewStepNoteField model readOnly tableId
 
-                TagProjects ->
+                _ ->
                     Html.nothing
+
+        ( addExistingLabel, addExistingTitle ) =
+            case TableSpec.getTag spec of
+                TagSteps _ _ ->
+                    ( "Add from other project", "Add from other project: " ++ TableSpec.getDisplayName spec )
+
+                _ ->
+                    ( "Add existing project", "Add existing project" )
 
         nameInput =
             let
@@ -931,25 +932,44 @@ viewAddOrEditRecordForm model spec table extraSection record =
         modeSelector =
             Html.div [ class "form-mode-selector" ]
                 [ radioButton AddNew "Create new"
-                , radioButton AddFromOtherProject "Add from other project"
+                , radioButton AddFromOtherProject addExistingLabel
                 ]
 
         viewSelectExisting state =
             let
-                mProjectId =
-                    try currentProjectId model
+                tableRecordIds =
+                    ApiData.withDefault [] table.records |> List.filterMap .id
+
+                candidates =
+                    case TableSpec.getTag spec of
+                        TagSteps _ _ ->
+                            let
+                                mProjectId =
+                                    try currentProjectId model
+                            in
+                            all (allEntities (where_ (\{ id } -> id /= mProjectId) << tables << key (TableSpec.getName spec) << just)) model
+                                |> List.map (\{ id, name } -> { id = id, name = name, mProjectId = Nothing })
+
+                        _ ->
+                            all (projects << records << success << each) model
+                                |> List.map (\{ id, name } -> { id = id, name = name, mProjectId = Nothing })
 
                 availableItems =
-                    List.map (\{ id, name } -> { id = id, name = name, mProjectId = Nothing })
-                        (all (allEntities (where_ (\{ id } -> id /= mProjectId) << tables << key (TableSpec.getName spec) << just)) model
-                            |> List.filter
-                                (\r -> r.id |> Maybe.unwrap True (\id -> not (List.member id (ApiData.withDefault [] table.records |> List.filterMap .id))))
-                        )
+                    candidates
+                        |> List.filter (.id >> Maybe.unwrap True (\id -> not (List.member id tableRecordIds)))
                         |> List.unique
                         |> List.filter (\item -> not (List.any (\i -> i.id == item.id) state.selected))
 
+                containingProjects entityId_ =
+                    case TableSpec.getTag spec of
+                        TagSteps _ _ ->
+                            all (projectsContainingEntity entityId_) model
+
+                        _ ->
+                            all (projectsContainingProject entityId_) model
+
                 toItemTooltip =
-                    Maybe.unwrap [] (\entityId_ -> "projects containing entity:" :: List.map (\p -> "• " ++ p) (List.map .name (all (projectsContainingEntity entityId_) model))) << .id
+                    Maybe.unwrap [] (\entityId_ -> "projects containing entity:" :: List.map (\p -> "• " ++ p.name) (containingProjects entityId_)) << .id
             in
             Select.view
                 { optic = TableSpec.getLens spec << selectExistingSteps
@@ -990,7 +1010,7 @@ viewAddOrEditRecordForm model spec table extraSection record =
                         "Create new " ++ displayName
 
                     ( False, AddFromOtherProject ) ->
-                        "Add from other project: " ++ displayName
+                        addExistingTitle
 
                     ( True, _ ) ->
                         "Edit " ++ displayName
@@ -1000,8 +1020,8 @@ viewAddOrEditRecordForm model spec table extraSection record =
                 endEdit =
                     Actions.endRecordEdit (TableSpec.getLens spec)
             in
-            case ( readOnly, record.id ) of
-                ( False, Just recordId ) ->
+            case ( readOnly, record.id, TableSpec.getTag spec ) of
+                ( False, Just recordId, TagSteps _ _ ) ->
                     Actions.discardSrcFileChanges recordId
                         |> Flow.seq endEdit
 
@@ -1029,8 +1049,8 @@ viewAddOrEditRecordForm model spec table extraSection record =
                         Nothing
                     )
                 , Html.div [ class "form-body" ]
-                    [ Html.viewIf (not editing && TableSpec.getTag spec /= TagProjects) modeSelector
-                    , Html.viewIf (not editing && table.addMode == AddFromOtherProject && TableSpec.getTag spec /= TagProjects) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
+                    [ Html.viewIf (not editing) modeSelector
+                    , Html.viewIf (not editing && table.addMode == AddFromOtherProject) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
                     , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|
@@ -1078,11 +1098,11 @@ upsertOnEnter spec =
             ]
 
 
-viewProjectExtraFormFields : Model -> List (Html (Flow Model ()))
-viewProjectExtraFormFields model =
+viewProjectExtraFormFields : Model -> A_Traversal Model (Table ProjectRecord) -> List (Html (Flow Model ()))
+viewProjectExtraFormFields model tableLens =
     let
         mEdited =
-            try (projects << edited << just) model
+            try (remkT tableLens << edited << just) model
 
         mPresets =
             ApiData.toMaybe (Model.getPresets model)
@@ -1155,13 +1175,13 @@ viewProjectExtraFormFields model =
 
                 onPickPreset item =
                     if item.name == customSentinel then
-                        Actions.chooseProjectCustom
+                        Actions.chooseProjectCustom tableLens
 
                     else
-                        Actions.chooseProjectPreset item.name
+                        Actions.chooseProjectPreset tableLens item.name
 
                 presetStateLens =
-                    projects << edited << just << presetSelect
+                    remkT tableLens << edited << just << presetSelect
 
                 rawPresetState =
                     try presetStateLens model |> Maybe.withDefault Select.initSelectState
@@ -1217,7 +1237,7 @@ viewProjectExtraFormFields model =
                         |> List.map templateItem
 
                 stateLens =
-                    projects << edited << just << templatesSelect
+                    remkT tableLens << edited << just << templatesSelect
 
                 templatesSelectView =
                     Select.view
@@ -1242,10 +1262,10 @@ viewProjectExtraFormFields model =
                         , toMenuItemName = .name >> templateLabel
                         , toMenuItemTooltip = always []
                         , onChange = Flow.pure ()
-                        , onRemove = .name >> Actions.removeProjectTemplate
+                        , onRemove = .name >> Actions.removeProjectTemplate tableLens
                         , activeAfterSelect = True
                         , clearInputAfterSelect = True
-                        , onSelect = .name >> Actions.addProjectTemplate
+                        , onSelect = .name >> Actions.addProjectTemplate tableLens
                         , alignRight = False
                         , inputItemStyle = .name >> stringToColor >> style "background-color" >> List.singleton
                         }
@@ -1366,19 +1386,14 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                             )
 
                 toHighlightRoute stepId =
-                    try currentProjectId model
+                    try (route << Route.page << Route.project) model
                         |> Maybe.map
-                            (\projectId ->
-                                let
-                                    mCommit_ =
-                                        try (route << Route.page << Route.project << mCommit << just) model
-                                in
+                            (\params ->
                                 Route.fromPage
                                     (Route.Project
-                                        { projectId = projectId
-                                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                                        , mCommit = mCommit_
-                                        , mCompare = Nothing
+                                        { params
+                                            | mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                                            , mCompare = Nothing
                                         }
                                     )
                             )
@@ -2305,6 +2320,19 @@ viewRunButton =
 viewStopButton : String -> Flow Model () -> Html (Flow Model ())
 viewStopButton =
     viewIconButtonWithTooltip "stop" True
+
+
+viewStoppingIndicator : Html (Flow Model ())
+viewStoppingIndicator =
+    Html.button
+        [ class "icon-btn icon-btn-inactive"
+        , attribute "aria-disabled" "true"
+        , attribute "aria-label" "Stopping"
+        , title "Stopping"
+        ]
+        [ iconCustom True "progress_activity" [ class "icon-btn-spinner" ]
+        , Html.span [ class "icon-btn-text" ] [ Html.text "Stopping" ]
+        ]
 
 
 viewUploadButton : Flow Model () -> Html (Flow Model ())

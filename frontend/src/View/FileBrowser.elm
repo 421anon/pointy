@@ -19,7 +19,7 @@ import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectId, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
+import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectPath, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -87,14 +87,14 @@ recordRevision model recordId =
         |> Maybe.andThen (stepRevision model)
 
 
-compareSelectionFor : Model -> Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
-compareSelectionFor model projectId fileName mime path ctx =
+compareSelectionFor : Model -> List Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
+compareSelectionFor model projectPath_ fileName mime path ctx =
     case ctx of
         OutputDir recordId commit_ ->
-            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
+            { projectPath = projectPath_, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
 
         SrcDir recordId ->
-            { projectId = projectId, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc (recordRevision model recordId) }
+            { projectPath = projectPath_, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc (recordRevision model recordId) }
 
 
 viewCompareButton : Model -> Maybe CompareSelection -> Html (Flow Model ())
@@ -334,9 +334,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
         shareButton =
             let
                 shareAction =
-                    case ( try currentProjectId model, mGutter ) of
-                        ( Just projectId, Just { recordId, target } ) ->
-                            Actions.shareEntity projectId recordId target path mSelectedRange
+                    case mGutter of
+                        Just { recordId, target } ->
+                            Actions.shareEntity recordId target path mSelectedRange
 
                         _ ->
                             Flow.none
@@ -379,21 +379,21 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                 mCompareSelection =
                     if not file.isDeleted && (file.viewable || isImage) then
-                        Maybe.map2 (\pid -> compareSelectionFor model pid itemName file.mimeType path)
-                            (try currentProjectId model)
+                        Maybe.map2 (\projectPath_ -> compareSelectionFor model projectPath_ itemName file.mimeType path)
+                            (try currentProjectPath model)
                             mDirCtx
 
                     else
                         Nothing
 
                 externalArtifactUrl =
-                    case ( try currentProjectId model, mDirCtx ) of
-                        ( Just projectId, Just (OutputDir stepId_ commit_) ) ->
+                    case ( try currentProjectPath model, mDirCtx ) of
+                        ( Just projectPath_, Just (OutputDir stepId_ commit_) ) ->
                             Just <|
                                 Route.toString <|
                                     Route.fromPage <|
                                         Route.Artifact
-                                            { projectId = projectId
+                                            { projectPath = projectPath_
                                             , stepId = stepId_
                                             , commit = commit_
                                             , path = path

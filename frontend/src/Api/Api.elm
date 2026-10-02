@@ -1,11 +1,12 @@
 module Api.Api exposing
     ( AutocompleteRequest
     , SeekAnchor(..)
+    , applyChildChanges
     , batchAssignRecordsToProject
+    , childChangesUrl
     , createProject
     , createSrcFile
     , createStep
-    , deleteProject
     , deleteSrcFile
     , fetchAutocomplete
     , fetchCommitHash
@@ -30,8 +31,6 @@ module Api.Api exposing
     , reviewDiffUrl
     , reviewStep
     , runStep
-    , saveProject
-    , saveProjectsBatch
     , saveRecord
     , saveSrcFile
     , srcFileDownloadUrl
@@ -39,7 +38,6 @@ module Api.Api exposing
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
-    , unassignRecordFromProject
     , uploadFiles
     , wrapScratch
     )
@@ -53,7 +51,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, ScratchListing, StepRecord)
+import Model.Core exposing (BaseRecord, ChildChanges, ChildKind, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, ScratchListing, StepRecord)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -228,11 +226,11 @@ removeReview id =
     request "DELETE" ("/backend/step-review?id=" ++ String.fromInt id) Http.emptyBody
 
 
-createProject : Presets -> StepConfig -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
-createProject presets stepConfig record =
+createProject : Presets -> StepConfig -> Int -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
+createProject presets stepConfig parentId record =
     Flow.lift <|
         Http.post
-            { url = "/backend/projects"
+            { url = UrlBuilder.absolute [ "backend", "projects" ] [ UrlBuilder.int "parent_id" parentId ]
             , body = Http.jsonBody <| Encode.projectRecord record
             , expect = Http.expectJson identity (Decode.projectRecord presets stepConfig)
             }
@@ -265,22 +263,6 @@ saveRecord tableSpec record =
         )
         record.id
 
-
-saveProject : Int -> ProjectRecord -> Flow s (Result Http.Error ())
-saveProject projectId project =
-    request "PATCH" ("/backend/projects?id=" ++ String.fromInt projectId) (Http.jsonBody (Encode.projectRecord project))
-
-
-saveProjectsBatch : List ( Int, Json.Encode.Value ) -> Flow s (Result Http.Error ())
-saveProjectsBatch projects =
-    let
-        encodeItem ( id, record ) =
-            Json.Encode.object
-                [ ( "id", Json.Encode.int id )
-                , ( "record", record )
-                ]
-    in
-    request "POST" "/backend/projects/batch" (Http.jsonBody (Json.Encode.list encodeItem projects))
 
 uploadFiles : Int -> List File -> Flow s (Result Http.Error ())
 uploadFiles stepId files =
@@ -382,30 +364,24 @@ fetchCommitHash =
             }
 
 
-deleteProject : Int -> Flow s (Result Http.Error ())
-deleteProject projectId =
-    request "DELETE" ("/backend/projects?id=" ++ String.fromInt projectId) Http.emptyBody
-
-
-batchAssignRecordsToProject : Int -> List Int -> Flow s (Result Http.Error ())
-batchAssignRecordsToProject projectId recordIds =
+batchAssignRecordsToProject : Int -> ChildKind -> List Int -> Flow s (Result Http.Error ())
+batchAssignRecordsToProject projectId kind recordIds =
     let
         url =
             "/backend/project-entities/batch?project_id="
                 ++ String.fromInt projectId
     in
-    request "POST" url (Http.jsonBody (Json.Encode.list Json.Encode.int recordIds))
+    request "POST" url (Http.jsonBody (Json.Encode.list (Encode.childRef kind) recordIds))
 
 
-unassignRecordFromProject : Int -> Int -> Flow s (Result Http.Error ())
-unassignRecordFromProject projectId recordId =
-    request "DELETE"
-        ("/backend/project-entities?project_id="
-            ++ String.fromInt projectId
-            ++ "&entity_id="
-            ++ String.fromInt recordId
-        )
-        Http.emptyBody
+childChangesUrl : Int -> String
+childChangesUrl projectId =
+    "/backend/project-entities/changes?project_id=" ++ String.fromInt projectId
+
+
+applyChildChanges : Int -> ChildChanges -> Flow s (Result Http.Error ())
+applyChildChanges projectId changes =
+    request "POST" (childChangesUrl projectId) (Http.jsonBody (Encode.childChanges changes))
 
 
 runStep : Int -> Maybe String -> Flow s (Result Http.Error ())

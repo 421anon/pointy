@@ -4,7 +4,9 @@ module Main (main) where
 
 import Bus (broadcastSnapshot, subscribe)
 import Control.Monad (unless)
+import Data.Aeson (eitherDecode)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Handlers.StatusStream (streamLoop)
 import Handlers.Statuses (projectContainsStep)
@@ -14,9 +16,9 @@ import System.Timeout (timeout)
 
 main :: IO ()
 main = do
-    projects <- either fail pure (decodeProjectDefinitions projectsJson)
+    projects <- either fail pure (eitherDecode projectsJson >>= decodeProjectDefinitions)
     assertEqual
-        "step updates reach every project listing the step, hidden or not"
+        "step updates reach every project listing the step, hidden or not, and no project listing a project with the step's id"
         [1, 2]
         [projectDefId p | p <- Map.elems projects, projectContainsStep 7 p]
 
@@ -41,13 +43,13 @@ main = do
                     assertBool "second snapshot is a snapshot event" ("event: snapshot" `BS.isInfixOf` bytes2)
                     assertBool "second snapshot carries project id" ("\"projectId\":2" `BS.isInfixOf` bytes2)
 
-projectsJson :: String
+projectsJson :: LBS.ByteString
 projectsJson =
-    concat
+    mconcat
         [ "{"
-        , "\"1\":{\"id\":1,\"hidden\":false,\"steps\":[{\"hidden\":true,\"def\":{\"id\":7}}]},"
-        , "\"2\":{\"id\":2,\"hidden\":true,\"steps\":[{\"hidden\":false,\"def\":{\"id\":7}}]},"
-        , "\"3\":{\"id\":3,\"hidden\":false,\"steps\":[{\"hidden\":false,\"def\":{\"id\":8}}]}"
+        , "\"1\":{\"id\":1,\"children\":[{\"step\":{\"id\":7,\"hidden\":true,\"sortKey\":null,\"def\":{\"id\":7}}}]},"
+        , "\"2\":{\"id\":2,\"children\":[{\"project\":{\"id\":1,\"hidden\":false,\"sortKey\":null}},{\"step\":{\"id\":7,\"hidden\":false,\"sortKey\":null,\"def\":{\"id\":7}}}]},"
+        , "\"3\":{\"id\":3,\"children\":[{\"step\":{\"id\":8,\"hidden\":false,\"sortKey\":null,\"def\":{\"id\":8}}},{\"project\":{\"id\":7,\"hidden\":false,\"sortKey\":null}}]}"
         , "}"
         ]
 

@@ -1,11 +1,11 @@
 module Api.Encode exposing (..)
 
-import Api.ApiData as ApiData
 import Dict exposing (Dict)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..))
+import Model.Core as Model exposing (ChildChanges, ChildKind, ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..))
 import Model.Shadow exposing (Field, StepType(..), StepArgValue(..), Widget(..))
+import Set
 
 
 stepArgValue : Widget -> StepArgValue -> Maybe Encode.Value
@@ -110,25 +110,44 @@ stepValue stepType record =
         ]
 
 
-stepRef : StepRecord -> Encode.Value
-stepRef record =
+childRef : ChildKind -> Int -> Encode.Value
+childRef kind id =
+    childEntry kind id []
+
+
+childEntry : ChildKind -> Int -> List ( String, Encode.Value ) -> Encode.Value
+childEntry kind id fields =
+    Encode.object [ ( Model.childKindName kind, Encode.object (( "id", Encode.int id ) :: fields) ) ]
+
+
+childChanges : ChildChanges -> Encode.Value
+childChanges changes =
+    let
+        updateFields update =
+            List.filterMap identity
+                [ Maybe.map (Encode.bool >> Tuple.pair "hidden") update.hidden
+                , Maybe.map (Maybe.unwrap Encode.null Encode.int >> Tuple.pair "sortKey") update.sortKey
+                ]
+
+        updatesOf kind =
+            (Model.entryChangesOf kind changes).updates
+                |> Dict.toList
+                |> List.map (\( id, update ) -> childEntry kind id (updateFields update))
+
+        removalsOf kind =
+            (Model.entryChangesOf kind changes).removals
+                |> Set.toList
+                |> List.map (childRef kind)
+    in
     Encode.object
-        [ ( "id", Maybe.unwrap Encode.null Encode.int record.id )
-        , ( "hidden", Encode.bool record.hidden )
-        , ( "sortKey", Maybe.unwrap Encode.null Encode.int record.sortKey )
+        [ ( "update", Encode.list identity (List.concatMap updatesOf Model.childKinds) )
+        , ( "remove", Encode.list identity (List.concatMap removalsOf Model.childKinds) )
         ]
 
 
 projectRecord : ProjectRecord -> Encode.Value
 projectRecord record =
     let
-        extractRecords table =
-            ApiData.withDefault [] table.records
-
-        steps =
-            (Dict.values record.tables |> List.concatMap extractRecords)
-                ++ record.orphanedSteps
-
         sourceField =
             case record.templateSource of
                 FromPreset name ->
@@ -139,10 +158,7 @@ projectRecord record =
     in
     Encode.object
         [ ( "name", Encode.string record.name )
-        , ( "hidden", Encode.bool record.hidden )
-        , ( "sortKey", Maybe.unwrap Encode.null Encode.int record.sortKey )
         , sourceField
-        , ( "steps", Encode.list stepRef steps )
         ]
 
 

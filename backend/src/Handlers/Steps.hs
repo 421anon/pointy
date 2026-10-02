@@ -24,7 +24,7 @@ import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extrac
 import Handlers.ProjectEntities (assignRecordToProject)
 import Handlers.Projects (jsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead, forkWarmStepCertificate)
-import Handlers.StepReview (ensureStepUnreviewed, requireStepUnreviewed)
+import Handlers.StepReview (ensureStepsUnreviewed, requireStepUnreviewed)
 import Certificates (withWriteRepoTransaction)
 import Servant (NoContent (..), throwError)
 import Servant.Server (err400, err409, err500, errBody)
@@ -101,7 +101,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
         let isDownloadW = maybe False (\t -> Set.member t templatesW) mReqType
         when (isDownload /= isDownloadW) $
             throwError "Step kind classification changed; retry"
-        ensureStepUnreviewed headCtx stepId
+        ensureStepsUnreviewed headCtx [stepId]
 
         case mExistingVal of
             Just existingVal -> do

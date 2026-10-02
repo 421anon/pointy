@@ -117,6 +117,107 @@ type alias ReviewDraft =
     }
 
 
+type ChildKind
+    = StepChild
+    | ProjectChild
+
+
+childKinds : List ChildKind
+childKinds =
+    [ StepChild, ProjectChild ]
+
+
+childKindName : ChildKind -> String
+childKindName kind =
+    case kind of
+        StepChild ->
+            "step"
+
+        ProjectChild ->
+            "project"
+
+
+rowDomId : ChildKind -> Int -> String
+rowDomId kind id =
+    childKindName kind ++ "-" ++ String.fromInt id
+
+
+type alias EntryUpdate =
+    { hidden : Maybe Bool
+    , sortKey : Maybe (Maybe Int)
+    }
+
+
+type alias EntryChanges =
+    { updates : Dict Int EntryUpdate
+    , removals : Set Int
+    }
+
+
+type alias ChildChanges =
+    { steps : EntryChanges
+    , projects : EntryChanges
+    }
+
+
+type alias ChildChangeQueue =
+    { pending : Dict Int ChildChanges
+    , inFlight : Dict Int ChildChanges
+    , debounce : Debounce ()
+    }
+
+
+noChildChanges : ChildChanges
+noChildChanges =
+    { steps = { updates = Dict.empty, removals = Set.empty }
+    , projects = { updates = Dict.empty, removals = Set.empty }
+    }
+
+
+entryChangesOf : ChildKind -> ChildChanges -> EntryChanges
+entryChangesOf kind =
+    case kind of
+        StepChild ->
+            .steps
+
+        ProjectChild ->
+            .projects
+
+
+updateEntry : Int -> (EntryUpdate -> EntryUpdate) -> EntryChanges -> EntryChanges
+updateEntry id change changes =
+    { changes | updates = Dict.update id (Maybe.withDefault { hidden = Nothing, sortKey = Nothing } >> change >> Just) changes.updates }
+
+
+removeEntry : Int -> EntryChanges -> EntryChanges
+removeEntry id changes =
+    { changes | updates = Dict.remove id changes.updates, removals = Set.insert id changes.removals }
+
+
+applyEntryChanges : EntryChanges -> List (BaseRecord a) -> List (BaseRecord a)
+applyEntryChanges changes =
+    let
+        applyUpdate record update =
+            { record
+                | hidden = Maybe.withDefault record.hidden update.hidden
+                , sortKey = Maybe.withDefault record.sortKey update.sortKey
+            }
+    in
+    List.filterMap
+        (\record ->
+            case record.id of
+                Just id ->
+                    if Set.member id changes.removals then
+                        Nothing
+
+                    else
+                        Just (Maybe.unwrap record (applyUpdate record) (Dict.get id changes.updates))
+
+                Nothing ->
+                    Just record
+        )
+
+
 type alias SrcFileDraft =
     { name : String
     , content : String
@@ -150,6 +251,7 @@ type alias Notice =
 type alias ProjectRecord =
     BaseRecord
         { tables : Dict String (Table StepRecord)
+        , subProjects : SubProjects
         , templateSource : TemplateSource
         , orphanedSteps : List StepRecord
         , validationErrors : List String
@@ -157,6 +259,109 @@ type alias ProjectRecord =
         , presetSelect : SelectState
         , templatesSelect : SelectState
         }
+
+
+type SubProjects
+    = SubProjects (Table ProjectRecord)
+
+
+subProjectsTable : SubProjects -> Table ProjectRecord
+subProjectsTable (SubProjects table) =
+    table
+
+
+subProjectRecords : ProjectRecord -> List ProjectRecord
+subProjectRecords project =
+    (subProjectsTable project.subProjects).records
+        |> ApiData.toMaybe
+        |> Maybe.withDefault []
+
+
+blankProject : ProjectRecord
+blankProject =
+    { id = Nothing
+    , clientId = Nothing
+    , hidden = False
+    , sortKey = Nothing
+    , name = ""
+    , tables = Dict.empty
+    , subProjects = SubProjects initialTable
+    , templateSource = CustomTemplates []
+    , orphanedSteps = []
+    , validationErrors = []
+    , hideOrphans = False
+    , presetSelect = initSelectState
+    , templatesSelect = initSelectState
+    , isUpdating = False
+    , lastModifiedAt = Nothing
+    }
+
+
+projectAtPath : List ProjectRecord -> List Int -> Maybe ProjectRecord
+projectAtPath projects projectPath =
+    let
+        findProject id =
+            List.find (.id >> (==) (Just id)) projects
+
+        enter childId =
+            Maybe.andThen
+                (\parent ->
+                    if List.member (Just childId) (List.map .id (subProjectRecords parent)) then
+                        findProject childId
+
+                    else
+                        Nothing
+                )
+    in
+    List.foldl enter (findProject Route.rootProjectId) projectPath
+
+
+canonicalProjectPath : List Int -> List ProjectRecord -> Int -> List Int
+canonicalProjectPath currentPath projects targetId =
+    let
+        hiddenRank child =
+            if child.hidden then
+                1
+
+            else
+                0
+
+        childIds id =
+            List.find (.id >> (==) (Just id)) projects
+                |> Maybe.unwrap [] subProjectRecords
+                |> List.sortBy (\child -> ( hiddenRank child, getSortKey child ))
+                |> List.filterMap .id
+                |> List.unique
+
+        search queue visited =
+            case queue of
+                [] ->
+                    Nothing
+
+                ( id, path ) :: rest ->
+                    let
+                        unvisited =
+                            List.filter (\childId -> not (Set.member childId visited)) (childIds id)
+                    in
+                    if List.member targetId unvisited then
+                        Just (path ++ [ targetId ])
+
+                    else
+                        search
+                            (rest ++ List.map (\childId -> ( childId, path ++ [ childId ] )) unvisited)
+                            (List.foldl Set.insert visited unvisited)
+    in
+    if targetId == Route.rootProjectId then
+        []
+
+    else
+        case List.findIndex ((==) targetId) currentPath of
+            Just index ->
+                List.take (index + 1) currentPath
+
+            Nothing ->
+                search [ ( Route.rootProjectId, [] ) ] (Set.singleton Route.rootProjectId)
+                    |> Maybe.withDefault [ targetId ]
 
 
 type alias Table a =
@@ -177,8 +382,19 @@ type alias Table a =
 
 
 type TableTag
-    = TagProjects
+    = TagAllProjects
+    | TagProjects
     | TagSteps String StepType
+
+
+tagChildKind : TableTag -> ChildKind
+tagChildKind tag =
+    case tag of
+        TagSteps _ _ ->
+            StepChild
+
+        _ ->
+            ProjectChild
 
 
 type alias ModalConfirmConfig =
@@ -411,6 +627,7 @@ type alias ChatTurn =
 type ChatChangesetState
     = ChatChangesetProposed
     | ChatChangesetNeedsReview String
+    | ChatChangesetRejected String
     | ChatChangesetApplied
     | ChatChangesetDiscarded
 
@@ -482,6 +699,14 @@ keepPicksForSameQuestion previous next =
             next
 
 
+type alias AgentToolCall =
+    { id : String
+    , name : String
+    , startedAt : Time.Posix
+    , text : String
+    }
+
+
 type alias AgentLiveTurn =
     { turnId : String
     , finished : Bool
@@ -490,6 +715,7 @@ type alias AgentLiveTurn =
     , pendingQuestion : Maybe PendingQuestion
     , streamError : Maybe String
     , pendingSteer : Maybe String
+    , runningCalls : List AgentToolCall
     }
 
 
@@ -502,6 +728,7 @@ liveTurnFor turnId view =
     , pendingQuestion = persistedQuestion view
     , streamError = Nothing
     , pendingSteer = Nothing
+    , runningCalls = []
     }
 
 
@@ -588,6 +815,7 @@ ingestLiveChunk chunk live =
         , entries = List.foldl appendChatLine live.entries keptLines
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
+        , runningCalls = List.foldl runningCallsAfterLine live.runningCalls keptLines
         , streamError = Nothing
     }
 
@@ -692,7 +920,10 @@ defaultChangesetDescription state =
             "Review this changeset, then apply it to the target branch or discard it."
 
         ChatChangesetNeedsReview _ ->
-            "This changeset could not be prepared cleanly. Resolve the issue by continuing the conversation, or discard the changeset."
+            "This changeset conflicts with newer changes. The agent resolves the conflict when you apply; apply again to retry, or discard the changeset."
+
+        ChatChangesetRejected _ ->
+            "This changeset was not applied because it introduces evaluation failures. Your next message sends the failures below to the agent so it can fix them."
 
         ChatChangesetApplied ->
             "This changeset was applied. You can continue the conversation from the applied state."
@@ -832,6 +1063,9 @@ splitLogPrefix line =
     else if String.startsWith "[question] " line then
         ( "question", String.dropLeft 11 line )
 
+    else if String.startsWith "[activity] " line then
+        ( "activity", String.dropLeft 11 line )
+
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )
 
@@ -907,6 +1141,62 @@ pendingSteerAfterLine rawLine pending =
 
         _ ->
             pending
+
+
+runningCallsAfterLine : String -> List AgentToolCall -> List AgentToolCall
+runningCallsAfterLine rawLine calls =
+    case splitLogPrefix rawLine of
+        ( "activity", body ) ->
+            case Decode.decodeString toolActivityDecoder (String.trim body) of
+                Ok (ToolStarted call) ->
+                    List.filter (\running -> running.id /= call.id) calls ++ [ call ]
+
+                Ok (ToolFinished id) ->
+                    List.filter (\running -> running.id /= id) calls
+
+                Err _ ->
+                    calls
+
+        ( "system", body ) ->
+            if isTurnFinishedLine body then
+                []
+
+            else
+                calls
+
+        _ ->
+            calls
+
+
+type ToolActivity
+    = ToolStarted AgentToolCall
+    | ToolFinished String
+
+
+toolActivityDecoder : Decode.Decoder ToolActivity
+toolActivityDecoder =
+    Decode.field "state" Decode.string
+        |> Decode.andThen
+            (\state ->
+                case state of
+                    "started" ->
+                        Decode.map ToolStarted toolCallDecoder
+
+                    "finished" ->
+                        Decode.map ToolFinished (Decode.field "id" Decode.string)
+
+                    _ ->
+                        Decode.fail ("unknown tool activity state " ++ state)
+            )
+
+
+toolCallDecoder : Decode.Decoder AgentToolCall
+toolCallDecoder =
+    Decode.map4 AgentToolCall
+        (Decode.field "id" Decode.string)
+        (Decode.field "name" Decode.string)
+        (Decode.field "startedAt" (Decode.map (\seconds -> Time.millisToPosix (round (seconds * 1000))) Decode.float))
+        (Decode.field "text" Decode.string)
 
 
 pendingQuestionDecoder : Decode.Decoder PendingQuestion
@@ -1023,10 +1313,12 @@ type Model
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict Int ( String, Status )
         , pendingBuilds : Dict Int String
+        , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
         , reviewDraft : Maybe ReviewDraft
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
+        , childChangeQueue : ChildChangeQueue
         , gutterDrag : Maybe GutterDrag
         , compareState : CompareState
         , now : Time.Posix
@@ -1072,7 +1364,7 @@ type alias CompareFile =
 
 
 type alias CompareSelection =
-    { projectId : Int
+    { projectPath : List Int
     , recordId : Int
     , path : List String
     , fileName : String
@@ -1346,6 +1638,11 @@ getPendingBuilds (Model model) =
     model.pendingBuilds
 
 
+getPendingStops : Model -> Set Int
+getPendingStops (Model model) =
+    model.pendingStops
+
+
 getOpenDiff : Model -> Maybe ( Int, Float )
 getOpenDiff (Model model) =
     model.openDiff
@@ -1359,6 +1656,11 @@ getAutocomplete (Model model) =
 getAutocompleteDebounce : Model -> Debounce AutocompleteJob
 getAutocompleteDebounce (Model model) =
     model.autocompleteDebounce
+
+
+getChildChangeQueue : Model -> ChildChangeQueue
+getChildChangeQueue (Model model) =
+    model.childChangeQueue
 
 
 getGutterDrag : Model -> Maybe GutterDrag
@@ -1379,6 +1681,25 @@ getAgent (Model model) =
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
+
+
+hasRunningToolCall : Model -> Bool
+hasRunningToolCall (Model model) =
+    List.any (\live -> not live.finished && not (List.isEmpty live.runningCalls)) (Dict.values model.agent.liveTurns)
+
+
+visibleToolCalls : Time.Posix -> AgentLiveTurn -> List AgentToolCall
+visibleToolCalls now live =
+    if live.finished then
+        []
+
+    else
+        List.filter (\call -> Time.posixToMillis now - Time.posixToMillis call.startedAt >= toolCallVisibleAfterMillis) live.runningCalls
+
+
+toolCallVisibleAfterMillis : Int
+toolCallVisibleAfterMillis =
+    20000
 
 
 dndSystem : DnDList.System a DnDList.Msg
@@ -1457,10 +1778,12 @@ initialModel key route flags =
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
         , pendingBuilds = Dict.empty
+        , pendingStops = Set.empty
         , openDiff = Nothing
         , reviewDraft = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
+        , childChangeQueue = { pending = Dict.empty, inFlight = Dict.empty, debounce = Debounce.init }
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
@@ -1907,6 +2230,10 @@ updateStepRecordTable new old =
 
 updateProjectRecordList : List ProjectRecord -> List ProjectRecord -> List ProjectRecord
 updateProjectRecordList =
+    let
+        keepTableState (SubProjects new) (SubProjects old) =
+            SubProjects { old | records = new.records }
+    in
     List.foldl
         (\oldRecord ->
             List.updateIf
@@ -1914,6 +2241,7 @@ updateProjectRecordList =
                 (\newRecord ->
                     { newRecord
                         | tables = Dict.map (\k -> updateStepRecordTable <| Maybe.withDefault initialTable <| Dict.get k newRecord.tables) oldRecord.tables
+                        , subProjects = keepTableState newRecord.subProjects oldRecord.subProjects
                         , hideOrphans = oldRecord.hideOrphans
                     }
                 )

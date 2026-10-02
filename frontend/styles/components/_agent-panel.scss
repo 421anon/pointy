@@ -549,6 +549,11 @@
     background: var(--state-warning-outline);
   }
 
+  &.is-rejected {
+    border-color: var(--state-danger);
+    background: var(--state-danger-outline);
+  }
+
   &.is-applied {
     border-color: var(--state-success);
     background: var(--state-success-outline);
@@ -603,7 +608,6 @@
   border: 1px solid var(--line-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
-  padding: var(--spacing-sm);
   white-space: pre-wrap;
   font-family: monospace;
   font-size: var(--font-size-sm);
@@ -658,6 +662,8 @@
   color: var(--text-primary);
   font-weight: 600;
   cursor: pointer;
+  position: sticky;
+  top: 0;
 
   > * {
     margin-left: var(--spacing-xs);

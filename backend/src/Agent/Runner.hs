@@ -15,10 +15,11 @@ module Agent.Runner (
     newRunnerInput,
     streamHandle,
     planSteer,
+    watchTurnBudget,
 ) where
 
-import Agent.Git (AgentSessionView, commitAgentTurnOutputs, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
-import Agent.Policy (renderCurrentProject)
+import Agent.Git (AgentSessionView, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Policy (promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sessionPaths)
 import Agent.Session (
     AgentSession (..),
@@ -45,7 +46,7 @@ import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.Async (async, wait)
+import Control.Concurrent.Async (async, wait, withAsync)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, catch, displayException, finally, fromException, try)
@@ -68,11 +69,12 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Interpreters.Production (runProduction)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
-import System.Directory (copyFile, createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist, doesFileExist, getFileSize, getSymbolicLinkTarget, listDirectory, pathIsSymbolicLink, removePathForcibly)
+import System.Directory (copyFile, createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist, doesFileExist, getFileSize, getHomeDirectory, getModificationTime, getSymbolicLinkTarget, listDirectory, pathIsSymbolicLink, removePathForcibly, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
@@ -139,6 +141,12 @@ retireTurn :: Text -> STM ()
 retireTurn sid = do
     modifyTVar' activeRunners $ Map.delete sid
     modifyTVar' waitingSteers $ Map.delete sid
+
+budgetPollMicros :: Int
+budgetPollMicros = 1000000
+
+budgetAbortGraceMicros :: Int
+budgetAbortGraceMicros = 10 * 1000000
 
 steerAckTimeoutMicros :: Int
 steerAckTimeoutMicros = 10 * 1000000
@@ -240,9 +248,9 @@ startAgentTurn sid prompt mCurrentProjectId = do
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
-    (freshSession, syncNotes) <- refreshSessionBase session_
+    (refreshedSession, syncNotes) <- refreshSessionBase session_
+    freshSession <- discardStaleApplyConflict refreshedSession
     let changedCurrentProjectId = mfilter ((/= agentCurrentProjectId freshSession) . Just) mCurrentProjectId
-        agentPrompt = maybe prompt (\projectId -> renderCurrentProject projectId <> "\n\n" <> prompt) changedCurrentProjectId
     tid <- liftIO newTurnId
     logPath <- liftIO $ turnLogFilePath sid tid
     now <- liftIO getCurrentTime
@@ -262,6 +270,7 @@ startAgentTurn sid prompt mCurrentProjectId = do
         createDirectoryIfMissing True (takeDirectory logPath)
         TIO.writeFile logPath ""
         mapM_ (appendLogLine (configAgent cfg) logPath "system") syncNotes
+        noteDiscardedConflict (configAgent cfg) logPath refreshedSession freshSession
         existingTurns <- listTurns sid
         let isFirstTurn = null existingTurns
         saveTurn turn
@@ -282,13 +291,21 @@ startAgentTurn sid prompt mCurrentProjectId = do
         case startSaveResult of
             Left ex -> appendLogLine (configAgent cfg) logPath "system" ("Session start metadata warning: " <> T.pack (show ex))
             Right _ -> return ()
-        case pendingApply of
-            Just pending ->
-                appendLogLine (configAgent cfg) logPath "system" $
-                    "An apply merge is waiting for conflict resolution. Resolve the conflict markers in "
-                        <> T.pack (candidateWorktree pending)
-                        <> " (the apply worktree is bound into your sandbox); the backend stages and commits your resolution automatically when this turn ends."
-            Nothing -> return ()
+        let evaluationFailure =
+                if status freshSession == "evaluation_failed"
+                    then lastError freshSession
+                    else Nothing
+            withConflict pending =
+                promptWithApplyConflict (targetBranch freshSession) (candidateWorktree pending) (fromMaybe "" nextError)
+            withCurrentProject projectId text = renderCurrentProject projectId <> "\n\n" <> text
+            agentPrompt =
+                maybe id withCurrentProject changedCurrentProjectId $
+                    maybe id withConflict pendingApply $
+                        maybe prompt (`promptWithEvaluationFailure` prompt) evaluationFailure
+        when (isJust evaluationFailure) $
+            appendLogLine (configAgent cfg) logPath "system" "The evaluation failures from the last apply attempt were sent to the agent with this message."
+        when (isJust pendingApply) $
+            appendLogLine (configAgent cfg) logPath "system" "The apply conflict was sent to the agent with this message; it resolves it in the apply worktree."
         atomically $ do
             modifyTVar' activeRunners $ Map.insert sid (tid, Nothing)
             modifyTVar' waitingSteers $ Map.delete sid
@@ -459,6 +476,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 }
     createDirectoryIfMissing True runnerHome
     seedPiConfig runnerHome
+    seedNixFetcherCache runnerHome
     appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (Just hin, Just hout, mErr, ph) <- createProcess process
     input <- newRunnerInput hin
@@ -474,17 +492,37 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
                 takeWaitingSteers (sessionId session_) input
             outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
             errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr" (const $ return ())) mErr
-            mExit <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
-            exitCode <- case mExit of
-                Just code -> return code
-                Nothing -> do
-                    appendLogLine cfg (turnLogPath turn) "system" "Runner timed out; terminating process"
-                    terminateProcess ph
-                    waitForProcess ph
+            exitCode <- watchTurnBudget cfg turn input ph (agentTimeoutSeconds cfg * 1000000)
             modelFailed <- wait outReader
             _ <- wait errReader
             return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
     run `finally` cleanup
+
+watchTurnBudget :: AgentConfig -> AgentTurn -> MVar (Maybe RunnerInput) -> ProcessHandle -> Int -> IO ExitCode
+watchTurnBudget cfg turn input ph budgetMicros =
+    withAsync (charge 0) (const (waitForProcess ph))
+  where
+    charge spent
+        | spent >= budgetMicros = abortTurn
+        | otherwise = do
+            threadDelay budgetPollMicros
+            asking <- questionOpen input
+            charge (if asking then spent else spent + budgetPollMicros)
+    abortTurn = do
+        appendLogLine cfg (turnLogPath turn) "system" "Runner timed out; aborting the turn"
+        void (try (withMVar input $ mapM_ (flip writeToRunner abortCommand)) :: IO (Either SomeException ()))
+        threadDelay budgetAbortGraceMicros
+        closeRunnerInput input
+        void (try (terminateProcess ph) :: IO (Either SomeException ()))
+    abortCommand = Aeson.object ["type" Aeson..= ("abort" :: Text)]
+
+questionOpen :: MVar (Maybe RunnerInput) -> IO Bool
+questionOpen input = withMVar input (return . maybe False (isJust . inputQuestion))
+
+noteDiscardedConflict :: AgentConfig -> FilePath -> AgentSession -> AgentSession -> IO ()
+noteDiscardedConflict cfg logPath before after =
+    when (maybe False applyConflictsPending (preparedApply before) && isNothing (preparedApply after)) $
+        appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; apply again to rebuild it."
 
 seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
@@ -495,6 +533,39 @@ seedPiConfig runnerHome = do
         createDirectoryIfMissing True dstDir
         copyFile (srcDir </> name) (dstDir </> name)
     seedExtensions (srcDir </> "extensions") (dstDir </> "extensions")
+
+nixFetcherCacheFile :: FilePath
+nixFetcherCacheFile = ".cache" </> "nix" </> "fetcher-cache-v3.sqlite"
+
+seedNixFetcherCache :: FilePath -> IO ()
+seedNixFetcherCache runnerHome = do
+    source <- (</> nixFetcherCacheFile) <$> getHomeDirectory
+    let target = runnerHome </> nixFetcherCacheFile
+        staging = target <> ".seed"
+    result <- try $ do
+        snapshot <- stableSnapshot source (3 :: Int)
+        forM_ snapshot $ \bytes -> do
+            createDirectoryIfMissing True (takeDirectory target)
+            BS.writeFile staging bytes
+            mapM_ (removePathForcibly . (target <>)) sqliteSidecars
+            renameFile staging target
+    either (\(_ :: SomeException) -> removePathForcibly staging) return result
+  where
+    stableSnapshot _ 0 = return Nothing
+    stableSnapshot source attempts = do
+        before <- (,) <$> sidecarsIdle source <*> getModificationTime source
+        bytes <- BS.readFile source
+        after <- (,) <$> sidecarsIdle source <*> getModificationTime source
+        if fst before && before == after
+            then return (Just bytes)
+            else threadDelay 100000 >> stableSnapshot source (attempts - 1)
+    sidecarsIdle source = and <$> mapM (idle . (source <>)) sqliteSidecars
+    idle path = do
+        exists <- doesFileExist path
+        if exists then (== 0) <$> getFileSize path else return True
+
+sqliteSidecars :: [String]
+sqliteSidecars = ["-journal", "-wal", "-shm"]
 
 seedExtensions :: FilePath -> FilePath -> IO ()
 seedExtensions src dst = do
@@ -651,6 +722,19 @@ handleRpcEvent cfg logPath input event =
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
                     flushWaiting control{inputPromptSeen = True}
         Just "extension_ui_request" -> handleDialog cfg logPath input event
+        Just "tool_execution_start"
+            | Just callId <- event ^? key "toolCallId" . _String -> do
+                now <- getCurrentTime
+                logActivity
+                    [ "state" Aeson..= ("started" :: Text)
+                    , "id" Aeson..= callId
+                    , "name" Aeson..= (event ^. key "toolName" . _String)
+                    , "text" Aeson..= toolCallText event
+                    , "startedAt" Aeson..= (realToFrac (utcTimeToPOSIXSeconds now) :: Double)
+                    ]
+        Just "tool_execution_end"
+            | Just callId <- event ^? key "toolCallId" . _String ->
+                logActivity ["state" Aeson..= ("finished" :: Text), "id" Aeson..= callId]
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True
         Just "auto_retry_end" -> do
@@ -689,6 +773,7 @@ handleRpcEvent cfg logPath input event =
     send command = withMVar input $ mapM_ (\control -> writeToRunner control (Aeson.object ["type" Aeson..= (command :: Text)]))
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
+    logActivity = appendLogLine cfg logPath "activity" . jsonLine . Aeson.object
 
 handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleRpcEventSafely cfg logPath input event =
@@ -852,15 +937,18 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
                         nextCurrentProject = if sentCurrentProject && finalStatus /= "succeeded" then Nothing else agentCurrentProjectId loaded
                         updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError, agentCurrentProjectId = nextCurrentProject}
                     applyResolution <- liftIO $ Except.runExceptT $ finalizeApplyResolution updated
-                    case applyResolution of
-                        Left err ->
+                    finalized <- case applyResolution of
+                        Left err -> do
                             liftIO $
                                 appendLogLine cfg (turnLogPath turn) "system" ("Apply resolution finalize failed: " <> T.pack err)
-                        Right mResolved ->
+                            return updated
+                        Right (resolvedSession, mResolved) -> do
                             forM_ mResolved $ \candidateHead_ ->
                                 liftIO $
                                     appendLogLine cfg (turnLogPath turn) "system" ("Committed apply conflict resolution " <> T.take 12 candidateHead_)
-                    touched <- liftIO $ touchSession updated
+                            liftIO $ noteDiscardedConflict cfg (turnLogPath turn) updated resolvedSession
+                            return resolvedSession
+                    touched <- liftIO $ touchSession finalized
                     liftIO $ saveSession touched
                 ) ::
                 IO (Either SomeException (Either String ()))
@@ -930,6 +1018,12 @@ safeFileSize path = do
 
 heartbeatDelayMicros :: Int
 heartbeatDelayMicros = 5 * 1000000
+
+toolCallText :: Aeson.Value -> Text
+toolCallText event = T.take 160 (T.unwords (T.words (fromMaybe argsJson command)))
+  where
+    command = event ^? key "args" . key "command" . _String
+    argsJson = jsonLine (fromMaybe Aeson.Null (event ^? key "args"))
 
 streamLoop :: AgentTurn -> Int -> TChan () -> IO (S.StepT IO BS.ByteString)
 streamLoop turn offset signal = return $ S.Effect $ do

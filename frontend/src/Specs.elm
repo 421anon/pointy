@@ -5,7 +5,6 @@ import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Api.Decode as Decode
 import Api.Encode as Encode
-import Components.Select as Select
 import Dict
 import Extra.Accessors exposing (by, where_)
 import Flow
@@ -83,11 +82,15 @@ stepsInProject projectId name entry =
                 }
 
 
-projects : Presets -> StepConfig -> TableSpec ProjectRecord
-projects presets stepConfig =
+allProjects : Presets -> StepConfig -> TableSpec ProjectRecord
+allProjects presets stepConfig =
+    let
+        blankProject =
+            Model.blankProject
+    in
     TableSpec
-        { tag = TagProjects
-        , name = "projects"
+        { tag = TagAllProjects
+        , name = "all-projects"
         , lens = Lenses.projects
         , encodeRecord = Encode.projectRecord
         , decodeRecord = Decode.projectRecord presets stepConfig
@@ -96,25 +99,23 @@ projects presets stepConfig =
         , isLocked = always False
         , directoryView = always Nothing
         , srcFilesView = always Nothing
-        , defaultRecord =
-            { id = Nothing
-            , clientId = Nothing
-            , hidden = False
-            , sortKey = Nothing
-            , name = ""
-            , tables = Dict.empty
-            , templateSource = Model.defaultTemplateSource presets
-            , orphanedSteps = []
-            , validationErrors = []
-            , hideOrphans = False
-            , presetSelect = Select.initSelectState
-            , templatesSelect = Select.initSelectState
-            , isUpdating = False
-            , lastModifiedAt = Nothing
-            }
-        , displayName = "Projects"
+        , defaultRecord = { blankProject | templateSource = Model.defaultTemplateSource presets }
+        , displayName = "Project"
         , description = Nothing
         , apiPath = "/projects"
         , upsertRecord = Actions.upsertProject
         , cloneRecord = \_ _ -> Flow.none
         }
+
+
+projects : Presets -> StepConfig -> TableSpec ProjectRecord
+projects presets stepConfig =
+    case allProjects presets stepConfig of
+        TableSpec spec ->
+            TableSpec
+                { spec
+                    | tag = TagProjects
+                    , name = "projects"
+                    , lens = Lenses.currentSubProjects
+                    , displayName = "Projects"
+                }

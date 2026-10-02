@@ -20,6 +20,7 @@ module Agent.Git (
     refreshSessionBase,
     prepareApplyCandidate,
     confirmApplyCandidate,
+    discardStaleApplyConflict,
     finalizeApplyResolution,
     discardAgentSession,
     getAgentUsage,
@@ -61,7 +62,7 @@ import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
 import Data.Char (isControl)
-import Data.List (nub, sortOn)
+import Data.List (intercalate, nub, sortOn)
 import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.ByteString as BS
@@ -70,7 +71,8 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
-import Handlers.StepReview (stepReviews)
+import Certificates (checkRevision)
+import Handlers.StepReview (readableStepReviews)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
 import Interpreters.Production (runProduction)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getModificationTime, removePathForcibly)
@@ -315,12 +317,10 @@ prepareApplyCandidate sid = do
     repoPath <- liftIO userRepoPath
     let targetBranchName = T.unpack (targetBranch session_)
     targetHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", targetBranchName]
+    agentHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (agentBranch session_)]
     stillCurrent <-
-        maybe (return False) (\candidate -> applyCandidateCurrent candidate targetHead_) (preparedApply session_)
-    if stillCurrent
-        then return ()
-        else do
-            agentHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (agentBranch session_)]
+        maybe (return False) (\candidate -> applyCandidateCurrent candidate targetHead_ agentHead_) (preparedApply session_)
+    unless stillCurrent $ do
             sessionRoot <- liftIO $ sessionDir sid
             let applyWorktree = sessionRoot </> "apply-worktree"
 
@@ -363,9 +363,10 @@ prepareApplyCandidate sid = do
                             , lastError = Just conflictSummary
                             }
                     return ()
+    verifyPreparedApply repoPath sid
   where
-    applyCandidateCurrent candidate targetHead_ = do
-        if targetHead candidate /= targetHead_
+    applyCandidateCurrent candidate targetHead_ agentHead_ = do
+        if targetHead candidate /= targetHead_ || agentHead candidate /= agentHead_
             then return False
             else do
                 worktreeExists <- liftIO $ doesDirectoryExist (candidateWorktree candidate)
@@ -378,49 +379,88 @@ prepareApplyCandidate sid = do
                                 head_ <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
                                 return (head_ == candidateHead candidate)
 
-finalizeApplyResolution :: AgentSession -> ExceptT String IO (Maybe Text)
-finalizeApplyResolution session_ =
+verifyPreparedApply :: FilePath -> Text -> ExceptT String IO ()
+verifyPreparedApply repoPath sid = do
+    session_ <- loadSessionOrThrow sid
+    case preparedApply session_ of
+        Just candidate | not (applyConflictsPending candidate) -> do
+            changedSteps <- candidateChangedSteps candidate
+            verdict <- liftIO $ verifyCandidate repoPath candidate changedSteps
+            either (rejectCandidate repoPath session_ candidate) return verdict
+        _ -> return ()
+
+verifyCandidate :: FilePath -> PreparedApply -> [Int] -> IO (Either String ())
+verifyCandidate repoPath candidate changedSteps =
+    runProduction $ runExceptT $ checkRevision (atCommit (targetHead candidate)) (atCommit (candidateHead candidate)) changedSteps
+  where
+    atCommit commit = ReadRepoContext repoPath (T.unpack commit)
+
+rejectCandidate :: FilePath -> AgentSession -> PreparedApply -> String -> ExceptT String IO ()
+rejectCandidate repoPath session_ candidate failures = do
+    liftIO $ do
+        putStrLn $
+            "Agent apply refused for session "
+                ++ T.unpack (sessionId session_)
+                ++ ": changeset "
+                ++ T.unpack (shortCommit (candidateHead candidate))
+                ++ " onto "
+                ++ T.unpack (targetBranch session_)
+                ++ " at "
+                ++ T.unpack (shortCommit (targetHead candidate))
+                ++ " introduces evaluation failures: "
+                ++ intercalate "; " (lines failures)
+        removeWorktreeIfExists repoPath (candidateWorktree candidate)
+    saveSessionUpdate session_{status = "evaluation_failed", preparedApply = Nothing, lastError = Just (T.pack failures)}
+
+candidateChangedSteps :: PreparedApply -> ExceptT String IO [Int]
+candidateChangedSteps candidate =
+    nub . mapMaybe appliedStepId . T.lines
+        <$> runGitChecked (candidateWorktree candidate) ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ T.unpack (candidateHead candidate)]
+
+discardStaleApplyConflict :: AgentSession -> ExceptT String IO AgentSession
+discardStaleApplyConflict session_ =
     case preparedApply session_ of
         Just candidate
             | applyConflictsPending candidate -> do
-                let applyWorktree = candidateWorktree candidate
-                worktreeExists <- liftIO $ doesDirectoryExist applyWorktree
-                if not worktreeExists
-                    then do
-                        saveSessionUpdate session_{preparedApply = Nothing, lastError = Nothing}
-                        return Nothing
+                repoPath <- liftIO userRepoPath
+                worktreeExists <- liftIO $ doesDirectoryExist (candidateWorktree candidate)
+                currentAgentHead <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (agentBranch session_)]
+                if worktreeExists && currentAgentHead == agentHead candidate
+                    then return session_
                     else do
-                        unmerged <- worktreeUnmergedPaths applyWorktree
-                        markers <- liftIO $ filterM (fileHasConflictMarkers applyWorktree) unmerged
-                        if not (null markers)
-                            then do
-                                conflictSummary <- collectConflictSummary applyWorktree "" ""
-                                saveSessionUpdate
-                                    session_
-                                        { status = "prepare_conflict"
-                                        , lastError = Just conflictSummary
-                                        }
-                                return Nothing
-                            else do
-                                unless (null unmerged) $
-                                    void $
-                                        runGitChecked applyWorktree (["add", "-A", "--"] ++ map T.unpack unmerged)
-                                staged <- hasStagedChanges applyWorktree
-                                candidateHead_ <-
-                                    if staged
-                                        then do
-                                            _ <- runGitChecked applyWorktree ["commit", "-m", applyCommitSubject session_]
-                                            stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
-                                        else do
-                                            stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
-                                saveSessionUpdate
-                                    session_
-                                        { status = "open"
-                                        , preparedApply = Just candidate{candidateHead = candidateHead_}
-                                        , lastError = Nothing
-                                        }
-                                return (Just candidateHead_)
-        _ -> return Nothing
+                        liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
+                        return session_{status = "open", preparedApply = Nothing}
+        _ -> return session_
+
+finalizeApplyResolution :: AgentSession -> ExceptT String IO (AgentSession, Maybe Text)
+finalizeApplyResolution session_ = do
+    current <- discardStaleApplyConflict session_
+    case preparedApply current of
+        Just candidate
+            | applyConflictsPending candidate -> do
+                let applyWorktree = candidateWorktree candidate
+                unmerged <- worktreeUnmergedPaths applyWorktree
+                markers <- liftIO $ filterM (fileHasConflictMarkers applyWorktree) unmerged
+                if not (null markers)
+                    then do
+                        conflictSummary <- collectConflictSummary applyWorktree "" ""
+                        return (current{status = "prepare_conflict", lastError = Just conflictSummary}, Nothing)
+                    else do
+                        edited <- filter isAgentOutputPath <$> changedWorktreePaths applyWorktree
+                        let resolvedPaths = nub (unmerged ++ edited)
+                        unless (null resolvedPaths) $
+                            void $
+                                runGitChecked applyWorktree (["add", "-A", "--"] ++ map T.unpack resolvedPaths)
+                        staged <- hasStagedChanges applyWorktree
+                        when staged $
+                            void $
+                                runGitChecked applyWorktree ["commit", "-m", applyCommitSubject current]
+                        candidateHead_ <- stripOutput <$> runGitChecked applyWorktree ["rev-parse", "HEAD"]
+                        return
+                            ( current{status = "open", preparedApply = Just candidate{candidateHead = candidateHead_}}
+                            , Just candidateHead_
+                            )
+        _ -> return (current, Nothing)
 
 worktreeUnmergedPaths :: FilePath -> ExceptT String IO [Text]
 worktreeUnmergedPaths worktree = do
@@ -470,35 +510,41 @@ confirmApplyCandidate sid requestedTarget requestedCandidate = do
             worktreeHead <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
             when (worktreeHead /= candidateHead candidate) $ throwError "candidate_mismatch"
             changesetDiff <- runGitChecked (candidateWorktree candidate) ["diff", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-            changedSteps <- nub . mapMaybe appliedStepId . T.lines <$> runGitChecked (candidateWorktree candidate) ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-            reviews <- ExceptT $ liftIO $ runProduction $ runExceptT $ stepReviews (ReadRepoContext repoPath (T.unpack currentTarget)) changedSteps
+            changedSteps <- candidateChangedSteps candidate
+            reviews <- ExceptT $ liftIO $ runProduction $ runExceptT $ readableStepReviews (ReadRepoContext repoPath (T.unpack currentTarget)) changedSteps
             when (any isJust reviews) $ throwError "step_reviewed"
-            pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile userRepo) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
-            case pushResult of
-                (ExitSuccess, _, _) -> do
-                    _ <- runGitChecked repoPath ["update-ref", "refs/heads/" ++ branchName, candidateSha]
-                    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
-                    _ <- runGitChecked (worktreePath session_) ["reset", "--hard", candidateSha]
-                    _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
-                    liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
-                    changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
-                    let projectIds = nub (mapMaybe appliedProjectId changedPaths)
-                        stepIds = nub (mapMaybe appliedStepId changedPaths)
-                    liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) projectIds stepIds
-                    appendLifecycleTurn
-                        sid
-                        "Apply proposed changeset"
-                        ("Applied changes to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ". You can continue from the applied state in this chat.")
-                        changesetDiff
-                    saveSessionUpdate
-                        session_
-                            { status = "open"
-                            , baseCommit = candidateHead candidate
-                            , preparedApply = Nothing
-                            , lastError = Nothing
-                            }
-                    return (projectIds, stepIds)
-                (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
+            verdict <- liftIO $ verifyCandidate repoPath candidate changedSteps
+            case verdict of
+                Left failures -> do
+                    rejectCandidate repoPath session_ candidate failures
+                    return ([], [])
+                Right () -> do
+                    pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile userRepo) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
+                    case pushResult of
+                        (ExitSuccess, _, _) -> do
+                            _ <- runGitChecked repoPath ["update-ref", "refs/heads/" ++ branchName, candidateSha]
+                            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+                            _ <- runGitChecked (worktreePath session_) ["reset", "--hard", candidateSha]
+                            _ <- runGitChecked (worktreePath session_) ["clean", "-fd"]
+                            liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
+                            changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", T.unpack (targetHead candidate) ++ ".." ++ candidateSha]
+                            let projectIds = nub (mapMaybe appliedProjectId changedPaths)
+                                stepIds = nub (mapMaybe appliedStepId changedPaths)
+                            liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) projectIds stepIds
+                            appendLifecycleTurn
+                                sid
+                                "Apply proposed changeset"
+                                ("Applied changes to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ". You can continue from the applied state in this chat.")
+                                changesetDiff
+                            saveSessionUpdate
+                                session_
+                                    { status = "open"
+                                    , baseCommit = candidateHead candidate
+                                    , preparedApply = Nothing
+                                    , lastError = Nothing
+                                    }
+                            return (projectIds, stepIds)
+                        (ExitFailure code, stdout, stderr) -> throwError $ "push_rejected: git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
 
 discardAgentSession :: Text -> ExceptT String IO ()
 discardAgentSession sid = do

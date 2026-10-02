@@ -1187,35 +1187,13 @@ $delimited-grid-row-height: 28px;
   }
 }
 
+.icon-btn-spinner {
+  animation: spin 1s linear infinite;
+}
+
 .dir-item-icon-btn {
   @include mixins.icon-btn-base;
   color: var(--text-secondary);
-}
-
-.back-btn {
-  @include mixins.button-base;
-  @include mixins.interactive-element;
-  background: none;
-  border: 1px solid var(--border-color);
-  color: var(--text-muted);
-  padding: var(--spacing-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  border-color: var(--text-secondary);
-
-  &:hover {
-    border-color: var(--text-primary);
-  }
-
-  text-decoration: none;
-  height: 32px;
-  width: 32px;
-}
-
-[data-theme="light"] .back-btn {
-  border-color: var(--line-color);
 }
 
 [data-theme="light"] .output-files-section {
@@ -1694,6 +1672,33 @@ $readonly-disabled-targets: (
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 18px;
+}
+
+.project-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-width: 0;
+}
+
+.project-breadcrumb {
+  color: var(--text-secondary);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+
+  &:hover {
+    color: var(--text-primary);
+    text-decoration: underline;
+  }
+}
+
+.project-breadcrumbs h2 .project-breadcrumb {
+  color: var(--text-primary);
+}
+
+.project-breadcrumb-separator {
+  color: var(--text-muted);
 }
 
 

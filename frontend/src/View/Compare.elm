@@ -45,11 +45,11 @@ selectionLabel : Model -> CompareSelection -> String
 selectionLabel model sel =
     let
         projectName =
-            try (projects << records << success << by .id (Just sel.projectId)) model
+            try (projects << records << success << by .id (Just (Route.pathProjectId sel.projectPath))) model
                 |> Maybe.unwrap "" .name
 
         stepName =
-            try (projectStep (Just sel.projectId) (Just sel.recordId)) model
+            try (projectStep (Just (Route.pathProjectId sel.projectPath)) (Just sel.recordId)) model
                 |> Maybe.unwrap "" .name
     in
     ([ projectName, stepName ] ++ sel.path)
@@ -182,7 +182,7 @@ viewInspectButton hasParams inspectOpen toggle =
 
 derivationParamsFor : Model -> CompareSelection -> Maybe ( StepRecord, List Field )
 derivationParamsFor model sel =
-    try (projectStep (Just sel.projectId) (Just sel.recordId)) model
+    try (projectStep (Just (Route.pathProjectId sel.projectPath)) (Just sel.recordId)) model
         |> Maybe.andThen
             (\step ->
                 Model.getStepConfig model
@@ -211,7 +211,7 @@ viewInlineParams model sel inspectOpen mParams =
             (\( step, fields ) ->
                 Html.div [ class "compare-params" ]
                     [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
-                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model sel.projectId step.args fields)
+                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model (Route.pathProjectId sel.projectPath) step.args fields)
                     ]
             )
             mParams
@@ -338,7 +338,7 @@ sourceRoute sel =
     in
     Route.fromPage
         (Route.Project
-            { projectId = sel.projectId
+            { projectPath = sel.projectPath
             , mHighlight = Just { id = sel.recordId, target = target, path = sel.path, range = Nothing }
             , mCommit = mCommit
             , mCompare = Nothing

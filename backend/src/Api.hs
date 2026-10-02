@@ -12,6 +12,7 @@ import Data.Text (Text)
 import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
+import ProjectTree (ChildChanges, ChildRef, ProjectFields)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
@@ -83,31 +84,32 @@ type DeleteSrcFile =
 
 type DeleteProject =
     "projects"
-        :> Description "Deletes a project record."
+        :> Description "Deletes a project file and removes its entry from the children of every other project in one commit. The root project 0 cannot be deleted."
         :> ReqId
         :> Delete '[JSON] NoContent
 
 type AssignRecord =
     "project-entities"
-        :> Description "Assigns a record to a project."
+        :> Description "Appends a step entry to a project's children."
         :> ReqProjectId
         :> ReqEntityId
         :> Post '[JSON] NoContent
 
-type BatchAssignRecords =
+type BatchAddChildren =
     "project-entities"
         :> "batch"
-        :> Description "Assigns multiple records to a project in one request."
+        :> Description "Appends step and project entries ({\"step\":{\"id\":N}} or {\"project\":{\"id\":N}}) to a project's children in one commit, skipping children the project already lists."
         :> ReqProjectId
-        :> ReqBody '[JSON] [Int]
+        :> ReqBody '[JSON] [ChildRef]
         :> Post '[JSON] NoContent
 
-type UnassignRecord =
+type ApplyChildChanges =
     "project-entities"
-        :> Description "Removes a record assignment from a project."
+        :> "changes"
+        :> Description "Removes children of a project and sets hidden or sortKey on others in a single commit. An absent field is left unchanged; a null sortKey clears it. Refuses to remove reviewed steps."
         :> ReqProjectId
-        :> ReqEntityId
-        :> Delete '[JSON] NoContent
+        :> ReqBody '[JSON] ChildChanges
+        :> Post '[JSON] NoContent
 
 type Autocomplete =
     "autocomplete"
@@ -310,27 +312,28 @@ type RawSrcFile =
 
 type GetProjects =
     "projects"
-        :> Description "Returns all project records, optionally at a specific user-repo commit."
+        :> Description "Returns every project keyed by id, including the root project 0, optionally at a specific user-repo commit. Each project lists its steps and subprojects in children; revisions written in the former steps format are converted to this shape."
         :> QueryParam "commit" Text
         :> Get '[RawJSON] DynamicJson
 
 type CreateProject =
     "projects"
-        :> Description "Creates a project record in the user repository."
-        :> ReqBody '[RawJSON] DynamicJson
+        :> Description "Creates a project from its name and preset or templates, and appends it to the children of the parent project (the root project 0 by default) in one commit. Returns the evaluated project."
+        :> QueryParam "parent_id" Int
+        :> ReqBody '[JSON] ProjectFields
         :> Post '[RawJSON] DynamicJson
 
 type UpdateProject =
     "projects"
-        :> Description "Updates an existing project record."
+        :> Description "Replaces a project's name and preset or templates; its children are left unchanged."
         :> ReqId
-        :> ReqBody '[RawJSON] DynamicJson
+        :> ReqBody '[JSON] ProjectFields
         :> Patch '[JSON] NoContent
 
 type BatchUpdateProjects =
     "projects"
         :> "batch"
-        :> Description "Saves multiple project records in one request, committing them to the user repository as a single commit."
+        :> Description "Replaces the name and preset or templates of several projects in one commit."
         :> ReqBody '[JSON] [ProjectUpdate]
         :> Post '[JSON] NoContent
 
@@ -475,8 +478,8 @@ type API =
         :<|> BatchUpdateProjects
         :<|> DeleteProject
         :<|> AssignRecord
-        :<|> BatchAssignRecords
-        :<|> UnassignRecord
+        :<|> BatchAddChildren
+        :<|> ApplyChildChanges
         :<|> StepStatusStream
         :<|> ProjectStatus
         :<|> GetStepConfig

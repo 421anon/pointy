@@ -1,23 +1,46 @@
 module Model.Lib exposing (..)
 
-import Accessors exposing (all, each, has, over, values)
+import Accessors exposing (all, each, get, has, over, try, values)
 import Api.ApiData as ApiData exposing (success)
 import Components.Select exposing (Item)
 import Dict exposing (Dict)
-import Model.Core exposing (Model, ProjectRecord, getSortKey)
-import Model.Lenses exposing (commitHash, presets, projectStepRecords, projects, records, stepConfig, tables)
+import Model.Core as Model exposing (Model, ProjectRecord, getSortKey)
+import Model.Lenses exposing (commitHash, currentProjectPath, presets, projectStepRecords, projects, records, stepConfig, subProjects, tables)
 
 
-sortProjects : Dict String ProjectRecord -> List ProjectRecord
-sortProjects =
+linkProjects : Dict String ProjectRecord -> List ProjectRecord
+linkProjects projectsByKey =
     let
+        decoded =
+            Dict.values projectsByKey
+
+        projectsById =
+            decoded
+                |> List.filterMap (\project -> Maybe.map (\id -> ( id, project )) project.id)
+                |> Dict.fromList
+
+        linkEntry entry =
+            entry.id
+                |> Maybe.andThen (\id -> Dict.get id projectsById)
+                |> Maybe.map (\child -> { child | hidden = entry.hidden, sortKey = entry.sortKey })
+
         sort accessor =
             over (accessor << records << success) (List.sortBy getSortKey)
     in
-    Dict.values
-        >> List.sortBy getSortKey
-        >> List.map
-            (sort (tables << values))
+    decoded
+        |> List.sortBy getSortKey
+        |> List.map
+            (over (subProjects << records << success) (List.filterMap linkEntry)
+                >> sort (tables << values)
+                >> sort subProjects
+            )
+
+
+canonicalPathTo : Model -> Int -> List Int
+canonicalPathTo model =
+    Model.canonicalProjectPath
+        (try currentProjectPath model |> Maybe.withDefault [])
+        (get (projects << records) model |> ApiData.toMaybe |> Maybe.withDefault [])
 
 
 getSearchItems : Model -> List Item

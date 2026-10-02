@@ -12,7 +12,7 @@ import Ingest
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, currentProjectId, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectId, projectStepRecords, projects, records, route, runState, stepConfig, tables, userRepoInfo)
+import Model.Lenses exposing (commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectPath, projectStepRecords, projects, records, route, runState, stepConfig, subProjects, tables, userRepoInfo)
 import Ports
 import Route exposing (Route)
 import Specs
@@ -103,9 +103,6 @@ applyRoute forceRevealHighlight newRoute =
 
                     routeNeedsWorkspace =
                         case newRoute.page of
-                            Route.Home ->
-                                True
-
                             Route.Project _ ->
                                 True
 
@@ -131,9 +128,8 @@ applyRoute forceRevealHighlight newRoute =
 
                                 mNewCommit =
                                     try (Route.page << Route.project << mCommit << just) newRoute
-                            in
-                            Flow.over (projects << records << success << each << tables << values)
-                                (\table ->
+
+                                resetTable table =
                                     let
                                         stashed =
                                             case ( mOldCommit, table.edited ) of
@@ -144,7 +140,12 @@ applyRoute forceRevealHighlight newRoute =
                                                     table
                                     in
                                     { stashed | edited = Nothing, nameEditOnly = False, addMode = AddNew }
-                                )
+
+                                currentProjectIdOf =
+                                    Maybe.map Route.pathProjectId << try (Route.page << Route.project << projectPath)
+                            in
+                            Flow.over (projects << records << success << each << tables << values) resetTable
+                                |> Flow.seq (Flow.over (projects << records << success << each << subProjects) resetTable)
                                 |> Flow.seq
                                     (Flow.setAll
                                         (projects << records << success << each << projectStepRecords << runState)
@@ -157,7 +158,7 @@ applyRoute forceRevealHighlight newRoute =
                                 |> Flow.seq Actions.loadProjects
                                 |> Flow.when (mOldCommit /= mNewCommit)
                                 |> Flow.seq
-                                    (Flow.when (try (Route.page << Route.project << projectId) newRoute /= try (route << Route.page << Route.project << projectId) model)
+                                    (Flow.when (currentProjectIdOf newRoute /= currentProjectIdOf currentRoute)
                                         (Flow.async Actions.loadProjectReviews)
                                     )
                         )
@@ -166,8 +167,8 @@ applyRoute forceRevealHighlight newRoute =
                             (\currentRoute_ ->
                                 Flow.when (currentRoute_ == newRoute) <|
                                     case newRoute.page of
-                                        Route.Project { projectId, mHighlight, mCommit } ->
-                                            Actions.requestProjectStatus projectId mCommit
+                                        Route.Project { projectPath, mHighlight, mCommit } ->
+                                            Actions.requestProjectStatus (Route.pathProjectId projectPath) mCommit
                                                 |> Flow.seq
                                                     (case mHighlight of
                                                         Just highlight ->
@@ -185,9 +186,6 @@ applyRoute forceRevealHighlight newRoute =
                                         Route.Artifact _ ->
                                             Actions.syncCompareFromRoute newRoute
 
-                                        Route.Home ->
-                                            Actions.syncCompareFromRoute newRoute
-
                                         Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute
                             )
@@ -197,15 +195,11 @@ applyRoute forceRevealHighlight newRoute =
 
 dndSubscription : Model -> Sub (Flow Model ())
 dndSubscription model =
-    let
-        mProjectId =
-            try currentProjectId model
-    in
     Maybe.map2 Tuple.pair (try (presets << success) model) (try (stepConfig << success) model)
         |> Maybe.unwrap []
             (\( presets_, config ) ->
-                Actions.dndSub model Nothing (Specs.projects presets_ config)
-                    :: List.map (\( name, entry ) -> Actions.dndSub model mProjectId (Specs.steps name entry)) (Dict.toList config)
+                Actions.dndSub model (Specs.projects presets_ config)
+                    :: List.map (\( name, entry ) -> Actions.dndSub model (Specs.steps name entry)) (Dict.toList config)
             )
         |> Sub.batch
 
@@ -217,6 +211,7 @@ subscriptions model =
         , uploadProgressSubscription model
         , gutterDragSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
+        , agentActivitySubscription model
         , Browser.Events.onVisibilityChange
             (\visibility ->
                 if visibility == Browser.Events.Visible then
@@ -226,6 +221,15 @@ subscriptions model =
                     Flow.pure ()
             )
         ]
+
+
+agentActivitySubscription : Model -> Sub (Flow Model ())
+agentActivitySubscription model =
+    if Model.Core.hasRunningToolCall model then
+        Time.every 1000 (\time -> Flow.setAll now time)
+
+    else
+        Sub.none
 
 
 gutterDragSubscription : Model -> Sub (Flow Model ())

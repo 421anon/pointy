@@ -25,7 +25,7 @@ import EffectRunner (runAppEffects)
 import Effects (AppM, Eval)
 import GHC.Generics (Generic)
 import Handlers.Store (DirEntry, FileChunk, downloadHandler, fromRawBase, listHandler, parseSeekOffset, seekHandler)
-import Handlers.StepReview (ensureStepUnreviewed)
+import Handlers.StepReview (ensureStepsUnreviewed)
 import Network.HTTP.Types (mkStatus)
 import Network.Wai (Application, responseLBS)
 import Certificates (withWriteRepoTransaction)
@@ -111,7 +111,7 @@ mutateSrcFile stepId rel verb falseErr action
         throwError err400{errBody = "Invalid source file path"}
     | otherwise = do
         result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
-            ensureStepUnreviewed ctx stepId
+            ensureStepsUnreviewed ctx [stepId]
             done <- liftIO $ action (worktreePath </> "srcFiles" </> relPath)
             when done $ commitAndPushChanges ctx (verb ++ " source file " ++ relPath)
             pure done

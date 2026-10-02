@@ -7,6 +7,7 @@ module ClusterBus
     , buildingSteps
     , buildingStepsAt
     , requestStop
+    , stopRequested
     , takeStopRequest
     , snapshotAndSubscribe
     ) where
@@ -46,6 +47,9 @@ stopRequests = unsafePerformIO $ newTVarIO Set.empty
 
 requestStop :: Int -> IO ()
 requestStop stepId = atomically $ modifyTVar' stopRequests (Set.insert stepId)
+
+stopRequested :: Int -> IO Bool
+stopRequested stepId = Set.member stepId <$> readTVarIO stopRequests
 
 takeStopRequest :: Int -> IO Bool
 takeStopRequest stepId = atomically $ stateTVar stopRequests (\requests -> (Set.member stepId requests, Set.delete stepId requests))
