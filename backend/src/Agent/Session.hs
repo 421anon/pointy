@@ -85,6 +85,7 @@ data AgentSession = AgentSession
     , lastError :: Maybe Text
     , createdAt :: UTCTime
     , updatedAt :: UTCTime
+    , agentCurrentProjectId :: Maybe Int
     }
     deriving (Show, Eq, Generic, ToJSON)
 
@@ -111,6 +112,7 @@ instance FromJSON AgentSession where
             <*> obj .:? "lastError"
             <*> obj .: "createdAt"
             <*> obj .: "updatedAt"
+            <*> obj .:? "agentCurrentProjectId"
 
 data AgentTurn = AgentTurn
     { turnId :: Text

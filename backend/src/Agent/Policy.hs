@@ -7,6 +7,7 @@ module Agent.Policy (
     appliedProjectId,
     appliedStepId,
     renderEmbeddedBootstrapPrompt,
+    renderCurrentProject,
     promptWithEvaluationFailure,
     promptWithApplyConflict,
 ) where
@@ -52,6 +53,15 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
                , configuredPrompt
                ]
         )
+
+renderCurrentProject :: Int -> Text
+renderCurrentProject projectId =
+    T.intercalate
+        "\n"
+        [ "The currently open project is:"
+        , "id: " <> T.pack (show projectId)
+        , "file: projects/" <> T.pack (show projectId) <> ".nix"
+        ]
 
 promptWithEvaluationFailure :: Text -> Text -> Text
 promptWithEvaluationFailure failures prompt =

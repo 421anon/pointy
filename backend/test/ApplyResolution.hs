@@ -105,6 +105,7 @@ conflictedSession home name = do
                 , lastError = Just "conflict"
                 , createdAt = now
                 , updatedAt = now
+                , agentCurrentProjectId = Nothing
                 }
     return (session_, applyWorktree)
 

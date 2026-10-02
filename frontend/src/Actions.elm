@@ -3623,7 +3623,7 @@ dispatchAgentTurn clearDraft view promptSource =
                         )
                     |> Flow.seq clearDraft
                     |> Flow.seq scrollAgentChatToBottom
-                    |> Flow.seq (AgentApi.sendTurn sessionId prompt)
+                    |> Flow.seq (Flow.try currentProjectId (AgentApi.sendTurn sessionId prompt))
                     |> FlowError.foldResult
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId

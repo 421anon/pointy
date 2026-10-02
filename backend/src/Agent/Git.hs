@@ -141,6 +141,7 @@ createAgentSession = do
                 , lastError = Nothing
                 , createdAt = now
                 , updatedAt = now
+                , agentCurrentProjectId = Nothing
                 }
     liftIO $ saveSession session_
     return sid
