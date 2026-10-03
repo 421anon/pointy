@@ -69,7 +69,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Interpreters.Production (runProduction)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
@@ -722,19 +721,6 @@ handleRpcEvent cfg logPath input event =
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
                     flushWaiting control{inputPromptSeen = True}
         Just "extension_ui_request" -> handleDialog cfg logPath input event
-        Just "tool_execution_start"
-            | Just callId <- event ^? key "toolCallId" . _String -> do
-                now <- getCurrentTime
-                logActivity
-                    [ "state" Aeson..= ("started" :: Text)
-                    , "id" Aeson..= callId
-                    , "name" Aeson..= (event ^. key "toolName" . _String)
-                    , "text" Aeson..= toolCallText event
-                    , "startedAt" Aeson..= (realToFrac (utcTimeToPOSIXSeconds now) :: Double)
-                    ]
-        Just "tool_execution_end"
-            | Just callId <- event ^? key "toolCallId" . _String ->
-                logActivity ["state" Aeson..= ("finished" :: Text), "id" Aeson..= callId]
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True
         Just "auto_retry_end" -> do
@@ -773,7 +759,6 @@ handleRpcEvent cfg logPath input event =
     send command = withMVar input $ mapM_ (\control -> writeToRunner control (Aeson.object ["type" Aeson..= (command :: Text)]))
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
-    logActivity = appendLogLine cfg logPath "activity" . jsonLine . Aeson.object
 
 handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleRpcEventSafely cfg logPath input event =
@@ -1018,12 +1003,6 @@ safeFileSize path = do
 
 heartbeatDelayMicros :: Int
 heartbeatDelayMicros = 5 * 1000000
-
-toolCallText :: Aeson.Value -> Text
-toolCallText event = T.take 160 (T.unwords (T.words (fromMaybe argsJson command)))
-  where
-    command = event ^? key "args" . key "command" . _String
-    argsJson = jsonLine (fromMaybe Aeson.Null (event ^? key "args"))
 
 streamLoop :: AgentTurn -> Int -> TChan () -> IO (S.StepT IO BS.ByteString)
 streamLoop turn offset signal = return $ S.Effect $ do

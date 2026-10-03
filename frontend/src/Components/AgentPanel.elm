@@ -21,7 +21,6 @@ import Model.Lib as Lib
 import Model.Shadow exposing (StepConfig)
 import Route
 import Set
-import Time
 import View.Icons
 import View.Lib exposing (boolText)
 
@@ -32,7 +31,7 @@ view model =
         workspace =
             Lib.lastKnownWorkspace model
     in
-    viewPanel (Model.getNow model) (mentionsPending workspace) (AgentMentions.sources workspace) (Model.getAgent model)
+    viewPanel (mentionsPending workspace) (AgentMentions.sources workspace) (Model.getAgent model)
 
 
 mentionsPending : Model -> Bool
@@ -41,8 +40,8 @@ mentionsPending model =
         || not (ApiData.settled (Model.getProjects model).records)
 
 
-viewPanel : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> Html (Flow Model ())
-viewPanel now mentionsAwaited mentionSources agent =
+viewPanel : Bool -> AgentMentions.Sources -> Model.AgentState -> Html (Flow Model ())
+viewPanel mentionsAwaited mentionSources agent =
     Html.div
         [ classList
             [ ( "agent-panel", True )
@@ -55,7 +54,7 @@ viewPanel now mentionsAwaited mentionSources agent =
                 [ ( Keyboard.escape, Decode.succeed Actions.exitAgentFocusMode ) ]
         ]
         [ viewHeader agent
-        , viewSessionBody now mentionsAwaited mentionSources agent
+        , viewSessionBody mentionsAwaited mentionSources agent
         ]
 
 
@@ -140,8 +139,8 @@ viewRowAction blocked label iconName action =
         [ View.Icons.icon False iconName ]
 
 
-viewSessionBody : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> Html (Flow Model ())
-viewSessionBody now mentionsAwaited mentionSources agent =
+viewSessionBody : Bool -> AgentMentions.Sources -> Model.AgentState -> Html (Flow Model ())
+viewSessionBody mentionsAwaited mentionSources agent =
     let
         listed =
             Maybe.withDefault [] (ApiData.toMaybe agent.sessions)
@@ -165,7 +164,7 @@ viewSessionBody now mentionsAwaited mentionSources agent =
                     viewSessionsLoading
 
                 _ ->
-                    viewSessionDetail now mentionsAwaited mentionSources agent listed
+                    viewSessionDetail mentionsAwaited mentionSources agent listed
         ]
 
 
@@ -463,15 +462,15 @@ liveStatusLabel agent sessionId =
             Nothing
 
 
-viewSessionDetail : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
-viewSessionDetail now mentionsAwaited mentionSources agent listed =
+viewSessionDetail : Bool -> AgentMentions.Sources -> Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionDetail mentionsAwaited mentionSources agent listed =
     case ( isCreatingAgentSession agent, Model.selectedSessionSummary agent ) of
         ( True, _ ) ->
             viewCreatingSession
 
         ( False, Just summary ) ->
             Model.selectedSessionView agent
-                |> Maybe.map (viewSession now mentionsAwaited mentionSources agent summary)
+                |> Maybe.map (viewSession mentionsAwaited mentionSources agent summary)
                 |> Maybe.withDefault (viewSessionUnavailable agent)
 
         ( False, Nothing ) ->
@@ -572,8 +571,8 @@ viewChatBody attrs parts =
         [ parts.title, parts.error, parts.chat, parts.composer ]
 
 
-viewSession : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionSummary -> Model.AgentSessionView -> Html (Flow Model ())
-viewSession now mentionsAwaited mentionSources agent summary sessionView =
+viewSession : Bool -> AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionSummary -> Model.AgentSessionView -> Html (Flow Model ())
+viewSession mentionsAwaited mentionSources agent summary sessionView =
     let
         session =
             summary.session
@@ -603,7 +602,7 @@ viewSession now mentionsAwaited mentionSources agent summary sessionView =
                 viewChatSkeletonBody
 
             else
-                viewChatTurns now mentionSources agent sessionView runnerActive closedChat detailBlocked
+                viewChatTurns mentionSources agent sessionView runnerActive closedChat detailBlocked
         , composer =
             if closedChat then
                 viewClosedChat session.status
@@ -914,8 +913,8 @@ activeChangesetOperation agent sessionId =
             Nothing
 
 
-viewChatTurns : Time.Posix -> AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Bool -> Html (Flow Model ())
-viewChatTurns now mentionSources agent sessionView runnerActive closedChat interactionsBlocked =
+viewChatTurns : AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionView -> Bool -> Bool -> Bool -> Html (Flow Model ())
+viewChatTurns mentionSources agent sessionView runnerActive closedChat interactionsBlocked =
     let
         sessionId =
             sessionView.session.sessionId
@@ -947,13 +946,8 @@ viewChatTurns now mentionSources agent sessionView runnerActive closedChat inter
                 |> Maybe.map (viewPendingSteer >> List.singleton)
                 |> Maybe.withDefault []
 
-        activityNodes =
-            get (liveTurnAt sessionId) agent
-                |> Maybe.map (Model.visibleToolCalls now >> List.map (viewToolCall now))
-                |> Maybe.withDefault []
-
         content =
-            List.map (viewChatEntry mentionSources interactionsBlocked sessionId agent.highlightTurnId) (sessionEntries sessionView agent) ++ activityNodes ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
+            List.map (viewChatEntry mentionSources interactionsBlocked sessionId agent.highlightTurnId) (sessionEntries sessionView agent) ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
     in
     if List.isEmpty content then
         viewEmptyChat (EmptyMessages (not closedChat && not runnerActive))
@@ -1040,30 +1034,6 @@ viewChatTurn mentionSources sessionId isHighlighted turn =
             ]
         , viewAgentMessage mentionSources turn
         ]
-
-
-viewToolCall : Time.Posix -> Model.AgentToolCall -> Html (Flow Model ())
-viewToolCall now call =
-    Html.div [ class "agent-panel__chat-message agent-panel__chat-message--agent" ]
-        [ Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--agent" ]
-            [ Html.span
-                [ class "agent-panel__chat-status is-running"
-                , attribute "role" "status"
-                ]
-                [ Html.text ("Running " ++ call.name ++ " · " ++ formatElapsed call.startedAt now) ]
-            , Html.text " "
-            , Html.code [] [ Html.text call.text ]
-            ]
-        ]
-
-
-formatElapsed : Time.Posix -> Time.Posix -> String
-formatElapsed startedAt now =
-    let
-        seconds =
-            max 0 (Time.posixToMillis now - Time.posixToMillis startedAt) // 1000
-    in
-    String.fromInt (seconds // 60) ++ ":" ++ String.padLeft 2 '0' (String.fromInt (remainderBy 60 seconds))
 
 
 viewPendingSteer : String -> Html (Flow Model ())
