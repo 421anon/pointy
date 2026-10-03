@@ -6,7 +6,6 @@ module Handlers.Agent (
     TurnRequest (..),
     SessionRequest (..),
     RenameSessionRequest (..),
-    ConfirmApplyRequest (..),
     createSessionHandler,
     getSessionHandler,
     listSessionsHandler,
@@ -14,9 +13,6 @@ module Handlers.Agent (
     stopTurnHandler,
     steerTurnHandler,
     turnLogStreamHandler,
-    prepareApplyHandler,
-    confirmApplyHandler,
-    discardSessionHandler,
     archiveSessionHandler,
     renameSessionHandler,
     purgeSessionHandler,
@@ -24,17 +20,13 @@ module Handlers.Agent (
 ) where
 
 import Agent.Git (
-    AgentApplyView (..),
     AgentSessionView,
     AgentUsage,
     archiveAgentSession,
-    confirmApplyCandidate,
     createAgentSession,
-    discardAgentSession,
     getAgentUsage,
     listAgentSessions,
     loadAgentSessionView,
-    prepareApplyCandidate,
     purgeAgentSession,
     renameAgentSession,
  )
@@ -87,20 +79,6 @@ instance FromJSON RenameSessionRequest where
             <$> obj .: "sessionId"
             <*> obj .: "name"
 
-data ConfirmApplyRequest = ConfirmApplyRequest
-    { confirmSessionId :: Text
-    , confirmTargetHead :: Text
-    , confirmCandidateHead :: Text
-    }
-    deriving (Show, Eq, Generic)
-
-instance FromJSON ConfirmApplyRequest where
-    parseJSON = withObject "ConfirmApplyRequest" $ \obj ->
-        ConfirmApplyRequest
-            <$> obj .: "sessionId"
-            <*> obj .: "targetHead"
-            <*> obj .: "candidateHead"
-
 createSessionHandler :: Handler AgentSessionView
 createSessionHandler = do
     sid <- runLockedAction createAgentSession
@@ -123,26 +101,6 @@ stopTurnHandler req =
 steerTurnHandler :: TurnRequest -> Handler NoContent
 steerTurnHandler req =
     NoContent <$ runAgentAction (steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req))
-
-prepareApplyHandler :: SessionRequest -> Handler AgentSessionView
-prepareApplyHandler req = do
-    let sid = sessionRequestSessionId req
-    _ <- runLockedAction (prepareApplyCandidate sid)
-    runSharedAction (loadAgentSessionView sid)
-
-confirmApplyHandler :: ConfirmApplyRequest -> Handler AgentApplyView
-confirmApplyHandler req = do
-    (projectIds, stepIds) <-
-        runLockedAction $
-            confirmApplyCandidate (confirmSessionId req) (confirmTargetHead req) (confirmCandidateHead req)
-    view_ <- runSharedAction (loadAgentSessionView (confirmSessionId req))
-    return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
-
-discardSessionHandler :: SessionRequest -> Handler AgentSessionView
-discardSessionHandler req = do
-    let sid = sessionRequestSessionId req
-    _ <- runLockedAction (discardAgentSession sid)
-    runSharedAction (loadAgentSessionView sid)
 
 renameSessionHandler :: RenameSessionRequest -> Handler AgentSessionView
 renameSessionHandler req = do
@@ -185,7 +143,6 @@ throwAgentError err =
         , "runner_not_active"
         , "runner_stopping"
         , "steering_failed"
-        , "step_reviewed"
         ]
 
 archiveSessionHandler :: SessionRequest -> Handler AgentSessionView

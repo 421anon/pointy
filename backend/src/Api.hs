@@ -3,13 +3,13 @@
 
 module Api (API) where
 
-import Agent.Git (AgentApplyView, AgentSessionView, AgentUsage)
+import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import ApiTypes (DynamicJson)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
-import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.Agent (RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Projects (ProjectUpdate (..), RawJSON)
 import ProjectTree (ChildChanges, ChildRef, ProjectFields)
@@ -184,27 +184,6 @@ type SteerTurn =
         :> Description "Sends steering input to the agent turn running in a session."
         :> ReqBody '[JSON] TurnRequest
         :> PostNoContent
-
-type PrepareApply =
-    "agent"
-        :> "prepare-apply"
-        :> Description "Prepares an agent session's changes for review before applying."
-        :> ReqBody '[JSON] SessionRequest
-        :> Post '[JSON] AgentSessionView
-
-type ConfirmApply =
-    "agent"
-        :> "confirm-apply"
-        :> Description "Applies a prepared agent session's changes to the target branch."
-        :> ReqBody '[JSON] ConfirmApplyRequest
-        :> Post '[JSON] AgentApplyView
-
-type DiscardSession =
-    "agent"
-        :> "discard"
-        :> Description "Discards an agent session's uncommitted changes."
-        :> ReqBody '[JSON] SessionRequest
-        :> Post '[JSON] AgentSessionView
 
 type ArchiveSession =
     "agent"
@@ -509,9 +488,6 @@ type API =
         :<|> StopTurn
         :<|> SteerTurn
         :<|> AgentTurnStream
-        :<|> PrepareApply
-        :<|> ConfirmApply
-        :<|> DiscardSession
         :<|> ArchiveSession
         :<|> RenameSession
         :<|> DeleteSession

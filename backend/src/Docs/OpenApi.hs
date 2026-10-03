@@ -10,7 +10,7 @@
 
 module Docs.OpenApi (pointyOpenApi) where
 
-import Agent.Git (AgentApplyView, AgentGitState, AgentSessionView, AgentUsage)
+import Agent.Git (AgentGitState, AgentSessionView, AgentUsage)
 import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedApply)
 import Api (API)
 import ApiTypes (DynamicJson)
@@ -22,7 +22,7 @@ import Data.Text (Text, pack)
 import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
-import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.Agent (RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Projects (ProjectUpdate)
 import ProjectTree (ChildChanges, ChildRef, ChildUpdate, ProjectFields)
 import Handlers.Autocomplete (AutocompleteRequest)
@@ -190,13 +190,6 @@ instance ToSchema RenameSessionRequest where
     declareNamedSchema _ =
         pure $ objectSchema "RenameSessionRequest" [("sessionId", stringField), ("name", stringField)]
 
-instance ToSchema ConfirmApplyRequest where
-    declareNamedSchema _ =
-        pure $
-            objectSchema
-                "ConfirmApplyRequest"
-                [("sessionId", stringField), ("targetHead", stringField), ("candidateHead", stringField)]
-
 instance ToSchema LineOffset where
     declareNamedSchema _ = declareNamedSchema (Proxy :: Proxy Int)
 
@@ -240,7 +233,6 @@ instance ToSchema AgentTurn
 instance ToSchema AgentGitState
 instance ToSchema AgentSessionSummary
 instance ToSchema AgentSessionView
-instance ToSchema AgentApplyView
 instance ToSchema AgentUsage
 
 instance ToSchema ReviewRequest where

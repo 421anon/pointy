@@ -18,8 +18,8 @@ module Agent.Runner (
     watchTurnBudget,
 ) where
 
-import Agent.Git (AgentSessionView, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
-import Agent.Policy (promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject)
+import Agent.Git (AgentSessionView, applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sessionPaths)
 import Agent.Session (
     AgentSession (..),
@@ -60,21 +60,22 @@ import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
+import Data.List (sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Interpreters.Production (runProduction)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
-import System.Directory (copyFile, createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist, doesFileExist, getFileSize, getHomeDirectory, getModificationTime, getSymbolicLinkTarget, listDirectory, pathIsSymbolicLink, removePathForcibly, renameFile)
+import System.Directory (copyFile, createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist, doesFileExist, doesPathExist, getFileSize, getHomeDirectory, getModificationTime, getSymbolicLinkTarget, listDirectory, pathIsSymbolicLink, removePathForcibly, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
@@ -137,10 +138,18 @@ takeWaitingSteers sid input = do
         return held
     modifyMVar_ input $ traverse $ \control -> flushWaiting control{inputWaiting = inputWaiting control ++ waiting}
 
-retireTurn :: Text -> STM ()
-retireTurn sid = do
-    modifyTVar' activeRunners $ Map.delete sid
-    modifyTVar' waitingSteers $ Map.delete sid
+retireTurn :: Text -> Text -> STM ()
+retireTurn sid tid = do
+    owner <- fmap fst . Map.lookup sid <$> readTVar activeRunners
+    when (owner == Just tid) $ do
+        modifyTVar' activeRunners $ Map.delete sid
+        modifyTVar' waitingSteers $ Map.delete sid
+
+takeStopRequest :: Text -> STM Bool
+takeStopRequest tid = do
+    pending <- readTVar stopRequestedTurns
+    writeTVar stopRequestedTurns (Set.delete tid pending)
+    return (Set.member tid pending)
 
 budgetPollMicros :: Int
 budgetPollMicros = 1000000
@@ -247,10 +256,16 @@ startAgentTurn sid prompt mCurrentProjectId = do
     when (status session_ == "archived") $ Except.throwError "session_archived"
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
+    beginAgentTurn session_ prompt mCurrentProjectId Nothing
+
+beginAgentTurn :: AgentSession -> Text -> Maybe Int -> Maybe Text -> ExceptT String IO AgentTurn
+beginAgentTurn session_ prompt mCurrentProjectId fixedTurnId = do
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     (refreshedSession, syncNotes) <- refreshSessionBase session_
+    reviewedSteps <- findReviewedSteps refreshedSession
     freshSession <- discardStaleApplyConflict refreshedSession
-    let changedCurrentProjectId = mfilter ((/= agentCurrentProjectId freshSession) . Just) mCurrentProjectId
+    let sid = sessionId session_
+        changedCurrentProjectId = mfilter ((/= agentCurrentProjectId freshSession) . Just) mCurrentProjectId
     tid <- liftIO newTurnId
     logPath <- liftIO $ turnLogFilePath sid tid
     now <- liftIO getCurrentTime
@@ -259,6 +274,7 @@ startAgentTurn sid prompt mCurrentProjectId = do
                 { turnId = tid
                 , turnSessionId = sid
                 , turnPrompt = prompt
+                , turnAutomatic = isJust fixedTurnId
                 , turnStatus = "running"
                 , turnExitCode = Nothing
                 , turnStartedAt = now
@@ -298,24 +314,27 @@ startAgentTurn sid prompt mCurrentProjectId = do
             withConflict pending =
                 promptWithApplyConflict (targetBranch freshSession) (candidateWorktree pending) (fromMaybe "" nextError)
             withCurrentProject projectId text = renderCurrentProject projectId <> "\n\n" <> text
+            request = if isJust fixedTurnId then prompt else userMessage prompt
+            refusal = (withConflict <$> pendingApply) <|> (promptWithEvaluationFailure <$> evaluationFailure)
             agentPrompt =
                 maybe id withCurrentProject changedCurrentProjectId $
-                    maybe id withConflict pendingApply $
-                        maybe prompt (`promptWithEvaluationFailure` prompt) evaluationFailure
+                    maybe prompt ($ request) refusal
         when (isJust evaluationFailure) $
-            appendLogLine (configAgent cfg) logPath "system" "The evaluation failures from the last apply attempt were sent to the agent with this message."
+            appendLogLine (configAgent cfg) logPath "system" "The reason the last apply was refused was sent to the agent with this message."
         when (isJust pendingApply) $
             appendLogLine (configAgent cfg) logPath "system" "The apply conflict was sent to the agent with this message; it resolves it in the apply worktree."
         atomically $ do
+            stopInherited <- maybe (return False) takeStopRequest fixedTurnId
             modifyTVar' activeRunners $ Map.insert sid (tid, Nothing)
             modifyTVar' waitingSteers $ Map.delete sid
+            when stopInherited $ modifyTVar' stopRequestedTurns (Set.insert tid)
         let unnamed = isNothing (sessionName freshSession >>= normalizeSessionName)
             titling = not (T.null (T.strip (agentTitlePrompt (configAgent cfg))))
-        when (unnamed && titling) $
+        when (unnamed && titling && isNothing fixedTurnId) $
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProjectId)
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
     return turn
 
 stopAgentTurn :: Text -> ExceptT String IO AgentSessionView
@@ -395,10 +414,10 @@ nameChat cfg session_ logPath prompt =
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Bool -> IO ()
-runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject =
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Bool -> [Int] -> IO ()
+runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedSteps =
     continueUnlessStopped run
-        `finally` atomically (retireTurn sid)
+        `finally` atomically (retireTurn sid tid)
   where
     sid = sessionId session_
     tid = turnId turn
@@ -421,7 +440,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject =
             let mWarmFile = case mWarmResult of
                     Just (Right meta) -> Just (warmSessionFile meta)
                     _ -> Nothing
-            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile) :: IO (Either SomeException ExitCode)
+            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile reviewedSteps) :: IO (Either SomeException ExitCode)
             exitCode <- case result of
                 Left err -> do
                     appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
@@ -429,10 +448,12 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject =
                 Right code -> return code
             finishTurn cfg session_ turn sentCurrentProject exitCode
 
-runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> IO ExitCode
-runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
+runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> [Int] -> IO ExitCode
+runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewedSteps = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
+    let conflictWorktrees = [candidateWorktree pending | Just pending <- [preparedApply session_], applyConflictsPending pending]
+    readOnlySteps <- filterM doesPathExist [root </> path | root <- worktreePath session_ : conflictWorktrees, stepId <- reviewedSteps, path <- ["steps" </> show stepId ++ ".nix", "srcFiles" </> show stepId]]
     let paths = sessionPaths session_
         runnerHome = sandboxHome paths
         expand = expandSandboxArg paths
@@ -445,17 +466,15 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
         runnerArgs =
             agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ runnerConfigArgs expand (agentRunnerArgs cfg)
         wrapperScript =
-            "set -e; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
+            "set -e; cd \"$POINTY_AGENT_WORKTREE\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
         warmBindArgs = maybe [] bindPathReadOnly mWarmFile
-        applyBindArgs =
-            case preparedApply session_ of
-                Just pending | applyConflictsPending pending -> bindPath (candidateWorktree pending)
-                _ -> []
         args =
             map expand (agentSboxArgs cfg)
+                ++ bindPath (worktreePath session_)
+                ++ concatMap bindPathReadOnly readOnlySteps
                 ++ warmBindArgs
                 ++ bindPathReadOnly repoPath
-                ++ applyBindArgs
+                ++ concatMap bindPath conflictWorktrees
                 ++ nixBind
                 ++ ["--", "bash", "-lc", wrapperScript, "pointy-agent-runner"]
                 ++ runnerArgs
@@ -468,7 +487,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             ]
     let process =
             (proc (agentSboxCommand cfg) args)
-                { cwd = Just (worktreePath session_)
+                { cwd = Just runnerHome
                 , env = Just runnerEnv
                 , std_in = CreatePipe
                 , std_out = CreatePipe
@@ -522,7 +541,7 @@ questionOpen input = withMVar input (return . maybe False (isJust . inputQuestio
 noteDiscardedConflict :: AgentConfig -> FilePath -> AgentSession -> AgentSession -> IO ()
 noteDiscardedConflict cfg logPath before after =
     when (maybe False applyConflictsPending (preparedApply before) && isNothing (preparedApply after)) $
-        appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; apply again to rebuild it."
+        appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; the next apply merges the changeset again."
 
 seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
@@ -722,19 +741,6 @@ handleRpcEvent cfg logPath input event =
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
                     flushWaiting control{inputPromptSeen = True}
         Just "extension_ui_request" -> handleDialog cfg logPath input event
-        Just "tool_execution_start"
-            | Just callId <- event ^? key "toolCallId" . _String -> do
-                now <- getCurrentTime
-                logActivity
-                    [ "state" Aeson..= ("started" :: Text)
-                    , "id" Aeson..= callId
-                    , "name" Aeson..= (event ^. key "toolName" . _String)
-                    , "text" Aeson..= toolCallText event
-                    , "startedAt" Aeson..= (realToFrac (utcTimeToPOSIXSeconds now) :: Double)
-                    ]
-        Just "tool_execution_end"
-            | Just callId <- event ^? key "toolCallId" . _String ->
-                logActivity ["state" Aeson..= ("finished" :: Text), "id" Aeson..= callId]
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True
         Just "auto_retry_end" -> do
@@ -773,7 +779,6 @@ handleRpcEvent cfg logPath input event =
     send command = withMVar input $ mapM_ (\control -> writeToRunner control (Aeson.object ["type" Aeson..= (command :: Text)]))
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
-    logActivity = appendLogLine cfg logPath "activity" . jsonLine . Aeson.object
 
 handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleRpcEventSafely cfg logPath input event =
@@ -896,11 +901,7 @@ sessionFinalizationAttempts = 3
 
 finishTurn :: AgentConfig -> AgentSession -> AgentTurn -> Bool -> ExitCode -> IO ()
 finishTurn cfg _session turn sentCurrentProject exitCode = do
-    stopped <- atomically $ do
-        pending <- readTVar stopRequestedTurns
-        let wasStopped = Set.member (turnId turn) pending
-        when wasStopped $ writeTVar stopRequestedTurns (Set.delete (turnId turn) pending)
-        return wasStopped
+    stopped <- atomically $ takeStopRequest (turnId turn)
     let exitCodeInt = case exitCode of
             ExitSuccess -> 0
             ExitFailure code -> code
@@ -956,14 +957,48 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
     case finishResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
         Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
-        Right (Right _) -> return ()
+        Right (Right _) -> when (finalStatus == "succeeded") $ do
+            applyTurnChanges cfg turn
+            stoppedWhileApplying <- atomically $ takeStopRequest (turnId turn)
+            unless stoppedWhileApplying $ startAutomaticFix cfg turn
     now <- getCurrentTime
     let finalTurn = turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}
     saveResult <- try (saveTurn finalTurn) :: IO (Either SomeException ())
     case saveResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Turn finalization error: " <> T.pack (show ex))
         Right _ -> return ()
+    signalTurnLog (turnLogPath turn)
     unregisterTurnSignal (turnLogPath turn)
+
+applyTurnChanges :: AgentConfig -> AgentTurn -> IO ()
+applyTurnChanges cfg turn = do
+    result <- try (withUserRepoExclusiveIO (applyAgentChanges announce (turnSessionId turn))) :: IO (Either SomeException (Either String ()))
+    either (logFailure . displayException) (either logFailure return) result
+  where
+    logSystem = appendLogLine cfg (turnLogPath turn) "system"
+    announce = logSystem . ("changeset-applying " <>) . jsonLine
+    logFailure = logSystem . ("Apply failed: " <>) . T.pack
+
+automaticFixLimit :: Int
+automaticFixLimit = 2
+
+startAutomaticFix :: AgentConfig -> AgentTurn -> IO ()
+startAutomaticFix cfg turn = do
+    result <-
+        try
+            ( withUserRepoExclusiveIO $ do
+                session_ <- ExceptT $ loadSessionById sid
+                turns_ <- liftIO $ listTurns sid
+                let automaticInARow = length (takeWhile turnAutomatic (sortOn (Down . turnStartedAt) turns_))
+                when (status session_ `elem` ["evaluation_failed", "prepare_conflict"] && automaticInARow < automaticFixLimit) $
+                    void $
+                        beginAgentTurn session_ automaticFixPrompt Nothing (Just (turnId turn))
+            ) ::
+            IO (Either SomeException (Either String ()))
+    either (logFailure . displayException) (either logFailure return) result
+  where
+    sid = turnSessionId turn
+    logFailure = appendLogLine cfg (turnLogPath turn) "system" . ("Could not start the automatic fix: " <>) . T.pack
 
 finalizeWithRetry :: AgentConfig -> AgentTurn -> Int -> IO (Either SomeException a) -> IO (Either SomeException a)
 finalizeWithRetry cfg turn attempt runAttempt = do
@@ -1018,12 +1053,6 @@ safeFileSize path = do
 
 heartbeatDelayMicros :: Int
 heartbeatDelayMicros = 5 * 1000000
-
-toolCallText :: Aeson.Value -> Text
-toolCallText event = T.take 160 (T.unwords (T.words (fromMaybe argsJson command)))
-  where
-    command = event ^? key "args" . key "command" . _String
-    argsJson = jsonLine (fromMaybe Aeson.Null (event ^? key "args"))
 
 streamLoop :: AgentTurn -> Int -> TChan () -> IO (S.StepT IO BS.ByteString)
 streamLoop turn offset signal = return $ S.Effect $ do

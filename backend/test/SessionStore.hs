@@ -90,6 +90,7 @@ turnFor now sid n =
         { turnId = "turn-" <> sid <> "-" <> T.pack (show n)
         , turnSessionId = sid
         , turnPrompt = "prompt"
+        , turnAutomatic = False
         , turnStatus = "running"
         , turnExitCode = Nothing
         , turnFinishedAt = Nothing

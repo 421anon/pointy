@@ -211,7 +211,6 @@ subscriptions model =
         , uploadProgressSubscription model
         , gutterDragSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
-        , agentActivitySubscription model
         , Browser.Events.onVisibilityChange
             (\visibility ->
                 if visibility == Browser.Events.Visible then
@@ -221,15 +220,6 @@ subscriptions model =
                     Flow.pure ()
             )
         ]
-
-
-agentActivitySubscription : Model -> Sub (Flow Model ())
-agentActivitySubscription model =
-    if Model.Core.hasRunningToolCall model then
-        Time.every 1000 (\time -> Flow.setAll now time)
-
-    else
-        Sub.none
 
 
 gutterDragSubscription : Model -> Sub (Flow Model ())

@@ -10,6 +10,8 @@ module Agent.Policy (
     renderCurrentProject,
     promptWithEvaluationFailure,
     promptWithApplyConflict,
+    userMessage,
+    automaticFixPrompt,
 ) where
 
 import Data.Maybe (isJust)
@@ -41,7 +43,8 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
             ++ [ "Do not edit outside this allowlist; those changes will be discarded."
                , "A project file projects/<id>.nix holds `name`, exactly one of `preset` or `templates`, and `children`: a list of entries `{ step = { hidden = false; id = <step-id>; sortKey = null; }; }` for steps and `{ project = { hidden = false; id = <project-id>; sortKey = null; }; }` for subprojects. The `hidden` and `sortKey` of an entry set how that child shows inside this project; one project can be listed in several projects."
                , "projects/0.nix is the root project, Home. A new project file only shows up once an entry for it is added to the `children` of a parent project; to place it at the top level, add the entry to projects/0.nix."
-               , "The backend refuses a changeset that introduces evaluation failures in the projects or in the steps it changes; failures that already exist on the target branch do not block it. When it refuses one, the failures are sent to you with the next message."
+               , "The backend refuses a changeset that introduces evaluation failures in the projects or in the steps it changes; failures that already exist on the target branch do not block it. When it refuses one, it tells you why in a new message."
+               , "Reviewed steps cannot be changed: their steps/<id>.nix and srcFiles/<id>/ are read-only."
                , "Before ending a turn that edits steps/<id>.nix or projects/<id>.nix, run `nix-instantiate --parse <file>` on each edited file and fix any error it reports."
                , "Every bash command without an explicit `timeout` is stopped after 120 seconds and returns the output it produced so far. Set `timeout` in seconds when you expect a command to run longer, and expect a search through /nix/store, /data or the git history to be stopped at that limit: narrow it with a path, -maxdepth, or a name pattern instead of scanning everything."
                , "Follow the Embedded agents only section in AGENTS.md."
@@ -64,16 +67,16 @@ renderCurrentProject projectId =
         ]
 
 promptWithEvaluationFailure :: Text -> Text -> Text
-promptWithEvaluationFailure failures prompt =
+promptWithEvaluationFailure failures request =
     T.unlines
-        ( "The backend refused to apply your last changeset because it introduces evaluation failures:"
+        ( "The backend refused to apply your last changeset:"
             : map ("- " <>) (filter (not . T.null) (T.lines failures))
-            ++ ["Fix these problems so the changeset can be applied.", "", "User message:"]
+            ++ ["Fix these problems so the changeset can be applied.", ""]
         )
-        <> prompt
+        <> request
 
 promptWithApplyConflict :: Text -> FilePath -> Text -> Text -> Text
-promptWithApplyConflict target applyWorktree conflictSummary prompt =
+promptWithApplyConflict target applyWorktree conflictSummary request =
     T.unlines
         ( [ "Your changeset cannot be applied: `" <> target <> "` gained commits that conflict with it."
           , "The apply worktree " <> T.pack applyWorktree <> " holds the latest `" <> target <> "` with your changeset merged in. Git state:"
@@ -84,10 +87,15 @@ promptWithApplyConflict target applyWorktree conflictSummary prompt =
                , "When both sides added the same steps/<id>.nix, projects/<id>.nix or srcFiles/<id>/, they are different records: keep the `" <> target <> "` version at that id, move yours to an id no file in the apply worktree uses, and update every reference to it in the files of your changeset, including path strings such as \"<id>/file\"."
                , "Remove every conflict marker. Do not edit the session worktree for this; a commit there discards the apply worktree."
                , ""
-               , "User message:"
                ]
         )
-        <> prompt
+        <> request
+
+userMessage :: Text -> Text
+userMessage = ("User message:\n" <>)
+
+automaticFixPrompt :: Text
+automaticFixPrompt = "The user has not written anything new: the backend started this turn by itself because it refused your last changeset. Unless the user asked you not to, fix it so it can be applied. Your whole reply is one short sentence saying what went wrong."
 
 appliedProjectId :: Text -> Maybe Int
 appliedProjectId path =
