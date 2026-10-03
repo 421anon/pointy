@@ -6,7 +6,7 @@ import Http
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (custom, optional, required)
-import Model.Core as Model exposing (ChildKind(..), DirectoryItem(..), FileView, ProjectRecord, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), blankProject, initialTable)
+import Model.Core as Model exposing (DirectoryItem(..), FileView, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), blankProject, blankStep)
 import Model.Shadow exposing (Artifact, Field, Preset, Presets, StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), WithSrcFiles(..))
 
 
@@ -108,110 +108,6 @@ presets =
     Decode.dict preset
 
 
-projectRecord : Presets -> StepConfig -> Decoder ProjectRecord
-projectRecord presets_ stepConfig_ =
-    let
-        resolveSource id_ mPreset mTemplates =
-            case ( mPreset, mTemplates ) of
-                ( Just _, Just _ ) ->
-                    Err ("Project `" ++ String.fromInt id_ ++ "` cannot define both `preset` and `templates`.")
-
-                ( Nothing, Nothing ) ->
-                    Err ("Project `" ++ String.fromInt id_ ++ "` must define either `preset` or `templates`.")
-
-                ( Just p, Nothing ) ->
-                    Ok (FromPreset p)
-
-                ( Nothing, Just ts ) ->
-                    Ok (CustomTemplates ts)
-
-        build fields source =
-            let
-                effective =
-                    Model.effectiveTemplates presets_ source
-                        |> List.filter (\t -> Dict.member t stepConfig_)
-
-                ( tablesByType, orphans ) =
-                    Model.partitionStepsByTemplate effective fields.steps
-            in
-            { blankProject
-                | id = Just fields.id
-                , name = fields.name
-                , tables = Dict.map (\_ recs -> { initialTable | records = Success recs }) tablesByType
-                , subProjects = Model.SubProjects { initialTable | records = Success fields.subProjects }
-                , templateSource = source
-                , orphanedSteps = orphans
-                , validationErrors = fields.validationErrors
-                , lastModifiedAt = fields.lastModifiedAt
-            }
-    in
-    Decode.succeed
-        (\id name lastModifiedAt mPreset mTemplates steps subProjects validationErrors ->
-            { id = id
-            , name = name
-            , lastModifiedAt = lastModifiedAt
-            , mPreset = mPreset
-            , mTemplates = mTemplates
-            , steps = steps
-            , subProjects = subProjects
-            , validationErrors = validationErrors
-            }
-        )
-        |> required "id" Decode.int
-        |> required "name" Decode.string
-        |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
-        |> required "preset" (maybe Decode.string)
-        |> required "templates" (maybe (Decode.list Decode.string))
-        |> required "children" (childEntries StepChild (stepRecord stepConfig_))
-        |> required "children" (childEntries ProjectChild projectEntry)
-        |> optional "validationErrors" (Decode.list Decode.string) []
-        |> Decode.andThen
-            (\fields ->
-                case resolveSource fields.id fields.mPreset fields.mTemplates of
-                    Ok source ->
-                        Decode.succeed (build fields source)
-
-                    Err msg ->
-                        Decode.fail msg
-            )
-
-
-childEntries : ChildKind -> Decoder a -> Decoder (List a)
-childEntries kind decoder =
-    let
-        entryOf entryKind =
-            if entryKind == kind then
-                Decode.field (Model.childKindName entryKind) (Decode.map Just decoder)
-
-            else
-                Decode.field (Model.childKindName entryKind) (Decode.succeed Nothing)
-    in
-    Decode.list (Decode.oneOf (List.map entryOf Model.childKinds))
-        |> Decode.map (List.filterMap identity)
-
-
-projectEntry : Decoder ProjectRecord
-projectEntry =
-    Decode.succeed (\id hidden sortKey -> { blankProject | id = Just id, hidden = hidden, sortKey = sortKey })
-        |> required "id" Decode.int
-        |> required "hidden" Decode.bool
-        |> required "sortKey" (maybe Decode.int)
-
-
-stepRecord : StepConfig -> Decoder StepRecord
-stepRecord stepConfig_ =
-    Decode.succeed
-        (\def hidden sortKey ->
-            { def
-                | hidden = hidden
-                , sortKey = sortKey
-            }
-        )
-        |> required "def" (stepValueOnlyFromConfig stepConfig_)
-        |> required "hidden" Decode.bool
-        |> required "sortKey" (maybe Decode.int)
-
-
 stepValueOnlyFromConfig : StepConfig -> Decoder StepRecord
 stepValueOnlyFromConfig stepConfig_ =
     Decode.field "type" Decode.string
@@ -229,28 +125,19 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ note args reviewedRevision reviewedBy comments lastModifiedAt ->
-            { id = Just id
-            , clientId = Nothing
-            , type_ = type_
-            , hidden = False
-            , sortKey = Nothing
-            , name = name
-            , note = note
-            , runState = NotAsked
-            , review = Maybe.map (\revision -> { revision = revision, reviewedBy = reviewedBy, comments = comments, comparison = NotAsked }) reviewedRevision
-            , args = args
-            , isUpdating = False
-            , lastModifiedAt = lastModifiedAt
-            , srcFiles =
-                { children = NotAsked
-                , expanded = False
-                , extras = NotAsked
-                , size = Nothing
-                , mimeType = Nothing
-                }
-            , srcFileDraft = Nothing
-            , srcFileWriting = False
+        (\id name type_ note args reviewedRevision reviewedBy comments lastModifiedAt createdAt ->
+            let
+                base =
+                    blankStep type_
+            in
+            { base
+                | id = Just id
+                , name = name
+                , note = note
+                , review = Maybe.map (\revision -> { revision = revision, reviewedBy = reviewedBy, comments = comments, comparison = NotAsked }) reviewedRevision
+                , args = args
+                , lastModifiedAt = lastModifiedAt
+                , createdAt = createdAt
             }
         )
         |> required "id" Decode.int
@@ -262,6 +149,180 @@ stepValueOnly stepType_ =
         |> optional "reviewedBy" Decode.string ""
         |> optional "reviewComments" Decode.string ""
         |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
+        |> optional "createdAt" (maybe Iso8601.decoder) Nothing
+
+
+stepDefs : List ( Model.ChildLink, Maybe StepRecord ) -> Dict Int StepRecord
+stepDefs entries =
+    List.filterMap (\( link, mDef ) -> Maybe.map (\def -> ( link.id, def )) mDef) entries
+        |> Dict.fromList
+
+
+type alias ProjectDecode =
+    { record : Model.ProjectRecord
+    , stepDefs : Dict Int StepRecord
+    }
+
+
+projectDecodes : StepConfig -> Decoder (Dict Int ProjectDecode)
+projectDecodes stepConfig_ =
+    Decode.dict (projectDecode stepConfig_)
+        |> Decode.map
+            (Dict.values
+                >> List.filterMap (\decode -> Maybe.map (\id -> ( id, decode )) decode.record.id)
+                >> Dict.fromList
+            )
+
+
+projectDecode : StepConfig -> Decoder ProjectDecode
+projectDecode stepConfig_ =
+    let
+        resolveSource id_ mPreset mTemplates =
+            case ( mPreset, mTemplates ) of
+                ( Just _, Just _ ) ->
+                    Err ("Project `" ++ String.fromInt id_ ++ "` cannot define both `preset` and `templates`.")
+
+                ( Nothing, Nothing ) ->
+                    Err ("Project `" ++ String.fromInt id_ ++ "` must define either `preset` or `templates`.")
+
+                ( Just p, Nothing ) ->
+                    Ok (FromPreset p)
+
+                ( Nothing, Just ts ) ->
+                    Ok (CustomTemplates ts)
+
+        build fields source =
+            { record =
+                { blankProject
+                    | id = Just fields.id
+                    , name = fields.name
+                    , children = Model.sortChildLinks (List.map Tuple.first fields.entries)
+                    , templateSource = source
+                    , validationErrors = fields.validationErrors
+                    , lastModifiedAt = fields.lastModifiedAt
+                    , createdAt = fields.createdAt
+                }
+            , stepDefs = stepDefs fields.entries
+            }
+    in
+    Decode.succeed
+        (\id name lastModifiedAt createdAt mPreset mTemplates entries validationErrors ->
+            { id = id
+            , name = name
+            , lastModifiedAt = lastModifiedAt
+            , createdAt = createdAt
+            , mPreset = mPreset
+            , mTemplates = mTemplates
+            , entries = entries
+            , validationErrors = validationErrors
+            }
+        )
+        |> required "id" Decode.int
+        |> required "name" Decode.string
+        |> optional "lastModifiedAt" (maybe Iso8601.decoder) Nothing
+        |> optional "createdAt" (maybe Iso8601.decoder) Nothing
+        |> required "preset" (maybe Decode.string)
+        |> required "templates" (maybe (Decode.list Decode.string))
+        |> required "children" (Decode.list (childEntry stepConfig_))
+        |> optional "validationErrors" (Decode.list Decode.string) []
+        |> Decode.andThen
+            (\fields ->
+                case resolveSource fields.id fields.mPreset fields.mTemplates of
+                    Ok source ->
+                        Decode.succeed (build fields source)
+
+                    Err msg ->
+                        Decode.fail msg
+            )
+
+
+unfiledData : StepConfig -> Decoder Model.UnfiledData
+unfiledData stepConfig_ =
+    Decode.succeed Model.UnfiledData
+        |> required "children" (Decode.list (childEntry stepConfig_) |> Decode.map stepDefs)
+        |> required "membership" unfiledMembership
+
+
+unfiledMembership : Decoder (Dict Int (List Model.ChildRef))
+unfiledMembership =
+    Decode.keyValuePairs (Decode.list membershipRef)
+        |> Decode.map
+            (\pairs ->
+                pairs
+                    |> List.filterMap
+                        (\( key, refs ) ->
+                            String.toInt key
+                                |> Maybe.map (\projectId -> ( projectId, refs ))
+                        )
+                    |> Dict.fromList
+            )
+
+
+membershipRef : Decoder Model.ChildRef
+membershipRef =
+    Decode.oneOf
+        [ Decode.field "step" (Decode.field "id" Decode.int)
+            |> Decode.map (\id_ -> { kind = Model.StepChild, id = id_ })
+        , Decode.field "project" (Decode.field "id" Decode.int)
+            |> Decode.map (\id_ -> { kind = Model.ProjectChild, id = id_ })
+        ]
+
+
+projectRollup : Decoder Model.ProjectRollup
+projectRollup =
+    Decode.succeed
+        (\projectId children ->
+            { projectId = projectId
+            , children = children
+            }
+        )
+        |> required "project_id" Decode.int
+        |> required "children" (Decode.list rollupChild)
+
+
+rollupChild : Decoder Model.RollupChild
+rollupChild =
+    Decode.succeed
+        (\id steps_ statuses ->
+            { id = id
+            , steps = steps_
+            , statuses = statuses
+            }
+        )
+        |> required "id" Decode.int
+        |> required "steps" Decode.int
+        |> required "statuses" rollupStatuses
+
+
+rollupStatuses : Decoder Model.RollupStatuses
+rollupStatuses =
+    Decode.succeed Model.RollupStatuses
+        |> required "not-started" Decode.int
+        |> required "running" Decode.int
+        |> required "success" Decode.int
+        |> required "failure" Decode.int
+        |> required "built-not-certified" Decode.int
+        |> required "certification-failed" Decode.int
+
+
+childEntry : StepConfig -> Decoder ( Model.ChildLink, Maybe StepRecord )
+childEntry stepConfig_ =
+    let
+        linkOf kind =
+            Decode.succeed (\id hidden sortKey -> { kind = kind, id = id, hidden = hidden, sortKey = sortKey })
+                |> required "id" Decode.int
+                |> required "hidden" Decode.bool
+                |> required "sortKey" (maybe Decode.int)
+    in
+    Decode.oneOf
+        [ Decode.field "step"
+            (Decode.map2 Tuple.pair
+                (linkOf Model.StepChild)
+                (Decode.field "def" (stepValueOnlyFromConfig stepConfig_) |> Decode.map Just)
+            )
+        , Decode.field "project"
+            (Decode.map (\link -> ( link, Nothing )) (linkOf Model.ProjectChild))
+        ]
 
 
 reviewComparison : String -> Maybe String -> Decoder (Maybe (ApiData Model.ReviewComparison))

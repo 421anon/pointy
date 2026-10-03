@@ -11,6 +11,7 @@ const app = Elm.Main.init({
   flags: {
     origin: window.location.origin,
     lastChat: localStorage.getItem("agent:lastChat"),
+    isNarrow: window.matchMedia("(max-width: 1000px)").matches,
   },
 });
 

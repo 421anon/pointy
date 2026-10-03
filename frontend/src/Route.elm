@@ -9,6 +9,7 @@ module Route exposing
     , Page(..)
     , ProjectParams
     , Route
+    , backToHead
     , chat
     , chatHref
     , formatLineRange
@@ -19,16 +20,20 @@ module Route exposing
     , href
     , navigationTarget
     , page
+    , pageCommit
     , pathProjectId
     , project
     , projectPage
     , rootProjectId
     , routeUrlIso
     , toString
+    , unfiled
+    , unfiledPage
+    , viewedCommit
+    , viewedCommitT
     )
 
-
-import Accessors exposing (Iso, Lens, Prism, iso, lens, prism)
+import Accessors exposing (Iso, Lens, Prism, Traversal, iso, lens, prism, traversal)
 import Html
 import Html.Attributes as Attr
 import List.Extra as List
@@ -51,6 +56,7 @@ type alias Route =
 
 type Page
     = Project ProjectParams
+    | Unfiled UnfiledParams
     | Artifact ArtifactParams
     | NotFound { path : String, query : Maybe String }
 
@@ -61,6 +67,10 @@ type alias ProjectParams =
     , mCommit : Maybe String
     , mCompare : Maybe Comparison
     }
+
+
+type alias UnfiledParams =
+    { mCommit : Maybe String }
 
 
 type alias ArtifactParams =
@@ -152,6 +162,117 @@ rootProjectId =
     0
 
 
+unfiled : Prism pr Page UnfiledParams x y
+unfiled =
+    prism ">Unfiled"
+        Unfiled
+        (\page_ ->
+            case page_ of
+                Unfiled params ->
+                    Ok params
+
+                _ ->
+                    Err page_
+        )
+
+
+pageCommit : Traversal Page (Maybe String) x y
+pageCommit =
+    traversal ".pageCommit"
+        (\page_ ->
+            case page_ of
+                Project params ->
+                    [ params.mCommit ]
+
+                Unfiled params ->
+                    [ params.mCommit ]
+
+                _ ->
+                    []
+        )
+        (\f page_ ->
+            case page_ of
+                Project params ->
+                    Project { params | mCommit = f params.mCommit }
+
+                Unfiled params ->
+                    Unfiled { params | mCommit = f params.mCommit }
+
+                other ->
+                    other
+        )
+
+
+viewedCommit : Page -> Maybe String
+viewedCommit page_ =
+    case page_ of
+        Project params ->
+            params.mCommit
+
+        Unfiled params ->
+            params.mCommit
+
+        Artifact params ->
+            Just params.commit
+
+        NotFound _ ->
+            Nothing
+
+
+viewedCommitT : Traversal Page String x y
+viewedCommitT =
+    traversal ".viewedCommit"
+        (\page_ ->
+            case page_ of
+                Project params ->
+                    Maybe.toList params.mCommit
+
+                Unfiled params ->
+                    Maybe.toList params.mCommit
+
+                Artifact params ->
+                    [ params.commit ]
+
+                NotFound _ ->
+                    []
+        )
+        (\f page_ ->
+            case page_ of
+                Project params ->
+                    Project { params | mCommit = Maybe.map f params.mCommit }
+
+                Unfiled params ->
+                    Unfiled { params | mCommit = Maybe.map f params.mCommit }
+
+                Artifact params ->
+                    Artifact { params | commit = f params.commit }
+
+                NotFound _ ->
+                    page_
+        )
+
+
+backToHead : Page -> Page
+backToHead page_ =
+    case page_ of
+        Project params ->
+            Project { params | mCommit = Nothing }
+
+        Unfiled params ->
+            Unfiled { params | mCommit = Nothing }
+
+        Artifact params ->
+            Project
+                { projectPath = params.projectPath
+                , mHighlight = Just { id = params.stepId, target = Output, path = params.path, range = Nothing }
+                , mCommit = Nothing
+                , mCompare = Nothing
+                }
+
+        NotFound _ ->
+            page_
+
+
 pathProjectId : List Int -> Int
 pathProjectId =
     List.last >> Maybe.withDefault rootProjectId
@@ -165,6 +286,11 @@ projectPage projectPath mCommit =
         , mCommit = mCommit
         , mCompare = Nothing
         }
+
+
+unfiledPage : Maybe String -> Page
+unfiledPage mCommit =
+    Unfiled { mCommit = mCommit }
 
 
 fromPage : Page -> Route
@@ -213,6 +339,9 @@ toUrl route =
             case route.page of
                 Project params ->
                     projectUrlParts params
+
+                Unfiled params ->
+                    unfiledUrlParts params
 
                 Artifact params ->
                     artifactUrlParts params
@@ -317,6 +446,9 @@ pageFromUrl url =
         [] ->
             parseQuery (projectQueryParser [])
 
+        "unfiled" :: [] ->
+            parseQuery unfiledQueryParser
+
         "project" :: ((_ :: _) as ids) ->
             projectIds ids
                 |> Maybe.andThen (parseQuery << projectQueryParser)
@@ -364,6 +496,13 @@ projectQueryParser projectPath =
         )
 
 
+unfiledQueryParser : Parser (Page -> a) a
+unfiledQueryParser =
+    Parser.map
+        (\mCommit -> Unfiled { mCommit = mCommit })
+        (Parser.top <?> Query.string "commit")
+
+
 artifactQueryParser : String -> List Int -> Int -> Parser (Page -> a) a
 artifactQueryParser commit projectPath stepId =
     Parser.map
@@ -395,6 +534,9 @@ pageQueryKeys page_ =
 
         Artifact _ ->
             [ "path" ]
+
+        Unfiled _ ->
+            [ "commit" ]
 
         NotFound _ ->
             []
@@ -554,6 +696,13 @@ projectUrlParts { projectPath, mHighlight, mCommit, mCompare } =
     )
 
 
+unfiledUrlParts : UnfiledParams -> ( String, List String )
+unfiledUrlParts { mCommit } =
+    ( "/unfiled"
+    , List.filterMap identity [ Maybe.map (\c -> "commit=" ++ Url.percentEncode c) mCommit ]
+    )
+
+
 artifactUrlParts : ArtifactParams -> ( String, List String )
 artifactUrlParts { projectPath, stepId, commit, path } =
     ( "/artifact/" ++ String.join "/" (List.map String.fromInt (projectPath ++ [ stepId ]) ++ [ commit ])
@@ -581,9 +730,6 @@ compareTargetQueryParts prefix compareTarget =
     , Maybe.map (\commit -> prefix ++ "Commit=" ++ Url.percentEncode commit) compareTarget.commit
     , Maybe.map (\mimeType -> prefix ++ "Mime=" ++ Url.percentEncode mimeType) compareTarget.mimeType
     ]
-
-
-
 
 
 chatFromQuery : Maybe String -> Maybe ChatRef

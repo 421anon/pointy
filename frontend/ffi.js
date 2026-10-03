@@ -1,3 +1,5 @@
+import { installDragDropListeners } from "./drag-drop.js";
+
 function openDialog(id) {
   const dialog = document.getElementById(id);
   if (!dialog || dialog.open) return;
@@ -18,22 +20,23 @@ function copyToClipboard(text) {
   navigator.clipboard.writeText(text);
 }
 
-let unsentStepChanges = [];
+let unsentTreeOps = null;
 
-function setUnsentStepChanges(requests) {
-  unsentStepChanges = requests;
+function setUnsentTreeOps(request) {
+  unsentTreeOps = request || null;
 }
 
-function sendUnsentStepChanges() {
-  for (const { url, body } of unsentStepChanges) {
+function sendUnsentTreeOps() {
+  if (unsentTreeOps) {
+    const { url, body } = unsentTreeOps;
     fetch(url, {
       method: "POST",
       keepalive: true,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    unsentTreeOps = null;
   }
-  unsentStepChanges = [];
 }
 
 function zoomIframe({ id, zoom }) {
@@ -303,10 +306,11 @@ export function connectPorts(app) {
     toggleTheme,
     agentPrompt,
     storeLastChat,
-    setUnsentStepChanges,
+    setUnsentTreeOps,
   };
 
   installGutterDragListeners(app);
+  installDragDropListeners(app);
 
   if (app.ports && app.ports.ffiOut) {
     app.ports.ffiOut.subscribe((req) => {
@@ -338,5 +342,5 @@ export function connectPorts(app) {
     if (ingestJobsSource) ingestJobsSource.close();
   });
 
-  window.addEventListener("pagehide", sendUnsentStepChanges);
+  window.addEventListener("pagehide", sendUnsentTreeOps);
 }

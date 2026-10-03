@@ -12,6 +12,16 @@ A notebook for writing, running, organizing and sharing research computation.
 
 User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 
+## Project organization
+
+- Unfiled membership comes from raw project links, independently of project enrichment. Unreadable raw links fail the listing rather than exposing potentially linked items as unfiled.
+- Organization batches reject newly introduced project cycles, including cycles assembled within a single batch, without committing partial changes.
+- Manual drag reorder follows the displayed folders-first order. Drops that leave the visible order unchanged do not queue a write.
+- Historical views are read-only, including toast Undo, and retain the browser's native context menu.
+- Organization controls wrap on narrow screens.
+
+Deploy the organization frontend and backend together: the UI requires the authoritative membership map returned by the Unfiled API.
+
 ## Development
 
 A NixOS VM runs a server environment:

@@ -3,9 +3,8 @@ module Api.Encode exposing (..)
 import Dict exposing (Dict)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildChanges, ChildKind, ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..))
+import Model.Core as Model exposing (ChildRef, ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..), TreeOp(..))
 import Model.Shadow exposing (Field, StepType(..), StepArgValue(..), Widget(..))
-import Set
 
 
 stepArgValue : Widget -> StepArgValue -> Maybe Encode.Value
@@ -110,39 +109,37 @@ stepValue stepType record =
         ]
 
 
-childRef : ChildKind -> Int -> Encode.Value
-childRef kind id =
-    childEntry kind id []
+childRef : ChildRef -> Encode.Value
+childRef ref =
+    Encode.object [ ( Model.childKindName ref.kind, Encode.object [ ( "id", Encode.int ref.id ) ] ) ]
 
 
-childEntry : ChildKind -> Int -> List ( String, Encode.Value ) -> Encode.Value
-childEntry kind id fields =
-    Encode.object [ ( Model.childKindName kind, Encode.object (( "id", Encode.int id ) :: fields) ) ]
-
-
-childChanges : ChildChanges -> Encode.Value
-childChanges changes =
+treeOp : TreeOp -> Encode.Value
+treeOp op =
     let
-        updateFields update =
-            List.filterMap identity
-                [ Maybe.map (Encode.bool >> Tuple.pair "hidden") update.hidden
-                , Maybe.map (Maybe.unwrap Encode.null Encode.int >> Tuple.pair "sortKey") update.sortKey
-                ]
-
-        updatesOf kind =
-            (Model.entryChangesOf kind changes).updates
-                |> Dict.toList
-                |> List.map (\( id, update ) -> childEntry kind id (updateFields update))
-
-        removalsOf kind =
-            (Model.entryChangesOf kind changes).removals
-                |> Set.toList
-                |> List.map (childRef kind)
+        entry name fields =
+            Encode.object (( "op", Encode.string name ) :: fields)
     in
-    Encode.object
-        [ ( "update", Encode.list identity (List.concatMap updatesOf Model.childKinds) )
-        , ( "remove", Encode.list identity (List.concatMap removalsOf Model.childKinds) )
-        ]
+    case op of
+        LinkOp parent ref ->
+            entry "link" [ ( "parent", Encode.int parent ), ( "child", childRef ref ) ]
+
+        UnlinkOp parent ref ->
+            entry "unlink" [ ( "parent", Encode.int parent ), ( "child", childRef ref ) ]
+
+        OrderOp parent refs ->
+            entry "order" [ ( "parent", Encode.int parent ), ( "children", Encode.list childRef refs ) ]
+
+        HideOp parent ref hidden_ ->
+            entry "hide" [ ( "parent", Encode.int parent ), ( "child", childRef ref ), ( "hidden", Encode.bool hidden_ ) ]
+
+        DeleteOp ref ->
+            entry "delete" [ ( "child", childRef ref ) ]
+
+
+treeOps : List TreeOp -> Encode.Value
+treeOps ops =
+    Encode.list treeOp ops
 
 
 projectRecord : ProjectRecord -> Encode.Value

@@ -2,15 +2,20 @@ module View.Lib exposing (..)
 
 import Accessors exposing (get)
 import Actions
+import Api.ApiData as ApiData
 import Components.Select as Select
+import Dict
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (class)
+import Html.Extra as Html
 import Maybe.Extra as Maybe
-import Model.Core exposing (Model)
-import Model.Lenses exposing (searchBox)
+import Model.Core as Model exposing (Model)
+import Model.Lenses as Lenses exposing (searchBox)
 import Model.Lib as Lib
+import Route
 import View.Icons exposing (iconCustom)
+import View.Organize
 
 
 viewLoading : Html a -> Html a
@@ -25,17 +30,28 @@ viewPage : { header : List (Html a), content : Html a } -> Html a
 viewPage { header, content } =
     Html.div [ class "page" ]
         [ Html.div [ class "page-header" ] header
-        , Html.div [ class "page-content" ] [ content ]
+        , Html.div [] [ content ]
         ]
 
 
 viewSearchBox : Model -> Html (Flow Model ())
 viewSearchBox model =
+    let
+        state =
+            get searchBox model
+
+        availableItems =
+            if state.active || not (String.isEmpty state.input) then
+                Lib.getSearchItems model
+
+            else
+                []
+    in
     Select.view
         { optic = searchBox
-        , selectState = get searchBox model
+        , selectState = state
         , selected_ = []
-        , availableItems = Lib.getSearchItems model
+        , availableItems = availableItems
         , readOnly = False
         , hasChanged = False
         , label = ""
@@ -68,3 +84,132 @@ boolText value =
 
     else
         "false"
+
+
+statusIndicatorClass : Model.Status -> String
+statusIndicatorClass status =
+    case status of
+        Model.StatusNotStarted ->
+            "status-not-started"
+
+        Model.StatusRunning ->
+            "status-running"
+
+        Model.StatusSuccess ->
+            "status-success"
+
+        Model.StatusFailure _ ->
+            "status-failure"
+
+        Model.StatusBuiltNotCertified ->
+            "status-built-not-certified"
+
+        Model.StatusCertificationFailed _ ->
+            "status-certification-failed"
+
+
+statusLabel : Model.Status -> String
+statusLabel status =
+    case status of
+        Model.StatusNotStarted ->
+            "Not Started"
+
+        Model.StatusRunning ->
+            "Running"
+
+        Model.StatusSuccess ->
+            "Success"
+
+        Model.StatusFailure _ ->
+            "Failure"
+
+        Model.StatusBuiltNotCertified ->
+            "Not Certified"
+
+        Model.StatusCertificationFailed _ ->
+            "Certification Failed"
+
+
+viewStatusUnknown : Html msg
+viewStatusUnknown =
+    Html.span
+        [ class "status-indicator-wrapper"
+        , Html.Attributes.title "Status unknown"
+        ]
+        [ Html.span [ class "status-indicator status-unknown" ] [] ]
+
+
+rollupChildFor : Model -> Maybe Int -> Int -> Maybe Model.RollupChild
+rollupChildFor model mParentProjectId folderProjectId =
+    mParentProjectId
+        |> Maybe.andThen (\parentId -> Dict.get parentId (Model.getProjectRollups model))
+        |> Maybe.andThen ApiData.toMaybe
+        |> Maybe.andThen (\rollup -> Model.rollupChildById rollup folderProjectId)
+
+
+viewRollupSummary : Model -> Maybe Int -> Int -> Html msg
+viewRollupSummary model mParentProjectId folderProjectId =
+    let
+        chip status count =
+            Html.span
+                [ class "rollup-chip"
+                , Html.Attributes.title (statusLabel status ++ ": " ++ String.fromInt count)
+                ]
+                [ Html.span [ class ("status-indicator " ++ statusIndicatorClass status) ] []
+                , Html.text (String.fromInt count)
+                ]
+    in
+    Html.viewMaybe
+        (\child ->
+            Html.span [ class "rollup-summary" ]
+                (List.map (\( status, count ) -> chip status count) (List.filter (\( _, count ) -> count > 0) (Model.rollupStatusEntries child.statuses))
+                    ++ [ Html.span [ class "rollup-chip rollup-total", Html.Attributes.title "Total steps" ]
+                            [ Html.text (String.fromInt child.steps) ]
+                       ]
+                )
+        )
+        (rollupChildFor model mParentProjectId folderProjectId)
+
+
+viewAlsoInLinks : Model -> Maybe Int -> Model.ChildRef -> List (Html (Flow Model ()))
+viewAlsoInLinks model mCurrentParentId ref =
+    let
+        otherParents =
+            Lib.entityOtherParents model ref.kind ref.id mCurrentParentId
+
+        mCommit_ =
+            Route.viewedCommit (Model.getRoute model).page
+
+        parentEntry parentId =
+            Html.a
+                [ Route.href
+                    (Route.fromPage
+                        (Route.projectPage (Lib.canonicalPathTo model parentId) mCommit_)
+                    )
+                , class "listing-menu-item"
+                , Html.Attributes.title (Lib.canonicalNamePath model parentId)
+                ]
+                [ iconCustom False "folder" []
+                , Html.text (Dict.get parentId (Lenses.projectsDict model) |> Maybe.unwrap ("#" ++ String.fromInt parentId) .name)
+                ]
+    in
+    List.map parentEntry otherParents
+
+
+viewAlsoInButton : String -> Model -> Maybe Int -> Model.ChildRef -> Html (Flow Model ())
+viewAlsoInButton popoverId model mCurrentParentId ref =
+    let
+        links =
+            viewAlsoInLinks model mCurrentParentId ref
+    in
+    Html.viewIf (not (List.isEmpty links)) <|
+        View.Organize.viewMenuPopover
+            { popoverId = popoverId
+            , wrapperClass = "listing-menu-details"
+            , triggerAttrs =
+                [ class "icon-btn"
+                , Html.Attributes.title "Also in"
+                ]
+            , triggerContent = [ iconCustom True "account_tree" [] ]
+            , content = links
+            }

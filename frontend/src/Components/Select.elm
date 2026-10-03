@@ -1,4 +1,4 @@
-module Components.Select exposing (Item, SelectState, initSelectState, selected, view)
+module Components.Select exposing (Item, SelectState, initSelectState, itemRef, selected, view)
 
 import Accessors exposing (An_Optic, Lens, get, lens, over, set)
 import Browser.Dom
@@ -19,8 +19,8 @@ import Task
 import View.Icons exposing (iconCustom)
 
 
-type alias SelectState =
-    { selected : List Item
+type alias SelectState ref =
+    { selected : List (Item ref)
     , input : String
     , active : Bool
     , activeIndex : Int
@@ -28,14 +28,20 @@ type alias SelectState =
     }
 
 
-type alias Item =
+type alias Item ref =
     { id : Maybe Int
     , name : String
     , mProjectId : Maybe Int
+    , ref : Maybe ref
     }
 
 
-initSelectState : SelectState
+itemRef : Lens ls (Item ref) (Maybe ref) x y
+itemRef =
+    lens ".ref" .ref (\item ref_ -> { item | ref = ref_ })
+
+
+initSelectState : SelectState ref
 initSelectState =
     { selected = []
     , input = ""
@@ -117,28 +123,28 @@ viewMenuItem isActive domId name tooltip =
 
 
 view :
-    { optic : An_Optic pr ls s SelectState
-    , selectState : SelectState
-    , selected_ : List Item
-    , availableItems : List Item
+    { optic : An_Optic pr ls s (SelectState ref)
+    , selectState : SelectState ref
+    , selected_ : List (Item ref)
+    , availableItems : List (Item ref)
     , readOnly : Bool
     , hasChanged : Bool
     , label : String
     , mHint : Maybe String
     , placeholder : String
     , inputIcon : Maybe String
-    , toInputItemName : Item -> String
-    , toInputItemTooltip : Item -> List String
-    , onInputItemClick : Item -> Maybe (Flow s ())
-    , toMenuItemName : Item -> String
-    , toMenuItemTooltip : Item -> List String
+    , toInputItemName : Item ref -> String
+    , toInputItemTooltip : Item ref -> List String
+    , onInputItemClick : Item ref -> Maybe (Flow s ())
+    , toMenuItemName : Item ref -> String
+    , toMenuItemTooltip : Item ref -> List String
     , activeAfterSelect : Bool
     , clearInputAfterSelect : Bool
     , onChange : Flow s ()
-    , onRemove : Item -> Flow s ()
-    , onSelect : Item -> Flow s ()
+    , onRemove : Item ref -> Flow s ()
+    , onSelect : Item ref -> Flow s ()
     , alignRight : Bool
-    , inputItemStyle : Item -> List (Html.Attribute Never)
+    , inputItemStyle : Item ref -> List (Html.Attribute Never)
     }
     -> Html (Flow s ())
 view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toMenuItemName, toMenuItemTooltip, onChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =

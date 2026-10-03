@@ -1,17 +1,15 @@
 module Specs exposing (..)
 
-import Accessors exposing (has, snd)
+import Accessors exposing (has, snd, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
-import Api.Decode as Decode
 import Api.Encode as Encode
-import Dict
-import Extra.Accessors exposing (by, where_)
+import Extra.Accessors exposing (where_)
 import Flow
-import Model.Core as Model exposing (ProjectRecord, StepRecord, TableTag(..))
-import Model.Lenses as Lenses exposing (currentTableOf)
-import Model.Shadow as Shadow exposing (Presets, StepConfig, StepConfigEntry, WithSrcFiles(..))
-import Model.TableSpec as TableSpec exposing (TableSpec(..))
+import Model.Core as Model exposing (ChildKind(..), ProjectRecord, StepRecord, blankProject, blankStep)
+import Model.Lenses as Lenses
+import Model.Shadow as Shadow exposing (Presets, StepConfigEntry, WithSrcFiles(..))
+import Model.TableSpec exposing (TableSpec(..))
 
 
 steps : String -> StepConfigEntry -> TableSpec StepRecord
@@ -21,11 +19,10 @@ steps name entry =
             entry.stepType
     in
     TableSpec
-        { tag = TagSteps name stepType
-        , name = name
-        , lens = currentTableOf name
+        { name = name
+        , childKind = StepChild
+        , lens = Lenses.stepFormsAt name
         , encodeRecord = Encode.stepValue stepType
-        , decodeRecord = Decode.stepValueOnly stepType
         , status = \r -> ApiData.unwrap (ApiData.loading Nothing) .status r.runState
         , validationErrors = always []
         , isLocked = .review >> (/=) Nothing
@@ -36,29 +33,8 @@ steps name entry =
 
             else
                 always Nothing
-        , defaultRecord =
-            { id = Nothing
-            , clientId = Nothing
-            , type_ = name
-            , hidden = False
-            , sortKey = Nothing
-            , name = name
-            , note = ""
-            , args = Dict.empty
-            , runState = ApiData.loading Nothing
-            , review = Nothing
-            , isUpdating = False
-            , lastModifiedAt = Nothing
-            , srcFiles =
-                { children = NotAsked
-                , expanded = False
-                , extras = NotAsked
-                , size = Nothing
-                , mimeType = Nothing
-                }
-            , srcFileDraft = Nothing
-            , srcFileWriting = False
-            }
+        , defaultRecord = blankStep name
+        , findRecord = \stepId model -> try (Lenses.stepRecordById stepId) model
         , displayName = Maybe.withDefault name entry.displayName
         , description = entry.description
         , apiPath = "/step"
@@ -67,55 +43,23 @@ steps name entry =
         }
 
 
-stepsInProject : Int -> String -> StepConfigEntry -> TableSpec StepRecord
-stepsInProject projectId name entry =
-    case steps name entry of
-        TableSpec spec ->
-            TableSpec
-                { spec
-                    | lens =
-                        Lenses.projects
-                            << Lenses.records
-                            << ApiData.success
-                            << by .id (Just projectId)
-                            << Lenses.tableInProject name
-                }
-
-
-allProjects : Presets -> StepConfig -> TableSpec ProjectRecord
-allProjects presets stepConfig =
-    let
-        blankProject =
-            Model.blankProject
-    in
+allProjects : Presets -> TableSpec ProjectRecord
+allProjects presets =
     TableSpec
-        { tag = TagAllProjects
-        , name = "all-projects"
-        , lens = Lenses.projects
+        { name = "all-projects"
+        , childKind = ProjectChild
+        , lens = Lenses.projectForms
         , encodeRecord = Encode.projectRecord
-        , decodeRecord = Decode.projectRecord presets stepConfig
         , status = always NotAsked
         , validationErrors = .validationErrors
         , isLocked = always False
         , directoryView = always Nothing
         , srcFilesView = always Nothing
         , defaultRecord = { blankProject | templateSource = Model.defaultTemplateSource presets }
+        , findRecord = \projectId model -> try (Lenses.projectRecordById projectId) model
         , displayName = "Project"
         , description = Nothing
         , apiPath = "/projects"
         , upsertRecord = Actions.upsertProject
         , cloneRecord = \_ _ -> Flow.none
         }
-
-
-projects : Presets -> StepConfig -> TableSpec ProjectRecord
-projects presets stepConfig =
-    case allProjects presets stepConfig of
-        TableSpec spec ->
-            TableSpec
-                { spec
-                    | tag = TagProjects
-                    , name = "projects"
-                    , lens = Lenses.currentSubProjects
-                    , displayName = "Projects"
-                }

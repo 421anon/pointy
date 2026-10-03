@@ -20,11 +20,6 @@
         version = "1.0.1";
       };
 
-      "annaghi/dnd-list" = {
-        sha256 = "0pmnyiz1b0si8yip6wmixlybgxa8gnh3zwdpbxgq2zqwp7jx52xs";
-        version = "6.0.1";
-      };
-
       "basti1302/elm-human-readable-filesize" = {
         sha256 = "182hjyji8hj5zzn81f676p83fa15dxq5fgqq9li384qk33m5sh05";
         version = "1.2.0";

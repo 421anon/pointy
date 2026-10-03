@@ -18,8 +18,8 @@ import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
 import Handlers.Presets (getPresetsHandler)
-import Handlers.ProjectEntities (applyChildChangesHandler, assignRecordHandler, batchAddChildrenHandler)
-import Handlers.Projects (batchUpdateProjectsHandler, deleteProjectHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
+import Handlers.ProjectReads (projectRollupHandler, unfiledHandler)
+import Handlers.Projects (batchProjectOpsHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (jobEndedHandler, restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
@@ -59,13 +59,11 @@ server =
         :<|> createSrcFileHandler
         :<|> deleteSrcFileHandler
         :<|> getProjectsHandler
+        :<|> unfiledHandler
+        :<|> projectRollupHandler
         :<|> postProjectHandler
         :<|> patchProjectHandler
-        :<|> batchUpdateProjectsHandler
-        :<|> deleteProjectHandler
-        :<|> assignRecordHandler
-        :<|> batchAddChildrenHandler
-        :<|> applyChildChangesHandler
+        :<|> batchProjectOpsHandler
         :<|> stepStatusStreamHandler
         :<|> projectStatusHandler
         :<|> getStepConfigHandler
@@ -172,14 +170,7 @@ corsPolicy req = case pathInfo req of
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
-    ["project-entities"] ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["POST", "OPTIONS"]
+                , corsMethods = ["GET", "POST", "PATCH", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     ["commit-hash"] ->

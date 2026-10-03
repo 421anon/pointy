@@ -10,6 +10,7 @@ module BuildStatus (
     partitionImmediateStatuses,
     resolveStatuses,
     resolveStepStatus,
+    stepStatusNames,
 ) where
 
 import BuildLog (LogAccess (..), ResolvedLog (..), isStorePath, lastMeaningfulLine, lookupDeriver, resolveBuildLog, validPaths)
@@ -28,6 +29,9 @@ data StepPaths = StepPaths
     , stepOutput :: FilePath
     }
     deriving (Eq, Show)
+
+stepStatusNames :: [Text]
+stepStatusNames = ["not-started", "running", "success", "failure", "built-not-certified", "certification-failed"]
 
 instance FromJSON StepPaths where
     parseJSON = withObject "StepPaths" $ \o -> StepPaths <$> o .: "certificate" <*> o .: "output"

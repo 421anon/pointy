@@ -1,9 +1,7 @@
 module Api.Api exposing
     ( AutocompleteRequest
     , SeekAnchor(..)
-    , applyChildChanges
-    , batchAssignRecordsToProject
-    , childChangesUrl
+    , batchProjectsUrl
     , createProject
     , createSrcFile
     , createStep
@@ -17,6 +15,7 @@ module Api.Api exposing
     , fetchNotices
     , fetchPresets
     , fetchProjectReviews
+    , fetchProjectRollup
     , fetchProjects
     , fetchScratchListing
     , fetchScratchRoot
@@ -25,7 +24,9 @@ module Api.Api exposing
     , fetchSrcFileSeek
     , fetchStepConfig
     , fetchStepLog
+    , fetchUnfiled
     , fetchUserRepoInfo
+    , postTreeOps
     , refreshProjectStatus
     , removeReview
     , reviewDiffUrl
@@ -51,7 +52,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, ChildChanges, ChildKind, DirectoryItem, FileChunk, Notice, ProjectRecord, ReviewDraft, ReviewReport, ScratchListing, StepRecord)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp, UnfiledData)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -132,7 +133,6 @@ srcFileRawUrl id commit filePath =
     appendCommitQuery ("/backend/src-files/raw?id=" ++ String.fromInt id ++ "&path=" ++ String.join "/" filePath) commit
 
 
-
 stepFileBundleUrl : Int -> String -> List String -> String
 stepFileBundleUrl stepId commit filePath =
     UrlBuilder.absolute ([ "backend", "step-files", "bundle", String.fromInt stepId, commit ] ++ filePath) []
@@ -204,6 +204,15 @@ fetchProjectReviews projectId commit =
             }
 
 
+fetchProjectRollup : Int -> Maybe String -> Flow s (Result Http.Error ProjectRollup)
+fetchProjectRollup projectId commit =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery ("/backend/project-rollup?project_id=" ++ String.fromInt projectId) commit
+            , expect = Http.expectJson identity Decode.projectRollup
+            }
+
+
 reviewStep : ReviewDraft -> Maybe String -> Flow s (Result Http.Error Bool)
 reviewStep draft commit =
     Flow.lift <|
@@ -226,13 +235,13 @@ removeReview id =
     request "DELETE" ("/backend/step-review?id=" ++ String.fromInt id) Http.emptyBody
 
 
-createProject : Presets -> StepConfig -> Int -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
-createProject presets stepConfig parentId record =
+createProject : StepConfig -> Int -> ProjectRecord -> Flow s (Result Http.Error ProjectRecord)
+createProject stepConfig parentId record =
     Flow.lift <|
         Http.post
             { url = UrlBuilder.absolute [ "backend", "projects" ] [ UrlBuilder.int "parent_id" parentId ]
             , body = Http.jsonBody <| Encode.projectRecord record
-            , expect = Http.expectJson identity (Decode.projectRecord presets stepConfig)
+            , expect = Http.expectJson identity (Json.Decode.map .record (Decode.projectDecode stepConfig))
             }
 
 
@@ -310,12 +319,21 @@ wrapScratch stepId path =
         (Http.jsonBody (Json.Encode.object [ ( "path", Json.Encode.string path ) ]))
 
 
-fetchProjects : Maybe String -> Presets -> StepConfig -> Flow s (Result Http.Error (Dict String ProjectRecord))
-fetchProjects commit presets stepConfig =
+fetchProjects : Maybe String -> StepConfig -> Flow s (Result Http.Error (Dict Int Decode.ProjectDecode))
+fetchProjects commit stepConfig =
     Flow.lift <|
         Http.get
             { url = appendCommitQuery "/backend/projects" commit
-            , expect = Http.expectJson identity <| Json.Decode.dict <| Decode.projectRecord presets stepConfig
+            , expect = Http.expectJson identity (Decode.projectDecodes stepConfig)
+            }
+
+
+fetchUnfiled : Maybe String -> StepConfig -> Flow s (Result Http.Error UnfiledData)
+fetchUnfiled commit stepConfig =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery "/backend/unfiled" commit
+            , expect = Http.expectJson identity (Decode.unfiledData stepConfig)
             }
 
 
@@ -364,24 +382,14 @@ fetchCommitHash =
             }
 
 
-batchAssignRecordsToProject : Int -> ChildKind -> List Int -> Flow s (Result Http.Error ())
-batchAssignRecordsToProject projectId kind recordIds =
-    let
-        url =
-            "/backend/project-entities/batch?project_id="
-                ++ String.fromInt projectId
-    in
-    request "POST" url (Http.jsonBody (Json.Encode.list (Encode.childRef kind) recordIds))
+batchProjectsUrl : String
+batchProjectsUrl =
+    "/backend/projects/batch"
 
 
-childChangesUrl : Int -> String
-childChangesUrl projectId =
-    "/backend/project-entities/changes?project_id=" ++ String.fromInt projectId
-
-
-applyChildChanges : Int -> ChildChanges -> Flow s (Result Http.Error ())
-applyChildChanges projectId changes =
-    request "POST" (childChangesUrl projectId) (Http.jsonBody (Encode.childChanges changes))
+postTreeOps : List TreeOp -> Flow s (Result Http.Error ())
+postTreeOps ops =
+    request "POST" batchProjectsUrl (Http.jsonBody (Encode.treeOps ops))
 
 
 runStep : Int -> Maybe String -> Flow s (Result Http.Error ())

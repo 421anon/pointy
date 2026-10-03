@@ -1,13 +1,13 @@
-module View.Project exposing (..)
+module View.Project exposing (viewCurrentProject)
 
 import Accessors exposing (get, has, try)
-import Api.ApiData as ApiData exposing (ApiData(..), success)
+import Api.ApiData as ApiData exposing (ApiData(..))
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
 import Model.Core exposing (Model)
-import Model.Lenses exposing (currentProject, currentProjectPath, projects, records, stepConfig)
+import Model.Lenses exposing (currentProject, currentProjectPath, projects, stepConfig)
 import Route
 import View.Shadow exposing (viewProject)
 
@@ -32,7 +32,7 @@ viewCurrentProject model =
                 |> Maybe.withDefault (Html.span [ class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading project..." ])
 
         Error _ ->
-            if try currentProjectPath model == Just [] && has (projects << records << success) model then
+            if try currentProjectPath model == Just [] && has (projects << ApiData.success) model then
                 viewRootProjectMissing
 
             else

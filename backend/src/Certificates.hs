@@ -7,6 +7,9 @@
 module Certificates (
     getProjectCertificates,
     getStepCertificate,
+    getStepCertificates,
+    projectSchemaVersion,
+    schemaVersionWithKeys,
     evalProjectDefinitions,
     evalProjectDefinition,
     evaluatedProjectStepIds,
@@ -132,6 +135,21 @@ scheduleRefreshIfMissing commit keys = do
     when (not settled) $ do
         stored <- mapM lookupCertificate keys
         when (any isNothing stored) $ scheduleCertificateRefresh commit
+
+getStepCertificates :: (Eval :> es, IOE :> es) => [Int] -> Text -> Eff es (Either String (Map Int StepPaths))
+getStepCertificates stepIds targetCommit = runExceptT $ do
+    ctx <- prepareCommit targetCommit
+    let ids = Set.toList (Set.fromList stepIds)
+    keys <- resolveKeys ctx ids
+    let known = [(sid, key) | (sid, Just key) <- Map.toList keys]
+    liftIO $ scheduleRefreshIfMissing targetCommit (map snd known)
+    paths <- resolveCertificates ctx known
+    pure $
+        Map.union paths $
+            Map.fromList [(sid, StepPaths invalidCertificate invalidCertificate) | sid <- ids, Map.notMember sid paths]
+
+projectSchemaVersion :: (Eval :> es, IOE :> es) => ReadRepoContext -> Eff es Int
+projectSchemaVersion ctx = either (const 0) id <$> runExceptT (runJson ctx "#pointy" schemaVersionExpression)
 
 getStepCertificate :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Maybe StepPaths))
 getStepCertificate sid targetCommit = runExceptT $ do
