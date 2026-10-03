@@ -37,6 +37,7 @@
 
   --focus-ring: rgba(107, 182, 227, 0.3);
   --code-selection-bg: rgba(9, 105, 218, 0.34);
+  --diff-added-bg: rgba(46, 160, 67, 0.16);
 
   --font-size-md: 16px;
   --font-size-sm: 12px;
@@ -102,6 +103,7 @@
   --link: var(--color-blue-400);
   --focus-ring: rgba(9, 105, 218, 0.4);
   --code-selection-bg: rgba(5, 80, 174, 0.22);
+  --diff-added-bg: #dafbe1;
 
   --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.06);
   --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.1);

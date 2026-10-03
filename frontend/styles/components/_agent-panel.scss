@@ -635,7 +635,7 @@
 }
 
 .agent-panel__changeset-file > .is-added {
-  background: color-mix(in srgb, var(--state-success) 16%, transparent);
+  background: var(--diff-added-bg);
 }
 
 .agent-panel__changeset-file > .is-removed {
