@@ -482,17 +482,6 @@ type alias UserRepoInfo =
     }
 
 
-type alias AgentPreparedApply =
-    { targetHead : String
-    , agentHead : String
-    , candidateHead : String
-    , candidateWorktree : String
-    }
-
-
-
-
-
 type alias SessionTimestamp =
     { posix : Time.Posix
     , nanos : Int
@@ -514,7 +503,6 @@ type alias AgentSession =
     , baseCommit : String
     , worktreePath : String
     , status : String
-    , preparedApply : Maybe AgentPreparedApply
     , activeTurnId : Maybe String
     , lastError : Maybe String
     , updatedAt : SessionTimestamp
@@ -602,13 +590,6 @@ chatNameMaxLength =
     80
 
 
-type alias AgentApplyView =
-    { sessionView : AgentSessionView
-    , invalidatedProjectIds : List Int
-    , invalidatedStepIds : List Int
-    }
-
-
 type ChatTurnStatus
     = ChatPending
     | ChatDone
@@ -625,8 +606,9 @@ type alias ChatTurn =
 
 
 type ChatChangesetState
-    = ChatChangesetProposed
-    | ChatChangesetNeedsReview String
+    = ChatChangesetPending
+    | ChatChangesetApplying
+    | ChatChangesetConflicted String
     | ChatChangesetRejected String
     | ChatChangesetApplied
     | ChatChangesetDiscarded
@@ -642,17 +624,6 @@ type alias ChatChangeset =
 type ChatEntry
     = ChatTurnEntry ChatTurn
     | ChatChangesetEntry ChatChangeset
-
-
-type ChangesetOperationKind
-    = ApplyingChangeset
-    | DiscardingChangeset
-
-
-type alias ChangesetOperation =
-    { sessionId : String
-    , kind : ChangesetOperationKind
-    }
 
 
 type alias AgentSessionNameEdit =
@@ -707,6 +678,7 @@ type alias AgentLiveTurn =
     , pendingQuestion : Maybe PendingQuestion
     , streamError : Maybe String
     , pendingSteer : Maybe String
+    , applying : Maybe String
     }
 
 
@@ -719,6 +691,7 @@ liveTurnFor turnId view =
     , pendingQuestion = persistedQuestion view
     , streamError = Nothing
     , pendingSteer = Nothing
+    , applying = Nothing
     }
 
 
@@ -736,7 +709,6 @@ type alias AgentState =
     , isSessionListOpen : Bool
     , isFocusMode : Bool
     , showArchived : Bool
-    , changesetOperation : Maybe ChangesetOperation
     , request : Maybe AgentRequest
     , sessionNameEdit : Maybe AgentSessionNameEdit
     , sessionRenames : Dict String ( String, SessionTimestamp )
@@ -756,7 +728,6 @@ initAgentState =
     , isSessionListOpen = False
     , isFocusMode = False
     , showArchived = False
-    , changesetOperation = Nothing
     , request = Nothing
     , sessionNameEdit = Nothing
     , sessionRenames = Dict.empty
@@ -769,7 +740,6 @@ initAgentState =
 agentMutationPending : AgentState -> Bool
 agentMutationPending agentState =
     (agentState.request /= Nothing)
-        || (agentState.changesetOperation /= Nothing)
         || (agentState.sessionNameEdit
                 |> Maybe.map .saving
                 |> Maybe.withDefault False
@@ -805,6 +775,7 @@ ingestLiveChunk chunk live =
         , entries = List.foldl appendChatLine live.entries keptLines
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
+        , applying = List.foldl applyingDiffAfterLine live.applying keptLines
         , streamError = Nothing
     }
 
@@ -905,17 +876,20 @@ changesetFromLifecycleTurn turn =
 defaultChangesetDescription : ChatChangesetState -> String
 defaultChangesetDescription state =
     case state of
-        ChatChangesetProposed ->
-            "Review this changeset, then apply it to the target branch or discard it."
+        ChatChangesetPending ->
+            "These changes are not applied yet. They are applied when the agent next finishes a turn."
 
-        ChatChangesetNeedsReview _ ->
-            "This changeset conflicts with newer changes. The agent resolves the conflict when you apply; apply again to retry, or discard the changeset."
+        ChatChangesetApplying ->
+            "Applying the agent's changes."
+
+        ChatChangesetConflicted _ ->
+            "This changeset was not applied because it conflicts with newer changes. Your next message sends the conflicts below to the agent so it can resolve them."
 
         ChatChangesetRejected _ ->
             "This changeset was not applied because it introduces evaluation failures. Your next message sends the failures below to the agent so it can fix them."
 
         ChatChangesetApplied ->
-            "This changeset was applied. You can continue the conversation from the applied state."
+            "This changeset was applied."
 
         ChatChangesetDiscarded ->
             "This changeset was discarded. No changes were applied."
@@ -940,6 +914,11 @@ parseChangesetLog logText =
 changesetDiffMarker : String
 changesetDiffMarker =
     "[system] changeset-diff"
+
+
+changesetApplyingMarker : String
+changesetApplyingMarker =
+    "[system] changeset-applying"
 
 
 splitChangesetDiffMarker : List String -> ( List String, List String )
@@ -1140,6 +1119,17 @@ pendingQuestionDecoder =
 isTurnFinishedLine : String -> Bool
 isTurnFinishedLine =
     String.startsWith "Agent turn finished with exit code "
+
+
+applyingDiffAfterLine : String -> Maybe String -> Maybe String
+applyingDiffAfterLine rawLine applying =
+    if String.startsWith changesetApplyingMarker rawLine then
+        Decode.decodeString Decode.string (String.dropLeft (String.length changesetApplyingMarker) rawLine)
+            |> Result.withDefault ""
+            |> Just
+
+    else
+        applying
 
 
 splitOnLastNewline : String -> ( String, String )

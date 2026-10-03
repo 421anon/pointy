@@ -18,7 +18,7 @@ module Agent.Runner (
     watchTurnBudget,
 ) where
 
-import Agent.Git (AgentSessionView, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Git (AgentSessionView, applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
 import Agent.Policy (promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sessionPaths)
 import Agent.Session (
@@ -521,7 +521,7 @@ questionOpen input = withMVar input (return . maybe False (isJust . inputQuestio
 noteDiscardedConflict :: AgentConfig -> FilePath -> AgentSession -> AgentSession -> IO ()
 noteDiscardedConflict cfg logPath before after =
     when (maybe False applyConflictsPending (preparedApply before) && isNothing (preparedApply after)) $
-        appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; apply again to rebuild it."
+        appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; the next apply merges the changeset again."
 
 seedPiConfig :: FilePath -> IO ()
 seedPiConfig runnerHome = do
@@ -941,7 +941,7 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
     case finishResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
         Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
-        Right (Right _) -> return ()
+        Right (Right _) -> when (finalStatus == "succeeded") $ applyTurnChanges cfg turn
     now <- getCurrentTime
     let finalTurn = turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}
     saveResult <- try (saveTurn finalTurn) :: IO (Either SomeException ())
@@ -949,6 +949,15 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Turn finalization error: " <> T.pack (show ex))
         Right _ -> return ()
     unregisterTurnSignal (turnLogPath turn)
+
+applyTurnChanges :: AgentConfig -> AgentTurn -> IO ()
+applyTurnChanges cfg turn = do
+    result <- try (withUserRepoExclusiveIO (applyAgentChanges announce (turnSessionId turn))) :: IO (Either SomeException (Either String ()))
+    either (logFailure . displayException) (either logFailure return) result
+  where
+    logSystem = appendLogLine cfg (turnLogPath turn) "system"
+    announce = logSystem . ("changeset-applying " <>) . jsonLine
+    logFailure = logSystem . ("Apply failed: " <>) . T.pack
 
 finalizeWithRetry :: AgentConfig -> AgentTurn -> Int -> IO (Either SomeException a) -> IO (Either SomeException a)
 finalizeWithRetry cfg turn attempt runAttempt = do

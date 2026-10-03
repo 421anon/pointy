@@ -539,17 +539,18 @@
   border: 1px solid var(--line-color);
   border-radius: 10px;
   background: var(--bg-secondary);
-  &.is-proposed {
-    border-color: var(--state-info);
-    background: var(--state-info-outline);
+  &.is-pending {
+    border-style: dashed;
   }
 
-  &.is-needs-review {
+  &.is-applying {
     border-color: var(--state-warning);
     background: var(--state-warning-outline);
   }
 
-  &.is-rejected {
+  &.is-conflicted,
+  &.is-rejected,
+  &.is-discarded {
     border-color: var(--state-danger);
     background: var(--state-danger-outline);
   }
@@ -557,16 +558,6 @@
   &.is-applied {
     border-color: var(--state-success);
     background: var(--state-success-outline);
-  }
-
-  &.is-discarded {
-    border-color: var(--state-danger);
-    background: var(--state-danger-outline);
-  }
-
-  &.is-loading {
-    border-color: var(--state-warning);
-    background: var(--state-warning-outline);
   }
 }
 
@@ -677,17 +668,6 @@
 .agent-panel__changeset-tag {
   color: var(--text-muted);
   font-weight: 400;
-}
-
-.agent-panel__changeset-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs);
-}
-
-.agent-panel__changeset-actions .small-btn,
-.agent-panel__changeset-actions .small-btn:disabled {
-  background: var(--bg-elevated);
 }
 
 .agent-panel__chat-turn {

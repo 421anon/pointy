@@ -932,6 +932,11 @@ pendingSteer =
     lens ".pendingSteer" .pendingSteer (\t steer -> { t | pendingSteer = steer })
 
 
+applying : Lens ls { a | applying : b } b x y
+applying =
+    lens ".applying" .applying (\t applying_ -> { t | applying = applying_ })
+
+
 sessionAt : String -> Traversal AgentState AgentSessionSummary x y
 sessionAt sessionId =
     sessions << orElseT success ApiData.reloading << by (.session >> .sessionId) sessionId
