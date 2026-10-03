@@ -19,6 +19,7 @@ module Agent.Git (
     refreshSessionBase,
     applyAgentChanges,
     discardStaleApplyConflict,
+    findReviewedSteps,
     finalizeApplyResolution,
     getAgentUsage,
     sweepStaleRunningSessions,
@@ -54,7 +55,7 @@ import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
-import Control.Monad (filterM, mfilter, unless, void, when)
+import Control.Monad (filterM, mfilter, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON)
@@ -312,13 +313,14 @@ applyPendingChanges announce sid = do
         fetchRepoStrict
         repoPath <- liftIO userRepoPath
         targetHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+        dropped <- dropReviewedStepChanges repoPath targetHead_ session_
         agentHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (agentBranch session_)]
         current <- maybe (return False) (candidateCurrent targetHead_ agentHead_) (preparedApply session_)
         prepared <-
             if current
                 then return (preparedApply session_)
                 else mergeCandidate repoPath session_ targetHead_ agentHead_
-        mapM_ (pushCandidate repoPath session_) (mfilter (not . applyConflictsPending) prepared)
+        mapM_ (pushCandidate repoPath session_ dropped) (mfilter (not . applyConflictsPending) prepared)
 
 candidateCurrent :: Text -> Text -> PreparedApply -> ExceptT String IO Bool
 candidateCurrent targetHead_ agentHead_ candidate
@@ -380,7 +382,7 @@ rejectCandidate repoPath session_ candidate failures = do
                 ++ T.unpack (targetBranch session_)
                 ++ " at "
                 ++ T.unpack (shortCommit (targetHead candidate))
-                ++ " introduces evaluation failures: "
+                ++ ": "
                 ++ intercalate "; " (lines failures)
         removeWorktreeIfExists repoPath (candidateWorktree candidate)
     saveSessionUpdate session_{status = "evaluation_failed", preparedApply = Nothing, lastError = Just (T.pack failures)}
@@ -447,17 +449,18 @@ fileHasConflictMarkers worktree path = do
   where
     conflictMarkerBytes = ["<<<<<<<", "=======", ">>>>>>>"] :: [BS.ByteString]
 
-pushCandidate :: FilePath -> AgentSession -> PreparedApply -> ExceptT String IO ()
-pushCandidate repoPath session_ candidate = do
-    changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", changesetRange]
+pushCandidate :: FilePath -> AgentSession -> [Int] -> PreparedApply -> ExceptT String IO ()
+pushCandidate repoPath session_ dropped candidate = do
+    changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", "--no-renames", changesetRange]
     let stepIds = nub (mapMaybe appliedStepId changedPaths)
-    verdict <- liftIO $ verifyCandidate repoPath candidate stepIds
+    reviewed <- reviewedSteps repoPath (targetHead candidate) stepIds
+    verdict <-
+        if null reviewed
+            then liftIO $ verifyCandidate repoPath candidate stepIds
+            else return (Left (reviewedStepsError reviewed))
     case verdict of
         Left failures -> rejectCandidate repoPath session_ candidate failures
         Right () -> do
-            reviews <- ExceptT $ runProduction $ runExceptT $ readableStepReviews (ReadRepoContext repoPath (T.unpack (targetHead candidate))) stepIds
-            let reviewedSteps = Map.keys (Map.filter isJust reviews)
-            unless (null reviewedSteps) $ throwError (reviewedStepsError reviewedSteps)
             cfg <- liftIO $ resolveConfigPath >>= loadConfig
             changesetDiff <- runGitChecked repoPath ["diff", changesetRange]
             pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile (configUserRepo cfg)) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
@@ -471,7 +474,7 @@ pushCandidate repoPath session_ candidate = do
                     liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) (nub (mapMaybe appliedProjectId changedPaths)) stepIds
                     appendAppliedTurn
                         (sessionId session_)
-                        ("Applied to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ".")
+                        (T.unwords (("Applied to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ".") : [droppedStepsNote dropped | not (null dropped)]))
                         changesetDiff
                     saveSessionUpdate
                         session_
@@ -486,8 +489,36 @@ pushCandidate repoPath session_ candidate = do
     changesetRange = T.unpack (targetHead candidate) ++ ".." ++ candidateSha
 
 reviewedStepsError :: [Int] -> String
-reviewedStepsError stepIds =
-    "Reviewed steps cannot be changed: " ++ intercalate ", " (map (("step " ++) . show) stepIds) ++ "."
+reviewedStepsError stepIds = "Reviewed steps cannot be changed: " ++ stepList stepIds ++ "."
+
+droppedStepsNote :: [Int] -> Text
+droppedStepsNote stepIds = "Changes to reviewed steps were left out: " <> T.pack (stepList stepIds) <> "."
+
+stepList :: [Int] -> String
+stepList = intercalate ", " . map (("step " ++) . show)
+
+reviewedSteps :: FilePath -> Text -> [Int] -> ExceptT String IO [Int]
+reviewedSteps repoPath commit stepIds =
+    Map.keys . Map.filter isJust <$> ExceptT (runProduction (runExceptT (readableStepReviews (ReadRepoContext repoPath (T.unpack commit)) stepIds)))
+
+findReviewedSteps :: AgentSession -> ExceptT String IO [Int]
+findReviewedSteps session_ = do
+    repoPath <- liftIO userRepoPath
+    target <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+    (_, matches, _) <- liftIO $ runGitIn repoPath ["grep", "-l", "-F", "reviewedRevision", T.unpack target, "--", "steps"]
+    reviewedSteps repoPath target (mapMaybe (appliedStepId <=< T.stripPrefix (target <> ":")) (T.lines (T.pack matches)))
+
+dropReviewedStepChanges :: FilePath -> Text -> AgentSession -> ExceptT String IO [Int]
+dropReviewedStepChanges repoPath target session_ = do
+    changed <- T.lines <$> runGitChecked worktree ["diff", "--name-only", "--no-renames", base, "HEAD"]
+    reviewed <- reviewedSteps repoPath target (nub (mapMaybe appliedStepId changed))
+    unless (null reviewed) $ do
+        _ <- runGitChecked worktree (["restore", "--source", base, "--staged", "--worktree", "--"] ++ [T.unpack path | path <- changed, maybe False (`elem` reviewed) (appliedStepId path)])
+        void $ runGitChecked worktree ["commit", "-m", agentCommitSubject "Agent" session_ (Just "Leave out changes to reviewed steps")]
+    pure reviewed
+  where
+    worktree = worktreePath session_
+    base = T.unpack (baseCommit session_)
 
 resetWorktree :: FilePath -> Text -> ExceptT String IO ()
 resetWorktree worktree commit =
@@ -503,6 +534,7 @@ appendAppliedTurn sid body changesetDiff = do
                 { turnId = tid
                 , turnSessionId = sid
                 , turnPrompt = "Apply proposed changeset"
+                , turnAutomatic = False
                 , turnStatus = "succeeded"
                 , turnExitCode = Just 0
                 , turnStartedAt = now

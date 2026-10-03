@@ -193,6 +193,7 @@ turnDecoder =
         |> required "turnId" Decode.string
         |> required "turnSessionId" Decode.string
         |> optional "turnPrompt" Decode.string ""
+        |> optional "turnAutomatic" Decode.bool False
         |> required "turnStatus" Decode.string
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
         |> required "turnLogPath" Decode.string

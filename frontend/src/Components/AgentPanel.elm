@@ -597,7 +597,7 @@ viewSession mentionsAwaited mentionSources agent summary sessionView =
     in
     viewChatBody []
         { title = viewSessionTitle agent summary
-        , error = Html.viewIf (Maybe.andThen (.state >> changesetError) changeset == Nothing) (viewError session)
+        , error = Html.viewIf (not runnerActive && not (changesetRefused changeset)) (viewError session)
         , chat =
             if mentionsAwaited then
                 viewChatSkeletonBody
@@ -776,17 +776,9 @@ viewError session =
     Html.viewMaybe (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text err ]) session.lastError
 
 
-changesetError : Model.ChatChangesetState -> Maybe String
-changesetError state =
-    case state of
-        Model.ChatChangesetConflicted err ->
-            Just err
-
-        Model.ChatChangesetRejected err ->
-            Just err
-
-        _ ->
-            Nothing
+changesetRefused : Maybe Model.ChatChangeset -> Bool
+changesetRefused changeset =
+    List.member (Maybe.map .state changeset) [ Just Model.ChatChangesetConflicted, Just Model.ChatChangesetRejected ]
 
 
 type ComposerBusy
@@ -996,22 +988,26 @@ viewChatTurn mentionSources sessionId isHighlighted turn =
             ]
             :: turnIdAttribute turn
         )
-        [ Html.div [ class "agent-panel__chat-message agent-panel__chat-message--user" ]
-            [ Html.div [ class "agent-panel__chat-label" ]
-                [ if String.isEmpty turn.turnId then
-                    Html.text "You"
+        [ Html.viewMaybe
+            (\prompt ->
+                Html.div [ class "agent-panel__chat-message agent-panel__chat-message--user" ]
+                    [ Html.div [ class "agent-panel__chat-label" ]
+                        [ if String.isEmpty turn.turnId then
+                            Html.text "You"
 
-                  else
-                    Html.a
-                        [ class "agent-panel__chat-permalink"
-                        , Html.Attributes.href (Route.chatHref { sessionId = sessionId, mTurnId = Just turn.turnId })
-                        , title "Link to this message"
+                          else
+                            Html.a
+                                [ class "agent-panel__chat-permalink"
+                                , Html.Attributes.href (Route.chatHref { sessionId = sessionId, mTurnId = Just turn.turnId })
+                                , title "Link to this message"
+                                ]
+                                [ Html.text "You" ]
                         ]
-                        [ Html.text "You" ]
-                ]
-            , Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ]
-                [ Html.text turn.prompt ]
-            ]
+                    , Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ]
+                        [ Html.text prompt ]
+                    ]
+            )
+            turn.prompt
         , viewAgentMessage mentionSources turn
         ]
 
@@ -1185,10 +1181,10 @@ unappliedState : Model.AgentSession -> Model.ChatChangesetState
 unappliedState session =
     case session.status of
         "prepare_conflict" ->
-            Model.ChatChangesetConflicted (Maybe.withDefault "The changeset conflicts with newer changes." session.lastError)
+            Model.ChatChangesetConflicted
 
         "evaluation_failed" ->
-            Model.ChatChangesetRejected (Maybe.withDefault "The changeset introduces evaluation failures." session.lastError)
+            Model.ChatChangesetRejected
 
         _ ->
             Model.ChatChangesetPending
@@ -1208,10 +1204,10 @@ viewChangesetBox changeset =
                 Model.ChatChangesetApplying ->
                     ( "is-applying", "Applying" )
 
-                Model.ChatChangesetConflicted _ ->
+                Model.ChatChangesetConflicted ->
                     ( "is-conflicted", "Conflict" )
 
-                Model.ChatChangesetRejected _ ->
+                Model.ChatChangesetRejected ->
                     ( "is-rejected", "Not applied" )
 
                 Model.ChatChangesetApplied ->
@@ -1226,10 +1222,10 @@ viewChangesetBox changeset =
             , Html.Lazy.lazy viewChangesetTotals diff
             , Html.span [ class "agent-panel__changeset-status" ] [ Html.text statusLabel ]
             ]
-        , Html.p [ class "agent-panel__changeset-description" ] [ Html.text changeset.description ]
+        , Html.viewIf (not (String.isEmpty changeset.description))
+            (Html.p [ class "agent-panel__changeset-description" ] [ Html.text changeset.description ])
         , Html.viewIf (not (String.isEmpty diff))
             (Html.Lazy.lazy viewChangesetDiff diff)
-        , Html.viewMaybe (\err -> Html.pre [ class "agent-panel__changeset-error" ] [ Html.text err ]) (changesetError changeset.state)
         ]
 
 

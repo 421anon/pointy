@@ -521,6 +521,7 @@ type alias AgentTurn =
     { turnId : String
     , turnSessionId : String
     , turnPrompt : String
+    , turnAutomatic : Bool
     , turnStatus : String
     , turnExitCode : Maybe Int
     , turnLogPath : String
@@ -599,7 +600,7 @@ type ChatTurnStatus
 
 type alias ChatTurn =
     { turnId : String
-    , prompt : String
+    , prompt : Maybe String
     , assistant : String
     , status : ChatTurnStatus
     }
@@ -608,8 +609,8 @@ type alias ChatTurn =
 type ChatChangesetState
     = ChatChangesetPending
     | ChatChangesetApplying
-    | ChatChangesetConflicted String
-    | ChatChangesetRejected String
+    | ChatChangesetConflicted
+    | ChatChangesetRejected
     | ChatChangesetApplied
     | ChatChangesetDiscarded
 
@@ -827,11 +828,14 @@ appendPersistedTurn turn entries =
     else
         let
             prompt =
-                if String.isEmpty (String.trim turn.turnPrompt) then
-                    "Prompt unavailable"
+                if turn.turnAutomatic then
+                    Nothing
+
+                else if String.isEmpty (String.trim turn.turnPrompt) then
+                    Just "Prompt unavailable"
 
                 else
-                    turn.turnPrompt
+                    Just turn.turnPrompt
 
             seeded =
                 entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
@@ -882,11 +886,11 @@ defaultChangesetDescription state =
         ChatChangesetApplying ->
             "Applying the agent's changes."
 
-        ChatChangesetConflicted _ ->
-            "This changeset was not applied because it conflicts with newer changes. Your next message sends the conflicts below to the agent so it can resolve them."
+        ChatChangesetConflicted ->
+            ""
 
-        ChatChangesetRejected _ ->
-            "This changeset was not applied because it introduces evaluation failures. Your next message sends the failures below to the agent so it can fix them."
+        ChatChangesetRejected ->
+            ""
 
         ChatChangesetApplied ->
             "This changeset was applied."
@@ -1002,7 +1006,7 @@ appendChatLine rawLine entries =
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
                     mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = ChatPending } ]
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, assistant = "", status = ChatPending } ]
 
                 Err _ ->
                     entries

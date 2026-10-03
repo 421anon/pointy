@@ -588,8 +588,7 @@
   color: var(--text-secondary);
 }
 
-.agent-panel__changeset-diff,
-.agent-panel__changeset-error {
+.agent-panel__changeset-diff {
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -602,11 +601,6 @@
   white-space: pre-wrap;
   font-family: monospace;
   font-size: var(--font-size-sm);
-}
-
-.agent-panel__changeset-error {
-  color: var(--text-primary);
-  border-color: var(--state-danger);
 }
 
 .agent-panel__changeset-count {

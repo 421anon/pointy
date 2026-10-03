@@ -118,6 +118,7 @@ data AgentTurn = AgentTurn
     { turnId :: Text
     , turnSessionId :: Text
     , turnPrompt :: Text
+    , turnAutomatic :: Bool
     , turnStatus :: Text
     , turnExitCode :: Maybe Int
     , turnStartedAt :: UTCTime
@@ -133,6 +134,7 @@ instance ToJSON AgentTurn where
             [ "turnId" .= turnId turn
             , "turnSessionId" .= turnSessionId turn
             , "turnPrompt" .= turnPrompt turn
+            , "turnAutomatic" .= turnAutomatic turn
             , "turnStatus" .= turnStatus turn
             , "turnExitCode" .= turnExitCode turn
             , "turnStartedAt" .= turnStartedAt turn
@@ -147,6 +149,7 @@ instance FromJSON AgentTurn where
             <$> obj .: "turnId"
             <*> obj .: "turnSessionId"
             <*> obj .:? "turnPrompt" .!= ""
+            <*> obj .:? "turnAutomatic" .!= False
             <*> obj .: "turnStatus"
             <*> obj .:? "turnExitCode"
             <*> obj .: "turnStartedAt"
