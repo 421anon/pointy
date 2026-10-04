@@ -212,9 +212,9 @@ stepForms =
     lens ".stepForms" Model.getStepForms (\(Model m) forms -> Model { m | stepForms = forms })
 
 
-stepFormsAt : String -> Traversal Model (Table StepRecord) x y
+stepFormsAt : String -> Lens ls Model (Table StepRecord) x y
 stepFormsAt typeName =
-    stepForms << Dict.Accessors.at typeName << just
+    stepForms << lens ("[" ++ typeName ++ "]") (Dict.get typeName >> Maybe.withDefault Model.initialTable) (\forms table -> Dict.insert typeName table forms)
 
 
 listingPreferences : Lens ls Model ListingPreferences x y

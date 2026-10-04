@@ -623,7 +623,7 @@ viewPendingStepForm model parentId stepConfig =
                         in
                         try (Lenses.stepFormsAt typeName << Lenses.edited << just) model
                             |> Maybe.filter (\record -> record.id == Nothing)
-                            |> Maybe.filter (\_ -> not (Maybe.withDefault False (try (Lenses.stepFormsAt typeName << Lenses.nameEditOnly) model)))
+                            |> Maybe.filter (\_ -> not (get (Lenses.stepFormsAt typeName << Lenses.nameEditOnly) model))
                             |> Maybe.map
                                 (\record ->
                                     let
@@ -633,7 +633,7 @@ viewPendingStepForm model parentId stepConfig =
                                     viewAddOrEditRecordForm model
                                         parentId
                                         spec
-                                        (try (Lenses.stepFormsAt typeName) model |> Maybe.withDefault Model.initialTable)
+                                        (get (Lenses.stepFormsAt typeName) model)
                                         { extraFields = [ viewStepExtraFormFields model readOnly typeName entry.stepType ]
                                         , noteInput = viewStepNoteField model readOnly typeName
                                         }
@@ -814,7 +814,7 @@ listingRow model parentId stepConfig presentTypes link =
                     try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model |> Maybe.andThen .id
 
                 isEditing =
-                    mEditedId == step.id && not (Maybe.withDefault False (try (Lenses.stepFormsAt step.type_ << Lenses.nameEditOnly) model))
+                    mEditedId == step.id && not (get (Lenses.stepFormsAt step.type_ << Lenses.nameEditOnly) model)
 
                 readOnly =
                     stepFormReadOnly model spec step
@@ -826,7 +826,7 @@ listingRow model parentId stepConfig presentTypes link =
                                 viewAddOrEditRecordForm model
                                     parentId
                                     spec
-                                    (try (Lenses.stepFormsAt step.type_) model |> Maybe.withDefault Model.initialTable)
+                                    (get (Lenses.stepFormsAt step.type_) model)
                                     { extraFields = [ viewStepExtraFormFields model readOnly step.type_ entry.stepType ]
                                     , noteInput = viewStepNoteField model readOnly step.type_
                                     }
@@ -838,7 +838,7 @@ listingRow model parentId stepConfig presentTypes link =
                 mInlineRename =
                     try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model
                         |> Maybe.filter (\edited -> edited.id == step.id)
-                        |> Maybe.filter (always (Maybe.withDefault False (try (Lenses.stepFormsAt step.type_ << Lenses.nameEditOnly) model)))
+                        |> Maybe.filter (always (get (Lenses.stepFormsAt step.type_ << Lenses.nameEditOnly) model))
                         |> Maybe.map
                             (\edited ->
                                 { value = edited.name

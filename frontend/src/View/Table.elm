@@ -990,11 +990,26 @@ viewStepRecordActions parentId link name entry stepConfig presentTypes page reco
                             in
                             case targetEntry.stepType of
                                 Derivation fields _ ->
-                                    fields
-                                        |> List.filterMap
-                                            (\f ->
-                                                prefill f.widget
-                                                    |> Maybe.map (viewQuickCreateButton targetEntry.icon label << Actions.addStepWithArg targetSpec f.name)
+                                    let
+                                        eligible =
+                                            fields
+                                                |> List.filterMap
+                                                    (\f ->
+                                                        prefill f.widget
+                                                            |> Maybe.map (\value -> ( f, value ))
+                                                    )
+
+                                        buttonLabel f =
+                                            if List.length eligible > 1 then
+                                                label ++ " (" ++ Maybe.withDefault f.name f.label ++ ")"
+
+                                            else
+                                                label
+                                    in
+                                    eligible
+                                        |> List.map
+                                            (\( f, value ) ->
+                                                viewQuickCreateButton targetEntry.icon (buttonLabel f) (Actions.addStepWithArg targetSpec f.name value)
                                             )
 
                                 FileUpload _ ->

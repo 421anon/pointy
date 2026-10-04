@@ -129,9 +129,22 @@ applyRoute forceRevealHighlight newRoute =
 
                     viewedCommitOf route_ =
                         try (Route.page << Route.viewedCommitT) route_
+
+                    resetTable table =
+                        let
+                            stashed =
+                                case ( viewedCommitOf currentRoute, table.edited ) of
+                                    ( Nothing, Just draft ) ->
+                                        set (draftAt draft.id) (Just draft) table
+
+                                    _ ->
+                                        table
+                        in
+                        { stashed | edited = Nothing, nameEditOnly = False, addMode = AddNew }
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute) (Flow.modify Selection.clear))
+                    |> Flow.seq (Flow.when (listingFolder currentRoute /= listingFolder newRoute) (Flow.over (stepForms << values) resetTable))
                     |> Flow.seq (Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute) (Flow.setAll projectRollups Dict.empty))
                     |> Flow.seq (Flow.when (pageTarget currentRoute /= pageTarget newRoute) Actions.resetPageScroll)
                     |> Flow.seq (Flow.when projectRoute (Actions.expandSidebarPath expandPath))
@@ -140,28 +153,6 @@ applyRoute forceRevealHighlight newRoute =
                             initializeWorkspace
 
                          else
-                            let
-                                mOldCommit =
-                                    try (route << Route.page << Route.viewedCommitT) model
-
-                                mNewCommit =
-                                    try (Route.page << Route.viewedCommitT) newRoute
-
-                                resetTable table =
-                                    let
-                                        stashed =
-                                            case ( mOldCommit, table.edited ) of
-                                                ( Nothing, Just draft ) ->
-                                                    set (draftAt draft.id) (Just draft) table
-
-                                                _ ->
-                                                    table
-                                    in
-                                    { stashed | edited = Nothing, nameEditOnly = False, addMode = AddNew }
-
-                                currentProjectIdOf =
-                                    Maybe.map Route.pathProjectId << try (Route.page << Route.project << projectPath)
-                            in
                             Flow.over projectForms resetTable
                                 |> Flow.seq (Flow.over (stepForms << values) resetTable)
                                 |> Flow.seq
@@ -174,9 +165,9 @@ applyRoute forceRevealHighlight newRoute =
                                 |> Flow.seq Actions.loadStepConfig
                                 |> Flow.seq Actions.loadPresets
                                 |> Flow.seq Actions.loadProjects
-                                |> Flow.when (mOldCommit /= mNewCommit)
+                                |> Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute)
                                 |> Flow.seq
-                                    (Flow.when (currentProjectIdOf newRoute /= currentProjectIdOf currentRoute)
+                                    (Flow.when (listingFolder newRoute /= listingFolder currentRoute)
                                         (Flow.async Actions.loadProjectReviews)
                                     )
                         )
