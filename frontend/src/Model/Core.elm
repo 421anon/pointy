@@ -1519,7 +1519,7 @@ type Model
         , runningStepIds : List Int
         , statusBarOpen : Bool
         , sidebarOpen : Bool
-        , sidebarScrolled : Bool
+        , sidebarScroll : SidebarScroll
         , sidebarExpanded : Set Int
         , projectRollups : Dict Int (ApiData ProjectRollup)
         , projectsRequest : Int
@@ -1658,9 +1658,9 @@ getSidebarOpen (Model model) =
     model.sidebarOpen
 
 
-getSidebarScrolled : Model -> Bool
-getSidebarScrolled (Model model) =
-    model.sidebarScrolled
+getSidebarScroll : Model -> SidebarScroll
+getSidebarScroll (Model model) =
+    model.sidebarScroll
 
 
 getSidebarExpanded : Model -> Set Int
@@ -1986,7 +1986,7 @@ initialModel key route flags =
         , runningStepIds = []
         , statusBarOpen = False
         , sidebarOpen = not flags.isNarrow
-        , sidebarScrolled = False
+        , sidebarScroll = { top = False, left = False, right = False }
         , sidebarExpanded = Set.empty
         , projectRollups = Dict.empty
         , projectsRequest = 0
@@ -1997,6 +1997,13 @@ initialModel key route flags =
 plainLineHeight : Int
 plainLineHeight =
     17
+
+
+type alias SidebarScroll =
+    { top : Bool
+    , left : Bool
+    , right : Bool
+    }
 
 
 type alias ScrollMetrics =

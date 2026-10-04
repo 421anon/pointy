@@ -70,7 +70,7 @@ body {
     border-bottom: 1px solid var(--line-color);
   }
 
-  .sidebar--scrolled & {
+  .sidebar--scrolled-top & {
     box-shadow: 0 6px 8px -6px rgba(0, 0, 0, 0.45);
   }
 }
@@ -82,8 +82,16 @@ body {
   letter-spacing: 0.04em;
 }
 
+.sidebar-scroller {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .sidebar-body {
   flex: 1;
+  min-width: 0;
   overflow: auto;
   padding: var(--spacing-xs) var(--spacing-2xs);
   display: flex;
@@ -93,6 +101,31 @@ body {
   > .sidebar-node {
     min-width: max-content;
   }
+}
+
+.sidebar-hint {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--spacing-md);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.sidebar-hint--left {
+  left: 0;
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0));
+}
+
+.sidebar-hint--right {
+  right: 0;
+  background: linear-gradient(to left, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0));
+}
+
+.sidebar--scrolled-left .sidebar-hint--left,
+.sidebar--scrolled-right .sidebar-hint--right {
+  opacity: 1;
 }
 
 .sidebar-row {

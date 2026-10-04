@@ -1046,9 +1046,9 @@ sidebarOpen =
     lens ".sidebarOpen" Model.getSidebarOpen (\(Model m) open -> Model { m | sidebarOpen = open })
 
 
-sidebarScrolled : Lens ls Model Bool x y
-sidebarScrolled =
-    lens ".sidebarScrolled" Model.getSidebarScrolled (\(Model m) scrolled -> Model { m | sidebarScrolled = scrolled })
+sidebarScroll : Lens ls Model Model.SidebarScroll x y
+sidebarScroll =
+    lens ".sidebarScroll" Model.getSidebarScroll (\(Model m) scroll -> Model { m | sidebarScroll = scroll })
 
 
 sidebarExpanded : Lens ls Model (Set Int) x y

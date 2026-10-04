@@ -12,7 +12,7 @@ import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord)
-import Model.Lenses exposing (currentProjectPath, listingPreferences, sidebarExpanded, sidebarOpen, sidebarScrolled)
+import Model.Lenses exposing (currentProjectPath, listingPreferences, sidebarExpanded, sidebarOpen, sidebarScroll)
 import Model.Selection
 import Route
 import Set exposing (Set)
@@ -27,8 +27,8 @@ view model =
         open =
             get sidebarOpen model
 
-        scrolled =
-            get sidebarScrolled model
+        scroll =
+            get sidebarScroll model
 
         expanded : Int -> Bool
         expanded nodeId =
@@ -47,7 +47,12 @@ view model =
         Just projects ->
             Html.aside
                 [ class "sidebar"
-                , classList [ ( "sidebar--open", open ), ( "sidebar--scrolled", scrolled ) ]
+                , classList
+                    [ ( "sidebar--open", open )
+                    , ( "sidebar--scrolled-top", scroll.top )
+                    , ( "sidebar--scrolled-left", scroll.left )
+                    , ( "sidebar--scrolled-right", scroll.right )
+                    ]
                 ]
                 [ Html.div [ class "sidebar-header" ]
                     [ Html.button
@@ -74,24 +79,38 @@ view model =
                         Html.span [ class "sidebar-title" ] [ Html.text "Navigation" ]
                     ]
                 , Html.viewIf open <|
-                    Html.div
-                        [ class "sidebar-body"
-                        , Html.Events.on "scroll" (scrolledChangeDecoder scrolled)
+                    Html.div [ class "sidebar-scroller" ]
+                        [ Html.div
+                            [ class "sidebar-body"
+                            , Html.Events.on "scroll" (scrollHintDecoder scroll)
+                            ]
+                            (viewNode model editable projects mCommit_ [] expanded rootLink)
+                        , Html.span [ class "sidebar-hint sidebar-hint--left" ] []
+                        , Html.span [ class "sidebar-hint sidebar-hint--right" ] []
                         ]
-                        (viewNode model editable projects mCommit_ [] expanded rootLink)
                 ]
 
 
-scrolledChangeDecoder : Bool -> Decode.Decoder (Flow Model ())
-scrolledChangeDecoder scrolled =
-    Decode.at [ "target", "scrollTop" ] Decode.float
+scrollHintDecoder : Model.SidebarScroll -> Decode.Decoder (Flow Model ())
+scrollHintDecoder previous =
+    Decode.map4
+        (\scrollTop scrollLeft clientWidth scrollWidth ->
+            { top = scrollTop > 0
+            , left = scrollLeft > 0
+            , right = scrollLeft + clientWidth < scrollWidth - 1
+            }
+        )
+        (Decode.at [ "target", "scrollTop" ] Decode.float)
+        (Decode.at [ "target", "scrollLeft" ] Decode.float)
+        (Decode.at [ "target", "clientWidth" ] Decode.float)
+        (Decode.at [ "target", "scrollWidth" ] Decode.float)
         |> Decode.andThen
-            (\scrollTop ->
-                if (scrollTop > 0) == scrolled then
+            (\hints ->
+                if hints == previous then
                     Decode.fail "unchanged"
 
                 else
-                    Decode.succeed (Actions.setSidebarScrolled (scrollTop > 0))
+                    Decode.succeed (Actions.setSidebarScroll hints)
             )
 
 
