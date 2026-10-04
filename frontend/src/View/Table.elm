@@ -1,4 +1,4 @@
-module View.Table exposing (ListingRow, actionsPopoverId, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
 
 import Accessors exposing (has, just, key, lens, set, try)
 import Actions
@@ -255,7 +255,8 @@ viewListing { model, scope, stepConfig, rows, header } =
                     []
                )
         )
-        [ Html.div [ class "listing-header" ]
+        [ Html.viewIf editable (View.Organize.viewActionBar model)
+        , Html.div [ class "listing-header" ]
             [ Html.div [ class "listing-header-title" ]
                 [ iconCustom True "folder_open" [ class "listing-header-icon" ]
                 , Html.span [ class "listing-content-header" ] [ Html.text "Contents" ]
@@ -270,7 +271,6 @@ viewListing { model, scope, stepConfig, rows, header } =
                     :: header
                 )
             ]
-        , Html.viewIf editable (View.Organize.viewActionBar model)
         , Html.div
             ([ class "listing-groups" ]
                 ++ (if editable then
@@ -466,17 +466,7 @@ viewRow model rowContext orderedRefs row =
                         [ iconCustom True "error" [] ]
 
         clickAttrs =
-            if rowContext.editable then
-                rowClickAttrs scope orderedRefs ref row.openRow
-
-            else
-                Maybe.unwrap []
-                    (\openRow ->
-                        [ Events.on "click"
-                            (Decode.field "target" (Decode.whenNotInside "listing-row-actions" openRow))
-                        ]
-                    )
-                    row.openRow
+            rowClickAttrs rowContext.editable scope orderedRefs ref row.openRow
 
         dragAttrs =
             if rowContext.editable then
@@ -516,11 +506,12 @@ viewRow model rowContext orderedRefs row =
                     []
                )
         )
-        [ Html.div
+        (Html.div
             ([ class "listing-row-header"
              , classList
                 [ ( "highlighted", isHighlighted )
                 , ( "listing-row-header--read-only", not rowContext.editable )
+                , ( "listing-row-header--openable", Maybe.isJust row.openRow )
                 ]
              ]
                 ++ dragHandleAttrs
@@ -551,28 +542,24 @@ viewRow model rowContext orderedRefs row =
                 , Html.Lazy.lazy2 viewMtimeBadge row.mTime (Model.getNow model)
                 ]
             ]
-        , row.form
-        , Html.div [] row.expanders
-        ]
+            :: row.form
+            :: row.expanders
+        )
 
 
-rowClickAttrs : Model.ListingScope -> List Model.ChildRef -> Model.ChildRef -> Maybe (Flow Model ()) -> List (Html.Attribute (Flow Model ()))
-rowClickAttrs scope orderedRefs ref mOpenRow =
+rowClickAttrs : Bool -> Model.ListingScope -> List Model.ChildRef -> Model.ChildRef -> Maybe (Flow Model ()) -> List (Html.Attribute (Flow Model ()))
+rowClickAttrs editable scope orderedRefs ref mOpenRow =
     [ Events.on "click"
-        (Decode.map2
-            (\_ mods ->
-                let
-                    select =
-                        Organize.clickRow scope orderedRefs mods.ctrl mods.shift ref
-                in
-                if mods.ctrl || mods.shift then
-                    select
+        (Decode.field "target" (Decode.whenNotInside "listing-row-actions" ())
+            |> Decode.andThen (\_ -> clickModsDecoder)
+            |> Decode.andThen
+                (\mods ->
+                    if editable && (mods.ctrl || mods.shift) then
+                        Decode.succeed (Organize.clickRow scope orderedRefs mods.shift ref)
 
-                else
-                    Maybe.unwrap select (\openRow -> Flow.seq select openRow) mOpenRow
-            )
-            (Decode.field "target" (Decode.whenNotInside "listing-row-actions" ()))
-            clickModsDecoder
+                    else
+                        Maybe.unwrap (Decode.fail "row has no open action") Decode.succeed mOpenRow
+                )
         )
     ]
 
@@ -646,7 +633,7 @@ viewStatusApiData tableName logState mRecordId status =
                         popoverId =
                             "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
                     in
-                    Html.span [ Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True )) ]
+                    Html.span [ class "status-log", Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True )) ]
                         [ Html.button
                             [ class "status-indicator-wrapper status-log-trigger"
                             , title statusText

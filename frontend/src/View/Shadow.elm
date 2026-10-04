@@ -33,7 +33,7 @@ import View.FileBrowser as FileBrowser
 import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
-import View.Table exposing (ListingRow, actionsPopoverId, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
 
 
 type alias ComparisonChip =
@@ -908,7 +908,12 @@ listingRow model scope stepConfig presentTypes link =
             , cTime = step.createdAt
             , statusSortKey = statusSortRank (TableSpec.getStatus spec step)
             , isUpdating = step.isUpdating
-            , openRow = step.id |> Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ()))
+            , openRow =
+                if hasBrowsableOutput (TableSpec.getStatus spec step) then
+                    Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ())) step.id
+
+                else
+                    Nothing
             , editName =
                 if readOnly then
                     Nothing

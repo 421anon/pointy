@@ -33,18 +33,14 @@ selectedScopeAndRefs model =
             ( Selection.currentListingScope model, [] )
 
 
-clickRow : ListingScope -> List ChildRef -> Bool -> Bool -> ChildRef -> Flow Model ()
-clickRow scope orderedRefs ctrl shift ref =
+clickRow : ListingScope -> List ChildRef -> Bool -> ChildRef -> Flow Model ()
+clickRow scope orderedRefs shift ref =
     Flow.modify
-        (\model ->
-            if shift then
-                Selection.rangeSelect scope orderedRefs ref model
+        (if shift then
+            Selection.rangeSelect scope orderedRefs ref
 
-            else if ctrl then
-                Selection.toggle scope ref model
-
-            else
-                Selection.selectOne scope ref model
+         else
+            Selection.toggle scope ref
         )
 
 

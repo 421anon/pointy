@@ -18,7 +18,8 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - Organization batches reject newly introduced project cycles, including cycles assembled within a single batch, without committing partial changes.
 - Manual drag reorder follows the displayed folders-first order. Drops that leave the visible order unchanged do not queue a write.
 - Historical views are read-only, including toast Undo, and retain the browser's native context menu.
-- Organization controls wrap on narrow screens.
+- Listing header controls wrap on narrow screens. The selection action bar overlays the listing header, so selecting never shifts rows; it collapses to icons on narrow listings.
+- A plain row click opens a folder or a built step's outputs and never changes the selection. Selection uses the row checkbox, Ctrl/Cmd-click, or Shift-click for ranges.
 
 Deploy the organization frontend and backend together: the UI requires the authoritative membership map returned by the Unfiled API.
 

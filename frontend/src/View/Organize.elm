@@ -116,11 +116,13 @@ viewActionBar model =
             barActions model
     in
     Html.viewIf (Selection.listingEditable model && Selection.hasSelection model && not (List.isEmpty actions)) <|
-        Html.div [ class "listing-action-bar" ]
-            [ Html.span [ class "listing-action-bar-count" ]
-                [ Html.text (String.fromInt (List.length (Selection.selectionRefs model)) ++ " selected") ]
-            , Html.div [ class "listing-action-bar-actions" ]
-                (List.map (viewActionButton model) actions)
+        Html.div [ class "listing-action-bar-anchor" ]
+            [ Html.div [ class "listing-action-bar" ]
+                [ Html.span [ class "listing-action-bar-count" ]
+                    [ Html.text (String.fromInt (List.length (Selection.selectionRefs model)) ++ " selected") ]
+                , Html.div [ class "listing-action-bar-actions" ]
+                    (List.map (viewActionButton model) actions)
+                ]
             ]
 
 
