@@ -46,7 +46,6 @@ import Route
 onListingRoute : Model -> Bool
 onListingRoute model =
     has (route << Route.page << Route.project) model
-        || has (route << Route.page << Route.unfiled) model
 
 
 listingEditable : Model -> Bool
@@ -61,7 +60,7 @@ folderLinks model scope =
             Dict.get parentId (projectsDict model) |> Maybe.map .children |> Maybe.withDefault []
 
         UnfiledListing ->
-            Model.unfiledRefs (Model.getUnfiledMembership model) (get steps model) |> List.map Model.childLinkOf
+            []
 
 
 childLinkIn : Model -> ListingScope -> ChildRef -> Maybe ChildLink

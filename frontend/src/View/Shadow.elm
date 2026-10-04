@@ -1,4 +1,4 @@
-module View.Shadow exposing (viewProject, viewUnfiled)
+module View.Shadow exposing (viewProject)
 
 import Accessors exposing (get, just, snd, try)
 import Actions
@@ -400,11 +400,14 @@ viewProject model proj =
         stepConfig =
             Maybe.withDefault Dict.empty mStepConfig
 
+        projectId =
+            Maybe.withDefault Route.rootProjectId proj.id
+
         scope =
-            Model.ProjectListing (Maybe.withDefault Route.rootProjectId proj.id)
+            Model.ProjectListing projectId
 
         listingRows =
-            List.filterMap (listingRow model scope stepConfig (presentStepTypes model scope)) proj.children
+            List.filterMap (listingRow model projectId stepConfig (presentStepTypes model scope)) proj.children
 
         projectEditForm =
             Html.viewIf (not isReadOnly) <|
@@ -666,12 +669,9 @@ presentStepTypes model scope =
             []
 
 
-listingRow : Model -> Model.ListingScope -> StepConfig -> List String -> Model.ChildLink -> Maybe ListingRow
-listingRow model scope stepConfig presentTypes link =
+listingRow : Model -> Int -> StepConfig -> List String -> Model.ChildLink -> Maybe ListingRow
+listingRow model parentId stepConfig presentTypes link =
     let
-        mParentId =
-            Model.listingScopeProjectId scope
-
         folderRow project =
             let
                 spec =
@@ -694,29 +694,23 @@ listingRow model scope stepConfig presentTypes link =
             , displayName = "Folder"
             , typeName = "folder"
             , typeIcon = Just "folder"
-            , statusPill = View.Lib.viewRollupSummary model mParentId link.id
+            , statusPill = View.Lib.viewRollupSummary model (Just parentId) link.id
             , validationErrors = project.validationErrors
             , alwaysVisibleActions = []
             , actionsPopover =
                 viewRecordActionsPopover
                     (actionsPopoverId link)
-                    (viewRowActionsFor model mParentId link spec readOnly project)
+                    (viewRowActions parentId link spec readOnly project)
             , mTime = project.lastModifiedAt
             , cTime = project.createdAt
-            , statusSortKey = Maybe.withDefault 5 (View.Lib.rollupChildFor model mParentId link.id |> Maybe.map (.statuses >> Model.rollupStatusRank))
+            , statusSortKey = Maybe.withDefault 5 (View.Lib.rollupChildFor model (Just parentId) link.id |> Maybe.map (.statuses >> Model.rollupStatusRank))
             , isUpdating = project.isUpdating
             , openRow =
                 Just
                     (Actions.goToRoute
                         (Route.fromPage
                             (Route.projectPage
-                                (case mParentId of
-                                    Just _ ->
-                                        Maybe.withDefault [] (try Lenses.currentProjectPath model) ++ [ link.id ]
-
-                                    Nothing ->
-                                        Model.Lib.canonicalPathTo model link.id
-                                )
+                                (Maybe.withDefault [] (try Lenses.currentProjectPath model) ++ [ link.id ])
                                 (Route.viewedCommit (Model.getRoute model).page)
                             )
                         )
@@ -747,7 +741,7 @@ listingRow model scope stepConfig presentTypes link =
                     Maybe.map
                         (\edited ->
                             viewAddOrEditRecordForm model
-                                mParentId
+                                (Just parentId)
                                 spec
                                 (get Lenses.projectForms model)
                                 { extraFields = viewProjectExtraFormFields model (remkT (TableSpec.getLens spec))
@@ -833,7 +827,7 @@ listingRow model scope stepConfig presentTypes link =
                         Html.viewMaybe
                             (\edited ->
                                 viewAddOrEditRecordForm model
-                                    mParentId
+                                    (Just parentId)
                                     spec
                                     (try (Lenses.stepFormsAt step.type_) model |> Maybe.withDefault Model.initialTable)
                                     { extraFields = [ viewStepExtraFormFields model readOnly step.type_ entry.stepType ]
@@ -871,17 +865,12 @@ listingRow model scope stepConfig presentTypes link =
             , typeName = step.type_
             , typeIcon = entry.icon
             , statusPill =
-                case mParentId of
-                    Just _ ->
-                        Html.Lazy.lazy5 viewStepRecordStatus
-                            step.type_
-                            entry
-                            recordLog
-                            isIngesting
-                            step
-
-                    Nothing ->
-                        View.Lib.viewStatusUnknown
+                Html.Lazy.lazy5 viewStepRecordStatus
+                    step.type_
+                    entry
+                    recordLog
+                    isIngesting
+                    step
             , validationErrors = TableSpec.getValidationErrors spec step
             , alwaysVisibleActions =
                 Maybe.values
@@ -890,9 +879,8 @@ listingRow model scope stepConfig presentTypes link =
                     , ingestProgressView
                     ]
             , actionsPopover =
-                viewStepRecordActionsFor
-                    model
-                    mParentId
+                viewStepRecordActions
+                    parentId
                     link
                     step.type_
                     entry
@@ -1034,88 +1022,3 @@ viewBreadcrumbs model proj =
                     ]
                ]
         )
-
-
-viewUnfiled : Model -> Html (Flow Model ())
-viewUnfiled model =
-    let
-        stepConfig =
-            ApiData.toMaybe (Model.getStepConfig model)
-
-        refs =
-            Model.unfiledRefs (Model.getUnfiledMembership model) (Model.getSteps model)
-
-        listing =
-            case stepConfig of
-                Nothing ->
-                    Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading step config..." ]
-
-                Just stepConfig_ ->
-                    Html.div [ Html.Attributes.class "sections" ]
-                        [ viewListing
-                            { model = model
-                            , scope = Model.UnfiledListing
-                            , stepConfig = stepConfig_
-                            , rows =
-                                List.filterMap
-                                    (listingRow model Model.UnfiledListing stepConfig_ (presentStepTypes model Model.UnfiledListing)
-                                        << Model.childLinkOf
-                                    )
-                                    refs
-                            , header = []
-                            }
-                        ]
-    in
-    viewPage
-        { header =
-            [ Html.div [ Html.Attributes.class "project-header" ]
-                [ Html.h2 [] [ Html.text "Unfiled" ]
-                , Html.span [ Html.Attributes.class "listing-header-count" ] [ Html.text ("(" ++ String.fromInt (List.length refs) ++ ")") ]
-                ]
-            , viewSearchBox model
-            ]
-        , content = listing
-        }
-
-
-viewRowActionsFor : Model -> Maybe Int -> Model.ChildLink -> TableSpec (Model.BaseRecord a) -> Bool -> Model.BaseRecord a -> List (Html (Flow Model ()))
-viewRowActionsFor model mParentId link spec isReadOnly record =
-    case mParentId of
-        Just parentId ->
-            viewRowActions parentId link spec isReadOnly record
-
-        Nothing ->
-            unfiledRowActions model link spec record
-
-
-viewStepRecordActionsFor : Model -> Maybe Int -> Model.ChildLink -> String -> StepConfigEntry -> StepConfig -> List String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
-viewStepRecordActionsFor model mParentId link name entry stepConfig presentTypes page record flags =
-    case mParentId of
-        Just parentId ->
-            viewStepRecordActions parentId link name entry stepConfig presentTypes page record flags
-
-        Nothing ->
-            viewRecordActionsPopover
-                (actionsPopoverId link)
-                (unfiledRowActions model link (Specs.steps name entry) record)
-
-
-unfiledRowActions : Model -> Model.ChildLink -> TableSpec (Model.BaseRecord a) -> Model.BaseRecord a -> List (Html (Flow Model ()))
-unfiledRowActions model link spec record =
-    let
-        ref =
-            Model.childRefOf link
-
-        isReadOnly =
-            isReadOnlyRoute model
-    in
-    [ Html.viewIf (not isReadOnly && Maybe.isJust record.id) <|
-        viewIconButtonWithTooltip "drive_file_move" True "Link to..." (Organize.openOrganizeDialogFor Model.OrganizeLinkTo Model.UnfiledListing [ ref ])
-    , Html.viewIf (Maybe.isJust record.id) <|
-        viewIconButtonWithTooltip "edit" True "Edit" (Actions.toggleAddOrEditRecordForm spec record.id)
-    , Html.viewIf (not isReadOnly && Maybe.isJust record.id) <|
-        viewIconButtonWithTooltip "delete"
-            False
-            "Delete permanently"
-            (Organize.openOrganizeDialogFor Model.OrganizeDelete Model.UnfiledListing [ ref ])
-    ]

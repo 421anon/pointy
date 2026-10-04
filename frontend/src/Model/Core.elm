@@ -486,12 +486,6 @@ blankProject =
     }
 
 
-type alias UnfiledData =
-    { stepDefs : Dict Int StepRecord
-    , membership : Dict Int (List ChildRef)
-    }
-
-
 projectChildren : ProjectRecord -> List ChildLink
 projectChildren project =
     sortChildLinks project.children
@@ -1527,7 +1521,6 @@ type Model
         , sidebarOpen : Bool
         , sidebarExpanded : Set Int
         , projectRollups : Dict Int (ApiData ProjectRollup)
-        , unfiledMembership : ApiData (Dict Int (List ChildRef))
         , projectsRequest : Int
         , rollupRequests : Dict Int Int
         }
@@ -1672,11 +1665,6 @@ getSidebarExpanded (Model model) =
 getProjectRollups : Model -> Dict Int (ApiData ProjectRollup)
 getProjectRollups (Model model) =
     model.projectRollups
-
-
-getUnfiledMembership : Model -> ApiData (Dict Int (List ChildRef))
-getUnfiledMembership (Model model) =
-    model.unfiledMembership
 
 
 getProjectsRequest : Model -> Int
@@ -1994,7 +1982,6 @@ initialModel key route flags =
         , sidebarOpen = not flags.isNarrow
         , sidebarExpanded = Set.empty
         , projectRollups = Dict.empty
-        , unfiledMembership = NotAsked
         , projectsRequest = 0
         , rollupRequests = Dict.empty
         }
@@ -2473,45 +2460,6 @@ childLinksTo kind id projects =
         projects
 
 
-unfiledRefs : ApiData (Dict Int (List ChildRef)) -> Dict Int StepRecord -> List ChildRef
-unfiledRefs membership steps =
-    case ApiData.toMaybe membership of
-        Nothing ->
-            []
-
-        Just membership_ ->
-            let
-                ( linkedSteps, linkedProjects ) =
-                    Dict.foldl
-                        (\_ refs ( stepAcc, projectAcc ) ->
-                            List.foldl
-                                (\ref ( stepAcc_, projectAcc_ ) ->
-                                    case ref.kind of
-                                        StepChild ->
-                                            ( Set.insert ref.id stepAcc_, projectAcc_ )
-
-                                        ProjectChild ->
-                                            ( stepAcc_, Set.insert ref.id projectAcc_ )
-                                )
-                                ( stepAcc, projectAcc )
-                                refs
-                        )
-                        ( Set.empty, Set.empty )
-                        membership_
-
-                stepRefs =
-                    Dict.keys steps
-                        |> List.filter (\stepId -> not (Set.member stepId linkedSteps))
-                        |> List.map (\stepId -> { kind = StepChild, id = stepId })
-
-                projectRefs =
-                    Dict.keys membership_
-                        |> List.filter (\projectId -> projectId /= Route.rootProjectId && not (Set.member projectId linkedProjects))
-                        |> List.map (\projectId -> { kind = ProjectChild, id = projectId })
-            in
-            stepRefs ++ projectRefs
-
-
 isAncestorProject : Dict Int ProjectRecord -> Int -> Int -> Bool
 isAncestorProject projects ancestorId targetId =
     let
@@ -2618,62 +2566,6 @@ applyTreeOp op ( projects, steps ) =
 applyTreeOps : List TreeOp -> ( Dict Int ProjectRecord, Dict Int StepRecord ) -> ( Dict Int ProjectRecord, Dict Int StepRecord )
 applyTreeOps ops store =
     List.foldl applyTreeOp store ops
-
-
-applyMembershipOps : List TreeOp -> Dict Int (List ChildRef) -> Dict Int (List ChildRef)
-applyMembershipOps ops membership =
-    List.foldl applyMembershipOp membership ops
-
-
-applyMembershipOp : TreeOp -> Dict Int (List ChildRef) -> Dict Int (List ChildRef)
-applyMembershipOp op membership =
-    let
-        addRef parentId ref =
-            Dict.update parentId
-                (\mRefs ->
-                    case mRefs of
-                        Nothing ->
-                            Just [ ref ]
-
-                        Just refs ->
-                            if List.any (sameEntity ref) refs then
-                                Just refs
-
-                            else
-                                Just (refs ++ [ ref ])
-                )
-                membership
-
-        removeRef parentId ref =
-            Dict.update parentId (Maybe.map (List.filter (not << sameEntity ref))) membership
-
-        removeRefFromAll ref =
-            Dict.map (\_ refs -> List.filter (not << sameEntity ref) refs) membership
-    in
-    case op of
-        LinkOp parentId ref ->
-            addRef parentId ref
-
-        UnlinkOp parentId ref ->
-            removeRef parentId ref
-
-        OrderOp _ _ ->
-            membership
-
-        HideOp _ _ _ ->
-            membership
-
-        DeleteOp ref ->
-            case ref.kind of
-                StepChild ->
-                    removeRefFromAll ref
-
-                ProjectChild ->
-                    if ref.id == Route.rootProjectId then
-                        membership
-
-                    else
-                        Dict.remove ref.id (removeRefFromAll ref)
 
 
 invertTreeOps : ( Dict Int ProjectRecord, Dict Int StepRecord ) -> List TreeOp -> List TreeOp

@@ -41,8 +41,7 @@ unfiledHandler commit = do
         membership <- projectMembership readCtx
         times <- liftIO $ readRecordMtimes (readRepoPath ctx) targetCommit
         steps <- unfiledStepEntries readCtx (Set.toList (linkedStepIds membership))
-        let children = annotateRecordChildren times (toJSON (steps ++ unfiledProjectEntries membership))
-        pure (encode (object ["children" .= children, "membership" .= membershipIndex membership]))
+        pure (encode (object ["children" .= annotateRecordChildren times (toJSON steps)]))
     case result of
         Right output -> return (DynamicJson output)
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
@@ -79,23 +78,6 @@ projectMembership ctx = do
 
 linkedStepIds :: Map Int [ChildRef] -> Set Int
 linkedStepIds membership = Set.fromList [stepId | refs <- Map.elems membership, StepChild stepId <- refs]
-
-unfiledProjectEntries :: Map Int [ChildRef] -> [Value]
-unfiledProjectEntries membership =
-    [ object ["project" .= object ["id" .= projectId, "hidden" .= False, "sortKey" .= Null]]
-    | projectId <- Set.toList unfiled
-    ]
-  where
-    linkedProjects = Set.fromList [projectId | refs <- Map.elems membership, ProjectChild projectId <- refs]
-    unfiled = Set.difference (Map.keysSet membership) (Set.insert 0 linkedProjects)
-
-membershipIndex :: Map Int [ChildRef] -> Value
-membershipIndex membership =
-    object [Key.fromText (T.pack (show projectId)) .= map childRefJson refs | (projectId, refs) <- Map.toList membership]
-
-childRefJson :: ChildRef -> Value
-childRefJson (StepChild stepId) = object ["step" .= object ["id" .= stepId]]
-childRefJson (ProjectChild projectId) = object ["project" .= object ["id" .= projectId]]
 
 unfiledStepEntries :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) [Value]
 unfiledStepEntries ctx members = do

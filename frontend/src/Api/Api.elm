@@ -52,7 +52,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp, UnfiledData)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -328,12 +328,12 @@ fetchProjects commit stepConfig =
             }
 
 
-fetchUnfiled : Maybe String -> StepConfig -> Flow s (Result Http.Error UnfiledData)
+fetchUnfiled : Maybe String -> StepConfig -> Flow s (Result Http.Error (Dict Int StepRecord))
 fetchUnfiled commit stepConfig =
     Flow.lift <|
         Http.get
             { url = appendCommitQuery "/backend/unfiled" commit
-            , expect = Http.expectJson identity (Decode.unfiledData stepConfig)
+            , expect = Http.expectJson identity (Decode.unfiledSteps stepConfig)
             }
 
 

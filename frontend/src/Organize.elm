@@ -12,7 +12,7 @@ import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ChildKind(..), ChildRef, ClipboardMode(..), ListingScope(..), Model, OrganizeAction(..), OrganizeDialog, OrganizeDialogMode(..), OrganizeDragEvent(..), OrganizeDropAction(..), OrganizeDropTarget(..), ProjectRecord, TemplateSource(..), TreeOp(..), blankProject)
-import Model.Lenses exposing (listingPreferences, listingSelection, organizeClipboard, organizeContextMenu, organizeDialog, organizeDrag, projectRecordById, projects, projectsDict, stepConfig, stepRecordById, store, unfiledMembership)
+import Model.Lenses exposing (listingPreferences, listingSelection, organizeClipboard, organizeContextMenu, organizeDialog, organizeDrag, projectRecordById, projects, projectsDict, stepConfig, stepRecordById, store)
 import Model.Selection as Selection
 import Route
 import Specs
@@ -469,7 +469,6 @@ insertNewFolder parentId folderId folder =
     Flow.modify
         (over projects (ApiData.map (Dict.insert folderId folder))
             >> over store (Model.applyTreeOps [ link ])
-            >> over unfiledMembership (ApiData.map (Dict.insert folderId [] >> Model.applyMembershipOps [ link ]))
         )
 
 

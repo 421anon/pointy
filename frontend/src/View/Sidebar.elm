@@ -1,6 +1,6 @@
 module View.Sidebar exposing (view)
 
-import Accessors exposing (get, has, try)
+import Accessors exposing (get, try)
 import Actions
 import Api.ApiData as ApiData
 import Dict exposing (Dict)
@@ -9,10 +9,9 @@ import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, title)
 import Html.Events
 import Html.Extra as Html
-import Html.Lazy
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord)
-import Model.Lenses exposing (currentProjectPath, listingPreferences, route, sidebarExpanded, sidebarOpen)
+import Model.Lenses exposing (currentProjectPath, listingPreferences, sidebarExpanded, sidebarOpen)
 import Model.Selection
 import Route
 import Set exposing (Set)
@@ -39,25 +38,6 @@ view model =
 
         editable =
             Model.Selection.listingEditable model
-
-        unfiledCount =
-            Html.Lazy.lazy2 unfiledCountView (Model.getUnfiledMembership model) (Model.getSteps model)
-
-        unfiledEntry =
-            let
-                isCurrent =
-                    has (route << Route.page << Route.unfiled) model
-            in
-            Html.a
-                [ Route.href (Route.fromPage (Route.unfiledPage mCommit_))
-                , class "sidebar-link"
-                , classList [ ( "current", isCurrent ) ]
-                , attribute "aria-current" (View.Lib.boolText isCurrent)
-                ]
-                [ Html.span [ class "sidebar-row-icon" ] [ iconCustom False "inbox" [] ]
-                , Html.span [ class "sidebar-label" ] [ Html.text "Unfiled" ]
-                , unfiledCount
-                ]
 
         tree =
             mProjects
@@ -93,22 +73,13 @@ view model =
                 Html.span [ class "sidebar-title" ] [ Html.text "Navigation" ]
             ]
         , Html.viewIf open <|
-            Html.div [ class "sidebar-body" ] (unfiledEntry :: tree)
+            Html.div [ class "sidebar-body" ] tree
         ]
 
 
 rootLink : Model.ChildLink
 rootLink =
     Model.childLinkOf { kind = Model.ProjectChild, id = Route.rootProjectId }
-
-
-unfiledCountView : ApiData.ApiData (Dict Int (List Model.ChildRef)) -> Dict Int Model.StepRecord -> Html msg
-unfiledCountView membership steps_ =
-    let
-        count =
-            List.length (Model.unfiledRefs membership steps_)
-    in
-    Html.span [ class "sidebar-count" ] [ Html.text ("(" ++ String.fromInt count ++ ")") ]
 
 
 viewNode : Model -> Bool -> Dict Int ProjectRecord -> Maybe String -> List Int -> (Int -> Bool) -> Model.ChildLink -> List (Html (Flow Model ()))

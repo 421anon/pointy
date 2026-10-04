@@ -1061,11 +1061,6 @@ projectRollupAt projectId =
     projectRollups << Dict.Accessors.id projectId << just
 
 
-unfiledMembership : Lens ls Model (ApiData (Dict Int (List ChildRef))) x y
-unfiledMembership =
-    lens ".unfiledMembership" Model.getUnfiledMembership (\(Model m) membership -> Model { m | unfiledMembership = membership })
-
-
 projectsRequest : Lens ls Model Int x y
 projectsRequest =
     lens ".projectsRequest" Model.getProjectsRequest (\(Model m) request -> Model { m | projectsRequest = request })

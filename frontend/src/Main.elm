@@ -12,7 +12,7 @@ import Ingest
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, stepConfig, stepForms, steps, unfiledMembership, userRepoInfo)
+import Model.Lenses exposing (commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, stepConfig, stepForms, steps, userRepoInfo)
 import Model.Selection as Selection
 import Organize
 import Ports
@@ -111,44 +111,18 @@ applyRoute forceRevealHighlight newRoute =
                             _ ->
                                 False
 
-                    routeNeedsWorkspace =
-                        case newRoute.page of
-                            Route.Project _ ->
-                                True
-
-                            Route.Unfiled _ ->
-                                True
-
-                            _ ->
-                                False
+                    projectRoute =
+                        has (Route.page << Route.project) newRoute
 
                     shouldInitializeWorkspace =
-                        workspaceNotStarted && routeNeedsWorkspace
-
-                    listingRoute =
-                        case newRoute.page of
-                            Route.Project _ ->
-                                True
-
-                            Route.Unfiled _ ->
-                                True
-
-                            _ ->
-                                False
+                        workspaceNotStarted && projectRoute
 
                     isDragging =
                         has (gutterDrag << just) model
 
                     listingFolder route_ =
-                        case route_.page of
-                            Route.Project params ->
-                                Just (Just (Route.pathProjectId params.projectPath))
-
-                            Route.Unfiled _ ->
-                                Just Nothing
-
-                            _ ->
-                                Nothing
+                        try (Route.page << Route.project << projectPath) route_
+                            |> Maybe.map Route.pathProjectId
 
                     listingContext route_ =
                         ( listingFolder route_, try (Route.page << Route.viewedCommitT) route_ )
@@ -159,9 +133,8 @@ applyRoute forceRevealHighlight newRoute =
                 Flow.modify (set route newRoute)
                     |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute) (Flow.modify Selection.clear))
                     |> Flow.seq (Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute) (Flow.setAll projectRollups Dict.empty))
-                    |> Flow.seq (Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute) (Flow.setAll unfiledMembership NotAsked))
                     |> Flow.seq (Flow.when (pageTarget currentRoute /= pageTarget newRoute) Actions.resetPageScroll)
-                    |> Flow.seq (Flow.when listingRoute (Actions.expandSidebarPath expandPath))
+                    |> Flow.seq (Flow.when projectRoute (Actions.expandSidebarPath expandPath))
                     |> Flow.seq
                         (if shouldInitializeWorkspace then
                             initializeWorkspace
@@ -229,9 +202,6 @@ applyRoute forceRevealHighlight newRoute =
                                                 |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
                                         Route.Artifact _ ->
-                                            Actions.syncCompareFromRoute newRoute
-
-                                        Route.Unfiled _ ->
                                             Actions.syncCompareFromRoute newRoute
 
                                         Route.NotFound _ ->

@@ -269,7 +269,6 @@ organizeApply : List TreeOp -> Flow Model ()
 organizeApply ops =
     Flow.modify
         (over store (Model.applyTreeOps ops)
-            >> over unfiledMembership (ApiData.map (Model.applyMembershipOps ops))
             >> Selection.pruneSelection
         )
         |> Flow.seq (Flow.over organizeQueue (\queue -> { queue | pending = queue.pending ++ ops }))
@@ -444,16 +443,16 @@ loadProjects =
             )
 
 
-applyLoadedProjects : Maybe String -> ( Result Http.Error (Dict Int ApiDecode.ProjectDecode), Result Http.Error Model.UnfiledData ) -> Flow Model ()
+applyLoadedProjects : Maybe String -> ( Result Http.Error (Dict Int ApiDecode.ProjectDecode), Result Http.Error (Dict Int StepRecord) ) -> Flow Model ()
 applyLoadedProjects target result =
     case result of
-        ( Ok projectDecodes_, Ok unfiledData_ ) ->
+        ( Ok projectDecodes_, Ok unfiledSteps ) ->
             Flow.get
                 |> Flow.andThen
                     (\model ->
                         let
                             fetchedSteps =
-                                Dict.foldl (\_ decode acc -> Dict.union acc decode.stepDefs) unfiledData_.stepDefs projectDecodes_
+                                Dict.foldl (\_ decode acc -> Dict.union acc decode.stepDefs) unfiledSteps projectDecodes_
 
                             fetchedProjects =
                                 Dict.map (\_ decode -> decode.record) projectDecodes_
@@ -467,7 +466,6 @@ applyLoadedProjects target result =
                         Flow.modify
                             (set projects (ApiData.Success mergedProjects)
                                 >> set steps mergedSteps
-                                >> set unfiledMembership (ApiData.Success unfiledData_.membership)
                             )
                             |> Flow.seq
                                 (Flow.when
@@ -489,7 +487,6 @@ applyLoadedProjects target result =
 loadProjectsFailed : Http.Error -> Flow Model ()
 loadProjectsFailed err =
     Flow.setAll projects (ApiData.Error err)
-        |> Flow.seq (Flow.setAll unfiledMembership (ApiData.Error err))
         |> Flow.seq (addToast False (Http.errorMessage err))
 
 
@@ -501,10 +498,7 @@ reapplyOrganizeQueue =
                 ops =
                     queue.inFlight ++ queue.pending
             in
-            Flow.modify
-                (over store (Model.applyTreeOps ops)
-                    >> over unfiledMembership (ApiData.map (Model.applyMembershipOps ops))
-                )
+            Flow.modify (over store (Model.applyTreeOps ops))
         )
 
 

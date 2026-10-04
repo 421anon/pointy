@@ -130,15 +130,6 @@ statusLabel status =
             "Certification Failed"
 
 
-viewStatusUnknown : Html msg
-viewStatusUnknown =
-    Html.span
-        [ class "status-indicator-wrapper"
-        , Html.Attributes.title "Status unknown"
-        ]
-        [ Html.span [ class "status-indicator status-unknown" ] [] ]
-
-
 rollupChildFor : Model -> Maybe Int -> Int -> Maybe Model.RollupChild
 rollupChildFor model mParentProjectId folderProjectId =
     mParentProjectId

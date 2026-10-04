@@ -236,36 +236,9 @@ projectDecode stepConfig_ =
             )
 
 
-unfiledData : StepConfig -> Decoder Model.UnfiledData
-unfiledData stepConfig_ =
-    Decode.succeed Model.UnfiledData
-        |> required "children" (Decode.list (childEntry stepConfig_) |> Decode.map stepDefs)
-        |> required "membership" unfiledMembership
-
-
-unfiledMembership : Decoder (Dict Int (List Model.ChildRef))
-unfiledMembership =
-    Decode.keyValuePairs (Decode.list membershipRef)
-        |> Decode.map
-            (\pairs ->
-                pairs
-                    |> List.filterMap
-                        (\( key, refs ) ->
-                            String.toInt key
-                                |> Maybe.map (\projectId -> ( projectId, refs ))
-                        )
-                    |> Dict.fromList
-            )
-
-
-membershipRef : Decoder Model.ChildRef
-membershipRef =
-    Decode.oneOf
-        [ Decode.field "step" (Decode.field "id" Decode.int)
-            |> Decode.map (\id_ -> { kind = Model.StepChild, id = id_ })
-        , Decode.field "project" (Decode.field "id" Decode.int)
-            |> Decode.map (\id_ -> { kind = Model.ProjectChild, id = id_ })
-        ]
+unfiledSteps : StepConfig -> Decoder (Dict Int StepRecord)
+unfiledSteps stepConfig_ =
+    Decode.field "children" (Decode.list (childEntry stepConfig_) |> Decode.map stepDefs)
 
 
 projectRollup : Decoder Model.ProjectRollup

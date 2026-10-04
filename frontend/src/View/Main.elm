@@ -43,9 +43,6 @@ view model =
                             Route.Project _ ->
                                 viewCurrentProject model
 
-                            Route.Unfiled _ ->
-                                View.Shadow.viewUnfiled model
-
                             Route.Artifact artifact ->
                                 viewArtifact artifact
 

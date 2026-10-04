@@ -286,7 +286,7 @@ type GetProjects =
 
 type GetUnfiled =
     "unfiled"
-        :> Description "Returns unfiled steps with evaluated definitions and unfiled projects other than the root project 0, together with a membership map of all raw project child references keyed by project id, optionally at a specific user-repo commit. Membership is independent of project enrichment; unreadable raw project links fail the request. Step definitions carry lastModifiedAt and createdAt."
+        :> Description "Returns steps not linked from any project, with evaluated definitions, optionally at a specific user-repo commit. Unreadable raw project links fail the request. Step definitions carry lastModifiedAt and createdAt."
         :> QueryParam "commit" Text
         :> Get '[RawJSON] DynamicJson
 

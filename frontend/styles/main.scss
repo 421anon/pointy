@@ -72,14 +72,14 @@ body {
 
 .sidebar-body {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   padding: var(--spacing-xs) var(--spacing-2xs);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2xs);
 
-  > .sidebar-link {
-    flex: 0 0 auto;
+  > .sidebar-node {
+    min-width: max-content;
   }
 }
 
@@ -157,16 +157,6 @@ body {
 }
 
 .sidebar-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-count {
-  margin-left: auto;
-  font-size: var(--font-size-sm);
-  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -177,6 +167,32 @@ body {
     z-index: 40;
     background-color: var(--bg-primary);
     box-shadow: var(--shadow-elevated);
+  }
+}
+
+@media (max-width: 600px) {
+  .sidebar:not(.sidebar--open) {
+    position: absolute;
+    z-index: 1;
+    top: auto;
+    height: auto;
+  }
+
+  .sidebar.sidebar--open {
+    top: 0;
+    height: calc(100vh - var(--spacing-5xl));
+    height: calc(100dvh - var(--spacing-5xl));
+    margin-right: calc(-1 * var(--sidebar-width));
+  }
+
+  .workspace > .sidebar ~ .app {
+    .page-header > .select-container {
+      margin-left: var(--spacing-4xl);
+    }
+
+    &:not(:has(> .page)) {
+      padding-left: var(--spacing-4xl);
+    }
   }
 }
 
@@ -552,13 +568,31 @@ body {
     display: inline;
   }
 
+  .listing-header {
+    padding-inline: var(--spacing-xs);
+
+    .listing-control-label {
+      display: none;
+    }
+  }
+
   .listing-row-header {
-    grid-template-columns: auto 32px 1fr auto;
-    column-gap: var(--spacing-sm);
+    grid-template-columns: auto 24px 1fr auto;
+    column-gap: var(--spacing-xs);
+    padding-right: var(--spacing-xs);
 
     &.listing-row-header--read-only {
-      grid-template-columns: 32px 1fr auto;
+      grid-template-columns: 24px 1fr auto;
     }
+
+    > .listing-row-checkbox {
+      margin-inline: var(--spacing-xs) 0;
+    }
+  }
+
+  .listing-row-name .record-name-container {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .listing-row-name .listing-row-mtime {
@@ -569,7 +603,6 @@ body {
     display: inline-flex;
     order: -1;
   }
-
 }
 
 .listing {
@@ -2488,11 +2521,6 @@ select.field-changed,
         var(--color-red-400) 50%);
   }
 
-  &.status-unknown {
-    background: transparent;
-    border: 1px dashed var(--color-gray-400);
-  }
-
   &.status-running {
     animation: pulse-running 1.5s ease-in-out infinite;
   }
@@ -3296,7 +3324,18 @@ body:has(dialog[open]) {
 
 @media (max-width: 600px) {
   .status-bar {
-    width: calc(100% - var(--spacing-sm) - var(--spacing-sm));
+    width: 100%;
+  }
+
+  .status-bar__surface,
+  .status-bar--open .status-bar__surface {
+    border: 0;
+    border-radius: 0;
+  }
+
+  .status-bar__panel {
+    border-inline: 0;
+    border-radius: 0;
   }
 
   .status-bar__main {
@@ -3819,6 +3858,11 @@ body:has(dialog[open]) {
 
   .page {
     padding-inline: var(--spacing-xs);
+    padding-top: var(--spacing-xs);
+  }
+
+  .page-header {
+    margin-bottom: var(--spacing-xs);
   }
 
   .src-files-section,
