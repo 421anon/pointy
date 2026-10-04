@@ -403,11 +403,8 @@ viewProject model proj =
         projectId =
             Maybe.withDefault Route.rootProjectId proj.id
 
-        scope =
-            Model.ProjectListing projectId
-
         listingRows =
-            List.filterMap (listingRow model projectId stepConfig (presentStepTypes model scope)) proj.children
+            List.filterMap (listingRow model projectId stepConfig (presentStepTypes model projectId)) proj.children
 
         projectEditForm =
             Html.viewIf (not isReadOnly) <|
@@ -418,7 +415,7 @@ viewProject model proj =
                             |> Maybe.map
                                 (\editedProject ->
                                     viewAddOrEditRecordForm model
-                                        (Model.listingScopeProjectId scope)
+                                        projectId
                                         spec
                                         (get Lenses.projectForms model)
                                         { extraFields = viewProjectExtraFormFields model (remkT (TableSpec.getLens spec))
@@ -447,10 +444,10 @@ viewProject model proj =
                     Html.div [ Html.Attributes.class "sections" ]
                         [ projectEditForm
                         , configErrors
-                        , viewPendingStepForm model (Model.listingScopeProjectId scope) stepConfig
+                        , viewPendingStepForm model projectId stepConfig
                         , viewListing
                             { model = model
-                            , scope = scope
+                            , scope = projectId
                             , stepConfig = stepConfig
                             , rows = listingRows
                             , header = listingHeader model proj
@@ -612,8 +609,8 @@ viewNewMenu model proj =
             }
 
 
-viewPendingStepForm : Model -> Maybe Int -> StepConfig -> Html (Flow Model ())
-viewPendingStepForm model mParentId stepConfig =
+viewPendingStepForm : Model -> Int -> StepConfig -> Html (Flow Model ())
+viewPendingStepForm model parentId stepConfig =
     let
         forms =
             stepConfig
@@ -634,7 +631,7 @@ viewPendingStepForm model mParentId stepConfig =
                                             stepFormReadOnly model spec record
                                     in
                                     viewAddOrEditRecordForm model
-                                        mParentId
+                                        parentId
                                         spec
                                         (try (Lenses.stepFormsAt typeName) model |> Maybe.withDefault Model.initialTable)
                                         { extraFields = [ viewStepExtraFormFields model readOnly typeName entry.stepType ]
@@ -741,7 +738,7 @@ listingRow model parentId stepConfig presentTypes link =
                     Maybe.map
                         (\edited ->
                             viewAddOrEditRecordForm model
-                                (Just parentId)
+                                parentId
                                 spec
                                 (get Lenses.projectForms model)
                                 { extraFields = viewProjectExtraFormFields model (remkT (TableSpec.getLens spec))
@@ -827,7 +824,7 @@ listingRow model parentId stepConfig presentTypes link =
                         Html.viewMaybe
                             (\edited ->
                                 viewAddOrEditRecordForm model
-                                    (Just parentId)
+                                    parentId
                                     spec
                                     (try (Lenses.stepFormsAt step.type_) model |> Maybe.withDefault Model.initialTable)
                                     { extraFields = [ viewStepExtraFormFields model readOnly step.type_ entry.stepType ]

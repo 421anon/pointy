@@ -1,27 +1,19 @@
 module Keyboard exposing
     ( Binding
     , Combination
+    , Key(..)
     , Modifier(..)
     , arrowDown
     , arrowUp
     , backspace
-    , ctrlA
-    , ctrlC
-    , ctrlV
-    , ctrlX
-    , ctrlZ
     , decodeCombinations
     , delete
     , enter
     , escape
     , keyName
     , mapBindingMsg
-    , metaA
-    , metaC
-    , metaV
-    , metaX
-    , metaZ
     , modName
+    , primary
     , simpleCombinations
     , space
     , toName
@@ -88,54 +80,9 @@ toName (Combination mods key) =
     String.join "-" <| List.map modName mods ++ [ keyName key ]
 
 
-ctrlC : Combination
-ctrlC =
-    Combination [ Ctrl ] KeyC
-
-
-ctrlA : Combination
-ctrlA =
-    Combination [ Ctrl ] KeyA
-
-
-ctrlV : Combination
-ctrlV =
-    Combination [ Ctrl ] KeyV
-
-
-ctrlX : Combination
-ctrlX =
-    Combination [ Ctrl ] KeyX
-
-
-ctrlZ : Combination
-ctrlZ =
-    Combination [ Ctrl ] KeyZ
-
-
-metaA : Combination
-metaA =
-    Combination [ Meta ] KeyA
-
-
-metaC : Combination
-metaC =
-    Combination [ Meta ] KeyC
-
-
-metaV : Combination
-metaV =
-    Combination [ Meta ] KeyV
-
-
-metaX : Combination
-metaX =
-    Combination [ Meta ] KeyX
-
-
-metaZ : Combination
-metaZ =
-    Combination [ Meta ] KeyZ
+primary : Key -> List Combination
+primary key =
+    [ Combination [ Ctrl ] key, Combination [ Meta ] key ]
 
 
 delete : Combination

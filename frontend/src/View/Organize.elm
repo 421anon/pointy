@@ -47,9 +47,9 @@ dropAllowedToken model folderId =
         |> String.join " "
 
 
-dropEdgeAttrs : Model -> Model.ListingScope -> List (Html.Attribute msg)
-dropEdgeAttrs model scope =
-    case Selection.dropEdgeAllowed model scope of
+dropEdgeAttrs : Model -> List (Html.Attribute msg)
+dropEdgeAttrs model =
+    case Selection.dropEdgeAllowed model of
         Just action ->
             [ attribute "data-drop-edge-allowed" (Selection.dropActionToken action) ]
 
@@ -61,7 +61,7 @@ rowDragAttrs : Model.ListingScope -> ChildLink -> List (Html.Attribute msg)
 rowDragAttrs scope link =
     [ attribute "data-drag-ref" (refToken (Model.childRefOf link))
     , attribute "data-drag-folder"
-        (Model.listingScopeProjectId scope |> Maybe.map String.fromInt |> Maybe.withDefault "")
+        (String.fromInt scope)
     ]
 
 
@@ -129,20 +129,24 @@ viewActionBar model =
 barActions : Model -> List OrganizeAction
 barActions model =
     Selection.actionDefinitions
-        |> List.filter Selection.actionInBar
         |> List.filter (Selection.actionVisible model)
+        |> List.filter (\action -> (Selection.actionSpec model action).inBar)
 
 
 viewActionButton : Model -> OrganizeAction -> Html (Flow Model ())
 viewActionButton model action =
+    let
+        spec =
+            Selection.actionSpec model action
+    in
     Html.button
         [ class "listing-action-bar-btn"
         , classList [ ( "danger", action == OrganizeDeleteAction ) ]
-        , title (Selection.actionLabel model action)
+        , title spec.label
         , Events.onClick (Organize.runAction action)
         ]
-        [ iconCustom False (Selection.actionIcon action) [ class "listing-action-bar-icon" ]
-        , Html.span [ class "listing-action-bar-label" ] [ Html.text (Selection.actionLabel model action) ]
+        [ iconCustom False spec.icon [ class "listing-action-bar-icon" ]
+        , Html.span [ class "listing-action-bar-label" ] [ Html.text spec.label ]
         ]
 
 
@@ -159,8 +163,8 @@ viewContextMenu model =
 
                             Nothing ->
                                 Selection.actionDefinitions
-                                    |> List.filter (not << Selection.actionInBar)
                                     |> List.filter (Selection.actionVisible model)
+                                    |> List.filter (\action -> not (Selection.actionSpec model action).inBar)
                 in
                 Html.viewIf (not (List.isEmpty actions)) <|
                     Html.div

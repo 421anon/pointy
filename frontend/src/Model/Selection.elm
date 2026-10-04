@@ -1,19 +1,16 @@
 module Model.Selection exposing
     ( actionDefinitions
-    , actionIcon
-    , actionInBar
-    , actionLabel
+    , actionSpec
     , actionVisible
     , clear
     , currentListingScope
+    , displayOrder
     , dropActionToken
     , dropAllowed
     , dropEdgeAllowed
-    , displayOrder
     , folderLinks
     , hasSelection
     , isSelected
-    , linkValid
     , listingEditable
     , moveValid
     , onListingRoute
@@ -37,7 +34,7 @@ import Accessors exposing (get, has, set, try)
 import Dict exposing (Dict)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, ListingScope(..), ListingSelection, Model, OrganizeAction(..), OrganizeDialogMode(..), OrganizeDrag, OrganizeDropAction(..))
+import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, ListingScope, ListingSelection, Model, OrganizeAction(..), OrganizeDialogMode(..), OrganizeDrag, OrganizeDropAction(..))
 import Model.Lenses exposing (currentProjectPath, isReadOnlyRoute, listingPreferences, listingSelection, organizeClipboard, organizeDrag, projectsDict, route, steps)
 import Model.Lib as Lib
 import Route
@@ -54,13 +51,8 @@ listingEditable model =
 
 
 folderLinks : Model -> ListingScope -> List ChildLink
-folderLinks model scope =
-    case scope of
-        ProjectListing parentId ->
-            Dict.get parentId (projectsDict model) |> Maybe.map .children |> Maybe.withDefault []
-
-        UnfiledListing ->
-            []
+folderLinks model parentId =
+    Dict.get parentId (projectsDict model) |> Maybe.map .children |> Maybe.withDefault []
 
 
 childLinkIn : Model -> ListingScope -> ChildRef -> Maybe ChildLink
@@ -93,11 +85,9 @@ clear =
     set listingSelection Nothing
 
 
-currentListingScope : Model -> ListingScope
+currentListingScope : Model -> Maybe ListingScope
 currentListingScope model =
-    try currentProjectPath model
-        |> Maybe.map (Route.pathProjectId >> ProjectListing)
-        |> Maybe.withDefault UnfiledListing
+    try currentProjectPath model |> Maybe.map Route.pathProjectId
 
 
 selectOne : ListingScope -> ChildRef -> Model -> Model
@@ -214,23 +204,18 @@ visibleRefs model scope =
         |> List.map Model.childRefOf
 
 
-reorderDropAllowed : Model -> ListingScope -> Bool
-reorderDropAllowed model scope =
+reorderDropAllowed : Model -> Bool
+reorderDropAllowed model =
     let
         prefs =
             get listingPreferences model
     in
-    case scope of
-        UnfiledListing ->
-            False
-
-        ProjectListing _ ->
-            prefs.sort == Model.SortManual && not prefs.groupByType && not (isReadOnlyRoute model)
+    prefs.sort == Model.SortManual && not prefs.groupByType && not (isReadOnlyRoute model)
 
 
-dropEdgeAllowed : Model -> ListingScope -> Maybe OrganizeDropAction
-dropEdgeAllowed model scope =
-    if reorderDropAllowed model scope then
+dropEdgeAllowed : Model -> Maybe OrganizeDropAction
+dropEdgeAllowed model =
+    if reorderDropAllowed model then
         Just OrganizeDropMove
 
     else
@@ -240,13 +225,8 @@ dropEdgeAllowed model scope =
 moveValid : Model -> ListingScope -> Int -> ChildRef -> Bool
 moveValid model sourceScope targetId ref =
     sourceScope
-        /= ProjectListing targetId
+        /= targetId
         && not (Lib.linkCreatesCycle (projectsDict model) targetId ref)
-
-
-linkValid : Model -> Int -> ChildRef -> Bool
-linkValid =
-    Lib.linkValid
 
 
 resolveInto : Model -> OrganizeDrag -> Int -> List OrganizeDropAction
@@ -260,39 +240,26 @@ resolveInto model drag targetId =
                 List.any (moveValid model drag.sourceScope targetId) drag.refs
 
             linkPossible =
-                List.any (linkValid model targetId) drag.refs
+                List.any (Lib.linkValid model targetId) drag.refs
         in
-        List.filterMap identity
-            [ if movePossible then
-                Just OrganizeDropMove
-
-              else
-                Nothing
-            , if linkPossible then
-                Just OrganizeDropLink
-
-              else
-                Nothing
+        List.filter Tuple.first
+            [ ( movePossible, OrganizeDropMove )
+            , ( linkPossible, OrganizeDropLink )
             ]
+            |> List.map Tuple.second
 
 
 resolveDropAction : Bool -> List OrganizeDropAction -> Maybe OrganizeDropAction
 resolveDropAction linkRequested allowed =
     let
-        prefer action =
-            if List.member action allowed then
-                Just action
+        preference =
+            if linkRequested then
+                [ OrganizeDropLink, OrganizeDropMove ]
 
             else
-                Nothing
+                [ OrganizeDropMove, OrganizeDropLink ]
     in
-    if linkRequested then
-        prefer OrganizeDropLink
-            |> Maybe.orElse (prefer OrganizeDropMove)
-
-    else
-        prefer OrganizeDropMove
-            |> Maybe.orElse (prefer OrganizeDropLink)
+    List.find (\action -> List.member action allowed) preference
 
 
 dropActionToken : OrganizeDropAction -> String
@@ -350,25 +317,18 @@ reorderForEdgeDrop visual payload ref before =
         present =
             List.filter (\r -> List.any (Model.sameEntity r) visual) payload
 
-        mIndex =
-            List.findIndex (Model.sameEntity ref) visual
-
-        removedBefore =
-            case mIndex of
-                Just index ->
-                    List.take index visual
-                        |> List.filter (\r -> List.any (Model.sameEntity r) present)
-                        |> List.length
-
-                Nothing ->
-                    0
-
         withoutPayload =
             List.filter (\r -> not (List.any (Model.sameEntity r) present)) visual
 
         insertAt =
-            case mIndex of
+            case List.findIndex (Model.sameEntity ref) visual of
                 Just index ->
+                    let
+                        removedBefore =
+                            List.take index visual
+                                |> List.filter (\r -> List.any (Model.sameEntity r) present)
+                                |> List.length
+                    in
                     (if before then
                         index - removedBefore
 
@@ -397,7 +357,7 @@ organizeTargets model mode sourceScope refs =
             List.filter (\ref -> ref.kind == ProjectChild) refs
 
         excluded id =
-            (mode == OrganizeMove && sourceScope == ProjectListing id)
+            (mode == OrganizeMove && sourceScope == id)
                 || List.any (\ref -> ref.id == id || Model.isAncestorProject projects_ ref.id id) projectRefs
     in
     Dict.toList projects_
@@ -408,23 +368,16 @@ organizeTargets model mode sourceScope refs =
 
 shouldHide : Model -> Bool
 shouldHide model =
-    let
-        scope =
-            get listingSelection model |> Maybe.map .scope |> Maybe.withDefault UnfiledListing
+    case get listingSelection model of
+        Just selection ->
+            let
+                isHidden ref =
+                    childLinkIn model selection.scope ref |> Maybe.map .hidden |> Maybe.withDefault False
+            in
+            List.any (not << isHidden) selection.refs
 
-        isHidden ref =
-            childLinkIn model scope ref |> Maybe.map .hidden |> Maybe.withDefault False
-    in
-    selectionRefs model |> List.any (not << isHidden)
-
-
-hideUnhideLabel : Model -> String
-hideUnhideLabel model =
-    if shouldHide model then
-        "Hide"
-
-    else
-        "Unhide"
+        Nothing ->
+            False
 
 
 selectionHasLocked : Model -> Bool
@@ -460,106 +413,64 @@ actionDefinitions =
     ]
 
 
-actionInBar : OrganizeAction -> Bool
-actionInBar action =
-    case action of
-        OrganizePasteAction ->
-            False
-
-        OrganizePasteDuplicateAction ->
-            False
-
-        OrganizeNewFolderAction ->
-            False
-
-        _ ->
-            True
-
-
-actionLabel : Model -> OrganizeAction -> String
-actionLabel model action =
+actionSpec :
+    Model
+    -> OrganizeAction
+    -> { label : String, icon : String, inBar : Bool }
+actionSpec model action =
     case action of
         OrganizeMoveAction ->
-            "Move to..."
+            { label = "Move to...", icon = "drive_file_move", inBar = True }
 
         OrganizeLinkAction ->
-            "Link to..."
+            { label = "Link to...", icon = "drive_file_move", inBar = True }
 
         OrganizeGroupAction ->
-            "Group into new folder"
+            { label = "Group into new folder"
+            , icon = "create_new_folder"
+            , inBar = True
+            }
 
         OrganizeCutAction ->
-            "Cut"
+            { label = "Cut", icon = "content_cut", inBar = True }
 
         OrganizeCopyAction ->
-            "Copy"
+            { label = "Copy", icon = "content_copy", inBar = True }
 
         OrganizeHideAction ->
-            hideUnhideLabel model
+            { label =
+                if shouldHide model then
+                    "Hide"
+
+                else
+                    "Unhide"
+            , icon = "visibility_off"
+            , inBar = True
+            }
 
         OrganizeRemoveAction ->
-            "Remove from here"
+            { label = "Remove from here", icon = "remove", inBar = True }
 
         OrganizeDuplicateAction ->
-            "Duplicate"
+            { label = "Duplicate", icon = "copy_all", inBar = True }
 
         OrganizeDeleteAction ->
-            "Delete permanently"
+            { label = "Delete permanently", icon = "delete", inBar = True }
 
         OrganizeClearAction ->
-            "Clear"
+            { label = "Clear", icon = "close", inBar = True }
 
         OrganizePasteAction ->
-            "Paste"
+            { label = "Paste", icon = "content_paste", inBar = False }
 
         OrganizePasteDuplicateAction ->
-            "Paste as duplicate"
+            { label = "Paste as duplicate"
+            , icon = "content_paste_go"
+            , inBar = False
+            }
 
         OrganizeNewFolderAction ->
-            "New folder"
-
-
-actionIcon : OrganizeAction -> String
-actionIcon action =
-    case action of
-        OrganizeMoveAction ->
-            "drive_file_move"
-
-        OrganizeLinkAction ->
-            "drive_file_move"
-
-        OrganizeGroupAction ->
-            "create_new_folder"
-
-        OrganizeCutAction ->
-            "content_cut"
-
-        OrganizeCopyAction ->
-            "content_copy"
-
-        OrganizeHideAction ->
-            "visibility_off"
-
-        OrganizeRemoveAction ->
-            "remove"
-
-        OrganizeDuplicateAction ->
-            "copy_all"
-
-        OrganizeDeleteAction ->
-            "delete"
-
-        OrganizeClearAction ->
-            "close"
-
-        OrganizePasteAction ->
-            "content_paste"
-
-        OrganizePasteDuplicateAction ->
-            "content_paste_go"
-
-        OrganizeNewFolderAction ->
-            "create_new_folder"
+            { label = "New folder", icon = "create_new_folder", inBar = False }
 
 
 actionVisible : Model -> OrganizeAction -> Bool
@@ -575,38 +486,26 @@ actionVisible model action =
             Maybe.isJust (get organizeClipboard model)
 
         selectionInFolder =
-            selection |> Maybe.map (\s -> s.scope /= UnfiledListing) |> Maybe.withDefault False
+            Maybe.isJust selection
 
         hasFolder =
-            currentListingScope model /= UnfiledListing
+            Maybe.isJust (currentListingScope model)
 
         editable =
             listingEditable model
     in
     case action of
-        OrganizeMoveAction ->
-            editable && hasSel
-
-        OrganizeLinkAction ->
-            editable && hasSel
-
         OrganizeGroupAction ->
             editable && hasSel && hasFolder
 
-        OrganizeCutAction ->
-            editable && hasSel
-
-        OrganizeCopyAction ->
-            editable && hasSel
+        OrganizeDuplicateAction ->
+            editable && hasSel && hasFolder
 
         OrganizeHideAction ->
             editable && hasSel && selectionInFolder
 
         OrganizeRemoveAction ->
             editable && hasSel && selectionInFolder
-
-        OrganizeDuplicateAction ->
-            editable && hasSel && hasFolder
 
         OrganizeDeleteAction ->
             editable && hasSel && not (selectionHasLocked model)
@@ -622,3 +521,6 @@ actionVisible model action =
 
         OrganizeNewFolderAction ->
             editable && hasFolder
+
+        _ ->
+            editable && hasSel

@@ -59,34 +59,27 @@ entityPathLabel model kind id =
         stepName =
             Dict.get id (get steps model)
 
-        name =
+        unnamed =
+            "#" ++ String.fromInt id
+
+        ( name, typeLabel, path ) =
             case kind of
                 ProjectChild ->
-                    Dict.get id projects_ |> Maybe.map .name |> Maybe.withDefault ("#" ++ String.fromInt id)
+                    ( Dict.get id projects_ |> Maybe.map .name |> Maybe.withDefault unnamed
+                    , "(folder) "
+                    , canonicalNamePath model id
+                    )
 
                 StepChild ->
-                    stepName |> Maybe.map .name |> Maybe.withDefault ("#" ++ String.fromInt id)
-
-        typeLabel =
-            case kind of
-                ProjectChild ->
-                    "(folder) "
-
-                StepChild ->
-                    stepName |> Maybe.map (\step -> "(" ++ step.type_ ++ ") ") |> Maybe.withDefault "(step) "
-
-        path =
-            case kind of
-                ProjectChild ->
-                    canonicalNamePath model id
-
-                StepChild ->
-                    case Model.childLinksTo StepChild id projects_ of
+                    ( stepName |> Maybe.map .name |> Maybe.withDefault unnamed
+                    , stepName |> Maybe.map (\step -> "(" ++ step.type_ ++ ") ") |> Maybe.withDefault "(step) "
+                    , case Model.childLinksTo StepChild id projects_ of
                         [] ->
                             "/unfiled"
 
                         ( parentId, _ ) :: _ ->
                             canonicalNamePath model parentId
+                    )
     in
     typeLabel ++ name ++ " — " ++ path
 

@@ -288,19 +288,8 @@ type alias ListingSelection =
     }
 
 
-type ListingScope
-    = ProjectListing Int
-    | UnfiledListing
-
-
-listingScopeProjectId : ListingScope -> Maybe Int
-listingScopeProjectId scope =
-    case scope of
-        ProjectListing projectId ->
-            Just projectId
-
-        UnfiledListing ->
-            Nothing
+type alias ListingScope =
+    Int
 
 
 type ClipboardMode
@@ -491,12 +480,12 @@ projectChildren project =
     sortChildLinks project.children
 
 
-childProjectIds : ProjectRecord -> List Int
-childProjectIds project =
+childIdsOf : ChildKind -> ProjectRecord -> List Int
+childIdsOf kind project =
     projectChildren project
         |> List.filterMap
             (\link ->
-                if link.kind == ProjectChild then
+                if link.kind == kind then
                     Just link.id
 
                 else
@@ -504,12 +493,34 @@ childProjectIds project =
             )
 
 
+descendantProjectIds : Dict Int ProjectRecord -> Int -> Set Int
+descendantProjectIds projects rootId =
+    let
+        childIds id =
+            Dict.get id projects
+                |> Maybe.unwrap [] (childIdsOf ProjectChild)
+
+        expand visited queue =
+            case queue of
+                [] ->
+                    visited
+
+                current :: rest ->
+                    if Set.member current visited then
+                        expand visited rest
+
+                    else
+                        expand (Set.insert current visited) (rest ++ childIds current)
+    in
+    expand Set.empty (childIds rootId)
+
+
 canonicalProjectPath : List Int -> Dict Int ProjectRecord -> Int -> List Int
 canonicalProjectPath currentPath projects targetId =
     let
         childIds id =
             Dict.get id projects
-                |> Maybe.unwrap [] childProjectIds
+                |> Maybe.unwrap [] (childIdsOf ProjectChild)
                 |> List.unique
 
         search queue visited =
@@ -2476,28 +2487,7 @@ childLinksTo kind id projects =
 
 isAncestorProject : Dict Int ProjectRecord -> Int -> Int -> Bool
 isAncestorProject projects ancestorId targetId =
-    let
-        search visited queue =
-            case queue of
-                [] ->
-                    False
-
-                current :: rest ->
-                    if Set.member current visited then
-                        search visited rest
-
-                    else if current == targetId && current /= ancestorId then
-                        True
-
-                    else
-                        let
-                            childIds =
-                                Dict.get current projects
-                                    |> Maybe.unwrap [] childProjectIds
-                        in
-                        search (Set.insert current visited) (childIds ++ rest)
-    in
-    search Set.empty [ ancestorId ]
+    targetId /= ancestorId && Set.member targetId (descendantProjectIds projects ancestorId)
 
 
 applyTreeOp : TreeOp -> ( Dict Int ProjectRecord, Dict Int StepRecord ) -> ( Dict Int ProjectRecord, Dict Int StepRecord )
@@ -2527,28 +2517,11 @@ applyTreeOp op ( projects, steps ) =
             changeChildren parentId (List.filter (not << sameEntity ref))
 
         OrderOp parentId refs ->
-            ( Dict.update parentId
-                (Maybe.map
-                    (\project ->
-                        let
-                            children_ =
-                                project.children
-
-                            listed =
-                                List.filter (\link -> List.any (sameEntity link) refs) children_
-
-                            listedInOrder =
-                                List.filterMap (\wanted -> List.find (sameEntity wanted) listed) refs
-
-                            unlisted =
-                                List.filter (\link -> not (List.any (sameEntity link) listedInOrder)) children_
-                        in
-                        { project | children = dense (listedInOrder ++ unlisted) }
-                    )
+            changeChildren parentId
+                (\children_ ->
+                    List.filterMap (\wanted -> List.find (sameEntity wanted) children_) refs
+                        ++ List.filter (\link -> not (List.any (sameEntity link) refs)) children_
                 )
-                projects
-            , steps
-            )
 
         HideOp parentId ref hidden_ ->
             changeChildren parentId
@@ -2623,15 +2596,8 @@ invertTreeOps before ops =
                     List.filter (\link -> not (List.any (sameEntity link) pre)) post
 
                 removedHiddenRestores =
-                    List.filterMap
-                        (\link ->
-                            if link.hidden then
-                                Just (HideOp parentId (childRefOf link) True)
-
-                            else
-                                Nothing
-                        )
-                        removed
+                    List.filter .hidden removed
+                        |> List.map (\link -> HideOp parentId (childRefOf link) True)
 
                 hiddenRestores =
                     List.filterMap
@@ -2642,12 +2608,15 @@ invertTreeOps before ops =
                         )
                         post
 
+                preOrder =
+                    List.map childRefOf (sortChildLinks pre)
+
                 orderChanged =
-                    List.map childRefOf (sortChildLinks pre) /= List.map childRefOf (sortChildLinks post)
+                    preOrder /= List.map childRefOf (sortChildLinks post)
 
                 inverseOrder =
                     if orderChanged then
-                        [ OrderOp parentId (List.map childRefOf (sortChildLinks pre)) ]
+                        [ OrderOp parentId preOrder ]
 
                     else
                         []

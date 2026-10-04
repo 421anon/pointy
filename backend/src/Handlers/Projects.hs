@@ -2,14 +2,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Handlers.Projects (getProjectsHandler, patchProjectHandler, batchProjectOpsHandler, postProjectHandler, readRecordMtimes, annotateRecordChildren) where
+module Handlers.Projects (getProjectsHandler, readJsonAtCommit, patchProjectHandler, batchProjectOpsHandler, postProjectHandler, readRecordMtimes, annotateRecordChildren) where
 
 import ApiTypes (DynamicJson (..))
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Monad.Except (ExceptT, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Object, Result (..), Value (..), eitherDecode, encode, fromJSON, toJSON, withObject, (.:))
+import Data.Aeson (FromJSON (..), Object, Result (..), ToJSON, Value (..), eitherDecode, encode, fromJSON, toJSON, withObject, (.:))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.List (foldl')
@@ -29,7 +29,7 @@ import Handlers.StepReview (ensureStepsUnreviewed)
 import ProjectFiles (applyTreeOpsIn, applyTreeOpsInWith, nextProjectId, projectFilePath, rewriteNixFile, srcFilesPath, stepFilePath, valueToNix)
 import ProjectTree (ChildRef (..), ProjectFields, TreeOp (..), TreePlan (..), TreeState (..), describeTreeOps, newProject)
 import Servant (NoContent (..))
-import Servant.Server (err400, err409, err500, errBody)
+import Servant.Server (ServerError, err400, err409, err500, errBody)
 import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
@@ -39,14 +39,19 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 getProjectsHandler :: Maybe T.Text -> AppM DynamicJson
-getProjectsHandler commit = do
-    result <- lift $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
-        let targetCommit = maybe commitHash T.unpack commit
-        projects <- evalProjectDefinitions (ReadRepoContext repoPath targetCommit)
-        times <- liftIO $ readRecordMtimes repoPath targetCommit
-        return $ encode (annotateRecordMtimes times projects)
+getProjectsHandler commit =
+    readJsonAtCommit commit $ \ctx -> do
+        projects <- evalProjectDefinitions ctx
+        times <- liftIO $ readRecordMtimes (readRepoPath ctx) (readCommitHash ctx)
+        pure (annotateRecordMtimes times projects)
+
+readJsonAtCommit :: (IOE :> es, ToJSON a) => Maybe T.Text -> (ReadRepoContext -> ExceptT String (Eff es) a) -> ExceptT ServerError (Eff es) DynamicJson
+readJsonAtCommit commit action = do
+    result <- lift $ withReadRepoTransaction $ \ctx -> do
+        let targetCommit = maybe (readCommitHash ctx) T.unpack commit
+        action (ReadRepoContext (readRepoPath ctx) targetCommit)
     case result of
-        Right output -> return (DynamicJson output)
+        Right output -> return (DynamicJson (encode output))
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 data RecordTimes = RecordTimes
@@ -83,13 +88,11 @@ loadRecordMtimes repoPath commit = do
         | null line = (stamp, modified, created)
         | otherwise = case words line of
             [status, path] | status == "A" ->
-                ( stamp
-                , Map.insertWith (\_ old -> old) path stamp modified
-                , Map.insertWith (\_ old -> old) path stamp created
-                )
-            [_, path] -> (stamp, Map.insertWith (\_ old -> old) path stamp modified, created)
-            [_, _, path] -> (stamp, Map.insertWith (\_ old -> old) path stamp modified, created)
+                (stamp, keepFirst stamp path modified, keepFirst stamp path created)
+            ws | length ws `elem` [2, 3] ->
+                (stamp, keepFirst stamp (last ws) modified, created)
             _ -> (utcStamp line, modified, created)
+    keepFirst stamp path = Map.insertWith (\_ old -> old) path stamp
     collect (_, modified, created) = RecordTimes modified created
 
 utcStamp :: String -> T.Text

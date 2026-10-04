@@ -1061,11 +1061,6 @@ projectRollups =
     lens ".projectRollups" Model.getProjectRollups (\(Model m) rollups -> Model { m | projectRollups = rollups })
 
 
-projectRollupAt : Int -> Traversal Model (ApiData Model.ProjectRollup) x y
-projectRollupAt projectId =
-    projectRollups << Dict.Accessors.id projectId << just
-
-
 projectsRequest : Lens ls Model Int x y
 projectsRequest =
     lens ".projectsRequest" Model.getProjectsRequest (\(Model m) request -> Model { m | projectsRequest = request })

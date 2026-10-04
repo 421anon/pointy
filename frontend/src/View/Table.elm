@@ -137,6 +137,11 @@ timeMillis mTime =
     Maybe.map Time.posixToMillis mTime |> Maybe.withDefault 0
 
 
+isFolderRow : ListingRow -> Bool
+isFolderRow =
+    .link >> .kind >> (==) Model.ProjectChild
+
+
 sortRows : Model.ListingPreferences -> List ListingRow -> List ListingRow
 sortRows prefs rows =
     let
@@ -150,11 +155,8 @@ sortRows prefs rows =
             else
                 sorted
 
-        isFolder =
-            .link >> .kind >> (==) Model.ProjectChild
-
         ( folders, steps_ ) =
-            List.partition isFolder ordered
+            List.partition isFolderRow ordered
     in
     if prefs.foldersFirst then
         folders ++ steps_
@@ -169,11 +171,8 @@ groupRows prefs stepConfig rows =
         sorted =
             sortRows prefs rows
 
-        isFolder =
-            .link >> .kind >> (==) Model.ProjectChild
-
         ( folders, steps_ ) =
-            List.partition isFolder sorted
+            List.partition isFolderRow sorted
 
         typeOrder typeName =
             ( Dict.get typeName stepConfig |> Maybe.andThen .sortKey |> Maybe.withDefault 2147483647
@@ -297,7 +296,11 @@ viewPasteButtons model =
         |> List.filter (Model.Selection.actionVisible model)
         |> List.map
             (\action ->
-                viewIconButtonWithTooltip (Model.Selection.actionIcon action) True (Model.Selection.actionLabel model action) (Organize.runAction action)
+                let
+                    spec =
+                        Model.Selection.actionSpec model action
+                in
+                viewIconButtonWithTooltip spec.icon True spec.label (Organize.runAction action)
             )
 
 
@@ -482,7 +485,7 @@ viewRow model rowContext orderedRefs row =
         dragAttrs =
             if rowContext.editable then
                 View.Organize.rowDragAttrs scope row.link
-                    ++ View.Organize.dropEdgeAttrs model scope
+                    ++ View.Organize.dropEdgeAttrs model
                     ++ (if isFolder then
                             View.Organize.dropTargetAttrs model row.link.id
 
@@ -616,8 +619,11 @@ viewStatusApiData tableName logState mRecordId status =
     let
         viewStatusPill s =
             let
+                presentation =
+                    View.Lib.statusPresentation s
+
                 colorClass =
-                    View.Lib.statusIndicatorClass s
+                    presentation.className
 
                 statusText =
                     case s of
@@ -625,7 +631,7 @@ viewStatusApiData tableName logState mRecordId status =
                             "Failure: " ++ err
 
                         _ ->
-                            View.Lib.statusLabel s
+                            presentation.label
 
                 showsLog =
                     case s of
@@ -1003,8 +1009,8 @@ viewStepRecordActions parentId link name entry stepConfig presentTypes page reco
         (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions parentId link spec isReadOnly record)
 
 
-viewAddOrEditRecordForm : Model -> Maybe Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
-viewAddOrEditRecordForm model mParentId spec table fields extraSection record =
+viewAddOrEditRecordForm : Model -> Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
+viewAddOrEditRecordForm model parentId spec table fields extraSection record =
     let
         readOnly =
             stepFormReadOnly model spec record
@@ -1066,7 +1072,7 @@ viewAddOrEditRecordForm model mParentId spec table fields extraSection record =
         viewSelectExisting state =
             let
                 availableItems =
-                    Model.Lib.linkCandidates model (Maybe.withDefault Route.rootProjectId mParentId)
+                    Model.Lib.linkCandidates model parentId
                         |> List.map
                             (\( ref, label ) ->
                                 { id = Just ref.id, name = label, mProjectId = Nothing, ref = Just ref }
@@ -1082,7 +1088,7 @@ viewAddOrEditRecordForm model mParentId spec table fields extraSection record =
                                         [ "unfiled" ]
 
                                     parents ->
-                                        List.map (\parentId -> "in " ++ Model.Lib.canonicalNamePath model parentId) parents
+                                        List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model linkedParentId) parents
                             )
             in
             Select.view

@@ -86,48 +86,26 @@ boolText value =
         "false"
 
 
-statusIndicatorClass : Model.Status -> String
-statusIndicatorClass status =
+statusPresentation : Model.Status -> { className : String, label : String }
+statusPresentation status =
     case status of
         Model.StatusNotStarted ->
-            "status-not-started"
+            { className = "status-not-started", label = "Not Started" }
 
         Model.StatusRunning ->
-            "status-running"
+            { className = "status-running", label = "Running" }
 
         Model.StatusSuccess ->
-            "status-success"
+            { className = "status-success", label = "Success" }
 
         Model.StatusFailure _ ->
-            "status-failure"
+            { className = "status-failure", label = "Failure" }
 
         Model.StatusBuiltNotCertified ->
-            "status-built-not-certified"
+            { className = "status-built-not-certified", label = "Not Certified" }
 
         Model.StatusCertificationFailed _ ->
-            "status-certification-failed"
-
-
-statusLabel : Model.Status -> String
-statusLabel status =
-    case status of
-        Model.StatusNotStarted ->
-            "Not Started"
-
-        Model.StatusRunning ->
-            "Running"
-
-        Model.StatusSuccess ->
-            "Success"
-
-        Model.StatusFailure _ ->
-            "Failure"
-
-        Model.StatusBuiltNotCertified ->
-            "Not Certified"
-
-        Model.StatusCertificationFailed _ ->
-            "Certification Failed"
+            { className = "status-certification-failed", label = "Certification Failed" }
 
 
 rollupChildFor : Model -> Maybe Int -> Int -> Maybe Model.RollupChild
@@ -142,11 +120,15 @@ viewRollupSummary : Model -> Maybe Int -> Int -> Html msg
 viewRollupSummary model mParentProjectId folderProjectId =
     let
         chip status count =
+            let
+                presentation =
+                    statusPresentation status
+            in
             Html.span
                 [ class "rollup-chip"
-                , Html.Attributes.title (statusLabel status ++ ": " ++ String.fromInt count)
+                , Html.Attributes.title (presentation.label ++ ": " ++ String.fromInt count)
                 ]
-                [ Html.span [ class ("status-indicator " ++ statusIndicatorClass status) ] []
+                [ Html.span [ class ("status-indicator " ++ presentation.className) ] []
                 , Html.text (String.fromInt count)
                 ]
     in

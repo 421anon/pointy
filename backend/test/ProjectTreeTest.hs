@@ -74,14 +74,11 @@ applyTests = do
 orderTests :: IO ()
 orderTests = do
     let plan =
-            expectPlan "order with unlisted children" $
-                applyTreeOps
-                    ( projectState
-                        [ (1, [childList [stepEntry 5 ["sortKey" .= (2 :: Int)], stepEntry 6 ["sortKey" .= (0 :: Int)], stepEntry 7 [], stepEntry 8 ["sortKey" .= (1 :: Int)]]])
-                        ]
-                        (Set.fromList [5, 6, 7, 8])
-                    )
-                    [TreeOrder 1 [StepChild 7, StepChild 5]]
+            singleParentPlan
+                "order with unlisted children"
+                [stepEntry 5 ["sortKey" .= (2 :: Int)], stepEntry 6 ["sortKey" .= (0 :: Int)], stepEntry 7 [], stepEntry 8 ["sortKey" .= (1 :: Int)]]
+                [5, 6, 7, 8]
+                [TreeOrder 1 [StepChild 7, StepChild 5]]
     assertEqual
         "listed children come first in the given order and unlisted children keep their effective order after them"
         [StepChild 7, StepChild 5, StepChild 6, StepChild 8]
@@ -90,14 +87,11 @@ orderTests = do
 renumberTests :: IO ()
 renumberTests = do
     let plan =
-            expectPlan "dense renumbering" $
-                applyTreeOps
-                    ( projectState
-                        [ (1, [childList [entryWithNote 5 ["hidden" .= True, "sortKey" .= (5 :: Int), "colour" .= ("red" :: String)], stepEntry 6 ["hidden" .= False, "sortKey" .= (0 :: Int)]]])
-                        ]
-                        (Set.fromList [5, 6])
-                    )
-                    [TreeOrder 1 [StepChild 5]]
+            singleParentPlan
+                "dense renumbering"
+                [entryWithNote 5 ["hidden" .= True, "sortKey" .= (5 :: Int), "colour" .= ("red" :: String)], stepEntry 6 ["hidden" .= False, "sortKey" .= (0 :: Int)]]
+                [5, 6]
+                [TreeOrder 1 [StepChild 5]]
         inners = entryInners plan 1
     assertEqual "children are rewritten in effective order" [StepChild 5, StepChild 6] (writtenRefs plan 1)
     assertEqual "sortKeys are renumbered densely from zero" [Just (Number 0), Just (Number 1)] (map (KeyMap.lookup "sortKey") inners)
@@ -107,61 +101,38 @@ renumberTests = do
 
 linkTests :: IO ()
 linkTests = do
-    let idempotent =
-            expectPlan "link idempotence" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 []]])] (Set.fromList [5, 6]))
-                    [TreeLink 1 (StepChild 5)]
+    let idempotent = singleParentPlan "link idempotence" [stepEntry 5 []] [5, 6] [TreeLink 1 (StepChild 5)]
     assertBool "linking an already-linked child rewrites no project file" (Map.null (planWrites idempotent))
     assertBool "linking an already-linked child broadcasts no child change" (Set.null (planChangedChildren idempotent))
 
-    let appended =
-            expectPlan "link append" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 []]])] (Set.fromList [5, 6]))
-                    [TreeLink 1 (StepChild 6)]
+    let appended = singleParentPlan "link append" [stepEntry 5 []] [5, 6] [TreeLink 1 (StepChild 6)]
     assertEqual "a new link is appended after the existing children" [StepChild 5, StepChild 6] (writtenRefs appended 1)
     assertEqual "the appended link starts visible" (Just (Bool False)) (KeyMap.lookup "hidden" (at 1 (entryInners appended 1)))
 
-    let deduped =
-            expectPlan "duplicate links dedupe" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 ["sortKey" .= (0 :: Int)], stepEntry 5 ["sortKey" .= (1 :: Int)]]])] (Set.fromList [5, 6]))
-                    [TreeLink 1 (StepChild 6)]
+    let deduped = singleParentPlan "duplicate links dedupe" [stepEntry 5 ["sortKey" .= (0 :: Int)], stepEntry 5 ["sortKey" .= (1 :: Int)]] [5, 6] [TreeLink 1 (StepChild 6)]
     assertEqual "duplicate links collapse to the first occurrence" [StepChild 5, StepChild 6] (writtenRefs deduped 1)
 
 unlinkTests :: IO ()
 unlinkTests = do
-    let plan =
-            expectPlan "unlink removes the matching entry" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 [], stepEntry 6 []]])] (Set.fromList [5, 6]))
-                    [TreeUnlink 1 (StepChild 5)]
+    let plan = singleParentPlan "unlink removes the matching entry" [stepEntry 5 [], stepEntry 6 []] [5, 6] [TreeUnlink 1 (StepChild 5)]
     assertEqual "the unlinked child is gone" [StepChild 6] (writtenRefs plan 1)
     assertEqual "the parent's children changed" (Set.fromList [1]) (planChangedChildren plan)
 
-    let absent =
-            expectPlan "unlinking an absent child does nothing" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 []]])] (Set.fromList [5]))
-                    [TreeUnlink 1 (StepChild 6)]
+    let absent = singleParentPlan "unlinking an absent child does nothing" [stepEntry 5 []] [5] [TreeUnlink 1 (StepChild 6)]
     assertBool "an absent unlink rewrites no project file" (Map.null (planWrites absent))
 
 hideTests :: IO ()
 hideTests = do
     let plan =
-            expectPlan "hide flips the matching entry" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 ["hidden" .= False, "sortKey" .= (0 :: Int)], stepEntry 6 ["hidden" .= False, "sortKey" .= (1 :: Int)]]])] (Set.fromList [5, 6]))
-                    [TreeHide 1 (StepChild 5) True]
+            singleParentPlan
+                "hide flips the matching entry"
+                [stepEntry 5 ["hidden" .= False, "sortKey" .= (0 :: Int)], stepEntry 6 ["hidden" .= False, "sortKey" .= (1 :: Int)]]
+                [5, 6]
+                [TreeHide 1 (StepChild 5) True]
     assertEqual "the matching entry is hidden" (Just (Bool True)) (KeyMap.lookup "hidden" (at 0 (entryInners plan 1)))
     assertEqual "the other entry keeps its flag" (Just (Bool False)) (KeyMap.lookup "hidden" (at 1 (entryInners plan 1)))
 
-    let absent =
-            expectPlan "hiding an absent child does nothing" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 ["hidden" .= False]]])] (Set.fromList [5]))
-                    [TreeHide 1 (StepChild 6) True]
+    let absent = singleParentPlan "hiding an absent child does nothing" [stepEntry 5 ["hidden" .= False]] [5] [TreeHide 1 (StepChild 6) True]
     assertBool "an absent hide rewrites no project file" (Map.null (planWrites absent))
 
 cycleTests :: IO ()
@@ -234,9 +205,7 @@ deleteTests = do
     assertEqual "a surviving parent loses the project link" [ProjectChild 3] (writtenRefs projectPlan 1)
 
     expectError "a child deleted earlier in the batch cannot be linked again" (DeletedEarlier (StepChild 5)) $
-        applyTreeOps
-            (projectState [(1, [childList [stepEntry 5 []]])] (Set.fromList [5]))
-            [TreeDelete (StepChild 5), TreeLink 1 (StepChild 5)]
+        singleParentOps [stepEntry 5 []] [5] [TreeDelete (StepChild 5), TreeLink 1 (StepChild 5)]
 
     expectUnreadable "a delete is refused while an unreadable project file exists" 2 $
         applyTreeOps
@@ -256,30 +225,22 @@ deleteTests = do
 
 updateTests :: IO ()
 updateTests = do
-    let plan =
-            expectPlan "update keeps children" $
-                applyTreeOps
-                    (projectState [(1, [childList [stepEntry 5 []]])] (Set.fromList [5]))
-                    [TreeUpdate 1 (ProjectFields "New" (Just "preset") Nothing)]
+    let plan = singleParentPlan "update keeps children" [stepEntry 5 []] [5] [TreeUpdate 1 (ProjectFields "New" (Just "preset") Nothing)]
     assertEqual "children survive a field update" [StepChild 5] (writtenRefs plan 1)
     assertEqual "the name is replaced" (Just (String "New")) (Map.lookup 1 (planWrites plan) >>= KeyMap.lookup "name")
     assertEqual "the preset is written" (Just (String "preset")) (Map.lookup 1 (planWrites plan) >>= KeyMap.lookup "preset")
 
-    let unchanged =
-            expectPlan "an identical update rewrites nothing" $
-                applyTreeOps
-                    (projectState [(1, [childList []])] Set.empty)
-                    [TreeUpdate 1 (ProjectFields "Project 1" Nothing Nothing)]
+    let unchanged = singleParentPlan "an identical update rewrites nothing" [] [] [TreeUpdate 1 (ProjectFields "Project 1" Nothing Nothing)]
     assertBool "an identical update produces no write" (Map.null (planWrites unchanged))
 
 existenceTests :: IO ()
 existenceTests = do
     expectError "linking under an unknown parent is refused" (UnknownChild (ProjectChild 7)) $
-        applyTreeOps (projectState [(1, [childList []])] (Set.fromList [5])) [TreeLink 7 (StepChild 5)]
+        singleParentOps [] [5] [TreeLink 7 (StepChild 5)]
     expectError "linking an unknown step is refused" (UnknownChild (StepChild 9)) $
-        applyTreeOps (projectState [(1, [childList []])] (Set.fromList [5])) [TreeLink 1 (StepChild 9)]
+        singleParentOps [] [5] [TreeLink 1 (StepChild 9)]
     expectError "linking an unknown project is refused" (UnknownChild (ProjectChild 9)) $
-        applyTreeOps (projectState [(1, [childList []])] Set.empty) [TreeLink 1 (ProjectChild 9)]
+        singleParentOps [] [] [TreeLink 1 (ProjectChild 9)]
 
 legacyTests :: IO ()
 legacyTests = do
@@ -308,6 +269,13 @@ projectState projects steps =
         { treeProjects = Map.fromList [(projectId, ProjectReadable (objectOf (project projectId fields))) | (projectId, fields) <- projects]
         , treeSteps = steps
         }
+
+singleParentOps :: [Value] -> [Int] -> [TreeOp] -> Either TreeOpError TreePlan
+singleParentOps entries stepIds ops =
+    applyTreeOps (projectState [(1, [childList entries])] (Set.fromList stepIds)) ops
+
+singleParentPlan :: String -> [Value] -> [Int] -> [TreeOp] -> TreePlan
+singleParentPlan label entries stepIds = expectPlan label . singleParentOps entries stepIds
 
 project :: Int -> [Pair] -> Value
 project projectId fields = object (("name" .= ("Project " ++ show projectId)) : fields)

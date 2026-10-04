@@ -186,9 +186,12 @@ editRecordName lens value =
     Flow.over (remkT lens << edited << just) (\record -> { record | name = value })
 
 
-createTail : A_Traversal Model (Table (BaseRecord a)) -> Flow Model ()
-createTail lens =
-    endRecordEdit lens |> Flow.seq loadProjects
+finishCreate : TableSpec (BaseRecord a) -> BaseRecord a -> Flow Model (BaseRecord a)
+finishCreate spec record =
+    Flow.pure record.id
+        |> Flow.assertJust
+        |> Flow.seq (endRecordEdit (TableSpec.getLens spec) |> Flow.seq loadProjects)
+        |> Flow.return record
 
 
 createProject : TableSpec ProjectRecord -> ProjectRecord -> FlowError Http.Error Model ProjectRecord
@@ -198,13 +201,7 @@ createProject spec record =
             Flow.forAll currentProjectId
                 (\parentId ->
                     callApi void (Api.createProject stepConfig_ parentId record)
-                        |> FlowError.andThen
-                            (\newRecord ->
-                                Flow.pure newRecord.id
-                                    |> Flow.assertJust
-                                    |> Flow.seq (createTail (TableSpec.getLens spec))
-                                    |> Flow.return newRecord
-                            )
+                        |> FlowError.andThen (finishCreate spec)
                 )
         )
 
@@ -216,13 +213,7 @@ createStep mSourceId spec record =
             Flow.forAll (stepConfig << success << Dict.Accessors.at (TableSpec.getName spec) << just)
                 (\entry ->
                     callApi void (Api.createStep (Just projectId) mSourceId entry.stepType record)
-                        |> FlowError.andThen
-                            (\newRecord ->
-                                Flow.pure newRecord.id
-                                    |> Flow.assertJust
-                                    |> Flow.seq (createTail (TableSpec.getLens spec))
-                                    |> Flow.return newRecord
-                            )
+                        |> FlowError.andThen (finishCreate spec)
                 )
         )
 
@@ -694,35 +685,30 @@ loadProjectRollup =
                                         (Flow.over projectRollups
                                             (Dict.update projectId (Maybe.withDefault ApiData.NotAsked >> ApiData.toLoading >> Just))
                                         )
-                                    |> Flow.seq
-                                        (Api.fetchProjectRollup projectId mCommit_
-                                            |> Flow.andThen
-                                                (\result ->
-                                                    Flow.get
-                                                        |> Flow.andThen
-                                                            (\current ->
-                                                                if Dict.get projectId (Model.getRollupRequests current) /= Just request then
-                                                                    Flow.pure ()
-
-                                                                else if rollupTarget current /= Just ( projectId, mCommit_ ) then
-                                                                    Flow.pure ()
-
-                                                                else
-                                                                    Flow.over projectRollups (Dict.insert projectId (ApiData.fromResult result))
-                                                                        |> Flow.seq
-                                                                            (case result of
-                                                                                Err err ->
-                                                                                    addToast False (Http.errorMessage err)
-
-                                                                                Ok _ ->
-                                                                                    Flow.pure ()
-                                                                            )
-                                                            )
-                                                )
-                                        )
+                                    |> Flow.seq (Api.fetchProjectRollup projectId mCommit_ |> Flow.andThen (settleProjectRollup projectId mCommit_ request))
                             )
                 )
         )
+
+
+settleProjectRollup : Int -> Maybe String -> Int -> Result Http.Error Model.ProjectRollup -> Flow Model ()
+settleProjectRollup projectId mCommit request result =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if
+                    (Dict.get projectId (Model.getRollupRequests model) /= Just request)
+                        || (rollupTarget model /= Just ( projectId, mCommit ))
+                then
+                    Flow.pure ()
+
+                else
+                    Flow.over projectRollups (Dict.insert projectId (ApiData.fromResult result))
+                        |> Flow.seq
+                            (Flow.pure result
+                                |> FlowError.foldResult (\_ -> Flow.pure ()) (\err -> addToast False (Http.errorMessage err))
+                            )
+            )
 
 
 rollupTarget : Model -> Maybe ( Int, Maybe String )
@@ -892,8 +878,12 @@ removeReview stepId =
         )
 
 
-upsertProject : TableSpec ProjectRecord -> Flow Model ()
-upsertProject spec =
+upsertRecord :
+    TableSpec (BaseRecord a)
+    -> (BaseRecord a -> Flow Model ())
+    -> (Model -> Int -> BaseRecord a -> Flow Model ())
+    -> Flow Model ()
+upsertRecord spec createNew saveExisting =
     let
         lens =
             TableSpec.getLens spec
@@ -908,7 +898,7 @@ upsertProject spec =
                         (\( edited_, addMode_ ) ->
                             case ( edited_.id, addMode_ ) of
                                 ( Nothing, AddNew ) ->
-                                    createProject spec edited_ |> Flow.return ()
+                                    createNew edited_
 
                                 ( Nothing, LinkExisting ) ->
                                     Flow.forAll currentProjectId
@@ -918,74 +908,63 @@ upsertProject spec =
                                                 |> Flow.seq (endRecordEdit lens)
                                         )
 
-                                ( Just projectId, _ ) ->
-                                    saveExistingRecord (projectRecordById projectId)
-                                        edited_
-                                        (\current -> { current | name = edited_.name, templateSource = edited_.templateSource })
-                                        spec
-                                        |> Flow.seq loadProjects
+                                ( Just recordId, _ ) ->
+                                    saveExisting model recordId edited_
                         )
             )
+
+
+upsertProject : TableSpec ProjectRecord -> Flow Model ()
+upsertProject spec =
+    upsertRecord spec
+        (\edited_ -> createProject spec edited_ |> Flow.return ())
+        (\_ recordId edited_ ->
+            saveExistingRecord (projectRecordById recordId)
+                edited_
+                (\current -> { current | name = edited_.name, templateSource = edited_.templateSource })
+                spec
+                |> Flow.seq loadProjects
+        )
 
 
 upsertStep : StepSpec -> Flow Model ()
 upsertStep spec =
-    let
-        lens =
-            TableSpec.getLens spec
-    in
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
-                    |> Flow.assertJust
-                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == LinkExisting)
-                    |> Flow.andThen
-                        (\( edited_, addMode_ ) ->
-                            Flow.forAll currentProjectId
-                                (\parentId ->
-                                    case ( edited_.id, addMode_ ) of
-                                        ( Nothing, AddNew ) ->
-                                            createStep Nothing spec edited_ |> Flow.return ()
+    Flow.forAll currentProjectId
+        (\_ ->
+            upsertRecord spec
+                (\edited_ -> createStep Nothing spec edited_ |> Flow.return ())
+                (\model stepId edited_ ->
+                    let
+                        srcFilePaths =
+                            try (stepRecordById stepId << srcFiles) model
+                                |> Maybe.unwrap [] (Model.srcFileChangePaths [])
 
-                                        ( Nothing, LinkExisting ) ->
-                                            linkExistingRecords parentId (all (lens << selectExistingSteps << selected << each << itemRef << just) model)
-                                                |> Flow.seq (Flow.setAll (lens << selectExistingSteps << selected) [])
-                                                |> Flow.seq (endRecordEdit lens)
+                        originalArgs =
+                            try (stepRecordById stepId << args) model
 
-                                        ( Just stepId, _ ) ->
-                                            let
-                                                srcFilePaths =
-                                                    try (stepRecordById stepId << srcFiles) model
-                                                        |> Maybe.unwrap [] (Model.srcFileChangePaths [])
+                        argsChanged =
+                            originalArgs /= Just edited_.args
 
-                                                originalArgs =
-                                                    try (stepRecordById stepId << args) model
+                        mergeFn r =
+                            { edited_
+                                | runState =
+                                    if argsChanged then
+                                        ApiData.loading Nothing
 
-                                                argsChanged =
-                                                    originalArgs /= Just edited_.args
+                                    else
+                                        r.runState
+                                , srcFiles = Model.closeDirectoryFileViews r.srcFiles
+                                , srcFileDraft = r.srcFileDraft
+                                , srcFileWriting = r.srcFileWriting
+                            }
 
-                                                mergeFn r =
-                                                    { edited_
-                                                        | runState =
-                                                            if argsChanged then
-                                                                ApiData.loading Nothing
-
-                                                            else
-                                                                r.runState
-                                                        , srcFiles = Model.closeDirectoryFileViews r.srcFiles
-                                                        , srcFileDraft = r.srcFileDraft
-                                                        , srcFileWriting = r.srcFileWriting
-                                                    }
-
-                                                saveSrcFiles =
-                                                    saveSrcFileChanges stepId srcFilePaths
-                                                        |> Flow.return ()
-                                            in
-                                            saveExistingRecordWith saveSrcFiles (stepRecordById stepId) edited_ mergeFn spec
-                                )
-                        )
-            )
+                        saveSrcFiles =
+                            saveSrcFileChanges stepId srcFilePaths
+                                |> Flow.return ()
+                    in
+                    saveExistingRecordWith saveSrcFiles (stepRecordById stepId) edited_ mergeFn spec
+                )
+        )
 
 
 endRecordEdit : A_Traversal Model (Table (BaseRecord a)) -> Flow Model ()
@@ -3989,52 +3968,16 @@ rollupAffectedFor model statuses =
 
 stepsBelow : Dict Int ProjectRecord -> Int -> Set Int
 stepsBelow projects_ rootId =
-    let
-        recurse visited queue steps =
-            case queue of
-                [] ->
-                    steps
-
-                current :: rest ->
-                    if Set.member current visited then
-                        recurse visited rest steps
-
-                    else
-                        let
-                            links =
-                                Dict.get current projects_ |> Maybe.unwrap [] Model.projectChildren
-
-                            stepIds =
-                                List.filterMap
-                                    (\link ->
-                                        if link.kind == StepChild then
-                                            Just link.id
-
-                                        else
-                                            Nothing
-                                    )
-                                    links
-
-                            projectIds =
-                                List.filterMap
-                                    (\link ->
-                                        if link.kind == ProjectChild then
-                                            Just link.id
-
-                                        else
-                                            Nothing
-                                    )
-                                    links
-                        in
-                        recurse (Set.insert current visited) (projectIds ++ rest) (List.foldl Set.insert steps stepIds)
-
-        directProjects =
-            Dict.get rootId projects_
-                |> Maybe.unwrap [] Model.projectChildren
-                |> List.filter (.kind >> (==) ProjectChild)
-                |> List.map .id
-    in
-    recurse Set.empty directProjects Set.empty
+    Model.descendantProjectIds projects_ rootId
+        |> Set.foldl
+            (\projectId steps ->
+                Dict.get projectId projects_
+                    |> Maybe.unwrap steps
+                        (\project ->
+                            List.foldl Set.insert steps (Model.childIdsOf StepChild project)
+                        )
+            )
+            Set.empty
 
 
 applyStepStatuses : Dict Int ( String, Status ) -> Flow Model ()

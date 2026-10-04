@@ -11,10 +11,11 @@ import Flow exposing (Flow)
 import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildKind(..), ChildRef, ClipboardMode(..), ListingScope(..), Model, OrganizeAction(..), OrganizeDialog, OrganizeDialogMode(..), OrganizeDragEvent(..), OrganizeDropAction(..), OrganizeDropTarget(..), ProjectRecord, TemplateSource(..), TreeOp(..), blankProject)
+import Model.Core as Model exposing (ChildKind(..), ChildRef, ClipboardMode(..), ListingScope, Model, OrganizeAction(..), OrganizeDialog, OrganizeDialogMode(..), OrganizeDragEvent(..), OrganizeDropAction(..), OrganizeDropTarget(..), ProjectRecord, TemplateSource(..), TreeOp(..), blankProject)
 import Model.Lenses exposing (listingPreferences, listingSelection, organizeClipboard, organizeContextMenu, organizeDialog, organizeDrag, projectRecordById, projects, projectsDict, stepConfig, stepRecordById, store)
+import Model.Lib as Lib
 import Model.Selection as Selection
-import Route
+import Model.Shadow exposing (StepConfig)
 import Specs
 
 
@@ -23,14 +24,14 @@ dialogId =
     "organize-dialog"
 
 
-selectedScopeAndRefs : Model -> ( ListingScope, List ChildRef )
+selectedScopeAndRefs : Model -> Maybe ( ListingScope, List ChildRef )
 selectedScopeAndRefs model =
     case get listingSelection model of
         Just selection ->
-            ( selection.scope, selection.refs )
+            Just ( selection.scope, selection.refs )
 
         Nothing ->
-            ( Selection.currentListingScope model, [] )
+            Maybe.map (\scope -> ( scope, [] )) (Selection.currentListingScope model)
 
 
 clickRow : ListingScope -> List ChildRef -> Bool -> ChildRef -> Flow Model ()
@@ -55,11 +56,12 @@ selectAll =
         |> Flow.andThen
             (\model ->
                 Flow.when (Selection.listingEditable model) <|
-                    let
-                        scope =
-                            Selection.currentListingScope model
-                    in
-                    Flow.setAll listingSelection (Selection.selectAllState scope (Selection.visibleRefs model scope))
+                    case Selection.currentListingScope model of
+                        Just scope ->
+                            Flow.setAll listingSelection (Selection.selectAllState scope (Selection.visibleRefs model scope))
+
+                        Nothing ->
+                            Flow.pure ()
             )
 
 
@@ -97,56 +99,57 @@ runAction action =
                 |> Flow.andThen
                     (\model ->
                         Flow.when (Selection.listingEditable model) <|
-                            let
-                                ( scope, refs ) =
-                                    selectedScopeAndRefs model
-                            in
-                            case action of
-                                OrganizeMoveAction ->
-                                    openOrganizeDialogFor OrganizeMove scope refs
+                            case selectedScopeAndRefs model of
+                                Just ( scope, refs ) ->
+                                    runActionOn scope refs action
 
-                                OrganizeLinkAction ->
-                                    openOrganizeDialogFor OrganizeLinkTo scope refs
-
-                                OrganizeGroupAction ->
-                                    openOrganizeDialogFor OrganizeGroup scope refs
-
-                                OrganizeCutAction ->
-                                    cutSelection
-
-                                OrganizeCopyAction ->
-                                    copySelection
-
-                                OrganizeHideAction ->
-                                    hideSelection scope refs
-
-                                OrganizeRemoveAction ->
-                                    removeSelection scope refs
-
-                                OrganizeDuplicateAction ->
-                                    case scope of
-                                        ProjectListing projectId ->
-                                            duplicateInto projectId refs
-
-                                        UnfiledListing ->
-                                            Flow.pure ()
-
-                                OrganizeDeleteAction ->
-                                    openOrganizeDialogFor OrganizeDelete scope refs
-
-                                OrganizeClearAction ->
-                                    clearSelection
-
-                                OrganizePasteAction ->
-                                    pasteClipboard False
-
-                                OrganizePasteDuplicateAction ->
-                                    pasteClipboard True
-
-                                OrganizeNewFolderAction ->
-                                    openOrganizeDialogFor OrganizeGroup scope []
+                                Nothing ->
+                                    Flow.pure ()
                     )
             )
+
+
+runActionOn : ListingScope -> List ChildRef -> OrganizeAction -> Flow Model ()
+runActionOn scope refs action =
+    case action of
+        OrganizeMoveAction ->
+            openOrganizeDialogFor OrganizeMove scope refs
+
+        OrganizeLinkAction ->
+            openOrganizeDialogFor OrganizeLinkTo scope refs
+
+        OrganizeGroupAction ->
+            openOrganizeDialogFor OrganizeGroup scope refs
+
+        OrganizeCutAction ->
+            cutSelection
+
+        OrganizeCopyAction ->
+            copySelection
+
+        OrganizeHideAction ->
+            hideSelection scope refs
+
+        OrganizeRemoveAction ->
+            removeSelection scope refs
+
+        OrganizeDuplicateAction ->
+            duplicateInto scope refs
+
+        OrganizeDeleteAction ->
+            openOrganizeDialogFor OrganizeDelete scope refs
+
+        OrganizeClearAction ->
+            clearSelection
+
+        OrganizePasteAction ->
+            pasteClipboard False
+
+        OrganizePasteDuplicateAction ->
+            pasteClipboard True
+
+        OrganizeNewFolderAction ->
+            openOrganizeDialogFor OrganizeGroup scope []
 
 
 openOrganizeDialogFor : OrganizeDialogMode -> ListingScope -> List ChildRef -> Flow Model ()
@@ -197,10 +200,6 @@ confirmDialog =
                     Just dialog ->
                         Flow.when (Selection.listingEditable model) <|
                             let
-                                finish =
-                                    Flow.setAll organizeDialog Nothing
-                                        |> Flow.seq (Actions.closeDialog dialogId)
-
                                 apply =
                                     case dialog.mode of
                                         OrganizeMove ->
@@ -219,12 +218,12 @@ confirmDialog =
                                                     String.trim dialog.name
                                             in
                                             Flow.when (not (String.isEmpty name))
-                                                (groupIntoNewFolder name (Model.listingScopeProjectId dialog.sourceScope) dialog.refs)
+                                                (groupIntoNewFolder name dialog.sourceScope dialog.refs)
 
                                         OrganizeDelete ->
                                             confirmDeleteRefs dialog.refs
                             in
-                            finish |> Flow.seq apply
+                            closeDialog |> Flow.seq apply
             )
 
 
@@ -242,47 +241,35 @@ confirmDeleteRefs refs =
 
 moveRefsInto : ListingScope -> Int -> List ChildRef -> Flow Model ()
 moveRefsInto sourceScope targetId refs =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                let
-                    ops =
-                        List.concatMap (moveOps model sourceScope targetId) refs
-                in
-                if List.isEmpty ops then
-                    Actions.addToast False "Nothing to move."
-
-                else
-                    organizeWithUndo "Move" ops
-            )
+    organizeOrToast "Move" "Nothing to move." (\model -> List.concatMap (moveOps model sourceScope targetId) refs)
 
 
 linkRefsInto : Int -> List ChildRef -> Flow Model ()
 linkRefsInto targetId refs =
+    organizeOrToast "Link" "Nothing to link." (\model -> List.concatMap (linkOps model targetId) refs)
+
+
+organizeOrToast : String -> String -> (Model -> List TreeOp) -> Flow Model ()
+organizeOrToast label emptyMessage buildOps =
     Flow.get
         |> Flow.andThen
             (\model ->
                 let
                     ops =
-                        List.concatMap (linkOps model targetId) refs
+                        buildOps model
                 in
                 if List.isEmpty ops then
-                    Actions.addToast False "Nothing to link."
+                    Actions.addToast False emptyMessage
 
                 else
-                    organizeWithUndo "Link" ops
+                    organizeWithUndo label ops
             )
 
 
 removeSelection : ListingScope -> List ChildRef -> Flow Model ()
-removeSelection scope refs =
-    case scope of
-        ProjectListing parentId ->
-            Flow.when (not (List.isEmpty refs))
-                (organizeWithUndo "Remove from here" (List.map (UnlinkOp parentId) refs))
-
-        UnfiledListing ->
-            Flow.pure ()
+removeSelection parentId refs =
+    Flow.when (not (List.isEmpty refs))
+        (organizeWithUndo "Remove from here" (List.map (UnlinkOp parentId) refs))
 
 
 unlinkChild : Int -> ChildRef -> Flow Model ()
@@ -309,29 +296,24 @@ unhideAll parentId refs =
 
 
 hideSelection : ListingScope -> List ChildRef -> Flow Model ()
-hideSelection scope refs =
+hideSelection parentId refs =
     Flow.get
         |> Flow.andThen
             (\model ->
-                case scope of
-                    ProjectListing parentId ->
-                        let
-                            hidden =
-                                Selection.shouldHide model
-                        in
-                        Flow.when (not (List.isEmpty refs))
-                            (organizeWithUndo
-                                (if hidden then
-                                    "Hide"
+                let
+                    hidden =
+                        Selection.shouldHide model
+                in
+                Flow.when (not (List.isEmpty refs))
+                    (organizeWithUndo
+                        (if hidden then
+                            "Hide"
 
-                                 else
-                                    "Unhide"
-                                )
-                                (List.map (\ref -> HideOp parentId ref hidden) refs)
-                            )
-
-                    UnfiledListing ->
-                        Flow.pure ()
+                         else
+                            "Unhide"
+                        )
+                        (List.map (\ref -> HideOp parentId ref hidden) refs)
+                    )
             )
 
 
@@ -352,14 +334,15 @@ setClipboard mode label =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    ( scope, refs ) =
-                        selectedScopeAndRefs model
-                in
-                Flow.when (not (List.isEmpty refs))
-                    (Flow.setAll organizeClipboard (Just { mode = mode, sourceScope = scope, refs = refs })
-                        |> Flow.seq (Actions.addToast True (label ++ " " ++ String.fromInt (List.length refs) ++ " item(s)"))
-                    )
+                case selectedScopeAndRefs model of
+                    Just ( scope, refs ) ->
+                        Flow.when (not (List.isEmpty refs))
+                            (Flow.setAll organizeClipboard (Just { mode = mode, sourceScope = scope, refs = refs })
+                                |> Flow.seq (Actions.addToast True (label ++ " " ++ String.fromInt (List.length refs) ++ " item(s)"))
+                            )
+
+                    Nothing ->
+                        Flow.pure ()
             )
 
 
@@ -371,7 +354,7 @@ pasteClipboard asDuplicate =
                 case get organizeClipboard model of
                     Just clipboard ->
                         Flow.when (Selection.listingEditable model) <|
-                            case Model.listingScopeProjectId (Selection.currentListingScope model) of
+                            case Selection.currentListingScope model of
                                 Just targetId ->
                                     if asDuplicate then
                                         duplicateInto targetId clipboard.refs
@@ -412,14 +395,7 @@ pasteInto model targetId clipboard =
 moveOps : Model -> ListingScope -> Int -> ChildRef -> List TreeOp
 moveOps model sourceScope targetId ref =
     if Selection.moveValid model sourceScope targetId ref then
-        (case sourceScope of
-            ProjectListing sourceId ->
-                [ UnlinkOp sourceId ref ]
-
-            UnfiledListing ->
-                []
-        )
-            ++ [ LinkOp targetId ref ]
+        [ UnlinkOp sourceScope ref, LinkOp targetId ref ]
 
     else
         []
@@ -427,7 +403,7 @@ moveOps model sourceScope targetId ref =
 
 linkOps : Model -> Int -> ChildRef -> List TreeOp
 linkOps model targetId ref =
-    if Selection.linkValid model targetId ref then
+    if Lib.linkValid model targetId ref then
         [ LinkOp targetId ref ]
 
     else
@@ -488,31 +464,19 @@ duplicateFolder targetId projectId =
                                 , validationErrors = []
                             }
                     in
-                    Api.createProject config targetId record
-                        |> Flow.andThen
-                            (\result ->
-                                case result of
-                                    Ok newFolder ->
-                                        case newFolder.id of
-                                            Just newId ->
-                                                let
-                                                    ops =
-                                                        List.map (\child -> LinkOp newId (Model.childRefOf child)) (Model.projectChildren project)
-                                                in
-                                                insertNewFolder targetId newId newFolder
-                                                    |> Flow.seq (Flow.when (not (List.isEmpty ops)) (organizeWithUndo "Duplicate" ops))
-
-                                            Nothing ->
-                                                Flow.pure ()
-
-                                    Err err ->
-                                        Actions.addToast False (Http.errorMessage err)
-                            )
+                    createFolder config targetId record <|
+                        \newId newFolder ->
+                            let
+                                ops =
+                                    List.map (\child -> LinkOp newId (Model.childRefOf child)) (Model.projectChildren project)
+                            in
+                            insertNewFolder targetId newId newFolder
+                                |> Flow.seq (Flow.when (not (List.isEmpty ops)) (organizeWithUndo "Duplicate" ops))
                 )
         )
 
 
-groupIntoNewFolder : String -> Maybe Int -> List ChildRef -> Flow Model ()
+groupIntoNewFolder : String -> Int -> List ChildRef -> Flow Model ()
 groupIntoNewFolder name sourceFolderId refs =
     Flow.forAll (stepConfig << success)
         (\config ->
@@ -523,48 +487,48 @@ groupIntoNewFolder name sourceFolderId refs =
                             projects_ =
                                 projectsDict model
 
-                            parentId =
-                                Maybe.withDefault Route.rootProjectId sourceFolderId
-
-                            sourceScope =
-                                Maybe.unwrap UnfiledListing ProjectListing sourceFolderId
-
                             templateSource =
-                                sourceFolderId
-                                    |> Maybe.andThen (\projectId -> Dict.get projectId projects_)
+                                Dict.get sourceFolderId projects_
                                     |> Maybe.map .templateSource
                                     |> Maybe.withDefault (CustomTemplates [])
 
                             record =
                                 { blankProject | name = name, templateSource = templateSource }
                         in
-                        Api.createProject config parentId record
-                            |> Flow.andThen
-                                (\result ->
-                                    case result of
-                                        Ok newFolder ->
-                                            case newFolder.id of
-                                                Just newId ->
-                                                    Flow.get
-                                                        |> Flow.andThen
-                                                            (\freshModel ->
-                                                                let
-                                                                    ops =
-                                                                        List.concatMap (moveOps freshModel sourceScope newId) refs
-                                                                in
-                                                                insertNewFolder parentId newId newFolder
-                                                                    |> Flow.seq (Flow.when (not (List.isEmpty ops)) (organizeWithUndo "Group into new folder" ops))
-                                                                    |> Flow.seq (Flow.async Actions.loadProjects)
-                                                            )
-
-                                                Nothing ->
-                                                    Flow.pure ()
-
-                                        Err err ->
-                                            Actions.addToast False (Http.errorMessage err)
-                                )
+                        createFolder config sourceFolderId record <|
+                            \newId newFolder ->
+                                Flow.get
+                                    |> Flow.andThen
+                                        (\freshModel ->
+                                            let
+                                                ops =
+                                                    List.concatMap (moveOps freshModel sourceFolderId newId) refs
+                                            in
+                                            insertNewFolder sourceFolderId newId newFolder
+                                                |> Flow.seq (Flow.when (not (List.isEmpty ops)) (organizeWithUndo "Group into new folder" ops))
+                                                |> Flow.seq (Flow.async Actions.loadProjects)
+                                        )
                     )
         )
+
+
+createFolder : StepConfig -> Int -> ProjectRecord -> (Int -> ProjectRecord -> Flow Model ()) -> Flow Model ()
+createFolder config parentId record onCreated =
+    Api.createProject config parentId record
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok newFolder ->
+                        case newFolder.id of
+                            Just newId ->
+                                onCreated newId newFolder
+
+                            Nothing ->
+                                Flow.pure ()
+
+                    Err err ->
+                        Actions.addToast False (Http.errorMessage err)
+            )
 
 
 organizeWithUndo : String -> List TreeOp -> Flow Model ()
@@ -605,8 +569,8 @@ dropReorder scope ref before =
     Flow.get
         |> Flow.andThen
             (\model ->
-                case ( get organizeDrag model, Model.listingScopeProjectId scope ) of
-                    ( Just drag, Just parentId_ ) ->
+                case get organizeDrag model of
+                    Just drag ->
                         let
                             prefs =
                                 get listingPreferences model
@@ -621,15 +585,15 @@ dropReorder scope ref before =
                             newOrder =
                                 Selection.storedOrder prefs desired
                         in
-                        Flow.when (Selection.reorderDropAllowed model scope) <|
+                        Flow.when (Selection.reorderDropAllowed model) <|
                             if Selection.displayOrder prefs newOrder == rendered then
                                 Flow.pure ()
 
                             else
                                 organizeWithUndo "Reorder"
-                                    [ OrderOp parentId_ newOrder ]
+                                    [ OrderOp scope newOrder ]
 
-                    _ ->
+                    Nothing ->
                         Flow.pure ()
             )
 
@@ -685,16 +649,7 @@ childRefDecoder =
 
 listingScopeDecoder : Decode.Decoder ListingScope
 listingScopeDecoder =
-    Decode.nullable Decode.int
-        |> Decode.map
-            (\mProjectId ->
-                case mProjectId of
-                    Just projectId ->
-                        ProjectListing projectId
-
-                    Nothing ->
-                        UnfiledListing
-            )
+    Decode.int
 
 
 dropTargetDecoder : Decode.Decoder OrganizeDropTarget
@@ -760,17 +715,18 @@ keyBindings =
     [ ( Keyboard.escape, Decode.succeed escapePressed )
     , ( Keyboard.delete, Decode.succeed removeShortcut )
     , ( Keyboard.backspace, Decode.succeed removeShortcut )
-    , ( Keyboard.ctrlA, Decode.succeed selectAll )
-    , ( Keyboard.metaA, Decode.succeed selectAll )
-    , ( Keyboard.ctrlX, Decode.succeed cutSelection )
-    , ( Keyboard.metaX, Decode.succeed cutSelection )
-    , ( Keyboard.ctrlC, Decode.succeed copySelection )
-    , ( Keyboard.metaC, Decode.succeed copySelection )
-    , ( Keyboard.ctrlV, Decode.succeed (pasteClipboard False) )
-    , ( Keyboard.metaV, Decode.succeed (pasteClipboard False) )
-    , ( Keyboard.ctrlZ, Decode.succeed undoShortcut )
-    , ( Keyboard.metaZ, Decode.succeed undoShortcut )
     ]
+        ++ List.concatMap
+            (\( key, msg ) ->
+                Keyboard.primary key
+                    |> List.map (\combination -> ( combination, Decode.succeed msg ))
+            )
+            [ ( Keyboard.KeyA, selectAll )
+            , ( Keyboard.KeyX, cutSelection )
+            , ( Keyboard.KeyC, copySelection )
+            , ( Keyboard.KeyV, pasteClipboard False )
+            , ( Keyboard.KeyZ, undoShortcut )
+            ]
 
 
 shortcutDecoder : Decode.Decoder (Flow Model ())
@@ -807,11 +763,12 @@ removeShortcut =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    ( scope, refs ) =
-                        selectedScopeAndRefs model
-                in
-                Flow.when (Selection.listingEditable model) (removeSelection scope refs)
+                case selectedScopeAndRefs model of
+                    Just ( scope, refs ) ->
+                        Flow.when (Selection.listingEditable model) (removeSelection scope refs)
+
+                    Nothing ->
+                        Flow.pure ()
             )
 
 

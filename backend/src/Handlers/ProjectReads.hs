@@ -11,7 +11,7 @@ import Certificates (evalProjectDefinitions, getProjectCertificates, getStepCert
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (Object, Result (..), Value (..), eitherDecode, encode, fromJSON, object, toJSON, (.=))
+import Data.Aeson (Object, Result (..), Value (..), eitherDecode, fromJSON, object, toJSON, (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Map.Strict (Map)
@@ -25,26 +25,20 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (App, AppM, Eval)
-import Handlers.Projects (annotateRecordChildren, readRecordMtimes)
+import Handlers.Projects (annotateRecordChildren, readJsonAtCommit, readRecordMtimes)
 import ProjectFiles (RawProjectFile (..), loadRawProjectFilesAt)
 import ProjectTree (ChildRef (..), normalizeProject, projectChildRefs)
 import RollupCache (currentRollupGeneration, insertRollupCache, lookupRollupCache)
-import Servant.Server (err500, errBody)
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo)
 
 unfiledHandler :: Maybe T.Text -> AppM DynamicJson
-unfiledHandler commit = do
-    result <- lift $ withReadRepoTransaction $ \ctx -> do
-        let targetCommit = maybe (readCommitHash ctx) T.unpack commit
-            readCtx = ReadRepoContext (readRepoPath ctx) targetCommit
-        membership <- projectMembership readCtx
-        times <- liftIO $ readRecordMtimes (readRepoPath ctx) targetCommit
-        steps <- unfiledStepEntries readCtx (Set.toList (linkedStepIds membership))
-        pure (encode (object ["children" .= annotateRecordChildren times (toJSON steps)]))
-    case result of
-        Right output -> return (DynamicJson output)
-        Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+unfiledHandler commit =
+    readJsonAtCommit commit $ \ctx -> do
+        membership <- projectMembership ctx
+        times <- liftIO $ readRecordMtimes (readRepoPath ctx) (readCommitHash ctx)
+        steps <- unfiledStepEntries ctx (Set.toList (linkedStepIds membership))
+        pure (object ["children" .= annotateRecordChildren times (toJSON steps)])
 
 projectMembership :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map Int [ChildRef])
 projectMembership ctx = do
@@ -98,21 +92,17 @@ unfiledStepEntries ctx members = do
             ++ "in builtins.filter (entry: entry != null) (builtins.map entry unfiledIds)"
 
 projectRollupHandler :: Int -> Maybe T.Text -> AppM DynamicJson
-projectRollupHandler projectId commit = do
-    result <- lift $ withReadRepoTransaction $ \ctx -> do
-        let targetCommit = maybe (readCommitHash ctx) T.unpack commit
-            readCtx = ReadRepoContext (readRepoPath ctx) targetCommit
+projectRollupHandler projectId commit =
+    readJsonAtCommit commit $ \ctx -> do
+        let targetCommit = readCommitHash ctx
         cached <- liftIO $ lookupRollupCache targetCommit projectId
         case cached of
-            Just value -> pure (encode value)
+            Just value -> pure value
             Nothing -> do
                 generation <- liftIO currentRollupGeneration
-                rollup <- projectRollup readCtx projectId
+                rollup <- projectRollup ctx projectId
                 liftIO $ insertRollupCache generation targetCommit projectId rollup
-                pure (encode rollup)
-    case result of
-        Right output -> return (DynamicJson output)
-        Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+                pure rollup
 
 projectRollup :: App es => ReadRepoContext -> Int -> ExceptT String (Eff es) Value
 projectRollup ctx projectId = do
