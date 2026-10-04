@@ -30,51 +30,48 @@ view model =
         expanded nodeId =
             Set.member nodeId (get sidebarExpanded model)
 
-        mProjects =
-            ApiData.toMaybe (Model.getProjects model)
-
         mCommit_ =
             Route.viewedCommit (Model.getRoute model).page
 
         editable =
             Model.Selection.listingEditable model
-
-        tree =
-            mProjects
-                |> Maybe.map (\projects -> viewNode model editable projects mCommit_ [] expanded rootLink)
-                |> Maybe.withDefault []
     in
-    Html.aside
-        [ class "sidebar"
-        , classList [ ( "sidebar--open", open ) ]
-        ]
-        [ Html.div [ class "sidebar-header" ]
-            [ Html.button
-                [ class "icon-btn sidebar-toggle"
-                , title
-                    (if open then
-                        "Hide navigation"
+    case ApiData.toMaybe (Model.getProjects model) of
+        Nothing ->
+            Html.nothing
 
-                     else
-                        "Show navigation"
-                    )
-                , Html.Events.onClick Actions.toggleSidebar
-                , attribute "aria-label" "Toggle navigation"
+        Just projects ->
+            Html.aside
+                [ class "sidebar"
+                , classList [ ( "sidebar--open", open ) ]
                 ]
-                [ icon True
-                    (if open then
-                        "chevron_left"
+                [ Html.div [ class "sidebar-header" ]
+                    [ Html.button
+                        [ class "icon-btn sidebar-toggle"
+                        , title
+                            (if open then
+                                "Hide navigation"
 
-                     else
-                        "chevron_right"
-                    )
+                             else
+                                "Show navigation"
+                            )
+                        , Html.Events.onClick Actions.toggleSidebar
+                        , attribute "aria-label" "Toggle navigation"
+                        ]
+                        [ icon True
+                            (if open then
+                                "chevron_left"
+
+                             else
+                                "chevron_right"
+                            )
+                        ]
+                    , Html.viewIf open <|
+                        Html.span [ class "sidebar-title" ] [ Html.text "Navigation" ]
+                    ]
+                , Html.viewIf open <|
+                    Html.div [ class "sidebar-body" ] (viewNode model editable projects mCommit_ [] expanded rootLink)
                 ]
-            , Html.viewIf open <|
-                Html.span [ class "sidebar-title" ] [ Html.text "Navigation" ]
-            ]
-        , Html.viewIf open <|
-            Html.div [ class "sidebar-body" ] tree
-        ]
 
 
 rootLink : Model.ChildLink
