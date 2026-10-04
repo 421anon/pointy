@@ -5,6 +5,7 @@ import "./code-editor.js";
 import "./molstar-viewer.js";
 import "./grid-resize.js";
 import "./iframe-fit.js";
+import "./sidebar-scroll.js";
 
 const app = Elm.Main.init({
   node: document.getElementById("app"),
