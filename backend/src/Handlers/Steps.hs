@@ -5,33 +5,27 @@
 module Handlers.Steps (patchStepHandler, postStepHandler, noticesHandler) where
 
 import ApiTypes (DynamicJson (..))
-import Control.Monad (forM_, when)
-import Control.Monad.Except (ExceptT (..), catchError, liftEither)
+import Control.Monad (void, when)
+import Control.Monad.Except (catchError, liftEither)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString.Lazy as LBS
-import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Effectful (Eff, IOE, (:>))
 import Effects (AppM)
 import Handlers.Download (discoverDownloadTemplates, extractDownloadHash, extractDownloadUrl, extractDownloadedAt, extractReqType, injectDownloaded, prefetchFile, validateHttpUrl)
-import Handlers.ProjectEntities (assignRecordToProject)
-import Handlers.Projects (jsonToNix)
 import Handlers.Statuses (forkBroadcastProjectStatusAtHead, forkBroadcastStatusForStepProjectsAtHead, forkWarmStepCertificate)
 import Handlers.StepReview (ensureStepsUnreviewed, requireStepUnreviewed)
 import Certificates (withWriteRepoTransaction)
+import ProjectFiles (applyTreeOpsIn, copyClonedSrcFiles, saveStep, stepFilePath)
+import ProjectTree (ChildRef (..), TreeOp (..))
 import Servant (NoContent (..), throwError)
 import Servant.Server (err400, err409, err500, errBody)
-import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
-import System.FilePath (takeBaseName, (</>))
 import System.Process (readProcessWithExitCode)
-import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, commitRepoChanges, pushRepoChanges, runGitIn, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, withReadRepoTransaction, writeRepoHeadContext)
 
 prefetchDownloadUrl :: T.Text -> AppM (T.Text, T.Text)
@@ -117,9 +111,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                     $ throwError "Step changed underfoot; retry"
             Nothing -> return ()
 
-        evalRes <- liftEither $ jsonToNix (unDynamicJson finalBody)
-        let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
-        liftIO $ TIO.writeFile outputPath (evalRes <> "\n")
+        _ <- saveStep worktreePath (Just stepId) (unDynamicJson finalBody)
 
         case mDownloaded of
             Just _ -> do
@@ -171,7 +163,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
             Nothing -> DynamicJson jsonBody
 
     result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
-        stepId <- saveStep ctx Nothing (unDynamicJson finalBody)
+        stepId <- saveStep worktreePath Nothing (unDynamicJson finalBody)
         liftIO $ copyClonedSrcFiles worktreePath maybeSourceId stepId
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
 
@@ -180,11 +172,11 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
         when (isDownload /= isDownloadW) $
             throwError "Step kind classification changed; retry"
         case maybeProjectId of
-            Just projectId -> assignRecordToProject ctx projectId stepId
+            Just projectId ->
+                void (applyTreeOpsIn worktreePath [TreeLink projectId (StepChild stepId)])
             Nothing -> return ()
         output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx (stepDefAttr stepId)) $ \err -> do
-            let outputPath = worktreePath </> "steps" </> show stepId ++ ".nix"
-            _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", outputPath] ""
+            _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", stepFilePath worktreePath stepId] ""
             throwError err
         let cloneNote = maybe "" (\srcId -> " (clone of " ++ show srcId ++ ")") maybeSourceId
         commitAndPushChanges ctx $
@@ -213,41 +205,3 @@ noticesHandler stepId mCommit = do
         Right output -> return (DynamicJson output)
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-saveStep :: (IOE :> es) => WriteRepoContext -> Maybe Int -> LBS.ByteString -> ExceptT String (Eff es) Int
-saveStep (WriteRepoContext worktreePath) maybeId jsonBody = do
-    nixText <- liftEither $ jsonToNix jsonBody
-    let stepsDir = worktreePath </> "steps"
-    stepId <- liftIO $ maybe (getNextStepId stepsDir) return maybeId
-    let outputPath = stepsDir </> show stepId ++ ".nix"
-    liftIO $ TIO.writeFile outputPath (nixText <> "\n")
-    return stepId
-
-getNextStepId :: FilePath -> IO Int
-getNextStepId stepsDir = do
-    exists <- doesDirectoryExist stepsDir
-    if not exists
-        then return 1
-        else do
-            files <- listDirectory stepsDir
-            let ids = mapMaybe (readMaybe . takeBaseName) files :: [Int]
-            return $ if null ids then 1 else maximum ids + 1
-
-copyClonedSrcFiles :: FilePath -> Maybe Int -> Int -> IO ()
-copyClonedSrcFiles _ Nothing _ = return ()
-copyClonedSrcFiles worktreePath (Just sourceId) newStepId = do
-    let sourceDir = worktreePath </> "srcFiles" </> show sourceId
-        destDir = worktreePath </> "srcFiles" </> show newStepId
-    sourceExists <- doesDirectoryExist sourceDir
-    when sourceExists $ copyDirectoryRecursive sourceDir destDir
-
-copyDirectoryRecursive :: FilePath -> FilePath -> IO ()
-copyDirectoryRecursive sourceDir destDir = do
-    createDirectoryIfMissing True destDir
-    entries <- listDirectory sourceDir
-    forM_ entries $ \entry -> do
-        let sourcePath = sourceDir </> entry
-            destPath = destDir </> entry
-        isDir <- doesDirectoryExist sourcePath
-        if isDir
-            then copyDirectoryRecursive sourcePath destPath
-            else copyFile sourcePath destPath

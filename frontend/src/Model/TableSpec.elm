@@ -1,20 +1,22 @@
 module Model.TableSpec exposing
     ( StepSpec
     , TableSpec(..)
+    , formId
     , getApiPath
+    , getChildKind
     , getCloneRecord
     , getDefaultRecord
     , getDescription
     , getDirectoryView
     , getDisplayName
     , getEncodeRecord
+    , getFindRecord
     , getIsLocked
     , getLens
     , getName
     , getShareable
     , getSrcFilesView
     , getStatus
-    , getTag
     , getUpsertRecord
     , getValidationErrors
     )
@@ -23,15 +25,14 @@ import Accessors exposing (Traversal, has)
 import Api.ApiData as ApiData exposing (ApiData)
 import Extra.Accessors exposing (A_Traversal, orElseT, remkT, where_)
 import Flow exposing (Flow)
-import Json.Decode
 import Json.Encode
-import Model.Core exposing (DirectoryFolder, Model, Status(..), StepRecord, Table, TableTag, hasBuiltOutput)
+import Model.Core exposing (ChildKind, DirectoryFolder, Model, Status(..), StepRecord, Table, hasBuiltOutput)
 
 
 type TableSpec a
     = TableSpec
-        { tag : TableTag
-        , name : String
+        { name : String
+        , childKind : ChildKind
         , lens : A_Traversal Model (Table a)
         , status : a -> ApiData Status
         , validationErrors : a -> List String
@@ -39,8 +40,8 @@ type TableSpec a
         , directoryView : a -> Maybe DirectoryFolder
         , srcFilesView : a -> Maybe DirectoryFolder
         , encodeRecord : a -> Json.Encode.Value
-        , decodeRecord : Json.Decode.Decoder a
         , defaultRecord : a
+        , findRecord : Int -> Model -> Maybe a
         , apiPath : String
         , displayName : String
         , description : Maybe String
@@ -53,14 +54,14 @@ type alias StepSpec =
     TableSpec StepRecord
 
 
-getTag : TableSpec a -> TableTag
-getTag (TableSpec spec) =
-    spec.tag
-
-
 getName : TableSpec a -> String
 getName (TableSpec spec) =
     spec.name
+
+
+getChildKind : TableSpec a -> ChildKind
+getChildKind (TableSpec spec) =
+    spec.childKind
 
 
 getDisplayName : TableSpec a -> String
@@ -71,6 +72,16 @@ getDisplayName (TableSpec spec) =
 getDescription : TableSpec a -> Maybe String
 getDescription (TableSpec spec) =
     spec.description
+
+
+getFindRecord : TableSpec a -> Int -> Model -> Maybe a
+getFindRecord (TableSpec spec) =
+    spec.findRecord
+
+
+formId : TableSpec a -> String
+formId spec =
+    getName spec ++ "-form"
 
 
 getLens : TableSpec a -> Traversal Model (Table a) x y

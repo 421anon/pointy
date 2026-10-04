@@ -1,110 +1,139 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Handlers.Projects (getProjectsHandler, patchProjectHandler, batchUpdateProjectsHandler, postProjectHandler, deleteProjectHandler, jsonToNix, rewriteNixFile, rewriteProjectFile, RawJSON, ProjectUpdate (..)) where
+module Handlers.Projects (getProjectsHandler, readJsonAtCommit, patchProjectHandler, batchProjectOpsHandler, postProjectHandler, readRecordMtimes, annotateRecordChildren) where
 
 import ApiTypes (DynamicJson (..))
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
-import Control.Monad (mapM_)
-import Control.Monad.Except (ExceptT, catchError, liftEither, throwError)
+import Control.Monad.Except (ExceptT, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Options (..), Result (..), Value (..), defaultOptions, eitherDecode, encode, fromJSON, genericParseJSON, toJSON)
-import Data.Aeson.Key (toText)
+import Data.Aeson (FromJSON (..), Object, Result (..), ToJSON, Value (..), eitherDecode, encode, fromJSON, toJSON, withObject, (.:))
+import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import qualified Data.ByteString.Lazy as LB
-import Data.Fix (foldFix)
 import Data.List (foldl')
 import qualified Data.Map as Map
-import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Scientific (floatingOrInteger)
+import Data.Maybe (fromMaybe)
+import qualified Data.Set as Set
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (AppM, Eval)
-import GHC.Generics (Generic)
-import Network.HTTP.Media ((//))
 import Certificates (evalProjectDefinition, evalProjectDefinitions, withWriteRepoTransaction)
-import ProjectTree (ChildChanges (..), ChildRef (..), ProjectFields, appendChildren, applyChildChanges, newProject)
-import Servant (Accept (..), MimeRender (..), MimeUnrender (..), NoContent (..))
-import Servant.Server (err400, err500, errBody)
-import System.Directory (doesDirectoryExist, listDirectory)
+import Handlers.Statuses (forkBroadcastProjectStatusAtHead)
+import Handlers.StepReview (ensureStepsUnreviewed)
+import ProjectFiles (applyTreeOpsIn, applyTreeOpsInWith, nextProjectId, projectFilePath, rewriteNixFile, srcFilesPath, stepFilePath, valueToNix)
+import ProjectTree (ChildRef (..), ProjectFields, TreeOp (..), TreePlan (..), TreeState (..), describeTreeOps, newProject)
+import Servant (NoContent (..))
+import Servant.Server (ServerError, err400, err409, err500, errBody)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeBaseName, takeExtension, (</>))
 import System.IO.Unsafe (unsafePerformIO)
-import System.Process (readProcessWithExitCode)
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalImpureJsonExpr, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, runGitIn, runNixEvalJsonApplyInRepo, withReadRepoTransaction)
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Nix.Expr.Shorthands (attrsE, mkBool, mkFloat, mkIndentedStr, mkInt, mkList, mkNull, mkStr)
-import Nix.Expr.Types (Antiquoted (..), NExpr, NExprF (..), NString (..))
-import Nix.Pretty (exprFNixDoc, getDoc, simpleExpr)
-import Prettyprinter (defaultLayoutOptions, hardline, layoutPretty, pretty)
-import Prettyprinter.Render.Text (renderStrict)
-
-data RawJSON
-
-instance Accept RawJSON where contentType _ = "application" // "json"
-instance MimeRender RawJSON DynamicJson where mimeRender _ = unDynamicJson
-instance MimeUnrender RawJSON DynamicJson where mimeUnrender _ = Right . DynamicJson
 
 getProjectsHandler :: Maybe T.Text -> AppM DynamicJson
-getProjectsHandler commit = do
-    result <- lift $ withReadRepoTransaction $ \(ReadRepoContext repoPath commitHash) -> do
-        let targetCommit = maybe commitHash T.unpack commit
-        projects <- evalProjectDefinitions (ReadRepoContext repoPath targetCommit)
-        mtimes <- liftIO $ readRecordMtimes repoPath targetCommit
-        return $ encode (annotateRecordMtimes mtimes projects)
+getProjectsHandler commit =
+    readJsonAtCommit commit $ \ctx -> do
+        projects <- evalProjectDefinitions ctx
+        times <- liftIO $ readRecordMtimes (readRepoPath ctx) (readCommitHash ctx)
+        pure (annotateRecordMtimes times projects)
+
+readJsonAtCommit :: (IOE :> es, ToJSON a) => Maybe T.Text -> (ReadRepoContext -> ExceptT String (Eff es) a) -> ExceptT ServerError (Eff es) DynamicJson
+readJsonAtCommit commit action = do
+    result <- lift $ withReadRepoTransaction $ \ctx -> do
+        let targetCommit = maybe (readCommitHash ctx) T.unpack commit
+        action (ReadRepoContext (readRepoPath ctx) targetCommit)
     case result of
-        Right output -> return (DynamicJson output)
+        Right output -> return (DynamicJson (encode output))
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
+data RecordTimes = RecordTimes
+    { recordModifiedTimes :: Map.Map FilePath T.Text
+    , recordCreatedTimes :: Map.Map FilePath T.Text
+    }
+
 {-# NOINLINE mtimeCacheRef #-}
-mtimeCacheRef :: MVar [(String, Map.Map FilePath T.Text)]
+mtimeCacheRef :: MVar [(String, RecordTimes)]
 mtimeCacheRef = unsafePerformIO (newMVar [])
 
 mtimeCacheLimit :: Int
 mtimeCacheLimit = 8
 
-readRecordMtimes :: FilePath -> String -> IO (Map.Map FilePath T.Text)
+readRecordMtimes :: FilePath -> String -> IO RecordTimes
 readRecordMtimes repoPath commit = do
     cache <- readMVar mtimeCacheRef
     case lookup commit cache of
-        Just mtimes -> return mtimes
+        Just times -> return times
         Nothing -> do
-            mtimes <- loadRecordMtimes repoPath commit
+            times <- loadRecordMtimes repoPath commit
             modifyMVar_ mtimeCacheRef $ \entries ->
-                return $ take mtimeCacheLimit $ (commit, mtimes) : filter ((/= commit) . fst) entries
-            return mtimes
+                return $ take mtimeCacheLimit $ (commit, times) : filter ((/= commit) . fst) entries
+            return times
 
-loadRecordMtimes :: FilePath -> String -> IO (Map.Map FilePath T.Text)
+loadRecordMtimes :: FilePath -> String -> IO RecordTimes
 loadRecordMtimes repoPath commit = do
-    (code, out, _) <- runGitIn repoPath ["log", commit, "--pretty=tformat:%cI", "--name-only", "--", "steps/", "projects/"]
+    (code, out, _) <- runGitIn repoPath ["log", commit, "--pretty=tformat:%ct", "--name-status", "--", "steps/", "projects/"]
     return $ case code of
-        ExitSuccess -> snd $ foldl' step (T.empty, Map.empty) (lines out)
-        ExitFailure _ -> Map.empty
+        ExitSuccess -> collect (foldl' step (T.empty, Map.empty, Map.empty) (lines out))
+        ExitFailure _ -> RecordTimes Map.empty Map.empty
   where
-    step (iso, acc) line
-        | null line = (iso, acc)
-        | '/' `notElem` line = (T.pack line, acc)
-        | otherwise = (iso, Map.insertWith (\_ old -> old) line iso acc)
+    step (stamp, modified, created) line
+        | null line = (stamp, modified, created)
+        | otherwise = case words line of
+            [status, path] | status == "A" ->
+                (stamp, keepFirst stamp path modified, keepFirst stamp path created)
+            ws | length ws `elem` [2, 3] ->
+                (stamp, keepFirst stamp (last ws) modified, created)
+            _ -> (utcStamp line, modified, created)
+    keepFirst stamp path = Map.insertWith (\_ old -> old) path stamp
+    collect (_, modified, created) = RecordTimes modified created
 
-annotateRecordMtimes :: Map.Map FilePath T.Text -> Value -> Value
-annotateRecordMtimes mts = onObject (KeyMap.map decorateProject)
-  where
-    decorateProject = onObject (stamp "projects/" . adjustKey "children" (onArray (V.map decorateChild)))
-    decorateChild = onObject (adjustKey "step" (onObject (adjustKey "def" (onObject (stamp "steps/")))))
-    stamp prefix obj = maybe obj (\iso -> KeyMap.insert "lastModifiedAt" (String iso) obj) (integerId obj >>= \i -> Map.lookup (prefix ++ show i ++ ".nix") mts)
-    integerId obj = KeyMap.lookup "id" obj >>= \v -> case fromJSON v :: Result Int of Success i -> Just i; _ -> Nothing
-    onObject f v = case v of Object o -> Object (f o); _ -> v
-    onArray f v = case v of Array a -> Array (f a); _ -> v
-    adjustKey k f m = maybe m (\v -> KeyMap.insert k (f v) m) (KeyMap.lookup k m)
+utcStamp :: String -> T.Text
+utcStamp raw =
+    maybe (T.pack raw) (T.pack . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" . posixSecondsToUTCTime . fromIntegral) (readMaybe raw :: Maybe Integer)
+
+annotateRecordMtimes :: RecordTimes -> Value -> Value
+annotateRecordMtimes times = onObject (KeyMap.map (annotateProject times))
+
+annotateRecordChildren :: RecordTimes -> Value -> Value
+annotateRecordChildren times = onArray (V.map (annotateChild times))
+
+annotateProject :: RecordTimes -> Value -> Value
+annotateProject times = onObject (stampRecord "projects/" times . adjustKey "children" (onArray (V.map (annotateChild times))))
+
+annotateChild :: RecordTimes -> Value -> Value
+annotateChild times = onObject (adjustKey "step" (onObject (adjustKey "def" (onObject (stampRecord "steps/" times)))))
+
+stampRecord :: String -> RecordTimes -> Object -> Object
+stampRecord prefix times obj = case integerId obj of
+    Just i ->
+        withTime "createdAt" (Map.lookup path (recordCreatedTimes times)) $
+            withTime "lastModifiedAt" (Map.lookup path (recordModifiedTimes times)) obj
+      where
+        path = prefix ++ show i ++ ".nix"
+    Nothing -> obj
+
+withTime :: Key.Key -> Maybe T.Text -> Object -> Object
+withTime key iso obj = maybe obj (\value -> KeyMap.insert key (String value) obj) iso
+
+integerId :: Object -> Maybe Int
+integerId obj = KeyMap.lookup "id" obj >>= \v -> case fromJSON v :: Result Int of Success i -> Just i; _ -> Nothing
+
+onObject :: (Object -> Object) -> Value -> Value
+onObject f v = case v of Object o -> Object (f o); _ -> v
+
+onArray :: (V.Vector Value -> V.Vector Value) -> Value -> Value
+onArray f v = case v of Array a -> Array (f a); _ -> v
+
+adjustKey :: Key.Key -> (Value -> Value) -> Object -> Object
+adjustKey k f m = maybe m (\v -> KeyMap.insert k (f v) m) (KeyMap.lookup k m)
 
 patchProjectHandler :: Int -> ProjectFields -> AppM NoContent
 patchProjectHandler projectId fields = do
@@ -115,68 +144,88 @@ patchProjectHandler projectId fields = do
         Right _ -> return NoContent
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 
-data ProjectUpdate = ProjectUpdate
-    { projectUpdateId :: Int
-    , projectUpdateRecord :: ProjectFields
-    }
-    deriving (Generic, Show)
-
-instance FromJSON ProjectUpdate where
-    parseJSON = genericParseJSON $ defaultOptions{fieldLabelModifier = \label -> if label == "projectUpdateRecord" then "record" else "id"}
-
-batchUpdateProjectsHandler :: [ProjectUpdate] -> AppM NoContent
-batchUpdateProjectsHandler [] =
-    throwError $ err400{errBody = "Empty project update batch"}
-batchUpdateProjectsHandler updates = do
-    result <- lift $ withWriteRepoTransaction $ \ctx -> do
-        mapM_ (\(ProjectUpdate projectId fields) -> rewriteProjectFile ctx projectId (replaceProjectFields fields)) updates
-        let plural = if null (tail updates) then "project" else "projects"
-        commitAndPushChanges ctx $ "Update " ++ show (length updates) ++ " " ++ plural
-    case result of
-        Right _ -> return NoContent
-        Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-
 replaceProjectFields :: ProjectFields -> T.Text
 replaceProjectFields fields = "builtins.removeAttrs orig [ \"preset\" \"templates\" ] // " <> valueToNix (toJSON fields)
 
-deleteProjectHandler :: Int -> AppM NoContent
-deleteProjectHandler 0 =
-    throwError $ err400{errBody = "The root project cannot be deleted."}
-deleteProjectHandler projectId = do
-    result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
-        _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", projectFilePath worktreePath projectId] ""
-        parents <- projectFilesReferencing (worktreePath </> "projects") projectId
-        mapM_ (\file -> rewriteNixFile (worktreePath </> "projects" </> file) (applyChildChanges (ChildChanges [] [ProjectChild projectId]))) parents
-        commitAndPushChanges ctx $ "Delete project " ++ show projectId
-    case result of
-        Right _ -> return NoContent
-        Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
+data StepDependencies = StepDependencies
+    { dependencyStepId :: Int
+    , dependencyStepIds :: [Int]
+    }
 
-projectFilesReferencing :: (Eval :> es, IOE :> es) => FilePath -> Int -> ExceptT String (Eff es) [FilePath]
-projectFilesReferencing projectsDir projectId = do
-    files <- liftIO $ map projectFileName <$> projectFileIds projectsDir
-    output <-
-        runNixEvalImpureJsonExpr $
-            "builtins.filter (name: builtins.any (c: c ? project && c.project.id == "
-                ++ show projectId
-                ++ ") ((import ("
-                ++ projectsDir
-                ++ " + \"/${name}\")).children or [ ])) [ "
-                ++ unwords (map show files)
-                ++ " ]"
-    liftEither $ either (Left . (("Failed to find the projects containing project " ++ show projectId ++ ": ") ++)) Right $ eitherDecode (TLE.encodeUtf8 (TL.pack output))
+instance FromJSON StepDependencies where
+    parseJSON = withObject "StepDependencies" $ \fields ->
+        StepDependencies <$> fields .: "id" <*> fields .: "deps"
+
+batchProjectOpsHandler :: [TreeOp] -> AppM NoContent
+batchProjectOpsHandler [] =
+    throwError $ err400{errBody = "Empty project tree batch"}
+batchProjectOpsHandler ops = do
+    result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
+        let validate state plan = do
+                ensureStepsUnreviewed ctx (planDeletedSteps plan)
+                ensureDeletedStepsUnused ctx state (planDeletedSteps plan)
+        (_, plan) <- applyTreeOpsInWith worktreePath validate ops
+        removeDeletedFiles worktreePath plan
+        commitAndPushChanges ctx (describeTreeOps ops)
+        return (planChangedChildren plan)
+    case result of
+        Right changed -> do
+            liftIO $ mapM_ forkBroadcastProjectStatusAtHead (Set.toList changed)
+            return NoContent
+        Left err -> throwError $ err409{errBody = TLE.encodeUtf8 (TL.pack err)}
+
+ensureDeletedStepsUnused :: (Eval :> es) => WriteRepoContext -> TreeState -> [Int] -> ExceptT String (Eff es) ()
+ensureDeletedStepsUnused _ _ [] = return ()
+ensureDeletedStepsUnused ctx state deleted = do
+    let deletedSet = Set.fromList deleted
+        remaining = foldr Set.delete (treeSteps state) deleted
+    dependencies <- evaluatedStepDependencies ctx (Set.toList remaining)
+    let blocked =
+            [ (stepId, dependencyId)
+            | stepId <- Set.toList remaining
+            , dependencyId <- Map.findWithDefault [] stepId dependencies
+            , Set.member dependencyId deletedSet
+            ]
+    case blocked of
+        [] -> return ()
+        ((stepId, dependencyId) : _) ->
+            throwError $ "Step " ++ show stepId ++ " depends on step " ++ show dependencyId ++ ", so it cannot be deleted."
+
+evaluatedStepDependencies :: (Eval :> es) => WriteRepoContext -> [Int] -> ExceptT String (Eff es) (Map.Map Int [Int])
+evaluatedStepDependencies ctx remaining = do
+    output <- runNixEvalJsonApplyInRepo ctx (stepDependenciesExpression remaining) "#pointy.steps"
+    entries <- liftEither $ either (Left . ("Failed to evaluate step dependencies: " ++)) Right $ eitherDecode (TLE.encodeUtf8 (TL.pack output))
+    return $ Map.fromList [(dependencyStepId entry, dependencyStepIds entry) | entry <- entries]
+
+stepDependenciesExpression :: [Int] -> String
+stepDependenciesExpression ids =
+    "steps: let ids = [ "
+        ++ unwords (map show ids)
+        ++ " ]; keep = builtins.filter (name: builtins.elem (builtins.fromJSON name) ids) (builtins.attrNames steps); "
+        ++ "in builtins.map (name: let attempt = builtins.tryEval ((builtins.getAttr name steps).dependencies or []); "
+        ++ "guarded = if attempt.success then (let value = builtins.tryEval (builtins.deepSeq attempt.value (builtins.map builtins.fromJSON attempt.value)); in if value.success then value.value else []) else []; "
+        ++ "in { id = builtins.fromJSON name; deps = guarded; }) keep"
+
+removeDeletedFiles :: (IOE :> es) => FilePath -> TreePlan -> ExceptT String (Eff es) ()
+removeDeletedFiles worktreePath plan = do
+    mapM_ (gitRemove . projectFilePath worktreePath) (planDeletedProjects plan)
+    mapM_ (\stepId -> gitRemove (stepFilePath worktreePath stepId) >> gitRemove (srcFilesPath worktreePath stepId)) (planDeletedSteps plan)
+  where
+    gitRemove path = do
+        (code, _, err) <- liftIO $ runGitIn worktreePath ["rm", "-rf", "--ignore-unmatch", path]
+        case code of
+            ExitSuccess -> return ()
+            ExitFailure _ -> throwError ("git rm failed for " ++ path ++ ": " ++ err)
 
 postProjectHandler :: Maybe Int -> ProjectFields -> AppM DynamicJson
 postProjectHandler maybeParentId fields = do
     let parentId = fromMaybe 0 maybeParentId
     result <- lift $ withWriteRepoTransaction $ \ctx@(WriteRepoContext worktreePath) -> do
-        projectId <- liftIO $ getNextProjectId (worktreePath </> "projects")
+        projectId <- liftIO $ nextProjectId worktreePath
         liftIO $ TIO.writeFile (projectFilePath worktreePath projectId) (valueToNix (newProject fields) <> "\n")
-        rewriteProjectFile ctx parentId (appendChildren [ProjectChild projectId])
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> evalProjectDefinition ctx projectId) $ \err -> do
-            _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", projectFilePath worktreePath projectId] ""
-            throwError err
+        _ <- applyTreeOpsIn worktreePath [TreeLink parentId (ProjectChild projectId)]
+        output <- TLE.encodeUtf8 . TL.pack <$> evalProjectDefinition ctx projectId
         commitAndPushChanges ctx $ "Create project " ++ show projectId ++ " in project " ++ show parentId
         return output
     case result of
@@ -186,55 +235,3 @@ postProjectHandler maybeParentId fields = do
 rewriteProjectFile :: (Eval :> es, IOE :> es) => WriteRepoContext -> Int -> T.Text -> ExceptT String (Eff es) ()
 rewriteProjectFile (WriteRepoContext worktreePath) projectId =
     rewriteNixFile (projectFilePath worktreePath projectId)
-
-projectFilePath :: FilePath -> Int -> FilePath
-projectFilePath worktreePath projectId = worktreePath </> "projects" </> projectFileName projectId
-
-projectFileName :: Int -> FilePath
-projectFileName projectId = show projectId ++ ".nix"
-
-projectFileIds :: FilePath -> IO [Int]
-projectFileIds projectsDir = do
-    exists <- doesDirectoryExist projectsDir
-    if not exists
-        then return []
-        else mapMaybe projectFileId <$> listDirectory projectsDir
-  where
-    projectFileId file
-        | takeExtension file == ".nix" = readMaybe (takeBaseName file)
-        | otherwise = Nothing
-
-getNextProjectId :: FilePath -> IO Int
-getNextProjectId projectsDir = do
-    ids <- projectFileIds projectsDir
-    return $ if null ids then 1 else maximum ids + 1
-
-jsonToNix :: LB.ByteString -> Either String T.Text
-jsonToNix bs = valueToNix <$> eitherDecode bs
-
-valueToNix :: Value -> T.Text
-valueToNix = renderMultilineNix . jsonValueToNixExpr
-
-rewriteNixFile :: (Eval :> es, IOE :> es) => FilePath -> T.Text -> ExceptT String (Eff es) ()
-rewriteNixFile path transformation = do
-    output <- runNixEvalImpureJsonExpr $ T.unpack $ "let orig = import " <> T.pack path <> "; in " <> transformation
-    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
-    liftIO $ TIO.writeFile path (nixResult <> "\n")
-
-jsonValueToNixExpr :: Value -> NExpr
-jsonValueToNixExpr (Object obj) =
-    attrsE [(toText key, jsonValueToNixExpr value) | (key, value) <- KeyMap.toAscList obj]
-jsonValueToNixExpr (Array arr) = mkList (map jsonValueToNixExpr $ V.toList arr)
-jsonValueToNixExpr (String text)
-    | T.any (== '\n') text = mkIndentedStr 0 text
-    | otherwise = mkStr text
-jsonValueToNixExpr (Number number) = either mkFloat mkInt $ floatingOrInteger number
-jsonValueToNixExpr (Bool boolean) = mkBool boolean
-jsonValueToNixExpr Null = mkNull
-
-renderMultilineNix :: NExpr -> T.Text
-renderMultilineNix = renderStrict . layoutPretty defaultLayoutOptions . getDoc . foldFix renderNode
-  where
-    renderNode (NStr (Indented _ [Plain text])) =
-        simpleExpr $ "''" <> hardline <> pretty (T.replace "${" "''${" $ T.replace "'" "''\\'" text) <> "''"
-    renderNode node = exprFNixDoc node

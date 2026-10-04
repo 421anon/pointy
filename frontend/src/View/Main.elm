@@ -10,17 +10,22 @@ import Components.StatusBar as StatusBar
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
+import Html.Events
 import Html.Extra as Html
 import Html.Keyed
 import Model.Core as Model exposing (Model)
 import Model.Lenses exposing (currentProject, name)
 import Model.Lib as Lib
+import Organize
 import Route
 import Toast
 import View.Compare as Compare
 import View.Dialog as Dialog
+import View.Organize
 import View.Project exposing (viewCurrentProject)
 import View.Scratch exposing (viewScratchPicker)
+import View.Shadow
+import View.Sidebar
 
 
 view : Model -> Browser.Document (Flow Model ())
@@ -46,13 +51,19 @@ view model =
                 in
                 [ Html.viewIf (Lib.isWorkspaceReloading model) (Html.div [ Html.Attributes.class "loading-bar" ] [])
                 , Compare.viewCompareBanner model
-                , Html.div [ Html.Attributes.class "workspace" ]
-                    [ Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
+                , Html.div
+                    [ Html.Attributes.class "workspace"
+                    , Html.Events.onClick Organize.closeMenu
+                    ]
+                    [ View.Sidebar.view model
+                    , Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
                     , AgentPanel.view model
                     ]
                 , Html.Keyed.node "div" [ Html.Attributes.class "toast-container" ] <|
                     List.map (\toast -> ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) toast )) (Model.getToasts model)
                 , Dialog.viewConfirm (Model.getModalConfirm model)
+                , View.Organize.viewOrganizeDialog model
+                , View.Organize.viewContextMenu model
                 , Compare.viewCompareDialog model
                 , viewScratchPicker model
                 , StatusBar.view model

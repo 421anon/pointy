@@ -15,7 +15,7 @@ import Http
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (IngestJob, IngestState(..), Model)
-import Model.Lenses exposing (currentProject, ingestJobs, pendingIngestSteps, scratchError, scratchListing, scratchPickerStepId, scratchRoot, stepConfig, tables, uploadProgress, void)
+import Model.Lenses exposing (ingestJobs, pendingIngestSteps, scratchError, scratchListing, scratchPickerStepId, scratchRoot, stepConfig, stepRecordById, uploadProgress, void)
 import Model.TableSpec exposing (StepSpec)
 import Set exposing (Set)
 import Specs
@@ -111,26 +111,12 @@ runStepForStepId stepId =
 
 stepSpecForId : Model -> Int -> Maybe StepSpec
 stepSpecForId model stepId =
-    let
-        mStepName =
-            try (currentProject << success << tables) model
-                |> Maybe.unwrap Dict.empty identity
-                |> Dict.toList
-                |> List.filterMap
-                    (\( name, table ) ->
-                        table.records
-                            |> ApiData.toMaybe
-                            |> Maybe.andThen (List.filter (\record -> record.id == Just stepId) >> List.head)
-                            |> Maybe.map (\_ -> name)
-                    )
-                |> List.head
-    in
-    mStepName
+    try (stepRecordById stepId) model
         |> Maybe.andThen
-            (\name ->
+            (\step ->
                 try (stepConfig << success) model
-                    |> Maybe.andThen (Dict.get name)
-                    |> Maybe.map (Specs.steps name)
+                    |> Maybe.andThen (Dict.get step.type_)
+                    |> Maybe.map (Specs.steps step.type_)
             )
 
 

@@ -7,6 +7,9 @@
 module Certificates (
     getProjectCertificates,
     getStepCertificate,
+    getStepCertificates,
+    projectSchemaVersion,
+    schemaVersionWithKeys,
     evalProjectDefinitions,
     evalProjectDefinition,
     evaluatedProjectStepIds,
@@ -87,11 +90,7 @@ getProjectCertificates pid targetCommit = runExceptT $ do
     let ids = Set.toList (Set.fromList (versionedValue declared))
     paths <-
         if versionedSchema declared >= schemaVersionWithKeys
-            then do
-                keys <- resolveKeys ctx ids
-                let known = [(sid, key) | (sid, Just key) <- Map.toList keys]
-                liftIO $ scheduleRefreshIfMissing targetCommit (map snd known)
-                resolveCertificates ctx known
+            then certificatesForKeys ctx targetCommit ids
             else
                 if null ids
                     then pure Map.empty
@@ -99,9 +98,19 @@ getProjectCertificates pid targetCommit = runExceptT $ do
                         withExceptT ("Failed to evaluate project certificates: " ++) $
                             fmap (Map.mapMaybe id) $
                                 runJson ctx (projectAttr pid) legacyProjectCertificates
-    pure $
-        Map.union paths $
-            Map.fromList [(sid, StepPaths invalidCertificate invalidCertificate) | sid <- ids, Map.notMember sid paths]
+    pure $ fillInvalid ids paths
+
+certificatesForKeys :: (Eval :> es, IOE :> es) => ReadRepoContext -> Text -> [Int] -> ExceptT String (Eff es) (Map Int StepPaths)
+certificatesForKeys ctx targetCommit ids = do
+    keys <- resolveKeys ctx ids
+    let known = [(sid, key) | (sid, Just key) <- Map.toList keys]
+    liftIO $ scheduleRefreshIfMissing targetCommit (map snd known)
+    resolveCertificates ctx known
+
+fillInvalid :: [Int] -> Map Int StepPaths -> Map Int StepPaths
+fillInvalid ids paths =
+    Map.union paths $
+        Map.fromList [(sid, StepPaths invalidCertificate invalidCertificate) | sid <- ids, Map.notMember sid paths]
 
 legacyProjectCertificates :: String
 legacyProjectCertificates = "project: builtins.mapAttrs (id: certificate: if certificate == null then null else { inherit certificate; output = project.outPaths.${id} or certificate; }) (project.certificates or project.outPaths)"
@@ -132,6 +141,16 @@ scheduleRefreshIfMissing commit keys = do
     when (not settled) $ do
         stored <- mapM lookupCertificate keys
         when (any isNothing stored) $ scheduleCertificateRefresh commit
+
+getStepCertificates :: (Eval :> es, IOE :> es) => [Int] -> Text -> Eff es (Either String (Map Int StepPaths))
+getStepCertificates stepIds targetCommit = runExceptT $ do
+    ctx <- prepareCommit targetCommit
+    let ids = Set.toList (Set.fromList stepIds)
+    paths <- certificatesForKeys ctx targetCommit ids
+    pure $ fillInvalid ids paths
+
+projectSchemaVersion :: (Eval :> es, IOE :> es) => ReadRepoContext -> Eff es Int
+projectSchemaVersion ctx = either (const 0) id <$> runExceptT (runJson ctx "#pointy" schemaVersionExpression)
 
 getStepCertificate :: (Eval :> es, IOE :> es) => Int -> Text -> Eff es (Either String (Maybe StepPaths))
 getStepCertificate sid targetCommit = runExceptT $ do

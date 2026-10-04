@@ -4,6 +4,7 @@ import Accessors exposing (get, just, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Components.AgentMentions as AgentMentions
+import Dict
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
@@ -38,7 +39,7 @@ view model =
 mentionsPending : Model -> Bool
 mentionsPending model =
     not (ApiData.settled (Model.getStepConfig model))
-        || not (ApiData.settled (Model.getProjects model).records)
+        || not (ApiData.settled (Model.getProjects model))
 
 
 viewPanel : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> Html (Flow Model ())
@@ -1126,8 +1127,9 @@ viewAgentMessage mentionSources turn =
                 , ( "is-failed", failedMessage /= Nothing )
                 ]
             ]
-            [ Html.Lazy.lazy5 viewAgentMessageContent
+            [ Html.Lazy.lazy6 viewAgentMessageContent
                 mentionSources.projects
+                mentionSources.steps
                 mentionSources.route
                 mentionSources.stepConfig
                 (turn.status == Model.ChatPending && isEmptyAssistant)
@@ -1141,8 +1143,8 @@ viewAgentMessage mentionSources turn =
         ]
 
 
-viewAgentMessageContent : List Model.ProjectRecord -> Route.Route -> StepConfig -> Bool -> String -> Html (Flow Model ())
-viewAgentMessageContent projects route stepConfig shimmer body =
+viewAgentMessageContent : Dict.Dict Int Model.ProjectRecord -> Dict.Dict Int Model.StepRecord -> Route.Route -> StepConfig -> Bool -> String -> Html (Flow Model ())
+viewAgentMessageContent projects_ steps_ route_ stepConfig_ shimmer body =
     Html.div
         [ classList
             [ ( "agent-panel__chat-content", True )
@@ -1150,7 +1152,7 @@ viewAgentMessageContent projects route stepConfig shimmer body =
             , ( "shimmer-text--medium-contrast", shimmer )
             ]
         ]
-        (AgentMentions.toHtml projects route stepConfig body)
+        (AgentMentions.toHtml { projects = projects_, steps = steps_, route = route_, stepConfig = stepConfig_ } body)
 
 
 viewAgentQuestion : String -> Bool -> Bool -> Model.PendingQuestion -> Html (Flow Model ())

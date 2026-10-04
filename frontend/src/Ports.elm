@@ -1,4 +1,4 @@
-port module Ports exposing (agentTurnIn, clusterStatusIn, ffiIn, ffiOut, gutterDragEnd, ingestJobsIn, openAgentTurnStream, openClusterStatusStream, openIngestStream, openStepStatusStream, stepStatusIn)
+port module Ports exposing (agentTurnIn, clusterStatusIn, ffiIn, ffiOut, gutterDragEnd, ingestJobsIn, openAgentTurnStream, openClusterStatusStream, openIngestStream, openStepStatusStream, organizeDragIn, stepStatusIn)
 
 import Json.Decode
 import Json.Encode
@@ -23,6 +23,9 @@ port agentTurnIn : (Json.Decode.Value -> msg) -> Sub msg
 
 
 port gutterDragEnd : (Json.Decode.Value -> msg) -> Sub msg
+
+
+port organizeDragIn : (Json.Decode.Value -> msg) -> Sub msg
 
 
 port openClusterStatusStream : {} -> Cmd msg

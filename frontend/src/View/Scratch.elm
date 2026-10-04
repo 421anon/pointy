@@ -44,7 +44,7 @@ viewContent model =
                 [ Html.div [ class "scratch-picker-header" ]
                     [ Html.span [ class "dialog-title" ] [ Html.text "Wrap a scratch directory" ]
                     , Html.button
-                        [ class "icon-btn scratch-picker-close"
+                        [ class "icon-btn"
                         , title "Close"
                         , Events.onClick (Actions.closeDialog "scratch-picker-dialog")
                         ]

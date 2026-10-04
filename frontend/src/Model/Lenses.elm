@@ -1,20 +1,19 @@
 module Model.Lenses exposing (..)
 
-import Accessors exposing (A_Prism, An_Optic, Lens, Prism, Traversal, each, get, has, just, lens, new, prism, traversal, try, values)
-import Api.ApiData as ApiData exposing (ApiData, success)
-import Basics.Extra exposing (flip)
+import Accessors exposing (A_Prism, Lens, Prism, Traversal, all, each, get, just, lens, new, over, prism, set, traversal, try, values)
+import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Browser.Navigation
 import Components.Select exposing (SelectState)
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Dict.Accessors
-import Extra.Accessors exposing (by, orElseT, remkT, where_)
+import Extra.Accessors exposing (by, orElseT, where_)
 import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildChanges, ChildKind(..), ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), EntryChanges, IngestJob, Model(..), PendingQuestion, ProjectRecord, ReviewDraft, ScratchState, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, ReviewDraft, ScratchState, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -40,21 +39,34 @@ void =
 currentProject : Lens ls Model (ApiData ProjectRecord) x y
 currentProject =
     let
+        get_ m =
+            case try currentProjectPath m of
+                Nothing ->
+                    NotAsked
+
+                Just _ ->
+                    get projects m
+                        |> ApiData.andThenMaybe
+                            (\projects_ -> tryProjectPath m |> Maybe.andThen (Model.projectAtPath projects_))
+                            (Http.BadUrl "Not a project route")
+
         tryProjectPath =
             try (route << Route.page << projectRoute << projectPath)
 
-        get_ m =
-            get (projects << records) m
-                |> ApiData.andThenMaybe (\projects_ -> tryProjectPath m |> Maybe.andThen (Model.projectAtPath projects_)) (Http.BadUrl "Not a project route")
+        set (Model m) value =
+            case ( m.projects, value ) of
+                ( Success projects_, Success project ) ->
+                    case project.id of
+                        Just projectId ->
+                            Model { m | projects = Success (Dict.insert projectId project projects_) }
 
-        set m project =
-            if project.id == Maybe.map Route.pathProjectId (tryProjectPath m) then
-                Accessors.set (projects << records << success << by .id project.id) project m
+                        Nothing ->
+                            Model m
 
-            else
-                m
+                _ ->
+                    Model m
     in
-    lens ".currentProject" get_ (\m -> ApiData.unwrap m (set m))
+    lens ".currentProject" get_ set
 
 
 currentProjectId : Traversal Model Int x y
@@ -67,19 +79,64 @@ currentProjectPath =
     route << Route.page << projectRoute << projectPath
 
 
+recordId : Lens ls { a | id : b } b x y
+recordId =
+    lens ".id" .id (\record id_ -> { record | id = id_ })
+
+
+stepRevisionById : Int -> Model -> Maybe String
+stepRevisionById stepId model =
+    try (stepRecordById stepId) model |> Maybe.andThen (Model.stepRevision model)
+
+
+children : Lens ls { a | children : b } b x y
+children =
+    lens ".children" .children (\record children_ -> { record | children = children_ })
+
+
+commitHash : Lens ls Model (ApiData String) x y
+commitHash =
+    lens ".commitHash" Model.getCommitHash (\(Model m) commitHash_ -> Model { m | commitHash = commitHash_ })
+
+
+stepConfig : Lens ls Model (ApiData StepConfig) x y
+stepConfig =
+    lens ".stepConfig" Model.getStepConfig (\(Model m) value -> Model { m | stepConfig = value })
+
+
+presets : Lens ls Model (ApiData Presets) x y
+presets =
+    lens ".presets" Model.getPresets (\(Model m) value -> Model { m | presets = value })
+
+
+commit : Lens ls { a | commit : b } b x y
+commit =
+    lens "commit" .commit (\t commit_ -> { t | commit = commit_ })
+
+
+runState : Lens ls { a | runState : b } b x y
+runState =
+    lens "runState" .runState (\t rs -> { t | runState = rs })
+
+
+review : Lens ls { a | review : b } b x y
+review =
+    lens "review" .review (\t r -> { t | review = r })
+
+
+reviewRevision : Lens ls { a | revision : b } b x y
+reviewRevision =
+    lens "reviewRevision" .revision (\reviewed revision_ -> { reviewed | revision = revision_ })
+
+
 isReadOnlyPage : Route.Page -> Bool
 isReadOnlyPage =
-    has (Route.project << mCommit << just)
+    Route.viewedCommit >> Maybe.isJust
 
 
 isReadOnlyRoute : Model -> Bool
 isReadOnlyRoute =
-    has (route << Route.page << Route.project << mCommit << just)
-
-
-projectStep : Maybe Int -> Maybe Int -> Traversal Model StepRecord x y
-projectStep mPid mRid =
-    projects << records << success << by .id mPid << projectStepRecords << where_ (.id >> (==) mRid)
+    get route >> .page >> Route.viewedCommit >> Maybe.isJust
 
 
 route : Lens ls Model Route x y
@@ -106,29 +163,150 @@ projectPath =
     lens ".projectPath" .projectPath (\p projectPath_ -> { p | projectPath = projectPath_ })
 
 
-projects : Lens ls Model (Table ProjectRecord) x y
+projects : Lens ls Model (ApiData (Dict Int ProjectRecord)) x y
 projects =
-    lens ".projects" Model.getProjects (\(Model m) table -> Model { m | projects = table })
+    lens ".projects" Model.getProjects (\(Model m) projects_ -> Model { m | projects = projects_ })
 
 
-currentTableOf : String -> Traversal Model (Table StepRecord) x y
-currentTableOf key_ =
-    currentProject << orElseT success ApiData.reloading << tableInProject key_
+store : Lens ls Model ( Dict Int ProjectRecord, Dict Int StepRecord ) x y
+store =
+    lens ".store"
+        (\model -> ( projectsDict model, get steps model ))
+        (\model ( projects_, steps_ ) -> set steps steps_ (set projects (ApiData.Success projects_) model))
 
 
-tableInProject : String -> Traversal ProjectRecord (Table StepRecord) x y
-tableInProject key_ =
-    tables << Dict.Accessors.at key_ << just
+projectsDict : Model -> Dict Int ProjectRecord
+projectsDict =
+    get projects >> ApiData.withDefault Dict.empty
 
 
-subProjects : Lens ls { a | subProjects : Model.SubProjects } (Table ProjectRecord) x y
-subProjects =
-    lens ".subProjects" (.subProjects >> Model.subProjectsTable) (\p table -> { p | subProjects = Model.SubProjects table })
+projectSteps : Int -> Traversal Model StepRecord x y
+projectSteps projectId =
+    let
+        childStepIds model =
+            all (projectRecordById projectId << children << each << where_ (\link -> link.kind == Model.StepChild)) model
+                |> List.map .id
+    in
+    traversal "projectSteps"
+        (\model -> List.filterMap (\stepId -> try (stepRecordById stepId) model) (childStepIds model))
+        (\fn model -> List.foldl (\stepId acc -> over (stepRecordById stepId) fn acc) model (childStepIds model))
 
 
-currentSubProjects : Traversal Model (Table ProjectRecord) x y
-currentSubProjects =
-    currentProject << orElseT success ApiData.reloading << subProjects
+projectRecordById : Int -> Traversal Model ProjectRecord x y
+projectRecordById projectId =
+    projects << success << Dict.Accessors.id projectId << just
+
+
+steps : Lens ls Model (Dict Int StepRecord) x y
+steps =
+    lens ".steps" Model.getSteps (\(Model m) steps_ -> Model { m | steps = steps_ })
+
+
+projectForms : Lens ls Model (Table ProjectRecord) x y
+projectForms =
+    lens ".projectForms" Model.getProjectForms (\(Model m) forms -> Model { m | projectForms = forms })
+
+
+stepForms : Lens ls Model (Dict String (Table StepRecord)) x y
+stepForms =
+    lens ".stepForms" Model.getStepForms (\(Model m) forms -> Model { m | stepForms = forms })
+
+
+stepFormsAt : String -> Traversal Model (Table StepRecord) x y
+stepFormsAt typeName =
+    stepForms << Dict.Accessors.at typeName << just
+
+
+listingPreferences : Lens ls Model ListingPreferences x y
+listingPreferences =
+    lens ".listingPreferences" Model.getListingPreferences (\(Model m) prefs -> Model { m | listingPreferences = prefs })
+
+
+listingSort : Lens ls ListingPreferences ListingSort x y
+listingSort =
+    lens ".sort" .sort (\prefs sort_ -> { prefs | sort = sort_ })
+
+
+listingDescending : Lens ls ListingPreferences Bool x y
+listingDescending =
+    lens ".descending" .descending (\prefs value -> { prefs | descending = value })
+
+
+listingFoldersFirst : Lens ls ListingPreferences Bool x y
+listingFoldersFirst =
+    lens ".foldersFirst" .foldersFirst (\prefs value -> { prefs | foldersFirst = value })
+
+
+listingShowHidden : Lens ls ListingPreferences Bool x y
+listingShowHidden =
+    lens ".showHidden" .showHidden (\prefs value -> { prefs | showHidden = value })
+
+
+listingGroupByType : Lens ls ListingPreferences Bool x y
+listingGroupByType =
+    lens ".groupByType" .groupByType (\prefs value -> { prefs | groupByType = value })
+
+
+stepRecordById : Int -> Traversal Model StepRecord x y
+stepRecordById stepId =
+    steps << Dict.Accessors.id stepId << just
+
+
+viewedRevision : Traversal Model String x y
+viewedRevision =
+    orElseT (route << Route.page << Route.viewedCommitT)
+        (commitHash << orElseT success ApiData.reloading)
+
+
+stepShownRevision : Int -> Traversal Model String x y
+stepShownRevision stepId =
+    orElseT (stepRecordById stepId << runState << success << commit)
+        (orElseT (stepRecordById stepId << review << just << reviewRevision) viewedRevision)
+
+
+selectExistingSteps : Lens ls { a | selectExistingSteps : b } b x y
+selectExistingSteps =
+    lens ".selectExistingSteps" .selectExistingSteps (\t selectExistingSteps_ -> { t | selectExistingSteps = selectExistingSteps_ })
+
+
+argSelectStates : Lens ls { a | argSelectStates : b } b x y
+argSelectStates =
+    lens ".argSelectStates" .argSelectStates (\t argSelectStates_ -> { t | argSelectStates = argSelectStates_ })
+
+
+isUpdating : Lens ls { a | isUpdating : b } b x y
+isUpdating =
+    lens ".isUpdating" .isUpdating (\t isUpdating_ -> { t | isUpdating = isUpdating_ })
+
+
+nameEditOnly : Lens ls { a | nameEditOnly : Bool } Bool x y
+nameEditOnly =
+    lens ".nameEditOnly" .nameEditOnly (\t value -> { t | nameEditOnly = value })
+
+
+addMode : Lens ls { a | addMode : b } b x y
+addMode =
+    lens ".addMode" .addMode (\t addMode_ -> { t | addMode = addMode_ })
+
+
+mimeType : Lens ls { a | mimeType : b } b x y
+mimeType =
+    lens ".mimeType" .mimeType (\t mimeType_ -> { t | mimeType = mimeType_ })
+
+
+stepRecords : Traversal Model StepRecord x y
+stepRecords =
+    steps << values
+
+
+stepRecordsListed : Dict Int a -> Traversal Model StepRecord x y
+stepRecordsListed statuses =
+    stepRecords << where_ (\step -> Maybe.unwrap False (\id -> Dict.member id statuses) step.id)
+
+
+projectsContainingEntity : Int -> Traversal Model ProjectRecord x y
+projectsContainingEntity entityId =
+    projects << success << values << where_ (\project -> List.any (Model.sameEntity { kind = Model.StepChild, id = entityId }) project.children)
 
 
 args : Lens ls { a | args : b } b x y
@@ -136,9 +314,34 @@ args =
     lens ".args" .args (\t args_ -> { t | args = args_ })
 
 
-records : Lens ls { a | records : b } b x y
-records =
-    lens ".records" .records (\t records_ -> { t | records = records_ })
+note : Lens ls { a | note : String } String x y
+note =
+    lens "note" .note (\t note_ -> { t | note = note_ })
+
+
+name : Lens ls { a | name : String } String x y
+name =
+    lens "name" .name (\t name_ -> { t | name = name_ })
+
+
+status : Lens ls { a | status : b } b x y
+status =
+    lens "status" .status (\t status_ -> { t | status = status_ })
+
+
+comparison : Lens ls { a | comparison : b } b x y
+comparison =
+    lens "comparison" .comparison (\t c -> { t | comparison = c })
+
+
+sortKey : Lens ls { a | sortKey : b } b x y
+sortKey =
+    lens ".sortKey" .sortKey (\t sortKey_ -> { t | sortKey = sortKey_ })
+
+
+isOpen : Lens ls { a | isOpen : b } b x y
+isOpen =
+    lens ".isOpen" .isOpen (\t isOpen_ -> { t | isOpen = isOpen_ })
 
 
 edited : Lens ls { a | edited : Maybe b } (Maybe b) x y
@@ -166,26 +369,6 @@ draftAt mId =
             newDraft
 
 
-stepConfig : Lens ls Model (ApiData StepConfig) x y
-stepConfig =
-    lens ".stepConfig" Model.getStepConfig (\(Model m) stepConfig_ -> Model { m | stepConfig = stepConfig_ })
-
-
-presets : Lens ls Model (ApiData Presets) x y
-presets =
-    lens ".presets" Model.getPresets (\(Model m) presets_ -> Model { m | presets = presets_ })
-
-
-commitHash : Lens ls Model (ApiData String) x y
-commitHash =
-    lens ".commitHash" Model.getCommitHash (\(Model m) commitHash_ -> Model { m | commitHash = commitHash_ })
-
-
-userRepoInfo : Lens ls Model (ApiData UserRepoInfo) x y
-userRepoInfo =
-    lens ".userRepoInfo" Model.getUserRepoInfo (\(Model m) userRepoInfo_ -> Model { m | userRepoInfo = userRepoInfo_ })
-
-
 stepLogs : Lens ls Model (Dict String (ApiData String)) x y
 stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
@@ -194,6 +377,11 @@ stepLogs =
 notices : Lens ls Model (Dict String (ApiData (List Model.Notice))) x y
 notices =
     lens ".notices" Model.getNotices (\(Model m) notices_ -> Model { m | notices = notices_ })
+
+
+userRepoInfo : Lens ls Model (ApiData UserRepoInfo) x y
+userRepoInfo =
+    lens ".userRepoInfo" Model.getUserRepoInfo (\(Model m) userRepoInfo_ -> Model { m | userRepoInfo = userRepoInfo_ })
 
 
 autocomplete : Lens ls Model (Dict String Model.AutocompleteState) x y
@@ -208,37 +396,22 @@ suggestions =
 
 autocompleteDebounce : Lens ls Model (Debounce Model.AutocompleteJob) x y
 autocompleteDebounce =
-    lens ".autocompleteDebounce" Model.getAutocompleteDebounce (\(Model m) autocompleteDebounce_ -> Model { m | autocompleteDebounce = autocompleteDebounce_ })
+    lens ".autocompleteDebounce" Model.getAutocompleteDebounce (\(Model m) value -> Model { m | autocompleteDebounce = value })
 
 
-childChangeQueue : Lens ls Model Model.ChildChangeQueue x y
-childChangeQueue =
-    lens ".childChangeQueue" Model.getChildChangeQueue (\(Model m) childChangeQueue_ -> Model { m | childChangeQueue = childChangeQueue_ })
-
-
-entryChanges : ChildKind -> Lens ls ChildChanges EntryChanges x y
-entryChanges kind =
-    case kind of
-        StepChild ->
-            lens ".steps" .steps (\changes steps_ -> { changes | steps = steps_ })
-
-        ProjectChild ->
-            lens ".projects" .projects (\changes projects_ -> { changes | projects = projects_ })
-
-
-isOpen : Lens ls { a | isOpen : b } b x y
-isOpen =
-    lens ".isOpen" .isOpen (\t isOpen_ -> { t | isOpen = isOpen_ })
-
-
-showHiddenRecords : Lens ls { a | showHiddenRecords : b } b x y
-showHiddenRecords =
-    lens ".showHiddenRecords" .showHiddenRecords (\t showHiddenRecords_ -> { t | showHiddenRecords = showHiddenRecords_ })
+nextClientId : Lens ls Model Int x y
+nextClientId =
+    lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })
 
 
 folderExpanded : Lens ls { a | expanded : b } b x y
 folderExpanded =
     lens ".expanded" .expanded (\folder_ expanded_ -> { folder_ | expanded = expanded_ })
+
+
+folderExtras : Lens ls { a | extras : b } b x y
+folderExtras =
+    lens ".extras" .extras (\folder_ extras_ -> { folder_ | extras = extras_ })
 
 
 fileContent : Lens ls { a | content : b } b x y
@@ -266,7 +439,7 @@ fileZoom =
 filePlainScrollTop : Lens ls { a | view : { b | plainScrollTop : c } } c x y
 filePlainScrollTop =
     lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
-        << lens ".plainScrollTop" .plainScrollTop (\view plainScrollTop_ -> { view | plainScrollTop = plainScrollTop_ })
+        << lens ".plainScrollTop" .plainScrollTop (\view value -> { view | plainScrollTop = value })
 
 
 filePlainLineCount : Lens ls { a | plainLineCount : b } b x y
@@ -279,16 +452,6 @@ fileSeekWindow =
     lens ".seekWindow" .seekWindow (\file_ seekWindow_ -> { file_ | seekWindow = seekWindow_ })
 
 
-children : Lens ls { a | children : b } b x y
-children =
-    lens ".children" .children (\folder_ children_ -> { folder_ | children = children_ })
-
-
-folderExtras : Lens ls { a | extras : b } b x y
-folderExtras =
-    lens ".extras" .extras (\folder_ extras_ -> { folder_ | extras = extras_ })
-
-
 fileDelimitedGrid : Lens ls { a | delimitedGrid : b } b x y
 fileDelimitedGrid =
     lens ".delimitedGrid" .delimitedGrid (\file_ delimitedGrid_ -> { file_ | delimitedGrid = delimitedGrid_ })
@@ -299,48 +462,24 @@ gridState =
     lens ".grid" .grid (\rec grid_ -> { rec | grid = grid_ })
 
 
-recordId : Lens ls { a | id : b } b x y
-recordId =
-    lens ".id" .id (\record id_ -> { record | id = id_ })
-
-
-recordById : Int -> Traversal (Table { a | id : Maybe Int }) { a | id : Maybe Int } x y
-recordById id_ =
-    records << success << by .id (Just id_)
-
-
 directoryView : Lens ls { a | directoryView : b } b x y
 directoryView =
-    lens "directoryView" .directoryView (\record directoryView_ -> { record | directoryView = directoryView_ })
+    lens ".directoryView" .directoryView (\record directoryView_ -> { record | directoryView = directoryView_ })
 
 
 srcFiles : Lens ls { a | srcFiles : b } b x y
 srcFiles =
-    lens "srcFiles" .srcFiles (\record srcFiles_ -> { record | srcFiles = srcFiles_ })
+    lens ".srcFiles" .srcFiles (\record srcFiles_ -> { record | srcFiles = srcFiles_ })
 
 
 srcFileDraft : Lens ls { a | srcFileDraft : b } b x y
 srcFileDraft =
-    lens "srcFileDraft" .srcFileDraft (\record srcFileDraft_ -> { record | srcFileDraft = srcFileDraft_ })
+    lens ".srcFileDraft" .srcFileDraft (\record srcFileDraft_ -> { record | srcFileDraft = srcFileDraft_ })
 
 
 srcFileWriting : Lens ls { a | srcFileWriting : b } b x y
 srcFileWriting =
-    lens "srcFileWriting" .srcFileWriting (\record srcFileWriting_ -> { record | srcFileWriting = srcFileWriting_ })
-
-
-folder : Prism pr DirectoryItem DirectoryFolder x y
-folder =
-    let
-        split item =
-            case item of
-                Folder folder_ ->
-                    Ok folder_
-
-                File _ ->
-                    Err item
-    in
-    prism ">Folder" Folder split
+    lens ".srcFileWriting" .srcFileWriting (\record srcFileWriting_ -> { record | srcFileWriting = srcFileWriting_ })
 
 
 file : Prism pr DirectoryItem DirectoryFile x y
@@ -355,6 +494,20 @@ file =
                     Err item
     in
     prism ">File" File split
+
+
+folder : Prism pr DirectoryItem DirectoryFolder x y
+folder =
+    let
+        split item =
+            case item of
+                Folder folder_ ->
+                    Ok folder_
+
+                File _ ->
+                    Err item
+    in
+    prism ">Folder" Folder split
 
 
 entryAt : String -> Traversal (ApiData (Dict String a)) a x y
@@ -382,132 +535,17 @@ entryAtPath path =
             children << entryAt segment << folder << entryAtPath rest
 
 
-projectsContainingEntity : Int -> Traversal Model ProjectRecord x y
-projectsContainingEntity entityId_ =
-    projects << records << success << each << where_ (has (projectStepRecords << where_ (.id >> (==) (Just entityId_))))
-
-
-projectsContainingProject : Int -> Traversal Model ProjectRecord x y
-projectsContainingProject projectId_ =
-    projects << records << success << each << where_ (has (subProjects << records << success << each << where_ (.id >> (==) (Just projectId_))))
-
-
-recordDirectoryView : Int -> Traversal (Table StepRecord) DirectoryFolder x y
-recordDirectoryView recordId_ =
-    recordById recordId_ << runState << success << directoryView
-
-
-directoryItemAtPath : Int -> List String -> Traversal (Table StepRecord) DirectoryItem x y
+directoryItemAtPath : Int -> List String -> Traversal Model DirectoryItem x y
 directoryItemAtPath recordId_ path =
-    recordDirectoryView recordId_ << entryAtPath path
+    stepRecordById recordId_ << runState << success << directoryView << entryAtPath path
 
 
-fileContentAt : Int -> List String -> Traversal (Table StepRecord) (ApiData String) x y
-fileContentAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileContent
-
-
-fileIsViewingAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
-fileIsViewingAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileIsViewing
-
-
-fileZoomAt : Int -> List String -> Traversal (Table StepRecord) Float x y
-fileZoomAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileZoom
-
-
-filePlainScrollTopAt : Int -> List String -> Traversal (Table StepRecord) Float x y
-filePlainScrollTopAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << filePlainScrollTop
-
-
-filePlainLineCountAt : Int -> List String -> Traversal (Table StepRecord) Int x y
-filePlainLineCountAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << filePlainLineCount
-
-
-fileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
-fileSeekWindowAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileSeekWindow
-
-
-folderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
-folderExpandedAt recordId_ path =
-    directoryItemAtPath recordId_ path << folder << folderExpanded
-
-
-childrenAt : Int -> List String -> Traversal (Table StepRecord) (ApiData (Dict String DirectoryItem)) x y
-childrenAt recordId_ path =
-    directoryItemAtPath recordId_ path << folder << children
-
-
-extrasAt : Int -> List String -> Traversal (Table StepRecord) (ApiData (Dict String Value)) x y
-extrasAt recordId_ path =
-    directoryItemAtPath recordId_ path << folder << folderExtras
-
-
-fileDelimitedGridAt : Int -> List String -> Traversal (Table StepRecord) (Maybe DelimitedGrid) x y
-fileDelimitedGridAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileDelimitedGrid
-
-
-rootExtrasAt : Int -> Traversal (Table StepRecord) (ApiData (Dict String Value)) x y
-rootExtrasAt recordId_ =
-    recordById recordId_ << runState << success << directoryView << folderExtras
-
-
-recordSrcFiles : Int -> Traversal (Table StepRecord) DirectoryFolder x y
-recordSrcFiles recordId_ =
-    recordById recordId_ << srcFiles
-
-
-srcFilesItemAtPath : Int -> List String -> Traversal (Table StepRecord) DirectoryItem x y
+srcFilesItemAtPath : Int -> List String -> Traversal Model DirectoryItem x y
 srcFilesItemAtPath recordId_ path =
-    recordSrcFiles recordId_ << entryAtPath path
+    stepRecordById recordId_ << srcFiles << entryAtPath path
 
 
-srcFilesFileContentAt : Int -> List String -> Traversal (Table StepRecord) (ApiData String) x y
-srcFilesFileContentAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileContent
-
-
-srcFilesFileEditedContentAt : Int -> List String -> Traversal (Table StepRecord) (Maybe String) x y
-srcFilesFileEditedContentAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileEditedContent
-
-
-srcFilesFileSeekWindowAt : Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
-srcFilesFileSeekWindowAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileSeekWindow
-
-
-srcFilesFileIsViewingAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
-srcFilesFileIsViewingAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileIsViewing
-
-
-srcFilesFilePlainScrollTopAt : Int -> List String -> Traversal (Table StepRecord) Float x y
-srcFilesFilePlainScrollTopAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << filePlainScrollTop
-
-
-srcFilesFilePlainLineCountAt : Int -> List String -> Traversal (Table StepRecord) Int x y
-srcFilesFilePlainLineCountAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << filePlainLineCount
-
-
-srcFilesFolderExpandedAt : Int -> List String -> Traversal (Table StepRecord) Bool x y
-srcFilesFolderExpandedAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << folder << folderExpanded
-
-
-srcFilesChildrenAt : Int -> List String -> Traversal (Table StepRecord) (ApiData (Dict String DirectoryItem)) x y
-srcFilesChildrenAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << folder << children
-
-
-directoryItemForTargetAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) DirectoryItem x y
+directoryItemForTargetAt : HighlightTarget -> Int -> List String -> Traversal Model DirectoryItem x y
 directoryItemForTargetAt target recordId_ path =
     case target of
         Output ->
@@ -517,7 +555,102 @@ directoryItemForTargetAt target recordId_ path =
             srcFilesItemAtPath recordId_ path
 
 
-seekWindowAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) (ApiData Model.SeekWindow) x y
+childrenAt : Int -> List String -> Traversal Model (ApiData (Dict String DirectoryItem)) x y
+childrenAt recordId_ path =
+    directoryItemAtPath recordId_ path << folder << children
+
+
+extrasAt : Int -> List String -> Traversal Model (ApiData (Dict String Value)) x y
+extrasAt recordId_ path =
+    directoryItemAtPath recordId_ path << folder << folderExtras
+
+
+rootExtrasAt : Int -> Traversal Model (ApiData (Dict String Value)) x y
+rootExtrasAt recordId_ =
+    stepRecordById recordId_ << runState << success << directoryView << folderExtras
+
+
+folderExpandedAt : Int -> List String -> Traversal Model Bool x y
+folderExpandedAt recordId_ path =
+    directoryItemAtPath recordId_ path << folder << folderExpanded
+
+
+fileContentAt : Int -> List String -> Traversal Model (ApiData String) x y
+fileContentAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileContent
+
+
+fileIsViewingAt : Int -> List String -> Traversal Model Bool x y
+fileIsViewingAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileIsViewing
+
+
+fileZoomAt : Int -> List String -> Traversal Model Float x y
+fileZoomAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileZoom
+
+
+fileDelimitedGridAt : Int -> List String -> Traversal Model (Maybe DelimitedGrid) x y
+fileDelimitedGridAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileDelimitedGrid
+
+
+filePlainScrollTopAt : Int -> List String -> Traversal Model Float x y
+filePlainScrollTopAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << filePlainScrollTop
+
+
+filePlainLineCountAt : Int -> List String -> Traversal Model Int x y
+filePlainLineCountAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << filePlainLineCount
+
+
+fileSeekWindowAt : Int -> List String -> Traversal Model (ApiData Model.SeekWindow) x y
+fileSeekWindowAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileSeekWindow
+
+
+srcFilesChildrenAt : Int -> List String -> Traversal Model (ApiData (Dict String DirectoryItem)) x y
+srcFilesChildrenAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << folder << children
+
+
+srcFilesFolderExpandedAt : Int -> List String -> Traversal Model Bool x y
+srcFilesFolderExpandedAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << folder << folderExpanded
+
+
+srcFilesFileContentAt : Int -> List String -> Traversal Model (ApiData String) x y
+srcFilesFileContentAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileContent
+
+
+srcFilesFileEditedContentAt : Int -> List String -> Traversal Model (Maybe String) x y
+srcFilesFileEditedContentAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileEditedContent
+
+
+srcFilesFileIsViewingAt : Int -> List String -> Traversal Model Bool x y
+srcFilesFileIsViewingAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileIsViewing
+
+
+srcFilesFileSeekWindowAt : Int -> List String -> Traversal Model (ApiData Model.SeekWindow) x y
+srcFilesFileSeekWindowAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << fileSeekWindow
+
+
+srcFilesFilePlainScrollTopAt : Int -> List String -> Traversal Model Float x y
+srcFilesFilePlainScrollTopAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << filePlainScrollTop
+
+
+srcFilesFilePlainLineCountAt : Int -> List String -> Traversal Model Int x y
+srcFilesFilePlainLineCountAt recordId_ path =
+    srcFilesItemAtPath recordId_ path << file << filePlainLineCount
+
+
+seekWindowAt : HighlightTarget -> Int -> List String -> Traversal Model (ApiData Model.SeekWindow) x y
 seekWindowAt target recordId_ path =
     case target of
         Output ->
@@ -527,7 +660,7 @@ seekWindowAt target recordId_ path =
             srcFilesFileSeekWindowAt recordId_ path
 
 
-plainLineCountAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) Int x y
+plainLineCountAt : HighlightTarget -> Int -> List String -> Traversal Model Int x y
 plainLineCountAt target recordId_ path =
     case target of
         Output ->
@@ -537,7 +670,7 @@ plainLineCountAt target recordId_ path =
             srcFilesFilePlainLineCountAt recordId_ path
 
 
-plainScrollTopAt : HighlightTarget -> Int -> List String -> Traversal (Table StepRecord) Float x y
+plainScrollTopAt : HighlightTarget -> Int -> List String -> Traversal Model Float x y
 plainScrollTopAt target recordId_ path =
     case target of
         Output ->
@@ -547,156 +680,39 @@ plainScrollTopAt target recordId_ path =
             srcFilesFilePlainScrollTopAt recordId_ path
 
 
-toasts : Lens ls Model (List Toast) x y
-toasts =
-    lens ".toasts" Model.getToasts (\(Model t) toasts_ -> Model { t | toasts = toasts_ })
-
-
-nextToastId : Lens ls Model Int x y
-nextToastId =
-    lens ".nextToastId" Model.getNextToastId (\(Model t) nextToastId_ -> Model { t | nextToastId = nextToastId_ })
-
-
-needsIntro : Lens ls { a | needsIntro : b } b x y
-needsIntro =
-    lens ".needsIntro" .needsIntro (\t needsIntro_ -> { t | needsIntro = needsIntro_ })
-
-
-nextClientId : Lens ls Model Int x y
-nextClientId =
-    lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })
-
-
-name : Lens ls { a | name : String } String x y
-name =
-    lens "name" .name (\t name_ -> { t | name = name_ })
-
-
-note : Lens ls { a | note : String } String x y
-note =
-    lens "note" .note (\t note_ -> { t | note = note_ })
-
-
-commit : Lens ls { a | commit : b } b x y
-commit =
-    lens "commit" .commit (\t commit_ -> { t | commit = commit_ })
-
-
-status : Lens ls { a | status : b } b x y
-status =
-    lens "status" .status (\t status_ -> { t | status = status_ })
-
-
-runState : Lens ls { a | runState : b } b x y
-runState =
-    lens "runState" .runState (\t rs -> { t | runState = rs })
-
-
-review : Lens ls { a | review : b } b x y
-review =
-    lens "review" .review (\t r -> { t | review = r })
-
-
-reviewRevision : Lens ls { a | revision : b } b x y
-reviewRevision =
-    lens "reviewRevision" .revision (\reviewed revision_ -> { reviewed | revision = revision_ })
-
-
-comparison : Lens ls { a | comparison : b } b x y
-comparison =
-    lens "comparison" .comparison (\t c -> { t | comparison = c })
-
-
-projectStepRecords : Traversal ProjectRecord StepRecord x y
-projectStepRecords =
-    tables << values << records << success << each
-
-
-stepRecords : Traversal Model StepRecord x y
-stepRecords =
-    projects << records << success << each << projectStepRecords
-
-
-stepRecordsListed : Dict Int a -> Traversal Model StepRecord x y
-stepRecordsListed statuses =
-    stepRecords << where_ (.id >> Maybe.unwrap False (flip Dict.member statuses))
-
-
-stepRecordById : Int -> Traversal Model StepRecord x y
-stepRecordById stepId =
-    stepRecords << where_ (.id >> (==) (Just stepId))
-
-
-stepRevisionById : Int -> Model -> Maybe String
-stepRevisionById stepId model =
-    try (stepRecordById stepId) model |> Maybe.andThen (Model.stepRevision model)
-
-
-viewedRevision : Traversal Model String x y
-viewedRevision =
-    orElseT (route << Route.page << Route.project << mCommit << just)
-        (commitHash << orElseT success ApiData.reloading)
-
-
-stepShownRevision : Int -> Traversal Model String x y
-stepShownRevision stepId =
-    orElseT (currentProject << success << tables << values << recordById stepId << runState << success << commit)
-        (orElseT (stepRecordById stepId << review << just << reviewRevision) viewedRevision)
-
-
-sortKey : Lens ls { a | sortKey : b } b x y
-sortKey =
-    lens ".sortKey" .sortKey (\t sortKey_ -> { t | sortKey = sortKey_ })
-
-
-dnd : Lens ls { a | dnd : b } b x y
-dnd =
-    lens ".dnd" .dnd (\t dnd_ -> { t | dnd = dnd_ })
-
-
-dndAffected : Lens ls { a | dndAffected : b } b x y
-dndAffected =
-    lens ".dndAffected" .dndAffected (\t dndAffected_ -> { t | dndAffected = dndAffected_ })
-
-
-allEntities : An_Optic pr ls ProjectRecord (Table a) -> Traversal Model a x y
-allEntities entities =
-    projects << records << success << each << remkT entities << records << success << each
-
-
-selectExistingSteps : Lens ls { a | selectExistingSteps : b } b x y
-selectExistingSteps =
-    lens ".selectExistingSteps" .selectExistingSteps (\t selectExistingSteps_ -> { t | selectExistingSteps = selectExistingSteps_ })
-
-
-argSelectStates : Lens ls { a | argSelectStates : b } b x y
-argSelectStates =
-    lens ".argSelectStates" .argSelectStates (\t argSelectStates_ -> { t | argSelectStates = argSelectStates_ })
-
-
-isUpdating : Lens ls { a | isUpdating : b } b x y
-isUpdating =
-    lens ".isUpdating" .isUpdating (\t isUpdating_ -> { t | isUpdating = isUpdating_ })
-
-
-addMode : Lens ls { a | addMode : b } b x y
-addMode =
-    lens ".addMode" .addMode (\t addMode_ -> { t | addMode = addMode_ })
-
-
-mimeType : Lens ls { a | mimeType : b } b x y
-mimeType =
-    lens ".mimeType" .mimeType (\t mimeType_ -> { t | mimeType = mimeType_ })
-
-
-searchBox : Lens ls Model SelectState x y
+searchBox : Lens ls Model (SelectState ChildRef) x y
 searchBox =
     lens ".searchBox" Model.getSearchBox (\(Model m) searchBox_ -> Model { m | searchBox = searchBox_ })
 
 
-tables : Lens ls { a | tables : b } b x y
-tables =
-    lens ".tables" .tables (\p t -> { p | tables = t })
+organizeQueue : Lens ls Model OrganizeQueue x y
+organizeQueue =
+    lens ".organizeQueue" Model.getOrganizeQueue (\(Model m) queue -> Model { m | organizeQueue = queue })
+
+
+listingSelection : Lens ls Model (Maybe Model.ListingSelection) x y
+listingSelection =
+    lens ".listingSelection" Model.getListingSelection (\(Model m) selection -> Model { m | listingSelection = selection })
+
+
+organizeClipboard : Lens ls Model (Maybe Model.OrganizeClipboard) x y
+organizeClipboard =
+    lens ".organizeClipboard" Model.getOrganizeClipboard (\(Model m) clipboard -> Model { m | organizeClipboard = clipboard })
+
+
+organizeDialog : Lens ls Model (Maybe Model.OrganizeDialog) x y
+organizeDialog =
+    lens ".organizeDialog" Model.getOrganizeDialog (\(Model m) dialog -> Model { m | organizeDialog = dialog })
+
+
+organizeContextMenu : Lens ls Model (Maybe Model.OrganizeContextMenu) x y
+organizeContextMenu =
+    lens ".organizeContextMenu" Model.getOrganizeContextMenu (\(Model m) menu -> Model { m | organizeContextMenu = menu })
+
+
+organizeDrag : Lens ls Model (Maybe Model.OrganizeDrag) x y
+organizeDrag =
+    lens ".organizeDrag" Model.getOrganizeDrag (\(Model m) drag -> Model { m | organizeDrag = drag })
 
 
 mCommit : Lens ls { a | mCommit : b } b x y
@@ -721,7 +737,7 @@ ingestJobs =
 
 pendingIngestSteps : Lens ls Model (Set Int) x y
 pendingIngestSteps =
-    lens ".pendingIngestSteps" Model.getPendingIngestSteps (\(Model m) steps -> Model { m | pendingIngestSteps = steps })
+    lens ".pendingIngestSteps" Model.getPendingIngestSteps (\(Model m) pending -> Model { m | pendingIngestSteps = pending })
 
 
 scratch : Lens ls Model ScratchState x y
@@ -995,19 +1011,14 @@ templateSource =
     lens ".templateSource" .templateSource (\p t -> { p | templateSource = t })
 
 
-presetSelect : Lens ls { a | presetSelect : SelectState } SelectState x y
+presetSelect : Lens ls { a | presetSelect : SelectState ChildRef } (SelectState ChildRef) x y
 presetSelect =
     lens ".presetSelect" .presetSelect (\p s -> { p | presetSelect = s })
 
 
-templatesSelect : Lens ls { a | templatesSelect : SelectState } SelectState x y
+templatesSelect : Lens ls { a | templatesSelect : SelectState ChildRef } (SelectState ChildRef) x y
 templatesSelect =
     lens ".templatesSelect" .templatesSelect (\p s -> { p | templatesSelect = s })
-
-
-hideOrphans : Lens ls { a | hideOrphans : Bool } Bool x y
-hideOrphans =
-    lens ".hideOrphans" .hideOrphans (\p b -> { p | hideOrphans = b })
 
 
 clusterStatus : Lens ls Model (ApiData ClusterStatus) x y
@@ -1028,3 +1039,48 @@ runningStepIds =
 statusBarOpen : Lens ls Model Bool x y
 statusBarOpen =
     lens ".statusBarOpen" Model.getStatusBarOpen (\(Model m) open -> Model { m | statusBarOpen = open })
+
+
+sidebarOpen : Lens ls Model Bool x y
+sidebarOpen =
+    lens ".sidebarOpen" Model.getSidebarOpen (\(Model m) open -> Model { m | sidebarOpen = open })
+
+
+sidebarScroll : Lens ls Model Model.SidebarScroll x y
+sidebarScroll =
+    lens ".sidebarScroll" Model.getSidebarScroll (\(Model m) scroll -> Model { m | sidebarScroll = scroll })
+
+
+sidebarExpanded : Lens ls Model (Set Int) x y
+sidebarExpanded =
+    lens ".sidebarExpanded" Model.getSidebarExpanded (\(Model m) expanded -> Model { m | sidebarExpanded = expanded })
+
+
+projectRollups : Lens ls Model (Dict Int (ApiData Model.ProjectRollup)) x y
+projectRollups =
+    lens ".projectRollups" Model.getProjectRollups (\(Model m) rollups -> Model { m | projectRollups = rollups })
+
+
+projectsRequest : Lens ls Model Int x y
+projectsRequest =
+    lens ".projectsRequest" Model.getProjectsRequest (\(Model m) request -> Model { m | projectsRequest = request })
+
+
+rollupRequests : Lens ls Model (Dict Int Int) x y
+rollupRequests =
+    lens ".rollupRequests" Model.getRollupRequests (\(Model m) requests -> Model { m | rollupRequests = requests })
+
+
+toasts : Lens ls Model (List (Toast (Flow Model ()))) x y
+toasts =
+    lens ".toasts" Model.getToasts (\(Model t) toasts_ -> Model { t | toasts = toasts_ })
+
+
+nextToastId : Lens ls Model Int x y
+nextToastId =
+    lens ".nextToastId" Model.getNextToastId (\(Model t) nextToastId_ -> Model { t | nextToastId = nextToastId_ })
+
+
+needsIntro : Lens ls { a | needsIntro : b } b x y
+needsIntro =
+    lens ".needsIntro" .needsIntro (\t needsIntro_ -> { t | needsIntro = needsIntro_ })

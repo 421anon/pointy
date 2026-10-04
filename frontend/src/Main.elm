@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Accessors exposing (each, get, has, just, set, try, values)
+import Accessors exposing (get, has, just, set, try, values)
 import Actions
 import Api.ApiData exposing (ApiData(..), success)
 import Browser.Events
@@ -12,7 +12,9 @@ import Ingest
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectPath, projectStepRecords, projects, records, route, runState, stepConfig, subProjects, tables, userRepoInfo)
+import Model.Lenses exposing (commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, stepConfig, stepForms, steps, userRepoInfo)
+import Model.Selection as Selection
+import Organize
 import Ports
 import Route exposing (Route)
 import Specs
@@ -93,6 +95,14 @@ applyRoute forceRevealHighlight newRoute =
                     pageTarget route_ =
                         set (Route.page << Route.project << mHighlight) Nothing (Route.navigationTarget route_)
 
+                    expandPath =
+                        case newRoute.page of
+                            Route.Project params ->
+                                params.projectPath
+
+                            _ ->
+                                []
+
                     workspaceNotStarted =
                         case get userRepoInfo model of
                             NotAsked ->
@@ -101,22 +111,30 @@ applyRoute forceRevealHighlight newRoute =
                             _ ->
                                 False
 
-                    routeNeedsWorkspace =
-                        case newRoute.page of
-                            Route.Project _ ->
-                                True
-
-                            _ ->
-                                False
+                    projectRoute =
+                        has (Route.page << Route.project) newRoute
 
                     shouldInitializeWorkspace =
-                        workspaceNotStarted && routeNeedsWorkspace
+                        workspaceNotStarted && projectRoute
 
                     isDragging =
                         has (gutterDrag << just) model
+
+                    listingFolder route_ =
+                        try (Route.page << Route.project << projectPath) route_
+                            |> Maybe.map Route.pathProjectId
+
+                    listingContext route_ =
+                        ( listingFolder route_, try (Route.page << Route.viewedCommitT) route_ )
+
+                    viewedCommitOf route_ =
+                        try (Route.page << Route.viewedCommitT) route_
                 in
                 Flow.modify (set route newRoute)
+                    |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute) (Flow.modify Selection.clear))
+                    |> Flow.seq (Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute) (Flow.setAll projectRollups Dict.empty))
                     |> Flow.seq (Flow.when (pageTarget currentRoute /= pageTarget newRoute) Actions.resetPageScroll)
+                    |> Flow.seq (Flow.when projectRoute (Actions.expandSidebarPath expandPath))
                     |> Flow.seq
                         (if shouldInitializeWorkspace then
                             initializeWorkspace
@@ -124,10 +142,10 @@ applyRoute forceRevealHighlight newRoute =
                          else
                             let
                                 mOldCommit =
-                                    try (route << Route.page << Route.project << mCommit << just) model
+                                    try (route << Route.page << Route.viewedCommitT) model
 
                                 mNewCommit =
-                                    try (Route.page << Route.project << mCommit << just) newRoute
+                                    try (Route.page << Route.viewedCommitT) newRoute
 
                                 resetTable table =
                                     let
@@ -144,14 +162,14 @@ applyRoute forceRevealHighlight newRoute =
                                 currentProjectIdOf =
                                     Maybe.map Route.pathProjectId << try (Route.page << Route.project << projectPath)
                             in
-                            Flow.over (projects << records << success << each << tables << values) resetTable
-                                |> Flow.seq (Flow.over (projects << records << success << each << subProjects) resetTable)
+                            Flow.over projectForms resetTable
+                                |> Flow.seq (Flow.over (stepForms << values) resetTable)
                                 |> Flow.seq
                                     (Flow.setAll
-                                        (projects << records << success << each << projectStepRecords << runState)
+                                        (steps << values << runState)
                                         (Api.ApiData.loading Nothing)
                                     )
-                                |> Flow.seq (Flow.over (projects << records) Api.ApiData.toLoading)
+                                |> Flow.seq (Flow.over projects Api.ApiData.toLoading)
                                 |> Flow.seq (Flow.over commitHash Api.ApiData.toLoading)
                                 |> Flow.seq Actions.loadStepConfig
                                 |> Flow.seq Actions.loadPresets
@@ -193,25 +211,15 @@ applyRoute forceRevealHighlight newRoute =
             )
 
 
-dndSubscription : Model -> Sub (Flow Model ())
-dndSubscription model =
-    Maybe.map2 Tuple.pair (try (presets << success) model) (try (stepConfig << success) model)
-        |> Maybe.unwrap []
-            (\( presets_, config ) ->
-                Actions.dndSub model (Specs.projects presets_ config)
-                    :: List.map (\( name, entry ) -> Actions.dndSub model (Specs.steps name entry)) (Dict.toList config)
-            )
-        |> Sub.batch
-
-
 subscriptions : Model -> Sub (Flow Model ())
 subscriptions model =
     Sub.batch
-        [ dndSubscription model
-        , uploadProgressSubscription model
+        [ uploadProgressSubscription model
         , gutterDragSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
         , agentActivitySubscription model
+        , Browser.Events.onKeyDown Organize.shortcutDecoder
+        , Ports.organizeDragIn Organize.onOrganizeDragEvent
         , Browser.Events.onVisibilityChange
             (\visibility ->
                 if visibility == Browser.Events.Visible then
