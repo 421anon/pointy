@@ -73,6 +73,12 @@ toggleListingGroupByType =
 toggleSidebar : Flow Model ()
 toggleSidebar =
     Flow.over sidebarOpen not
+        |> Flow.seq (Flow.setAll sidebarScrolled False)
+
+
+setSidebarScrolled : Bool -> Flow Model ()
+setSidebarScrolled =
+    Flow.setAll sidebarScrolled
 
 
 toggleSidebarNode : Int -> Flow Model ()

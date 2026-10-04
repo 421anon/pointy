@@ -19,7 +19,7 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - Manual drag reorder follows the displayed folders-first order. Drops that leave the visible order unchanged do not queue a write.
 - Historical views are read-only, including toast Undo, and retain the browser's native context menu.
 - Listing header controls wrap on narrow screens. The selection action bar overlays the listing header, so selecting never shifts rows; it collapses to icons on narrow listings.
-- The navigation toggle appears only once the folder tree has loaded. On narrow screens the open navigation drawer spans the full width and omits folder icons to fit longer names.
+- The navigation toggle appears only once the folder tree has loaded. The open navigation drawer starts just wide enough for the folder tree, up to a quarter of the window, and resizes from its bottom-right corner like the agent panel; its header casts a shadow once the tree is scrolled. On narrow screens the drawer overlays the page, spanning the full width on phones and omitting folder icons to fit longer names.
 - A plain row click opens a folder or a built step's outputs and never changes the selection. Selection uses the row checkbox, Ctrl/Cmd-click, or Shift-click for ranges.
 - While the clipboard holds cut or copied items, Paste and Paste as duplicate appear in the listing header; Ctrl/Cmd+V also pastes into the current folder.
 
