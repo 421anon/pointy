@@ -414,7 +414,6 @@ actionDefinitions =
     , OrganizeCutAction
     , OrganizeCopyAction
     , OrganizePasteAction
-    , OrganizePasteDuplicateAction
     , OrganizeClearClipboardAction
     , OrganizeHideAction
     , OrganizeRemoveAction
@@ -475,12 +474,6 @@ actionSpec model action =
         OrganizePasteAction ->
             { label = "Paste", icon = "content_paste", inBar = False }
 
-        OrganizePasteDuplicateAction ->
-            { label = "Paste as duplicate"
-            , icon = "content_paste_go"
-            , inBar = False
-            }
-
         OrganizeClearClipboardAction ->
             { label = "Clear clipboard", icon = "content_paste_off", inBar = hasSelection model }
 
@@ -529,9 +522,6 @@ actionVisible model action =
             hasSel
 
         OrganizePasteAction ->
-            editable && hasClipboard && hasFolder
-
-        OrganizePasteDuplicateAction ->
             editable && hasClipboard && hasFolder
 
         OrganizeClearClipboardAction ->

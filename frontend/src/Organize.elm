@@ -143,10 +143,7 @@ runActionOn scope refs action =
             clearSelection
 
         OrganizePasteAction ->
-            pasteClipboard False
-
-        OrganizePasteDuplicateAction ->
-            pasteClipboard True
+            pasteClipboard
 
         OrganizeClearClipboardAction ->
             Flow.setAll organizeClipboard Nothing
@@ -349,8 +346,8 @@ setClipboard mode label =
             )
 
 
-pasteClipboard : Bool -> Flow Model ()
-pasteClipboard asDuplicate =
+pasteClipboard : Flow Model ()
+pasteClipboard =
     Flow.get
         |> Flow.andThen
             (\model ->
@@ -359,11 +356,7 @@ pasteClipboard asDuplicate =
                         Flow.when (Selection.listingEditable model) <|
                             case Selection.currentListingScope model of
                                 Just targetId ->
-                                    if asDuplicate then
-                                        duplicateInto targetId clipboard.refs
-
-                                    else
-                                        pasteInto model targetId clipboard
+                                    pasteInto model targetId clipboard
 
                                 Nothing ->
                                     Flow.pure ()
@@ -375,27 +368,28 @@ pasteClipboard asDuplicate =
 
 pasteInto : Model -> Int -> Model.OrganizeClipboard -> Flow Model ()
 pasteInto model targetId clipboard =
-    let
-        ops =
-            case clipboard.mode of
-                ClipboardCopy ->
-                    List.concatMap (linkOps model targetId) clipboard.refs
-
-                ClipboardCut ->
-                    List.concatMap (moveOps model clipboard.sourceScope targetId) clipboard.refs
-    in
     if clipboard.mode == ClipboardCut && clipboard.sourceScope == targetId then
         Flow.setAll organizeClipboard Nothing
 
-    else if List.isEmpty ops then
-        Actions.addToast False "Nothing to paste."
-
     else
-        organizeWithUndo "Paste" ops
-            |> Flow.seq
-                (Flow.when (clipboard.mode == ClipboardCut)
-                    (Flow.setAll organizeClipboard Nothing)
-                )
+        let
+            ops =
+                case clipboard.mode of
+                    ClipboardCopy ->
+                        List.concatMap (linkOps model targetId) clipboard.refs
+
+                    ClipboardCut ->
+                        List.concatMap (moveOps model clipboard.sourceScope targetId) clipboard.refs
+        in
+        if List.isEmpty ops then
+            Actions.addToast False "Nothing to paste."
+
+        else
+            organizeWithUndo "Paste" ops
+                |> Flow.seq
+                    (Flow.when (clipboard.mode == ClipboardCut)
+                        (Flow.setAll organizeClipboard Nothing)
+                    )
 
 
 moveOps : Model -> ListingScope -> Int -> ChildRef -> List TreeOp
@@ -429,7 +423,6 @@ duplicateInto targetId refs =
         (List.map (\ref -> duplicateStep ref.id) stepRefs
             ++ List.map (\ref -> duplicateFolder targetId ref.id) folderRefs
         )
-        |> Flow.seq (Flow.setAll organizeClipboard Nothing)
         |> Flow.seq (Flow.when (not (List.isEmpty folderRefs)) (Flow.async Actions.loadProjects))
 
 
@@ -730,7 +723,7 @@ keyBindings =
             [ ( Keyboard.KeyA, selectAll )
             , ( Keyboard.KeyX, cutSelection )
             , ( Keyboard.KeyC, copySelection )
-            , ( Keyboard.KeyV, pasteClipboard False )
+            , ( Keyboard.KeyV, pasteClipboard )
             , ( Keyboard.KeyZ, undoShortcut )
             ]
 

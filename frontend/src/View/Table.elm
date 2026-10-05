@@ -292,7 +292,7 @@ viewListing { model, scope, stepConfig, rows, header } =
 
 viewClipboardButtons : Model -> List (Html (Flow Model ()))
 viewClipboardButtons model =
-    [ Model.OrganizePasteAction, Model.OrganizePasteDuplicateAction, Model.OrganizeClearClipboardAction ]
+    [ Model.OrganizePasteAction, Model.OrganizeClearClipboardAction ]
         |> List.filter (Model.Selection.actionVisible model)
         |> List.map
             (\action ->

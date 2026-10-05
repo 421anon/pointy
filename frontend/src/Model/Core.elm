@@ -356,7 +356,6 @@ type OrganizeAction
     | OrganizeDeleteAction
     | OrganizeClearAction
     | OrganizePasteAction
-    | OrganizePasteDuplicateAction
     | OrganizeClearClipboardAction
     | OrganizeNewFolderAction
 
