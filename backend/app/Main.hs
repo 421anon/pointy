@@ -3,6 +3,7 @@
 module Main (main) where
 
 import Agent.Git (sweepStaleRunningSessions)
+import Agent.Sandbox (prepareAgentCgroup)
 import App (runServer)
 import BuildRunner (reconcileWatchedJobs)
 import Config (loadConfig, resolveConfigPath)
@@ -22,6 +23,8 @@ main = do
     putStrLn "Loading configuration..."
     configPath <- resolveConfigPath
     config <- loadConfig configPath
+    putStrLn "Limiting agent sandbox memory..."
+    prepareAgentCgroup
     putStrLn "Ensuring user repo is configured..."
     ensureUserRepo config
     putStrLn "Resetting stale agent runner state..."

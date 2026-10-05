@@ -31,8 +31,8 @@ isAgentOutputPath :: Text -> Bool
 isAgentOutputPath path =
     isJust (appliedProjectId path) || isJust (appliedStepId path)
 
-renderEmbeddedBootstrapPrompt :: Text -> Text
-renderEmbeddedBootstrapPrompt configuredPrompt =
+renderEmbeddedBootstrapPrompt :: Maybe Text -> Text -> Text
+renderEmbeddedBootstrapPrompt memoryMax configuredPrompt =
     T.unlines
         ( [ embeddedAgentModeMarker
           , "The backend applies changes only to these path patterns:"
@@ -44,7 +44,11 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
                , "The backend refuses a changeset that introduces evaluation failures in the projects or in the steps it changes; failures that already exist on the target branch do not block it. When it refuses one, the failures are sent to you with the next message."
                , "Before ending a turn that edits steps/<id>.nix or projects/<id>.nix, run `nix-instantiate --parse <file>` on each edited file and fix any error it reports."
                , "Every bash command without an explicit `timeout` is stopped after 120 seconds and returns the output it produced so far. Set `timeout` in seconds when you expect a command to run longer, and expect a search through /nix/store, /data or the git history to be stopped at that limit: narrow it with a path, -maxdepth, or a name pattern instead of scanning everything."
-               , "Follow the Embedded agents only section in AGENTS.md."
+               , "Use this sandbox to inspect files and to check logic on small inputs: a sample of reads, a `LIMIT`, one region of a BAM. Never run a full step workload here, such as an alignment, a merge, a DuckDB query over whole BAM or FASTQ files, or a script over a full dataset. Finish the step file instead, ask the user to apply the changeset and run the step, and read its build log and outputs afterwards. A step run is a Slurm job that gets the memory and CPUs the step requests, such as a duckdb step's `memoryLimit`."
+               , "Keep scratch files and DuckDB `temp_directory` under $HOME, not /tmp: /tmp is held in memory."
+               ]
+            ++ maybe [] memoryCapLines memoryMax
+            ++ [ "Follow the Embedded agents only section in AGENTS.md."
                , "Use only these entity-reference formats in every response:"
                , "- Step: step <id>. This is the entire step reference; never include the step name."
                , "- Project: @[project:<id>] <name>. Quote the name when it contains spaces."
@@ -53,6 +57,11 @@ renderEmbeddedBootstrapPrompt configuredPrompt =
                , configuredPrompt
                ]
         )
+  where
+    memoryCapLines limit =
+        [ "Every process you start here shares a " <> limit <> " memory limit with all other agent sessions, /tmp included. When the limit is hit the kernel kills the largest process, which shows up as `Killed` or exit code 137: the job is too big for the sandbox and belongs in a step run."
+        , "For a quick DuckDB check here, `SET memory_limit` well below " <> limit <> " and `SET threads = 4`."
+        ]
 
 renderCurrentProject :: Int -> Text
 renderCurrentProject projectId =

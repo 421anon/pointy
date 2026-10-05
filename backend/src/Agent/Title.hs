@@ -3,7 +3,7 @@
 
 module Agent.Title (generateSessionTitle) where
 
-import Agent.Sandbox (bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sessionPaths)
+import Agent.Sandbox (bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
 import Agent.Session (AgentSession (..))
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
@@ -16,7 +16,7 @@ import qualified Data.Text.IO as TIO
 import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode (..))
 import System.IO (Handle)
-import System.Process (CreateProcess (..), StdStream (..), createProcess, proc, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), StdStream (..), createProcess, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 
 titleTimeoutSeconds :: Int
@@ -57,8 +57,9 @@ generateSessionTitle cfg session_ request = do
             , ("PI_CODING_AGENT_DIR", piConfigDir)
             ]
     createDirectoryIfMissing True runnerHome
+    sandbox <- sandboxProcess cfg args
     let process =
-            (proc (agentSboxCommand cfg) args)
+            sandbox
                 { cwd = Just runnerHome
                 , env = Just runnerEnv
                 , std_in = NoStream

@@ -51,7 +51,14 @@ let
   backendEnvironment =
     lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
     // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
-    // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; };
+    // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; }
+    // lib.optionalAttrs (cfg.agentMemoryMax != null) { POINTY_AGENT_MEMORY_MAX = cfg.agentMemoryMax; };
+
+  agentMemoryServiceConfig = lib.optionalAttrs (cfg.agentMemoryMax != null) {
+    Delegate = "memory";
+    DelegateSubgroup = "main";
+    OOMPolicy = "continue";
+  };
 in
 {
 
@@ -124,6 +131,18 @@ in
         Null stages uploads in the system temporary directory.
       '';
       example = "/data/pointy-uploads";
+    };
+
+    agentMemoryMax = lib.mkOption {
+      type = lib.types.nullOr (lib.types.strMatching "[0-9]+[KMGT]?");
+      default = "24G";
+      description = ''
+        Memory limit shared by every agent sandbox and the processes it starts, including
+        files in the sandbox /tmp. When it is exceeded the kernel kills the largest process
+        in the sandboxes and the backend keeps running. The agents are told the limit and
+        pointed at step runs for full-size work. Null leaves the sandboxes unlimited.
+      '';
+      example = "16G";
     };
   };
 
@@ -243,7 +262,8 @@ in
         Group = "backend";
         EnvironmentFile = "-/home/backend/agent-env";
         LimitNOFILE = 65536;
-      };
+      }
+      // agentMemoryServiceConfig;
     };
 
     services.nginx = {
