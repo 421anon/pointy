@@ -4,6 +4,7 @@ import Accessors exposing (get, just, over)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (success)
+import Components.Select exposing (selected)
 import Dict exposing (Dict)
 import Dict.Accessors
 import Extra.Http as Http
@@ -11,11 +12,13 @@ import Flow exposing (Flow)
 import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildKind(..), ChildRef, ClipboardMode(..), ListingScope, Model, OrganizeAction(..), OrganizeDialog, OrganizeDialogMode(..), OrganizeDragEvent(..), OrganizeDropAction(..), OrganizeDropTarget(..), ProjectRecord, TemplateSource(..), TreeOp(..), blankProject)
-import Model.Lenses exposing (listingPreferences, listingSelection, organizeClipboard, organizeContextMenu, organizeDialog, organizeDrag, projectRecordById, projects, projectsDict, stepConfig, stepRecordById, store)
+import Model.Core as Model exposing (AddMode(..), ChildKind(..), ChildRef, ClipboardMode(..), ListingScope, Model, OrganizeAction(..), OrganizeDialog, OrganizeDialogMode(..), OrganizeDragEvent(..), OrganizeDropAction(..), OrganizeDropTarget(..), ProjectRecord, TemplateSource(..), TreeOp(..), blankProject)
+import Model.Lenses exposing (addMode, isReadOnlyRoute, listingPreferences, listingSelection, organizeClipboard, organizeContextMenu, organizeDialog, organizeDrag, presets, projectForms, projectRecordById, projects, projectsDict, selectExistingSteps, stepConfig, stepRecordById, steps, store)
 import Model.Lib as Lib
 import Model.Selection as Selection
 import Model.Shadow exposing (StepConfig)
+import Model.TableSpec as TableSpec
+import Scroll
 import Specs
 
 
@@ -775,3 +778,48 @@ undoShortcut : Flow Model ()
 undoShortcut =
     Flow.get
         |> Flow.andThen (\model -> Flow.when (Selection.listingEditable model) Actions.undoOrganize)
+
+
+openLinkExisting : Int -> Flow Model ()
+openLinkExisting stepId =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    item =
+                        { id = Just stepId, name = Lib.entityPathLabel model StepChild stepId, mProjectId = Nothing, ref = Just { kind = StepChild, id = stepId } }
+                in
+                if isReadOnlyRoute model then
+                    Actions.addToast False ((Dict.get stepId (get steps model) |> Maybe.unwrap item.name .name) ++ " isn't in any folder.")
+
+                else
+                    Flow.forAll (presets << success)
+                        (\presets_ ->
+                            let
+                                spec =
+                                    Specs.allProjects presets_
+
+                                forms =
+                                    get projectForms model
+
+                                formOpen =
+                                    not forms.nameEditOnly && Maybe.map .id forms.edited == Just Nothing
+
+                                kept =
+                                    if formOpen && forms.addMode == LinkExisting then
+                                        List.filter (\other -> other.ref /= item.ref) forms.selectExistingSteps.selected
+
+                                    else
+                                        []
+                            in
+                            Flow.setAll (projectForms << addMode) LinkExisting
+                                |> Flow.seq
+                                    (if formOpen then
+                                        Flow.attemptTask (Scroll.scrollY (TableSpec.formId spec) 0 0)
+
+                                     else
+                                        Actions.toggleAddOrEditRecordForm spec Nothing
+                                    )
+                                |> Flow.seq (Flow.setAll (projectForms << selectExistingSteps << selected) (kept ++ [ item ]))
+                        )
+            )

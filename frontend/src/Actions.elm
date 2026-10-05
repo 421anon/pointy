@@ -2627,29 +2627,21 @@ resetNeedsIntro toastId =
     Flow.setAll (toasts << by .id toastId << needsIntro) False
 
 
-onSelectSearch : Maybe Int -> Int -> Flow Model ()
-onSelectSearch mProjectId stepId =
+onSelectSearch : Int -> Int -> Flow Model ()
+onSelectSearch projectId stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    mCommit_ =
-                        try (route << Route.page << Route.viewedCommitT) model
-                in
-                mProjectId
-                    |> Maybe.unwrap (Flow.pure ())
-                        (\pId ->
-                            goToRoute
-                                (Route.fromPage
-                                    (Route.Project
-                                        { projectPath = canonicalPathTo model pId
-                                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                                        , mCommit = mCommit_
-                                        , mCompare = Nothing
-                                        }
-                                    )
-                                )
+                goToRoute
+                    (Route.fromPage
+                        (Route.Project
+                            { projectPath = canonicalPathTo model projectId
+                            , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                            , mCommit = try (route << Route.page << Route.viewedCommitT) model
+                            , mCompare = Nothing
+                            }
                         )
+                    )
             )
 
 
