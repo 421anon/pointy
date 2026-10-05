@@ -1,4 +1,3 @@
-let dragSourceFolder = "";
 let indicator = null;
 
 function parseRef(token) {
@@ -45,23 +44,22 @@ function isTopHalf(row, event) {
   return event.clientY < rect.top + rect.height / 2;
 }
 
+function allowsEdge(row, before) {
+  return (row.dataset.dropEdges || "").split(/\s+/).includes(before ? "before" : "after");
+}
+
 function hitTest(event) {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return null;
   const row = target.closest("[data-drag-ref]");
   const folderNode = target.closest("[data-drop-folder]");
   const linkRequested = event.ctrlKey || event.metaKey || event.altKey;
-  const edgeAllowed =
-    !linkRequested &&
-    !!row &&
-    row.dataset.dropEdgeAllowed === "move" &&
-    row.dataset.dragFolder === dragSourceFolder;
-  if (edgeAllowed && inEdgeBand(row, event)) {
-    return { kind: "edge", row, before: isTopHalf(row, event), token: "move" };
-  }
+  const before = !!row && isTopHalf(row, event);
+  const edge = !linkRequested && !!row && allowsEdge(row, before);
+  if (edge && inEdgeBand(row, event)) return { kind: "edge", row, before, token: "move" };
   const token = folderNode ? chooseToken(folderNode, linkRequested) : null;
   if (token) return { kind: "folder", node: folderNode, token };
-  if (edgeAllowed) return { kind: "edge", row, before: isTopHalf(row, event), token: "move" };
+  if (edge) return { kind: "edge", row, before, token: "move" };
   return null;
 }
 
@@ -72,21 +70,18 @@ function clearIndicator() {
   }
 }
 
-function showIndicator(hit) {
-  clearIndicator();
-  if (hit.kind === "edge") {
-    hit.row.classList.add(hit.before ? "drop-before" : "drop-after");
-    indicator = hit.row;
-  } else {
-    hit.node.classList.add("drop-into");
-    indicator = hit.node;
-  }
+function indicatorTarget(hit) {
+  if (hit.kind !== "edge") return { node: hit.node, className: "drop-into" };
+  const next = hit.before ? null : hit.row.nextElementSibling;
+  if (next && next.matches("[data-drag-ref]")) return { node: next, className: "drop-before" };
+  return { node: hit.row, className: hit.before ? "drop-before" : "drop-after" };
 }
 
-function clearDragSource() {
-  for (const node of document.querySelectorAll(".drag-source")) {
-    node.classList.remove("drag-source");
-  }
+function showIndicator(hit) {
+  clearIndicator();
+  const { node, className } = indicatorTarget(hit);
+  node.classList.add(className);
+  indicator = node;
 }
 
 function setDragImage(event, count) {
@@ -108,9 +103,6 @@ function onDragStart(app, event) {
   const payload = tokens.includes(rowToken) ? tokens : [rowToken];
   const refs = payload.map(parseRef).filter(Boolean);
   if (!refs.length) return;
-  dragSourceFolder = folder;
-  clearDragSource();
-  row.classList.add("drag-source");
   setDragImage(event, refs.length);
   if (app.ports && app.ports.organizeDragIn) {
     app.ports.organizeDragIn.send({
@@ -136,14 +128,12 @@ function onDragOver(event) {
 }
 
 function onDragLeave(event) {
-  if (!(event.target instanceof Element)) return;
-  if (!event.relatedTarget || !event.target.contains(event.relatedTarget)) clearIndicator();
+  if (!event.relatedTarget) clearIndicator();
 }
 
 function onDrop(app, event) {
   const hit = hitTest(event);
   clearIndicator();
-  clearDragSource();
   if (!hit) return;
   event.preventDefault();
   const linkModifier = !!(event.ctrlKey || event.metaKey || event.altKey);
@@ -175,8 +165,6 @@ function onDrop(app, event) {
 
 function onDragEnd(app) {
   clearIndicator();
-  clearDragSource();
-  dragSourceFolder = "";
   if (app.ports && app.ports.organizeDragIn) {
     app.ports.organizeDragIn.send({ type: "end" });
   }
@@ -204,6 +192,7 @@ export function installDragDropListeners(app) {
   if (installed) return;
   installed = true;
   document.addEventListener("dragstart", (event) => onDragStart(app, event));
+  document.addEventListener("dragenter", onDragOver);
   document.addEventListener("dragover", onDragOver);
   document.addEventListener("dragleave", onDragLeave);
   document.addEventListener("drop", (event) => onDrop(app, event));

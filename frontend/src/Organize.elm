@@ -584,7 +584,7 @@ dropReorder scope ref before =
                             newOrder =
                                 Selection.storedOrder prefs desired
                         in
-                        Flow.when (Selection.reorderDropAllowed model) <|
+                        Flow.when (Selection.edgeDropAllowed model scope ref before) <|
                             if Selection.displayOrder prefs newOrder == rendered then
                                 Flow.pure ()
 

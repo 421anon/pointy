@@ -47,14 +47,14 @@ dropAllowedToken model folderId =
         |> String.join " "
 
 
-dropEdgeAttrs : Model -> List (Html.Attribute msg)
-dropEdgeAttrs model =
-    case Selection.dropEdgeAllowed model of
-        Just action ->
-            [ attribute "data-drop-edge-allowed" (Selection.dropActionToken action) ]
-
-        Nothing ->
-            []
+dropEdgeAttrs : Maybe ( Int, Int ) -> Int -> List (Html.Attribute msg)
+dropEdgeAttrs gaps index =
+    [ ( True, "before" ), ( False, "after" ) ]
+        |> List.filter (\( before, _ ) -> Selection.edgeAllowed gaps index before)
+        |> List.map Tuple.second
+        |> String.join " "
+        |> attribute "data-drop-edges"
+        |> List.singleton
 
 
 rowDragAttrs : Model.ListingScope -> ChildLink -> List (Html.Attribute msg)

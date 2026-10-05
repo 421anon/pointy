@@ -7,10 +7,12 @@ module Model.Selection exposing
     , displayOrder
     , dropActionToken
     , dropAllowed
-    , dropEdgeAllowed
+    , edgeAllowed
+    , edgeDropAllowed
     , folderLinks
     , hasSelection
     , isCut
+    , isDragged
     , isSelected
     , listingEditable
     , moveValid
@@ -18,8 +20,8 @@ module Model.Selection exposing
     , organizeTargets
     , pruneSelection
     , rangeSelect
-    , reorderDropAllowed
     , reorderForEdgeDrop
+    , reorderGaps
     , resolveDropAction
     , resolveInto
     , selectAllState
@@ -76,6 +78,16 @@ isCut model scope ref =
     case get organizeClipboard model of
         Just { mode, sourceScope, refs } ->
             mode == Model.ClipboardCut && sourceScope == scope && not (isReadOnlyRoute model) && List.any (Model.sameEntity ref) refs
+
+        Nothing ->
+            False
+
+
+isDragged : Model -> ListingScope -> ChildRef -> Bool
+isDragged model scope ref =
+    case get organizeDrag model of
+        Just drag ->
+            drag.sourceScope == scope && List.any (Model.sameEntity ref) drag.refs
 
         Nothing ->
             False
@@ -224,13 +236,75 @@ reorderDropAllowed model =
     prefs.sort == Model.SortManual && not prefs.groupByType && not (isReadOnlyRoute model)
 
 
-dropEdgeAllowed : Model -> Maybe OrganizeDropAction
-dropEdgeAllowed model =
-    if reorderDropAllowed model then
-        Just OrganizeDropMove
+reorderGaps : Model -> ListingScope -> List ChildRef -> Maybe ( Int, Int )
+reorderGaps model scope displayed =
+    get organizeDrag model
+        |> Maybe.filter (\drag -> drag.sourceScope == scope && reorderDropAllowed model)
+        |> Maybe.map (\drag -> landingGaps (get listingPreferences model) displayed drag.refs)
+
+
+landingGaps : Model.ListingPreferences -> List ChildRef -> List ChildRef -> ( Int, Int )
+landingGaps prefs displayed payload =
+    let
+        end =
+            List.length displayed
+    in
+    if prefs.foldersFirst then
+        let
+            isFolder ref =
+                ref.kind == ProjectChild
+
+            staying =
+                List.indexedMap Tuple.pair displayed
+                    |> List.filter (\( _, ref ) -> not (List.any (Model.sameEntity ref) payload))
+        in
+        ( if List.any (not << isFolder) payload then
+            staying
+                |> List.filter (\( _, ref ) -> isFolder ref)
+                |> List.last
+                |> Maybe.unwrap 0 (\( index, _ ) -> index + 1)
+
+          else
+            0
+        , if List.any isFolder payload then
+            staying
+                |> List.find (\( _, ref ) -> not (isFolder ref))
+                |> Maybe.unwrap end Tuple.first
+
+          else
+            end
+        )
 
     else
-        Nothing
+        ( 0, end )
+
+
+edgeAllowed : Maybe ( Int, Int ) -> Int -> Bool -> Bool
+edgeAllowed gaps index before =
+    case gaps of
+        Just ( first, last ) ->
+            let
+                gap =
+                    if before then
+                        index
+
+                    else
+                        index + 1
+            in
+            first <= gap && gap <= last
+
+        Nothing ->
+            False
+
+
+edgeDropAllowed : Model -> ListingScope -> ChildRef -> Bool -> Bool
+edgeDropAllowed model scope ref before =
+    let
+        displayed =
+            displayOrder (get listingPreferences model) (visibleRefs model scope)
+    in
+    List.findIndex (Model.sameEntity ref) displayed
+        |> Maybe.unwrap False (\index -> edgeAllowed (reorderGaps model scope displayed) index before)
 
 
 moveValid : Model -> ListingScope -> Int -> ChildRef -> Bool
@@ -326,27 +400,26 @@ reorderForEdgeDrop : List ChildRef -> List ChildRef -> ChildRef -> Bool -> List 
 reorderForEdgeDrop visual payload ref before =
     let
         present =
-            List.filter (\r -> List.any (Model.sameEntity r) visual) payload
+            List.filter (\r -> List.any (Model.sameEntity r) payload) visual
+
+        stays r =
+            not (List.any (Model.sameEntity r) present)
 
         withoutPayload =
-            List.filter (\r -> not (List.any (Model.sameEntity r) present)) visual
+            List.filter stays visual
 
         insertAt =
             case List.findIndex (Model.sameEntity ref) visual of
                 Just index ->
-                    let
-                        removedBefore =
-                            List.take index visual
-                                |> List.filter (\r -> List.any (Model.sameEntity r) present)
-                                |> List.length
-                    in
-                    (if before then
-                        index - removedBefore
+                    List.take
+                        (if before then
+                            index
 
-                     else
-                        index - removedBefore + 1
-                    )
-                        |> clamp 0 (List.length withoutPayload)
+                         else
+                            index + 1
+                        )
+                        visual
+                        |> List.count stays
 
                 Nothing ->
                     List.length withoutPayload

@@ -376,6 +376,9 @@ viewListingGroup model rowContext prefs group =
 
         orderedRefs =
             List.map (Model.childRefOf << .link) visible
+
+        gaps =
+            Model.Selection.reorderGaps model rowContext.scope orderedRefs
     in
     Html.div [ class "listing-group" ]
         [ Html.viewIf (not (String.isEmpty group.title))
@@ -388,17 +391,17 @@ viewListingGroup model rowContext prefs group =
             )
         , Html.Keyed.node "div"
             [ class "listing-rows" ]
-            (List.map (viewRowKeyed model rowContext orderedRefs) visible)
+            (List.indexedMap (\index -> viewRowKeyed model rowContext orderedRefs (View.Organize.dropEdgeAttrs gaps index)) visible)
         ]
 
 
-viewRowKeyed : Model -> ListingRowContext -> List Model.ChildRef -> ListingRow -> ( String, Html (Flow Model ()) )
-viewRowKeyed model rowContext orderedRefs row =
-    ( Model.rowDomId row.link.kind row.link.id, viewRow model rowContext orderedRefs row )
+viewRowKeyed : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> ( String, Html (Flow Model ()) )
+viewRowKeyed model rowContext orderedRefs edgeAttrs row =
+    ( Model.rowDomId row.link.kind row.link.id, viewRow model rowContext orderedRefs edgeAttrs row )
 
 
-viewRow : Model -> ListingRowContext -> List Model.ChildRef -> ListingRow -> Html (Flow Model ())
-viewRow model rowContext orderedRefs row =
+viewRow : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> Html (Flow Model ())
+viewRow model rowContext orderedRefs edgeAttrs row =
     let
         scope =
             rowContext.scope
@@ -485,7 +488,7 @@ viewRow model rowContext orderedRefs row =
         dragAttrs =
             if rowContext.editable then
                 View.Organize.rowDragAttrs scope row.link
-                    ++ View.Organize.dropEdgeAttrs model
+                    ++ edgeAttrs
                     ++ (if isFolder then
                             View.Organize.dropTargetAttrs model row.link.id
 
@@ -509,6 +512,7 @@ viewRow model rowContext orderedRefs row =
             [ ( "listing-row-folder", isFolder )
             , ( "listing-row-selected", isSelected )
             , ( "listing-row-cut", Model.Selection.isCut model scope ref )
+            , ( "drag-source", Model.Selection.isDragged model scope ref )
             ]
          , id rowId
          ]
