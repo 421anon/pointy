@@ -170,6 +170,10 @@ applyRoute forceRevealHighlight newRoute =
                                     (Flow.when (listingFolder newRoute /= listingFolder currentRoute)
                                         (Flow.async Actions.loadProjectReviews)
                                     )
+                                |> Flow.seq
+                                    (Flow.when (listingFolder newRoute /= listingFolder currentRoute && viewedCommitOf newRoute == viewedCommitOf currentRoute)
+                                        (Flow.async Actions.loadProjectRollup)
+                                    )
                         )
                     |> Flow.seq
                         (Flow.forAll route
