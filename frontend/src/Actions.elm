@@ -144,8 +144,20 @@ toggleAddOrEditRecordForm spec mRecordId =
                             |> Maybe.orElse mRecordToEdit
                             |> Maybe.withDefault (TableSpec.getDefaultRecord spec)
                             |> Just
+
+                opensNewRecord =
+                    (newEdited |> Maybe.map .id) == Just Nothing
             in
-            { stashed | nameEditOnly = False, edited = newEdited }
+            { stashed
+                | nameEditOnly = False
+                , edited = newEdited
+                , addMode =
+                    if opensNewRecord then
+                        stashed.addMode
+
+                    else
+                        AddNew
+            }
 
         scrollAction =
             Flow.attemptTask (Scroll.scrollY (Maybe.unwrap (TableSpec.formId spec) (Model.rowDomId (TableSpec.getChildKind spec)) mRecordId) 0 0)
@@ -173,12 +185,12 @@ toggleAddOrEditRecordForm spec mRecordId =
 
 startInlineRecordNameEdit : TableSpec a -> a -> Flow Model ()
 startInlineRecordNameEdit spec record =
-    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True })
+    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True, addMode = AddNew })
 
 
 stopInlineRecordNameEdit : TableSpec a -> Flow Model ()
 stopInlineRecordNameEdit spec =
-    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Nothing, nameEditOnly = False })
+    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Nothing, nameEditOnly = False, addMode = AddNew })
 
 
 editRecordName : A_Traversal s (Table (BaseRecord a)) -> String -> Flow s ()
