@@ -381,7 +381,10 @@ pasteInto model targetId clipboard =
                 ClipboardCut ->
                     List.concatMap (moveOps model clipboard.sourceScope targetId) clipboard.refs
     in
-    if List.isEmpty ops then
+    if clipboard.mode == ClipboardCut && clipboard.sourceScope == targetId then
+        Flow.setAll organizeClipboard Nothing
+
+    else if List.isEmpty ops then
         Actions.addToast False "Nothing to paste."
 
     else
