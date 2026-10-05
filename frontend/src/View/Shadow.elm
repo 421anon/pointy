@@ -17,7 +17,7 @@ import Iso8601
 import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), Model, ProjectRecord, Status(..), StepRecord, blankProject)
+import Model.Core as Model exposing (AddMode(..), Model, ProjectRecord, Status(..), StepRecord)
 import Model.Lenses as Lenses exposing (isReadOnlyRoute)
 import Model.Lib
 import Model.Selection
@@ -549,8 +549,8 @@ viewNewMenu model proj =
                     Html.viewMaybe
                         (\stepConfig ->
                             menuItem
-                                (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing
-                                    |> Flow.seq (Flow.setAll (Lenses.projectForms << Lenses.newDraft) (Just { blankProject | templateSource = proj.templateSource }))
+                                (Flow.setAll (Lenses.projectForms << Lenses.newDraft) Nothing
+                                    |> Flow.seq (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
                                 )
                                 [ iconCustom False "create_new_folder" []
                                 , Html.text "New folder"

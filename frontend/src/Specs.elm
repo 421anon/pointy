@@ -1,6 +1,6 @@
 module Specs exposing (..)
 
-import Accessors exposing (has, snd, try)
+import Accessors exposing (get, has, snd, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Api.Encode as Encode
@@ -33,7 +33,7 @@ steps name entry =
 
             else
                 always Nothing
-        , defaultRecord = blankStep name
+        , defaultRecord = always (blankStep name)
         , findRecord = \stepId model -> try (Lenses.stepRecordById stepId) model
         , displayName = Maybe.withDefault name entry.displayName
         , description = entry.description
@@ -55,7 +55,12 @@ allProjects presets =
         , isLocked = always False
         , directoryView = always Nothing
         , srcFilesView = always Nothing
-        , defaultRecord = { blankProject | templateSource = Model.defaultTemplateSource presets }
+        , defaultRecord =
+            \model ->
+                { blankProject
+                    | templateSource =
+                        ApiData.unwrap (Model.defaultTemplateSource presets) .templateSource (get Lenses.currentProject model)
+                }
         , findRecord = \projectId model -> try (Lenses.projectRecordById projectId) model
         , displayName = "Project"
         , description = Nothing

@@ -40,7 +40,7 @@ type TableSpec a
         , directoryView : a -> Maybe DirectoryFolder
         , srcFilesView : a -> Maybe DirectoryFolder
         , encodeRecord : a -> Json.Encode.Value
-        , defaultRecord : a
+        , defaultRecord : Model -> a
         , findRecord : Int -> Model -> Maybe a
         , apiPath : String
         , displayName : String
@@ -130,7 +130,7 @@ getEncodeRecord (TableSpec spec) record =
     spec.encodeRecord record
 
 
-getDefaultRecord : TableSpec a -> a
+getDefaultRecord : TableSpec a -> Model -> a
 getDefaultRecord (TableSpec spec) =
     spec.defaultRecord
 

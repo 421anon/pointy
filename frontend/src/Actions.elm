@@ -142,7 +142,7 @@ toggleAddOrEditRecordForm spec mRecordId =
                     else
                         get (draftAt mRecordId) stashed
                             |> Maybe.orElse mRecordToEdit
-                            |> Maybe.withDefault (TableSpec.getDefaultRecord spec)
+                            |> Maybe.withDefault (TableSpec.getDefaultRecord spec model)
                             |> Just
 
                 opensNewRecord =

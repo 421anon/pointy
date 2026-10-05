@@ -1072,7 +1072,7 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                     [ type_ "radio"
                     , name ("addMode" ++ TableSpec.getName spec)
                     , checked (table.addMode == mode)
-                    , Events.onClick (Actions.setAddMode (TableSpec.getLens spec) (TableSpec.getDefaultRecord spec) mode)
+                    , Events.onClick (Actions.setAddMode (TableSpec.getLens spec) (TableSpec.getDefaultRecord spec model) mode)
                     ]
                     []
                 , Html.text label

@@ -144,7 +144,7 @@ applyRoute forceRevealHighlight newRoute =
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute) (Flow.modify Selection.clear))
-                    |> Flow.seq (Flow.when (listingFolder currentRoute /= listingFolder newRoute) (Flow.over (stepForms << values) resetTable))
+                    |> Flow.seq (Flow.when (listingFolder currentRoute /= listingFolder newRoute) (Flow.over (stepForms << values) resetTable |> Flow.seq (Flow.over projectForms resetTable)))
                     |> Flow.seq (Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute) (Flow.setAll projectRollups Dict.empty))
                     |> Flow.seq (Flow.when (pageTarget currentRoute /= pageTarget newRoute) Actions.resetPageScroll)
                     |> Flow.seq (Flow.when projectRoute (Actions.expandSidebarPath expandPath))
