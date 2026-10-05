@@ -502,8 +502,8 @@ listingHeader model proj =
                                     "link"
                                     True
                                     "Link existing"
-                                    (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing
-                                        |> Flow.seq (Flow.setAll (Lenses.projectForms << Lenses.addMode) LinkExisting)
+                                    (Flow.setAll (Lenses.projectForms << Lenses.addMode) LinkExisting
+                                        |> Flow.seq (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
                                     )
                             )
                             mStepConfig
