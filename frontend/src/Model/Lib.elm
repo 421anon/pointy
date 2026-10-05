@@ -7,8 +7,9 @@ import Dict exposing (Dict)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord)
-import Model.Lenses exposing (commitHash, currentProjectPath, presets, projects, projectsDict, stepConfig, steps)
+import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, stepConfig, steps)
 import Route
+import Set exposing (Set)
 
 
 canonicalPathTo : Model -> Int -> List Int
@@ -48,6 +49,13 @@ entityOtherParents model kind id mCurrentParentId =
     entityParents model kind id
         |> List.map Tuple.first
         |> List.filter (\parentId -> Just parentId /= mCurrentParentId)
+
+
+currentProjectStepIds : Model -> Set Int
+currentProjectStepIds model =
+    get currentProject model
+        |> ApiData.toMaybe
+        |> Maybe.unwrap Set.empty (Model.childIdsOf StepChild >> Set.fromList)
 
 
 entityPathLabel : Model -> ChildKind -> Int -> String

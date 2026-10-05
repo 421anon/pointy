@@ -1468,6 +1468,9 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         << argSelectStates
                         << lens "keyWithDefault" (Dict.get cfg.stateKey >> Maybe.withDefault Select.initSelectState) (\d v -> Dict.insert cfg.stateKey v d)
 
+                selectState =
+                    try stateLens model |> Maybe.withDefault Select.initSelectState
+
                 selectedItems =
                     selectedStepIds
                         |> List.map
@@ -1489,9 +1492,17 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                     List.map .id selectedItems
 
                 availableItems =
-                    allSteps mAllowedStepTypes
-                        |> List.filterMap (\step -> step.id |> Maybe.map (\id -> { id = Just id, name = step.name, mProjectId = Nothing, ref = Nothing }))
-                        |> List.filter (\item -> not (List.member item.id selectedIds))
+                    if selectState.active || not (String.isEmpty selectState.input) then
+                        let
+                            projectStepIds =
+                                Model.Lib.currentProjectStepIds model
+                        in
+                        allSteps mAllowedStepTypes
+                            |> List.filterMap (\step -> step.id |> Maybe.filter (\id -> Set.member id projectStepIds) |> Maybe.map (\id -> { id = Just id, name = step.name, mProjectId = Nothing, ref = Nothing }))
+                            |> List.filter (\item -> not (List.member item.id selectedIds))
+
+                    else
+                        []
 
                 toTooltip =
                     .id
@@ -1520,7 +1531,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
             in
             Select.view
                 { optic = stateLens
-                , selectState = try stateLens model |> Maybe.withDefault Select.initSelectState
+                , selectState = selectState
                 , selected_ = selectedItems
                 , availableItems = availableItems
                 , readOnly = cfg.readOnly

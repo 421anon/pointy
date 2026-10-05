@@ -52,8 +52,11 @@ initSelectState =
 
 
 matchesOrderedTokens : String -> String -> Bool
-matchesOrderedTokens query haystack =
+matchesOrderedTokens query =
     let
+        queryTokens =
+            List.filter (not << String.isEmpty) (String.words (String.toLower query))
+
         findTokens tokens remaining =
             case tokens of
                 [] ->
@@ -67,7 +70,11 @@ matchesOrderedTokens query haystack =
                         [] ->
                             False
     in
-    findTokens (List.filter (not << String.isEmpty) (String.words (String.toLower query))) (String.toLower haystack)
+    if List.isEmpty queryTokens then
+        always True
+
+    else
+        \haystack -> findTokens queryTokens (String.toLower haystack)
 
 
 type ChipAction
@@ -77,7 +84,6 @@ type ChipAction
 
 type MenuAction
     = MenuSelect
-    | MenuHover
 
 
 viewChip : Bool -> Bool -> String -> String -> List (Html.Attribute Never) -> Html ChipAction
@@ -116,7 +122,6 @@ viewMenuItem isActive domId name tooltip =
         , id domId
         , classList [ ( "active", isActive ) ]
         , Events.preventDefaultOn "mousedown" (Decode.succeed ( MenuSelect, True ))
-        , Events.onMouseEnter MenuHover
         , title tooltip
         ]
         [ Html.text name ]
@@ -152,8 +157,23 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
         optic_ =
             remkT optic
 
+        matchesInput =
+            matchesOrderedTokens selectState.input
+
         filteredAvailableItems =
-            availableItems |> List.filter (\item -> matchesOrderedTokens selectState.input (toMenuItemName item))
+            availableItems
+                |> List.filterMap
+                    (\item ->
+                        let
+                            name =
+                                toMenuItemName item
+                        in
+                        if matchesInput name then
+                            Just ( item, name )
+
+                        else
+                            Nothing
+                    )
 
         keyedSelectedChips =
             selected_
@@ -250,7 +270,7 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                                                 |> List.drop selectState.activeIndex
                                                 |> List.head
                                                 |> Maybe.unwrap Flow.none
-                                                    (\item ->
+                                                    (\( item, _ ) ->
                                                         Flow.modify (over optic_ (over selected (List.push item) >> setInputAction clearInputAfterSelect item >> set activeIndex 0))
                                                             |> Flow.seq (Flow.modify (set (optic_ << active) activeAfterSelect))
                                                             |> Flow.seq (onSelect item)
@@ -306,23 +326,18 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                 [ class "select-menu", id "select-menu" ]
                 (filteredAvailableItems
                     |> List.indexedMap
-                        (\index item_ ->
+                        (\index ( item_, name ) ->
                             Html.Lazy.lazy4 viewMenuItem
                                 (index == selectState.activeIndex)
                                 (menuItemId index)
-                                (toMenuItemName item_)
+                                name
                                 (String.join "\n" (toMenuItemTooltip item_))
                                 |> map
-                                    (\action ->
-                                        case action of
-                                            MenuSelect ->
-                                                Flow.modify (over optic_ (over selected (List.push item_) >> setInputAction clearInputAfterSelect item_))
-                                                    |> Flow.seq (Flow.modify (set (optic_ << active) activeAfterSelect))
-                                                    |> Flow.seq (onSelect item_)
-                                                    |> Flow.seq onChange
-
-                                            MenuHover ->
-                                                Flow.modify (set (optic_ << activeIndex) index)
+                                    (\MenuSelect ->
+                                        Flow.modify (over optic_ (over selected (List.push item_) >> setInputAction clearInputAfterSelect item_))
+                                            |> Flow.seq (Flow.modify (set (optic_ << active) activeAfterSelect))
+                                            |> Flow.seq (onSelect item_)
+                                            |> Flow.seq onChange
                                     )
                         )
                 )
