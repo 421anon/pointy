@@ -10,6 +10,7 @@ import Html.Attributes exposing (attribute, class, classList, title)
 import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
+import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model, ProjectRecord)
 import Model.Lenses exposing (currentProjectPath, listingPreferences, sidebarExpanded, sidebarOpen, sidebarScroll)
@@ -140,6 +141,10 @@ viewFolderNode model editable projects mCommit_ ancestors isOpen link =
         isCurrent =
             try currentProjectPath model |> Maybe.map ((==) path) |> Maybe.withDefault False
 
+        isCut =
+            List.last ancestors
+                |> Maybe.unwrap False (\parentId -> Model.Selection.isCut model parentId (Model.childRefOf link))
+
         mProject =
             Dict.get projectId projects
 
@@ -193,7 +198,7 @@ viewFolderNode model editable projects mCommit_ ancestors isOpen link =
             Html.a
                 ([ Route.href (Route.fromPage (Route.projectPage path mCommit_))
                  , class "sidebar-link"
-                 , classList [ ( "current", isCurrent ) ]
+                 , classList [ ( "current", isCurrent ), ( "cut", isCut ) ]
                  , attribute "aria-current" (View.Lib.boolText isCurrent)
                  ]
                     ++ (if editable then

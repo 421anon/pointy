@@ -508,6 +508,7 @@ viewRow model rowContext orderedRefs row =
          , classList
             [ ( "listing-row-folder", isFolder )
             , ( "listing-row-selected", isSelected )
+            , ( "listing-row-cut", Model.Selection.isCut model scope ref )
             ]
          , id rowId
          ]

@@ -10,6 +10,7 @@ module Model.Selection exposing
     , dropEdgeAllowed
     , folderLinks
     , hasSelection
+    , isCut
     , isSelected
     , listingEditable
     , moveValid
@@ -65,6 +66,16 @@ isSelected mSelection scope ref =
     case mSelection of
         Just selection ->
             selection.scope == scope && List.any (Model.sameEntity ref) selection.refs
+
+        Nothing ->
+            False
+
+
+isCut : Model -> ListingScope -> ChildRef -> Bool
+isCut model scope ref =
+    case get organizeClipboard model of
+        Just { mode, sourceScope, refs } ->
+            mode == Model.ClipboardCut && sourceScope == scope && not (isReadOnlyRoute model) && List.any (Model.sameEntity ref) refs
 
         Nothing ->
             False

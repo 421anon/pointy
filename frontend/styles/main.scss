@@ -190,6 +190,10 @@ body {
     color: var(--text-primary);
     font-weight: 600;
   }
+
+  &.cut {
+    opacity: 0.4;
+  }
 }
 
 .sidebar-label {
@@ -382,7 +386,8 @@ body {
     background-color: var(--state-info-outline);
   }
 
-  &.drag-source {
+  &.drag-source,
+  &.listing-row-cut {
     opacity: 0.4;
   }
 
