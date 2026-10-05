@@ -193,7 +193,7 @@ viewFolderNode model editable projects mCommit_ ancestors isOpen link =
             Html.a
                 ([ Route.href (Route.fromPage (Route.projectPage path mCommit_))
                  , class "sidebar-link"
-                 , classList [ ( "current", isCurrent ), ( "hidden-link", link.hidden ) ]
+                 , classList [ ( "current", isCurrent ) ]
                  , attribute "aria-current" (View.Lib.boolText isCurrent)
                  ]
                     ++ (if editable then

@@ -190,15 +190,6 @@ body {
     color: var(--text-primary);
     font-weight: 600;
   }
-
-  &.hidden-link {
-    opacity: 0.6;
-    color: var(--text-muted);
-
-    .sidebar-label {
-      text-decoration: line-through;
-    }
-  }
 }
 
 .sidebar-label {
@@ -385,16 +376,6 @@ body {
   display: flex;
   flex-direction: column;
   row-gap: var(--spacing-xs);
-
-  &.hidden {
-    opacity: 0.6;
-    color: var(--text-muted);
-
-    .listing-row-name {
-      text-decoration: line-through;
-      color: var(--text-muted);
-    }
-  }
 
   &.listing-row-selected .listing-row-header {
     border-left-color: var(--state-info);

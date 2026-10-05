@@ -508,7 +508,6 @@ viewRow model rowContext orderedRefs row =
          , classList
             [ ( "listing-row-folder", isFolder )
             , ( "listing-row-selected", isSelected )
-            , ( "hidden", row.link.hidden )
             ]
          , id rowId
          ]
