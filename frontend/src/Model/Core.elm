@@ -390,7 +390,7 @@ defaultListingPreferences =
     , descending = False
     , foldersFirst = True
     , showHidden = False
-    , groupByType = False
+    , groupByType = True
     }
 
 
