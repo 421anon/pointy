@@ -304,11 +304,6 @@ stepRecordsListed statuses =
     stepRecords << where_ (\step -> Maybe.unwrap False (\id -> Dict.member id statuses) step.id)
 
 
-projectsContainingEntity : Int -> Traversal Model ProjectRecord x y
-projectsContainingEntity entityId =
-    projects << success << values << where_ (\project -> List.any (Model.sameEntity { kind = Model.StepChild, id = entityId }) project.children)
-
-
 args : Lens ls { a | args : b } b x y
 args =
     lens ".args" .args (\t args_ -> { t | args = args_ })

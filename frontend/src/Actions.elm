@@ -2635,11 +2635,8 @@ onSelectSearch mProjectId stepId =
                 let
                     mCommit_ =
                         try (route << Route.page << Route.viewedCommitT) model
-
-                    pickedProjectId =
-                        mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
                 in
-                pickedProjectId
+                mProjectId
                     |> Maybe.unwrap (Flow.pure ())
                         (\pId ->
                             goToRoute
