@@ -414,6 +414,10 @@ body {
     top: -1px;
   }
 
+  &.drop-before:first-child::after {
+    top: 0;
+  }
+
   &.drop-after::after {
     bottom: -1px;
   }
