@@ -576,6 +576,10 @@ body {
     display: inline-flex;
   }
 
+  .icon-btn.hamburger-icon-btn-mobile:has(+ .listing-row-actions-popover:empty) {
+    display: none;
+  }
+
   .listing-row-actions-popover {
     display: none;
   }

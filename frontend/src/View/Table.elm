@@ -815,7 +815,7 @@ viewRowActions parentId link spec isReadOnly record =
             , { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
               , render = always (viewInactiveIconButtonWithTooltip "edit" "Remove review to edit")
               }
-            , { shouldShow = Maybe.isJust << .id
+            , { shouldShow = \r -> Maybe.isJust r.id && (editable r || TableSpec.getChildKind spec == Model.StepChild)
               , render =
                     \r ->
                         if editable r then
