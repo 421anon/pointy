@@ -370,6 +370,12 @@ body {
 
 .listing-rows > div:not(:last-child) {
   border-bottom: 1px solid var(--line-color);
+
+  &:has(+ .drop-before),
+  &:has(+ .drop-into),
+  &.drop-into {
+    border-bottom-color: var(--bg-elevated);
+  }
 }
 
 .table-form-wrapper {
@@ -381,13 +387,13 @@ body {
   flex-direction: column;
   row-gap: var(--spacing-xs);
 
-  &.listing-row-selected .listing-row-header {
+  &.listing-row-selected:not(.drag-source) .listing-row-header {
     border-left-color: var(--state-info);
     background-color: var(--state-info-outline);
   }
 
-  &.drag-source,
-  &.listing-row-cut {
+  &.drag-source > *,
+  &.listing-row-cut > * {
     opacity: 0.4;
   }
 
@@ -395,23 +401,21 @@ body {
   &.drop-after {
     position: relative;
 
-    &::before,
     &::after {
       content: "";
       position: absolute;
       left: 0;
       right: 0;
-      height: 2px;
-      background-color: var(--state-info);
+      border-top: 2px solid var(--state-info);
     }
   }
 
-  &.drop-before::before {
-    top: 0;
+  &.drop-before::after {
+    top: -1px;
   }
 
   &.drop-after::after {
-    bottom: 0;
+    bottom: -1px;
   }
 
   &.drop-into .listing-row-header {
