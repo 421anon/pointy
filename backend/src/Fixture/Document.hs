@@ -80,7 +80,7 @@ appliedAnswer document applyExpr attr
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
     | "certified" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
-    | "srcFiles" `isInfixOf` applyExpr = Right (either (const (encodeValue Null)) id (jsonAnswer document (attr ++ ".srcFiles")))
+    | "srcFiles" `isInfixOf` applyExpr = Right (either (const (encodeValue Null)) id (jsonAnswer document ("#pointy.steps." ++ fromMaybe "" (listToMaybe (idsIn applyExpr)) ++ ".srcFiles")))
     | "presets" `isInfixOf` applyExpr = Right (encodeValue (documentPresets document))
     | "notices" `isInfixOf` applyExpr = Right (encodeValue (entry (documentNotices document)))
     | "extras.outPath" `isInfixOf` applyExpr = Right (encodeValue extrasValue)
