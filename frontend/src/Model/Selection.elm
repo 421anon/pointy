@@ -413,13 +413,14 @@ actionDefinitions =
     , OrganizeGroupAction
     , OrganizeCutAction
     , OrganizeCopyAction
+    , OrganizePasteAction
+    , OrganizePasteDuplicateAction
+    , OrganizeClearClipboardAction
     , OrganizeHideAction
     , OrganizeRemoveAction
     , OrganizeDuplicateAction
     , OrganizeDeleteAction
     , OrganizeClearAction
-    , OrganizePasteAction
-    , OrganizePasteDuplicateAction
     , OrganizeNewFolderAction
     ]
 
@@ -480,6 +481,9 @@ actionSpec model action =
             , inBar = False
             }
 
+        OrganizeClearClipboardAction ->
+            { label = "Clear clipboard", icon = "content_paste_off", inBar = hasSelection model }
+
         OrganizeNewFolderAction ->
             { label = "New folder", icon = "create_new_folder", inBar = False }
 
@@ -529,6 +533,9 @@ actionVisible model action =
 
         OrganizePasteDuplicateAction ->
             editable && hasClipboard && hasFolder
+
+        OrganizeClearClipboardAction ->
+            editable && hasClipboard
 
         OrganizeNewFolderAction ->
             editable && hasFolder

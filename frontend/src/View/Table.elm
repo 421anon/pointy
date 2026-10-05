@@ -268,7 +268,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                     :: viewListingToggle "visibility" "Show hidden" prefs.showHidden Actions.toggleListingShowHidden
                     :: viewListingToggle "widgets" "Group by type" prefs.groupByType Actions.toggleListingGroupByType
                     :: header
-                    ++ viewPasteButtons model
+                    ++ viewClipboardButtons model
                 )
             ]
         , Html.div
@@ -290,9 +290,9 @@ viewListing { model, scope, stepConfig, rows, header } =
         ]
 
 
-viewPasteButtons : Model -> List (Html (Flow Model ()))
-viewPasteButtons model =
-    [ Model.OrganizePasteAction, Model.OrganizePasteDuplicateAction ]
+viewClipboardButtons : Model -> List (Html (Flow Model ()))
+viewClipboardButtons model =
+    [ Model.OrganizePasteAction, Model.OrganizePasteDuplicateAction, Model.OrganizeClearClipboardAction ]
         |> List.filter (Model.Selection.actionVisible model)
         |> List.map
             (\action ->

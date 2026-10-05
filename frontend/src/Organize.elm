@@ -148,6 +148,9 @@ runActionOn scope refs action =
         OrganizePasteDuplicateAction ->
             pasteClipboard True
 
+        OrganizeClearClipboardAction ->
+            Flow.setAll organizeClipboard Nothing
+
         OrganizeNewFolderAction ->
             openOrganizeDialogFor OrganizeGroup scope []
 
