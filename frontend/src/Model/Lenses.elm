@@ -129,11 +129,6 @@ reviewRevision =
     lens "reviewRevision" .revision (\reviewed revision_ -> { reviewed | revision = revision_ })
 
 
-isReadOnlyPage : Route.Page -> Bool
-isReadOnlyPage =
-    Route.viewedCommit >> Maybe.isJust
-
-
 isReadOnlyRoute : Model -> Bool
 isReadOnlyRoute =
     get route >> .page >> Route.viewedCommit >> Maybe.isJust

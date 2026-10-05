@@ -5,7 +5,6 @@ import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Api.Encode as Encode
 import Extra.Accessors exposing (where_)
-import Flow
 import Model.Core as Model exposing (ChildKind(..), ProjectRecord, StepRecord, blankProject, blankStep)
 import Model.Lenses as Lenses
 import Model.Shadow as Shadow exposing (Presets, StepConfigEntry, WithSrcFiles(..))
@@ -39,7 +38,6 @@ steps name entry =
         , description = entry.description
         , apiPath = "/step"
         , upsertRecord = Actions.upsertStep
-        , cloneRecord = Actions.cloneStep
         }
 
 
@@ -66,5 +64,4 @@ allProjects presets =
         , description = Nothing
         , apiPath = "/projects"
         , upsertRecord = Actions.upsertProject
-        , cloneRecord = \_ _ -> Flow.none
         }

@@ -27,16 +27,6 @@ dialogId =
     "organize-dialog"
 
 
-selectedScopeAndRefs : Model -> Maybe ( ListingScope, List ChildRef )
-selectedScopeAndRefs model =
-    case get listingSelection model of
-        Just selection ->
-            Just ( selection.scope, selection.refs )
-
-        Nothing ->
-            Maybe.map (\scope -> ( scope, [] )) (Selection.currentListingScope model)
-
-
 clickRow : ListingScope -> List ChildRef -> Bool -> ChildRef -> Flow Model ()
 clickRow scope orderedRefs shift ref =
     Flow.modify
@@ -101,58 +91,70 @@ runAction action =
             (Flow.get
                 |> Flow.andThen
                     (\model ->
-                        Flow.when (Selection.listingEditable model) <|
-                            case selectedScopeAndRefs model of
-                                Just ( scope, refs ) ->
-                                    runActionOn scope refs action
+                        case Selection.actionTarget model of
+                            Just ( scope, refs ) ->
+                                runActionOn scope refs action
 
-                                Nothing ->
-                                    Flow.pure ()
+                            Nothing ->
+                                Flow.pure ()
                     )
             )
 
 
 runActionOn : ListingScope -> List ChildRef -> OrganizeAction -> Flow Model ()
 runActionOn scope refs action =
-    case action of
-        OrganizeMoveAction ->
-            openOrganizeDialogFor OrganizeMove scope refs
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    label =
+                        (Selection.actionSpec model scope refs action).label
+                in
+                Flow.when (Selection.actionVisible model refs action) <|
+                    case action of
+                        OrganizeMoveAction ->
+                            openOrganizeDialogFor OrganizeMove scope refs
 
-        OrganizeLinkAction ->
-            openOrganizeDialogFor OrganizeLinkTo scope refs
+                        OrganizeLinkAction ->
+                            openOrganizeDialogFor OrganizeLinkTo scope refs
 
-        OrganizeGroupAction ->
-            openOrganizeDialogFor OrganizeGroup scope refs
+                        OrganizeGroupAction ->
+                            openOrganizeDialogFor OrganizeGroup scope refs
 
-        OrganizeCutAction ->
-            cutSelection
+                        OrganizeCutAction ->
+                            setClipboard ClipboardCut label scope refs
 
-        OrganizeCopyAction ->
-            copySelection
+                        OrganizeCopyAction ->
+                            setClipboard ClipboardCopy label scope refs
 
-        OrganizeHideAction ->
-            hideSelection scope refs
+                        OrganizeHideAction ->
+                            let
+                                hidden =
+                                    Selection.shouldHide model scope refs
+                            in
+                            organizeWithUndo label (List.map (\ref -> HideOp scope ref hidden) refs)
 
-        OrganizeRemoveAction ->
-            removeSelection scope refs
+                        OrganizeRemoveAction ->
+                            organizeWithUndo label (List.map (UnlinkOp scope) refs)
 
-        OrganizeDuplicateAction ->
-            duplicateInto scope refs
+                        OrganizeDuplicateAction ->
+                            duplicateInto scope refs
 
-        OrganizeDeleteAction ->
-            openOrganizeDialogFor OrganizeDelete scope refs
+                        OrganizeDeleteAction ->
+                            openOrganizeDialogFor OrganizeDelete scope refs
 
-        OrganizeClearAction ->
-            clearSelection
+                        OrganizeClearAction ->
+                            clearSelection
 
-        OrganizePasteAction ->
-            pasteClipboard
+                        OrganizePasteAction ->
+                            Maybe.unwrap (Flow.pure ()) (pasteInto model scope) (get organizeClipboard model)
 
-        OrganizeClearClipboardAction ->
-            Flow.setAll organizeClipboard Nothing
+                        OrganizeClearClipboardAction ->
+                            Flow.setAll organizeClipboard Nothing
 
-        OrganizeNewFolderAction ->
-            openOrganizeDialogFor OrganizeGroup scope []
+                        OrganizeNewFolderAction ->
+                            openOrganizeDialogFor OrganizeGroup scope []
+            )
 
 
 openOrganizeDialogFor : OrganizeDialogMode -> ListingScope -> List ChildRef -> Flow Model ()
@@ -269,104 +271,16 @@ organizeOrToast label emptyMessage buildOps =
             )
 
 
-removeSelection : ListingScope -> List ChildRef -> Flow Model ()
-removeSelection parentId refs =
-    Flow.when (not (List.isEmpty refs))
-        (organizeWithUndo "Remove from here" (List.map (UnlinkOp parentId) refs))
-
-
-unlinkChild : Int -> ChildRef -> Flow Model ()
-unlinkChild parentId ref =
-    organizeWithUndo "Remove from here" [ UnlinkOp parentId ref ]
-
-
-setChildHidden : Int -> ChildRef -> Bool -> Flow Model ()
-setChildHidden parentId ref hidden =
-    organizeWithUndo
-        (if hidden then
-            "Hide"
-
-         else
-            "Unhide"
-        )
-        [ HideOp parentId ref hidden ]
-
-
 unhideAll : Int -> List ChildRef -> Flow Model ()
 unhideAll parentId refs =
     Flow.when (not (List.isEmpty refs))
         (organizeWithUndo "Unhide all" (List.map (\ref -> HideOp parentId ref False) refs))
 
 
-hideSelection : ListingScope -> List ChildRef -> Flow Model ()
-hideSelection parentId refs =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                let
-                    hidden =
-                        Selection.shouldHide model
-                in
-                Flow.when (not (List.isEmpty refs))
-                    (organizeWithUndo
-                        (if hidden then
-                            "Hide"
-
-                         else
-                            "Unhide"
-                        )
-                        (List.map (\ref -> HideOp parentId ref hidden) refs)
-                    )
-            )
-
-
-cutSelection : Flow Model ()
-cutSelection =
-    Flow.get
-        |> Flow.andThen (\model -> Flow.when (Selection.listingEditable model) (setClipboard ClipboardCut "Cut"))
-
-
-copySelection : Flow Model ()
-copySelection =
-    Flow.get
-        |> Flow.andThen (\model -> Flow.when (Selection.listingEditable model) (setClipboard ClipboardCopy "Copy"))
-
-
-setClipboard : ClipboardMode -> String -> Flow Model ()
-setClipboard mode label =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case selectedScopeAndRefs model of
-                    Just ( scope, refs ) ->
-                        Flow.when (not (List.isEmpty refs))
-                            (Flow.setAll organizeClipboard (Just { mode = mode, sourceScope = scope, refs = refs })
-                                |> Flow.seq (Actions.addToast True (label ++ " " ++ String.fromInt (List.length refs) ++ " item(s)"))
-                            )
-
-                    Nothing ->
-                        Flow.pure ()
-            )
-
-
-pasteClipboard : Flow Model ()
-pasteClipboard =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case get organizeClipboard model of
-                    Just clipboard ->
-                        Flow.when (Selection.listingEditable model) <|
-                            case Selection.currentListingScope model of
-                                Just targetId ->
-                                    pasteInto model targetId clipboard
-
-                                Nothing ->
-                                    Flow.pure ()
-
-                    Nothing ->
-                        Flow.pure ()
-            )
+setClipboard : ClipboardMode -> String -> ListingScope -> List ChildRef -> Flow Model ()
+setClipboard mode label scope refs =
+    Flow.setAll organizeClipboard (Just { mode = mode, sourceScope = scope, refs = refs })
+        |> Flow.seq (Actions.addToast True (label ++ " " ++ String.fromInt (List.length refs) ++ " item(s)"))
 
 
 pasteInto : Model -> Int -> Model.OrganizeClipboard -> Flow Model ()
@@ -715,8 +629,8 @@ editableTargetDecoder =
 keyBindings : List ( Keyboard.Combination, Decode.Decoder (Flow Model ()) )
 keyBindings =
     [ ( Keyboard.escape, Decode.succeed escapePressed )
-    , ( Keyboard.delete, Decode.succeed removeShortcut )
-    , ( Keyboard.backspace, Decode.succeed removeShortcut )
+    , ( Keyboard.delete, Decode.succeed (runAction OrganizeRemoveAction) )
+    , ( Keyboard.backspace, Decode.succeed (runAction OrganizeRemoveAction) )
     ]
         ++ List.concatMap
             (\( key, msg ) ->
@@ -724,9 +638,9 @@ keyBindings =
                     |> List.map (\combination -> ( combination, Decode.succeed msg ))
             )
             [ ( Keyboard.KeyA, selectAll )
-            , ( Keyboard.KeyX, cutSelection )
-            , ( Keyboard.KeyC, copySelection )
-            , ( Keyboard.KeyV, pasteClipboard )
+            , ( Keyboard.KeyX, runAction OrganizeCutAction )
+            , ( Keyboard.KeyC, runAction OrganizeCopyAction )
+            , ( Keyboard.KeyV, runAction OrganizePasteAction )
             , ( Keyboard.KeyZ, undoShortcut )
             ]
 
@@ -757,20 +671,6 @@ escapePressed =
 
                 else
                     clearSelection
-            )
-
-
-removeShortcut : Flow Model ()
-removeShortcut =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case selectedScopeAndRefs model of
-                    Just ( scope, refs ) ->
-                        Flow.when (Selection.listingEditable model) (removeSelection scope refs)
-
-                    Nothing ->
-                        Flow.pure ()
             )
 
 

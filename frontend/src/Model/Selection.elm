@@ -1,6 +1,7 @@
 module Model.Selection exposing
-    ( actionDefinitions
+    ( ActionSpec
     , actionSpec
+    , actionTarget
     , actionVisible
     , clear
     , currentListingScope
@@ -24,8 +25,10 @@ module Model.Selection exposing
     , reorderGaps
     , resolveDropAction
     , resolveInto
+    , rowActions
     , selectAllState
     , selectOne
+    , selectionActions
     , selectionRefs
     , shouldHide
     , storedOrder
@@ -450,33 +453,57 @@ organizeTargets model mode sourceScope refs =
         |> List.sortBy Tuple.second
 
 
-shouldHide : Model -> Bool
-shouldHide model =
-    case get listingSelection model of
-        Just selection ->
-            let
-                isHidden ref =
-                    childLinkIn model selection.scope ref |> Maybe.map .hidden |> Maybe.withDefault False
-            in
-            List.any (not << isHidden) selection.refs
-
-        Nothing ->
-            False
+shouldHide : Model -> ListingScope -> List ChildRef -> Bool
+shouldHide model scope refs =
+    let
+        isHidden ref =
+            childLinkIn model scope ref |> Maybe.map .hidden |> Maybe.withDefault False
+    in
+    List.any (not << isHidden) refs
 
 
-selectionHasLocked : Model -> Bool
-selectionHasLocked model =
+anyLocked : Model -> List ChildRef -> Bool
+anyLocked model refs =
     let
         lockedStep step =
             step.review /= Nothing
     in
-    selectionRefs model
-        |> List.any
-            (\ref ->
-                ref.kind
-                    == StepChild
-                    && (Dict.get ref.id (get steps model) |> Maybe.unwrap False lockedStep)
-            )
+    List.any
+        (\ref ->
+            ref.kind
+                == StepChild
+                && (Dict.get ref.id (get steps model) |> Maybe.unwrap False lockedStep)
+        )
+        refs
+
+
+actionTarget : Model -> Maybe ( ListingScope, List ChildRef )
+actionTarget model =
+    case get listingSelection model of
+        Just selection ->
+            Just ( selection.scope, selection.refs )
+
+        Nothing ->
+            Maybe.map (\scope -> ( scope, [] )) (currentListingScope model)
+
+
+selectionActions : Model -> List ( OrganizeAction, ActionSpec )
+selectionActions model =
+    actionTarget model
+        |> Maybe.unwrap [] (\( scope, refs ) -> availableActions model scope refs)
+
+
+rowActions : Model -> ListingScope -> ChildRef -> List ( OrganizeAction, ActionSpec )
+rowActions model scope ref =
+    availableActions model scope [ ref ]
+        |> List.filter (Tuple.second >> .inRow)
+
+
+availableActions : Model -> ListingScope -> List ChildRef -> List ( OrganizeAction, ActionSpec )
+availableActions model scope refs =
+    actionDefinitions
+        |> List.filter (actionVisible model refs)
+        |> List.map (\action -> ( action, actionSpec model scope refs action ))
 
 
 actionDefinitions : List OrganizeAction
@@ -497,111 +524,88 @@ actionDefinitions =
     ]
 
 
-actionSpec :
-    Model
-    -> OrganizeAction
-    -> { label : String, icon : String, inBar : Bool }
-actionSpec model action =
+type alias ActionSpec =
+    { label : String
+    , icon : String
+    , inBar : Bool
+    , inRow : Bool
+    }
+
+
+actionSpec : Model -> ListingScope -> List ChildRef -> OrganizeAction -> ActionSpec
+actionSpec model scope refs action =
     case action of
         OrganizeMoveAction ->
-            { label = "Move to...", icon = "drive_file_move", inBar = True }
+            { label = "Move to...", icon = "drive_file_move", inBar = True, inRow = False }
 
         OrganizeLinkAction ->
-            { label = "Link to...", icon = "drive_file_move", inBar = True }
+            { label = "Link to...", icon = "drive_file_move", inBar = True, inRow = False }
 
         OrganizeGroupAction ->
-            { label = "Group into new folder"
-            , icon = "create_new_folder"
-            , inBar = True
-            }
+            { label = "Group into new folder", icon = "create_new_folder", inBar = True, inRow = False }
 
         OrganizeCutAction ->
-            { label = "Cut", icon = "content_cut", inBar = True }
+            { label = "Cut", icon = "content_cut", inBar = True, inRow = False }
 
         OrganizeCopyAction ->
-            { label = "Copy", icon = "content_copy", inBar = True }
+            { label = "Copy", icon = "content_copy", inBar = True, inRow = False }
 
         OrganizeHideAction ->
-            { label =
-                if shouldHide model then
-                    "Hide"
+            if shouldHide model scope refs then
+                { label = "Hide", icon = "visibility_off", inBar = True, inRow = True }
 
-                else
-                    "Unhide"
-            , icon = "visibility_off"
-            , inBar = True
-            }
+            else
+                { label = "Unhide", icon = "visibility", inBar = True, inRow = True }
 
         OrganizeRemoveAction ->
-            { label = "Remove from here", icon = "remove", inBar = True }
+            { label = "Remove from here", icon = "remove", inBar = True, inRow = True }
 
         OrganizeDuplicateAction ->
-            { label = "Duplicate", icon = "copy_all", inBar = True }
+            { label = "Duplicate", icon = "copy_all", inBar = True, inRow = True }
 
         OrganizeDeleteAction ->
-            { label = "Delete permanently", icon = "delete", inBar = True }
+            { label = "Delete permanently", icon = "delete", inBar = True, inRow = False }
 
         OrganizeClearAction ->
-            { label = "Clear", icon = "close", inBar = True }
+            { label = "Clear", icon = "close", inBar = True, inRow = False }
 
         OrganizePasteAction ->
-            { label = "Paste", icon = "content_paste", inBar = False }
+            { label = "Paste", icon = "content_paste", inBar = False, inRow = False }
 
         OrganizeClearClipboardAction ->
-            { label = "Clear clipboard", icon = "content_paste_off", inBar = hasSelection model }
+            { label = "Clear clipboard", icon = "content_paste_off", inBar = not (List.isEmpty refs), inRow = False }
 
         OrganizeNewFolderAction ->
-            { label = "New folder", icon = "create_new_folder", inBar = False }
+            { label = "New folder", icon = "create_new_folder", inBar = False, inRow = False }
 
 
-actionVisible : Model -> OrganizeAction -> Bool
-actionVisible model action =
+actionVisible : Model -> List ChildRef -> OrganizeAction -> Bool
+actionVisible model refs action =
     let
-        selection =
-            get listingSelection model
-
-        hasSel =
-            hasSelection model
+        hasRefs =
+            not (List.isEmpty refs)
 
         hasClipboard =
             Maybe.isJust (get organizeClipboard model)
-
-        selectionInFolder =
-            Maybe.isJust selection
-
-        hasFolder =
-            Maybe.isJust (currentListingScope model)
 
         editable =
             listingEditable model
     in
     case action of
-        OrganizeGroupAction ->
-            editable && hasSel && hasFolder
-
-        OrganizeDuplicateAction ->
-            editable && hasSel && hasFolder
-
-        OrganizeHideAction ->
-            editable && hasSel && selectionInFolder
-
-        OrganizeRemoveAction ->
-            editable && hasSel && selectionInFolder
-
         OrganizeDeleteAction ->
-            editable && hasSel && not (selectionHasLocked model)
+            editable && hasRefs && not (anyLocked model refs)
 
         OrganizeClearAction ->
-            hasSel
+            hasRefs
 
         OrganizePasteAction ->
-            editable && hasClipboard && hasFolder
+            editable && hasClipboard
 
         OrganizeClearClipboardAction ->
             editable && hasClipboard
 
         OrganizeNewFolderAction ->
-            editable && hasFolder
+            editable
 
         _ ->
-            editable && hasSel
+            editable && hasRefs

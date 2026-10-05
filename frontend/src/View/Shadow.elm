@@ -697,7 +697,7 @@ listingRow model parentId stepConfig presentTypes link =
             , actionsPopover =
                 viewRecordActionsPopover
                     (actionsPopoverId link)
-                    (viewRowActions parentId link spec readOnly project)
+                    (viewRowActions model parentId link spec project)
             , mTime = project.lastModifiedAt
             , cTime = project.createdAt
             , statusSortKey = Maybe.withDefault 5 (View.Lib.rollupChildFor model (Just parentId) link.id |> Maybe.map (.statuses >> Model.rollupStatusRank))
@@ -877,13 +877,13 @@ listingRow model parentId stepConfig presentTypes link =
                     ]
             , actionsPopover =
                 viewStepRecordActions
+                    model
                     parentId
                     link
                     step.type_
                     entry
                     stepConfig
                     presentTypes
-                    (Model.getRoute model).page
                     step
                     { uploading = isIngesting
                     , scratchAvailable = scratchAvailable

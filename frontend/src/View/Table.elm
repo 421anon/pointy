@@ -28,7 +28,7 @@ import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildLink, ListingSort(..), Model, ProjectRecord, Status(..), StepRecord, Table, TemplateSource(..), UploadProgress)
-import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyPage, isReadOnlyRoute, note, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
+import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyRoute, note, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
 import Model.Lib
 import Model.Selection
 import Model.Shadow exposing (Field, StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), tBoolValue, tEnumValue, tIntValue, tStepId, tStringValue)
@@ -292,16 +292,9 @@ viewListing { model, scope, stepConfig, rows, header } =
 
 viewClipboardButtons : Model -> List (Html (Flow Model ()))
 viewClipboardButtons model =
-    [ Model.OrganizePasteAction, Model.OrganizeClearClipboardAction ]
-        |> List.filter (Model.Selection.actionVisible model)
-        |> List.map
-            (\action ->
-                let
-                    spec =
-                        Model.Selection.actionSpec model action
-                in
-                viewIconButtonWithTooltip spec.icon True spec.label (Organize.runAction action)
-            )
+    Model.Selection.selectionActions model
+        |> List.filter (\( action, _ ) -> List.member action [ Model.OrganizePasteAction, Model.OrganizeClearClipboardAction ])
+        |> List.map (\( action, actionSpec ) -> viewIconButtonWithTooltip actionSpec.icon True actionSpec.label (Organize.runAction action))
 
 
 viewListingSort : Model.ListingPreferences -> Html (Flow Model ())
@@ -774,9 +767,12 @@ viewRecordActionsPopover popoverId actions =
         actions
 
 
-viewRowActions : Int -> ChildLink -> TableSpec (BaseRecord a) -> Bool -> BaseRecord a -> List (Html (Flow Model ()))
-viewRowActions parentId link spec isReadOnly record =
+viewRowActions : Model -> Int -> ChildLink -> TableSpec (BaseRecord a) -> BaseRecord a -> List (Html (Flow Model ()))
+viewRowActions model parentId link spec record =
     let
+        isReadOnly =
+            isReadOnlyRoute model
+
         editable r =
             not isReadOnly && not (TableSpec.getIsLocked spec r)
 
@@ -833,32 +829,17 @@ viewRowActions parentId link spec isReadOnly record =
                             "Share"
                             (Maybe.unwrap Flow.none (\recordId -> Actions.shareEntity recordId Route.Output [] Nothing) r.id)
               }
-            , { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
-              , render =
-                    \r ->
-                        viewIconButtonWithTooltip
-                            (if link.hidden then
-                                "visibility"
-
-                             else
-                                "visibility_off"
-                            )
-                            True
-                            (if link.hidden then
-                                "Show"
-
-                             else
-                                "Hide"
-                            )
-                            (Organize.setChildHidden parentId (Model.childRefOf link) (not link.hidden))
-              }
-            , { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
-              , render = \r -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec r)
-              }
-            , { shouldShow = \r -> editable r && Maybe.isJust r.id
-              , render = \_ -> viewIconButtonWithTooltip "delete" False "Remove" (Organize.unlinkChild parentId (Model.childRefOf link))
-              }
             ]
+
+        ref =
+            Model.childRefOf link
+
+        organizeActions =
+            Model.Selection.rowActions model parentId ref
+                |> List.map
+                    (\( action, actionSpec ) ->
+                        viewIconButtonWithTooltip actionSpec.icon False actionSpec.label (Organize.runActionOn parentId [ ref ] action)
+                    )
     in
     List.filterMap
         (\recordActionBtn ->
@@ -869,6 +850,7 @@ viewRowActions parentId link spec isReadOnly record =
                 Nothing
         )
         recordActions
+        ++ organizeActions
 
 
 viewRunStop : TableSpec StepRecord -> Bool -> StepRecord -> List (Html (Flow Model ()))
@@ -907,14 +889,14 @@ viewRunStop spec stopping record =
             []
 
 
-viewStepRecordActions : Int -> ChildLink -> String -> StepConfigEntry -> StepConfig -> List String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
-viewStepRecordActions parentId link name entry stepConfig presentTypes page record flags =
+viewStepRecordActions : Model -> Int -> ChildLink -> String -> StepConfigEntry -> StepConfig -> List String -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
+viewStepRecordActions model parentId link name entry stepConfig presentTypes record flags =
     let
         spec =
             Specs.steps name entry
 
         isReadOnly =
-            isReadOnlyPage page
+            isReadOnlyRoute model
 
         prefill widget_ =
             let
@@ -1025,7 +1007,7 @@ viewStepRecordActions parentId link name entry stepConfig presentTypes page reco
     in
     viewRecordActionsPopover
         (actionsPopoverId link)
-        (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions parentId link spec isReadOnly record)
+        (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions model parentId link spec record)
 
 
 viewAddOrEditRecordForm : Model -> Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())

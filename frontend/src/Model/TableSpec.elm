@@ -4,7 +4,6 @@ module Model.TableSpec exposing
     , formId
     , getApiPath
     , getChildKind
-    , getCloneRecord
     , getDefaultRecord
     , getDescription
     , getDirectoryView
@@ -46,7 +45,6 @@ type TableSpec a
         , displayName : String
         , description : Maybe String
         , upsertRecord : TableSpec a -> Flow Model ()
-        , cloneRecord : TableSpec a -> a -> Flow Model ()
         }
 
 
@@ -143,8 +141,3 @@ getApiPath (TableSpec spec) =
 getUpsertRecord : TableSpec a -> Flow Model ()
 getUpsertRecord ((TableSpec spec) as ts) =
     spec.upsertRecord ts
-
-
-getCloneRecord : TableSpec a -> a -> Flow Model ()
-getCloneRecord ((TableSpec spec) as ts) =
-    spec.cloneRecord ts

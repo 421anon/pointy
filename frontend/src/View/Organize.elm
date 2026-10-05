@@ -121,24 +121,18 @@ viewActionBar model =
                 [ Html.span [ class "listing-action-bar-count" ]
                     [ Html.text (String.fromInt (List.length (Selection.selectionRefs model)) ++ " selected") ]
                 , Html.div [ class "listing-action-bar-actions" ]
-                    (List.map (viewActionButton model) actions)
+                    (List.map viewActionButton actions)
                 ]
             ]
 
 
-barActions : Model -> List OrganizeAction
+barActions : Model -> List ( OrganizeAction, Selection.ActionSpec )
 barActions model =
-    Selection.actionDefinitions
-        |> List.filter (Selection.actionVisible model)
-        |> List.filter (\action -> (Selection.actionSpec model action).inBar)
+    List.filter (Tuple.second >> .inBar) (Selection.selectionActions model)
 
 
-viewActionButton : Model -> OrganizeAction -> Html (Flow Model ())
-viewActionButton model action =
-    let
-        spec =
-            Selection.actionSpec model action
-    in
+viewActionButton : ( OrganizeAction, Selection.ActionSpec ) -> Html (Flow Model ())
+viewActionButton ( action, spec ) =
     Html.button
         [ class "listing-action-bar-btn"
         , classList [ ( "danger", action == OrganizeDeleteAction ) ]
@@ -162,9 +156,7 @@ viewContextMenu model =
                                 barActions model
 
                             Nothing ->
-                                Selection.actionDefinitions
-                                    |> List.filter (Selection.actionVisible model)
-                                    |> List.filter (\action -> not (Selection.actionSpec model action).inBar)
+                                List.filter (Tuple.second >> .inBar >> not) (Selection.selectionActions model)
                 in
                 Html.viewIf (not (List.isEmpty actions)) <|
                     Html.div
@@ -172,7 +164,7 @@ viewContextMenu model =
                         , style "left" (String.fromInt menu.x ++ "px")
                         , style "top" (String.fromInt menu.y ++ "px")
                         ]
-                        (List.map (viewActionButton model) actions)
+                        (List.map viewActionButton actions)
             )
             (get organizeContextMenu model)
 
