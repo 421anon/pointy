@@ -215,7 +215,11 @@ viewOrganizeDialogContent model dialog =
                     ( "Link to", "Link" )
 
                 OrganizeGroup ->
-                    ( "Group into new folder", "Create" )
+                    if List.isEmpty dialog.refs then
+                        ( "New folder", "Create" )
+
+                    else
+                        ( "Group into new folder", "Create" )
 
                 OrganizeDelete ->
                     ( "Delete permanently", "Delete" )
@@ -239,8 +243,9 @@ viewOrganizeDialogContent model dialog =
     in
     Html.div [ class "dialog-content organize-dialog-content" ]
         [ Html.span [ class "dialog-title" ] [ Html.text dialogTitle ]
-        , Html.span [ class "dialog-subtitle" ]
-            [ Html.text (String.fromInt (List.length dialog.refs) ++ " selected") ]
+        , Html.viewIf (not (List.isEmpty dialog.refs)) <|
+            Html.span [ class "dialog-subtitle" ]
+                [ Html.text (String.fromInt (List.length dialog.refs) ++ " selected") ]
         , Html.viewIf isDelete <|
             Html.p [ class "organize-dialog-warning" ]
                 [ Html.text "This permanently deletes the selected items from the repository. This cannot be undone." ]
