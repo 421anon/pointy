@@ -678,7 +678,6 @@ type alias UserRepoInfo =
     }
 
 
-
 type alias SessionTimestamp =
     { posix : Time.Posix
     , nanos : Int
@@ -1821,9 +1820,6 @@ getAgent (Model model) =
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
-
-
-
 
 
 initialTable : Table a
