@@ -12,7 +12,7 @@ import Grid
 import Json.Decode as Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Shadow exposing (Presets, StepArgValue, StepConfig)
+import Model.Shadow exposing (Presets, StepArgValue, StepConfig, stepArgStepIds)
 import Route exposing (Route)
 import Set exposing (Set)
 import String.Extra
@@ -2426,6 +2426,37 @@ maxLengthsByColumn rows header =
 delimitedColumnWidth : Int -> Int
 delimitedColumnWidth maxChars =
     max 88 ((maxChars + 2) * 9)
+
+
+downstreamStepIds : Int -> Dict Int StepRecord -> Set Int
+downstreamStepIds stepId steps_ =
+    let
+        dependents =
+            Dict.foldl
+                (\dependentId step acc ->
+                    List.foldl
+                        (\upstreamId -> Dict.update upstreamId (Just << Set.insert dependentId << Maybe.withDefault Set.empty))
+                        acc
+                        (List.concatMap stepArgStepIds (Dict.values step.args))
+                )
+                Dict.empty
+                steps_
+
+        visit frontier seen =
+            case frontier of
+                [] ->
+                    seen
+
+                current :: rest ->
+                    let
+                        fresh =
+                            Dict.get current dependents
+                                |> Maybe.unwrap [] Set.toList
+                                |> List.filter (\id -> not (Set.member id seen))
+                    in
+                    visit (fresh ++ rest) (List.foldl Set.insert seen fresh)
+    in
+    Set.remove stepId (visit [ stepId ] Set.empty)
 
 
 mergeSteps : Dict Int StepRecord -> Dict Int StepRecord -> Dict Int StepRecord

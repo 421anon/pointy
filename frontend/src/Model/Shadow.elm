@@ -77,6 +77,22 @@ tStepId =
         )
 
 
+stepArgStepIds : StepArgValue -> List Int
+stepArgStepIds value =
+    case value of
+        TStepValue stepId ->
+            [ stepId ]
+
+        TListValue items ->
+            List.concatMap stepArgStepIds items
+
+        TRecordValue fields ->
+            List.concatMap stepArgStepIds (Dict.values fields)
+
+        _ ->
+            []
+
+
 tIntValue : Prism ls StepArgValue Int x y
 tIntValue =
     prism ">TIntValue"
