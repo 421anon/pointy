@@ -500,14 +500,15 @@
 .agent-panel__session-title-main {
   display: flex;
   flex: 1;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: 0 var(--spacing-sm);
   overflow: hidden;
 }
 
 .agent-panel__session-title {
-  flex: 1;
+  flex: 1 1 8ch;
   min-width: 0;
   margin: 0;
   overflow: hidden;
