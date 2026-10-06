@@ -142,10 +142,22 @@ toggleAddOrEditRecordForm spec mRecordId =
                     else
                         get (draftAt mRecordId) stashed
                             |> Maybe.orElse mRecordToEdit
-                            |> Maybe.withDefault (TableSpec.getDefaultRecord spec)
+                            |> Maybe.withDefault (TableSpec.getDefaultRecord spec model)
                             |> Just
+
+                opensNewRecord =
+                    (newEdited |> Maybe.map .id) == Just Nothing
             in
-            { stashed | nameEditOnly = False, edited = newEdited }
+            { stashed
+                | nameEditOnly = False
+                , edited = newEdited
+                , addMode =
+                    if opensNewRecord then
+                        stashed.addMode
+
+                    else
+                        AddNew
+            }
 
         scrollAction =
             Flow.attemptTask (Scroll.scrollY (Maybe.unwrap (TableSpec.formId spec) (Model.rowDomId (TableSpec.getChildKind spec)) mRecordId) 0 0)
@@ -173,12 +185,12 @@ toggleAddOrEditRecordForm spec mRecordId =
 
 startInlineRecordNameEdit : TableSpec a -> a -> Flow Model ()
 startInlineRecordNameEdit spec record =
-    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True })
+    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True, addMode = AddNew })
 
 
 stopInlineRecordNameEdit : TableSpec a -> Flow Model ()
 stopInlineRecordNameEdit spec =
-    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Nothing, nameEditOnly = False })
+    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Nothing, nameEditOnly = False, addMode = AddNew })
 
 
 editRecordName : A_Traversal s (Table (BaseRecord a)) -> String -> Flow s ()
@@ -2615,32 +2627,21 @@ resetNeedsIntro toastId =
     Flow.setAll (toasts << by .id toastId << needsIntro) False
 
 
-onSelectSearch : Maybe Int -> Int -> Flow Model ()
-onSelectSearch mProjectId stepId =
+onSelectSearch : Int -> Int -> Flow Model ()
+onSelectSearch projectId stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    mCommit_ =
-                        try (route << Route.page << Route.viewedCommitT) model
-
-                    pickedProjectId =
-                        mProjectId |> Maybe.orElse (try (projectsContainingEntity stepId << recordId << just) model)
-                in
-                pickedProjectId
-                    |> Maybe.unwrap (Flow.pure ())
-                        (\pId ->
-                            goToRoute
-                                (Route.fromPage
-                                    (Route.Project
-                                        { projectPath = canonicalPathTo model pId
-                                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                                        , mCommit = mCommit_
-                                        , mCompare = Nothing
-                                        }
-                                    )
-                                )
+                goToRoute
+                    (Route.fromPage
+                        (Route.Project
+                            { projectPath = canonicalPathTo model projectId
+                            , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                            , mCommit = try (route << Route.page << Route.viewedCommitT) model
+                            , mCompare = Nothing
+                            }
                         )
+                    )
             )
 
 

@@ -13,6 +13,7 @@ import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
 import Model.Lib as Lib
+import Organize
 import Route
 import View.Icons exposing (iconCustom)
 import View.Organize
@@ -69,9 +70,15 @@ viewSearchBox model =
         , clearInputAfterSelect = False
         , onSelect =
             \item ->
-                Maybe.unwrap (Flow.pure ())
-                    (Actions.onSelectSearch item.mProjectId)
-                    item.id
+                case ( item.id, item.mProjectId ) of
+                    ( Just stepId, Just projectId ) ->
+                        Actions.onSelectSearch projectId stepId
+
+                    ( Just stepId, Nothing ) ->
+                        Organize.openLinkExisting stepId
+
+                    ( Nothing, _ ) ->
+                        Flow.pure ()
         , alignRight = True
         , inputItemStyle = \_ -> []
         }

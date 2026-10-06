@@ -4,7 +4,6 @@ module Model.TableSpec exposing
     , formId
     , getApiPath
     , getChildKind
-    , getCloneRecord
     , getDefaultRecord
     , getDescription
     , getDirectoryView
@@ -40,13 +39,12 @@ type TableSpec a
         , directoryView : a -> Maybe DirectoryFolder
         , srcFilesView : a -> Maybe DirectoryFolder
         , encodeRecord : a -> Json.Encode.Value
-        , defaultRecord : a
+        , defaultRecord : Model -> a
         , findRecord : Int -> Model -> Maybe a
         , apiPath : String
         , displayName : String
         , description : Maybe String
         , upsertRecord : TableSpec a -> Flow Model ()
-        , cloneRecord : TableSpec a -> a -> Flow Model ()
         }
 
 
@@ -130,7 +128,7 @@ getEncodeRecord (TableSpec spec) record =
     spec.encodeRecord record
 
 
-getDefaultRecord : TableSpec a -> a
+getDefaultRecord : TableSpec a -> Model -> a
 getDefaultRecord (TableSpec spec) =
     spec.defaultRecord
 
@@ -143,8 +141,3 @@ getApiPath (TableSpec spec) =
 getUpsertRecord : TableSpec a -> Flow Model ()
 getUpsertRecord ((TableSpec spec) as ts) =
     spec.upsertRecord ts
-
-
-getCloneRecord : TableSpec a -> a -> Flow Model ()
-getCloneRecord ((TableSpec spec) as ts) =
-    spec.cloneRecord ts

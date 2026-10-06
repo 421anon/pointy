@@ -28,7 +28,7 @@ import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildLink, ListingSort(..), Model, ProjectRecord, Status(..), StepRecord, Table, TemplateSource(..), UploadProgress)
-import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyPage, isReadOnlyRoute, note, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
+import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyRoute, note, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
 import Model.Lib
 import Model.Selection
 import Model.Shadow exposing (Field, StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), tBoolValue, tEnumValue, tIntValue, tStepId, tStringValue)
@@ -268,7 +268,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                     :: viewListingToggle "visibility" "Show hidden" prefs.showHidden Actions.toggleListingShowHidden
                     :: viewListingToggle "widgets" "Group by type" prefs.groupByType Actions.toggleListingGroupByType
                     :: header
-                    ++ viewPasteButtons model
+                    ++ viewClipboardButtons model
                 )
             ]
         , Html.div
@@ -290,18 +290,11 @@ viewListing { model, scope, stepConfig, rows, header } =
         ]
 
 
-viewPasteButtons : Model -> List (Html (Flow Model ()))
-viewPasteButtons model =
-    [ Model.OrganizePasteAction, Model.OrganizePasteDuplicateAction ]
-        |> List.filter (Model.Selection.actionVisible model)
-        |> List.map
-            (\action ->
-                let
-                    spec =
-                        Model.Selection.actionSpec model action
-                in
-                viewIconButtonWithTooltip spec.icon True spec.label (Organize.runAction action)
-            )
+viewClipboardButtons : Model -> List (Html (Flow Model ()))
+viewClipboardButtons model =
+    Model.Selection.selectionActions model
+        |> List.filter (\( action, _ ) -> List.member action [ Model.OrganizePasteAction, Model.OrganizeClearClipboardAction ])
+        |> List.map (\( action, actionSpec ) -> viewIconButtonWithTooltip actionSpec.icon True actionSpec.label (Organize.runAction action))
 
 
 viewListingSort : Model.ListingPreferences -> Html (Flow Model ())
@@ -376,6 +369,9 @@ viewListingGroup model rowContext prefs group =
 
         orderedRefs =
             List.map (Model.childRefOf << .link) visible
+
+        gaps =
+            Model.Selection.reorderGaps model rowContext.scope orderedRefs
     in
     Html.div [ class "listing-group" ]
         [ Html.viewIf (not (String.isEmpty group.title))
@@ -388,17 +384,17 @@ viewListingGroup model rowContext prefs group =
             )
         , Html.Keyed.node "div"
             [ class "listing-rows" ]
-            (List.map (viewRowKeyed model rowContext orderedRefs) visible)
+            (List.indexedMap (\index -> viewRowKeyed model rowContext orderedRefs (View.Organize.dropEdgeAttrs gaps index)) visible)
         ]
 
 
-viewRowKeyed : Model -> ListingRowContext -> List Model.ChildRef -> ListingRow -> ( String, Html (Flow Model ()) )
-viewRowKeyed model rowContext orderedRefs row =
-    ( Model.rowDomId row.link.kind row.link.id, viewRow model rowContext orderedRefs row )
+viewRowKeyed : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> ( String, Html (Flow Model ()) )
+viewRowKeyed model rowContext orderedRefs edgeAttrs row =
+    ( Model.rowDomId row.link.kind row.link.id, viewRow model rowContext orderedRefs edgeAttrs row )
 
 
-viewRow : Model -> ListingRowContext -> List Model.ChildRef -> ListingRow -> Html (Flow Model ())
-viewRow model rowContext orderedRefs row =
+viewRow : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> Html (Flow Model ())
+viewRow model rowContext orderedRefs edgeAttrs row =
     let
         scope =
             rowContext.scope
@@ -485,7 +481,7 @@ viewRow model rowContext orderedRefs row =
         dragAttrs =
             if rowContext.editable then
                 View.Organize.rowDragAttrs scope row.link
-                    ++ View.Organize.dropEdgeAttrs model
+                    ++ edgeAttrs
                     ++ (if isFolder then
                             View.Organize.dropTargetAttrs model row.link.id
 
@@ -508,7 +504,8 @@ viewRow model rowContext orderedRefs row =
          , classList
             [ ( "listing-row-folder", isFolder )
             , ( "listing-row-selected", isSelected )
-            , ( "hidden", row.link.hidden )
+            , ( "listing-row-cut", Model.Selection.isCut model scope ref )
+            , ( "drag-source", Model.Selection.isDragged model scope ref )
             ]
          , id rowId
          ]
@@ -770,9 +767,12 @@ viewRecordActionsPopover popoverId actions =
         actions
 
 
-viewRowActions : Int -> ChildLink -> TableSpec (BaseRecord a) -> Bool -> BaseRecord a -> List (Html (Flow Model ()))
-viewRowActions parentId link spec isReadOnly record =
+viewRowActions : Model -> Int -> ChildLink -> TableSpec (BaseRecord a) -> BaseRecord a -> List (Html (Flow Model ()))
+viewRowActions model parentId link spec record =
     let
+        isReadOnly =
+            isReadOnlyRoute model
+
         editable r =
             not isReadOnly && not (TableSpec.getIsLocked spec r)
 
@@ -811,7 +811,7 @@ viewRowActions parentId link spec isReadOnly record =
             , { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r
               , render = always (viewInactiveIconButtonWithTooltip "edit" "Remove review to edit")
               }
-            , { shouldShow = Maybe.isJust << .id
+            , { shouldShow = \r -> Maybe.isJust r.id && (editable r || TableSpec.getChildKind spec == Model.StepChild)
               , render =
                     \r ->
                         if editable r then
@@ -829,32 +829,17 @@ viewRowActions parentId link spec isReadOnly record =
                             "Share"
                             (Maybe.unwrap Flow.none (\recordId -> Actions.shareEntity recordId Route.Output [] Nothing) r.id)
               }
-            , { shouldShow = \r -> not isReadOnly && Maybe.isJust r.id
-              , render =
-                    \r ->
-                        viewIconButtonWithTooltip
-                            (if link.hidden then
-                                "visibility"
-
-                             else
-                                "visibility_off"
-                            )
-                            True
-                            (if link.hidden then
-                                "Show"
-
-                             else
-                                "Hide"
-                            )
-                            (Organize.setChildHidden parentId (Model.childRefOf link) (not link.hidden))
-              }
-            , { shouldShow = \r -> not isReadOnly && TableSpec.getShareable spec r
-              , render = \r -> viewIconButtonWithTooltip "content_copy" False "Clone" (TableSpec.getCloneRecord spec r)
-              }
-            , { shouldShow = \r -> editable r && Maybe.isJust r.id
-              , render = \_ -> viewIconButtonWithTooltip "delete" False "Remove" (Organize.unlinkChild parentId (Model.childRefOf link))
-              }
             ]
+
+        ref =
+            Model.childRefOf link
+
+        organizeActions =
+            Model.Selection.rowActions model parentId ref
+                |> List.map
+                    (\( action, actionSpec ) ->
+                        viewIconButtonWithTooltip actionSpec.icon False actionSpec.label (Organize.runActionOn parentId [ ref ] action)
+                    )
     in
     List.filterMap
         (\recordActionBtn ->
@@ -865,6 +850,7 @@ viewRowActions parentId link spec isReadOnly record =
                 Nothing
         )
         recordActions
+        ++ organizeActions
 
 
 viewRunStop : TableSpec StepRecord -> Bool -> StepRecord -> List (Html (Flow Model ()))
@@ -903,14 +889,14 @@ viewRunStop spec stopping record =
             []
 
 
-viewStepRecordActions : Int -> ChildLink -> String -> StepConfigEntry -> StepConfig -> List String -> Route.Page -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
-viewStepRecordActions parentId link name entry stepConfig presentTypes page record flags =
+viewStepRecordActions : Model -> Int -> ChildLink -> String -> StepConfigEntry -> StepConfig -> List String -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
+viewStepRecordActions model parentId link name entry stepConfig presentTypes record flags =
     let
         spec =
             Specs.steps name entry
 
         isReadOnly =
-            isReadOnlyPage page
+            isReadOnlyRoute model
 
         prefill widget_ =
             let
@@ -1021,7 +1007,7 @@ viewStepRecordActions parentId link name entry stepConfig presentTypes page reco
     in
     viewRecordActionsPopover
         (actionsPopoverId link)
-        (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions parentId link spec isReadOnly record)
+        (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions model parentId link spec record)
 
 
 viewAddOrEditRecordForm : Model -> Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
@@ -1072,7 +1058,7 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                     [ type_ "radio"
                     , name ("addMode" ++ TableSpec.getName spec)
                     , checked (table.addMode == mode)
-                    , Events.onClick (Actions.setAddMode (TableSpec.getLens spec) (TableSpec.getDefaultRecord spec) mode)
+                    , Events.onClick (Actions.setAddMode (TableSpec.getLens spec) (TableSpec.getDefaultRecord spec model) mode)
                     ]
                     []
                 , Html.text label

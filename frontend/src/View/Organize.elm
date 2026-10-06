@@ -47,14 +47,14 @@ dropAllowedToken model folderId =
         |> String.join " "
 
 
-dropEdgeAttrs : Model -> List (Html.Attribute msg)
-dropEdgeAttrs model =
-    case Selection.dropEdgeAllowed model of
-        Just action ->
-            [ attribute "data-drop-edge-allowed" (Selection.dropActionToken action) ]
-
-        Nothing ->
-            []
+dropEdgeAttrs : Maybe ( Int, Int ) -> Int -> List (Html.Attribute msg)
+dropEdgeAttrs gaps index =
+    [ ( True, "before" ), ( False, "after" ) ]
+        |> List.filter (\( before, _ ) -> Selection.edgeAllowed gaps index before)
+        |> List.map Tuple.second
+        |> String.join " "
+        |> attribute "data-drop-edges"
+        |> List.singleton
 
 
 rowDragAttrs : Model.ListingScope -> ChildLink -> List (Html.Attribute msg)
@@ -121,24 +121,18 @@ viewActionBar model =
                 [ Html.span [ class "listing-action-bar-count" ]
                     [ Html.text (String.fromInt (List.length (Selection.selectionRefs model)) ++ " selected") ]
                 , Html.div [ class "listing-action-bar-actions" ]
-                    (List.map (viewActionButton model) actions)
+                    (List.map viewActionButton actions)
                 ]
             ]
 
 
-barActions : Model -> List OrganizeAction
+barActions : Model -> List ( OrganizeAction, Selection.ActionSpec )
 barActions model =
-    Selection.actionDefinitions
-        |> List.filter (Selection.actionVisible model)
-        |> List.filter (\action -> (Selection.actionSpec model action).inBar)
+    List.filter (Tuple.second >> .inBar) (Selection.selectionActions model)
 
 
-viewActionButton : Model -> OrganizeAction -> Html (Flow Model ())
-viewActionButton model action =
-    let
-        spec =
-            Selection.actionSpec model action
-    in
+viewActionButton : ( OrganizeAction, Selection.ActionSpec ) -> Html (Flow Model ())
+viewActionButton ( action, spec ) =
     Html.button
         [ class "listing-action-bar-btn"
         , classList [ ( "danger", action == OrganizeDeleteAction ) ]
@@ -162,9 +156,7 @@ viewContextMenu model =
                                 barActions model
 
                             Nothing ->
-                                Selection.actionDefinitions
-                                    |> List.filter (Selection.actionVisible model)
-                                    |> List.filter (\action -> not (Selection.actionSpec model action).inBar)
+                                List.filter (Tuple.second >> .inBar >> not) (Selection.selectionActions model)
                 in
                 Html.viewIf (not (List.isEmpty actions)) <|
                     Html.div
@@ -172,7 +164,7 @@ viewContextMenu model =
                         , style "left" (String.fromInt menu.x ++ "px")
                         , style "top" (String.fromInt menu.y ++ "px")
                         ]
-                        (List.map (viewActionButton model) actions)
+                        (List.map viewActionButton actions)
             )
             (get organizeContextMenu model)
 
@@ -215,7 +207,11 @@ viewOrganizeDialogContent model dialog =
                     ( "Link to", "Link" )
 
                 OrganizeGroup ->
-                    ( "Group into new folder", "Create" )
+                    if List.isEmpty dialog.refs then
+                        ( "New folder", "Create" )
+
+                    else
+                        ( "Group into new folder", "Create" )
 
                 OrganizeDelete ->
                     ( "Delete permanently", "Delete" )
@@ -239,8 +235,9 @@ viewOrganizeDialogContent model dialog =
     in
     Html.div [ class "dialog-content organize-dialog-content" ]
         [ Html.span [ class "dialog-title" ] [ Html.text dialogTitle ]
-        , Html.span [ class "dialog-subtitle" ]
-            [ Html.text (String.fromInt (List.length dialog.refs) ++ " selected") ]
+        , Html.viewIf (not (List.isEmpty dialog.refs)) <|
+            Html.span [ class "dialog-subtitle" ]
+                [ Html.text (String.fromInt (List.length dialog.refs) ++ " selected") ]
         , Html.viewIf isDelete <|
             Html.p [ class "organize-dialog-warning" ]
                 [ Html.text "This permanently deletes the selected items from the repository. This cannot be undone." ]

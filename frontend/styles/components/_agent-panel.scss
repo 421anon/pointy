@@ -34,7 +34,7 @@
 }
 
 .agent-panel.is-focus-mode {
-  width: 100%;
+  flex: 1;
   max-width: none;
   resize: none;
 }
@@ -1140,8 +1140,9 @@
 
 @media (max-width: 900px) {
   .agent-panel {
-    min-width: 100%;
-    max-width: 100%;
+    flex: 1;
+    min-width: 0;
+    max-width: none;
     resize: none;
   }
 

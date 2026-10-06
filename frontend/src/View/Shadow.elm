@@ -17,7 +17,7 @@ import Iso8601
 import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), Model, ProjectRecord, Status(..), StepRecord, blankProject)
+import Model.Core as Model exposing (AddMode(..), Model, ProjectRecord, Status(..), StepRecord)
 import Model.Lenses as Lenses exposing (isReadOnlyRoute)
 import Model.Lib
 import Model.Selection
@@ -502,8 +502,8 @@ listingHeader model proj =
                                     "link"
                                     True
                                     "Link existing"
-                                    (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing
-                                        |> Flow.seq (Flow.setAll (Lenses.projectForms << Lenses.addMode) LinkExisting)
+                                    (Flow.setAll (Lenses.projectForms << Lenses.addMode) LinkExisting
+                                        |> Flow.seq (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
                                     )
                             )
                             mStepConfig
@@ -549,8 +549,8 @@ viewNewMenu model proj =
                     Html.viewMaybe
                         (\stepConfig ->
                             menuItem
-                                (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing
-                                    |> Flow.seq (Flow.setAll (Lenses.projectForms << Lenses.newDraft) (Just { blankProject | templateSource = proj.templateSource }))
+                                (Flow.setAll (Lenses.projectForms << Lenses.newDraft) Nothing
+                                    |> Flow.seq (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
                                 )
                                 [ iconCustom False "create_new_folder" []
                                 , Html.text "New folder"
@@ -697,7 +697,7 @@ listingRow model parentId stepConfig presentTypes link =
             , actionsPopover =
                 viewRecordActionsPopover
                     (actionsPopoverId link)
-                    (viewRowActions parentId link spec readOnly project)
+                    (viewRowActions model parentId link spec project)
             , mTime = project.lastModifiedAt
             , cTime = project.createdAt
             , statusSortKey = Maybe.withDefault 5 (View.Lib.rollupChildFor model (Just parentId) link.id |> Maybe.map (.statuses >> Model.rollupStatusRank))
@@ -877,13 +877,13 @@ listingRow model parentId stepConfig presentTypes link =
                     ]
             , actionsPopover =
                 viewStepRecordActions
+                    model
                     parentId
                     link
                     step.type_
                     entry
                     stepConfig
                     presentTypes
-                    (Model.getRoute model).page
                     step
                     { uploading = isIngesting
                     , scratchAvailable = scratchAvailable

@@ -129,11 +129,6 @@ reviewRevision =
     lens "reviewRevision" .revision (\reviewed revision_ -> { reviewed | revision = revision_ })
 
 
-isReadOnlyPage : Route.Page -> Bool
-isReadOnlyPage =
-    Route.viewedCommit >> Maybe.isJust
-
-
 isReadOnlyRoute : Model -> Bool
 isReadOnlyRoute =
     get route >> .page >> Route.viewedCommit >> Maybe.isJust
@@ -302,11 +297,6 @@ stepRecords =
 stepRecordsListed : Dict Int a -> Traversal Model StepRecord x y
 stepRecordsListed statuses =
     stepRecords << where_ (\step -> Maybe.unwrap False (\id -> Dict.member id statuses) step.id)
-
-
-projectsContainingEntity : Int -> Traversal Model ProjectRecord x y
-projectsContainingEntity entityId =
-    projects << success << values << where_ (\project -> List.any (Model.sameEntity { kind = Model.StepChild, id = entityId }) project.children)
 
 
 args : Lens ls { a | args : b } b x y

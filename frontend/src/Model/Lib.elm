@@ -171,7 +171,7 @@ getSearchItems model =
             (\( id, step ) ->
                 { id = Just id
                 , name = "(" ++ step.type_ ++ ") " ++ step.name ++ " — " ++ pathLabel id
-                , mProjectId = Nothing
+                , mProjectId = Dict.get id stepParent
                 , ref = Just { kind = StepChild, id = id }
                 }
             )

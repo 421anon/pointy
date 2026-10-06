@@ -356,7 +356,7 @@ type OrganizeAction
     | OrganizeDeleteAction
     | OrganizeClearAction
     | OrganizePasteAction
-    | OrganizePasteDuplicateAction
+    | OrganizeClearClipboardAction
     | OrganizeNewFolderAction
 
 
@@ -390,7 +390,7 @@ defaultListingPreferences =
     , descending = False
     , foldersFirst = True
     , showHidden = False
-    , groupByType = False
+    , groupByType = True
     }
 
 
