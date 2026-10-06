@@ -1,6 +1,6 @@
 module View.FileBrowser exposing (viewDirectorySection, viewHtmlFrame, viewSrcFilesSection)
 
-import Accessors exposing (Prism, has, just, prism, snd, try, values)
+import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
@@ -19,7 +19,7 @@ import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProject, currentProjectPath, fileZoomAt, gutterDrag, mCommit, mHighlight, mimeType, recordById, route, srcFileWriting, tables)
+import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -77,13 +77,13 @@ srcDir =
 srcWritePending : Model -> Maybe DirContext -> Bool
 srcWritePending model mDirCtx =
     Maybe.andThen (try srcDir) mDirCtx
-        |> Maybe.andThen (\recordId -> try (currentProject << success << tables << values << recordById recordId << srcFileWriting) model)
+        |> Maybe.andThen (\recordId -> try (stepRecordById recordId << srcFileWriting) model)
         |> Maybe.withDefault False
 
 
 recordRevision : Model -> Int -> Maybe String
 recordRevision model recordId =
-    try (currentProject << success << tables << values << recordById recordId) model
+    try (stepRecordById recordId) model
         |> Maybe.andThen (stepRevision model)
 
 
@@ -191,7 +191,7 @@ viewSrcFilesSection model stepType spec step =
             has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType
 
         isLocked =
-            Maybe.isJust step.review || has (route << Route.page << Route.project << mCommit << just) model
+            Maybe.isJust step.review || has (route << Route.page << Route.pageCommit << just) model
 
         writePending =
             step.srcFileWriting
@@ -459,7 +459,14 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             Flow.pure ()
                                     )
                                 ]
-                                [ icon True (if isEditableSrcFile then "edit" else "visibility") ]
+                                [ icon True
+                                    (if isEditableSrcFile then
+                                        "edit"
+
+                                     else
+                                        "visibility"
+                                    )
+                                ]
                         , externalArtifactUrl
                             |> Html.viewMaybe
                                 (\url ->
@@ -548,7 +555,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                     zoomAction factor =
                                         mRecordId
-                                            |> Maybe.map (\recordId -> Actions.zoomIframeBy (currentProject << success << tables << values << fileZoomAt recordId path) iframeId factor)
+                                            |> Maybe.map (\recordId -> Actions.zoomIframeBy (fileZoomAt recordId path) iframeId factor)
                                             |> Maybe.withDefault Flow.none
                                 in
                                 Html.viewMaybe

@@ -1,6 +1,6 @@
 module Components.StatusBar exposing (view)
 
-import Accessors exposing (just, set, try)
+import Accessors exposing (try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData)
 import Flow exposing (Flow)
@@ -9,7 +9,7 @@ import Html.Attributes exposing (attribute, class, classList, disabled, href, id
 import Html.Events as Events
 import Html.Extra as Html
 import Model.Core as Model exposing (ClusterStatus(..), Model, RunningStepSummary)
-import Model.Lenses exposing (mCommit, route)
+import Model.Lenses exposing (route)
 import Route
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
@@ -146,7 +146,7 @@ viewRepoContext model =
                 repoLabel =
                     repo.branch ++ " @ " ++ String.left 7 commit
             in
-            case try (route << Route.page << Route.project << mCommit << just) model of
+            case try (route << Route.page << Route.viewedCommitT) model of
                 Just historicalCommit ->
                     let
                         switchLabel =
@@ -156,7 +156,7 @@ viewRepoContext model =
                     in
                     Html.a
                         [ class "status-bar__control status-bar__repo status-bar__repo--past"
-                        , Route.href (set (Route.page << Route.project << mCommit) Nothing (Model.getRoute model))
+                        , Route.href (Route.fromPage (Route.backToHead (Model.getRoute model).page))
                         , title switchLabel
                         , attribute "aria-label" switchLabel
                         ]

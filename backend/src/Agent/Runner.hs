@@ -20,7 +20,7 @@ module Agent.Runner (
 
 import Agent.Git (AgentSessionView, applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
 import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
-import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sessionPaths)
+import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
@@ -81,7 +81,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (sigKILL, signalProcess)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, proc, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 import UserRepo (userRepoPath, withUserRepoExclusiveIO)
@@ -485,8 +485,9 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
             , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
             , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
             ]
+    sandbox <- sandboxProcess cfg args
     let process =
-            (proc (agentSboxCommand cfg) args)
+            sandbox
                 { cwd = Just runnerHome
                 , env = Just runnerEnv
                 , std_in = CreatePipe

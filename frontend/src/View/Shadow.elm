@@ -1,11 +1,11 @@
 module View.Shadow exposing (viewProject)
 
-import Accessors exposing (get, has, just, snd, try)
+import Accessors exposing (get, just, snd, try)
 import Actions
 import Api.Api as Api
-import Api.ApiData as ApiData
+import Api.ApiData as ApiData exposing (ApiData)
 import Dict
-import Extra.Accessors exposing (by, orElseT, where_)
+import Extra.Accessors exposing (remkT)
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
@@ -17,19 +17,23 @@ import Iso8601
 import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (Model, ProjectRecord, StepRecord, Table)
-import Model.Lenses as Lenses exposing (currentProject, isReadOnlyRoute, recordId)
-import Model.Shadow exposing (StepConfigEntry)
+import Model.Core as Model exposing (AddMode(..), Model, ProjectRecord, Status(..), StepRecord)
+import Model.Lenses as Lenses exposing (isReadOnlyRoute)
+import Model.Lib
+import Model.Selection
+import Model.Shadow exposing (StepConfig, StepConfigEntry)
 import Model.TableSpec as TableSpec exposing (TableSpec)
+import Organize
 import Route
 import Set
 import Specs
 import Time exposing (Posix)
 import Time.Distance
 import View.FileBrowser as FileBrowser
-import View.Icons exposing (iconCustom)
+import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
-import View.Table exposing (actionsPopoverId, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewRecordActions, viewRecordActionsPopover, viewStepRecordActions, viewStepRecordStatus, viewTable, viewUploadProgress)
+import View.Organize exposing (dropTargetAttrs)
+import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
 
 
 type alias ComparisonChip =
@@ -391,10 +395,64 @@ viewProject model proj =
             ApiData.toMaybe (Model.getStepConfig model)
 
         mProjectSpec =
-            Maybe.map2 Specs.allProjects mPresets mStepConfig
+            Maybe.map Specs.allProjects mPresets
 
-        mProjectsSpec =
-            Maybe.map2 Specs.projects mPresets mStepConfig
+        stepConfig =
+            Maybe.withDefault Dict.empty mStepConfig
+
+        projectId =
+            Maybe.withDefault Route.rootProjectId proj.id
+
+        listingRows =
+            List.filterMap (listingRow model projectId stepConfig (presentStepTypes model projectId)) proj.children
+
+        projectEditForm =
+            Html.viewIf (not isReadOnly) <|
+                Html.viewMaybe
+                    (\spec ->
+                        try (Lenses.projectForms << Lenses.edited << just) model
+                            |> Maybe.filter (\editedProject -> editedProject.id == Nothing || editedProject.id == proj.id)
+                            |> Maybe.map
+                                (\editedProject ->
+                                    viewAddOrEditRecordForm model
+                                        projectId
+                                        spec
+                                        (get Lenses.projectForms model)
+                                        { extraFields = viewProjectExtraFormFields model (remkT (TableSpec.getLens spec))
+                                        , noteInput = Html.nothing
+                                        }
+                                        Html.nothing
+                                        editedProject
+                                )
+                            |> Maybe.withDefault Html.nothing
+                    )
+                    mProjectSpec
+
+        configErrors =
+            Html.viewIf (not (List.isEmpty proj.validationErrors)) <|
+                Html.div [ Html.Attributes.class "project-config-error" ]
+                    [ Html.ul []
+                        (List.map (\msg -> Html.li [] [ Html.text msg ]) proj.validationErrors)
+                    ]
+
+        listing =
+            case mStepConfig of
+                Nothing ->
+                    Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading step config..." ]
+
+                Just _ ->
+                    Html.div [ Html.Attributes.class "sections" ]
+                        [ projectEditForm
+                        , configErrors
+                        , viewPendingStepForm model projectId stepConfig
+                        , viewListing
+                            { model = model
+                            , scope = projectId
+                            , stepConfig = stepConfig
+                            , rows = listingRows
+                            , header = listingHeader model proj
+                            }
+                        ]
     in
     viewPage
         { header =
@@ -409,234 +467,335 @@ viewProject model proj =
                 ]
             , viewSearchBox model
             ]
-        , content =
-            let
-                projectEditForm =
-                    let
-                        mEditedProject =
-                            try (Lenses.projects << Lenses.edited << just) model
-                                |> Maybe.filter (.id >> (==) proj.id)
-                    in
-                    Html.viewIf (not isReadOnly)
-                        (Maybe.map2 (\spec -> viewAddOrEditRecordForm model spec (get Lenses.projects model) Html.nothing)
-                            mProjectSpec
-                            mEditedProject
-                            |> Maybe.withDefault Html.nothing
-                        )
-
-                orphanWarning =
-                    Html.viewIf (not (List.isEmpty proj.orphanedSteps)) <|
-                        Html.div [ Html.Attributes.class "project-config-warning" ]
-                            [ Html.div
-                                [ Html.Attributes.class "project-config-warning-header"
-                                , Html.Events.onClick (Flow.over (currentProject << ApiData.success << Lenses.hideOrphans) not)
-                                ]
-                                [ iconCustom True
-                                    (if proj.hideOrphans then
-                                        "chevron_right"
-
-                                     else
-                                        "expand_more"
-                                    )
-                                    []
-                                , Html.text "This project contains steps whose template is not active in the project configuration:"
-                                ]
-                            , Html.viewIf (not proj.hideOrphans) <|
-                                Html.ul []
-                                    (List.map
-                                        (\s ->
-                                            Html.li []
-                                                [ Html.text (Maybe.unwrap "" (\id -> "[" ++ String.fromInt id ++ "] ") s.id ++ "(" ++ s.type_ ++ ") " ++ s.name) ]
-                                        )
-                                        proj.orphanedSteps
-                                    )
-                            ]
-
-                configErrors =
-                    Html.viewIf (not (List.isEmpty proj.validationErrors)) <|
-                        Html.div [ Html.Attributes.class "project-config-error" ]
-                            [ Html.ul []
-                                (List.map (\msg -> Html.li [] [ Html.text msg ]) proj.validationErrors)
-                            ]
-
-                sections =
-                    Html.div [ Html.Attributes.class "sections" ]
-                        (projectEditForm
-                            :: configErrors
-                            :: orphanWarning
-                            :: Html.viewMaybe (viewProjectsSection model proj) mProjectsSpec
-                            :: (proj.tables
-                                    |> Dict.toList
-                                    |> List.filterMap
-                                        (\( sectionName, steps ) ->
-                                            Model.getStepConfig model
-                                                |> ApiData.toMaybe
-                                                |> Maybe.andThen (Dict.get sectionName)
-                                                |> Maybe.map (\entry -> ( sectionName, entry, steps ))
-                                        )
-                                    |> List.sortBy (\( name, entry, _ ) -> ( entry.sortKey |> Maybe.withDefault 2147483647, name ))
-                                    |> List.map (\( sectionName, entry, steps ) -> viewSection model sectionName entry steps)
-                               )
-                        )
-            in
-            sections
+        , content = listing
         }
 
 
-viewBreadcrumbs : Model -> ProjectRecord -> Html (Flow Model ())
-viewBreadcrumbs model proj =
-    let
-        projectPath_ =
-            try Lenses.currentProjectPath model |> Maybe.withDefault []
-
-        mCommit_ =
-            try (Lenses.route << Route.page << Route.project << Lenses.mCommit << just) model
-
-        projectName projectId_ =
-            if Just projectId_ == proj.id then
-                proj.name
-
-            else
-                try (Lenses.projects << Lenses.records << orElseT ApiData.success ApiData.reloading << by .id (Just projectId_) << Lenses.name) model
-                    |> Maybe.withDefault ("#" ++ String.fromInt projectId_)
-
-        crumb pathPrefix =
-            Html.a
-                [ Route.href (Route.fromPage (Route.projectPage pathPrefix mCommit_))
-                , Html.Attributes.class "project-breadcrumb"
-                ]
-                [ Html.text (projectName (Route.pathProjectId pathPrefix)) ]
-
-        ancestorPaths =
-            List.range 0 (List.length projectPath_ - 1)
-                |> List.map (\depth -> List.take depth projectPath_)
-    in
-    Html.nav [ Html.Attributes.class "project-breadcrumbs" ]
-        (List.concatMap (\pathPrefix -> [ crumb pathPrefix, iconCustom True "chevron_right" [ Html.Attributes.class "project-breadcrumb-separator" ] ]) ancestorPaths
-            ++ [ Html.h2 [] [ crumb projectPath_ ] ]
-        )
-
-
-viewProjectsSection : Model -> ProjectRecord -> TableSpec ProjectRecord -> Html (Flow Model ())
-viewProjectsSection model proj spec =
+listingHeader : Model -> ProjectRecord -> List (Html (Flow Model ()))
+listingHeader model proj =
     let
         isReadOnly =
             isReadOnlyRoute model
 
-        projectPath_ =
-            try Lenses.currentProjectPath model |> Maybe.withDefault []
+        parentId =
+            Maybe.withDefault Route.rootProjectId proj.id
 
-        mCommit_ =
-            try (Lenses.route << Route.page << Route.project << Lenses.mCommit << just) model
+        mPresets =
+            ApiData.toMaybe (Model.getPresets model)
 
-        openProject childId =
-            Actions.goToRoute (Route.fromPage (Route.projectPage (projectPath_ ++ [ childId ]) mCommit_))
+        mStepConfig =
+            ApiData.toMaybe (Model.getStepConfig model)
+
+        hiddenLinks =
+            List.filter .hidden proj.children
+
+        newMenu =
+            viewNewMenu model proj
+
+        linkExistingButton =
+            Html.viewIf (not isReadOnly) <|
+                Html.viewMaybe
+                    (\presets ->
+                        Html.viewMaybe
+                            (\stepConfig ->
+                                viewIconButtonWithTooltip
+                                    "link"
+                                    True
+                                    "Link existing"
+                                    (Flow.setAll (Lenses.projectForms << Lenses.addMode) LinkExisting
+                                        |> Flow.seq (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
+                                    )
+                            )
+                            mStepConfig
+                    )
+                    mPresets
+
+        unhideAllButton =
+            Html.viewIf (not isReadOnly && not (List.isEmpty hiddenLinks)) <|
+                Html.button
+                    [ Html.Attributes.class "btn"
+                    , Html.Events.onClick (Organize.unhideAll parentId (List.map Model.childRefOf hiddenLinks))
+                    ]
+                    [ Html.text "Unhide all" ]
     in
-    viewTable
-        { model = model
-        , spec = spec
-        , table = get Lenses.subProjects proj
-        , recordStatusPill = \_ -> Html.nothing
-        , recordActionsPopover =
-            \record ->
-                viewRecordActionsPopover
-                    (actionsPopoverId (TableSpec.getName spec) record)
-                    (viewRecordActions spec isReadOnly record)
-        , alwaysVisibleRecordActions = \_ -> []
-        , directorySection = \_ -> Html.nothing
-        , srcFilesSection = \_ -> Html.nothing
-        , detailSection = \_ -> Html.nothing
-        , onRecordClick = .id >> Maybe.map openProject
-        }
+    [ newMenu, linkExistingButton, unhideAllButton ]
 
 
-
-viewSection : Model -> String -> StepConfigEntry -> Table StepRecord -> Html (Flow Model ())
-viewSection model sectionName entry steps =
+viewNewMenu : Model -> ProjectRecord -> Html (Flow Model ())
+viewNewMenu model proj =
     let
-        spec =
-            Specs.steps sectionName entry
+        isReadOnly =
+            isReadOnlyRoute model
 
-        stepConfig_ =
-            try (Lenses.stepConfig << ApiData.success) model
-                |> Maybe.unwrap Dict.empty identity
+        mPresets =
+            ApiData.toMaybe (Model.getPresets model)
 
-        presentTypesKey =
-            try (currentProject << ApiData.success << Lenses.tables) model
-                |> Maybe.unwrap [] Dict.keys
-                |> String.join ","
+        mStepConfig =
+            ApiData.toMaybe (Model.getStepConfig model)
 
-        uploads =
-            Model.getUploadProgress model
+        popoverId =
+            "listing-new-menu"
 
-        runningIngestJobs =
-            Model.getIngestJobs model
-                |> Dict.filter (\_ job -> job.state == Model.IngestRunning)
+        menuItem action children =
+            Html.button
+                [ Html.Attributes.class "listing-menu-item"
+                , Html.Events.onClick action
+                ]
+                children
 
-        pendingIngestSteps =
-            Model.getPendingIngestSteps model
-
-        pendingStops =
-            Model.getPendingStops model
-
-        scratchAvailable =
-            ApiData.unwrap False Maybe.isJust (Model.getScratchState model).root
-
-        page =
-            (Model.getRoute model).page
-
-        stepLogs =
-            Model.getStepLogs model
-
-        recordLog record =
-            record.id
-                |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id (Model.stepRevision model record)) stepLogs)
-                |> Maybe.unwrap ApiData.NotAsked identity
-
-        isIngesting =
-            has
-                (recordId
-                    << just
-                    << where_
-                        (\stepId ->
-                            Dict.member stepId uploads
-                                || Dict.member stepId runningIngestJobs
-                                || Set.member stepId pendingIngestSteps
+        newFolderAction =
+            Html.viewMaybe
+                (\presets ->
+                    Html.viewMaybe
+                        (\stepConfig ->
+                            menuItem
+                                (Flow.setAll (Lenses.projectForms << Lenses.newDraft) Nothing
+                                    |> Flow.seq (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
+                                )
+                                [ iconCustom False "create_new_folder" []
+                                , Html.text "New folder"
+                                ]
                         )
+                        mStepConfig
                 )
+                mPresets
+
+        templateNames =
+            Model.effectiveTemplates (Maybe.withDefault Dict.empty mPresets) proj.templateSource
+
+        stepItem typeName entry =
+            let
+                spec =
+                    Specs.steps typeName entry
+            in
+            menuItem
+                (Actions.toggleAddOrEditRecordForm spec Nothing)
+                [ Html.viewMaybe (\stepIcon -> iconCustom False stepIcon []) entry.icon
+                , Html.text ("New " ++ TableSpec.getDisplayName spec)
+                ]
+
+        otherTemplates =
+            Maybe.withDefault Dict.empty mStepConfig
+                |> Dict.toList
+                |> List.filter (\( typeName, _ ) -> not (List.member typeName templateNames))
+
+        primaryItems =
+            templateNames
+                |> List.filterMap (\typeName -> Dict.get typeName (Maybe.withDefault Dict.empty mStepConfig) |> Maybe.map (stepItem typeName))
+
+        otherSubmenu =
+            Html.viewIf (not (List.isEmpty otherTemplates)) <|
+                Html.details [ Html.Attributes.class "listing-menu-details" ]
+                    [ Html.summary
+                        [ Html.Attributes.class "listing-menu-item"
+                        , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+                        ]
+                        [ iconCustom False "more_horiz" [], Html.text "Other types" ]
+                    , Html.div [ Html.Attributes.class "listing-menu-submenu" ]
+                        (List.map (\( typeName, entry ) -> stepItem typeName entry) otherTemplates)
+                    ]
     in
-    viewTable
-        { model = model
-        , spec = spec
-        , table = steps
-        , recordStatusPill =
-            \record ->
-                Html.Lazy.lazy5 viewStepRecordStatus
-                    sectionName
-                    entry
-                    (recordLog record)
-                    (isIngesting record)
-                    record
-        , recordActionsPopover =
-            \record ->
-                Html.Lazy.lazy7 viewStepRecordActions
-                    sectionName
-                    entry
-                    stepConfig_
-                    presentTypesKey
-                    page
-                    record
-                    { uploading = isIngesting record
-                    , scratchAvailable = scratchAvailable
-                    , stopping = Maybe.unwrap False (\id -> Set.member id pendingStops) record.id
-                    }
-        , alwaysVisibleRecordActions =
-            \r ->
-                Maybe.values
-                    [ r.id |> Maybe.andThen (\stepId -> viewReviewControls model spec stepId r)
-                    , r.id
-                        |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id (Model.getUploadProgress model)))
-                    , r.id
+    Html.viewIf (not isReadOnly) <|
+        View.Organize.viewMenuPopover
+            { popoverId = popoverId
+            , wrapperClass = "listing-new-menu"
+            , triggerAttrs =
+                [ Html.Attributes.class "icon-btn listing-new-button"
+                , Html.Attributes.title "New"
+                , Html.Attributes.attribute "aria-label" "New"
+                ]
+            , triggerContent = [ icon True "add" ]
+            , content = newFolderAction :: primaryItems ++ [ otherSubmenu ]
+            }
+
+
+viewPendingStepForm : Model -> Int -> StepConfig -> Html (Flow Model ())
+viewPendingStepForm model parentId stepConfig =
+    let
+        forms =
+            stepConfig
+                |> Dict.toList
+                |> List.filterMap
+                    (\( typeName, entry ) ->
+                        let
+                            spec =
+                                Specs.steps typeName entry
+                        in
+                        try (Lenses.stepFormsAt typeName << Lenses.edited << just) model
+                            |> Maybe.filter (\record -> record.id == Nothing)
+                            |> Maybe.filter (\_ -> not (get (Lenses.stepFormsAt typeName << Lenses.nameEditOnly) model))
+                            |> Maybe.map
+                                (\record ->
+                                    let
+                                        readOnly =
+                                            stepFormReadOnly model spec record
+                                    in
+                                    viewAddOrEditRecordForm model
+                                        parentId
+                                        spec
+                                        (get (Lenses.stepFormsAt typeName) model)
+                                        { extraFields = [ viewStepExtraFormFields model readOnly typeName entry.stepType ]
+                                        , noteInput = viewStepNoteField model readOnly typeName
+                                        }
+                                        (FileBrowser.viewSrcFilesSection model entry.stepType spec record)
+                                        record
+                                )
+                    )
+    in
+    Html.viewIf (not (List.isEmpty forms)) <|
+        Html.div [ Html.Attributes.class "listing-pending-form" ] forms
+
+
+presentStepTypes : Model -> Model.ListingScope -> List String
+presentStepTypes model scope =
+    let
+        steps_ =
+            Model.getSteps model
+    in
+    Model.Selection.folderLinks model scope
+        |> List.filter (\sibling -> sibling.kind == Model.StepChild)
+        |> List.filterMap (\sibling -> Dict.get sibling.id steps_ |> Maybe.map .type_)
+        |> List.foldl
+            (\typeName acc ->
+                if List.member typeName acc then
+                    acc
+
+                else
+                    acc ++ [ typeName ]
+            )
+            []
+
+
+listingRow : Model -> Int -> StepConfig -> List String -> Model.ChildLink -> Maybe ListingRow
+listingRow model parentId stepConfig presentTypes link =
+    let
+        folderRow project =
+            let
+                spec =
+                    folderSpec model
+
+                mEdited =
+                    try (Lenses.projectForms << Lenses.edited << just) model
+
+                isEditing =
+                    Maybe.andThen .id mEdited == Just link.id
+
+                nameEditOnly =
+                    Maybe.withDefault False (try (Lenses.projectForms << Lenses.nameEditOnly) model)
+
+                readOnly =
+                    isReadOnlyRoute model
+            in
+            { link = link
+            , name = project.name
+            , displayName = "Folder"
+            , typeName = "folder"
+            , typeIcon = Just "folder"
+            , statusPill = View.Lib.viewRollupSummary model (Just parentId) link.id
+            , validationErrors = project.validationErrors
+            , alwaysVisibleActions = []
+            , actionsPopover =
+                viewRecordActionsPopover
+                    (actionsPopoverId link)
+                    (viewRowActions model parentId link spec project)
+            , mTime = project.lastModifiedAt
+            , cTime = project.createdAt
+            , statusSortKey = Maybe.withDefault 5 (View.Lib.rollupChildFor model (Just parentId) link.id |> Maybe.map (.statuses >> Model.rollupStatusRank))
+            , isUpdating = project.isUpdating
+            , openRow =
+                Just
+                    (Actions.goToRoute
+                        (Route.fromPage
+                            (Route.projectPage
+                                (Maybe.withDefault [] (try Lenses.currentProjectPath model) ++ [ link.id ])
+                                (Route.viewedCommit (Model.getRoute model).page)
+                            )
+                        )
+                    )
+            , editName =
+                if readOnly then
+                    Nothing
+
+                else
+                    Just (Actions.startInlineRecordNameEdit spec project)
+            , inlineRename =
+                if isEditing && nameEditOnly then
+                    Maybe.map
+                        (\edited ->
+                            { value = edited.name
+                            , onInput = Actions.editRecordName (remkT (TableSpec.getLens spec))
+                            , onSubmit = TableSpec.getUpsertRecord spec
+                            , onCancel = Actions.stopInlineRecordNameEdit spec
+                            }
+                        )
+                        mEdited
+
+                else
+                    Nothing
+            , expanders = []
+            , form =
+                if isEditing && not nameEditOnly && not readOnly then
+                    Maybe.map
+                        (\edited ->
+                            viewAddOrEditRecordForm model
+                                parentId
+                                spec
+                                (get Lenses.projectForms model)
+                                { extraFields = viewProjectExtraFormFields model (remkT (TableSpec.getLens spec))
+                                , noteInput = Html.nothing
+                                }
+                                Html.nothing
+                                edited
+                        )
+                        mEdited
+                        |> Maybe.withDefault Html.nothing
+
+                else
+                    Html.nothing
+            }
+
+        stepRow step entry =
+            let
+                spec =
+                    Specs.steps step.type_ entry
+
+                recordLog =
+                    step.id
+                        |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id (Model.stepRevision model step)) (Model.getStepLogs model))
+                        |> Maybe.unwrap ApiData.NotAsked identity
+
+                uploads =
+                    Model.getUploadProgress model
+
+                runningIngestJobs =
+                    Model.getIngestJobs model |> Dict.filter (\_ job -> job.state == Model.IngestRunning)
+
+                pendingIngestSteps =
+                    Model.getPendingIngestSteps model
+
+                pendingStops =
+                    Model.getPendingStops model
+
+                scratchAvailable =
+                    ApiData.unwrap False Maybe.isJust (Model.getScratchState model).root
+
+                isIngesting =
+                    Maybe.unwrap False
+                        (\id ->
+                            Dict.member id uploads
+                                || Dict.member id runningIngestJobs
+                                || Set.member id pendingIngestSteps
+                        )
+                        step.id
+
+                reviewControls =
+                    step.id |> Maybe.andThen (\stepId -> viewReviewControls model spec stepId step)
+
+                uploadProgressView =
+                    step.id |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id uploads))
+
+                ingestProgressView =
+                    step.id
                         |> Maybe.andThen
                             (\id ->
                                 case Dict.get id runningIngestJobs of
@@ -650,12 +809,213 @@ viewSection model sectionName entry steps =
                                         else
                                             Nothing
                             )
+
+                mEditedId =
+                    try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model |> Maybe.andThen .id
+
+                isEditing =
+                    mEditedId == step.id && not (get (Lenses.stepFormsAt step.type_ << Lenses.nameEditOnly) model)
+
+                readOnly =
+                    stepFormReadOnly model spec step
+
+                formView =
+                    Html.viewIf isEditing <|
+                        Html.viewMaybe
+                            (\edited ->
+                                viewAddOrEditRecordForm model
+                                    parentId
+                                    spec
+                                    (get (Lenses.stepFormsAt step.type_) model)
+                                    { extraFields = [ viewStepExtraFormFields model readOnly step.type_ entry.stepType ]
+                                    , noteInput = viewStepNoteField model readOnly step.type_
+                                    }
+                                    (FileBrowser.viewSrcFilesSection model entry.stepType spec step)
+                                    edited
+                            )
+                            (try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model)
+
+                mInlineRename =
+                    try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model
+                        |> Maybe.filter (\edited -> edited.id == step.id)
+                        |> Maybe.filter (always (get (Lenses.stepFormsAt step.type_ << Lenses.nameEditOnly) model))
+                        |> Maybe.map
+                            (\edited ->
+                                { value = edited.name
+                                , onInput = Actions.editRecordName (remkT (TableSpec.getLens spec))
+                                , onSubmit = TableSpec.getUpsertRecord spec
+                                , onCancel = Actions.stopInlineRecordNameEdit spec
+                                }
+                            )
+
+                directoryViewOpen =
+                    TableSpec.getDirectoryView spec step |> Maybe.map .expanded |> Maybe.withDefault False
+
+                expanders =
+                    [ Html.viewIf directoryViewOpen (FileBrowser.viewDirectorySection model spec step)
+                    , viewDiffSection model step
                     ]
-        , directorySection = FileBrowser.viewDirectorySection model spec
-        , srcFilesSection = FileBrowser.viewSrcFilesSection model entry.stepType spec
-        , detailSection = viewDiffSection model
-        , onRecordClick =
-            \record ->
-                record.id
-                    |> Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ()))
-        }
+            in
+            { link = link
+            , name = step.name
+            , displayName = TableSpec.getDisplayName spec
+            , typeName = step.type_
+            , typeIcon = entry.icon
+            , statusPill =
+                Html.Lazy.lazy5 viewStepRecordStatus
+                    step.type_
+                    entry
+                    recordLog
+                    isIngesting
+                    step
+            , validationErrors = TableSpec.getValidationErrors spec step
+            , alwaysVisibleActions =
+                Maybe.values
+                    [ reviewControls
+                    , uploadProgressView
+                    , ingestProgressView
+                    ]
+            , actionsPopover =
+                viewStepRecordActions
+                    model
+                    parentId
+                    link
+                    step.type_
+                    entry
+                    stepConfig
+                    presentTypes
+                    step
+                    { uploading = isIngesting
+                    , scratchAvailable = scratchAvailable
+                    , stopping = Maybe.unwrap False (\id -> Set.member id pendingStops) step.id
+                    }
+            , mTime = step.lastModifiedAt
+            , cTime = step.createdAt
+            , statusSortKey = statusSortRank (TableSpec.getStatus spec step)
+            , isUpdating = step.isUpdating
+            , openRow =
+                if hasBrowsableOutput (TableSpec.getStatus spec step) then
+                    Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ())) step.id
+
+                else
+                    Nothing
+            , editName =
+                if readOnly then
+                    Nothing
+
+                else
+                    Just (Actions.startInlineRecordNameEdit spec step)
+            , inlineRename = mInlineRename
+            , expanders = expanders
+            , form = formView
+            }
+    in
+    case link.kind of
+        Model.ProjectChild ->
+            Dict.get link.id (Lenses.projectsDict model)
+                |> Maybe.map folderRow
+
+        Model.StepChild ->
+            let
+                mStep =
+                    Dict.get link.id (Model.getSteps model)
+            in
+            Maybe.map2 stepRow
+                mStep
+                (mStep
+                    |> Maybe.map .type_
+                    |> Maybe.withDefault ""
+                    |> (\typeName -> Dict.get typeName stepConfig)
+                )
+
+
+folderSpec : Model -> TableSpec ProjectRecord
+folderSpec model =
+    let
+        presets =
+            ApiData.toMaybe (Model.getPresets model) |> Maybe.withDefault Dict.empty
+    in
+    Specs.allProjects presets
+
+
+statusSortRank : ApiData Status -> Int
+statusSortRank status =
+    case ApiData.toMaybe status of
+        Just StatusRunning ->
+            0
+
+        Just StatusSuccess ->
+            1
+
+        Just StatusBuiltNotCertified ->
+            2
+
+        Just StatusNotStarted ->
+            3
+
+        Just _ ->
+            4
+
+        Nothing ->
+            5
+
+
+viewBreadcrumbs : Model -> ProjectRecord -> Html (Flow Model ())
+viewBreadcrumbs model proj =
+    let
+        projectPath_ =
+            try Lenses.currentProjectPath model |> Maybe.withDefault []
+
+        mCommit_ =
+            Route.viewedCommit (Model.getRoute model).page
+
+        projectsById =
+            Lenses.projectsDict model
+
+        editable =
+            Model.Selection.listingEditable model
+
+        projectName projectId_ =
+            if Just projectId_ == proj.id then
+                proj.name
+
+            else
+                Dict.get projectId_ projectsById
+                    |> Maybe.map .name
+                    |> Maybe.withDefault ("#" ++ String.fromInt projectId_)
+
+        crumb pathPrefix =
+            Html.a
+                ([ Route.href (Route.fromPage (Route.projectPage pathPrefix mCommit_))
+                 , Html.Attributes.class "project-breadcrumb"
+                 ]
+                    ++ (if editable then
+                            dropTargetAttrs model (Route.pathProjectId pathPrefix)
+
+                        else
+                            []
+                       )
+                )
+                [ Html.text (projectName (Route.pathProjectId pathPrefix)) ]
+
+        ancestorPaths =
+            List.range 0 (List.length projectPath_ - 1)
+                |> List.map (\depth -> List.take depth projectPath_)
+
+        currentId =
+            Route.pathProjectId projectPath_
+
+        currentParentId =
+            Route.pathProjectId (List.take (List.length projectPath_ - 1) projectPath_)
+
+        currentRef =
+            { kind = Model.ProjectChild, id = currentId }
+    in
+    Html.nav [ Html.Attributes.class "project-breadcrumbs" ]
+        (List.concatMap (\pathPrefix -> [ crumb pathPrefix, iconCustom True "chevron_right" [ Html.Attributes.class "project-breadcrumb-separator" ] ]) ancestorPaths
+            ++ [ Html.h2 []
+                    [ crumb projectPath_
+                    , View.Lib.viewAlsoInButton "also-in-breadcrumb" model (Just currentParentId) currentRef
+                    ]
+               ]
+        )

@@ -5,14 +5,13 @@ module Api (API) where
 
 import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
-import ApiTypes (DynamicJson)
+import ApiTypes (DynamicJson, RawJSON)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.Projects (ProjectUpdate (..), RawJSON)
-import ProjectTree (ChildChanges, ChildRef, ProjectFields)
+import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
@@ -25,8 +24,6 @@ import Servant.Types.SourceT (SourceT)
 type ReqId = QueryParam' '[Required, Strict] "id" Int
 
 type ReqProjectId = QueryParam' '[Required, Strict] "project_id" Int
-
-type ReqEntityId = QueryParam' '[Required, Strict] "entity_id" Int
 
 type AcceptedText = Verb 'POST 202 '[PlainText] Text
 
@@ -81,35 +78,6 @@ type DeleteSrcFile =
         :> ReqId
         :> QueryParam' '[Required] "path" FilePath
         :> Delete '[JSON] NoContent
-
-type DeleteProject =
-    "projects"
-        :> Description "Deletes a project file and removes its entry from the children of every other project in one commit. The root project 0 cannot be deleted."
-        :> ReqId
-        :> Delete '[JSON] NoContent
-
-type AssignRecord =
-    "project-entities"
-        :> Description "Appends a step entry to a project's children."
-        :> ReqProjectId
-        :> ReqEntityId
-        :> Post '[JSON] NoContent
-
-type BatchAddChildren =
-    "project-entities"
-        :> "batch"
-        :> Description "Appends step and project entries ({\"step\":{\"id\":N}} or {\"project\":{\"id\":N}}) to a project's children in one commit, skipping children the project already lists."
-        :> ReqProjectId
-        :> ReqBody '[JSON] [ChildRef]
-        :> Post '[JSON] NoContent
-
-type ApplyChildChanges =
-    "project-entities"
-        :> "changes"
-        :> Description "Removes children of a project and sets hidden or sortKey on others in a single commit. An absent field is left unchanged; a null sortKey clears it. Refuses to remove reviewed steps."
-        :> ReqProjectId
-        :> ReqBody '[JSON] ChildChanges
-        :> Post '[JSON] NoContent
 
 type Autocomplete =
     "autocomplete"
@@ -295,6 +263,19 @@ type GetProjects =
         :> QueryParam "commit" Text
         :> Get '[RawJSON] DynamicJson
 
+type GetUnfiled =
+    "unfiled"
+        :> Description "Returns steps not linked from any project, with evaluated definitions, optionally at a specific user-repo commit. Unreadable raw project links fail the request. Step definitions carry lastModifiedAt and createdAt."
+        :> QueryParam "commit" Text
+        :> Get '[RawJSON] DynamicJson
+
+type GetProjectRollup =
+    "project-rollup"
+        :> Description "Returns, for every direct child project of a project in its effective order, the number of steps reachable below it and the counts of their statuses, recursively and counting each step once per child project, optionally at a specific user-repo commit."
+        :> ReqProjectId
+        :> QueryParam "commit" Text
+        :> Get '[RawJSON] DynamicJson
+
 type CreateProject =
     "projects"
         :> Description "Creates a project from its name and preset or templates, and appends it to the children of the parent project (the root project 0 by default) in one commit. Returns the evaluated project."
@@ -309,11 +290,11 @@ type UpdateProject =
         :> ReqBody '[JSON] ProjectFields
         :> Patch '[JSON] NoContent
 
-type BatchUpdateProjects =
+type BatchProjectOps =
     "projects"
         :> "batch"
-        :> Description "Replaces the name and preset or templates of several projects in one commit."
-        :> ReqBody '[JSON] [ProjectUpdate]
+        :> Description "Applies an ordered list of project tree operations (update, link, unlink, order, hide, delete) validated as a whole and written in one commit. Refuses to delete the root project 0, reviewed steps, or steps that remaining steps depend on. Validation failures return 409 with a human message; an empty list returns 400."
+        :> ReqBody '[JSON] [TreeOp]
         :> Post '[JSON] NoContent
 
 type StepStatusStream =
@@ -452,13 +433,11 @@ type API =
         :<|> CreateSrcFile
         :<|> DeleteSrcFile
         :<|> GetProjects
+        :<|> GetUnfiled
+        :<|> GetProjectRollup
         :<|> CreateProject
         :<|> UpdateProject
-        :<|> BatchUpdateProjects
-        :<|> DeleteProject
-        :<|> AssignRecord
-        :<|> BatchAddChildren
-        :<|> ApplyChildChanges
+        :<|> BatchProjectOps
         :<|> StepStatusStream
         :<|> ProjectStatus
         :<|> GetStepConfig

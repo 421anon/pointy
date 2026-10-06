@@ -6,6 +6,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text, pack)
+import RollupCache (invalidateRollupCache)
 import System.IO.Unsafe (unsafePerformIO)
 
 data ProjectSnapshot = ProjectSnapshot
@@ -27,11 +28,13 @@ replayLimit :: Int
 replayLimit = 256
 
 broadcastSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
-broadcastSnapshot pid c reported = atomically $ do
-    building <- buildingStepsAt c
-    let stats = Map.filterWithKey (\sid (st, _) -> Set.notMember sid building || st `elem` map pack ["running", "success"]) reported
-    writeTChan statusBus (ProjectSnapshot pid c stats)
-    modifyTVar' recentSnapshots (take replayLimit . (ProjectSnapshot pid c stats :))
+broadcastSnapshot pid c reported = do
+    atomically $ do
+        building <- buildingStepsAt c
+        let stats = Map.filterWithKey (\sid (st, _) -> Set.notMember sid building || st `elem` map pack ["running", "success"]) reported
+        writeTChan statusBus (ProjectSnapshot pid c stats)
+        modifyTVar' recentSnapshots (take replayLimit . (ProjectSnapshot pid c stats :))
+    invalidateRollupCache
 
 subscribe :: IO (TChan ProjectSnapshot)
 subscribe = atomically $ do

@@ -37,7 +37,7 @@ import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
 import Effects (AppEffects, AppM, Eval, Nix)
 import GHC.Generics (Generic)
-import Handlers.Projects (rewriteNixFile)
+import ProjectFiles (rewriteNixFile, stepFilePath)
 import BuildStatus (StepPaths (..), checkStatus, resolveStatuses)
 import Handlers.Statuses (forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
@@ -545,7 +545,7 @@ storeHashes paths = do
 
 setReview :: (Eval :> es, IOE :> es) => WriteRepoContext -> Int -> Maybe Review -> ExceptT String (Eff es) ()
 setReview (WriteRepoContext worktreePath) stepId mReview =
-    rewriteNixFile (worktreePath </> "steps" </> show stepId ++ ".nix") $ case mReview of
+    rewriteNixFile (stepFilePath worktreePath stepId) $ case mReview of
         Just (Review revision by comments) ->
             "orig // { reviewedRevision = " <> nixString revision <> "; reviewedBy = " <> nixString by <> "; reviewComments = " <> nixString comments <> "; }"
         Nothing -> "builtins.removeAttrs orig [ \"reviewedRevision\" \"reviewedBy\" \"reviewComments\" ]"

@@ -7,13 +7,12 @@ import Components.Select exposing (SelectState, initSelectState)
 import Csv.Parser
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
-import DnDList
 import Flow exposing (Flow)
 import Grid
 import Json.Decode as Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Shadow exposing (Presets, StepArgValue, StepConfig, StepType)
+import Model.Shadow exposing (Presets, StepArgValue, StepConfig)
 import Route exposing (Route)
 import Set exposing (Set)
 import String.Extra
@@ -52,6 +51,73 @@ hasBuiltOutput status =
             True
 
 
+type alias RollupStatuses =
+    { notStarted : Int
+    , running : Int
+    , success : Int
+    , failure : Int
+    , builtNotCertified : Int
+    , certificationFailed : Int
+    }
+
+
+type alias RollupChild =
+    { id : Int
+    , steps : Int
+    , statuses : RollupStatuses
+    }
+
+
+type alias ProjectRollup =
+    { projectId : Int
+    , children : List RollupChild
+    }
+
+
+rollupChildById : ProjectRollup -> Int -> Maybe RollupChild
+rollupChildById rollup childId =
+    List.find (\child -> child.id == childId) rollup.children
+
+
+rollupStatusEntries : RollupStatuses -> List ( Status, Int )
+rollupStatusEntries counts =
+    [ ( StatusRunning, counts.running )
+    , ( StatusFailure Nothing, counts.failure )
+    , ( StatusCertificationFailed Nothing, counts.certificationFailed )
+    , ( StatusBuiltNotCertified, counts.builtNotCertified )
+    , ( StatusNotStarted, counts.notStarted )
+    , ( StatusSuccess, counts.success )
+    ]
+
+
+statusAttentionRank : Status -> Int
+statusAttentionRank status =
+    case status of
+        StatusRunning ->
+            0
+
+        StatusSuccess ->
+            1
+
+        StatusBuiltNotCertified ->
+            2
+
+        StatusNotStarted ->
+            3
+
+        _ ->
+            4
+
+
+rollupStatusRank : RollupStatuses -> Int
+rollupStatusRank counts =
+    rollupStatusEntries counts
+        |> List.filter (\( _, count ) -> count > 0)
+        |> List.map (Tuple.first >> statusAttentionRank)
+        |> List.minimum
+        |> Maybe.withDefault 5
+
+
 type ClusterStatus
     = ClusterAvailable
     | ClusterDegraded
@@ -61,7 +127,7 @@ type ClusterStatus
 
 type AddMode
     = AddNew
-    | AddFromOtherProject
+    | LinkExisting
 
 
 type TemplateSource
@@ -73,11 +139,10 @@ type alias BaseRecord a =
     { a
         | id : Maybe Int
         , clientId : Maybe Int
-        , hidden : Bool
-        , sortKey : Maybe Int
         , name : String
         , isUpdating : Bool
         , lastModifiedAt : Maybe Time.Posix
+        , createdAt : Maybe Time.Posix
     }
 
 
@@ -122,11 +187,6 @@ type ChildKind
     | ProjectChild
 
 
-childKinds : List ChildKind
-childKinds =
-    [ StepChild, ProjectChild ]
-
-
 childKindName : ChildKind -> String
 childKindName kind =
     case kind of
@@ -142,80 +202,196 @@ rowDomId kind id =
     childKindName kind ++ "-" ++ String.fromInt id
 
 
-type alias EntryUpdate =
-    { hidden : Maybe Bool
-    , sortKey : Maybe (Maybe Int)
+type alias ChildLink =
+    { kind : ChildKind
+    , id : Int
+    , hidden : Bool
+    , sortKey : Maybe Int
     }
 
 
-type alias EntryChanges =
-    { updates : Dict Int EntryUpdate
-    , removals : Set Int
+compareChildLinks : ChildLink -> ChildLink -> Order
+compareChildLinks a b =
+    let
+        rank link =
+            if Maybe.isJust link.sortKey then
+                0
+
+            else
+                1
+
+        key link =
+            ( rank link, Maybe.withDefault 0 link.sortKey, link.id )
+    in
+    compare (key a) (key b)
+
+
+sortChildLinks : List ChildLink -> List ChildLink
+sortChildLinks =
+    List.sortWith compareChildLinks
+
+
+type alias ChildRef =
+    { kind : ChildKind
+    , id : Int
     }
 
 
-type alias ChildChanges =
-    { steps : EntryChanges
-    , projects : EntryChanges
+childRefOf : ChildLink -> ChildRef
+childRefOf link =
+    { kind = link.kind, id = link.id }
+
+
+childLinkOf : ChildRef -> ChildLink
+childLinkOf ref =
+    { kind = ref.kind, id = ref.id, hidden = False, sortKey = Nothing }
+
+
+sameEntity : { a | kind : ChildKind, id : Int } -> { b | kind : ChildKind, id : Int } -> Bool
+sameEntity a b =
+    a.kind == b.kind && a.id == b.id
+
+
+type TreeOp
+    = LinkOp Int ChildRef
+    | UnlinkOp Int ChildRef
+    | OrderOp Int (List ChildRef)
+    | HideOp Int ChildRef Bool
+    | DeleteOp ChildRef
+
+
+type alias TreeOpUndo =
+    { id : Int
+    , label : String
+    , ops : List TreeOp
     }
 
 
-type alias ChildChangeQueue =
-    { pending : Dict Int ChildChanges
-    , inFlight : Dict Int ChildChanges
+type alias OrganizeQueue =
+    { pending : List TreeOp
+    , inFlight : List TreeOp
+    , undo : List TreeOpUndo
+    , nextUndoId : Int
     , debounce : Debounce ()
     }
 
 
-noChildChanges : ChildChanges
-noChildChanges =
-    { steps = { updates = Dict.empty, removals = Set.empty }
-    , projects = { updates = Dict.empty, removals = Set.empty }
+noOrganizeQueue : OrganizeQueue
+noOrganizeQueue =
+    { pending = [], inFlight = [], undo = [], nextUndoId = 0, debounce = Debounce.init }
+
+
+type alias ListingSelection =
+    { scope : ListingScope
+    , refs : List ChildRef
+    , anchor : Maybe ChildRef
     }
 
 
-entryChangesOf : ChildKind -> ChildChanges -> EntryChanges
-entryChangesOf kind =
-    case kind of
-        StepChild ->
-            .steps
-
-        ProjectChild ->
-            .projects
+type alias ListingScope =
+    Int
 
 
-updateEntry : Int -> (EntryUpdate -> EntryUpdate) -> EntryChanges -> EntryChanges
-updateEntry id change changes =
-    { changes | updates = Dict.update id (Maybe.withDefault { hidden = Nothing, sortKey = Nothing } >> change >> Just) changes.updates }
+type ClipboardMode
+    = ClipboardCut
+    | ClipboardCopy
 
 
-removeEntry : Int -> EntryChanges -> EntryChanges
-removeEntry id changes =
-    { changes | updates = Dict.remove id changes.updates, removals = Set.insert id changes.removals }
+type alias OrganizeClipboard =
+    { mode : ClipboardMode
+    , sourceScope : ListingScope
+    , refs : List ChildRef
+    }
 
 
-applyEntryChanges : EntryChanges -> List (BaseRecord a) -> List (BaseRecord a)
-applyEntryChanges changes =
-    let
-        applyUpdate record update =
-            { record
-                | hidden = Maybe.withDefault record.hidden update.hidden
-                , sortKey = Maybe.withDefault record.sortKey update.sortKey
-            }
-    in
-    List.filterMap
-        (\record ->
-            case record.id of
-                Just id ->
-                    if Set.member id changes.removals then
-                        Nothing
+type OrganizeDialogMode
+    = OrganizeMove
+    | OrganizeLinkTo
+    | OrganizeGroup
+    | OrganizeDelete
 
-                    else
-                        Just (Maybe.unwrap record (applyUpdate record) (Dict.get id changes.updates))
 
-                Nothing ->
-                    Just record
-        )
+type alias OrganizeDialog =
+    { mode : OrganizeDialogMode
+    , sourceScope : ListingScope
+    , refs : List ChildRef
+    , query : String
+    , targetId : Maybe Int
+    , name : String
+    }
+
+
+type alias OrganizeContextMenu =
+    { x : Int
+    , y : Int
+    , ref : Maybe ChildRef
+    }
+
+
+type alias OrganizeDrag =
+    { sourceScope : ListingScope
+    , refs : List ChildRef
+    }
+
+
+type OrganizeDropTarget
+    = OrganizeDropFolder { folderId : Int }
+    | OrganizeDropEdge { parentScope : ListingScope, ref : ChildRef, before : Bool }
+
+
+type OrganizeDropAction
+    = OrganizeDropMove
+    | OrganizeDropLink
+
+
+type OrganizeAction
+    = OrganizeMoveAction
+    | OrganizeLinkAction
+    | OrganizeGroupAction
+    | OrganizeCutAction
+    | OrganizeCopyAction
+    | OrganizeHideAction
+    | OrganizeRemoveAction
+    | OrganizeDuplicateAction
+    | OrganizeDeleteAction
+    | OrganizeClearAction
+    | OrganizePasteAction
+    | OrganizeClearClipboardAction
+    | OrganizeNewFolderAction
+
+
+type OrganizeDragEvent
+    = OrganizeDragStart { sourceScope : ListingScope, refs : List ChildRef }
+    | OrganizeDragEnd
+    | OrganizeDragDrop { target : OrganizeDropTarget, linkModifier : Bool }
+
+
+type ListingSort
+    = SortManual
+    | SortName
+    | SortType
+    | SortCreated
+    | SortModified
+    | SortStatus
+
+
+type alias ListingPreferences =
+    { sort : ListingSort
+    , descending : Bool
+    , foldersFirst : Bool
+    , showHidden : Bool
+    , groupByType : Bool
+    }
+
+
+defaultListingPreferences : ListingPreferences
+defaultListingPreferences =
+    { sort = SortManual
+    , descending = False
+    , foldersFirst = True
+    , showHidden = False
+    , groupByType = True
+    }
 
 
 type alias SrcFileDraft =
@@ -250,87 +426,101 @@ type alias Notice =
 
 type alias ProjectRecord =
     BaseRecord
-        { tables : Dict String (Table StepRecord)
-        , subProjects : SubProjects
+        { children : List ChildLink
         , templateSource : TemplateSource
-        , orphanedSteps : List StepRecord
         , validationErrors : List String
-        , hideOrphans : Bool
-        , presetSelect : SelectState
-        , templatesSelect : SelectState
+        , presetSelect : SelectState ChildRef
+        , templatesSelect : SelectState ChildRef
         }
 
 
-type SubProjects
-    = SubProjects (Table ProjectRecord)
-
-
-subProjectsTable : SubProjects -> Table ProjectRecord
-subProjectsTable (SubProjects table) =
-    table
-
-
-subProjectRecords : ProjectRecord -> List ProjectRecord
-subProjectRecords project =
-    (subProjectsTable project.subProjects).records
-        |> ApiData.toMaybe
-        |> Maybe.withDefault []
+blankStep : String -> StepRecord
+blankStep type_ =
+    { id = Nothing
+    , clientId = Nothing
+    , name = type_
+    , note = ""
+    , type_ = type_
+    , args = Dict.empty
+    , runState = NotAsked
+    , review = Nothing
+    , isUpdating = False
+    , lastModifiedAt = Nothing
+    , createdAt = Nothing
+    , srcFiles =
+        { children = NotAsked
+        , expanded = False
+        , extras = NotAsked
+        , size = Nothing
+        , mimeType = Nothing
+        }
+    , srcFileDraft = Nothing
+    , srcFileWriting = False
+    }
 
 
 blankProject : ProjectRecord
 blankProject =
     { id = Nothing
     , clientId = Nothing
-    , hidden = False
-    , sortKey = Nothing
     , name = ""
-    , tables = Dict.empty
-    , subProjects = SubProjects initialTable
+    , children = []
     , templateSource = CustomTemplates []
-    , orphanedSteps = []
     , validationErrors = []
-    , hideOrphans = False
     , presetSelect = initSelectState
     , templatesSelect = initSelectState
     , isUpdating = False
     , lastModifiedAt = Nothing
+    , createdAt = Nothing
     }
 
 
-projectAtPath : List ProjectRecord -> List Int -> Maybe ProjectRecord
-projectAtPath projects projectPath =
-    let
-        findProject id =
-            List.find (.id >> (==) (Just id)) projects
+projectChildren : ProjectRecord -> List ChildLink
+projectChildren project =
+    sortChildLinks project.children
 
-        enter childId =
-            Maybe.andThen
-                (\parent ->
-                    if List.member (Just childId) (List.map .id (subProjectRecords parent)) then
-                        findProject childId
+
+childIdsOf : ChildKind -> ProjectRecord -> List Int
+childIdsOf kind project =
+    projectChildren project
+        |> List.filterMap
+            (\link ->
+                if link.kind == kind then
+                    Just link.id
+
+                else
+                    Nothing
+            )
+
+
+descendantProjectIds : Dict Int ProjectRecord -> Int -> Set Int
+descendantProjectIds projects rootId =
+    let
+        childIds id =
+            Dict.get id projects
+                |> Maybe.unwrap [] (childIdsOf ProjectChild)
+
+        expand visited queue =
+            case queue of
+                [] ->
+                    visited
+
+                current :: rest ->
+                    if Set.member current visited then
+                        expand visited rest
 
                     else
-                        Nothing
-                )
+                        expand (Set.insert current visited) (rest ++ childIds current)
     in
-    List.foldl enter (findProject Route.rootProjectId) projectPath
+    expand Set.empty (childIds rootId)
 
 
-canonicalProjectPath : List Int -> List ProjectRecord -> Int -> List Int
+canonicalProjectPath : List Int -> Dict Int ProjectRecord -> Int -> List Int
 canonicalProjectPath currentPath projects targetId =
     let
-        hiddenRank child =
-            if child.hidden then
-                1
-
-            else
-                0
-
         childIds id =
-            List.find (.id >> (==) (Just id)) projects
-                |> Maybe.unwrap [] subProjectRecords
-                |> List.sortBy (\child -> ( hiddenRank child, getSortKey child ))
-                |> List.filterMap .id
+            Dict.get id projects
+                |> Maybe.unwrap [] (childIdsOf ProjectChild)
                 |> List.unique
 
         search queue visited =
@@ -364,37 +554,43 @@ canonicalProjectPath currentPath projects targetId =
                     |> Maybe.withDefault [ targetId ]
 
 
+projectAtPath : Dict Int ProjectRecord -> List Int -> Maybe ProjectRecord
+projectAtPath projects projectPath =
+    let
+        validPath =
+            List.foldl
+                (\childId acc ->
+                    acc
+                        |> Maybe.andThen
+                            (\parent ->
+                                if List.any (sameEntity { kind = ProjectChild, id = childId }) (projectChildren parent) then
+                                    Dict.get childId projects
+
+                                else
+                                    Nothing
+                            )
+                )
+                (Dict.get Route.rootProjectId projects)
+                projectPath
+    in
+    case validPath of
+        Just project ->
+            Just project
+
+        Nothing ->
+            List.head (List.reverse projectPath) |> Maybe.andThen (\id -> Dict.get id projects)
+
+
 type alias Table a =
-    { records : ApiData (List a)
-    , isOpen : Bool
-    , showHiddenRecords : Bool
-    , edited : Maybe a
+    { edited : Maybe a
     , drafts : Dict Int a
     , newDraft : Maybe a
     , addMode : AddMode
     , nameEditOnly : Bool
-    , dnd : DnDList.Model
-    , dndAffected : List Int
-    , selectExistingSteps : SelectState
-    , argSelectStates : Dict String SelectState
+    , selectExistingSteps : SelectState ChildRef
+    , argSelectStates : Dict String (SelectState ChildRef)
     , isUpdating : Bool
     }
-
-
-type TableTag
-    = TagAllProjects
-    | TagProjects
-    | TagSteps String StepType
-
-
-tagChildKind : TableTag -> ChildKind
-tagChildKind tag =
-    case tag of
-        TagSteps _ _ ->
-            StepChild
-
-        _ ->
-            ProjectChild
 
 
 type alias ModalConfirmConfig =
@@ -480,6 +676,7 @@ type alias UserRepoInfo =
     { url : String
     , branch : String
     }
+
 
 
 type alias SessionTimestamp =
@@ -1214,16 +1411,20 @@ initAutocompleteState =
 
 type Model
     = Model
-        { projects : Table ProjectRecord
+        { projects : ApiData (Dict Int ProjectRecord)
+        , steps : Dict Int StepRecord
+        , projectForms : Table ProjectRecord
+        , stepForms : Dict String (Table StepRecord)
+        , listingPreferences : ListingPreferences
         , route : Route
         , origin : String
         , key : Browser.Navigation.Key
-        , toasts : List Toast
+        , toasts : List (Toast (Flow Model ()))
         , nextToastId : Int
         , nextClientId : Int
         , modalConfirm : ModalConfirmConfig
         , downstreamEntities : Dict Int (List Int)
-        , searchBox : SelectState
+        , searchBox : SelectState ChildRef
         , stepConfig : ApiData StepConfig
         , presets : ApiData Presets
         , commitHash : ApiData String
@@ -1242,7 +1443,12 @@ type Model
         , reviewDraft : Maybe ReviewDraft
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
-        , childChangeQueue : ChildChangeQueue
+        , organizeQueue : OrganizeQueue
+        , listingSelection : Maybe ListingSelection
+        , organizeClipboard : Maybe OrganizeClipboard
+        , organizeDialog : Maybe OrganizeDialog
+        , organizeContextMenu : Maybe OrganizeContextMenu
+        , organizeDrag : Maybe OrganizeDrag
         , gutterDrag : Maybe GutterDrag
         , compareState : CompareState
         , now : Time.Posix
@@ -1251,6 +1457,12 @@ type Model
         , clusterDetail : Maybe String
         , runningStepIds : List Int
         , statusBarOpen : Bool
+        , sidebarOpen : Bool
+        , sidebarScroll : SidebarScroll
+        , sidebarExpanded : Set Int
+        , projectRollups : Dict Int (ApiData ProjectRollup)
+        , projectsRequest : Int
+        , rollupRequests : Dict Int Int
         }
 
 
@@ -1330,9 +1542,29 @@ compareSelectionMode sel =
         CompareText
 
 
-getProjects : Model -> Table ProjectRecord
+getProjects : Model -> ApiData (Dict Int ProjectRecord)
 getProjects (Model model) =
     model.projects
+
+
+getSteps : Model -> Dict Int StepRecord
+getSteps (Model model) =
+    model.steps
+
+
+getProjectForms : Model -> Table ProjectRecord
+getProjectForms (Model model) =
+    model.projectForms
+
+
+getStepForms : Model -> Dict String (Table StepRecord)
+getStepForms (Model model) =
+    model.stepForms
+
+
+getListingPreferences : Model -> ListingPreferences
+getListingPreferences (Model model) =
+    model.listingPreferences
 
 
 getRoute : Model -> Route
@@ -1360,6 +1592,36 @@ getStatusBarOpen (Model model) =
     model.statusBarOpen
 
 
+getSidebarOpen : Model -> Bool
+getSidebarOpen (Model model) =
+    model.sidebarOpen
+
+
+getSidebarScroll : Model -> SidebarScroll
+getSidebarScroll (Model model) =
+    model.sidebarScroll
+
+
+getSidebarExpanded : Model -> Set Int
+getSidebarExpanded (Model model) =
+    model.sidebarExpanded
+
+
+getProjectRollups : Model -> Dict Int (ApiData ProjectRollup)
+getProjectRollups (Model model) =
+    model.projectRollups
+
+
+getProjectsRequest : Model -> Int
+getProjectsRequest (Model model) =
+    model.projectsRequest
+
+
+getRollupRequests : Model -> Dict Int Int
+getRollupRequests (Model model) =
+    model.rollupRequests
+
+
 getOrigin : Model -> String
 getOrigin (Model model) =
     model.origin
@@ -1370,7 +1632,7 @@ getKey (Model model) =
     model.key
 
 
-getToasts : Model -> List Toast
+getToasts : Model -> List (Toast (Flow Model ()))
 getToasts (Model model) =
     model.toasts
 
@@ -1413,72 +1675,6 @@ defaultTemplateSource presets =
         |> Maybe.unwrap (CustomTemplates []) (FromPreset << Tuple.first)
 
 
-validationErrorsFor : Presets -> StepConfig -> TemplateSource -> List String
-validationErrorsFor presets stepConfig source =
-    case source of
-        FromPreset name ->
-            if Dict.member name presets then
-                []
-
-            else
-                [ "Unknown preset `" ++ name ++ "`. Pick another preset in the edit form." ]
-
-        CustomTemplates templates ->
-            case List.filter (\t -> not (Dict.member t stepConfig)) templates of
-                [] ->
-                    []
-
-                missing ->
-                    [ "Unknown templates: " ++ String.join ", " missing ++ ". Remove them in the edit form." ]
-
-
-partitionStepsByTemplate : List String -> List StepRecord -> ( Dict String (List StepRecord), List StepRecord )
-partitionStepsByTemplate effective steps =
-    let
-        ( recognized, orphans ) =
-            List.partition (\s -> List.member s.type_ effective) steps
-    in
-    ( List.foldl
-        (\step -> Dict.update step.type_ (Maybe.map ((::) step)))
-        (Dict.fromList (List.map (\t -> ( t, [] )) effective))
-        recognized
-    , orphans
-    )
-
-
-repartitionProjectSteps : Presets -> StepConfig -> ProjectRecord -> ProjectRecord
-repartitionProjectSteps presets stepConfig proj =
-    let
-        effective =
-            effectiveTemplates presets proj.templateSource
-                |> List.filter (\t -> Dict.member t stepConfig)
-
-        allSteps =
-            (Dict.values proj.tables |> List.concatMap (ApiData.withDefault [] << .records))
-                ++ proj.orphanedSteps
-
-        ( buckets, orphans ) =
-            partitionStepsByTemplate effective allSteps
-
-        newTables =
-            buckets
-                |> Dict.map
-                    (\name_ recs ->
-                        case Dict.get name_ proj.tables of
-                            Just old ->
-                                { old | records = Success recs }
-
-                            Nothing ->
-                                { initialTable | records = Success recs }
-                    )
-    in
-    { proj
-        | tables = newTables
-        , orphanedSteps = orphans
-        , validationErrors = validationErrorsFor presets stepConfig proj.templateSource
-    }
-
-
 getCommitHash : Model -> ApiData String
 getCommitHash (Model model) =
     model.commitHash
@@ -1491,12 +1687,7 @@ stepRevision model record =
 
 viewedRevision : Model -> Maybe String
 viewedRevision model =
-    case (getRoute model).page of
-        Route.Project { mCommit } ->
-            Maybe.orElse (ApiData.toMaybe (getCommitHash model)) mCommit
-
-        _ ->
-            ApiData.toMaybe (getCommitHash model)
+    Maybe.orElse (ApiData.toMaybe (getCommitHash model)) (Route.viewedCommit (getRoute model).page)
 
 
 getUserRepoInfo : Model -> ApiData UserRepoInfo
@@ -1582,9 +1773,34 @@ getAutocompleteDebounce (Model model) =
     model.autocompleteDebounce
 
 
-getChildChangeQueue : Model -> ChildChangeQueue
-getChildChangeQueue (Model model) =
-    model.childChangeQueue
+getOrganizeQueue : Model -> OrganizeQueue
+getOrganizeQueue (Model model) =
+    model.organizeQueue
+
+
+getListingSelection : Model -> Maybe ListingSelection
+getListingSelection (Model model) =
+    model.listingSelection
+
+
+getOrganizeClipboard : Model -> Maybe OrganizeClipboard
+getOrganizeClipboard (Model model) =
+    model.organizeClipboard
+
+
+getOrganizeDialog : Model -> Maybe OrganizeDialog
+getOrganizeDialog (Model model) =
+    model.organizeDialog
+
+
+getOrganizeContextMenu : Model -> Maybe OrganizeContextMenu
+getOrganizeContextMenu (Model model) =
+    model.organizeContextMenu
+
+
+getOrganizeDrag : Model -> Maybe OrganizeDrag
+getOrganizeDrag (Model model) =
+    model.organizeDrag
 
 
 getGutterDrag : Model -> Maybe GutterDrag
@@ -1607,31 +1823,16 @@ getNow (Model model) =
     model.now
 
 
-dndSystem : DnDList.System a DnDList.Msg
-dndSystem =
-    let
-        config =
-            { beforeUpdate = \_ _ list -> list
-            , movement = DnDList.Free
-            , listen = DnDList.OnDrag
-            , operation = DnDList.Rotate
-            }
-    in
-    DnDList.create config identity
+
 
 
 initialTable : Table a
 initialTable =
-    { records = NotAsked
-    , isOpen = True
-    , showHiddenRecords = False
-    , edited = Nothing
+    { edited = Nothing
     , drafts = Dict.empty
     , newDraft = Nothing
     , addMode = AddNew
     , nameEditOnly = False
-    , dnd = dndSystem.model
-    , dndAffected = []
     , selectExistingSteps = initSelectState
     , argSelectStates = Dict.empty
     , isUpdating = False
@@ -1641,6 +1842,7 @@ initialTable =
 type alias Flags =
     { origin : String
     , lastChat : Maybe String
+    , isNarrow : Bool
     }
 
 
@@ -1660,7 +1862,11 @@ type AgentTurnEvent
 initialModel : Browser.Navigation.Key -> Route -> Flags -> Model
 initialModel key route flags =
     Model
-        { projects = initialTable
+        { projects = NotAsked
+        , steps = Dict.empty
+        , projectForms = initialTable
+        , stepForms = Dict.empty
+        , listingPreferences = defaultListingPreferences
         , route = route
         , origin = flags.origin
         , key = key
@@ -1688,7 +1894,12 @@ initialModel key route flags =
         , reviewDraft = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
-        , childChangeQueue = { pending = Dict.empty, inFlight = Dict.empty, debounce = Debounce.init }
+        , organizeQueue = noOrganizeQueue
+        , listingSelection = Nothing
+        , organizeClipboard = Nothing
+        , organizeDialog = Nothing
+        , organizeContextMenu = Nothing
+        , organizeDrag = Nothing
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
@@ -1697,12 +1908,25 @@ initialModel key route flags =
         , clusterDetail = Nothing
         , runningStepIds = []
         , statusBarOpen = False
+        , sidebarOpen = not flags.isNarrow
+        , sidebarScroll = { top = False, left = False, right = False }
+        , sidebarExpanded = Set.empty
+        , projectRollups = Dict.empty
+        , projectsRequest = 0
+        , rollupRequests = Dict.empty
         }
 
 
 plainLineHeight : Int
 plainLineHeight =
     17
+
+
+type alias SidebarScroll =
+    { top : Bool
+    , left : Bool
+    , right : Bool
+    }
 
 
 type alias ScrollMetrics =
@@ -2116,53 +2340,206 @@ delimitedColumnWidth maxChars =
     max 88 ((maxChars + 2) * 9)
 
 
-updateStepRecordTable : Table StepRecord -> Table StepRecord -> Table StepRecord
-updateStepRecordTable new old =
-    let
-        mergeRecords =
-            List.foldl
-                (\oldRecord ->
-                    List.updateIf
-                        (\newRecord -> newRecord.id == oldRecord.id)
-                        (\newRecord -> { newRecord | runState = oldRecord.runState, review = Maybe.orElse newRecord.review oldRecord.review })
-                )
-
-        mergedRecords =
-            ApiData.update mergeRecords new.records old.records
-    in
-    { old | records = mergedRecords }
-
-
-updateProjectRecordList : List ProjectRecord -> List ProjectRecord -> List ProjectRecord
-updateProjectRecordList =
-    let
-        keepTableState (SubProjects new) (SubProjects old) =
-            SubProjects { old | records = new.records }
-    in
-    List.foldl
-        (\oldRecord ->
-            List.updateIf
-                (\newRecord -> newRecord.id == oldRecord.id)
-                (\newRecord ->
-                    { newRecord
-                        | tables = Dict.map (\k -> updateStepRecordTable <| Maybe.withDefault initialTable <| Dict.get k newRecord.tables) oldRecord.tables
-                        , subProjects = keepTableState newRecord.subProjects oldRecord.subProjects
-                        , hideOrphans = oldRecord.hideOrphans
+mergeSteps : Dict Int StepRecord -> Dict Int StepRecord -> Dict Int StepRecord
+mergeSteps fetched previous =
+    Dict.map
+        (\id step ->
+            case Dict.get id previous of
+                Just old ->
+                    { step
+                        | runState = old.runState
+                        , review = Maybe.orElse step.review old.review
+                        , srcFiles = old.srcFiles
+                        , srcFileDraft = old.srcFileDraft
+                        , srcFileWriting = old.srcFileWriting
                     }
-                )
+
+                Nothing ->
+                    step
         )
+        fetched
 
 
-getSortKey : BaseRecord a -> ( Int, Int, Int )
-getSortKey record =
-    ( if Maybe.isJust record.sortKey then
-        0
+mergeProjects : Dict Int ProjectRecord -> Dict Int ProjectRecord -> Dict Int ProjectRecord
+mergeProjects fetched previous =
+    Dict.map
+        (\id project ->
+            case Dict.get id previous of
+                Just old ->
+                    { project | presetSelect = old.presetSelect, templatesSelect = old.templatesSelect }
 
-      else
-        1
-    , record.sortKey |> Maybe.withDefault 0
-    , record.id |> Maybe.withDefault 2147483647
-    )
+                Nothing ->
+                    project
+        )
+        fetched
+
+
+childLinksTo : ChildKind -> Int -> Dict Int ProjectRecord -> List ( Int, ChildLink )
+childLinksTo kind id projects =
+    let
+        wanted =
+            { kind = kind, id = id }
+    in
+    Dict.foldl
+        (\parentId project acc ->
+            List.foldl
+                (\link acc_ ->
+                    if sameEntity wanted link then
+                        ( parentId, link ) :: acc_
+
+                    else
+                        acc_
+                )
+                acc
+                project.children
+        )
+        []
+        projects
+
+
+isAncestorProject : Dict Int ProjectRecord -> Int -> Int -> Bool
+isAncestorProject projects ancestorId targetId =
+    targetId /= ancestorId && Set.member targetId (descendantProjectIds projects ancestorId)
+
+
+applyTreeOp : TreeOp -> ( Dict Int ProjectRecord, Dict Int StepRecord ) -> ( Dict Int ProjectRecord, Dict Int StepRecord )
+applyTreeOp op ( projects, steps ) =
+    let
+        dense children_ =
+            List.indexedMap (\index link -> { link | sortKey = Just index }) children_
+
+        changeChildren parentId change =
+            ( Dict.update parentId (Maybe.map (\project -> { project | children = dense (change (sortChildLinks project.children)) })) projects, steps )
+
+        removeChildFromAll ref =
+            Dict.map (\_ project -> { project | children = List.filter (not << sameEntity ref) project.children }) projects
+    in
+    case op of
+        LinkOp parentId ref ->
+            changeChildren parentId
+                (\children_ ->
+                    if List.any (sameEntity ref) children_ then
+                        children_
+
+                    else
+                        children_ ++ [ childLinkOf ref ]
+                )
+
+        UnlinkOp parentId ref ->
+            changeChildren parentId (List.filter (not << sameEntity ref))
+
+        OrderOp parentId refs ->
+            changeChildren parentId
+                (\children_ ->
+                    List.filterMap (\wanted -> List.find (sameEntity wanted) children_) refs
+                        ++ List.filter (\link -> not (List.any (sameEntity link) refs)) children_
+                )
+
+        HideOp parentId ref hidden_ ->
+            changeChildren parentId
+                (List.map
+                    (\link ->
+                        if sameEntity ref link then
+                            { link | hidden = hidden_ }
+
+                        else
+                            link
+                    )
+                )
+
+        DeleteOp ref ->
+            case ref.kind of
+                StepChild ->
+                    ( removeChildFromAll ref, Dict.remove ref.id steps )
+
+                ProjectChild ->
+                    ( if ref.id == Route.rootProjectId then
+                        projects
+
+                      else
+                        Dict.remove ref.id (removeChildFromAll ref)
+                    , steps
+                    )
+
+
+applyTreeOps : List TreeOp -> ( Dict Int ProjectRecord, Dict Int StepRecord ) -> ( Dict Int ProjectRecord, Dict Int StepRecord )
+applyTreeOps ops store =
+    List.foldl applyTreeOp store ops
+
+
+invertTreeOps : ( Dict Int ProjectRecord, Dict Int StepRecord ) -> List TreeOp -> List TreeOp
+invertTreeOps before ops =
+    let
+        ( afterProjects, _ ) =
+            applyTreeOps ops before
+
+        parentOf op =
+            case op of
+                LinkOp parentId _ ->
+                    Just parentId
+
+                UnlinkOp parentId _ ->
+                    Just parentId
+
+                OrderOp parentId _ ->
+                    Just parentId
+
+                HideOp parentId _ _ ->
+                    Just parentId
+
+                DeleteOp _ ->
+                    Nothing
+
+        touchedParents =
+            List.filterMap parentOf ops
+
+        inverseFor parentId =
+            let
+                pre =
+                    Dict.get parentId (Tuple.first before) |> Maybe.unwrap [] .children
+
+                post =
+                    Dict.get parentId afterProjects |> Maybe.unwrap [] .children
+
+                removed =
+                    List.filter (\link -> not (List.any (sameEntity link) post)) pre
+
+                added =
+                    List.filter (\link -> not (List.any (sameEntity link) pre)) post
+
+                removedHiddenRestores =
+                    List.filter .hidden removed
+                        |> List.map (\link -> HideOp parentId (childRefOf link) True)
+
+                hiddenRestores =
+                    List.filterMap
+                        (\link ->
+                            List.find (sameEntity link) pre
+                                |> Maybe.filter (\old -> old.hidden /= link.hidden)
+                                |> Maybe.map (\old -> HideOp parentId (childRefOf link) old.hidden)
+                        )
+                        post
+
+                preOrder =
+                    List.map childRefOf (sortChildLinks pre)
+
+                orderChanged =
+                    preOrder /= List.map childRefOf (sortChildLinks post)
+
+                inverseOrder =
+                    if orderChanged then
+                        [ OrderOp parentId preOrder ]
+
+                    else
+                        []
+            in
+            List.map (\link -> UnlinkOp parentId (childRefOf link)) added
+                ++ List.map (\link -> LinkOp parentId (childRefOf link)) removed
+                ++ removedHiddenRestores
+                ++ hiddenRestores
+                ++ inverseOrder
+    in
+    List.concatMap inverseFor (List.reverse (List.unique touchedParents))
 
 
 type alias RunningStepSummary =
@@ -2176,15 +2553,8 @@ type alias RunningStepSummary =
 getRunningStepSummaries : Model -> List RunningStepSummary
 getRunningStepSummaries (Model model) =
     let
-        projectsList =
-            model.projects.records
-                |> ApiData.toMaybe
-                |> Maybe.withDefault []
-                |> List.sortBy getSortKey
-
-        projectSteps project =
-            Dict.values project.tables
-                |> List.concatMap (\t -> ApiData.toMaybe t.records |> Maybe.withDefault [])
+        projects =
+            ApiData.withDefault Dict.empty model.projects
 
         ingesting stepId =
             Dict.member stepId model.uploadProgress
@@ -2198,26 +2568,44 @@ getRunningStepSummaries (Model model) =
             else
                 ApiData.unwrap Nothing (.status >> ApiData.toMaybe) step.runState
 
-        stepInProject : Int -> ProjectRecord -> Maybe RunningStepSummary
-        stepInProject stepId project =
-            case List.filter (\s -> s.id == Just stepId && Maybe.unwrap True ((==) StatusRunning) (shownStatus s)) (projectSteps project) of
-                first :: _ ->
-                    project.id
-                        |> Maybe.map
-                            (\pid ->
-                                { stepId = stepId
-                                , stepName = first.name
-                                , projectId = pid
-                                , projectName = project.name
-                                }
-                            )
+        runningIds =
+            model.runningStepIds
+                ++ (Dict.filter (\_ step -> shownStatus step == Just StatusRunning) model.steps |> Dict.keys)
 
-                [] ->
-                    Nothing
+        routeProjectIds =
+            case model.route.page of
+                Route.Project params ->
+                    params.projectPath
+
+                _ ->
+                    []
+
+        containingProject stepId =
+            childLinksTo StepChild stepId projects
+                |> List.sortBy
+                    (\( parentId, _ ) ->
+                        if List.member parentId routeProjectIds then
+                            0
+
+                        else
+                            1
+                    )
+                |> List.head
+                |> Maybe.andThen (\( parentId, _ ) -> Dict.get parentId projects)
+
+        summary stepId =
+            Maybe.map2
+                (\step project ->
+                    { stepId = stepId
+                    , stepName = step.name
+                    , projectId = Maybe.withDefault Route.rootProjectId project.id
+                    , projectName = project.name
+                    }
+                )
+                (Dict.get stepId model.steps)
+                (containingProject stepId)
     in
-    (model.runningStepIds ++ List.filterMap .id (List.filter (shownStatus >> (==) (Just StatusRunning)) (List.concatMap projectSteps projectsList)))
-        |> List.unique
-        |> List.filterMap (\stepId -> List.findMap (stepInProject stepId) projectsList)
+    runningIds |> List.unique |> List.filterMap summary
 
 
 getModalConfirm : Model -> ModalConfirmConfig
@@ -2230,6 +2618,6 @@ getReviewDraft (Model model) =
     model.reviewDraft
 
 
-getSearchBox : Model -> SelectState
+getSearchBox : Model -> SelectState ChildRef
 getSearchBox (Model model) =
     model.searchBox

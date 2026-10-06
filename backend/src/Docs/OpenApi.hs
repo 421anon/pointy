@@ -23,8 +23,7 @@ import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (RenameSessionRequest, SessionRequest, TurnRequest)
-import Handlers.Projects (ProjectUpdate)
-import ProjectTree (ChildChanges, ChildRef, ChildUpdate, ProjectFields)
+import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
@@ -38,23 +37,6 @@ import Servant.Types.SourceT (SourceT)
 
 instance ToSchema DynamicJson where
     declareNamedSchema _ = pure (NamedSchema (Just "DynamicJson") (mempty & example ?~ object []))
-
-instance ToSchema ProjectUpdate where
-    declareNamedSchema _ = do
-        fieldsSchema <- declareSchemaRef (Proxy :: Proxy ProjectFields)
-        pure
-            ( NamedSchema
-                (Just "ProjectUpdate")
-                ( mempty
-                    & type_ ?~ OpenApiObject
-                    & required .~ ["id", "record"]
-                    & properties
-                        .~ fromList
-                            [ ("id", Inline (mempty & type_ ?~ OpenApiInteger))
-                            , ("record", fieldsSchema)
-                            ]
-                )
-            )
 
 instance ToSchema ProjectFields where
     declareNamedSchema _ =
@@ -72,23 +54,25 @@ instance ToSchema ChildRef where
                 & oneOf ?~ [childSchema "step" [("id", integerField)], childSchema "project" [("id", integerField)]]
                 & description ?~ "A step or project child of a project."
 
-instance ToSchema ChildUpdate where
-    declareNamedSchema _ =
-        pure . NamedSchema (Just "ChildUpdate") $
-            mempty
-                & oneOf ?~ [childSchema "step" updateFields, childSchema "project" updateFields]
-                & description ?~ "A child reference plus the fields to set on its entry. An absent field is left unchanged; a null sortKey clears it."
-      where
-        updateFields = [("id", integerField), ("hidden", Inline (mempty & type_ ?~ OpenApiBoolean)), ("sortKey", nullableField OpenApiInteger)]
-
-instance ToSchema ChildChanges where
+instance ToSchema TreeOp where
     declareNamedSchema _ = do
-        updateSchema <- declareSchemaRef (Proxy :: Proxy ChildUpdate)
+        fieldsSchema <- declareSchemaRef (Proxy :: Proxy ProjectFields)
         refSchema <- declareSchemaRef (Proxy :: Proxy ChildRef)
-        pure . NamedSchema (Just "ChildChanges") $
+        pure . NamedSchema (Just "TreeOp") $
             mempty
                 & type_ ?~ OpenApiObject
-                & properties .~ fromList [("update", arrayOf updateSchema), ("remove", arrayOf refSchema)]
+                & required .~ ["op"]
+                & properties
+                    .~ fromList
+                        [ ("op", Inline (mempty & type_ ?~ OpenApiString & description ?~ "One of update, link, unlink, order, hide, delete."))
+                        , ("project", integerField)
+                        , ("parent", integerField)
+                        , ("child", refSchema)
+                        , ("children", arrayOf refSchema)
+                        , ("hidden", Inline (mempty & type_ ?~ OpenApiBoolean))
+                        , ("fields", fieldsSchema)
+                        ]
+                & description ?~ "One project tree operation: update {project,fields}; link or unlink {parent,child}; order {parent,children}; hide {parent,child,hidden}; delete {child}."
 
 instance {-# OVERLAPPING #-} ToSchema (SourceT IO BS.ByteString) where
     declareNamedSchema _ =

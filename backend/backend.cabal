@@ -37,7 +37,7 @@ library
     Handlers.Download
     Handlers.IngestStream
     Handlers.Presets
-    Handlers.ProjectEntities
+    Handlers.ProjectReads
     Handlers.Projects
     Handlers.RunStep
     Handlers.Scratch
@@ -63,7 +63,9 @@ library
     Certificates
     CertificateStore
     Processes
+    ProjectFiles
     ProjectTree
+    RollupCache
     Sse
     Storage
     UserRepo
@@ -324,6 +326,8 @@ test-suite project-tree
     , backend
     , base
     , bytestring
+    , containers
+    , vector
 
   hs-source-dirs:   test
   default-language: Haskell2010

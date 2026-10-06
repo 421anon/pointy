@@ -10,17 +10,23 @@ module Agent.Sandbox (
     piAgentConfigDir,
     runnerEnvironment,
     runnerConfigArgs,
+    agentMemoryMax,
+    prepareAgentCgroup,
+    sandboxProcess,
 ) where
 
 import Agent.Session (AgentSession (..))
-import Data.Maybe (fromMaybe)
+import Config (AgentConfig (..))
+import Data.List (stripPrefix)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import NixStore (NixStore (..), nixStore)
 import Storage (scratchDirectory)
-import System.Directory (doesFileExist, doesPathExist, getHomeDirectory)
-import System.Environment (getEnvironment)
+import System.Directory (createDirectoryIfMissing, doesFileExist, doesPathExist, getHomeDirectory)
+import System.Environment (getEnvironment, lookupEnv)
 import System.FilePath (takeDirectory, (</>))
+import System.Process (CreateProcess, proc)
 
 nixCompatSocket :: FilePath
 nixCompatSocket = "/run/nix-daemon-socket"
@@ -125,3 +131,31 @@ runnerConfigArgs expand = strip
         | otherwise = expand arg : strip rest
     managedWithValue = ["--mode", "--session", "--fork"]
     managedFlags = ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"]
+
+agentMemoryMax :: IO (Maybe Text)
+agentMemoryMax = fmap T.pack <$> lookupEnv "POINTY_AGENT_MEMORY_MAX"
+
+agentCgroup :: IO FilePath
+agentCgroup = do
+    membership <- lines <$> readFile "/proc/self/cgroup"
+    case mapMaybe (stripPrefix "0::") membership of
+        [ownCgroup] -> return ("/sys/fs/cgroup" ++ takeDirectory ownCgroup </> "agents")
+        _ -> ioError (userError "the backend is not running in a cgroup v2 hierarchy")
+
+prepareAgentCgroup :: IO ()
+prepareAgentCgroup = agentMemoryMax >>= mapM_ limitAgents
+  where
+    limitAgents memoryMax = do
+        cgroup <- agentCgroup
+        writeFile (takeDirectory cgroup </> "cgroup.subtree_control") "+memory"
+        createDirectoryIfMissing False cgroup
+        writeFile (cgroup </> "memory.max") (T.unpack memoryMax)
+
+sandboxProcess :: AgentConfig -> [String] -> IO CreateProcess
+sandboxProcess cfg args = do
+    memoryMax <- agentMemoryMax
+    case memoryMax of
+        Nothing -> return (proc (agentSboxCommand cfg) args)
+        Just _ -> do
+            cgroup <- agentCgroup
+            return (proc "bash" (["-c", "echo $$ > \"$0/cgroup.procs\" && exec \"$@\"", cgroup, agentSboxCommand cfg] ++ args))

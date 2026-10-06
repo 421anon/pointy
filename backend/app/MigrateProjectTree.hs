@@ -12,7 +12,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as V
 import GHC.IO.Encoding (setLocaleEncoding, utf8)
-import Handlers.Projects (jsonToNix)
+import ProjectFiles (jsonToNix)
 import Processes (cli)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory, makeAbsolute)
 import System.Environment (getArgs)

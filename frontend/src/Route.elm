@@ -9,6 +9,7 @@ module Route exposing
     , Page(..)
     , ProjectParams
     , Route
+    , backToHead
     , chat
     , chatHref
     , formatLineRange
@@ -19,16 +20,18 @@ module Route exposing
     , href
     , navigationTarget
     , page
+    , pageCommit
     , pathProjectId
     , project
     , projectPage
     , rootProjectId
     , routeUrlIso
     , toString
+    , viewedCommit
+    , viewedCommitT
     )
 
-
-import Accessors exposing (Iso, Lens, Prism, iso, lens, prism)
+import Accessors exposing (Iso, Lens, Prism, Traversal, iso, lens, prism, traversal)
 import Html
 import Html.Attributes as Attr
 import List.Extra as List
@@ -150,6 +153,85 @@ project =
 rootProjectId : Int
 rootProjectId =
     0
+
+
+pageCommit : Traversal Page (Maybe String) x y
+pageCommit =
+    traversal ".pageCommit"
+        (\page_ ->
+            case page_ of
+                Project params ->
+                    [ params.mCommit ]
+
+                _ ->
+                    []
+        )
+        (\f page_ ->
+            case page_ of
+                Project params ->
+                    Project { params | mCommit = f params.mCommit }
+
+                other ->
+                    other
+        )
+
+
+viewedCommit : Page -> Maybe String
+viewedCommit page_ =
+    case page_ of
+        Project params ->
+            params.mCommit
+
+        Artifact params ->
+            Just params.commit
+
+        NotFound _ ->
+            Nothing
+
+
+viewedCommitT : Traversal Page String x y
+viewedCommitT =
+    traversal ".viewedCommit"
+        (\page_ ->
+            case page_ of
+                Project params ->
+                    Maybe.toList params.mCommit
+
+                Artifact params ->
+                    [ params.commit ]
+
+                NotFound _ ->
+                    []
+        )
+        (\f page_ ->
+            case page_ of
+                Project params ->
+                    Project { params | mCommit = Maybe.map f params.mCommit }
+
+                Artifact params ->
+                    Artifact { params | commit = f params.commit }
+
+                NotFound _ ->
+                    page_
+        )
+
+
+backToHead : Page -> Page
+backToHead page_ =
+    case page_ of
+        Project params ->
+            Project { params | mCommit = Nothing }
+
+        Artifact params ->
+            Project
+                { projectPath = params.projectPath
+                , mHighlight = Just { id = params.stepId, target = Output, path = params.path, range = Nothing }
+                , mCommit = Nothing
+                , mCompare = Nothing
+                }
+
+        NotFound _ ->
+            page_
 
 
 pathProjectId : List Int -> Int
@@ -581,9 +663,6 @@ compareTargetQueryParts prefix compareTarget =
     , Maybe.map (\commit -> prefix ++ "Commit=" ++ Url.percentEncode commit) compareTarget.commit
     , Maybe.map (\mimeType -> prefix ++ "Mime=" ++ Url.percentEncode mimeType) compareTarget.mimeType
     ]
-
-
-
 
 
 chatFromQuery : Maybe String -> Maybe ChatRef

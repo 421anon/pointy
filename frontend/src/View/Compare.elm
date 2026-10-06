@@ -5,7 +5,7 @@ import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Dict exposing (Dict)
-import Extra.Accessors exposing (by, remkT)
+import Extra.Accessors exposing (remkT)
 import Flow exposing (Flow)
 import Grid
 import Html exposing (Html)
@@ -16,7 +16,7 @@ import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), Model, StepRecord)
-import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, fileDelimitedGrid, gridState, projectStep, projects, records)
+import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, fileDelimitedGrid, gridState, projectRecordById, stepRecordById)
 import Model.Shadow as Shadow exposing (Field, StepArgValue(..), Widget(..))
 import Route exposing (Route)
 import View.Icons exposing (icon)
@@ -45,11 +45,11 @@ selectionLabel : Model -> CompareSelection -> String
 selectionLabel model sel =
     let
         projectName =
-            try (projects << records << success << by .id (Just (Route.pathProjectId sel.projectPath))) model
+            try (projectRecordById (Route.pathProjectId sel.projectPath)) model
                 |> Maybe.unwrap "" .name
 
         stepName =
-            try (projectStep (Just (Route.pathProjectId sel.projectPath)) (Just sel.recordId)) model
+            try (stepRecordById sel.recordId) model
                 |> Maybe.unwrap "" .name
     in
     ([ projectName, stepName ] ++ sel.path)
@@ -83,7 +83,7 @@ viewDialogContent model d =
                 , Html.text (selectionLabel model d.right)
                 ]
             , Html.button
-                [ class "icon-btn compare-dialog-close"
+                [ class "icon-btn"
                 , Html.Attributes.title "Close comparison"
                 , Html.Events.onClick (Actions.closeDialog "compare-dialog")
                 ]
@@ -150,7 +150,7 @@ viewPaneHeader model sel hasParams inspectOpen toggle =
         , Html.div [ class "compare-pane-actions" ]
             [ viewInspectButton hasParams inspectOpen toggle
             , Html.button
-                [ class "dir-item-icon-btn compare-pane-source-btn"
+                [ class "dir-item-icon-btn"
                 , Html.Attributes.title "Open source in project"
                 , Html.Events.onClick (openSource sel)
                 ]
@@ -182,7 +182,7 @@ viewInspectButton hasParams inspectOpen toggle =
 
 derivationParamsFor : Model -> CompareSelection -> Maybe ( StepRecord, List Field )
 derivationParamsFor model sel =
-    try (projectStep (Just (Route.pathProjectId sel.projectPath)) (Just sel.recordId)) model
+    try (stepRecordById sel.recordId) model
         |> Maybe.andThen
             (\step ->
                 Model.getStepConfig model
@@ -211,7 +211,7 @@ viewInlineParams model sel inspectOpen mParams =
             (\( step, fields ) ->
                 Html.div [ class "compare-params" ]
                     [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
-                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model (Route.pathProjectId sel.projectPath) step.args fields)
+                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model step.args fields)
                     ]
             )
             mParams
@@ -226,12 +226,12 @@ viewNote note =
         [ viewParamRow "Note" (Html.text note) ]
 
 
-viewNamedArgs : Model -> Int -> Dict String StepArgValue -> List Field -> List (Html (Flow Model ()))
-viewNamedArgs model projectId values fields =
+viewNamedArgs : Model -> Dict String StepArgValue -> List Field -> List (Html (Flow Model ()))
+viewNamedArgs model values fields =
     List.map
         (\f ->
             viewParamRow (Maybe.unwrap f.name identity f.label)
-                (viewArgValue model projectId f.widget (Dict.get f.name values))
+                (viewArgValue model f.widget (Dict.get f.name values))
         )
         fields
 
@@ -244,8 +244,8 @@ viewParamRow label valueHtml =
         ]
 
 
-viewArgValue : Model -> Int -> Widget -> Maybe StepArgValue -> Html (Flow Model ())
-viewArgValue model projectId widget_ mValue =
+viewArgValue : Model -> Widget -> Maybe StepArgValue -> Html (Flow Model ())
+viewArgValue model widget_ mValue =
     case ( widget_, mValue ) of
         ( WText _, Just (TStringValue s) ) ->
             orEmptyValue s (Html.text s)
@@ -266,38 +266,44 @@ viewArgValue model projectId widget_ mValue =
             Html.text (String.fromInt n)
 
         ( WCheckbox, Just (TBoolValue b) ) ->
-            Html.text (if b then "true" else "false")
+            Html.text
+                (if b then
+                    "true"
+
+                 else
+                    "false"
+                )
 
         ( WStep _, Just (TStepValue stepId) ) ->
-            Html.text (stepNameOf model projectId stepId)
+            Html.text (stepNameOf model stepId)
 
         ( WSelect options, Just (TEnumValue v) ) ->
             Html.text (Maybe.withDefault v (Dict.get v (Dict.fromList options)))
 
         ( WTokens _, Just (TListValue vs) ) ->
-            viewValueList model projectId (WText Nothing) vs
+            viewValueList model (WText Nothing) vs
 
         ( WList element, Just (TListValue vs) ) ->
-            viewValueList model projectId element vs
+            viewValueList model element vs
 
         ( WSteps artifact_, Just (TListValue vs) ) ->
-            viewValueList model projectId (WStep artifact_) vs
+            viewValueList model (WStep artifact_) vs
 
         ( WRecord fields, Just (TRecordValue dict) ) ->
-            Html.div [ class "compare-param-record" ] (viewNamedArgs model projectId dict fields)
+            Html.div [ class "compare-param-record" ] (viewNamedArgs model dict fields)
 
         _ ->
             emptyValue
 
 
-viewValueList : Model -> Int -> Widget -> List StepArgValue -> Html (Flow Model ())
-viewValueList model projectId widget_ values =
+viewValueList : Model -> Widget -> List StepArgValue -> Html (Flow Model ())
+viewValueList model widget_ values =
     if List.isEmpty values then
         emptyValue
 
     else
         Html.ul [ class "compare-param-list" ]
-            (List.map (\v -> Html.li [] [ viewArgValue model projectId widget_ (Just v) ]) values)
+            (List.map (\v -> Html.li [] [ viewArgValue model widget_ (Just v) ]) values)
 
 
 orEmptyValue : String -> Html (Flow Model ()) -> Html (Flow Model ())
@@ -314,9 +320,9 @@ emptyValue =
     Html.span [ class "compare-param-empty" ] [ Html.text "—" ]
 
 
-stepNameOf : Model -> Int -> Int -> String
-stepNameOf model projectId stepId =
-    try (projectStep (Just projectId) (Just stepId)) model
+stepNameOf : Model -> Int -> String
+stepNameOf model stepId =
+    try (stepRecordById stepId) model
         |> Maybe.unwrap ("#" ++ String.fromInt stepId) .name
 
 

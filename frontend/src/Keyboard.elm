@@ -1,17 +1,19 @@
 module Keyboard exposing
     ( Binding
     , Combination
+    , Key(..)
     , Modifier(..)
     , arrowDown
     , arrowUp
     , backspace
-    , ctrlC
     , decodeCombinations
+    , delete
     , enter
     , escape
     , keyName
     , mapBindingMsg
     , modName
+    , primary
     , simpleCombinations
     , space
     , toName
@@ -45,8 +47,12 @@ type Key
     | ArrowDown
     | Tab
     | Backspace
+    | Delete
     | KeyA
     | KeyC
+    | KeyV
+    | KeyX
+    | KeyZ
     | KeyK
     | KeyN
     | KeyR
@@ -56,6 +62,7 @@ type Modifier
     = Alt
     | Shift
     | Ctrl
+    | Meta
 
 
 decodeCombinations : List ( Combination, Decoder msg ) -> Decoder msg
@@ -73,12 +80,14 @@ toName (Combination mods key) =
     String.join "-" <| List.map modName mods ++ [ keyName key ]
 
 
+primary : Key -> List Combination
+primary key =
+    [ Combination [ Ctrl ] key, Combination [ Meta ] key ]
 
 
-
-ctrlC : Combination
-ctrlC =
-    Combination [ Ctrl ] KeyC
+delete : Combination
+delete =
+    Combination [] Delete
 
 
 arrowUp : Combination
@@ -111,9 +120,6 @@ escape =
     Combination [] Escape
 
 
-
-
-
 toCode : Key -> Int
 toCode key =
     case key of
@@ -138,11 +144,23 @@ toCode key =
         Backspace ->
             8
 
+        Delete ->
+            46
+
         KeyA ->
             65
 
         KeyC ->
             67
+
+        KeyV ->
+            86
+
+        KeyX ->
+            88
+
+        KeyZ ->
+            90
 
         KeyK ->
             75
@@ -178,11 +196,23 @@ keyName key =
         Backspace ->
             "⌫"
 
+        Delete ->
+            "Del"
+
         KeyA ->
             "A"
 
         KeyC ->
             "C"
+
+        KeyV ->
+            "V"
+
+        KeyX ->
+            "X"
+
+        KeyZ ->
+            "Z"
 
         KeyK ->
             "K"
@@ -199,6 +229,9 @@ modName mod =
     case mod of
         Ctrl ->
             "Ctrl"
+
+        Meta ->
+            "Cmd"
 
         Alt ->
             "Alt"
@@ -218,6 +251,9 @@ modifierToPname mod =
 
         Ctrl ->
             ctrlPname
+
+        Meta ->
+            metaPname
 
 
 allModifierPnames : List String

@@ -24,13 +24,12 @@ import Data.Text (Text)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, (:>))
 import Effects (AppEffects, Eval, ingestDirectory)
-import Handlers.Projects (jsonToNix)
+import ProjectFiles (jsonToNix, stepFilePath)
 import Handlers.StepReview (ensureStepsUnreviewed)
 import Ingest (IngestResult (..), storeRefName)
 import qualified IngestBus
 import Certificates (withWriteRepoTransaction)
 import System.Directory (removeDirectoryRecursive)
-import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
 import UserRepo (WriteRepoContext (..), commitAndPushChanges, runNixEvalImpureJsonExpr)
 
@@ -92,7 +91,7 @@ discardDirectory directory = removeDirectoryRecursive directory `catchIOError` \
 
 updateStepNixFile :: (Eval :> es, IOE :> es) => WriteRepoContext -> Int -> Text -> ExceptT String (Eff es) ()
 updateStepNixFile (WriteRepoContext worktreePath) stepId hash = do
-    let nixFilePath = worktreePath </> "steps" </> show stepId ++ ".nix"
+    let nixFilePath = stepFilePath worktreePath stepId
         nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in orig // { args = orig.args // { uploaded = (orig.args.uploaded or {}) // { hash = \"" <> hash <> "\"; }; }; }"
 
     output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)

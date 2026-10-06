@@ -15,19 +15,21 @@ module Interpreters.Fixture (
 ) where
 
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
+import Control.Monad (filterM)
 import Data.Aeson (object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as Key
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, Eval (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
-import Fixture.Document (FixtureDocument (..), appliedAnswer, derivationAnswer, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
+import Fixture.Document (FixtureDocument (..), appliedAnswer, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobsEnded)
 import Processes (cli)
 
@@ -85,15 +87,14 @@ evalNixJson state expression = do
 
 runNixFixture :: (IOE :> es) => FixtureState -> Eff (Nix : es) a -> Eff es a
 runNixFixture state = interpret $ \_ -> \case
-    PathValid path -> liftIO $ do
-        exists <- doesPathExist path
-        pure (exists || path `elem` documentValidPaths (fixtureDocument state))
+    PathValid path -> liftIO (fixturePathValid (fixtureDocument state) path)
     RunNixCli args -> liftIO $ do
         answerNix (fixtureDocument state) args
-    RunNixStoreCli args -> pure $ case args of
-        ["--query", "--references", drv] -> storePathsAnswer "references" (documentReferences (fixtureDocument state)) drv
-        ["--query", "--outputs", drv] -> storePathsAnswer "outputs" (documentOutputs (fixtureDocument state)) drv
-        _ -> (ExitFailure 1, "", "fixture: unsupported nix-store invocation: " ++ unwords args)
+    RunNixStoreCli args -> case args of
+        ("--realise" : "--dry-run" : paths) -> liftIO (dryRunAnswer (fixtureDocument state) paths)
+        ["--query", "--references", drv] -> pure (storePathsAnswer "references" (documentReferences (fixtureDocument state)) drv)
+        ["--query", "--outputs", drv] -> pure (storePathsAnswer "outputs" (documentOutputs (fixtureDocument state)) drv)
+        _ -> pure (ExitFailure 1, "", "fixture: unsupported nix-store invocation: " ++ unwords args)
     RegisterGcRoot _ _ -> pure ()
     IngestDirectory _ _ _ -> pure (Left "fixture: the ingest program is not available")
     ProbeMimeType path -> liftIO $ do
@@ -113,6 +114,8 @@ answerNix document args = case args of
         Nothing -> (ExitFailure 1, "", "fixture: no derivation recorded for " ++ path)
     ("--offline" : "path-info" : "--json" : paths) | not (null paths) ->
         pure (ExitSuccess, pathInfoJson document paths, "")
+    ("derivation" : "show" : paths) | not (null paths) ->
+        pure (ExitSuccess, derivationShowJson document paths, "")
     _ -> pure (ExitFailure 1, "", "fixture: unsupported nix invocation: " ++ unwords args)
   where
     logFor drv = do
@@ -125,6 +128,37 @@ storePathsAnswer :: String -> Map.Map FilePath [FilePath] -> FilePath -> (ExitCo
 storePathsAnswer label recorded drv = case Map.lookup drv recorded of
     Just paths -> (ExitSuccess, unlines paths, "")
     Nothing -> (ExitFailure 1, "", "fixture: no " ++ label ++ " recorded for " ++ drv)
+
+dryRunAnswer :: FixtureDocument -> [FilePath] -> IO (ExitCode, String, String)
+dryRunAnswer document drvs = do
+    unbuilt <- filterM (fmap not . derivationBuilt document) drvs
+    pure (ExitSuccess, "", buildPlan unbuilt)
+  where
+    buildPlan [] = ""
+    buildPlan [drv] = unlines ["this derivation will be built:", "  " ++ drv]
+    buildPlan unbuilt = unlines (("these " ++ show (length unbuilt) ++ " derivations will be built:") : map ("  " ++) unbuilt)
+
+derivationBuilt :: FixtureDocument -> FilePath -> IO Bool
+derivationBuilt document drv = case derivationOutputs document drv of
+    [] -> pure False
+    outputs -> and <$> mapM (fixturePathValid document) outputs
+
+fixturePathValid :: FixtureDocument -> FilePath -> IO Bool
+fixturePathValid document path = (|| path `elem` documentValidPaths document) <$> doesPathExist path
+
+derivationShowJson :: FixtureDocument -> [FilePath] -> String
+derivationShowJson document paths =
+    T.unpack . TE.decodeUtf8 . LBS.toStrict . A.encode $
+        object
+            [ Key.fromText (T.pack drv) .= object ["outputs" .= outputsOf drv, "inputDrvs" .= object []]
+            | drv <- mapMaybe deriverOf paths
+            ]
+  where
+    deriverOf path
+        | path `elem` Map.elems (documentDerivations document) = Just path
+        | otherwise = derivationAnswer document path
+    outputsOf drv = object [Key.fromText name .= object ["path" .= output] | (name, output) <- zip outputNames (derivationOutputs document drv)]
+    outputNames = "out" : ["out" <> T.pack (show n) | n <- [2 :: Int ..]]
 
 pathInfoJson :: FixtureDocument -> [FilePath] -> String
 pathInfoJson document paths =

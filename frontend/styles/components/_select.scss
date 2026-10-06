@@ -40,7 +40,8 @@
     cursor: pointer;
     color: var(--text-primary);
 
-    &.active {
+    &.active,
+    &:hover {
         background-color: var(--bg-hover);
     }
 }

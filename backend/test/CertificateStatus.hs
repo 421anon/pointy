@@ -2,7 +2,7 @@
 
 module Main (main) where
 
-import BuildLog (buildStepStore, rawStatusesBatched)
+import BuildLog (buildStepStore, rawStatusesBatched, resolveStatusesBatched)
 import BuildRunner (BuildKey (..), buildKeyForOutPath)
 import BuildStatus (checkStatus, resolveStepStatus)
 import Certificates (rawStatusesFor)
@@ -53,12 +53,13 @@ main = do
     hPutStr logHandle recordedLog
     hClose logHandle
     refreshState <- newFixtureState (refreshDocument logPath)
-    (refreshStatuses, _) <- runFixture refreshState (rawStatusesFor refreshCertificates)
+    (refreshStatuses, refreshStore) <- runFixture refreshState (rawStatusesFor refreshCertificates)
     assertEqual
         "refresh probe reports raw statuses"
         ( Map.fromList
             [ (176, ("not-started", Nothing))
             , (177, ("not-started", Nothing))
+            , (178, ("success", Nothing))
             ]
         )
         refreshStatuses
@@ -66,6 +67,16 @@ main = do
         "refresh probe leaves the recorded log unresolved"
         (Just ("not-started", Nothing))
         (Map.lookup 176 refreshStatuses)
+    batchedResolved <- runFixture refreshState (resolveStatusesBatched refreshStore refreshStatuses)
+    assertEqual
+        "batched statuses resolve the recorded log"
+        ( Map.fromList
+            [ (176, ("failure", Just (T.pack recordedLog)))
+            , (177, ("not-started", Nothing))
+            , (178, ("success", Nothing))
+            ]
+        )
+        batchedResolved
     resolved <-
         runFixture refreshState $
             resolveStepStatus (Just (T.unpack loggedCertificate)) (176, ("not-started", Nothing))
@@ -104,11 +115,18 @@ loggedCertificateDrv = "/nix/store/55555555555555555555555555555555-pointy-certi
 unloggedCertificateDrv :: FilePath
 unloggedCertificateDrv = "/nix/store/66666666666666666666666666666666-pointy-certificate-177.drv"
 
+builtCertificate :: Text
+builtCertificate = "/nix/store/77777777777777777777777777777777-pointy-certificate-178"
+
+builtCertificateDrv :: FilePath
+builtCertificateDrv = "/nix/store/88888888888888888888888888888888-pointy-certificate-178.drv"
+
 refreshCertificates :: Map.Map Int Text
 refreshCertificates =
     Map.fromList
         [ (176, loggedCertificate)
         , (177, unloggedCertificate)
+        , (178, builtCertificate)
         ]
 
 recordedLog :: String
@@ -137,10 +155,12 @@ document =
 refreshDocument :: FilePath -> FixtureDocument
 refreshDocument logPath =
     document
-        { documentDerivations =
+        { documentValidPaths = [T.unpack builtCertificate]
+        , documentDerivations =
             Map.fromList
                 [ (T.unpack loggedCertificate, loggedCertificateDrv)
                 , (T.unpack unloggedCertificate, unloggedCertificateDrv)
+                , (T.unpack builtCertificate, builtCertificateDrv)
                 ]
         , documentLogs = Map.fromList [(loggedCertificateDrv, logPath)]
         }

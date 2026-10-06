@@ -41,7 +41,8 @@ type alias Resolver =
 
 
 type alias Sources =
-    { projects : List ProjectRecord
+    { projects : Dict.Dict Int ProjectRecord
+    , steps : Dict.Dict Int Model.StepRecord
     , route : Route
     , stepConfig : StepConfig
     }
@@ -49,14 +50,15 @@ type alias Sources =
 
 sources : Model -> Sources
 sources model =
-    { projects = ApiData.withDefault [] (Model.getProjects model).records
+    { projects = ApiData.withDefault Dict.empty (Model.getProjects model)
+    , steps = Model.getSteps model
     , route = Model.getRoute model
     , stepConfig = ApiData.withDefault Dict.empty (Model.getStepConfig model)
     }
 
 
-resolver : List ProjectRecord -> Route -> StepConfig -> String -> Resolver
-resolver projects route stepConfig raw =
+resolver : Sources -> String -> Resolver
+resolver sources_ raw =
     let
         candidateStepIds =
             Regex.find digitsRegex raw
@@ -68,16 +70,16 @@ resolver projects route stepConfig raw =
                 Dict.empty
 
             else
-                Actions.stepLocations (\stepId -> Set.member stepId candidateStepIds) projects
+                Actions.stepLocations (\stepId -> Set.member stepId candidateStepIds) sources_.projects sources_.steps
 
         currentPath =
-            try (Route.page << Lenses.projectRoute << Lenses.projectPath) route
+            try (Route.page << Lenses.projectRoute << Lenses.projectPath) sources_.route
 
         openProjectId =
             Maybe.map Route.pathProjectId currentPath
 
         canonicalPath =
-            Model.canonicalProjectPath (Maybe.withDefault [] currentPath) projects
+            Model.canonicalProjectPath (Maybe.withDefault [] currentPath) sources_.projects
     in
     \entityId fixed candidates ->
         let
@@ -107,12 +109,12 @@ resolver projects route stepConfig raw =
                     |> Maybe.map
                         (\location ->
                             resolved (Actions.stepOutputRoute (canonicalPath location.projectId) stepId)
-                                (mentionRunAction stepConfig stepId location)
+                                (mentionRunAction sources_.stepConfig stepId location)
                                 (Just location.step.name)
                         )
 
             ProjectId projectId ->
-                List.find (\project -> project.id == Just projectId) projects
+                Dict.get projectId sources_.projects
                     |> Maybe.map (\project -> resolved (Actions.projectPageRoute (canonicalPath projectId)) Nothing (Just project.name))
 
 
@@ -155,13 +157,13 @@ namePrefixLength nameTokens candidates =
 
 
 mentionRunAction : StepConfig -> Int -> Actions.StepLocation -> Maybe (Flow Model ())
-mentionRunAction stepConfig stepId { projectId, step } =
+mentionRunAction stepConfig stepId { step } =
     Dict.get step.type_ stepConfig
         |> Maybe.andThen
             (\entry ->
                 let
                     spec =
-                        Specs.stepsInProject projectId step.type_ entry
+                        Specs.steps step.type_ entry
                 in
                 case TableSpec.getStatus spec step |> ApiData.toMaybe of
                     Just Model.StatusSuccess ->
@@ -175,9 +177,9 @@ mentionRunAction stepConfig stepId { projectId, step } =
             )
 
 
-toHtml : List ProjectRecord -> Route -> StepConfig -> String -> List (Html (Flow Model ()))
-toHtml projects route stepConfig raw =
-    Markdown.toHtml (viewText (resolver projects route stepConfig raw)) raw
+toHtml : Sources -> String -> List (Html (Flow Model ()))
+toHtml sources_ raw =
+    Markdown.toHtml (viewText (resolver sources_ raw)) raw
 
 
 digitsRegex : Regex

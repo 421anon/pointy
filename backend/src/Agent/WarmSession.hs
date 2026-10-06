@@ -8,7 +8,7 @@ module Agent.WarmSession (
 ) where
 
 import Agent.Policy (renderEmbeddedBootstrapPrompt)
-import Agent.Sandbox (SandboxPaths (..), bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerEnvironment)
+import Agent.Sandbox (SandboxPaths (..), agentMemoryMax, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerEnvironment, sandboxProcess)
 import Agent.Session (agentSessionsRoot)
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
@@ -40,7 +40,6 @@ import System.Process (
     ProcessHandle,
     StdStream (..),
     createProcess,
-    proc,
     waitForProcess,
  )
 import UserRepo (runGitIn, userRepoPath)
@@ -87,7 +86,8 @@ getOrBuildWarmSession cfg baseCommit onProcessStarted = do
     if T.null configuredPrompt
         then return Nothing
         else do
-            let bootstrapPrompt = renderEmbeddedBootstrapPrompt configuredPrompt
+            memoryMax <- agentMemoryMax
+            let bootstrapPrompt = renderEmbeddedBootstrapPrompt memoryMax configuredPrompt
             existing <- loadWarmMeta
             case existing of
                 Just meta | warmBaseCommit meta == baseCommit && warmBootstrapPrompt meta == bootstrapPrompt -> do
@@ -175,8 +175,9 @@ runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessS
                 ++ nixBind
                 ++ ["--"]
                 ++ runnerArgs
-        process =
-            (proc (agentSboxCommand cfg) args)
+    sandbox <- sandboxProcess cfg args
+    let process =
+            sandbox
                 { cwd = Just worktreeDir
                 , env = Just runnerEnv
                 , std_in = CreatePipe
