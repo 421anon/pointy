@@ -225,9 +225,25 @@ createStep mSourceId spec record =
             Flow.forAll (stepConfig << success << Dict.Accessors.at (TableSpec.getName spec) << just)
                 (\entry ->
                     callApi void (Api.createStep (Just projectId) mSourceId entry.stepType record)
-                        |> FlowError.andThen (finishCreate spec)
+                        |> FlowError.andThen (showCreatedStep spec projectId)
                 )
         )
+
+
+showCreatedStep : StepSpec -> Int -> StepRecord -> Flow Model StepRecord
+showCreatedStep spec projectId created =
+    Maybe.unwrap (Flow.pure ())
+        (\stepId ->
+            Flow.modify
+                (over steps (Dict.insert stepId created)
+                    >> over store (Model.applyTreeOps [ LinkOp projectId (ChildRef StepChild stepId) ])
+                )
+        )
+        created.id
+        |> Flow.seq (endRecordEdit (TableSpec.getLens spec))
+        |> Flow.seq (Flow.async (refetchCommitHash |> Flow.seq replayStepStatusBuffer))
+        |> Flow.seq (Flow.async loadProjects)
+        |> Flow.return created
 
 
 organizeDebounceConfig : Debounce.Config (Flow Model ())
@@ -903,26 +919,28 @@ upsertRecord spec createNew saveExisting =
     Flow.get
         |> Flow.andThen
             (\model ->
-                Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
-                    |> Flow.assertJust
-                    |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == LinkExisting)
-                    |> Flow.andThen
-                        (\( edited_, addMode_ ) ->
-                            case ( edited_.id, addMode_ ) of
-                                ( Nothing, AddNew ) ->
-                                    createNew edited_
+                Flow.when (try (lens << isUpdating) model /= Just True) <|
+                    (Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
+                        |> Flow.assertJust
+                        |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == LinkExisting)
+                        |> Flow.andThen
+                            (\( edited_, addMode_ ) ->
+                                case ( edited_.id, addMode_ ) of
+                                    ( Nothing, AddNew ) ->
+                                        Flow.setting (lens << isUpdating) (createNew edited_)
 
-                                ( Nothing, LinkExisting ) ->
-                                    Flow.forAll currentProjectId
-                                        (\parentId ->
-                                            linkExistingRecords parentId (all (lens << selectExistingSteps << selected << each << itemRef << just) model)
-                                                |> Flow.seq (Flow.setAll (lens << selectExistingSteps << selected) [])
-                                                |> Flow.seq (endRecordEdit lens)
-                                        )
+                                    ( Nothing, LinkExisting ) ->
+                                        Flow.forAll currentProjectId
+                                            (\parentId ->
+                                                linkExistingRecords parentId (all (lens << selectExistingSteps << selected << each << itemRef << just) model)
+                                                    |> Flow.seq (Flow.setAll (lens << selectExistingSteps << selected) [])
+                                                    |> Flow.seq (endRecordEdit lens)
+                                            )
 
-                                ( Just recordId, _ ) ->
-                                    saveExisting model recordId edited_
-                        )
+                                    ( Just recordId, _ ) ->
+                                        saveExisting model recordId edited_
+                            )
+                    )
             )
 
 
@@ -951,16 +969,23 @@ upsertStep spec =
                             try (stepRecordById stepId << srcFiles) model
                                 |> Maybe.unwrap [] (Model.srcFileChangePaths [])
 
-                        originalArgs =
+                        definitionChanged =
                             try (stepRecordById stepId << args) model
+                                /= Just edited_.args
+                                || not (List.isEmpty srcFilePaths)
 
-                        argsChanged =
-                            originalArgs /= Just edited_.args
+                        downstream =
+                            if definitionChanged then
+                                Model.downstreamStepIds stepId (get steps model)
+                                    |> Set.filter (\id -> try (stepRecordById id << review) model == Just Nothing)
+
+                            else
+                                Set.empty
 
                         mergeFn r =
                             { edited_
                                 | runState =
-                                    if argsChanged then
+                                    if definitionChanged then
                                         ApiData.loading Nothing
 
                                     else
@@ -974,9 +999,45 @@ upsertStep spec =
                             saveSrcFileChanges stepId srcFilePaths
                                 |> Flow.return ()
                     in
-                    saveExistingRecordWith saveSrcFiles (stepRecordById stepId) edited_ mergeFn spec
+                    invalidateStepStatuses downstream
+                        |> Flow.seq (saveExistingRecordWith saveSrcFiles (stepRecordById stepId) edited_ mergeFn spec)
+                        |> Flow.andThen (\saved -> Flow.when definitionChanged (recheckStepStatuses saved stepId downstream))
                 )
         )
+
+
+invalidateStepStatuses : Set Int -> Flow Model ()
+invalidateStepStatuses stepIds =
+    Flow.modify
+        (\model ->
+            Set.foldl (\stepId -> set (stepRecordById stepId << runState) (ApiData.loading Nothing)) model stepIds
+        )
+
+
+recheckStepStatuses : Bool -> Int -> Set Int -> Flow Model ()
+recheckStepStatuses saved stepId downstream =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    parentsOf id =
+                        List.map Tuple.first (Model.Lib.entityParents model StepChild id)
+
+                    ( rechecked, broadcastByServer ) =
+                        if saved then
+                            ( downstream, Set.fromList (parentsOf stepId) )
+
+                        else
+                            ( Set.insert stepId downstream, Set.empty )
+
+                    projectIds =
+                        Set.diff (Set.fromList (List.concatMap parentsOf (Set.toList rechecked))) broadcastByServer
+                in
+                Set.foldl
+                    (\projectId acc -> acc |> Flow.seq (Flow.async (requestProjectStatus projectId Nothing)))
+                    (Flow.pure ())
+                    projectIds
+            )
 
 
 endRecordEdit : A_Traversal Model (Table (BaseRecord a)) -> Flow Model ()
@@ -1000,12 +1061,12 @@ endRecordEdit lens =
             )
 
 
-saveExistingRecord : A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model ()
+saveExistingRecord : A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
 saveExistingRecord =
     saveExistingRecordWith (Flow.pure ())
 
 
-saveExistingRecordWith : Flow Model () -> A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model ()
+saveExistingRecordWith : Flow Model () -> A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
 saveExistingRecordWith beforeRequest storeRecord record mergeFn spec =
     let
         clearUpdating =
@@ -1028,7 +1089,7 @@ saveExistingRecordWith beforeRequest storeRecord record mergeFn spec =
         |> Flow.seq beforeRequest
         |> Flow.seq
             (callApi void (Api.saveRecord spec record)
-                |> FlowError.foldResult (always clearUpdating) (always clearUpdating)
+                |> FlowError.foldResult (\_ -> clearUpdating |> Flow.return True) (\_ -> clearUpdating |> Flow.return False)
             )
 
 
