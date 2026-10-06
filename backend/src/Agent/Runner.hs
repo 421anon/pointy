@@ -20,7 +20,7 @@ module Agent.Runner (
     watchTurnBudget,
 ) where
 
-import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
 import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
 import Agent.Session (
@@ -50,7 +50,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait, withAsync)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
-import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, takeTMVar, tryPutTMVar, writeTVar)
+import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, stateTVar, takeTMVar, tryPutTMVar)
 import Control.Exception (IOException, SomeException, catch, displayException, finally, fromException, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
@@ -148,10 +148,7 @@ retireTurn sid tid = do
         modifyTVar' waitingSteers $ Map.delete sid
 
 takeStopRequest :: Text -> STM Bool
-takeStopRequest tid = do
-    pending <- readTVar stopRequestedTurns
-    writeTVar stopRequestedTurns (Set.delete tid pending)
-    return (Set.member tid pending)
+takeStopRequest tid = stateTVar stopRequestedTurns (\pending -> (Set.member tid pending, Set.delete tid pending))
 
 budgetPollMicros :: Int
 budgetPollMicros = 1000000
@@ -351,7 +348,8 @@ setRunningAutoApply client enabled = do
     forM_ running $ \sid -> do
         session_ <- ExceptT $ loadSessionById sid
         when (autoApplyClient session_ == Just client) $
-            liftIO $ saveSession session_{autoApply = enabled}
+            liftIO $
+                saveSession session_{autoApply = enabled}
 
 stopAgentTurn :: Text -> ExceptT String IO AgentSessionView
 stopAgentTurn sid = do
@@ -426,7 +424,7 @@ nameChat cfg session_ logPath prompt =
         >>= either (note "Could not name this chat: ") store
   where
     store title =
-        Except.runExceptT (nameUnnamedAgentSession (sessionId session_) title)
+        withUserRepoExclusiveIO (nameUnnamedAgentSession (sessionId session_) title)
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
@@ -487,10 +485,10 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
         args =
             map expand (agentSboxArgs cfg)
                 ++ bindPath (worktreePath session_)
-                ++ concatMap bindPathReadOnly readOnlySteps
                 ++ warmBindArgs
                 ++ bindPathReadOnly repoPath
                 ++ concatMap bindPath conflictWorktrees
+                ++ concatMap bindPathReadOnly readOnlySteps
                 ++ nixBind
                 ++ ["--", "bash", "-lc", wrapperScript, "pointy-agent-runner"]
                 ++ runnerArgs
@@ -967,28 +965,27 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
                             liftIO $ noteDiscardedConflict cfg (turnLogPath turn) updated resolvedSession
                             return resolvedSession
                     touched <- liftIO $ touchSession finalized
-                    liftIO $ saveSession touched
+                    nextError <$ liftIO (saveSession touched)
                 ) ::
-                IO (Either SomeException (Either String ()))
+                IO (Either SomeException (Either String (Maybe Text)))
     finishResult <- finalizeWithRetry cfg turn 1 attemptFinalization
     case finishResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
         Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
-        Right (Right _) -> when (finalStatus == "succeeded") $ do
-            autoApplied <- applyTurnChanges cfg turn
+        Right (Right turnWarning) -> when (finalStatus == "succeeded") $ do
+            autoApplyOn <- applyTurnChanges cfg turn turnWarning
             stoppedWhileApplying <- atomically $ takeStopRequest (turnId turn)
-            when (autoApplied && not stoppedWhileApplying) $ startAutomaticFix cfg turn
+            when (autoApplyOn && not stoppedWhileApplying) $ startAutomaticFix cfg turn
     now <- getCurrentTime
     let finalTurn = turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}
     saveResult <- try (saveTurn finalTurn) :: IO (Either SomeException ())
     case saveResult of
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Turn finalization error: " <> T.pack (show ex))
         Right _ -> return ()
-    signalTurnLog (turnLogPath turn)
     unregisterTurnSignal (turnLogPath turn)
 
-applyTurnChanges :: AgentConfig -> AgentTurn -> IO Bool
-applyTurnChanges cfg turn = do
+applyTurnChanges :: AgentConfig -> AgentTurn -> Maybe Text -> IO Bool
+applyTurnChanges cfg turn turnWarning = do
     result <- try (withUserRepoExclusiveIO applyWhenEnabled) :: IO (Either SomeException (Either String Bool))
     either (\ex -> False <$ logFailure (displayException ex)) (either (\err -> False <$ logFailure err) return) result
   where
@@ -996,7 +993,7 @@ applyTurnChanges cfg turn = do
     applyWhenEnabled = do
         session_ <- ExceptT $ loadSessionById sid
         when (autoApply session_) $
-            applyAgentChanges (AutomaticApply announce) sid `Except.catchError` (liftIO . logFailure)
+            applyAgentChanges (AutomaticApply announce turnWarning) sid `Except.catchError` (liftIO . logFailure)
         return (autoApply session_)
     logSystem = appendLogLine cfg (turnLogPath turn) "system"
     announce = logSystem . ("changeset-applying " <>) . jsonLine
@@ -1017,13 +1014,13 @@ beginAutomaticFix sid fixedTurnId = do
     session_ <- ExceptT $ loadSessionById sid
     turns_ <- liftIO $ listTurns sid
     let automaticInARow = length (takeWhile turnAutomatic (sortOn (Down . turnStartedAt) turns_))
-    when (status session_ `elem` ["evaluation_failed", "prepare_conflict"] && automaticInARow < automaticFixLimit) $
+    when (status session_ `elem` ["evaluation_failed", "prepare_conflict"] && (isNothing fixedTurnId || automaticInARow < automaticFixLimit)) $
         void $
             beginAgentTurn session_ automaticFixPrompt Nothing (AutomaticFix fixedTurnId)
 
 applySessionChanges :: Text -> Bool -> Maybe Text -> ExceptT String IO ()
 applySessionChanges sid enabled client = do
-    session_ <- ExceptT $ loadSessionById sid
+    session_ <- requireEditableSession sid
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
     liftIO $ saveSession session_{autoApply = enabled, autoApplyClient = client}

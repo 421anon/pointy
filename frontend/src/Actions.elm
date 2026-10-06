@@ -632,8 +632,7 @@ loadPresets =
 
 reloadWorkspaceData : Flow Model ()
 reloadWorkspaceData =
-    Flow.over projects ApiData.toLoading
-        |> Flow.seq (Flow.over commitHash ApiData.toLoading)
+    Flow.over commitHash ApiData.toLoading
         |> Flow.seq loadStepConfig
         |> Flow.seq loadPresets
         |> Flow.seq loadProjects
@@ -3093,6 +3092,7 @@ handleAgentSessionResult sessionId result =
                                                         Flow.when (atBottom && entriesBefore /= selectedChatEntries after) scrollAgentChatToBottom
                                                     )
                                             )
+                                        |> Flow.seq (watchAgentTurn view)
                                         |> Flow.seq watchSelectedAgentTurn
                                 )
                     )
@@ -3612,36 +3612,27 @@ setAgentAutoApply : Bool -> Flow Model ()
 setAgentAutoApply enabled =
     syncAgentAutoApply enabled
         |> Flow.seq (callJs "storeAutoApply" Encode.bool (Decode.succeed ()) enabled)
-        |> Flow.seq
-            (Flow.forAll agent
-                (\agentState ->
-                    AgentApi.setAutoApply agentState
-                        |> FlowError.foldResult (\() -> Flow.pure ())
-                            (\err -> addToast False ("Couldn't update the turns already running: " ++ Http.errorMessage err))
-                )
-            )
+        |> Flow.seq (Flow.forAll agent AgentApi.setAutoApply)
+        |> FlowError.foldResult Flow.pure (Http.errorMessage >> (++) "Couldn't update the turns already running: " >> addToast False)
 
 
 syncAgentAutoApply : Bool -> Flow Model ()
-syncAgentAutoApply enabled =
-    Flow.over agent (\agentState -> { agentState | autoApply = enabled })
+syncAgentAutoApply =
+    Flow.setAll (agent << autoApply)
 
 
 applyAgentChanges : String -> Flow Model ()
 applyAgentChanges sessionId =
-    Flow.forAll agent
-        (\agentState ->
-            withAgentSessionRequest sessionId
-                (Model.ApplyingAgentChanges sessionId)
-                (AgentApi.applyChanges agentState sessionId
-                    |> FlowError.foldResult
-                        (\view ->
-                            Flow.over agent (applyAgentSessionView view)
-                                |> Flow.seq (watchAgentTurn view)
-                                |> Flow.seq (Flow.when (not view.gitState.hasAgentCommits) reloadWorkspaceData)
-                        )
-                        (\err -> addToast False (Http.errorMessage err))
+    withAgentSessionRequest sessionId
+        (Model.ApplyingAgentChanges sessionId)
+        (Flow.forAll agent (AgentApi.applyChanges sessionId)
+            |> FlowError.foldResult
+                (\view ->
+                    Flow.over agent (applyAgentSessionView view)
+                        |> Flow.seq (watchAgentTurn view)
+                        |> Flow.seq (Flow.when (not view.gitState.hasAgentCommits) (Flow.async reloadWorkspaceData))
                 )
+                (Http.errorMessage >> addToast False >> Flow.seq (refreshAgentSession sessionId))
         )
 
 
@@ -3649,10 +3640,10 @@ discardAgentChanges : String -> Flow Model ()
 discardAgentChanges sessionId =
     withAgentSessionRequest sessionId
         (Model.DiscardingAgentChanges sessionId)
-        (AgentApi.discardChanges sessionId
+        (AgentApi.discardSession sessionId
             |> FlowError.foldResult
-                (\view -> Flow.over agent (applyAgentSessionView view))
-                (\err -> addToast False (Http.errorMessage err))
+                (applyAgentSessionView >> Flow.over agent)
+                (Http.errorMessage >> addToast False >> Flow.seq (refreshAgentSession sessionId))
         )
 
 
@@ -3709,13 +3700,7 @@ sendAgentTurn view promptSource =
                         )
                     |> Flow.seq clearAgentPrompt
                     |> Flow.seq scrollAgentChatToBottom
-                    |> Flow.seq
-                        (Flow.get
-                            |> Flow.andThen
-                                (\model ->
-                                    AgentApi.sendTurn (Model.getAgent model) sessionId prompt (try currentProjectId model)
-                                )
-                        )
+                    |> Flow.seq (Flow.forAll agent (AgentApi.sendTurn sessionId prompt >> Flow.try currentProjectId))
                     |> FlowError.foldResult
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
@@ -3858,12 +3843,9 @@ onAgentTurnIn value =
                 )
 
         Ok (Model.AgentTurnDone sessionId) ->
-            Flow.try (agent << liveTurnAt sessionId << just << applying << just)
-                (\applyingDiff ->
-                    Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
-                        |> Flow.seq (refreshAgentSession sessionId)
-                        |> Flow.seq (Flow.when (applyingDiff /= Nothing) reloadWorkspaceData)
-                )
+            Flow.whenHas (agent << liveTurnAt sessionId << just << applying << just) (always (Flow.async reloadWorkspaceData))
+                |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId << just << finished) True)
+                |> Flow.seq (refreshAgentSession sessionId)
 
         Ok Model.AgentTurnHeartbeat ->
             Flow.pure ()

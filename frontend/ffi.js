@@ -269,7 +269,9 @@ export function agentClientId() {
   const created = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("");
-  localStorage.setItem("agent:clientId", created);
+  try {
+    localStorage.setItem("agent:clientId", created);
+  } catch {}
   return created;
 }
 

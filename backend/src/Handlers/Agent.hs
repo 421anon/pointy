@@ -5,19 +5,19 @@
 module Handlers.Agent (
     TurnRequest (..),
     SessionRequest (..),
+    RenameSessionRequest (..),
     ApplyRequest (..),
     AutoApplyRequest (..),
-    RenameSessionRequest (..),
     createSessionHandler,
     getSessionHandler,
     listSessionsHandler,
     postTurnHandler,
-    applyChangesHandler,
-    discardChangesHandler,
-    autoApplyHandler,
     stopTurnHandler,
     steerTurnHandler,
     turnLogStreamHandler,
+    applyChangesHandler,
+    autoApplyHandler,
+    discardSessionHandler,
     archiveSessionHandler,
     renameSessionHandler,
     purgeSessionHandler,
@@ -77,6 +77,18 @@ instance FromJSON SessionRequest where
     parseJSON = withObject "SessionRequest" $ \obj ->
         SessionRequest <$> obj .: "sessionId"
 
+data RenameSessionRequest = RenameSessionRequest
+    { renameSessionId :: Text
+    , renameSessionName :: Text
+    }
+    deriving (Show, Eq, Generic)
+
+instance FromJSON RenameSessionRequest where
+    parseJSON = withObject "RenameSessionRequest" $ \obj ->
+        RenameSessionRequest
+            <$> obj .: "sessionId"
+            <*> obj .: "name"
+
 data ApplyRequest = ApplyRequest
     { applyRequestSessionId :: Text
     , applyRequestAutoApply :: Bool
@@ -103,18 +115,6 @@ instance FromJSON AutoApplyRequest where
             <$> obj .: "clientId"
             <*> obj .: "autoApply"
 
-data RenameSessionRequest = RenameSessionRequest
-    { renameSessionId :: Text
-    , renameSessionName :: Text
-    }
-    deriving (Show, Eq, Generic)
-
-instance FromJSON RenameSessionRequest where
-    parseJSON = withObject "RenameSessionRequest" $ \obj ->
-        RenameSessionRequest
-            <$> obj .: "sessionId"
-            <*> obj .: "name"
-
 createSessionHandler :: Handler AgentSessionView
 createSessionHandler = do
     sid <- runLockedAction createAgentSession
@@ -130,22 +130,6 @@ postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
     runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
 
-applyChangesHandler :: ApplyRequest -> Handler AgentSessionView
-applyChangesHandler req = do
-    let sid = applyRequestSessionId req
-    runLockedAction (applySessionChanges sid (applyRequestAutoApply req) (applyRequestClientId req))
-    runSharedAction (loadAgentSessionView sid)
-
-discardChangesHandler :: SessionRequest -> Handler AgentSessionView
-discardChangesHandler req = do
-    let sid = sessionRequestSessionId req
-    runLockedAction (discardAgentSession sid)
-    runSharedAction (loadAgentSessionView sid)
-
-autoApplyHandler :: AutoApplyRequest -> Handler NoContent
-autoApplyHandler req =
-    NoContent <$ runLockedAction (setRunningAutoApply (autoApplyRequestClientId req) (autoApplyRequestEnabled req))
-
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =
     runAgentAction $ stopAgentTurn (sessionRequestSessionId req)
@@ -153,6 +137,22 @@ stopTurnHandler req =
 steerTurnHandler :: TurnRequest -> Handler NoContent
 steerTurnHandler req =
     NoContent <$ runAgentAction (steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req))
+
+applyChangesHandler :: ApplyRequest -> Handler AgentSessionView
+applyChangesHandler req = do
+    let sid = applyRequestSessionId req
+    runLockedAction (applySessionChanges sid (applyRequestAutoApply req) (applyRequestClientId req))
+    runSharedAction (loadAgentSessionView sid)
+
+autoApplyHandler :: AutoApplyRequest -> Handler NoContent
+autoApplyHandler req =
+    NoContent <$ runLockedAction (setRunningAutoApply (autoApplyRequestClientId req) (autoApplyRequestEnabled req))
+
+discardSessionHandler :: SessionRequest -> Handler AgentSessionView
+discardSessionHandler req = do
+    let sid = sessionRequestSessionId req
+    _ <- runLockedAction (discardAgentSession sid)
+    runSharedAction (loadAgentSessionView sid)
 
 renameSessionHandler :: RenameSessionRequest -> Handler AgentSessionView
 renameSessionHandler req = do

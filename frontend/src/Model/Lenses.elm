@@ -943,6 +943,11 @@ applying =
     lens ".applying" .applying (\t applying_ -> { t | applying = applying_ })
 
 
+autoApply : Lens ls { a | autoApply : b } b x y
+autoApply =
+    lens ".autoApply" .autoApply (\t autoApply_ -> { t | autoApply = autoApply_ })
+
+
 sessionAt : String -> Traversal AgentState AgentSessionSummary x y
 sessionAt sessionId =
     sessions << orElseT success ApiData.reloading << by (.session >> .sessionId) sessionId

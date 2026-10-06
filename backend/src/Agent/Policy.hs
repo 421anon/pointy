@@ -47,7 +47,7 @@ renderEmbeddedBootstrapPrompt memoryMax configuredPrompt =
                , "Reviewed steps cannot be changed: their steps/<id>.nix and srcFiles/<id>/ are read-only."
                , "Before ending a turn that edits steps/<id>.nix or projects/<id>.nix, run `nix-instantiate --parse <file>` on each edited file and fix any error it reports."
                , "Every bash command without an explicit `timeout` is stopped after 120 seconds and returns the output it produced so far. Set `timeout` in seconds when you expect a command to run longer, and expect a search through /nix/store, /data or the git history to be stopped at that limit: narrow it with a path, -maxdepth, or a name pattern instead of scanning everything."
-               , "Use this sandbox to inspect files and to check logic on small inputs: a sample of reads, a `LIMIT`, one region of a BAM. Never run a full step workload here, such as an alignment, a merge, a DuckDB query over whole BAM or FASTQ files, or a script over a full dataset. Finish the step file instead and ask the user to run the step once your changeset is applied at the end of this turn; read its build log and outputs afterwards. A step run is a Slurm job that gets the memory and CPUs the step requests, such as a duckdb step's `memoryLimit`."
+               , "Use this sandbox to inspect files and to check logic on small inputs: a sample of reads, a `LIMIT`, one region of a BAM. Never run a full step workload here, such as an alignment, a merge, a DuckDB query over whole BAM or FASTQ files, or a script over a full dataset. Finish the step file instead, ask the user to run the step once your changeset is applied, and read its build log and outputs afterwards. A step run is a Slurm job that gets the memory and CPUs the step requests, such as a duckdb step's `memoryLimit`."
                , "Keep scratch files and DuckDB `temp_directory` under $HOME, not /tmp: /tmp is held in memory."
                ]
             ++ maybe [] memoryCapLines memoryMax
@@ -76,16 +76,16 @@ renderCurrentProject projectId =
         ]
 
 promptWithEvaluationFailure :: Text -> Text -> Text
-promptWithEvaluationFailure failures request =
+promptWithEvaluationFailure failures prompt =
     T.unlines
         ( "The backend refused to apply your last changeset:"
             : map ("- " <>) (filter (not . T.null) (T.lines failures))
             ++ ["Fix these problems so the changeset can be applied.", ""]
         )
-        <> request
+        <> prompt
 
 promptWithApplyConflict :: Text -> FilePath -> Text -> Text -> Text
-promptWithApplyConflict target applyWorktree conflictSummary request =
+promptWithApplyConflict target applyWorktree conflictSummary prompt =
     T.unlines
         ( [ "Your changeset cannot be applied: `" <> target <> "` gained commits that conflict with it."
           , "The apply worktree " <> T.pack applyWorktree <> " holds the latest `" <> target <> "` with your changeset merged in. Git state:"
@@ -98,7 +98,7 @@ promptWithApplyConflict target applyWorktree conflictSummary request =
                , ""
                ]
         )
-        <> request
+        <> prompt
 
 userMessage :: Text -> Text
 userMessage = ("User message:\n" <>)

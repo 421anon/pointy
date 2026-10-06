@@ -3,7 +3,7 @@ module Api.Agent exposing
     , archive
     , createSession
     , delete_
-    , discardChanges
+    , discardSession
     , fetchSession
     , listSessions
     , renameSession
@@ -77,8 +77,8 @@ autoApplyFields setting =
     ]
 
 
-sendTurn : AutoApplySetting a -> String -> String -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn setting sessionId prompt mCurrentProjectId =
+sendTurn : String -> String -> AutoApplySetting a -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt setting mCurrentProjectId =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
@@ -110,13 +110,13 @@ steer sessionId prompt =
             }
 
 
-applyChanges : AutoApplySetting a -> String -> Flow s (Result Http.Error Model.AgentSessionView)
-applyChanges setting sessionId =
+applyChanges : String -> AutoApplySetting a -> Flow s (Result Http.Error Model.AgentSessionView)
+applyChanges sessionId setting =
     postSessionView "/apply" (Encode.object (( "sessionId", Encode.string sessionId ) :: autoApplyFields setting))
 
 
-discardChanges : String -> Flow s (Result Http.Error Model.AgentSessionView)
-discardChanges sessionId =
+discardSession : String -> Flow s (Result Http.Error Model.AgentSessionView)
+discardSession sessionId =
     postSessionView "/discard" (sessionIdBody sessionId)
 
 

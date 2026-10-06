@@ -92,7 +92,7 @@
   --auto-apply-on: var(--state-info);
 }
 
-.agent-panel__auto-apply-icon {
+.agent-panel__auto-apply .agent-panel__auto-apply-icon {
   display: none;
   font-size: 16px;
 }
@@ -128,10 +128,6 @@
     background: #fff;
     transform: translateX(12px);
   }
-}
-
-.agent-panel__hidden-text {
-  @include mixins.visually-hidden;
 }
 
 .agent-panel .icon-btn {
@@ -663,7 +659,9 @@
 }
 
 .agent-panel__changeset-code {
-  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .agent-panel__changeset-diff {
@@ -679,17 +677,6 @@
   white-space: pre-wrap;
   font-family: monospace;
   font-size: var(--font-size-sm);
-}
-
-.agent-panel__changeset-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs);
-}
-
-.agent-panel__changeset-actions .small-btn,
-.agent-panel__changeset-actions .small-btn:disabled {
-  background: var(--bg-elevated);
 }
 
 .agent-panel__changeset-count {
@@ -751,6 +738,17 @@
 .agent-panel__changeset-tag {
   color: var(--text-muted);
   font-weight: 400;
+}
+
+.agent-panel__changeset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.agent-panel__changeset-actions .small-btn,
+.agent-panel__changeset-actions .small-btn:disabled {
+  background: var(--bg-elevated);
 }
 
 .agent-panel__chat-turn {
@@ -1248,7 +1246,7 @@
   }
 
   @container (max-width: 355px) {
-    .agent-panel__auto-apply-icon {
+    .agent-panel__auto-apply .agent-panel__auto-apply-icon {
       display: inline-block;
     }
 
@@ -1275,5 +1273,18 @@
 @media (prefers-reduced-motion: reduce) {
   .agent-panel__chat-cursor {
     animation: none;
+  }
+
+  .agent-panel__auto-apply-track,
+  .agent-panel__auto-apply-track::after {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .agent-panel__auto-apply-track::after,
+  .agent-panel__auto-apply[aria-checked="true"] .agent-panel__auto-apply-track::after {
+    forced-color-adjust: none;
+    background: CanvasText;
   }
 }

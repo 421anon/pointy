@@ -175,6 +175,10 @@ instance ToSchema SessionRequest where
     declareNamedSchema _ =
         pure $ objectSchema "SessionRequest" [("sessionId", stringField)]
 
+instance ToSchema RenameSessionRequest where
+    declareNamedSchema _ =
+        pure $ objectSchema "RenameSessionRequest" [("sessionId", stringField), ("name", stringField)]
+
 instance ToSchema ApplyRequest where
     declareNamedSchema _ =
         pure $
@@ -184,10 +188,6 @@ instance ToSchema ApplyRequest where
 instance ToSchema AutoApplyRequest where
     declareNamedSchema _ =
         pure $ objectSchema "AutoApplyRequest" [("clientId", stringField), ("autoApply", booleanField)]
-
-instance ToSchema RenameSessionRequest where
-    declareNamedSchema _ =
-        pure $ objectSchema "RenameSessionRequest" [("sessionId", stringField), ("name", stringField)]
 
 instance ToSchema LineOffset where
     declareNamedSchema _ = declareNamedSchema (Proxy :: Proxy Int)

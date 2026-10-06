@@ -139,27 +139,6 @@ type AgentTurnEndpoint =
         :> ReqBody '[JSON] TurnRequest
         :> Post '[JSON] AgentTurn
 
-type ApplyChanges =
-    "agent"
-        :> "apply"
-        :> Description "Applies the agent's changes that are not applied yet. When the apply is refused, a turn starts that fixes the changes."
-        :> ReqBody '[JSON] ApplyRequest
-        :> Post '[JSON] AgentSessionView
-
-type DiscardChanges =
-    "agent"
-        :> "discard"
-        :> Description "Discards the agent's changes that are not applied yet."
-        :> ReqBody '[JSON] SessionRequest
-        :> Post '[JSON] AgentSessionView
-
-type SetAutoApply =
-    "agent"
-        :> "auto-apply"
-        :> Description "Sets whether the changes of the agent turns running now are applied when they end."
-        :> ReqBody '[JSON] AutoApplyRequest
-        :> PostNoContent
-
 type StopTurn =
     "agent"
         :> "stop"
@@ -173,6 +152,27 @@ type SteerTurn =
         :> Description "Sends steering input to the agent turn running in a session."
         :> ReqBody '[JSON] TurnRequest
         :> PostNoContent
+
+type ApplyChanges =
+    "agent"
+        :> "apply"
+        :> Description "Applies the agent's changes that are not applied yet. When the apply is refused, a turn starts that fixes the changes."
+        :> ReqBody '[JSON] ApplyRequest
+        :> Post '[JSON] AgentSessionView
+
+type SetAutoApply =
+    "agent"
+        :> "auto-apply"
+        :> Description "Sets whether the changes of the running agent turns that this client started are applied when they end."
+        :> ReqBody '[JSON] AutoApplyRequest
+        :> PostNoContent
+
+type DiscardSession =
+    "agent"
+        :> "discard"
+        :> Description "Discards the agent's changes that are not applied yet."
+        :> ReqBody '[JSON] SessionRequest
+        :> Post '[JSON] AgentSessionView
 
 type ArchiveSession =
     "agent"
@@ -485,12 +485,12 @@ type API =
         :<|> ListAgentSessions
         :<|> GetAgentSession
         :<|> AgentTurnEndpoint
-        :<|> ApplyChanges
-        :<|> DiscardChanges
-        :<|> SetAutoApply
         :<|> StopTurn
         :<|> SteerTurn
         :<|> AgentTurnStream
+        :<|> ApplyChanges
+        :<|> SetAutoApply
+        :<|> DiscardSession
         :<|> ArchiveSession
         :<|> RenameSession
         :<|> DeleteSession
