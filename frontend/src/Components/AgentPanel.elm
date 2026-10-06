@@ -679,7 +679,7 @@ viewSession mentionsAwaited mentionSources agent summary sessionView =
             else
                 let
                     changesetActions =
-                        if applyingDiff == Nothing then
+                        if applyingDiff == Nothing && not runnerActive then
                             [ viewChangesetActions sessionId (agentSessionBlocked sessionId agent) agent.request ]
 
                         else
@@ -1290,7 +1290,7 @@ viewQuestionSubmit sessionId answerBlocked question =
 
 
 pendingChangeset : Model.AgentState -> Bool -> Maybe String -> Model.AgentSessionView -> Maybe Model.ChatChangeset
-pendingChangeset agent runnerActive applyingDiff { session, gitState } =
+pendingChangeset agent runnerActive applyingDiff ({ session, gitState } as sessionView) =
     let
         changeset state diff =
             Just { state = state, description = changesetDescription agent runnerActive session state, diff = diff }
@@ -1307,7 +1307,7 @@ pendingChangeset agent runnerActive applyingDiff { session, gitState } =
                 changeset Model.ChatChangesetApplying gitState.branchDiff
 
             else
-                changeset (unappliedState session) gitState.branchDiff
+                changeset (unappliedState sessionView) gitState.branchDiff
 
 
 changesetDescription : Model.AgentState -> Bool -> Model.AgentSession -> Model.ChatChangesetState -> String
@@ -1346,8 +1346,8 @@ changesetDescription agent runnerActive session state =
             ""
 
 
-unappliedState : Model.AgentSession -> Model.ChatChangesetState
-unappliedState session =
+unappliedState : Model.AgentSessionView -> Model.ChatChangesetState
+unappliedState { session, turns } =
     case session.status of
         "prepare_conflict" ->
             Model.ChatChangesetConflicted
@@ -1356,7 +1356,11 @@ unappliedState session =
             Model.ChatChangesetRejected
 
         _ ->
-            Model.ChatChangesetPending
+            if List.any (\turn -> turn.turnAutomatic && Just turn.turnId == session.activeTurnId) turns then
+                Model.ChatChangesetRejected
+
+            else
+                Model.ChatChangesetPending
 
 
 viewChangesetActions : String -> Bool -> Maybe Model.AgentRequest -> Html (Flow Model ())
