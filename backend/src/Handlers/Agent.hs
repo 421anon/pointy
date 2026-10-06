@@ -5,11 +5,16 @@
 module Handlers.Agent (
     TurnRequest (..),
     SessionRequest (..),
+    ApplyRequest (..),
+    AutoApplyRequest (..),
     RenameSessionRequest (..),
     createSessionHandler,
     getSessionHandler,
     listSessionsHandler,
     postTurnHandler,
+    applyChangesHandler,
+    discardChangesHandler,
+    autoApplyHandler,
     stopTurnHandler,
     steerTurnHandler,
     turnLogStreamHandler,
@@ -24,17 +29,18 @@ import Agent.Git (
     AgentUsage,
     archiveAgentSession,
     createAgentSession,
+    discardAgentSession,
     getAgentUsage,
     listAgentSessions,
     loadAgentSessionView,
     purgeAgentSession,
     renameAgentSession,
  )
-import Agent.Runner (startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
+import Agent.Runner (applySessionChanges, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
+import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as TL
@@ -48,6 +54,8 @@ data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
     , turnRequestPrompt :: Text
     , turnRequestCurrentProjectId :: Maybe Int
+    , turnRequestAutoApply :: Bool
+    , turnRequestClientId :: Maybe Text
     }
     deriving (Show, Eq, Generic)
 
@@ -57,6 +65,8 @@ instance FromJSON TurnRequest where
             <$> obj .: "sessionId"
             <*> obj .: "prompt"
             <*> obj .:? "currentProjectId"
+            <*> obj .:? "autoApply" .!= True
+            <*> obj .:? "clientId"
 
 data SessionRequest = SessionRequest
     { sessionRequestSessionId :: Text
@@ -66,6 +76,32 @@ data SessionRequest = SessionRequest
 instance FromJSON SessionRequest where
     parseJSON = withObject "SessionRequest" $ \obj ->
         SessionRequest <$> obj .: "sessionId"
+
+data ApplyRequest = ApplyRequest
+    { applyRequestSessionId :: Text
+    , applyRequestAutoApply :: Bool
+    , applyRequestClientId :: Maybe Text
+    }
+    deriving (Show, Eq, Generic)
+
+instance FromJSON ApplyRequest where
+    parseJSON = withObject "ApplyRequest" $ \obj ->
+        ApplyRequest
+            <$> obj .: "sessionId"
+            <*> obj .: "autoApply"
+            <*> obj .:? "clientId"
+
+data AutoApplyRequest = AutoApplyRequest
+    { autoApplyRequestClientId :: Text
+    , autoApplyRequestEnabled :: Bool
+    }
+    deriving (Show, Eq, Generic)
+
+instance FromJSON AutoApplyRequest where
+    parseJSON = withObject "AutoApplyRequest" $ \obj ->
+        AutoApplyRequest
+            <$> obj .: "clientId"
+            <*> obj .: "autoApply"
 
 data RenameSessionRequest = RenameSessionRequest
     { renameSessionId :: Text
@@ -92,7 +128,23 @@ getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+
+applyChangesHandler :: ApplyRequest -> Handler AgentSessionView
+applyChangesHandler req = do
+    let sid = applyRequestSessionId req
+    runLockedAction (applySessionChanges sid (applyRequestAutoApply req) (applyRequestClientId req))
+    runSharedAction (loadAgentSessionView sid)
+
+discardChangesHandler :: SessionRequest -> Handler AgentSessionView
+discardChangesHandler req = do
+    let sid = sessionRequestSessionId req
+    runLockedAction (discardAgentSession sid)
+    runSharedAction (loadAgentSessionView sid)
+
+autoApplyHandler :: AutoApplyRequest -> Handler NoContent
+autoApplyHandler req =
+    NoContent <$ runLockedAction (setRunningAutoApply (autoApplyRequestClientId req) (autoApplyRequestEnabled req))
 
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =

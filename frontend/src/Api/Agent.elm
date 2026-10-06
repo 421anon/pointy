@@ -1,11 +1,14 @@
 module Api.Agent exposing
-    ( archive
+    ( applyChanges
+    , archive
     , createSession
     , delete_
+    , discardChanges
     , fetchSession
     , listSessions
     , renameSession
     , sendTurn
+    , setAutoApply
     , steer
     , stop
     , turnEvent
@@ -63,18 +66,31 @@ fetchSession sessionId =
             }
 
 
-sendTurn : String -> String -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt mCurrentProjectId =
+type alias AutoApplySetting a =
+    { a | autoApply : Bool, clientId : String }
+
+
+autoApplyFields : AutoApplySetting a -> List ( String, Encode.Value )
+autoApplyFields setting =
+    [ ( "autoApply", Encode.bool setting.autoApply )
+    , ( "clientId", Encode.string setting.clientId )
+    ]
+
+
+sendTurn : AutoApplySetting a -> String -> String -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn setting sessionId prompt mCurrentProjectId =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
             , body =
                 Http.jsonBody <|
                     Encode.object
-                        [ ( "sessionId", Encode.string sessionId )
-                        , ( "prompt", Encode.string prompt )
-                        , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
-                        ]
+                        ([ ( "sessionId", Encode.string sessionId )
+                         , ( "prompt", Encode.string prompt )
+                         , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
+                         ]
+                            ++ autoApplyFields setting
+                        )
             , expect = Http.expectJson identity turnDecoder
             }
 
@@ -90,6 +106,26 @@ steer sessionId prompt =
                         [ ( "sessionId", Encode.string sessionId )
                         , ( "prompt", Encode.string prompt )
                         ]
+            , expect = Http.expectWhatever identity
+            }
+
+
+applyChanges : AutoApplySetting a -> String -> Flow s (Result Http.Error Model.AgentSessionView)
+applyChanges setting sessionId =
+    postSessionView "/apply" (Encode.object (( "sessionId", Encode.string sessionId ) :: autoApplyFields setting))
+
+
+discardChanges : String -> Flow s (Result Http.Error Model.AgentSessionView)
+discardChanges sessionId =
+    postSessionView "/discard" (sessionIdBody sessionId)
+
+
+setAutoApply : AutoApplySetting a -> Flow s (Result Http.Error ())
+setAutoApply setting =
+    Flow.lift <|
+        Http.post
+            { url = baseUrl ++ "/auto-apply"
+            , body = Http.jsonBody (Encode.object (autoApplyFields setting))
             , expect = Http.expectWhatever identity
             }
 
@@ -140,9 +176,8 @@ sessionDecoder =
         |> optional "activeTurnId" (Decode.maybe Decode.string) Nothing
         |> optional "lastError" (Decode.maybe Decode.string) Nothing
         |> required "updatedAt" updatedAtDecoder
-
-
-
+        |> optional "autoApply" Decode.bool True
+        |> optional "autoApplyClient" (Decode.maybe Decode.string) Nothing
 
 
 updatedAtDecoder : Decoder Model.SessionTimestamp

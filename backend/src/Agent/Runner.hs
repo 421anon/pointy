@@ -4,6 +4,8 @@
 
 module Agent.Runner (
     startAgentTurn,
+    applySessionChanges,
+    setRunningAutoApply,
     stopAgentTurn,
     steerAgentTurn,
     turnLogStreamHandler,
@@ -18,7 +20,7 @@ module Agent.Runner (
     watchTurnBudget,
 ) where
 
-import Agent.Git (AgentSessionView, applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
 import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
 import Agent.Session (
@@ -248,18 +250,20 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> Maybe Int -> ExceptT String IO AgentTurn
-startAgentTurn sid prompt mCurrentProjectId = do
+startAgentTurn :: Text -> Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
+startAgentTurn sid prompt mCurrentProjectId enabled client = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
-    beginAgentTurn session_ prompt mCurrentProjectId Nothing
+    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId UserTurn
 
-beginAgentTurn :: AgentSession -> Text -> Maybe Int -> Maybe Text -> ExceptT String IO AgentTurn
-beginAgentTurn session_ prompt mCurrentProjectId fixedTurnId = do
+data TurnOrigin = UserTurn | AutomaticFix (Maybe Text)
+
+beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
+beginAgentTurn session_ prompt mCurrentProjectId origin = do
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     (refreshedSession, syncNotes) <- refreshSessionBase session_
     reviewedSteps <- findReviewedSteps refreshedSession
@@ -274,7 +278,7 @@ beginAgentTurn session_ prompt mCurrentProjectId fixedTurnId = do
                 { turnId = tid
                 , turnSessionId = sid
                 , turnPrompt = prompt
-                , turnAutomatic = isJust fixedTurnId
+                , turnAutomatic = automatic
                 , turnStatus = "running"
                 , turnExitCode = Nothing
                 , turnStartedAt = now
@@ -314,7 +318,7 @@ beginAgentTurn session_ prompt mCurrentProjectId fixedTurnId = do
             withConflict pending =
                 promptWithApplyConflict (targetBranch freshSession) (candidateWorktree pending) (fromMaybe "" nextError)
             withCurrentProject projectId text = renderCurrentProject projectId <> "\n\n" <> text
-            request = if isJust fixedTurnId then prompt else userMessage prompt
+            request = if automatic then prompt else userMessage prompt
             refusal = (withConflict <$> pendingApply) <|> (promptWithEvaluationFailure <$> evaluationFailure)
             agentPrompt =
                 maybe id withCurrentProject changedCurrentProjectId $
@@ -324,18 +328,30 @@ beginAgentTurn session_ prompt mCurrentProjectId fixedTurnId = do
         when (isJust pendingApply) $
             appendLogLine (configAgent cfg) logPath "system" "The apply conflict was sent to the agent with this message; it resolves it in the apply worktree."
         atomically $ do
-            stopInherited <- maybe (return False) takeStopRequest fixedTurnId
+            stopInherited <- maybe (return False) takeStopRequest inheritedStop
             modifyTVar' activeRunners $ Map.insert sid (tid, Nothing)
             modifyTVar' waitingSteers $ Map.delete sid
             when stopInherited $ modifyTVar' stopRequestedTurns (Set.insert tid)
         let unnamed = isNothing (sessionName freshSession >>= normalizeSessionName)
             titling = not (T.null (T.strip (agentTitlePrompt (configAgent cfg))))
-        when (unnamed && titling && isNothing fixedTurnId) $
+        when (unnamed && titling && not automatic) $
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
     return turn
+  where
+    (automatic, inheritedStop) = case origin of
+        UserTurn -> (False, Nothing)
+        AutomaticFix fixedTurnId -> (True, fixedTurnId)
+
+setRunningAutoApply :: Text -> Bool -> ExceptT String IO ()
+setRunningAutoApply client enabled = do
+    running <- liftIO $ Map.keys <$> atomically (readTVar activeRunners)
+    forM_ running $ \sid -> do
+        session_ <- ExceptT $ loadSessionById sid
+        when (autoApplyClient session_ == Just client) $
+            liftIO $ saveSession session_{autoApply = enabled}
 
 stopAgentTurn :: Text -> ExceptT String IO AgentSessionView
 stopAgentTurn sid = do
@@ -959,9 +975,9 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
         Left ex -> appendLogLine cfg (turnLogPath turn) "system" ("Session finalization error: " <> T.pack (show ex))
         Right (Left err) -> appendLogLine cfg (turnLogPath turn) "system" ("Failed to finalize session: " <> T.pack err)
         Right (Right _) -> when (finalStatus == "succeeded") $ do
-            applyTurnChanges cfg turn
+            autoApplied <- applyTurnChanges cfg turn
             stoppedWhileApplying <- atomically $ takeStopRequest (turnId turn)
-            unless stoppedWhileApplying $ startAutomaticFix cfg turn
+            when (autoApplied && not stoppedWhileApplying) $ startAutomaticFix cfg turn
     now <- getCurrentTime
     let finalTurn = turn{turnStatus = finalStatus, turnExitCode = Just exitCodeInt, turnFinishedAt = Just now}
     saveResult <- try (saveTurn finalTurn) :: IO (Either SomeException ())
@@ -971,11 +987,17 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
     signalTurnLog (turnLogPath turn)
     unregisterTurnSignal (turnLogPath turn)
 
-applyTurnChanges :: AgentConfig -> AgentTurn -> IO ()
+applyTurnChanges :: AgentConfig -> AgentTurn -> IO Bool
 applyTurnChanges cfg turn = do
-    result <- try (withUserRepoExclusiveIO (applyAgentChanges announce (turnSessionId turn))) :: IO (Either SomeException (Either String ()))
-    either (logFailure . displayException) (either logFailure return) result
+    result <- try (withUserRepoExclusiveIO applyWhenEnabled) :: IO (Either SomeException (Either String Bool))
+    either (\ex -> False <$ logFailure (displayException ex)) (either (\err -> False <$ logFailure err) return) result
   where
+    sid = turnSessionId turn
+    applyWhenEnabled = do
+        session_ <- ExceptT $ loadSessionById sid
+        when (autoApply session_) $
+            applyAgentChanges (AutomaticApply announce) sid `Except.catchError` (liftIO . logFailure)
+        return (autoApply session_)
     logSystem = appendLogLine cfg (turnLogPath turn) "system"
     announce = logSystem . ("changeset-applying " <>) . jsonLine
     logFailure = logSystem . ("Apply failed: " <>) . T.pack
@@ -985,21 +1007,28 @@ automaticFixLimit = 2
 
 startAutomaticFix :: AgentConfig -> AgentTurn -> IO ()
 startAutomaticFix cfg turn = do
-    result <-
-        try
-            ( withUserRepoExclusiveIO $ do
-                session_ <- ExceptT $ loadSessionById sid
-                turns_ <- liftIO $ listTurns sid
-                let automaticInARow = length (takeWhile turnAutomatic (sortOn (Down . turnStartedAt) turns_))
-                when (status session_ `elem` ["evaluation_failed", "prepare_conflict"] && automaticInARow < automaticFixLimit) $
-                    void $
-                        beginAgentTurn session_ automaticFixPrompt Nothing (Just (turnId turn))
-            ) ::
-            IO (Either SomeException (Either String ()))
+    result <- try (withUserRepoExclusiveIO (beginAutomaticFix (turnSessionId turn) (Just (turnId turn)))) :: IO (Either SomeException (Either String ()))
     either (logFailure . displayException) (either logFailure return) result
   where
-    sid = turnSessionId turn
     logFailure = appendLogLine cfg (turnLogPath turn) "system" . ("Could not start the automatic fix: " <>) . T.pack
+
+beginAutomaticFix :: Text -> Maybe Text -> ExceptT String IO ()
+beginAutomaticFix sid fixedTurnId = do
+    session_ <- ExceptT $ loadSessionById sid
+    turns_ <- liftIO $ listTurns sid
+    let automaticInARow = length (takeWhile turnAutomatic (sortOn (Down . turnStartedAt) turns_))
+    when (status session_ `elem` ["evaluation_failed", "prepare_conflict"] && automaticInARow < automaticFixLimit) $
+        void $
+            beginAgentTurn session_ automaticFixPrompt Nothing (AutomaticFix fixedTurnId)
+
+applySessionChanges :: Text -> Bool -> Maybe Text -> ExceptT String IO ()
+applySessionChanges sid enabled client = do
+    session_ <- ExceptT $ loadSessionById sid
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ Except.throwError "runner_active"
+    liftIO $ saveSession session_{autoApply = enabled, autoApplyClient = client}
+    applyAgentChanges ManualApply sid
+    beginAutomaticFix sid Nothing
 
 finalizeWithRetry :: AgentConfig -> AgentTurn -> Int -> IO (Either SomeException a) -> IO (Either SomeException a)
 finalizeWithRetry cfg turn attempt runAttempt = do

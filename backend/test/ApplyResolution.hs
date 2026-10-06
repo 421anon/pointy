@@ -106,6 +106,8 @@ conflictedSession home name = do
                 , createdAt = now
                 , updatedAt = now
                 , agentCurrentProjectId = Nothing
+                , autoApply = True
+                , autoApplyClient = Nothing
                 }
     return (session_, applyWorktree)
 

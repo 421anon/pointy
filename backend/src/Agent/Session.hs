@@ -86,6 +86,8 @@ data AgentSession = AgentSession
     , createdAt :: UTCTime
     , updatedAt :: UTCTime
     , agentCurrentProjectId :: Maybe Int
+    , autoApply :: Bool
+    , autoApplyClient :: Maybe Text
     }
     deriving (Show, Eq, Generic, ToJSON)
 
@@ -113,6 +115,8 @@ instance FromJSON AgentSession where
             <*> obj .: "createdAt"
             <*> obj .: "updatedAt"
             <*> obj .:? "agentCurrentProjectId"
+            <*> obj .:? "autoApply" .!= True
+            <*> obj .:? "autoApplyClient"
 
 data AgentTurn = AgentTurn
     { turnId :: Text

@@ -32,7 +32,7 @@ view model =
         workspace =
             Lib.lastKnownWorkspace model
     in
-    viewPanel (mentionsPending workspace) (AgentMentions.sources workspace) (Model.getAgent model)
+    viewPanel (mentionsPending workspace) (AgentMentions.sources workspace) (Maybe.map .branch (ApiData.toMaybe (Model.getUserRepoInfo model))) (Model.getAgent model)
 
 
 mentionsPending : Model -> Bool
@@ -41,8 +41,8 @@ mentionsPending model =
         || not (ApiData.settled (Model.getProjects model))
 
 
-viewPanel : Bool -> AgentMentions.Sources -> Model.AgentState -> Html (Flow Model ())
-viewPanel mentionsAwaited mentionSources agent =
+viewPanel : Bool -> AgentMentions.Sources -> Maybe String -> Model.AgentState -> Html (Flow Model ())
+viewPanel mentionsAwaited mentionSources branch agent =
     Html.div
         [ classList
             [ ( "agent-panel", True )
@@ -54,13 +54,13 @@ viewPanel mentionsAwaited mentionSources agent =
             Keyboard.decodeCombinations
                 [ ( Keyboard.escape, Decode.succeed Actions.exitAgentFocusMode ) ]
         ]
-        [ viewHeader agent
+        [ viewHeader branch agent
         , viewSessionBody mentionsAwaited mentionSources agent
         ]
 
 
-viewHeader : Model.AgentState -> Html (Flow Model ())
-viewHeader agent =
+viewHeader : Maybe String -> Model.AgentState -> Html (Flow Model ())
+viewHeader branch agent =
     let
         ( sessionsLabel, sessionsIcon ) =
             if agent.isSessionListOpen then
@@ -92,7 +92,9 @@ viewHeader agent =
                 )
             ]
         , Html.div [ class "agent-panel__header-actions" ]
-            [ viewIconButton sessionsLabel
+            [ viewAutoApplySwitch agent
+            , Html.span [ id autoApplyDescriptionId, class "agent-panel__hidden-text" ] [ Html.text (autoApplyDescription branch agent) ]
+            , viewIconButton sessionsLabel
                 sessionsIcon
                 [ class "icon-btn agent-panel__sessions-button"
                 , Events.onClick Actions.toggleAgentSessionList
@@ -120,6 +122,67 @@ viewHeader agent =
                 ]
             ]
         ]
+
+
+viewAutoApplySwitch : Model.AgentState -> Html (Flow Model ())
+viewAutoApplySwitch agent =
+    Html.button
+        [ type_ "button"
+        , class "agent-panel__auto-apply"
+        , attribute "role" "switch"
+        , attribute "aria-checked" (boolText agent.autoApply)
+        , attribute "aria-describedby" autoApplyDescriptionId
+        , Events.onClick (Actions.setAgentAutoApply (not agent.autoApply))
+        ]
+        [ View.Icons.iconCustom True "fast_forward" [ class "agent-panel__auto-apply-icon", attribute "aria-hidden" "true" ]
+        , Html.span [ class "agent-panel__auto-apply-label" ] [ Html.text "Auto-apply" ]
+        , Html.span [ class "agent-panel__auto-apply-track", attribute "aria-hidden" "true" ] []
+        ]
+
+
+autoApplyDescriptionId : String
+autoApplyDescriptionId =
+    "agent-auto-apply-description"
+
+
+autoApplyDescription : Maybe String -> Model.AgentState -> String
+autoApplyDescription branch agent =
+    let
+        mode =
+            if agent.autoApply then
+                "When a turn succeeds, its changes are applied to "
+                    ++ Maybe.withDefault "the shared branch" (Maybe.map (\name -> name ++ ", the shared branch") branch)
+                    ++ ". Turn off to review them first."
+
+            else
+                "Changes wait on the changeset card until you apply or discard them."
+    in
+    if ownsRunningTurn agent then
+        mode ++ " Turns already running follow this too."
+
+    else
+        mode
+
+
+ownsRunningTurn : Model.AgentState -> Bool
+ownsRunningTurn agent =
+    ApiData.toMaybe agent.sessions
+        |> Maybe.withDefault []
+        |> List.any (\summary -> summary.session.activeTurnId /= Nothing && ownsSession agent summary.session)
+
+
+ownsSession : Model.AgentState -> Model.AgentSession -> Bool
+ownsSession agent session =
+    session.autoApplyClient == Just agent.clientId
+
+
+turnAutoApplies : Model.AgentState -> Model.AgentSession -> Bool
+turnAutoApplies agent session =
+    if ownsSession agent session then
+        agent.autoApply
+
+    else
+        session.autoApply
 
 
 viewIconButton : String -> String -> List (Html.Attribute (Flow Model ())) -> Html (Flow Model ())
@@ -470,7 +533,7 @@ viewSessionDetail : Bool -> AgentMentions.Sources -> Model.AgentState -> List Mo
 viewSessionDetail mentionsAwaited mentionSources agent listed =
     case ( isCreatingAgentSession agent, Model.selectedSessionSummary agent ) of
         ( True, _ ) ->
-            viewCreatingSession
+            viewCreatingSession agent.autoApply
 
         ( False, Just summary ) ->
             Model.selectedSessionView agent
@@ -537,8 +600,8 @@ viewNoChat agent listed =
         ]
 
 
-viewCreatingSession : Html (Flow Model ())
-viewCreatingSession =
+viewCreatingSession : Bool -> Html (Flow Model ())
+viewCreatingSession autoApply =
     viewChatBody [ attribute "aria-busy" "true" ]
         { title =
             Html.div [ class "agent-panel__session-title-card" ]
@@ -557,7 +620,7 @@ viewCreatingSession =
                 ]
         , error = Html.nothing
         , chat = viewEmptyChat EmptyCreating
-        , composer = viewPrompt False ComposerIdle False True
+        , composer = viewPrompt autoApply False ComposerIdle False True
         }
 
 
@@ -593,8 +656,14 @@ viewSession mentionsAwaited mentionSources agent summary sessionView =
         closedChat =
             Model.agentSessionArchived session.status
 
+        applyingManually =
+            agent.request == Just (Model.ApplyingAgentChanges sessionId)
+
+        stopping =
+            agent.request == Just (Model.StoppingAgentTurn sessionId)
+
         changeset =
-            pendingChangeset applyingDiff sessionView
+            pendingChangeset agent runnerActive applyingDiff applyingManually sessionView
     in
     viewChatBody []
         { title = viewSessionTitle agent summary
@@ -604,16 +673,28 @@ viewSession mentionsAwaited mentionSources agent summary sessionView =
                 viewChatSkeletonBody
 
             else
-                viewChatTurns mentionSources agent sessionView changeset runnerActive closedChat
+                let
+                    changesetActions =
+                        if applyingManually || Maybe.withDefault False (Maybe.map (.state >> awaitsDecision) changeset) then
+                            [ viewChangesetActions sessionId (runnerActive || applyingDiff /= Nothing || Model.agentMutationPending agent) agent.request ]
+
+                        else
+                            []
+
+                    autoApplyEcho =
+                        if runnerActive && not stopping && applyingDiff == Nothing && ownsSession agent sessionView.session then
+                            Just agent.autoApply
+
+                        else
+                            Nothing
+                in
+                viewChatTurns mentionSources agent sessionView changeset changesetActions autoApplyEcho runnerActive closedChat
         , composer =
             if closedChat then
                 viewClosedChat session.status
 
             else
                 let
-                    stopping =
-                        agent.request == Just (Model.StoppingAgentTurn sessionId)
-
                     submitBlocked =
                         Model.agentMutationPending agent || applyingDiff /= Nothing
 
@@ -627,7 +708,7 @@ viewSession mentionsAwaited mentionSources agent summary sessionView =
                         else
                             ComposerIdle
                 in
-                viewPrompt (runnerActive && applyingDiff == Nothing) busy stopping submitBlocked
+                viewPrompt agent.autoApply (runnerActive && applyingDiff == Nothing) busy stopping submitBlocked
         }
 
 
@@ -782,17 +863,29 @@ changesetRefused changeset =
     List.member (Maybe.map .state changeset) [ Just Model.ChatChangesetConflicted, Just Model.ChatChangesetRejected ]
 
 
+awaitsDecision : Model.ChatChangesetState -> Bool
+awaitsDecision state =
+    List.member state [ Model.ChatChangesetPending, Model.ChatChangesetConflicted, Model.ChatChangesetRejected ]
+
+
 type ComposerBusy
     = ComposerIdle
     | ComposerSending
     | ComposerSteering
 
 
-viewPrompt : Bool -> ComposerBusy -> Bool -> Bool -> Html (Flow Model ())
-viewPrompt runnerActive busy stopping submitBlocked =
+viewPrompt : Bool -> Bool -> ComposerBusy -> Bool -> Bool -> Html (Flow Model ())
+viewPrompt autoApply runnerActive busy stopping submitBlocked =
     let
         steering =
             runnerActive || stopping
+
+        autoApplyState =
+            if autoApply then
+                "Auto-apply is on."
+
+            else
+                "Auto-apply is off."
     in
     Html.div [ class "agent-panel__composer" ]
         [ Html.div [ class "agent-panel__composer-row" ]
@@ -802,19 +895,26 @@ viewPrompt runnerActive busy stopping submitBlocked =
                 , rows 1
                 , placeholder "Ask for a change..."
                 , attribute "aria-label" "Agent prompt"
+                , attribute "aria-describedby" autoApplyStateId
                 , submitShortcut submitBlocked
                 ]
                 []
             , Html.div [ class "agent-panel__composer-actions" ]
-                [ viewSubmitButton steering busy submitBlocked
+                [ viewSubmitButton autoApplyState steering busy submitBlocked
                 , Html.viewIf steering (viewStopButton stopping)
                 ]
             ]
+        , Html.span [ id autoApplyStateId, class "agent-panel__hidden-text" ] [ Html.text autoApplyState ]
         ]
 
 
-viewSubmitButton : Bool -> ComposerBusy -> Bool -> Html (Flow Model ())
-viewSubmitButton steering busy submitBlocked =
+autoApplyStateId : String
+autoApplyStateId =
+    "agent-auto-apply-state"
+
+
+viewSubmitButton : String -> Bool -> ComposerBusy -> Bool -> Html (Flow Model ())
+viewSubmitButton autoApplyState steering busy submitBlocked =
     let
         working =
             busy /= ComposerIdle
@@ -840,11 +940,13 @@ viewSubmitButton steering busy submitBlocked =
         , attribute "aria-busy" (boolText working)
         , Events.onClick Actions.submitAgentPrompt
         , title
-            (if steering then
-                "Steer the running agent (Ctrl/⌘+Enter)"
+            ((if steering then
+                "Steer the running agent (Ctrl/⌘+Enter). "
 
-             else
-                "Send message (Ctrl/⌘+Enter)"
+              else
+                "Send message (Ctrl/⌘+Enter). "
+             )
+                ++ autoApplyState
             )
         ]
         [ Html.text label
@@ -893,15 +995,15 @@ submitShortcut submitBlocked =
     Events.preventDefaultOn "keydown" decoder
 
 
-viewChatTurns : AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionView -> Maybe Model.ChatChangeset -> Bool -> Bool -> Html (Flow Model ())
-viewChatTurns mentionSources agent sessionView changeset runnerActive closedChat =
+viewChatTurns : AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionView -> Maybe Model.ChatChangeset -> List (Html (Flow Model ())) -> Maybe Bool -> Bool -> Bool -> Html (Flow Model ())
+viewChatTurns mentionSources agent sessionView changeset changesetActions autoApplyEcho runnerActive closedChat =
     let
         sessionId =
             sessionView.session.sessionId
 
         pendingChangesetNodes =
             changeset
-                |> Maybe.map (viewChangesetBox >> List.singleton)
+                |> Maybe.map (viewChangesetBox changesetActions >> List.singleton)
                 |> Maybe.withDefault []
 
         questionNodes =
@@ -920,7 +1022,7 @@ viewChatTurns mentionSources agent sessionView changeset runnerActive closedChat
                 |> Maybe.withDefault []
 
         content =
-            List.map (viewChatEntry mentionSources sessionId agent.highlightTurnId) (sessionEntries sessionView agent) ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
+            List.map (viewChatEntry mentionSources sessionId agent.highlightTurnId autoApplyEcho) (sessionEntries sessionView agent) ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
     in
     if List.isEmpty content then
         viewEmptyChat (EmptyMessages (not closedChat && not runnerActive))
@@ -961,14 +1063,14 @@ viewEmptyChat state =
         ]
 
 
-viewChatEntry : AgentMentions.Sources -> String -> Maybe String -> Model.ChatEntry -> Html (Flow Model ())
-viewChatEntry mentionSources sessionId highlightTurnId entry =
+viewChatEntry : AgentMentions.Sources -> String -> Maybe String -> Maybe Bool -> Model.ChatEntry -> Html (Flow Model ())
+viewChatEntry mentionSources sessionId highlightTurnId autoApplyEcho entry =
     case entry of
         Model.ChatTurnEntry turn ->
-            viewChatTurn mentionSources sessionId (highlightTurnId == Just turn.turnId) turn
+            viewChatTurn mentionSources sessionId (highlightTurnId == Just turn.turnId) autoApplyEcho turn
 
         Model.ChatChangesetEntry changeset ->
-            viewChangesetBox changeset
+            viewChangesetBox [] changeset
 
 
 turnIdAttribute : Model.ChatTurn -> List (Html.Attribute (Flow Model ()))
@@ -980,8 +1082,8 @@ turnIdAttribute turn =
         [ id (Actions.agentTurnId turn.turnId) ]
 
 
-viewChatTurn : AgentMentions.Sources -> String -> Bool -> Model.ChatTurn -> Html (Flow Model ())
-viewChatTurn mentionSources sessionId isHighlighted turn =
+viewChatTurn : AgentMentions.Sources -> String -> Bool -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
+viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
     Html.div
         (classList
             [ ( "agent-panel__chat-turn", True )
@@ -1009,7 +1111,7 @@ viewChatTurn mentionSources sessionId isHighlighted turn =
                     ]
             )
             turn.prompt
-        , viewAgentMessage mentionSources turn
+        , viewAgentMessage mentionSources autoApplyEcho turn
         ]
 
 
@@ -1025,8 +1127,8 @@ viewPendingSteer prompt =
         ]
 
 
-viewAgentMessage : AgentMentions.Sources -> Model.ChatTurn -> Html (Flow Model ())
-viewAgentMessage mentionSources turn =
+viewAgentMessage : AgentMentions.Sources -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
+viewAgentMessage mentionSources autoApplyEcho turn =
     let
         isEmptyAssistant =
             String.isEmpty (String.trim turn.assistant)
@@ -1064,6 +1166,13 @@ viewAgentMessage mentionSources turn =
                 , attribute "role" "status"
                 ]
                 [ Html.text statusLabel ]
+            , Html.viewMaybe viewAutoApplyEcho
+                (if turn.status == Model.ChatPending then
+                    autoApplyEcho
+
+                 else
+                    Nothing
+                )
             ]
         , Html.div
             [ classList
@@ -1086,6 +1195,19 @@ viewAgentMessage mentionSources turn =
         , Html.viewMaybe
             (\err -> Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ])
             failedMessage
+        ]
+
+
+viewAutoApplyEcho : Bool -> Html msg
+viewAutoApplyEcho enabled =
+    Html.span [ class "agent-panel__chat-auto-apply" ]
+        [ Html.text
+            (if enabled then
+                "· Auto-apply on"
+
+             else
+                "· Auto-apply off"
+            )
         ]
 
 
@@ -1161,11 +1283,11 @@ viewQuestionSubmit sessionId answerBlocked question =
         [ Html.text "Send answer" ]
 
 
-pendingChangeset : Maybe String -> Model.AgentSessionView -> Maybe Model.ChatChangeset
-pendingChangeset applyingDiff { session, gitState } =
+pendingChangeset : Model.AgentState -> Bool -> Maybe String -> Bool -> Model.AgentSessionView -> Maybe Model.ChatChangeset
+pendingChangeset agent runnerActive applyingDiff applyingManually { session, gitState } =
     let
         changeset state diff =
-            Just { state = state, description = Model.defaultChangesetDescription state, diff = diff }
+            Just { state = state, description = changesetDescription agent runnerActive session state, diff = diff }
     in
     case applyingDiff of
         Just diff ->
@@ -1175,8 +1297,47 @@ pendingChangeset applyingDiff { session, gitState } =
             if not gitState.hasAgentCommits || Model.agentSessionArchived session.status then
                 Nothing
 
+            else if applyingManually then
+                changeset Model.ChatChangesetApplying gitState.branchDiff
+
             else
                 changeset (unappliedState session) gitState.branchDiff
+
+
+changesetDescription : Model.AgentState -> Bool -> Model.AgentSession -> Model.ChatChangesetState -> String
+changesetDescription agent runnerActive session state =
+    let
+        branch =
+            "`" ++ session.targetBranch ++ "`"
+    in
+    case state of
+        Model.ChatChangesetPending ->
+            if runnerActive && turnAutoApplies agent session then
+                "Not applied yet. If this turn succeeds, these changes are auto-applied to " ++ branch ++ "."
+
+            else if runnerActive then
+                "Auto-apply is off. When this turn ends, review these changes here."
+
+            else if agent.autoApply then
+                "Not applied yet. Apply or discard these changes, or they're auto-applied when the next turn succeeds."
+
+            else
+                "Auto-apply is off. Review these changes, then apply them to " ++ branch ++ " or discard them."
+
+        Model.ChatChangesetApplying ->
+            "Applying these changes to " ++ branch ++ "."
+
+        Model.ChatChangesetConflicted ->
+            ""
+
+        Model.ChatChangesetRejected ->
+            ""
+
+        Model.ChatChangesetApplied ->
+            ""
+
+        Model.ChatChangesetDiscarded ->
+            ""
 
 
 unappliedState : Model.AgentSession -> Model.ChatChangesetState
@@ -1192,8 +1353,40 @@ unappliedState session =
             Model.ChatChangesetPending
 
 
-viewChangesetBox : Model.ChatChangeset -> Html msg
-viewChangesetBox changeset =
+viewChangesetActions : String -> Bool -> Maybe Model.AgentRequest -> Html (Flow Model ())
+viewChangesetActions sessionId blocked request =
+    Html.div [ class "agent-panel__changeset-actions" ]
+        [ Html.button
+            [ class "small-btn"
+            , disabled blocked
+            , Events.onClick (Actions.applyAgentChanges sessionId)
+            ]
+            [ Html.text
+                (if request == Just (Model.ApplyingAgentChanges sessionId) then
+                    "Applying"
+
+                 else
+                    "Apply changes"
+                )
+            ]
+        , Html.button
+            [ class "small-btn"
+            , disabled blocked
+            , Events.onClick (Actions.discardAgentChanges sessionId)
+            ]
+            [ Html.text
+                (if request == Just (Model.DiscardingAgentChanges sessionId) then
+                    "Discarding"
+
+                 else
+                    "Discard changeset"
+                )
+            ]
+        ]
+
+
+viewChangesetBox : List (Html msg) -> Model.ChatChangeset -> Html msg
+viewChangesetBox actions changeset =
     let
         diff =
             String.trim changeset.diff
@@ -1219,16 +1412,31 @@ viewChangesetBox changeset =
                     ( "is-discarded", "Discarded" )
     in
     Html.div [ class "agent-panel__changeset", class stateClass ]
-        [ Html.div [ class "agent-panel__changeset-header" ]
+        ([ Html.div [ class "agent-panel__changeset-header" ]
             [ Html.h4 [] [ Html.text "Changeset" ]
             , Html.Lazy.lazy viewChangesetTotals diff
             , Html.span [ class "agent-panel__changeset-status" ] [ Html.text statusLabel ]
             ]
-        , Html.viewIf (not (String.isEmpty changeset.description))
-            (Html.p [ class "agent-panel__changeset-description" ] [ Html.text changeset.description ])
-        , Html.viewIf (not (String.isEmpty diff))
+         , Html.viewIf (not (String.isEmpty changeset.description))
+            (Html.p [ class "agent-panel__changeset-description" ] (viewChangesetDescription changeset.description))
+         , Html.viewIf (not (String.isEmpty diff))
             (Html.Lazy.lazy viewChangesetDiff diff)
-        ]
+         ]
+            ++ actions
+        )
+
+
+viewChangesetDescription : String -> List (Html msg)
+viewChangesetDescription description =
+    String.split "`" description
+        |> List.indexedMap
+            (\index part ->
+                if modBy 2 index == 1 then
+                    Html.span [ class "agent-panel__changeset-code" ] [ Html.text ("`" ++ part ++ "`") ]
+
+                else
+                    Html.text part
+            )
 
 
 type alias ChangesetFile =

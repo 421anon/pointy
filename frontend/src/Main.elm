@@ -214,6 +214,7 @@ subscriptions model =
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
         , Browser.Events.onKeyDown Organize.shortcutDecoder
         , Ports.organizeDragIn Organize.onOrganizeDragEvent
+        , Ports.agentAutoApplyIn Actions.syncAgentAutoApply
         , Browser.Events.onVisibilityChange
             (\visibility ->
                 if visibility == Browser.Events.Visible then

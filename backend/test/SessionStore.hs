@@ -82,6 +82,8 @@ sessionFor home now sid =
         , createdAt = now
         , updatedAt = now
         , agentCurrentProjectId = Nothing
+        , autoApply = True
+        , autoApplyClient = Nothing
         }
 
 turnFor :: UTCTime -> Text -> Int -> AgentTurn

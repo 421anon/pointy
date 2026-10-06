@@ -22,7 +22,7 @@ import Data.Text (Text, pack)
 import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
-import Handlers.Agent (RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -136,6 +136,9 @@ nullableField openApiType = Inline (mempty & type_ ?~ openApiType & nullable ?~ 
 integerField :: Referenced Schema
 integerField = Inline (mempty & type_ ?~ OpenApiInteger)
 
+booleanField :: Referenced Schema
+booleanField = Inline (mempty & type_ ?~ OpenApiBoolean)
+
 arrayOf :: Referenced Schema -> Referenced Schema
 arrayOf itemSchema = Inline (mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject itemSchema)
 
@@ -163,12 +166,24 @@ instance ToSchema TurnRequest where
                 [ ("sessionId", stringField)
                 , ("prompt", stringField)
                 , ("currentProjectId", nullableField OpenApiInteger)
+                , ("autoApply", booleanField)
+                , ("clientId", stringField)
                 ]
                 & schema . required .~ ["sessionId", "prompt"]
 
 instance ToSchema SessionRequest where
     declareNamedSchema _ =
         pure $ objectSchema "SessionRequest" [("sessionId", stringField)]
+
+instance ToSchema ApplyRequest where
+    declareNamedSchema _ =
+        pure $
+            objectSchema "ApplyRequest" [("sessionId", stringField), ("autoApply", booleanField), ("clientId", stringField)]
+                & schema . required .~ ["sessionId", "autoApply"]
+
+instance ToSchema AutoApplyRequest where
+    declareNamedSchema _ =
+        pure $ objectSchema "AutoApplyRequest" [("clientId", stringField), ("autoApply", booleanField)]
 
 instance ToSchema RenameSessionRequest where
     declareNamedSchema _ =

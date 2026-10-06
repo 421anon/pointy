@@ -9,7 +9,7 @@ import ApiTypes (DynamicJson, RawJSON)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
-import Handlers.Agent (RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -138,6 +138,27 @@ type AgentTurnEndpoint =
         :> Description "Starts an agent turn in an existing session."
         :> ReqBody '[JSON] TurnRequest
         :> Post '[JSON] AgentTurn
+
+type ApplyChanges =
+    "agent"
+        :> "apply"
+        :> Description "Applies the agent's changes that are not applied yet. When the apply is refused, a turn starts that fixes the changes."
+        :> ReqBody '[JSON] ApplyRequest
+        :> Post '[JSON] AgentSessionView
+
+type DiscardChanges =
+    "agent"
+        :> "discard"
+        :> Description "Discards the agent's changes that are not applied yet."
+        :> ReqBody '[JSON] SessionRequest
+        :> Post '[JSON] AgentSessionView
+
+type SetAutoApply =
+    "agent"
+        :> "auto-apply"
+        :> Description "Sets whether the changes of the agent turns running now are applied when they end."
+        :> ReqBody '[JSON] AutoApplyRequest
+        :> PostNoContent
 
 type StopTurn =
     "agent"
@@ -464,6 +485,9 @@ type API =
         :<|> ListAgentSessions
         :<|> GetAgentSession
         :<|> AgentTurnEndpoint
+        :<|> ApplyChanges
+        :<|> DiscardChanges
+        :<|> SetAutoApply
         :<|> StopTurn
         :<|> SteerTurn
         :<|> AgentTurnStream

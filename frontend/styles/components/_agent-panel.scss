@@ -1,3 +1,4 @@
+@use "../mixins";
 
 .agent-panel,
 .agent-panel * {
@@ -40,6 +41,7 @@
 }
 
 .agent-panel__header {
+  container-type: inline-size;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -49,15 +51,87 @@
   background: var(--bg-secondary);
 
   h2 {
+    min-width: 0;
     margin: 0;
+    overflow: hidden;
     font-size: var(--font-size-md);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
 .agent-panel__header-actions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--spacing-2xs);
+}
+
+.agent-panel__auto-apply {
+  @include mixins.button-base;
+  @include mixins.interactive-element;
+  --auto-apply-on: color-mix(in srgb, var(--state-info) 85%, white);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px 0 8px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  white-space: nowrap;
+
+  &[aria-checked="true"] {
+    color: var(--text-primary);
+  }
+}
+
+[data-theme="light"] .agent-panel__auto-apply {
+  --auto-apply-on: var(--state-info);
+}
+
+.agent-panel__auto-apply-icon {
+  display: none;
+  font-size: 16px;
+}
+
+.agent-panel__auto-apply-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 14px;
+  border: 1px solid var(--text-muted);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  transition: background-color 120ms ease, border-color 120ms ease;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: transform 120ms ease, background-color 120ms ease;
+  }
+}
+
+.agent-panel__auto-apply[aria-checked="true"] .agent-panel__auto-apply-track {
+  border-color: var(--auto-apply-on);
+  background: var(--auto-apply-on);
+
+  &::after {
+    background: #fff;
+    transform: translateX(12px);
+  }
+}
+
+.agent-panel__hidden-text {
+  @include mixins.visually-hidden;
 }
 
 .agent-panel .icon-btn {
@@ -588,6 +662,10 @@
   color: var(--text-secondary);
 }
 
+.agent-panel__changeset-code {
+  white-space: nowrap;
+}
+
 .agent-panel__changeset-diff {
   width: 100%;
   min-width: 0;
@@ -601,6 +679,17 @@
   white-space: pre-wrap;
   font-family: monospace;
   font-size: var(--font-size-sm);
+}
+
+.agent-panel__changeset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.agent-panel__changeset-actions .small-btn,
+.agent-panel__changeset-actions .small-btn:disabled {
+  background: var(--bg-elevated);
 }
 
 .agent-panel__changeset-count {
@@ -723,6 +812,10 @@
     color: var(--text-primary);
     background: var(--state-danger-outline);
   }
+}
+
+.agent-panel__chat-auto-apply {
+  font-weight: 400;
 }
 
 .agent-panel__chat-bubble {
@@ -1149,8 +1242,19 @@
 
   .agent-panel__run-button,
   .agent-panel__prompt,
-  .agent-panel .small-btn {
+  .agent-panel .small-btn,
+  .agent-panel__auto-apply {
     min-height: 44px;
+  }
+
+  @container (max-width: 355px) {
+    .agent-panel__auto-apply-icon {
+      display: inline-block;
+    }
+
+    .agent-panel__auto-apply-label {
+      @include mixins.visually-hidden;
+    }
   }
 
   .agent-panel__archive-toggle {

@@ -702,6 +702,8 @@ type alias AgentSession =
     , activeTurnId : Maybe String
     , lastError : Maybe String
     , updatedAt : SessionTimestamp
+    , autoApply : Bool
+    , autoApplyClient : Maybe String
     }
 
 
@@ -837,6 +839,8 @@ type AgentRequest
     | ArchivingAgentSession String
     | DeletingAgentSession String
     | StoppingAgentTurn String
+    | ApplyingAgentChanges String
+    | DiscardingAgentChanges String
 
 
 type alias PendingQuestion =
@@ -912,6 +916,8 @@ type alias AgentState =
     , highlightTurnId : Maybe String
     , lastChat : Maybe String
     , isRestoringChat : Bool
+    , autoApply : Bool
+    , clientId : String
     }
 
 
@@ -931,6 +937,8 @@ initAgentState =
     , highlightTurnId = Nothing
     , lastChat = Nothing
     , isRestoringChat = False
+    , autoApply = True
+    , clientId = ""
     }
 
 
@@ -1064,35 +1072,16 @@ changesetFromLifecycleTurn turn =
     in
     { state = state
     , description =
-        if String.isEmpty description then
-            defaultChangesetDescription state
+        if not (String.isEmpty description) then
+            description
+
+        else if state == ChatChangesetDiscarded then
+            "This changeset was discarded. No changes were applied."
 
         else
-            description
+            "This changeset was applied."
     , diff = diff
     }
-
-
-defaultChangesetDescription : ChatChangesetState -> String
-defaultChangesetDescription state =
-    case state of
-        ChatChangesetPending ->
-            "These changes are not applied yet. They are applied when the agent next finishes a turn."
-
-        ChatChangesetApplying ->
-            "Applying the agent's changes."
-
-        ChatChangesetConflicted ->
-            ""
-
-        ChatChangesetRejected ->
-            ""
-
-        ChatChangesetApplied ->
-            "This changeset was applied."
-
-        ChatChangesetDiscarded ->
-            "This changeset was discarded. No changes were applied."
 
 
 parseChangesetLog : String -> ( String, String )
@@ -1838,6 +1827,8 @@ initialTable =
 type alias Flags =
     { origin : String
     , lastChat : Maybe String
+    , autoApply : Bool
+    , clientId : String
     , isNarrow : Bool
     }
 
@@ -1899,7 +1890,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
-        , agent = { initAgentState | lastChat = flags.lastChat }
+        , agent = { initAgentState | lastChat = flags.lastChat, autoApply = flags.autoApply, clientId = flags.clientId }
         , clusterStatus = ApiData.Loading Nothing
         , clusterDetail = Nothing
         , runningStepIds = []

@@ -17,7 +17,9 @@ module Agent.Git (
     sessionHasActiveRunner,
     commitAgentTurnOutputs,
     refreshSessionBase,
+    ApplyOrigin (..),
     applyAgentChanges,
+    discardAgentSession,
     discardStaleApplyConflict,
     findReviewedSteps,
     finalizeApplyResolution,
@@ -134,6 +136,8 @@ createAgentSession = do
                 , createdAt = now
                 , updatedAt = now
                 , agentCurrentProjectId = Nothing
+                , autoApply = True
+                , autoApplyClient = Nothing
                 }
     liftIO $ saveSession session_
     return sid
@@ -297,19 +301,21 @@ syncWorktreeToTarget session_ latest = do
         saveSessionUpdate refreshed
         return (refreshed, note)
 
-applyAgentChanges :: (Text -> IO ()) -> Text -> ExceptT String IO ()
-applyAgentChanges announce sid =
-    applyPendingChanges announce sid `catchError` \err -> do
+data ApplyOrigin = AutomaticApply (Text -> IO ()) | ManualApply
+
+applyAgentChanges :: ApplyOrigin -> Text -> ExceptT String IO ()
+applyAgentChanges origin sid =
+    applyPendingChanges origin sid `catchError` \err -> do
         session_ <- loadSessionOrThrow sid
         saveSessionUpdate session_{lastError = Just (T.pack err)}
         throwError err
 
-applyPendingChanges :: (Text -> IO ()) -> Text -> ExceptT String IO ()
-applyPendingChanges announce sid = do
+applyPendingChanges :: ApplyOrigin -> Text -> ExceptT String IO ()
+applyPendingChanges origin sid = do
     session_ <- requireEditableSession sid
     branchState <- collectGitState session_
     when (hasAgentCommits branchState) $ do
-        unless (T.null (T.strip (branchDiff branchState))) $ liftIO $ announce (branchDiff branchState)
+        unless (T.null (T.strip (branchDiff branchState))) $ liftIO $ announce origin (branchDiff branchState)
         fetchRepoStrict
         repoPath <- liftIO userRepoPath
         targetHead_ <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
@@ -320,7 +326,15 @@ applyPendingChanges announce sid = do
             if current
                 then return (preparedApply session_)
                 else mergeCandidate repoPath session_ targetHead_ agentHead_
-        mapM_ (pushCandidate repoPath session_ dropped) (mfilter (not . applyConflictsPending) prepared)
+        mapM_ (pushCandidate repoPath session_ origin dropped) (mfilter (not . applyConflictsPending) prepared)
+
+announce :: ApplyOrigin -> Text -> IO ()
+announce (AutomaticApply announceDiff) = announceDiff
+announce ManualApply = const (return ())
+
+appliedVerb :: ApplyOrigin -> Text
+appliedVerb (AutomaticApply _) = "Auto-applied"
+appliedVerb ManualApply = "Applied"
 
 candidateCurrent :: Text -> Text -> PreparedApply -> ExceptT String IO Bool
 candidateCurrent targetHead_ agentHead_ candidate
@@ -449,8 +463,8 @@ fileHasConflictMarkers worktree path = do
   where
     conflictMarkerBytes = ["<<<<<<<", "=======", ">>>>>>>"] :: [BS.ByteString]
 
-pushCandidate :: FilePath -> AgentSession -> [Int] -> PreparedApply -> ExceptT String IO ()
-pushCandidate repoPath session_ dropped candidate = do
+pushCandidate :: FilePath -> AgentSession -> ApplyOrigin -> [Int] -> PreparedApply -> ExceptT String IO ()
+pushCandidate repoPath session_ origin dropped candidate = do
     changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", "--no-renames", changesetRange]
     let stepIds = nub (mapMaybe appliedStepId changedPaths)
     reviewed <- reviewedSteps repoPath (targetHead candidate) stepIds
@@ -472,9 +486,10 @@ pushCandidate repoPath session_ dropped candidate = do
                     resetWorktree (worktreePath session_) (candidateHead candidate)
                     liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
                     liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) (nub (mapMaybe appliedProjectId changedPaths)) stepIds
-                    appendAppliedTurn
+                    appendLifecycleTurn
                         (sessionId session_)
-                        (T.unwords (("Applied to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ".") : [droppedStepsNote dropped | not (null dropped)]))
+                        "Apply proposed changeset"
+                        (T.unwords ((appliedVerb origin <> " to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ".") : [droppedStepsNote dropped | not (null dropped)]))
                         changesetDiff
                     saveSessionUpdate
                         session_
@@ -524,8 +539,8 @@ resetWorktree :: FilePath -> Text -> ExceptT String IO ()
 resetWorktree worktree commit =
     mapM_ (runGitChecked worktree) [["clean", "-fd"], ["reset", "--hard", T.unpack commit], ["clean", "-fd"]]
 
-appendAppliedTurn :: Text -> Text -> Text -> ExceptT String IO ()
-appendAppliedTurn sid body changesetDiff = do
+appendLifecycleTurn :: Text -> Text -> Text -> Text -> ExceptT String IO ()
+appendLifecycleTurn sid prompt body changesetDiff = do
     tid <- liftIO newTurnId
     logPath <- liftIO $ turnLogFilePath sid tid
     now <- liftIO getCurrentTime
@@ -533,7 +548,7 @@ appendAppliedTurn sid body changesetDiff = do
             AgentTurn
                 { turnId = tid
                 , turnSessionId = sid
-                , turnPrompt = "Apply proposed changeset"
+                , turnPrompt = prompt
                 , turnAutomatic = False
                 , turnStatus = "succeeded"
                 , turnExitCode = Just 0
@@ -557,6 +572,19 @@ archiveAgentSession sid = do
     when hasRunner $ throwError "runner_active"
     saveSessionUpdate session_{status = "archived", activeTurnId = Nothing}
     return ()
+
+discardAgentSession :: Text -> ExceptT String IO ()
+discardAgentSession sid = do
+    session_ <- requireEditableSession sid
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ throwError "runner_active"
+    changesetDiff <- branchDiff <$> collectGitState session_
+    repoPath <- liftIO userRepoPath
+    latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+    resetWorktree (worktreePath session_) latest
+    liftIO $ mapM_ (removeWorktreeIfExists repoPath . candidateWorktree) (preparedApply session_)
+    appendLifecycleTurn sid "Discard proposed changeset" ("Discarded. No changes were applied to `" <> targetBranch session_ <> "`.") changesetDiff
+    saveSessionUpdate session_{status = "open", baseCommit = latest, preparedApply = Nothing, lastError = Nothing}
 
 purgeAgentSession :: Text -> ExceptT String IO ()
 purgeAgentSession sid = do

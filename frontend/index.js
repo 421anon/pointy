@@ -1,6 +1,6 @@
 import "./styles/main.scss";
 import { Elm } from "./src/Main.elm";
-import { connectPorts } from "./ffi.js";
+import { agentClientId, connectPorts, storedAutoApply } from "./ffi.js";
 import "./code-editor.js";
 import "./molstar-viewer.js";
 import "./grid-resize.js";
@@ -12,6 +12,8 @@ const app = Elm.Main.init({
   flags: {
     origin: window.location.origin,
     lastChat: localStorage.getItem("agent:lastChat"),
+    autoApply: storedAutoApply(),
+    clientId: agentClientId(),
     isNarrow: window.matchMedia("(max-width: 1000px)").matches,
   },
 });

@@ -3608,6 +3608,54 @@ stopAgentTurn =
         )
 
 
+setAgentAutoApply : Bool -> Flow Model ()
+setAgentAutoApply enabled =
+    syncAgentAutoApply enabled
+        |> Flow.seq (callJs "storeAutoApply" Encode.bool (Decode.succeed ()) enabled)
+        |> Flow.seq
+            (Flow.forAll agent
+                (\agentState ->
+                    AgentApi.setAutoApply agentState
+                        |> FlowError.foldResult (\() -> Flow.pure ())
+                            (\err -> addToast False ("Couldn't update the turns already running: " ++ Http.errorMessage err))
+                )
+            )
+
+
+syncAgentAutoApply : Bool -> Flow Model ()
+syncAgentAutoApply enabled =
+    Flow.over agent (\agentState -> { agentState | autoApply = enabled })
+
+
+applyAgentChanges : String -> Flow Model ()
+applyAgentChanges sessionId =
+    Flow.forAll agent
+        (\agentState ->
+            withAgentSessionRequest sessionId
+                (Model.ApplyingAgentChanges sessionId)
+                (AgentApi.applyChanges agentState sessionId
+                    |> FlowError.foldResult
+                        (\view ->
+                            Flow.over agent (applyAgentSessionView view)
+                                |> Flow.seq (watchAgentTurn view)
+                                |> Flow.seq (Flow.when (not view.gitState.hasAgentCommits) reloadWorkspaceData)
+                        )
+                        (\err -> addToast False (Http.errorMessage err))
+                )
+        )
+
+
+discardAgentChanges : String -> Flow Model ()
+discardAgentChanges sessionId =
+    withAgentSessionRequest sessionId
+        (Model.DiscardingAgentChanges sessionId)
+        (AgentApi.discardChanges sessionId
+            |> FlowError.foldResult
+                (\view -> Flow.over agent (applyAgentSessionView view))
+                (\err -> addToast False (Http.errorMessage err))
+        )
+
+
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
     submitAgentPromptFrom readAgentPrompt
@@ -3661,7 +3709,13 @@ sendAgentTurn view promptSource =
                         )
                     |> Flow.seq clearAgentPrompt
                     |> Flow.seq scrollAgentChatToBottom
-                    |> Flow.seq (Flow.try currentProjectId (AgentApi.sendTurn sessionId prompt))
+                    |> Flow.seq
+                        (Flow.get
+                            |> Flow.andThen
+                                (\model ->
+                                    AgentApi.sendTurn (Model.getAgent model) sessionId prompt (try currentProjectId model)
+                                )
+                        )
                     |> FlowError.foldResult
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
