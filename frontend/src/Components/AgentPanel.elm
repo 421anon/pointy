@@ -1441,7 +1441,7 @@ viewChangesetDescription description =
                     String.indexes " " next |> List.head |> Maybe.withDefault (String.length next)
             in
             Html.text text
-                :: Html.span [ class "agent-panel__changeset-code" ] [ Html.text ("`" ++ code ++ "`" ++ String.left gluedLength next) ]
+                :: Html.span [ class "agent-panel__changeset-code" ] [ Html.code [] [ Html.text code ], Html.text (String.left gluedLength next) ]
                 :: viewChangesetDescription (String.join "`" (String.dropLeft gluedLength next :: rest))
 
         _ ->

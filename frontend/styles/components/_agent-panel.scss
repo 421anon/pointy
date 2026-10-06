@@ -1055,7 +1055,8 @@
   line-height: 1.55;
 }
 
-.agent-panel__chat-content code {
+.agent-panel__chat-content code,
+.agent-panel__changeset-code code {
   padding: 1px 5px;
   border: 1px solid var(--line-color);
   border-radius: 4px;
