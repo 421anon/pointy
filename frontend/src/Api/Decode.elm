@@ -329,12 +329,13 @@ reviewComparison comparison detail =
 
 reviewReport : Decoder Model.ReviewReport
 reviewReport =
-    Decode.succeed (\revision reviewedBy comments reviewedStatus_ reviewedStatusError comparison detail -> { revision = revision, reviewedBy = reviewedBy, comments = comments, reviewedStatus = Maybe.map (\status_ -> applyError status_ reviewedStatusError) reviewedStatus_, comparison = comparison, detail = detail })
+    Decode.succeed (\revision reviewedBy comments reviewedStatus_ reviewedStatusError reviewedCertificate comparison detail -> { revision = revision, reviewedBy = reviewedBy, comments = comments, reviewedStatus = Maybe.map (\status_ -> applyError status_ reviewedStatusError) reviewedStatus_, reviewedCertificate = reviewedCertificate, comparison = comparison, detail = detail })
         |> optional "reviewedRevision" (maybe Decode.string) Nothing
         |> optional "reviewedBy" Decode.string ""
         |> optional "reviewComments" Decode.string ""
         |> optional "reviewedStatus" (maybe status) Nothing
         |> optional "reviewedStatusError" (maybe Decode.string) Nothing
+        |> optional "reviewedCertificate" (maybe Decode.string) Nothing
         |> required "comparison" Decode.string
         |> optional "comparisonDetail" (maybe Decode.string) Nothing
         |> Decode.andThen
@@ -344,6 +345,7 @@ reviewReport =
                         (\mComparison ->
                             { review = Maybe.map2 (\revision comparison -> { revision = revision, reviewedBy = fields.reviewedBy, comments = fields.comments, comparison = comparison }) fields.revision mComparison
                             , reviewedStatus = Maybe.andThen (always fields.reviewedStatus) mComparison
+                            , reviewedCertificate = fields.reviewedCertificate
                             }
                         )
             )

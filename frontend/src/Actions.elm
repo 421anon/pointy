@@ -767,7 +767,8 @@ loadProjectReviews =
                                 |> Flow.andThen
                                     (\model ->
                                         if reviewTarget model == Just target then
-                                            Flow.modify (over (projectSteps projectId_) (mergeReviewReport commit_ result))
+                                            Flow.modify (over (projectSteps projectId_) (mergeReviewReport result))
+                                                |> Flow.seq (refreshViewedStepStatuses (projectSteps projectId_ << where_ (lostReviewSince model)))
 
                                         else
                                             Flow.modify (over (projectSteps projectId_) (over (review << just << comparison) ApiData.stopLoading))
@@ -777,51 +778,47 @@ loadProjectReviews =
             )
 
 
-mergeReviewReport : String -> Result Http.Error (Dict Int Model.ReviewReport) -> StepRecord -> StepRecord
-mergeReviewReport commit_ result record =
+mergeReviewReport : Result Http.Error (Dict Int Model.ReviewReport) -> StepRecord -> StepRecord
+mergeReviewReport result record =
     case result of
         Ok reports ->
             record.id
                 |> Maybe.andThen (\stepId -> Dict.get stepId reports)
                 |> Maybe.unwrap (over (review << just << comparison) ApiData.stopLoading record)
-                    (applyReviewReport commit_ record)
+                    (applyReviewReport record)
 
         Err err ->
             set (review << just << comparison) (Error err) record
 
 
-applyReviewReport : String -> StepRecord -> Model.ReviewReport -> StepRecord
-applyReviewReport commit_ record report =
+lostReviewSince : Model -> StepRecord -> Bool
+lostReviewSince before record =
+    not (has (review << just) record) && Maybe.unwrap False (\stepId -> has (stepRecordById stepId << review << just) before) record.id
+
+
+applyReviewReport : StepRecord -> Model.ReviewReport -> StepRecord
+applyReviewReport record report =
     { record
         | review = report.review
-        , runState =
-            case ( report.review, record.review ) of
-                ( Just reviewed, _ ) ->
-                    reviewedRunState reviewed.revision report.reviewedStatus record.runState
-
-                ( Nothing, Just _ ) ->
-                    applyStepStatus commit_ Nothing NotAsked record.runState
-
-                ( Nothing, Nothing ) ->
-                    record.runState
+        , runState = Maybe.unwrap record.runState (\reviewed -> reviewedRunState reviewed.revision report.reviewedCertificate report.reviewedStatus record.runState) report.review
     }
 
 
-reviewedRunState : String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-reviewedRunState revision mStatus runState_ =
+reviewedRunState : String -> Maybe String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+reviewedRunState revision mCertificate mStatus runState_ =
     case ( ApiData.toMaybe runState_ |> Maybe.filter (.commit >> (==) revision), mStatus ) of
         ( Just current, Just status_ ) ->
             if current.status == Loading (Just Model.StatusRunning) && status_ /= Model.StatusRunning then
                 Success current
 
             else
-                Success { current | status = Success status_ }
+                applyStepStatus revision mCertificate (Success status_) runState_
 
         ( Just current, Nothing ) ->
             Success current
 
         ( Nothing, _ ) ->
-            applyStepStatus revision Nothing (Success (Maybe.withDefault Model.StatusNotStarted mStatus)) NotAsked
+            applyStepStatus revision mCertificate (Success (Maybe.withDefault Model.StatusNotStarted mStatus)) runState_
 
 
 refreshReviews : Flow Model ()
@@ -849,7 +846,7 @@ settleReview stepId mReview message result =
         Ok False ->
             Flow.setAll (stepRecordById stepId << review) mReview
                 |> Flow.seq refreshReviews
-                |> Flow.seq (Flow.when (Maybe.isNothing mReview) (refreshViewedStepStatus stepId))
+                |> Flow.seq (Flow.when (Maybe.isNothing mReview) (refreshViewedStepStatuses (stepRecordById stepId)))
                 |> Flow.seq (Flow.setAll reviewDraft Nothing)
                 |> Flow.seq (Flow.async (addToast True message))
 
@@ -857,10 +854,14 @@ settleReview stepId mReview message result =
             Flow.async (addToast False (Http.errorMessage err))
 
 
-refreshViewedStepStatus : Int -> Flow Model ()
-refreshViewedStepStatus stepId =
-    Flow.over (stepRecordById stepId << runState << success << status) ApiData.toLoading
-        |> Flow.seq (Flow.forAll currentProjectId (Flow.try viewedRevision << requestProjectStatus))
+refreshViewedStepStatuses : A_Traversal Model StepRecord -> Flow Model ()
+refreshViewedStepStatuses records =
+    Flow.whenHas records
+        (always
+            (Flow.over (remkT records << runState << success << status) ApiData.toLoading
+                |> Flow.seq (Flow.forAll currentProjectId (Flow.try viewedRevision << requestProjectStatus))
+            )
+        )
 
 
 reviewStep : Model.ReviewDraft -> Flow Model ()

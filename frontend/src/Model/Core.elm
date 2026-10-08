@@ -181,6 +181,7 @@ type alias Review =
 type alias ReviewReport =
     { review : Maybe Review
     , reviewedStatus : Maybe Status
+    , reviewedCertificate : Maybe String
     }
 
 
