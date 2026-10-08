@@ -9,6 +9,7 @@ import Agent.Session (
     forgetSessionTurns,
     listSessions,
     listTurns,
+    loadSessionById,
     saveSession,
     saveTurn,
     sessionDir,
@@ -18,7 +19,7 @@ import Data.List (sort)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime, getCurrentTime)
-import System.Directory (listDirectory, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, listDirectory, removePathForcibly)
 import System.Environment (setEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -63,6 +64,15 @@ main = withSystemTempDirectory "session-store-test" $ \home -> do
     missing <- findTurn "turn-missing"
     assertEqual "findTurn ignores unknown ids" Nothing (turnId <$> missing)
 
+    legacyDir <- sessionDir "s-legacy"
+    createDirectoryIfMissing True (legacyDir </> "turns")
+    writeFile (legacyDir </> "session.json") "{\"sessionId\":\"s-legacy\",\"targetBranch\":\"main\",\"agentBranch\":\"agent/s-legacy\",\"baseCommit\":\"abc\",\"worktreePath\":\"/w\",\"status\":\"open\",\"createdAt\":\"2026-01-01T00:00:00Z\",\"updatedAt\":\"2026-01-01T00:00:00Z\"}"
+    writeFile (legacyDir </> "turns" </> "turn-legacy.json") "{\"turnId\":\"turn-legacy\",\"turnSessionId\":\"s-legacy\",\"turnStatus\":\"succeeded\",\"turnExitCode\":0,\"turnStartedAt\":\"2026-01-01T00:00:00Z\",\"turnFinishedAt\":\"2026-01-01T00:00:01Z\",\"turnLogPath\":\"/l\"}"
+    legacy <- loadSessionById "s-legacy"
+    assertEqual "sessions stored before the auto-apply switch keep auto-apply on" (Right (True, Nothing)) ((\s -> (autoApply s, autoApplyClient s)) <$> legacy)
+    legacyTurns <- listTurns "s-legacy"
+    assertEqual "turns stored before automatic fixes are not automatic" [False] (map turnAutomatic legacyTurns)
+
 sessionIdFor :: Int -> Text
 sessionIdFor n = "s" <> T.pack (show n)
 
@@ -82,6 +92,8 @@ sessionFor home now sid =
         , createdAt = now
         , updatedAt = now
         , agentCurrentProjectId = Nothing
+        , autoApply = True
+        , autoApplyClient = Nothing
         }
 
 turnFor :: UTCTime -> Text -> Int -> AgentTurn
@@ -90,6 +102,7 @@ turnFor now sid n =
         { turnId = "turn-" <> sid <> "-" <> T.pack (show n)
         , turnSessionId = sid
         , turnPrompt = "prompt"
+        , turnAutomatic = False
         , turnStatus = "running"
         , turnExitCode = Nothing
         , turnFinishedAt = Nothing

@@ -6,7 +6,8 @@ module Handlers.Agent (
     TurnRequest (..),
     SessionRequest (..),
     RenameSessionRequest (..),
-    ConfirmApplyRequest (..),
+    ApplyRequest (..),
+    AutoApplyRequest (..),
     createSessionHandler,
     getSessionHandler,
     listSessionsHandler,
@@ -14,8 +15,8 @@ module Handlers.Agent (
     stopTurnHandler,
     steerTurnHandler,
     turnLogStreamHandler,
-    prepareApplyHandler,
-    confirmApplyHandler,
+    applyChangesHandler,
+    autoApplyHandler,
     discardSessionHandler,
     archiveSessionHandler,
     renameSessionHandler,
@@ -24,25 +25,22 @@ module Handlers.Agent (
 ) where
 
 import Agent.Git (
-    AgentApplyView (..),
     AgentSessionView,
     AgentUsage,
     archiveAgentSession,
-    confirmApplyCandidate,
     createAgentSession,
     discardAgentSession,
     getAgentUsage,
     listAgentSessions,
     loadAgentSessionView,
-    prepareApplyCandidate,
     purgeAgentSession,
     renameAgentSession,
  )
-import Agent.Runner (startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
+import Agent.Runner (applySessionChanges, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
+import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as TL
@@ -56,6 +54,8 @@ data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
     , turnRequestPrompt :: Text
     , turnRequestCurrentProjectId :: Maybe Int
+    , turnRequestAutoApply :: Bool
+    , turnRequestClientId :: Maybe Text
     }
     deriving (Show, Eq, Generic)
 
@@ -65,6 +65,8 @@ instance FromJSON TurnRequest where
             <$> obj .: "sessionId"
             <*> obj .: "prompt"
             <*> obj .:? "currentProjectId"
+            <*> obj .:? "autoApply" .!= True
+            <*> obj .:? "clientId"
 
 data SessionRequest = SessionRequest
     { sessionRequestSessionId :: Text
@@ -87,19 +89,31 @@ instance FromJSON RenameSessionRequest where
             <$> obj .: "sessionId"
             <*> obj .: "name"
 
-data ConfirmApplyRequest = ConfirmApplyRequest
-    { confirmSessionId :: Text
-    , confirmTargetHead :: Text
-    , confirmCandidateHead :: Text
+data ApplyRequest = ApplyRequest
+    { applyRequestSessionId :: Text
+    , applyRequestAutoApply :: Bool
+    , applyRequestClientId :: Maybe Text
     }
     deriving (Show, Eq, Generic)
 
-instance FromJSON ConfirmApplyRequest where
-    parseJSON = withObject "ConfirmApplyRequest" $ \obj ->
-        ConfirmApplyRequest
+instance FromJSON ApplyRequest where
+    parseJSON = withObject "ApplyRequest" $ \obj ->
+        ApplyRequest
             <$> obj .: "sessionId"
-            <*> obj .: "targetHead"
-            <*> obj .: "candidateHead"
+            <*> obj .: "autoApply"
+            <*> obj .:? "clientId"
+
+data AutoApplyRequest = AutoApplyRequest
+    { autoApplyRequestClientId :: Text
+    , autoApplyRequestEnabled :: Bool
+    }
+    deriving (Show, Eq, Generic)
+
+instance FromJSON AutoApplyRequest where
+    parseJSON = withObject "AutoApplyRequest" $ \obj ->
+        AutoApplyRequest
+            <$> obj .: "clientId"
+            <*> obj .: "autoApply"
 
 createSessionHandler :: Handler AgentSessionView
 createSessionHandler = do
@@ -114,7 +128,7 @@ getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
 
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =
@@ -124,19 +138,15 @@ steerTurnHandler :: TurnRequest -> Handler NoContent
 steerTurnHandler req =
     NoContent <$ runAgentAction (steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req))
 
-prepareApplyHandler :: SessionRequest -> Handler AgentSessionView
-prepareApplyHandler req = do
-    let sid = sessionRequestSessionId req
-    _ <- runLockedAction (prepareApplyCandidate sid)
+applyChangesHandler :: ApplyRequest -> Handler AgentSessionView
+applyChangesHandler req = do
+    let sid = applyRequestSessionId req
+    runLockedAction (applySessionChanges sid (applyRequestAutoApply req) (applyRequestClientId req))
     runSharedAction (loadAgentSessionView sid)
 
-confirmApplyHandler :: ConfirmApplyRequest -> Handler AgentApplyView
-confirmApplyHandler req = do
-    (projectIds, stepIds) <-
-        runLockedAction $
-            confirmApplyCandidate (confirmSessionId req) (confirmTargetHead req) (confirmCandidateHead req)
-    view_ <- runSharedAction (loadAgentSessionView (confirmSessionId req))
-    return AgentApplyView{sessionView = view_, invalidatedProjectIds = projectIds, invalidatedStepIds = stepIds}
+autoApplyHandler :: AutoApplyRequest -> Handler NoContent
+autoApplyHandler req =
+    NoContent <$ runLockedAction (setRunningAutoApply (autoApplyRequestClientId req) (autoApplyRequestEnabled req))
 
 discardSessionHandler :: SessionRequest -> Handler AgentSessionView
 discardSessionHandler req = do
@@ -185,7 +195,6 @@ throwAgentError err =
         , "runner_not_active"
         , "runner_stopping"
         , "steering_failed"
-        , "step_reviewed"
         ]
 
 archiveSessionHandler :: SessionRequest -> Handler AgentSessionView

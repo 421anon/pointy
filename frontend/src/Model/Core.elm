@@ -687,14 +687,6 @@ type alias UserRepoInfo =
     }
 
 
-type alias AgentPreparedApply =
-    { targetHead : String
-    , agentHead : String
-    , candidateHead : String
-    , candidateWorktree : String
-    }
-
-
 type alias SessionTimestamp =
     { posix : Time.Posix
     , nanos : Int
@@ -716,10 +708,11 @@ type alias AgentSession =
     , baseCommit : String
     , worktreePath : String
     , status : String
-    , preparedApply : Maybe AgentPreparedApply
     , activeTurnId : Maybe String
     , lastError : Maybe String
     , updatedAt : SessionTimestamp
+    , autoApply : Bool
+    , autoApplyClient : Maybe String
     }
 
 
@@ -735,6 +728,7 @@ type alias AgentTurn =
     { turnId : String
     , turnSessionId : String
     , turnPrompt : String
+    , turnAutomatic : Bool
     , turnStatus : String
     , turnExitCode : Maybe Int
     , turnLogPath : String
@@ -804,13 +798,6 @@ chatNameMaxLength =
     80
 
 
-type alias AgentApplyView =
-    { sessionView : AgentSessionView
-    , invalidatedProjectIds : List Int
-    , invalidatedStepIds : List Int
-    }
-
-
 type ChatTurnStatus
     = ChatPending
     | ChatDone
@@ -820,16 +807,17 @@ type ChatTurnStatus
 
 type alias ChatTurn =
     { turnId : String
-    , prompt : String
+    , prompt : Maybe String
     , assistant : String
     , status : ChatTurnStatus
     }
 
 
 type ChatChangesetState
-    = ChatChangesetProposed
-    | ChatChangesetNeedsReview String
-    | ChatChangesetRejected String
+    = ChatChangesetPending
+    | ChatChangesetApplying
+    | ChatChangesetConflicted
+    | ChatChangesetRejected
     | ChatChangesetApplied
     | ChatChangesetDiscarded
 
@@ -846,17 +834,6 @@ type ChatEntry
     | ChatChangesetEntry ChatChangeset
 
 
-type ChangesetOperationKind
-    = ApplyingChangeset
-    | DiscardingChangeset
-
-
-type alias ChangesetOperation =
-    { sessionId : String
-    , kind : ChangesetOperationKind
-    }
-
-
 type alias AgentSessionNameEdit =
     { sessionId : String
     , value : String
@@ -871,6 +848,8 @@ type AgentRequest
     | ArchivingAgentSession String
     | DeletingAgentSession String
     | StoppingAgentTurn String
+    | ApplyingAgentChanges String
+    | DiscardingAgentChanges String
 
 
 type alias PendingQuestion =
@@ -901,14 +880,6 @@ keepPicksForSameQuestion previous next =
             next
 
 
-type alias AgentToolCall =
-    { id : String
-    , name : String
-    , startedAt : Time.Posix
-    , text : String
-    }
-
-
 type alias AgentLiveTurn =
     { turnId : String
     , finished : Bool
@@ -917,7 +888,7 @@ type alias AgentLiveTurn =
     , pendingQuestion : Maybe PendingQuestion
     , streamError : Maybe String
     , pendingSteer : Maybe String
-    , runningCalls : List AgentToolCall
+    , applying : Maybe String
     }
 
 
@@ -930,7 +901,7 @@ liveTurnFor turnId view =
     , pendingQuestion = persistedQuestion view
     , streamError = Nothing
     , pendingSteer = Nothing
-    , runningCalls = []
+    , applying = Nothing
     }
 
 
@@ -948,13 +919,14 @@ type alias AgentState =
     , isSessionListOpen : Bool
     , isFocusMode : Bool
     , showArchived : Bool
-    , changesetOperation : Maybe ChangesetOperation
     , request : Maybe AgentRequest
     , sessionNameEdit : Maybe AgentSessionNameEdit
     , sessionRenames : Dict String ( String, SessionTimestamp )
     , highlightTurnId : Maybe String
     , lastChat : Maybe String
     , isRestoringChat : Bool
+    , autoApply : Bool
+    , clientId : String
     }
 
 
@@ -968,20 +940,20 @@ initAgentState =
     , isSessionListOpen = False
     , isFocusMode = False
     , showArchived = False
-    , changesetOperation = Nothing
     , request = Nothing
     , sessionNameEdit = Nothing
     , sessionRenames = Dict.empty
     , highlightTurnId = Nothing
     , lastChat = Nothing
     , isRestoringChat = False
+    , autoApply = True
+    , clientId = ""
     }
 
 
 agentMutationPending : AgentState -> Bool
 agentMutationPending agentState =
     (agentState.request /= Nothing)
-        || (agentState.changesetOperation /= Nothing)
         || (agentState.sessionNameEdit
                 |> Maybe.map .saving
                 |> Maybe.withDefault False
@@ -1017,7 +989,7 @@ ingestLiveChunk chunk live =
         , entries = List.foldl appendChatLine live.entries keptLines
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
-        , runningCalls = List.foldl runningCallsAfterLine live.runningCalls keptLines
+        , applying = List.foldl applyingDiffAfterLine live.applying keptLines
         , streamError = Nothing
     }
 
@@ -1069,11 +1041,14 @@ appendPersistedTurn turn entries =
     else
         let
             prompt =
-                if String.isEmpty (String.trim turn.turnPrompt) then
-                    "Prompt unavailable"
+                if turn.turnAutomatic then
+                    Nothing
+
+                else if String.isEmpty (String.trim turn.turnPrompt) then
+                    Just "Prompt unavailable"
 
                 else
-                    turn.turnPrompt
+                    Just turn.turnPrompt
 
             seeded =
                 entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
@@ -1106,32 +1081,16 @@ changesetFromLifecycleTurn turn =
     in
     { state = state
     , description =
-        if String.isEmpty description then
-            defaultChangesetDescription state
+        if not (String.isEmpty description) then
+            description
+
+        else if state == ChatChangesetDiscarded then
+            "This changeset was discarded. No changes were applied."
 
         else
-            description
+            "This changeset was applied."
     , diff = diff
     }
-
-
-defaultChangesetDescription : ChatChangesetState -> String
-defaultChangesetDescription state =
-    case state of
-        ChatChangesetProposed ->
-            "Review this changeset, then apply it to the target branch or discard it."
-
-        ChatChangesetNeedsReview _ ->
-            "This changeset conflicts with newer changes. The agent resolves the conflict when you apply; apply again to retry, or discard the changeset."
-
-        ChatChangesetRejected _ ->
-            "This changeset was not applied because it introduces evaluation failures. Your next message sends the failures below to the agent so it can fix them."
-
-        ChatChangesetApplied ->
-            "This changeset was applied. You can continue the conversation from the applied state."
-
-        ChatChangesetDiscarded ->
-            "This changeset was discarded. No changes were applied."
 
 
 parseChangesetLog : String -> ( String, String )
@@ -1153,6 +1112,11 @@ parseChangesetLog logText =
 changesetDiffMarker : String
 changesetDiffMarker =
     "[system] changeset-diff"
+
+
+changesetApplyingMarker : String
+changesetApplyingMarker =
+    "[system] changeset-applying"
 
 
 splitChangesetDiffMarker : List String -> ( List String, List String )
@@ -1236,7 +1200,7 @@ appendChatLine rawLine entries =
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
                     mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = prompt, assistant = "", status = ChatPending } ]
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, assistant = "", status = ChatPending } ]
 
                 Err _ ->
                     entries
@@ -1264,9 +1228,6 @@ splitLogPrefix line =
 
     else if String.startsWith "[question] " line then
         ( "question", String.dropLeft 11 line )
-
-    else if String.startsWith "[activity] " line then
-        ( "activity", String.dropLeft 11 line )
 
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )
@@ -1345,62 +1306,6 @@ pendingSteerAfterLine rawLine pending =
             pending
 
 
-runningCallsAfterLine : String -> List AgentToolCall -> List AgentToolCall
-runningCallsAfterLine rawLine calls =
-    case splitLogPrefix rawLine of
-        ( "activity", body ) ->
-            case Decode.decodeString toolActivityDecoder (String.trim body) of
-                Ok (ToolStarted call) ->
-                    List.filter (\running -> running.id /= call.id) calls ++ [ call ]
-
-                Ok (ToolFinished id) ->
-                    List.filter (\running -> running.id /= id) calls
-
-                Err _ ->
-                    calls
-
-        ( "system", body ) ->
-            if isTurnFinishedLine body then
-                []
-
-            else
-                calls
-
-        _ ->
-            calls
-
-
-type ToolActivity
-    = ToolStarted AgentToolCall
-    | ToolFinished String
-
-
-toolActivityDecoder : Decode.Decoder ToolActivity
-toolActivityDecoder =
-    Decode.field "state" Decode.string
-        |> Decode.andThen
-            (\state ->
-                case state of
-                    "started" ->
-                        Decode.map ToolStarted toolCallDecoder
-
-                    "finished" ->
-                        Decode.map ToolFinished (Decode.field "id" Decode.string)
-
-                    _ ->
-                        Decode.fail ("unknown tool activity state " ++ state)
-            )
-
-
-toolCallDecoder : Decode.Decoder AgentToolCall
-toolCallDecoder =
-    Decode.map4 AgentToolCall
-        (Decode.field "id" Decode.string)
-        (Decode.field "name" Decode.string)
-        (Decode.field "startedAt" (Decode.map (\seconds -> Time.millisToPosix (round (seconds * 1000))) Decode.float))
-        (Decode.field "text" Decode.string)
-
-
 pendingQuestionDecoder : Decode.Decoder PendingQuestion
 pendingQuestionDecoder =
     Decode.map3 PendingQuestion
@@ -1412,6 +1317,17 @@ pendingQuestionDecoder =
 isTurnFinishedLine : String -> Bool
 isTurnFinishedLine =
     String.startsWith "Agent turn finished with exit code "
+
+
+applyingDiffAfterLine : String -> Maybe String -> Maybe String
+applyingDiffAfterLine rawLine applying =
+    if String.startsWith changesetApplyingMarker rawLine then
+        Decode.decodeString Decode.string (String.dropLeft (String.length changesetApplyingMarker) rawLine)
+            |> Result.withDefault ""
+            |> Just
+
+    else
+        applying
 
 
 splitOnLastNewline : String -> ( String, String )
@@ -1904,25 +1820,6 @@ getNow (Model model) =
     model.now
 
 
-hasRunningToolCall : Model -> Bool
-hasRunningToolCall (Model model) =
-    List.any (\live -> not live.finished && not (List.isEmpty live.runningCalls)) (Dict.values model.agent.liveTurns)
-
-
-visibleToolCalls : Time.Posix -> AgentLiveTurn -> List AgentToolCall
-visibleToolCalls now live =
-    if live.finished then
-        []
-
-    else
-        List.filter (\call -> Time.posixToMillis now - Time.posixToMillis call.startedAt >= toolCallVisibleAfterMillis) live.runningCalls
-
-
-toolCallVisibleAfterMillis : Int
-toolCallVisibleAfterMillis =
-    20000
-
-
 initialTable : Table a
 initialTable =
     { edited = Nothing
@@ -1939,6 +1836,8 @@ initialTable =
 type alias Flags =
     { origin : String
     , lastChat : Maybe String
+    , autoApply : Bool
+    , clientId : String
     , isNarrow : Bool
     }
 
@@ -2000,7 +1899,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix 0
-        , agent = { initAgentState | lastChat = flags.lastChat }
+        , agent = { initAgentState | lastChat = flags.lastChat, autoApply = flags.autoApply, clientId = flags.clientId }
         , clusterStatus = ApiData.Loading Nothing
         , clusterDetail = Nothing
         , runningStepIds = []

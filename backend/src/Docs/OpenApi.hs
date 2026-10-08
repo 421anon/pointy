@@ -10,7 +10,7 @@
 
 module Docs.OpenApi (pointyOpenApi) where
 
-import Agent.Git (AgentApplyView, AgentGitState, AgentSessionView, AgentUsage)
+import Agent.Git (AgentGitState, AgentSessionView, AgentUsage)
 import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedApply)
 import Api (API)
 import ApiTypes (DynamicJson)
@@ -22,7 +22,7 @@ import Data.Text (Text, pack)
 import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
-import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -136,6 +136,9 @@ nullableField openApiType = Inline (mempty & type_ ?~ openApiType & nullable ?~ 
 integerField :: Referenced Schema
 integerField = Inline (mempty & type_ ?~ OpenApiInteger)
 
+booleanField :: Referenced Schema
+booleanField = Inline (mempty & type_ ?~ OpenApiBoolean)
+
 arrayOf :: Referenced Schema -> Referenced Schema
 arrayOf itemSchema = Inline (mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject itemSchema)
 
@@ -163,6 +166,8 @@ instance ToSchema TurnRequest where
                 [ ("sessionId", stringField)
                 , ("prompt", stringField)
                 , ("currentProjectId", nullableField OpenApiInteger)
+                , ("autoApply", booleanField)
+                , ("clientId", stringField)
                 ]
                 & schema . required .~ ["sessionId", "prompt"]
 
@@ -174,12 +179,15 @@ instance ToSchema RenameSessionRequest where
     declareNamedSchema _ =
         pure $ objectSchema "RenameSessionRequest" [("sessionId", stringField), ("name", stringField)]
 
-instance ToSchema ConfirmApplyRequest where
+instance ToSchema ApplyRequest where
     declareNamedSchema _ =
         pure $
-            objectSchema
-                "ConfirmApplyRequest"
-                [("sessionId", stringField), ("targetHead", stringField), ("candidateHead", stringField)]
+            objectSchema "ApplyRequest" [("sessionId", stringField), ("autoApply", booleanField), ("clientId", stringField)]
+                & schema . required .~ ["sessionId", "autoApply"]
+
+instance ToSchema AutoApplyRequest where
+    declareNamedSchema _ =
+        pure $ objectSchema "AutoApplyRequest" [("clientId", stringField), ("autoApply", booleanField)]
 
 instance ToSchema LineOffset where
     declareNamedSchema _ = declareNamedSchema (Proxy :: Proxy Int)
@@ -224,7 +232,6 @@ instance ToSchema AgentTurn
 instance ToSchema AgentGitState
 instance ToSchema AgentSessionSummary
 instance ToSchema AgentSessionView
-instance ToSchema AgentApplyView
 instance ToSchema AgentUsage
 
 instance ToSchema ReviewRequest where

@@ -3,13 +3,13 @@
 
 module Api (API) where
 
-import Agent.Git (AgentApplyView, AgentSessionView, AgentUsage)
+import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import ApiTypes (DynamicJson, RawJSON)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
-import Handlers.Agent (ConfirmApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -153,24 +153,24 @@ type SteerTurn =
         :> ReqBody '[JSON] TurnRequest
         :> PostNoContent
 
-type PrepareApply =
+type ApplyChanges =
     "agent"
-        :> "prepare-apply"
-        :> Description "Prepares an agent session's changes for review before applying."
-        :> ReqBody '[JSON] SessionRequest
+        :> "apply"
+        :> Description "Applies the agent's changes that are not applied yet. When the apply is refused, a turn starts that fixes the changes."
+        :> ReqBody '[JSON] ApplyRequest
         :> Post '[JSON] AgentSessionView
 
-type ConfirmApply =
+type SetAutoApply =
     "agent"
-        :> "confirm-apply"
-        :> Description "Applies a prepared agent session's changes to the target branch."
-        :> ReqBody '[JSON] ConfirmApplyRequest
-        :> Post '[JSON] AgentApplyView
+        :> "auto-apply"
+        :> Description "Sets whether the changes of the running agent turns that this client started are applied when they end."
+        :> ReqBody '[JSON] AutoApplyRequest
+        :> PostNoContent
 
 type DiscardSession =
     "agent"
         :> "discard"
-        :> Description "Discards an agent session's uncommitted changes."
+        :> Description "Discards the agent's changes that are not applied yet."
         :> ReqBody '[JSON] SessionRequest
         :> Post '[JSON] AgentSessionView
 
@@ -488,8 +488,8 @@ type API =
         :<|> StopTurn
         :<|> SteerTurn
         :<|> AgentTurnStream
-        :<|> PrepareApply
-        :<|> ConfirmApply
+        :<|> ApplyChanges
+        :<|> SetAutoApply
         :<|> DiscardSession
         :<|> ArchiveSession
         :<|> RenameSession

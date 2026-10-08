@@ -1,14 +1,14 @@
 module Api.Agent exposing
-    ( archive
-    , confirmApply
+    ( applyChanges
+    , archive
     , createSession
     , delete_
     , discardSession
     , fetchSession
     , listSessions
-    , prepareApply
     , renameSession
     , sendTurn
+    , setAutoApply
     , steer
     , stop
     , turnEvent
@@ -66,18 +66,31 @@ fetchSession sessionId =
             }
 
 
-sendTurn : String -> String -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt mCurrentProjectId =
+type alias AutoApplySetting a =
+    { a | autoApply : Bool, clientId : String }
+
+
+autoApplyFields : AutoApplySetting a -> List ( String, Encode.Value )
+autoApplyFields setting =
+    [ ( "autoApply", Encode.bool setting.autoApply )
+    , ( "clientId", Encode.string setting.clientId )
+    ]
+
+
+sendTurn : String -> String -> AutoApplySetting a -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt setting mCurrentProjectId =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
             , body =
                 Http.jsonBody <|
                     Encode.object
-                        [ ( "sessionId", Encode.string sessionId )
-                        , ( "prompt", Encode.string prompt )
-                        , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
-                        ]
+                        ([ ( "sessionId", Encode.string sessionId )
+                         , ( "prompt", Encode.string prompt )
+                         , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
+                         ]
+                            ++ autoApplyFields setting
+                        )
             , expect = Http.expectJson identity turnDecoder
             }
 
@@ -97,30 +110,24 @@ steer sessionId prompt =
             }
 
 
-prepareApply : String -> Flow s (Result Http.Error Model.AgentSessionView)
-prepareApply sessionId =
-    postSessionView "/prepare-apply" (sessionIdBody sessionId)
-
-
-confirmApply : String -> String -> String -> Flow s (Result Http.Error Model.AgentApplyView)
-confirmApply sessionId targetHead candidateHead =
-    Flow.lift <|
-        Http.post
-            { url = baseUrl ++ "/confirm-apply"
-            , body =
-                Http.jsonBody <|
-                    Encode.object
-                        [ ( "sessionId", Encode.string sessionId )
-                        , ( "targetHead", Encode.string targetHead )
-                        , ( "candidateHead", Encode.string candidateHead )
-                        ]
-            , expect = Http.expectJson identity applyViewDecoder
-            }
+applyChanges : String -> AutoApplySetting a -> Flow s (Result Http.Error Model.AgentSessionView)
+applyChanges sessionId setting =
+    postSessionView "/apply" (Encode.object (( "sessionId", Encode.string sessionId ) :: autoApplyFields setting))
 
 
 discardSession : String -> Flow s (Result Http.Error Model.AgentSessionView)
 discardSession sessionId =
     postSessionView "/discard" (sessionIdBody sessionId)
+
+
+setAutoApply : AutoApplySetting a -> Flow s (Result Http.Error ())
+setAutoApply setting =
+    Flow.lift <|
+        Http.post
+            { url = baseUrl ++ "/auto-apply"
+            , body = Http.jsonBody (Encode.object (autoApplyFields setting))
+            , expect = Http.expectWhatever identity
+            }
 
 
 renameSession : String -> String -> Flow s (Result Http.Error Model.AgentSessionView)
@@ -156,14 +163,6 @@ sessionViewDecoder =
         |> required "turns" (Decode.list turnDecoder)
 
 
-applyViewDecoder : Decoder Model.AgentApplyView
-applyViewDecoder =
-    Decode.succeed Model.AgentApplyView
-        |> required "sessionView" sessionViewDecoder
-        |> required "invalidatedProjectIds" (Decode.list Decode.int)
-        |> required "invalidatedStepIds" (Decode.list Decode.int)
-
-
 sessionDecoder : Decoder Model.AgentSession
 sessionDecoder =
     Decode.succeed Model.AgentSession
@@ -174,13 +173,11 @@ sessionDecoder =
         |> required "baseCommit" Decode.string
         |> required "worktreePath" Decode.string
         |> required "status" Decode.string
-        |> optional "preparedApply" (Decode.maybe preparedApplyDecoder) Nothing
         |> optional "activeTurnId" (Decode.maybe Decode.string) Nothing
         |> optional "lastError" (Decode.maybe Decode.string) Nothing
         |> required "updatedAt" updatedAtDecoder
-
-
-
+        |> optional "autoApply" Decode.bool True
+        |> optional "autoApplyClient" (Decode.maybe Decode.string) Nothing
 
 
 updatedAtDecoder : Decoder Model.SessionTimestamp
@@ -216,15 +213,6 @@ decodeSessionTimestamp raw =
             Nothing
 
 
-preparedApplyDecoder : Decoder Model.AgentPreparedApply
-preparedApplyDecoder =
-    Decode.succeed Model.AgentPreparedApply
-        |> required "targetHead" Decode.string
-        |> required "agentHead" Decode.string
-        |> required "candidateHead" Decode.string
-        |> required "candidateWorktree" Decode.string
-
-
 gitStateDecoder : Decoder Model.AgentGitState
 gitStateDecoder =
     Decode.succeed Model.AgentGitState
@@ -240,6 +228,7 @@ turnDecoder =
         |> required "turnId" Decode.string
         |> required "turnSessionId" Decode.string
         |> optional "turnPrompt" Decode.string ""
+        |> optional "turnAutomatic" Decode.bool False
         |> required "turnStatus" Decode.string
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
         |> required "turnLogPath" Decode.string
