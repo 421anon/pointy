@@ -526,13 +526,15 @@ onOrganizeDragEvent value =
             Flow.setAll organizeDrag Nothing
 
         Ok (OrganizeDragDrop { target, linkModifier }) ->
-            (case target of
-                OrganizeDropFolder { folderId } ->
-                    dropIntoFolder folderId linkModifier
+            clearSelection
+                |> Flow.seq
+                    (case target of
+                        OrganizeDropFolder { folderId } ->
+                            dropIntoFolder folderId linkModifier
 
-                OrganizeDropEdge { parentScope, ref, before } ->
-                    dropReorder parentScope ref before
-            )
+                        OrganizeDropEdge { parentScope, ref, before } ->
+                            dropReorder parentScope ref before
+                    )
                 |> Flow.seq (Flow.setAll organizeDrag Nothing)
 
         Err _ ->
