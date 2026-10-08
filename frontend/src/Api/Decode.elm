@@ -37,17 +37,18 @@ userRepoInfo =
         |> required "branch" Decode.string
 
 
-snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status } }
+snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
 snapshot =
     Decode.succeed (\pid c s -> { projectId = pid, commit = c, steps = s })
         |> required "projectId" Decode.int
         |> required "commit" Decode.string
         |> required "steps"
             (Decode.list
-                (Decode.succeed (\sid st mErr -> { stepId = sid, status = applyError st mErr })
+                (Decode.succeed (\sid st mErr mCertificate -> { stepId = sid, status = applyError st mErr, certificate = mCertificate })
                     |> required "stepId" Decode.int
                     |> required "status" status
                     |> optional "error" (Decode.map Just Decode.string) Nothing
+                    |> optional "certificate" (Decode.map Just Decode.string) Nothing
                 )
             )
 

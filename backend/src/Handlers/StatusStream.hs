@@ -70,10 +70,10 @@ streamLoop :: TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
 streamLoop busChan =
     Sse.broadcastLoop snapshotEvent busChan
   where
-    snapshotEvent snapshot = ("snapshot", encodeSnapshot (Bus.projectId snapshot) (Bus.commit snapshot) (Bus.statuses snapshot))
+    snapshotEvent snapshot = ("snapshot", encodeSnapshot (Bus.projectId snapshot) (Bus.commit snapshot) (Bus.certificates snapshot) (Bus.statuses snapshot))
 
-encodeSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> LBS.ByteString
-encodeSnapshot projectId targetCommit statuses =
+encodeSnapshot :: Int -> Text -> Map Int Text -> Map Int (Text, Maybe Text) -> LBS.ByteString
+encodeSnapshot projectId targetCommit certificates statuses =
     encode
         ( object
             [ "projectId" .= projectId
@@ -84,6 +84,7 @@ encodeSnapshot projectId targetCommit statuses =
                         object
                             ( ["stepId" .= sid, "status" .= st]
                                 ++ maybe [] (\e -> ["error" .= e]) mErr
+                                ++ maybe [] (\c -> ["certificate" .= c]) (Map.lookup sid certificates)
                             )
                     )
                     (Map.toList statuses)

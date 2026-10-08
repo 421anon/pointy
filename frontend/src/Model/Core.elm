@@ -148,8 +148,17 @@ type alias BaseRecord a =
 
 type alias StepRunState =
     { commit : String
+    , certificate : Maybe String
     , status : ApiData Status
+    , outputsCommit : String
     , directoryView : DirectoryFolder
+    }
+
+
+type alias StatusReport =
+    { commit : String
+    , status : Status
+    , certificate : Maybe String
     }
 
 
@@ -1508,7 +1517,7 @@ type Model
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
-        , stepStatusBuffer : Dict Int ( String, Status )
+        , stepStatusBuffer : Dict Int StatusReport
         , pendingBuilds : Dict Int String
         , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
@@ -1815,7 +1824,7 @@ getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
 
-getStepStatusBuffer : Model -> Dict Int ( String, Status )
+getStepStatusBuffer : Model -> Dict Int StatusReport
 getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
 
@@ -1935,7 +1944,7 @@ type alias Flags =
 
 
 type StepStatusEvent
-    = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status } }
+    = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
     | SSEHeartbeat
     | SSEError String
 

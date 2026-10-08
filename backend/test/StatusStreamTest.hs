@@ -25,8 +25,8 @@ main = do
     silent <- timeout 1000000 (pullStep (streamLoop =<< subscribe))
     assertEqual "no event without a broadcast" Nothing (fmap (const ()) silent)
 
-    broadcastSnapshot 1 "abc123" (Map.singleton 1 ("success", Nothing))
-    broadcastSnapshot 2 "def456" (Map.singleton 2 ("running", Nothing))
+    broadcastSnapshot 1 "abc123" (Map.singleton 1 "/nix/store/abc-certificate") (Map.singleton 1 ("success", Nothing))
+    broadcastSnapshot 2 "def456" Map.empty (Map.singleton 2 ("running", Nothing))
 
     m1 <- timeout 2000000 (pullStep (streamLoop =<< subscribe))
     case m1 of
@@ -35,6 +35,7 @@ main = do
         Just (Just (bytes1, pull1)) -> do
             assertBool "first snapshot is a snapshot event" ("event: snapshot" `BS.isInfixOf` bytes1)
             assertBool "first snapshot carries project id" ("\"projectId\":1" `BS.isInfixOf` bytes1)
+            assertBool "first snapshot carries the step certificate clients compare across commits" ("\"certificate\":\"/nix/store/abc-certificate\"" `BS.isInfixOf` bytes1)
             m2 <- timeout 2000000 (pullStep pull1)
             case m2 of
                 Nothing -> fail "second snapshot did not arrive"

@@ -537,25 +537,24 @@ replayStepStatusBuffer =
             )
 
 
-applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-applyStepStatus snapshotCommit status_ rs =
+applyStepStatus : String -> Maybe String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStepStatus snapshotCommit mCertificate status_ rs =
     let
-        collapsedDirectoryView =
-            { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
-
-        current =
-            ApiData.toMaybe rs
-                |> Maybe.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView }
-
-        directoryView_ =
-            if current.commit == snapshotCommit then
-                current.directoryView
-
-            else
-                collapsedDirectoryView
+        showsSameOutputs current =
+            current.commit == snapshotCommit || (Maybe.isJust mCertificate && current.certificate == mCertificate)
 
         updated =
-            { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
+            case ApiData.toMaybe rs |> Maybe.filter showsSameOutputs of
+                Just current ->
+                    { current | commit = snapshotCommit, certificate = Maybe.orElse current.certificate mCertificate, status = status_ }
+
+                Nothing ->
+                    { commit = snapshotCommit
+                    , certificate = mCertificate
+                    , status = status_
+                    , outputsCommit = snapshotCommit
+                    , directoryView = { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
+                    }
     in
     if rs == Success updated then
         rs
@@ -564,23 +563,23 @@ applyStepStatus snapshotCommit status_ rs =
         Success updated
 
 
-applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-applyStatusSnapshot snapshotCommit newStatus rs =
+applyStatusSnapshot : Model.StatusReport -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStatusSnapshot report rs =
     let
         pendingRun =
             has
                 (success
-                    << where_ (.commit >> (==) snapshotCommit)
+                    << where_ (.commit >> (==) report.commit)
                     << status
                     << where_ ((==) (Loading (Just StatusRunning)))
                 )
                 rs
     in
-    if pendingRun && List.member newStatus [ StatusNotStarted, StatusBuiltNotCertified ] then
+    if pendingRun && List.member report.status [ StatusNotStarted, StatusBuiltNotCertified ] then
         rs
 
     else
-        applyStepStatus snapshotCommit (Success newStatus) rs
+        applyStepStatus report.commit report.certificate (Success report.status) rs
 
 
 setLocalStepStatus : Int -> ApiData Status -> Flow Model ()
@@ -591,7 +590,7 @@ setLocalStepStatus stepId status_ =
                 stepRevisionById stepId model
                     |> Maybe.unwrap (Flow.pure ())
                         (\revision ->
-                            Flow.over (stepRecordById stepId << runState) (applyStepStatus revision status_)
+                            Flow.over (stepRecordById stepId << runState) (applyStepStatus revision Nothing status_)
                         )
             )
 
@@ -801,7 +800,7 @@ applyReviewReport commit_ record report =
                     reviewedRunState reviewed.revision report.reviewedStatus record.runState
 
                 ( Nothing, Just _ ) ->
-                    applyStepStatus commit_ NotAsked record.runState
+                    applyStepStatus commit_ Nothing NotAsked record.runState
 
                 ( Nothing, Nothing ) ->
                     record.runState
@@ -822,7 +821,7 @@ reviewedRunState revision mStatus runState_ =
             Success current
 
         ( Nothing, _ ) ->
-            applyStepStatus revision (Success (Maybe.withDefault Model.StatusNotStarted mStatus)) NotAsked
+            applyStepStatus revision Nothing (Success (Maybe.withDefault Model.StatusNotStarted mStatus)) NotAsked
 
 
 refreshReviews : Flow Model ()
@@ -1904,7 +1903,7 @@ seekAndMerge target recordId path anchor bytes_ =
         apiCall =
             case target of
                 Route.Output ->
-                    Flow.forAll (stepShownRevision recordId)
+                    Flow.forAll (stepOutputsRevision recordId)
                         (\commit_ ->
                             Api.fetchFileSeek recordId (Just commit_) path anchor bytes_
                         )
@@ -2095,7 +2094,7 @@ toggleOutputEntry recordId mOpen path =
             folderExpandedAt recordId path |> orElseT (fileIsViewingAt recordId path)
 
         stepCommit =
-            stepShownRevision recordId
+            stepOutputsRevision recordId
 
         extrasLensFor p =
             if List.isEmpty p then
@@ -3980,7 +3979,7 @@ onStepStatusIn value =
         Ok (SSESnapshot { commit, steps }) ->
             let
                 statuses =
-                    Dict.fromList (List.map (\step -> ( step.stepId, ( commit, step.status ) )) steps)
+                    Dict.fromList (List.map (\step -> ( step.stepId, { commit = commit, status = step.status, certificate = step.certificate } )) steps)
             in
             Flow.get
                 |> Flow.andThen
@@ -4006,7 +4005,7 @@ headMovedRemotely model snapshotCommit =
         && not (isReadOnlyRoute model)
 
 
-rollupAffectedFor : Model -> Dict Int ( String, Status ) -> Bool
+rollupAffectedFor : Model -> Dict Int Model.StatusReport -> Bool
 rollupAffectedFor model statuses =
     case try currentProjectId model of
         Nothing ->
@@ -4018,10 +4017,10 @@ rollupAffectedFor model statuses =
                     stepsBelow (projectsDict model) projectId
             in
             Dict.foldl
-                (\stepId ( _, status_ ) acc ->
+                (\stepId report acc ->
                     acc
                         || (Set.member stepId reachable
-                                && has (stepRecordById stepId << runState << success << status << where_ (ApiData.toMaybe >> (/=) (Just status_))) model
+                                && has (stepRecordById stepId << runState << success << status << where_ (ApiData.toMaybe >> (/=) (Just report.status))) model
                            )
                 )
                 False
@@ -4042,12 +4041,12 @@ stepsBelow projects_ rootId =
             Set.empty
 
 
-applyStepStatuses : Dict Int ( String, Status ) -> Flow Model ()
+applyStepStatuses : Dict Int Model.StatusReport -> Flow Model ()
 applyStepStatuses statuses =
     Flow.get |> Flow.andThen (applyListedStatuses statuses)
 
 
-applyListedStatuses : Dict Int ( String, Status ) -> Model -> Flow Model ()
+applyListedStatuses : Dict Int Model.StatusReport -> Model -> Flow Model ()
 applyListedStatuses statuses model =
     let
         listed =
@@ -4061,13 +4060,13 @@ applyListedStatuses statuses model =
 
         hooks =
             statuses
-                |> Dict.filter (\_ -> Model.hasBuiltOutput << Tuple.second)
+                |> Dict.filter (\_ -> Model.hasBuiltOutput << .status)
                 |> Dict.keys
                 |> List.map runAndClearStepStatusHook
 
         settles =
             Dict.toList statuses
-                |> List.map (\( stepId, ( commit, status_ ) ) -> settlePendingBuild commit stepId status_)
+                |> List.map (\( stepId, report ) -> settlePendingBuild report.commit stepId report.status)
 
         reviewReloads =
             listed
@@ -4101,34 +4100,34 @@ settlePendingStops =
             )
 
 
-renewsReview : Dict Int ( String, Status ) -> StepRecord -> Bool
+renewsReview : Dict Int Model.StatusReport -> StepRecord -> Bool
 renewsReview statuses record =
     has (review << just) record
         && has (runState << success << status << where_ ((==) (Success StatusRunning))) record
         && announcedSuccess statuses record
 
 
-announcedStatus : Dict Int ( String, Status ) -> StepRecord -> Maybe ( String, Status )
+announcedStatus : Dict Int Model.StatusReport -> StepRecord -> Maybe Model.StatusReport
 announcedStatus statuses =
     get recordId >> Maybe.andThen (flip Dict.get statuses)
 
 
-announcedSuccess : Dict Int ( String, Status ) -> StepRecord -> Bool
+announcedSuccess : Dict Int Model.StatusReport -> StepRecord -> Bool
 announcedSuccess statuses =
     announcedStatus statuses >> Maybe.unwrap False succeeded
 
 
-succeeded : ( String, Status ) -> Bool
+succeeded : Model.StatusReport -> Bool
 succeeded =
-    Tuple.second >> (==) StatusSuccess
+    .status >> (==) StatusSuccess
 
 
-applyStatusToStepRecord : Model -> Dict Int ( String, Status ) -> StepRecord -> StepRecord
+applyStatusToStepRecord : Model -> Dict Int Model.StatusReport -> StepRecord -> StepRecord
 applyStatusToStepRecord model statuses record =
     case announcedStatus statuses record of
-        Just ( commit, status_ ) ->
-            if acceptsCommit model commit record then
-                applySnapshotToRecord commit status_ record
+        Just report ->
+            if acceptsCommit model report.commit record then
+                applySnapshotToRecord report record
 
             else
                 record
@@ -4142,14 +4141,14 @@ acceptsCommit model commit =
     Maybe.unwrap True ((==) commit) << Model.stepRevision model
 
 
-applySnapshotToRecord : String -> Status -> StepRecord -> StepRecord
-applySnapshotToRecord commit status_ record =
+applySnapshotToRecord : Model.StatusReport -> StepRecord -> StepRecord
+applySnapshotToRecord report record =
     let
         current =
             get runState record
 
         updated =
-            applyStatusSnapshot commit status_ current
+            applyStatusSnapshot report current
     in
     if updated == current then
         record

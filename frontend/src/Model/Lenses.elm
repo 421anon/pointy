@@ -114,6 +114,11 @@ commit =
     lens "commit" .commit (\t commit_ -> { t | commit = commit_ })
 
 
+outputsCommit : Lens ls { a | outputsCommit : b } b x y
+outputsCommit =
+    lens "outputsCommit" .outputsCommit (\t outputsCommit_ -> { t | outputsCommit = outputsCommit_ })
+
+
 runState : Lens ls { a | runState : b } b x y
 runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
@@ -257,6 +262,11 @@ stepShownRevision : Int -> Traversal Model String x y
 stepShownRevision stepId =
     orElseT (stepRecordById stepId << runState << success << commit)
         (orElseT (stepRecordById stepId << review << just << reviewRevision) viewedRevision)
+
+
+stepOutputsRevision : Int -> Traversal Model String x y
+stepOutputsRevision stepId =
+    orElseT (stepRecordById stepId << runState << success << outputsCommit) (stepShownRevision stepId)
 
 
 selectExistingSteps : Lens ls { a | selectExistingSteps : b } b x y
@@ -760,7 +770,7 @@ stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
 
 
-stepStatusBuffer : Lens ls Model (Dict Int ( String, Model.Status )) x y
+stepStatusBuffer : Lens ls Model (Dict Int Model.StatusReport) x y
 stepStatusBuffer =
     lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
 
