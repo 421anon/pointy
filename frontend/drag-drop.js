@@ -94,7 +94,10 @@ function setDragImage(event, count) {
 }
 
 function onDragStart(app, event) {
-  const row = event.target instanceof Element ? event.target.closest("[data-drag-ref]") : null;
+  const row =
+    event.target instanceof Element && event.target.matches("[data-drag-handle]")
+      ? event.target.closest("[data-drag-ref]")
+      : null;
   if (!row || !event.dataTransfer) return;
   const rowToken = row.dataset.dragRef;
   if (!parseRef(rowToken)) return;

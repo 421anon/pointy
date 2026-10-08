@@ -17,6 +17,7 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - Steps not linked from any folder are loaded from raw project links and stay reachable through search and "Link existing". Unreadable raw links fail the load rather than exposing potentially linked steps as unfiled.
 - Organization batches reject newly introduced project cycles, including cycles assembled within a single batch, without committing partial changes.
 - Manual drag reorder follows the displayed folders-first order. Drops that leave the visible order unchanged do not queue a write.
+- Organize drags start only from a row's header. Links, images, selected text and form fields inside an open row keep the browser's native drag.
 - Historical views are read-only, including toast Undo, and retain the browser's native context menu.
 - Listing header controls wrap on narrow screens. The selection action bar overlays the listing header, so selecting never shifts rows; it collapses to icons on narrow listings.
 - The navigation toggle appears only once the folder tree has loaded. The open navigation drawer starts just wide enough for the folder tree, up to a quarter of the window, and resizes from its bottom-right corner like the agent panel; its header and its side edges cast shadows while the tree is scrolled vertically or horizontally. On narrow screens the drawer overlays the page, spanning the full width on phones and omitting folder icons to fit longer names.

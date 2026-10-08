@@ -67,7 +67,9 @@ rowDragAttrs scope link =
 
 rowDragHandleAttrs : List (Html.Attribute msg)
 rowDragHandleAttrs =
-    [ attribute "draggable" "true" ]
+    [ attribute "draggable" "true"
+    , attribute "data-drag-handle" ""
+    ]
 
 
 selectionRefsAttr : Model -> List (Html.Attribute msg)
