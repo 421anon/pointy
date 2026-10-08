@@ -309,7 +309,7 @@ moveValid model sourceScope targetId ref =
 
 resolveInto : Model -> OrganizeDrag -> Int -> List OrganizeDropAction
 resolveInto model drag targetId =
-    if not (listingEditable model) then
+    if not (listingEditable model) || List.any (Lib.linkCreatesCycle (projectsDict model) targetId) drag.refs then
         []
 
     else
@@ -419,12 +419,9 @@ organizeTargets model mode sourceScope refs =
         projects_ =
             projectsDict model
 
-        projectRefs =
-            List.filter (\ref -> ref.kind == ProjectChild) refs
-
         excluded id =
             (mode == OrganizeMove && sourceScope == id)
-                || List.any (\ref -> ref.id == id || Model.isAncestorProject projects_ ref.id id) projectRefs
+                || List.any (Lib.linkCreatesCycle projects_ id) refs
     in
     Dict.toList projects_
         |> List.filter (\( id, _ ) -> not (excluded id))
