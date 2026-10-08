@@ -62,7 +62,7 @@ toggleListingFoldersFirst =
 
 toggleListingShowHidden : Flow Model ()
 toggleListingShowHidden =
-    Flow.over (listingPreferences << listingShowHidden) not
+    Flow.modify (over (listingPreferences << listingShowHidden) not >> Selection.pruneSelection)
 
 
 toggleListingGroupByType : Flow Model ()
@@ -497,6 +497,7 @@ applyLoadedProjects target result =
                                     (target == Nothing && try (route << Route.page << Route.viewedCommitT) model == Nothing)
                                     reapplyOrganizeQueue
                                 )
+                            |> Flow.seq (Flow.modify Selection.pruneSelection)
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async loadProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
