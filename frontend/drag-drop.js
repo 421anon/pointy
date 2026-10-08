@@ -56,11 +56,18 @@ function hitTest(event) {
   const linkRequested = event.ctrlKey || event.metaKey || event.altKey;
   const before = !!row && isTopHalf(row, event);
   const edge = !linkRequested && !!row && allowsEdge(row, before);
-  if (edge && inEdgeBand(row, event)) return { kind: "edge", row, before, token: "move" };
+  if (edge && inEdgeBand(row, event)) return edgeHit(row, before);
   const token = folderNode ? chooseToken(folderNode, linkRequested) : null;
   if (token) return { kind: "folder", node: folderNode, token };
-  if (edge) return { kind: "edge", row, before, token: "move" };
+  if (edge) return edgeHit(row, before);
   return null;
+}
+
+function edgeHit(row, before) {
+  const next = before ? null : row.nextElementSibling;
+  return next && next.matches("[data-drag-ref]")
+    ? { kind: "edge", row: next, before: true, token: "move" }
+    : { kind: "edge", row, before, token: "move" };
 }
 
 function clearIndicator() {
@@ -72,8 +79,6 @@ function clearIndicator() {
 
 function indicatorTarget(hit) {
   if (hit.kind !== "edge") return { node: hit.node, className: "drop-into" };
-  const next = hit.before ? null : hit.row.nextElementSibling;
-  if (next && next.matches("[data-drag-ref]")) return { node: next, className: "drop-before" };
   return { node: hit.row, className: hit.before ? "drop-before" : "drop-after" };
 }
 
