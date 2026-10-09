@@ -3,7 +3,7 @@
 module Main (main) where
 
 import BuildRunner (JobComment (..), SlurmJob, encodeJobComment, parseSlurmJobLine)
-import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), FinishedStep (..), JobProgress (..), StepActivity (..), StepOutcome (..), StepPhase (..), TrackedBuild (..))
+import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), JobProgress (..), StepActivity (..), StepPhase (..), TrackedBuild (..))
 import Control.Monad (unless)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -100,11 +100,10 @@ main = do
             )
         )
     assertBool
-        "activity payload carries phase, reason and recent outcomes"
+        "activity payload carries phase, reason and start"
         ( "\"phase\":\"queued\"" `occursIn` activityPayload
             && "\"reason\":\"Dependency\"" `occursIn` activityPayload
             && "\"since\":\"2026-10-09T12:00:00Z\"" `occursIn` activityPayload
-            && "\"outcome\":\"failed\"" `occursIn` activityPayload
         )
 
 now :: UTCTime
@@ -142,7 +141,6 @@ activityPayload =
                 { clusterStatus = Available
                 , clusterDetail = Nothing
                 , activeSteps = Map.singleton 7 (StepActivity Queued trackedAt (Just "Dependency") ["f1c5ec2080eeed56e424178207fd8310081de368"])
-                , recentSteps = [FinishedStep 8 Failed now (Just "dependency step(s) [3] could not be scheduled")]
                 }
 
 downNodeTranscript :: String
@@ -154,7 +152,7 @@ degradedPayload = payload (Degraded, Just "trotter down; no usable nodes")
 
 payload :: (ClusterStatus, Maybe Text) -> BS.ByteString
 payload (status, detail) =
-    LBS.toStrict (encodeSnapshot (ClusterSnapshot status detail Map.empty []))
+    LBS.toStrict (encodeSnapshot (ClusterSnapshot status detail Map.empty))
 
 occursIn :: BS.ByteString -> BS.ByteString -> Bool
 occursIn = BS.isInfixOf

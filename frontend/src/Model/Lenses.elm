@@ -1036,11 +1036,6 @@ activeSteps =
     lens ".activeSteps" Model.getActiveSteps (\(Model m) steps_ -> Model { m | activeSteps = steps_ })
 
 
-recentSteps : Lens ls Model (List Model.FinishedStep) x y
-recentSteps =
-    lens ".recentSteps" Model.getRecentSteps (\(Model m) steps_ -> Model { m | recentSteps = steps_ })
-
-
 statusBarCollapsed : Lens ls Model (Set String) x y
 statusBarCollapsed =
     lens ".statusBarCollapsed" Model.getStatusBarCollapsed (\(Model m) groups -> Model { m | statusBarCollapsed = groups })

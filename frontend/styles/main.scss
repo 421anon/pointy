@@ -3301,21 +3301,12 @@ body:has(dialog[open]) {
   &--idle {
     color: var(--text-muted);
   }
-
-  &--failed {
-    color: var(--state-danger);
-    font-weight: 600;
-  }
 }
 
 .status-bar__count-number {
   font-weight: 600;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-}
-
-.status-bar__count--failed .status-bar__count-number {
-  color: inherit;
 }
 
 .status-bar__marker {
@@ -3344,10 +3335,6 @@ body:has(dialog[open]) {
 .status-bar__count--transferring .status-bar__marker,
 .status-bar__marker--transferring {
   background: var(--state-info);
-}
-
-.status-bar__count--failed .status-bar__marker {
-  background: var(--state-danger);
 }
 
 .status-bar__repo {
@@ -3614,16 +3601,6 @@ body:has(dialog[open]) {
   text-align: end;
   white-space: nowrap;
 
-  &--failed {
-    color: var(--state-danger);
-    font-weight: 600;
-  }
-
-  &--succeeded {
-    color: var(--state-success);
-  }
-
-  &--stopped,
   &--starting {
     color: var(--text-muted);
   }

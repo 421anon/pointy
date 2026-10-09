@@ -140,25 +140,10 @@ type alias StepActivity =
     }
 
 
-type StepOutcome
-    = OutcomeSucceeded
-    | OutcomeFailed
-    | OutcomeStopped
-
-
-type alias FinishedStep =
-    { stepId : Int
-    , outcome : StepOutcome
-    , finishedAt : Time.Posix
-    , detail : Maybe String
-    }
-
-
 type alias ClusterSnapshot =
     { status : ClusterStatus
     , detail : Maybe String
     , activeSteps : List StepActivity
-    , recentSteps : List FinishedStep
     }
 
 
@@ -1574,7 +1559,6 @@ type Model
         , clusterStatus : ApiData ClusterStatus
         , clusterDetail : Maybe String
         , activeSteps : List StepActivity
-        , recentSteps : List FinishedStep
         , statusBarCollapsed : Set String
         , statusBarOpen : Bool
         , sidebarOpen : Bool
@@ -1705,11 +1689,6 @@ getClusterDetail (Model model) =
 getActiveSteps : Model -> List StepActivity
 getActiveSteps (Model model) =
     model.activeSteps
-
-
-getRecentSteps : Model -> List FinishedStep
-getRecentSteps (Model model) =
-    model.recentSteps
 
 
 getStatusBarCollapsed : Model -> Set String
@@ -2053,7 +2032,6 @@ initialModel key route flags =
         , clusterStatus = ApiData.Loading Nothing
         , clusterDetail = Nothing
         , activeSteps = []
-        , recentSteps = []
         , statusBarCollapsed = Set.empty
         , statusBarOpen = False
         , sidebarOpen = not flags.isNarrow
@@ -2726,7 +2704,6 @@ type TrayState
     | TrayQueued Time.Posix (Maybe String)
     | TrayStarting (Maybe Time.Posix)
     | TrayTransferring (Maybe Float)
-    | TrayFinished StepOutcome Time.Posix (Maybe String)
 
 
 type alias TrayStep =
@@ -2737,11 +2714,6 @@ type alias TrayStep =
     , state : TrayState
     , commits : List String
     }
-
-
-recentStepWindowMillis : Int
-recentStepWindowMillis =
-    10 * 60 * 1000
 
 
 getTraySteps : Model -> List TrayStep
@@ -2790,11 +2762,6 @@ getTraySteps (Model model) =
         building =
             List.map (\activity -> ( activity.stepId, activityState activity, activity.commits )) model.activeSteps
 
-        recent =
-            model.recentSteps
-                |> List.filter (\finished -> Time.posixToMillis model.now - Time.posixToMillis finished.finishedAt < recentStepWindowMillis)
-                |> List.map (\finished -> ( finished.stepId, TrayFinished finished.outcome finished.finishedAt finished.detail, [] ))
-
         reportedRunning =
             model.steps
                 |> Dict.filter (\_ step -> ApiData.unwrap Nothing (.status >> ApiData.toMaybe) step.runState == Just StatusRunning)
@@ -2839,7 +2806,7 @@ getTraySteps (Model model) =
                         }
                     )
     in
-    (transfers ++ building ++ recent ++ reportedRunning)
+    (transfers ++ building ++ reportedRunning)
         |> List.uniqueBy (\( stepId, _, _ ) -> stepId)
         |> List.filterMap trayStep
 

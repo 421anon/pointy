@@ -9,7 +9,7 @@
 module Handlers.ClusterStream (clusterStatusFromAvailability, clusterStatusStreamHandler, deriveJobProgress, encodeSnapshot, startClusterPoller) where
 
 import BuildRunner (JobComment (..), JobId (..), SlurmJob (..), decodeJobComment, isRunningState, parseSlurmJobLine)
-import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), FinishedStep (..), JobProgress (..), StepActivity (..), StepOutcome (..), StepPhase (..), TrackedBuild (..), setClusterStatus, snapshotAndSubscribe, trackedBuilds, updateJobProgress, wholeSeconds)
+import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), JobProgress (..), StepActivity (..), StepPhase (..), TrackedBuild (..), setClusterStatus, snapshotAndSubscribe, trackedBuilds, updateJobProgress, wholeSeconds)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM (TChan, atomically)
 import Control.Monad (forever, unless, void)
@@ -136,7 +136,6 @@ encodeSnapshot snapshot =
             [ "status" .= statusText (clusterStatus snapshot)
             , "detail" .= clusterDetail snapshot
             , "activeSteps" .= map encodeActivity (Map.toList (activeSteps snapshot))
-            , "recentSteps" .= map encodeFinished (recentSteps snapshot)
             ]
   where
     encodeActivity (stepId, activity) =
@@ -147,23 +146,11 @@ encodeSnapshot snapshot =
             , "reason" .= activityReason activity
             , "commits" .= activityCommits activity
             ]
-    encodeFinished finished =
-        object
-            [ "stepId" .= finishedStepId finished
-            , "outcome" .= outcomeText (finishedOutcome finished)
-            , "finishedAt" .= finishedAt finished
-            , "detail" .= finishedDetail finished
-            ]
 
 phaseText :: StepPhase -> Text
 phaseText Preparing = "preparing"
 phaseText Queued = "queued"
 phaseText Running = "running"
-
-outcomeText :: StepOutcome -> Text
-outcomeText Succeeded = "succeeded"
-outcomeText Failed = "failed"
-outcomeText Stopped = "stopped"
 
 statusText :: ClusterStatus -> Text
 statusText Available = "available"

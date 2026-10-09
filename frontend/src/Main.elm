@@ -238,7 +238,7 @@ agentActivitySubscription model =
 
 statusBarClockSubscription : Model -> Sub (Flow Model ())
 statusBarClockSubscription model =
-    if Model.Core.getStatusBarOpen model && not (List.isEmpty (Model.Core.getActiveSteps model) && List.isEmpty (Model.Core.getRecentSteps model)) then
+    if Model.Core.getStatusBarOpen model && not (List.isEmpty (Model.Core.getActiveSteps model)) then
         Time.every 1000 (\time -> Flow.setAll now time)
 
     else

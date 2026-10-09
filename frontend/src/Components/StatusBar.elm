@@ -8,7 +8,7 @@ import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, disabled, href, id, rel, target, title, type_)
 import Html.Events as Events
 import Html.Extra as Html
-import Model.Core as Model exposing (ClusterStatus(..), Model, StepOutcome(..), TrayState(..), TrayStep)
+import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
 import Model.Lenses exposing (route)
 import Model.Lib exposing (canonicalNamePath)
 import Route
@@ -23,7 +23,6 @@ type GroupKind
     | QueuedGroup
     | StartingGroup
     | TransferGroup
-    | RecentGroup
 
 
 type alias Group =
@@ -35,7 +34,7 @@ type alias Group =
 
 groupOrder : List GroupKind
 groupOrder =
-    [ RunningGroup, QueuedGroup, StartingGroup, TransferGroup, RecentGroup ]
+    [ RunningGroup, QueuedGroup, StartingGroup, TransferGroup ]
 
 
 view : Model -> Html (Flow Model ())
@@ -45,7 +44,7 @@ view model =
             Model.getTraySteps model
 
         groups =
-            groupSteps (Model.getNow model) steps
+            groupSteps steps
 
         isOpen =
             Model.getStatusBarOpen model && not (List.isEmpty steps)
@@ -89,9 +88,6 @@ groupKind state =
         TrayTransferring _ ->
             TransferGroup
 
-        TrayFinished _ _ _ ->
-            RecentGroup
-
 
 groupKey : GroupKind -> String
 groupKey kind =
@@ -107,9 +103,6 @@ groupKey kind =
 
         TransferGroup ->
             "transferring"
-
-        RecentGroup ->
-            "recent"
 
 
 groupTitle : GroupKind -> String
@@ -127,12 +120,9 @@ groupTitle kind =
         TransferGroup ->
             "Uploading"
 
-        RecentGroup ->
-            "Recently finished"
 
-
-groupSteps : Time.Posix -> List TrayStep -> List Group
-groupSteps now steps =
+groupSteps : List TrayStep -> List Group
+groupSteps steps =
     groupOrder
         |> List.filterMap
             (\kind ->
@@ -143,7 +133,7 @@ groupSteps now steps =
                     members ->
                         let
                             ordered =
-                                List.sortBy (stepOrder now) members
+                                List.sortBy stepOrder members
                         in
                         Just
                             { kind = kind
@@ -153,17 +143,14 @@ groupSteps now steps =
             )
 
 
-stepOrder : Time.Posix -> TrayStep -> ( Int, Int )
-stepOrder now step =
+stepOrder : TrayStep -> ( Int, Int )
+stepOrder step =
     case step.state of
         TrayRunning since ->
             ( Time.posixToMillis since, step.stepId )
 
         TrayQueued since _ ->
             ( Time.posixToMillis since, step.stepId )
-
-        TrayFinished _ finishedAt _ ->
-            ( Time.posixToMillis now - Time.posixToMillis finishedAt, step.stepId )
 
         _ ->
             ( 0, step.stepId )
@@ -252,7 +239,7 @@ viewSummary : List Group -> Bool -> Bool -> Html (Flow Model ())
 viewSummary groups expandable isOpen =
     let
         counts =
-            List.filterMap summaryCount groups
+            List.map summaryCount groups
 
         spoken =
             if List.isEmpty counts then
@@ -317,38 +304,24 @@ type alias SummaryCount =
     }
 
 
-summaryCount : Group -> Maybe SummaryCount
+summaryCount : Group -> SummaryCount
 summaryCount group =
+    let
+        count =
+            List.length group.steps
+    in
     case group.kind of
         RunningGroup ->
-            Just { kind = "running", count = List.length group.steps, label = "running" }
+            { kind = "running", count = count, label = "running" }
 
         QueuedGroup ->
-            Just { kind = "queued", count = List.length group.steps, label = "queued" }
+            { kind = "queued", count = count, label = "queued" }
 
         StartingGroup ->
-            Just { kind = "starting", count = List.length group.steps, label = "starting" }
+            { kind = "starting", count = count, label = "starting" }
 
         TransferGroup ->
-            Just { kind = "transferring", count = List.length group.steps, label = "uploading" }
-
-        RecentGroup ->
-            case List.length (List.filter (.state >> isFailure) group.steps) of
-                0 ->
-                    Nothing
-
-                failures ->
-                    Just { kind = "failed", count = failures, label = "failed" }
-
-
-isFailure : TrayState -> Bool
-isFailure state =
-    case state of
-        TrayFinished OutcomeFailed _ _ ->
-            True
-
-        _ ->
-            False
+            { kind = "transferring", count = count, label = "uploading" }
 
 
 viewCount : SummaryCount -> Html msg
@@ -677,15 +650,6 @@ markerClass state =
         TrayTransferring _ ->
             "status-bar__marker status-bar__marker--transferring"
 
-        TrayFinished OutcomeSucceeded _ _ ->
-            "status-indicator status-success"
-
-        TrayFinished OutcomeFailed _ _ ->
-            "status-indicator status-failure"
-
-        TrayFinished OutcomeStopped _ _ ->
-            "status-indicator status-not-started"
-
 
 type alias Meta =
     { short : String
@@ -754,31 +718,6 @@ stateMeta now state =
             { short = "Uploading"
             , description = "Uploading"
             , tone = "transferring"
-            }
-
-        TrayFinished outcome finishedAt detail ->
-            let
-                ago =
-                    agoText (since finishedAt)
-
-                ( word, tone ) =
-                    case outcome of
-                        OutcomeSucceeded ->
-                            ( "Done", "succeeded" )
-
-                        OutcomeFailed ->
-                            ( "Failed", "failed" )
-
-                        OutcomeStopped ->
-                            ( "Stopped", "stopped" )
-            in
-            { short = word ++ " · " ++ ago
-            , description =
-                word
-                    ++ " "
-                    ++ ago
-                    ++ Maybe.withDefault "" (Maybe.map (\text -> ": " ++ text) detail)
-            , tone = tone
             }
 
 
@@ -887,15 +826,6 @@ durationWords millis =
 
     else
         plural (seconds // 86400) "day" ++ " " ++ plural (modBy 24 (seconds // 3600)) "hour"
-
-
-agoText : Int -> String
-agoText millis =
-    if millis < 60000 then
-        "just now"
-
-    else
-        durationText millis ++ " ago"
 
 
 type alias ClusterState =

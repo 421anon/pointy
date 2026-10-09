@@ -15,7 +15,7 @@ module Handlers.RunStep (
 
 import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog)
 import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
-import ClusterBus (StepOutcome (..), buildingSteps, recordFinished, requestStop, stopRequested, takeStopRequest)
+import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.STM (atomically)
@@ -71,29 +71,15 @@ runStepSync eid commit = do
             graph <- getDependencyGraph halted ctx eid
             stepIds <- liftEither $ topoOrder graph
             submitted <- lift $ submitGraph halted ctx graph stepIds
-            stopped <- liftIO $ stopRequested eid
+            stopped <- liftIO $ takeStopRequest eid
             when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _) <- [Map.lookup eid submitted]]
             return submitted
-        unless (Map.member eid outcomes) $ do
-            liftIO $ recordFinished eid Stopped Nothing
-            lift $ broadcastStatusForStepProjects eid (T.pack targetCommit) Nothing
+        unless (Map.member eid outcomes) $ lift $ broadcastStatusForStepProjects eid (T.pack targetCommit) Nothing
         liftIO $ mapConcurrently_ (runAppEffects . finishStep ctx) (Map.toList outcomes)
 
     case result of
-        Left err -> liftIO $ do
-            putStrLn $ "runStepAsync error: " ++ err
-            recordFinished eid Failed (Just (failureNote err))
+        Left err -> liftIO $ putStrLn $ "runStepAsync error: " ++ err
         Right _ -> return ()
-
-failureNote :: String -> T.Text
-failureNote = T.take 500 . T.strip . T.pack
-
-recordBuildEnd :: Int -> Bool -> IO ()
-recordBuildEnd sid certified
-    | certified = recordFinished sid Succeeded Nothing
-    | otherwise = do
-        stopped <- stopRequested sid
-        recordFinished sid (if stopped then Stopped else Failed) Nothing
 
 stepLogHandler :: Int -> Maybe T.Text -> AppM T.Text
 stepLogHandler eid commit = do
@@ -217,7 +203,6 @@ finishStep ctx (sid, outcome) = case outcome of
             broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
             waitForCompletion buildKey
         certified <- isBuilt certificate
-        liftIO $ recordBuildEnd sid certified
         if certified
             then do
                 registerCertificationRoots ctx sid certificate
@@ -227,7 +212,6 @@ finishStep ctx (sid, outcome) = case outcome of
         when certified $ buildExtras ctx sid
     NotSubmitted err -> do
         liftIO $ putStrLn $ "buildStep error: " ++ err
-        liftIO $ recordFinished sid Failed (Just (failureNote err))
         broadcastKnownStepStatus sid targetCommitText ("failure", Just (T.pack err))
   where
     targetCommitText = T.pack (readCommitHash ctx)
@@ -447,7 +431,6 @@ watchRestoredJob ctx comment job = do
         broadcastKnownStepStatus (jobCommentStep comment) commitText ("running", Nothing)
         waitForCompletion buildKey
     certified <- isBuilt certificate
-    liftIO $ recordBuildEnd (jobCommentStep comment) certified
     if certified
         then do
             registerCertificationRoots ctx (jobCommentStep comment) certificate

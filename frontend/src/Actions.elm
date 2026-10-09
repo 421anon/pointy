@@ -4209,7 +4209,6 @@ onClusterStatusIn value =
             Flow.setAll clusterStatus (ApiData.Success snapshot.status)
                 |> Flow.seq (Flow.setAll clusterDetail snapshot.detail)
                 |> Flow.seq (Flow.setAll activeSteps snapshot.activeSteps)
-                |> Flow.seq (Flow.setAll recentSteps snapshot.recentSteps)
 
         Err _ ->
             Flow.pure ()

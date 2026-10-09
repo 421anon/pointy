@@ -3,8 +3,6 @@ module ClusterBus
     , ClusterSnapshot (..)
     , StepPhase (..)
     , StepActivity (..)
-    , StepOutcome (..)
-    , FinishedStep (..)
     , TrackedBuild (..)
     , JobProgress (..)
     , setClusterStatus
@@ -14,7 +12,6 @@ module ClusterBus
     , buildingStepsAt
     , trackedBuilds
     , updateJobProgress
-    , recordFinished
     , wholeSeconds
     , requestStop
     , stopRequested
@@ -43,20 +40,10 @@ data StepActivity = StepActivity
     , activityCommits :: [Text]
     } deriving (Eq, Show)
 
-data StepOutcome = Succeeded | Failed | Stopped deriving (Eq, Show)
-
-data FinishedStep = FinishedStep
-    { finishedStepId :: Int
-    , finishedOutcome :: StepOutcome
-    , finishedAt :: UTCTime
-    , finishedDetail :: Maybe Text
-    } deriving (Eq, Show)
-
 data ClusterSnapshot = ClusterSnapshot
     { clusterStatus :: ClusterStatus
     , clusterDetail :: Maybe Text
     , activeSteps :: Map Int StepActivity
-    , recentSteps :: [FinishedStep]
     } deriving (Eq, Show)
 
 data TrackedBuild = TrackedBuild
@@ -73,7 +60,7 @@ data JobProgress = JobProgress
 
 {-# NOINLINE snapshotVar #-}
 snapshotVar :: TVar ClusterSnapshot
-snapshotVar = unsafePerformIO $ newTVarIO (ClusterSnapshot Available Nothing Map.empty [])
+snapshotVar = unsafePerformIO $ newTVarIO (ClusterSnapshot Available Nothing Map.empty)
 
 {-# NOINLINE broadcastChan #-}
 broadcastChan :: TChan ClusterSnapshot
@@ -90,9 +77,6 @@ jobProgress = unsafePerformIO $ newTVarIO Map.empty
 {-# NOINLINE stopRequests #-}
 stopRequests :: TVar (Set Int)
 stopRequests = unsafePerformIO $ newTVarIO Set.empty
-
-recentLimit :: Int
-recentLimit = 50
 
 requestStop :: Int -> IO ()
 requestStop stepId = atomically $ modifyTVar' stopRequests (Set.insert stepId)
@@ -163,18 +147,6 @@ updateJobProgress derive = atomically $ do
     builds <- readTVar runningBuilds
     modifyTVar' jobProgress (\progress -> derive builds progress `Map.restrictKeys` Map.keysSet builds)
     publish id
-
-recordFinished :: Int -> StepOutcome -> Maybe Text -> IO ()
-recordFinished stepId outcome detail = do
-    now <- wholeSeconds <$> getCurrentTime
-    atomically $
-        publish $ \snap ->
-            snap
-                { recentSteps =
-                    take recentLimit $
-                        FinishedStep stepId outcome now detail
-                            : filter ((/= stepId) . finishedStepId) (recentSteps snap)
-                }
 
 snapshotAndSubscribe :: IO (ClusterSnapshot, TChan ClusterSnapshot)
 snapshotAndSubscribe = atomically $ do

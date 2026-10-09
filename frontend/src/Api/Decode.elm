@@ -868,7 +868,6 @@ clusterSnapshot =
         |> required "status" clusterStatus
         |> optional "detail" (Decode.nullable Decode.string) Nothing
         |> required "activeSteps" (Decode.list stepActivity)
-        |> required "recentSteps" (Decode.list finishedStep)
 
 
 clusterStatus : Decoder Model.ClusterStatus
@@ -918,35 +917,6 @@ stepPhase =
 
                     other ->
                         Decode.fail ("Unknown step phase: " ++ other)
-            )
-
-
-finishedStep : Decoder Model.FinishedStep
-finishedStep =
-    Decode.succeed Model.FinishedStep
-        |> required "stepId" Decode.int
-        |> required "outcome" stepOutcome
-        |> required "finishedAt" Iso8601.decoder
-        |> optional "detail" (Decode.nullable Decode.string) Nothing
-
-
-stepOutcome : Decoder Model.StepOutcome
-stepOutcome =
-    Decode.string
-        |> Decode.andThen
-            (\outcome ->
-                case outcome of
-                    "succeeded" ->
-                        Decode.succeed Model.OutcomeSucceeded
-
-                    "failed" ->
-                        Decode.succeed Model.OutcomeFailed
-
-                    "stopped" ->
-                        Decode.succeed Model.OutcomeStopped
-
-                    other ->
-                        Decode.fail ("Unknown step outcome: " ++ other)
             )
 
 
