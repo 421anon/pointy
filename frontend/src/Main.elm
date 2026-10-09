@@ -213,6 +213,7 @@ subscriptions model =
         , gutterDragSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
         , agentActivitySubscription model
+        , statusBarClockSubscription model
         , Browser.Events.onKeyDown Organize.shortcutDecoder
         , Ports.organizeDragIn Organize.onOrganizeDragEvent
         , Browser.Events.onVisibilityChange
@@ -229,6 +230,15 @@ subscriptions model =
 agentActivitySubscription : Model -> Sub (Flow Model ())
 agentActivitySubscription model =
     if Model.Core.hasRunningToolCall model then
+        Time.every 1000 (\time -> Flow.setAll now time)
+
+    else
+        Sub.none
+
+
+statusBarClockSubscription : Model -> Sub (Flow Model ())
+statusBarClockSubscription model =
+    if Model.Core.getStatusBarOpen model && not (List.isEmpty (Model.Core.getActiveSteps model)) then
         Time.every 1000 (\time -> Flow.setAll now time)
 
     else

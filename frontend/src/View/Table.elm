@@ -1,4 +1,4 @@
-module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewStoppingIndicator, viewUploadProgress)
 
 import Accessors exposing (has, just, key, lens, set, try)
 import Actions
@@ -900,7 +900,7 @@ viewRunStop spec stopping record =
                             True
             in
             [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep spec id))
+            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep id))
             , Html.viewIf (isRunning && stopping) viewStoppingIndicator
             ]
 

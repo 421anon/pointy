@@ -864,6 +864,64 @@ ingestState =
             )
 
 
+clusterSnapshot : Decoder Model.ClusterSnapshot
+clusterSnapshot =
+    Decode.succeed Model.ClusterSnapshot
+        |> required "status" clusterStatus
+        |> optional "detail" (Decode.nullable Decode.string) Nothing
+        |> required "activeSteps" (Decode.list stepActivity)
+
+
+clusterStatus : Decoder Model.ClusterStatus
+clusterStatus =
+    Decode.string
+        |> Decode.map
+            (\reported ->
+                case reported of
+                    "available" ->
+                        Model.ClusterAvailable
+
+                    "degraded" ->
+                        Model.ClusterDegraded
+
+                    "unavailable" ->
+                        Model.ClusterUnavailable
+
+                    _ ->
+                        Model.ClusterUnknown
+            )
+
+
+stepActivity : Decoder Model.StepActivity
+stepActivity =
+    Decode.succeed Model.StepActivity
+        |> required "stepId" Decode.int
+        |> required "phase" stepPhase
+        |> required "since" Iso8601.decoder
+        |> optional "reason" (Decode.nullable Decode.string) Nothing
+        |> required "commits" (Decode.list Decode.string)
+
+
+stepPhase : Decoder Model.StepPhase
+stepPhase =
+    Decode.string
+        |> Decode.andThen
+            (\phase ->
+                case phase of
+                    "preparing" ->
+                        Decode.succeed Model.PhasePreparing
+
+                    "queued" ->
+                        Decode.succeed Model.PhaseQueued
+
+                    "running" ->
+                        Decode.succeed Model.PhaseRunning
+
+                    other ->
+                        Decode.fail ("Unknown step phase: " ++ other)
+            )
+
+
 scratchRoot : Decoder (Maybe String)
 scratchRoot =
     Decode.maybe (Decode.field "root" Decode.string)

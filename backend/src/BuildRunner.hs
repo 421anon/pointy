@@ -32,7 +32,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), ToJSON (..), decode, encode, object, withObject, (.:), (.=))
 import Data.Bits (xor)
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, isDigit)
 import Data.List (foldl')
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
@@ -73,6 +73,8 @@ data SlurmJob = SlurmJob
     , slurmJobName :: String
     , slurmJobComment :: Maybe String
     , slurmJobState :: String
+    , slurmJobElapsed :: Maybe Int
+    , slurmJobReason :: Maybe String
     }
     deriving (Eq, Show)
 
@@ -173,13 +175,30 @@ querySlurmJobs = do
 
 parseSlurmJobLine :: String -> Maybe SlurmJob
 parseSlurmJobLine line = case splitOn '|' line of
-    [jobId, name, comment, state] | not (null jobId) && not (null name) ->
-        Just $ SlurmJob (JobId jobId) name (parseComment comment) state
+    [jobId, name, comment, state, elapsed, reason] | not (null jobId) && not (null name) ->
+        Just $ SlurmJob (JobId jobId) name (presentField comment) state (parseElapsed elapsed) (presentReason reason)
     _ -> Nothing
   where
-    parseComment c
+    presentField c
         | null c || c == "(null)" = Nothing
         | otherwise = Just c
+    presentReason r
+        | r == "None" = Nothing
+        | otherwise = presentField r
+
+parseElapsed :: String -> Maybe Int
+parseElapsed text = case splitOn '-' text of
+    [clock] -> clockSeconds clock
+    [days, clock] -> (+) <$> ((* 86400) <$> readNumber days) <*> clockSeconds clock
+    _ -> Nothing
+  where
+    clockSeconds clock = case traverse readNumber (splitOn ':' clock) of
+        Just [minutes, seconds] -> Just (minutes * 60 + seconds)
+        Just [hours, minutes, seconds] -> Just (hours * 3600 + minutes * 60 + seconds)
+        _ -> Nothing
+    readNumber digits
+        | not (null digits) && all isDigit digits = Just (read digits)
+        | otherwise = Nothing
 
 splitOn :: Char -> String -> [String]
 splitOn sep = go []

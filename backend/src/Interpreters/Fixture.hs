@@ -195,7 +195,7 @@ runSlurmFixture state = interpret $ \_ -> \case
                 case query of
                     JobStatesByName name -> unlines [jobState job | job <- jobs, jobName job == name]
                     JobIdsByName name -> unlines [jobId job | job <- jobs, jobName job == name]
-                    AllJobs -> unlines [intercalate "|" [jobId job, jobName job, jobComment job, jobState job] | job <- jobs]
+                    AllJobs -> unlines [intercalate "|" [jobId job, jobName job, jobComment job, jobState job, "0:00", "None"] | job <- jobs]
     CancelJob key -> liftIO $ do
         atomically $ modifyTVar' (fixtureJobs state) (Map.delete key)
         markJobsEnded [key]

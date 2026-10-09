@@ -8,27 +8,46 @@ import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, classList, disabled, href, id, rel, target, title, type_)
 import Html.Events as Events
 import Html.Extra as Html
-import Model.Core as Model exposing (ClusterStatus(..), Model, RunningStepSummary)
+import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
 import Model.Lenses exposing (route)
+import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
+import Set exposing (Set)
+import Time
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
+import View.Table as Table
+
+
+type GroupKind
+    = RunningGroup
+    | QueuedGroup
+    | StartingGroup
+    | TransferGroup
+
+
+type alias Group =
+    { kind : GroupKind
+    , steps : List TrayStep
+    }
+
+
+groupOrder : List GroupKind
+groupOrder =
+    [ RunningGroup, QueuedGroup, StartingGroup, TransferGroup ]
 
 
 view : Model -> Html (Flow Model ())
 view model =
     let
-        requestedOpen =
-            Model.getStatusBarOpen model
+        steps =
+            Model.getTraySteps model
 
-        summaries =
-            Model.getRunningStepSummaries model
-
-        runningCount =
-            List.length summaries
+        groups =
+            groupSteps steps
 
         isOpen =
-            requestedOpen && runningCount > 0
+            Model.getStatusBarOpen model && not (List.isEmpty steps)
     in
     Html.div [ class "status-bar-dock" ]
         [ Html.div
@@ -38,13 +57,14 @@ view model =
                 ]
             ]
             ((if isOpen then
-                [ viewPanel summaries ]
+                [ viewPanel model groups ]
 
               else
                 []
              )
                 ++ [ Html.div [ class "status-bar__surface" ]
-                        [ viewMainControl model runningCount isOpen
+                        [ viewHealth model
+                        , viewSummary groups (not (List.isEmpty steps)) isOpen
                         , viewRepoContext model
                         , viewIndependentControls model
                         ]
@@ -53,37 +73,140 @@ view model =
         ]
 
 
-viewMainControl : Model -> Int -> Bool -> Html (Flow Model ())
-viewMainControl model runningCount isOpen =
+groupKind : TrayState -> GroupKind
+groupKind state =
+    case state of
+        TrayRunning _ ->
+            RunningGroup
+
+        TrayQueued _ _ ->
+            QueuedGroup
+
+        TrayStarting _ ->
+            StartingGroup
+
+        TrayTransferring _ ->
+            TransferGroup
+
+
+groupKey : GroupKind -> String
+groupKey kind =
+    case kind of
+        RunningGroup ->
+            "running"
+
+        QueuedGroup ->
+            "queued"
+
+        StartingGroup ->
+            "starting"
+
+        TransferGroup ->
+            "transferring"
+
+
+groupTitle : GroupKind -> String
+groupTitle kind =
+    case kind of
+        RunningGroup ->
+            "Running"
+
+        QueuedGroup ->
+            "Queued"
+
+        StartingGroup ->
+            "Starting"
+
+        TransferGroup ->
+            "Uploading"
+
+
+groupSteps : List TrayStep -> List Group
+groupSteps steps =
+    groupOrder
+        |> List.filterMap
+            (\kind ->
+                case List.filter (.state >> groupKind >> (==) kind) steps of
+                    [] ->
+                        Nothing
+
+                    members ->
+                        Just
+                            { kind = kind
+                            , steps = List.sortBy stepOrder members
+                            }
+            )
+
+
+stepOrder : TrayStep -> ( Int, Int )
+stepOrder step =
+    case step.state of
+        TrayRunning since ->
+            ( Time.posixToMillis since, step.stepId )
+
+        TrayQueued since _ ->
+            ( Time.posixToMillis since, step.stepId )
+
+        _ ->
+            ( 0, step.stepId )
+
+
+viewHealth : Model -> Html msg
+viewHealth model =
     let
-        status =
-            Model.getClusterStatus model
-
         state =
-            clusterState status (Model.getClusterDetail model)
+            clusterState (Model.getClusterStatus model) (Model.getClusterDetail model)
+    in
+    Html.span
+        [ classList
+            [ ( "status-bar__state", True )
+            , ( "status-bar__state--" ++ state.className, True )
+            ]
+        , attribute "role" "status"
+        , title state.sentence
+        , attribute "aria-label" state.sentence
+        ]
+        [ Html.span
+            [ class "status-bar__state-indicator"
+            , attribute "aria-hidden" "true"
+            ]
+            []
+        , Html.span [ class "status-bar__state-label" ] [ Html.text state.label ]
+        , case state.detail of
+            Just detail ->
+                Html.span [ class "status-bar__state-detail" ] [ Html.text detail ]
 
-        runningLabel =
-            runningText runningCount
+            Nothing ->
+                Html.nothing
+        ]
 
-        pending =
-            not (ApiData.settled status)
+
+viewSummary : List Group -> Bool -> Bool -> Html (Flow Model ())
+viewSummary groups expandable isOpen =
+    let
+        counts =
+            List.map summaryCount groups
+
+        spoken =
+            if List.isEmpty counts then
+                "Idle"
+
+            else
+                String.join ", " (List.map (\count -> String.fromInt count.count ++ " " ++ count.label) counts)
     in
     Html.button
         ([ class "status-bar__main"
          , type_ "button"
          , Events.onClick Actions.toggleStatusBar
-         , disabled (runningCount == 0)
+         , disabled (not expandable)
+         , title spoken
          , attribute "aria-expanded" (boolText isOpen)
-         , title state.sentence
          , attribute "aria-label"
-            (if pending then
-                state.sentence
-
-             else if runningCount == 0 then
-                state.sentence ++ ", Idle"
+            (if expandable then
+                spoken ++ ". Toggle activity"
 
              else
-                state.sentence ++ ", " ++ runningLabel ++ ". Toggle running steps"
+                spoken
             )
          ]
             ++ (if isOpen then
@@ -94,34 +217,16 @@ viewMainControl model runningCount isOpen =
                )
         )
         [ Html.span
-            [ classList
-                [ ( "status-bar__state", True )
-                , ( "status-bar__state--" ++ state.className, True )
-                ]
+            [ class "status-bar__counts"
+            , attribute "aria-live" "polite"
             ]
-            [ Html.span
-                [ class "status-bar__state-indicator"
-                , attribute "aria-hidden" "true"
-                ]
-                []
-            , case state.text of
-                Just label ->
-                    Html.span [ class "status-bar__state-detail" ]
-                        [ Html.text label ]
+            (if List.isEmpty counts then
+                [ Html.span [ class "status-bar__count status-bar__count--idle" ] [ Html.text "Idle" ] ]
 
-                Nothing ->
-                    Html.nothing
-            ]
-        , if pending then
-            Html.nothing
-
-          else
-            Html.span
-                [ class "status-bar__running-count"
-                , attribute "aria-live" "polite"
-                ]
-                [ Html.text runningLabel ]
-        , if runningCount > 0 then
+             else
+                List.map viewCount counts
+            )
+        , if expandable then
             iconCustom False
                 (if isOpen then
                     "keyboard_arrow_down"
@@ -138,14 +243,46 @@ viewMainControl model runningCount isOpen =
         ]
 
 
+type alias SummaryCount =
+    { kind : String
+    , count : Int
+    , label : String
+    }
+
+
+summaryCount : Group -> SummaryCount
+summaryCount group =
+    let
+        count =
+            List.length group.steps
+    in
+    case group.kind of
+        RunningGroup ->
+            { kind = "running", count = count, label = "running" }
+
+        QueuedGroup ->
+            { kind = "queued", count = count, label = "queued" }
+
+        StartingGroup ->
+            { kind = "starting", count = count, label = "starting" }
+
+        TransferGroup ->
+            { kind = "transferring", count = count, label = "uploading" }
+
+
+viewCount : SummaryCount -> Html msg
+viewCount count =
+    Html.span [ class ("status-bar__count status-bar__count--" ++ count.kind) ]
+        [ Html.span [ class "status-bar__marker", attribute "aria-hidden" "true" ] []
+        , Html.span [ class "status-bar__count-number" ] [ Html.text (String.fromInt count.count) ]
+        , Html.span [ class "status-bar__count-label" ] [ Html.text count.label ]
+        ]
+
+
 viewRepoContext : Model -> Html msg
 viewRepoContext model =
     Maybe.map2
         (\repo commit ->
-            let
-                repoLabel =
-                    repo.branch ++ " @ " ++ String.left 7 commit
-            in
             case try (route << Route.page << Route.viewedCommitT) model of
                 Just historicalCommit ->
                     let
@@ -160,7 +297,7 @@ viewRepoContext model =
                         , title switchLabel
                         , attribute "aria-label" switchLabel
                         ]
-                        [ Html.span [] [ Html.text repoLabel ]
+                        [ Html.span [] [ Html.text (repo.branch ++ " @ " ++ String.left 7 commit) ]
                         , Html.span []
                             [ Html.span [ class "status-bar__repo-state" ] [ Html.text "Past" ]
                             , Html.text " · View current"
@@ -168,7 +305,18 @@ viewRepoContext model =
                         ]
 
                 Nothing ->
-                    Html.span [ class "status-bar__repo" ] [ Html.text repoLabel ]
+                    let
+                        repoTitle =
+                            "Branch " ++ repo.branch ++ " at commit " ++ commit
+                    in
+                    Html.span
+                        [ class "status-bar__repo"
+                        , title repoTitle
+                        , attribute "aria-label" repoTitle
+                        ]
+                        [ iconCustom False "commit" [ class "status-bar__repo-icon", attribute "aria-hidden" "true" ]
+                        , Html.span [] [ Html.text repo.branch ]
+                        ]
         )
         (ApiData.toMaybe (Model.getUserRepoInfo model))
         (ApiData.toMaybe (Model.getCommitHash model))
@@ -242,92 +390,405 @@ viewIndependentControls model =
         ]
 
 
-viewPanel : List RunningStepSummary -> Html (Flow Model ())
-viewPanel summaries =
+viewPanel : Model -> List Group -> Html (Flow Model ())
+viewPanel model groups =
+    let
+        collapsed =
+            Model.getStatusBarCollapsed model
+    in
     Html.section
         [ class "status-bar__panel"
         , id "status-bar-panel"
         ]
-        [ Html.ul [ class "status-bar__list" ]
-            (List.map viewRunningStep summaries)
+        [ Html.div [ class "status-bar__groups" ]
+            (List.map (viewGroup model collapsed) groups)
         ]
 
 
-viewRunningStep : RunningStepSummary -> Html (Flow Model ())
-viewRunningStep summary =
+viewGroup : Model -> Set String -> Group -> Html (Flow Model ())
+viewGroup model collapsed group =
+    let
+        key =
+            groupKey group.kind
+
+        isCollapsed =
+            Set.member key collapsed
+
+        listId =
+            "status-bar-group-" ++ key
+    in
+    Html.div [ class ("status-bar__group status-bar__group--" ++ key) ]
+        [ Html.button
+            [ class "status-bar__group-header"
+            , type_ "button"
+            , Events.onClick (Actions.toggleStatusBarGroup key)
+            , attribute "aria-expanded" (boolText (not isCollapsed))
+            , attribute "aria-controls" listId
+            ]
+            [ iconCustom False
+                (if isCollapsed then
+                    "chevron_right"
+
+                 else
+                    "expand_more"
+                )
+                [ class "listing-group-icon", attribute "aria-hidden" "true" ]
+            , Html.text (groupTitle group.kind)
+            , Html.span [ class "listing-group-count" ] [ Html.text ("(" ++ String.fromInt (List.length group.steps) ++ ")") ]
+            ]
+        , if isCollapsed then
+            Html.nothing
+
+          else
+            Html.ul [ class "status-bar__list", id listId ]
+                (List.map (viewStep model) group.steps)
+        ]
+
+
+viewStep : Model -> TrayStep -> Html (Flow Model ())
+viewStep model step =
+    let
+        now =
+            Model.getNow model
+
+        folderPath =
+            Maybe.map (canonicalNamePath model) step.projectId
+
+        folderTrail =
+            case Maybe.map (canonicalPathNames model) step.projectId of
+                Just [] ->
+                    rootProjectName model
+
+                Just names ->
+                    String.join " / " names
+
+                Nothing ->
+                    "Unfiled"
+
+        meta =
+            stateMeta now step.state
+
+        offHead =
+            case ( Model.getCommitHash model |> ApiData.toMaybe, step.commits ) of
+                ( Just head, commit :: _ ) ->
+                    if List.member head step.commits then
+                        Nothing
+
+                    else
+                        Just commit
+
+                _ ->
+                    Nothing
+
+        stoppable =
+            case step.state of
+                TrayRunning _ ->
+                    True
+
+                TrayQueued _ _ ->
+                    True
+
+                TrayStarting _ ->
+                    True
+
+                _ ->
+                    False
+    in
     Html.li [ class "status-bar__item" ]
         [ Html.button
             [ class "status-bar__step"
             , type_ "button"
-            , Events.onClick (Actions.openRunningStep summary.stepId)
+            , Events.onClick (Actions.openRunningStep step.stepId)
+            , title (step.stepName ++ " — " ++ meta.description)
             , attribute "aria-label"
                 ("Open step ["
-                    ++ String.fromInt summary.stepId
+                    ++ String.fromInt step.stepId
                     ++ "] "
-                    ++ summary.stepName
-                    ++ " in project "
-                    ++ summary.projectName
+                    ++ step.stepName
+                    ++ Maybe.withDefault "" (Maybe.map (\path -> " in " ++ path) folderPath)
+                    ++ ". "
+                    ++ meta.description
                 )
             ]
             [ Html.span
-                [ class "status-indicator status-running status-bar__running-indicator"
+                [ class ("status-bar__step-marker " ++ markerClass step.state)
                 , attribute "aria-hidden" "true"
                 ]
                 []
             , Html.span [ class "status-bar__step-details" ]
-                [ Html.span [ class "status-bar__step-name" ]
-                    [ Html.text ("[" ++ String.fromInt summary.stepId ++ "] " ++ summary.stepName) ]
-                , Html.span [ class "status-bar__project-name" ]
-                    [ Html.text summary.projectName ]
+                [ Html.span [ class "status-bar__step-line" ]
+                    [ Html.span [ class "status-bar__step-id" ] [ Html.text (String.fromInt step.stepId) ]
+                    , Html.span [ class "status-bar__step-name" ] [ Html.text step.stepName ]
+                    , case offHead of
+                        Just commit ->
+                            Html.span
+                                [ class "step-review-revision"
+                                , title ("Building commit " ++ String.left 7 commit ++ ", not the current version")
+                                ]
+                                [ Html.span [ class "step-review-revision-hash" ] [ Html.text (String.left 7 commit) ] ]
+
+                        Nothing ->
+                            Html.nothing
+                    ]
+                , Html.span
+                    [ class "status-bar__step-path"
+                    , title (Maybe.withDefault "Not in any folder" folderPath)
+                    ]
+                    [ Html.text folderTrail ]
                 ]
+            , Html.span [ class ("status-bar__step-meta status-bar__step-meta--" ++ meta.tone) ]
+                [ Html.text meta.short ]
             , iconCustom False
                 "chevron_right"
                 [ class "status-bar__chevron"
                 , attribute "aria-hidden" "true"
                 ]
             ]
+        , if not stoppable then
+            Html.nothing
+
+          else if Set.member step.stepId (Model.getPendingStops model) then
+            Table.viewStoppingIndicator
+
+          else
+            Table.viewStopButton "Stop" (Actions.stopStepAt step.stepId (List.head step.commits))
         ]
+
+
+markerClass : TrayState -> String
+markerClass state =
+    case state of
+        TrayRunning _ ->
+            "status-indicator status-running"
+
+        TrayQueued _ _ ->
+            "status-bar__marker status-bar__marker--queued"
+
+        TrayStarting _ ->
+            "status-bar__marker status-bar__marker--starting"
+
+        TrayTransferring _ ->
+            "status-bar__marker status-bar__marker--transferring"
+
+
+type alias Meta =
+    { short : String
+    , description : String
+    , tone : String
+    }
+
+
+stateMeta : Time.Posix -> TrayState -> Meta
+stateMeta now state =
+    let
+        since time =
+            Time.posixToMillis now - Time.posixToMillis time
+    in
+    case state of
+        TrayRunning started ->
+            { short = durationText (since started)
+            , description = "Running for " ++ durationWords (since started)
+            , tone = "running"
+            }
+
+        TrayQueued queued reason ->
+            let
+                waited =
+                    durationText (since queued)
+            in
+            { short =
+                case Maybe.map queueReasonLabel reason of
+                    Just label ->
+                        label ++ " · " ++ waited
+
+                    Nothing ->
+                        waited
+            , description =
+                "Queued for "
+                    ++ durationWords (since queued)
+                    ++ (case reason of
+                            Just slurmReason ->
+                                ", " ++ queueReasonSentence slurmReason
+
+                            Nothing ->
+                                ""
+                       )
+            , tone = "queued"
+            }
+
+        TrayStarting (Just started) ->
+            { short = durationText (since started)
+            , description = "Preparing the build for " ++ durationWords (since started)
+            , tone = "starting"
+            }
+
+        TrayStarting Nothing ->
+            { short = "Starting"
+            , description = "Starting"
+            , tone = "starting"
+            }
+
+        TrayTransferring (Just progress) ->
+            { short = String.fromInt (round (progress * 100)) ++ "%"
+            , description = "Uploading, " ++ String.fromInt (round (progress * 100)) ++ "% done"
+            , tone = "transferring"
+            }
+
+        TrayTransferring Nothing ->
+            { short = "Uploading"
+            , description = "Uploading"
+            , tone = "transferring"
+            }
+
+
+queueReasonLabel : String -> String
+queueReasonLabel reason =
+    case reason of
+        "Dependency" ->
+            "Dependency"
+
+        "Resources" ->
+            "Resources"
+
+        "Priority" ->
+            "Priority"
+
+        "BeginTime" ->
+            "Scheduled"
+
+        "JobHeldUser" ->
+            "Held"
+
+        "JobHeldAdmin" ->
+            "Held"
+
+        _ ->
+            if String.startsWith "ReqNodeNotAvail" reason then
+                "Nodes unavailable"
+
+            else
+                String.replace "_" " " reason
+
+
+queueReasonSentence : String -> String
+queueReasonSentence reason =
+    case reason of
+        "Dependency" ->
+            "waiting for upstream steps to finish"
+
+        "Resources" ->
+            "waiting for free CPUs or memory"
+
+        "Priority" ->
+            "waiting behind higher-priority jobs"
+
+        "BeginTime" ->
+            "scheduled to start later"
+
+        "JobHeldUser" ->
+            "held by its owner"
+
+        "JobHeldAdmin" ->
+            "held by an administrator"
+
+        _ ->
+            if String.startsWith "ReqNodeNotAvail" reason then
+                "waiting for unavailable nodes"
+
+            else
+                "Slurm reason: " ++ reason
+
+
+durationText : Int -> String
+durationText millis =
+    let
+        seconds =
+            max 0 millis // 1000
+    in
+    if seconds < 60 then
+        String.fromInt seconds ++ "s"
+
+    else if seconds < 3600 then
+        String.fromInt (seconds // 60) ++ "m"
+
+    else if seconds < 86400 then
+        String.fromInt (seconds // 3600) ++ "h " ++ String.fromInt (modBy 60 (seconds // 60)) ++ "m"
+
+    else
+        String.fromInt (seconds // 86400) ++ "d " ++ String.fromInt (modBy 24 (seconds // 3600)) ++ "h"
+
+
+durationWords : Int -> String
+durationWords millis =
+    let
+        seconds =
+            max 0 millis // 1000
+
+        plural count unit =
+            String.fromInt count
+                ++ " "
+                ++ unit
+                ++ (if count == 1 then
+                        ""
+
+                    else
+                        "s"
+                   )
+    in
+    if seconds < 60 then
+        plural seconds "second"
+
+    else if seconds < 3600 then
+        plural (seconds // 60) "minute"
+
+    else if seconds < 86400 then
+        plural (seconds // 3600) "hour" ++ " " ++ plural (modBy 60 (seconds // 60)) "minute"
+
+    else
+        plural (seconds // 86400) "day" ++ " " ++ plural (modBy 24 (seconds // 3600)) "hour"
 
 
 type alias ClusterState =
     { className : String
+    , label : String
     , sentence : String
-    , text : Maybe String
+    , detail : Maybe String
     }
 
 
 clusterState : ApiData ClusterStatus -> Maybe String -> ClusterState
 clusterState apiStatus detail =
     let
-        ( className, baseSentence, label ) =
+        ( className, label, baseSentence ) =
             case apiStatus of
                 ApiData.NotAsked ->
-                    ( "loading", "Loading cluster status", Just "Loading" )
+                    ( "loading", "Connecting", "Loading cluster status" )
 
                 ApiData.Loading _ ->
-                    ( "loading", "Loading cluster status", Just "Loading" )
+                    ( "loading", "Connecting", "Loading cluster status" )
 
                 ApiData.Error _ ->
-                    ( "unknown", "Cluster status unknown", Nothing )
+                    ( "unknown", "Cluster unknown", "Cluster status unknown" )
 
                 ApiData.Success status ->
                     case status of
                         ClusterAvailable ->
-                            ( "available", "Cluster available", Nothing )
+                            ( "available", "Cluster OK", "Cluster available" )
 
                         ClusterDegraded ->
-                            ( "degraded", "Cluster degraded", Just "Degraded" )
+                            ( "degraded", "Degraded", "Cluster degraded" )
 
                         ClusterUnavailable ->
-                            ( "unavailable", "Cluster unavailable", Just "Unavailable" )
+                            ( "unavailable", "Unavailable", "Cluster unavailable" )
 
                         ClusterUnknown ->
-                            ( "unknown", "Cluster status unknown", Nothing )
+                            ( "unknown", "Cluster unknown", "Cluster status unknown" )
 
         reported =
             Maybe.andThen nonEmptyDetail detail
     in
     { className = className
+    , label = label
     , sentence =
         case reported of
             Just text ->
@@ -335,17 +796,7 @@ clusterState apiStatus detail =
 
             Nothing ->
                 baseSentence
-    , text =
-        Maybe.map
-            (\visibleLabel ->
-                case reported of
-                    Just text ->
-                        visibleLabel ++ " · " ++ text
-
-                    Nothing ->
-                        visibleLabel
-            )
-            label
+    , detail = reported
     }
 
 
@@ -356,16 +807,3 @@ nonEmptyDetail detail =
 
     else
         Just detail
-
-
-runningText : Int -> String
-runningText count =
-    case count of
-        0 ->
-            "Idle"
-
-        1 ->
-            "1 running"
-
-        _ ->
-            String.fromInt count ++ " running"

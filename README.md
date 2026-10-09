@@ -26,6 +26,15 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - Open outputs and file viewers keep their contents and scroll positions when hidden rows or listing groups appear or disappear, and through new commits and review changes while the step's build is unchanged.
 - While the clipboard holds cut or copied items, Paste and Clear clipboard appear in the listing header, and Clear clipboard also joins the selection action bar and row menus while rows are selected; Ctrl/Cmd+V also pastes into the current folder. Cut items fade until the cut is pasted or cleared, and pasting a cut back into its source folder just ends it.
 
+## Activity tray
+
+- The bottom tray counts running, queued and starting builds and uploads. Cluster health has its own label; hover it for the reported detail.
+- A build is starting from the moment the backend accepts it, while it resolves dependencies and submits Slurm jobs, until Slurm lists a queued or running job for it.
+- Opening the tray groups steps by state, and each group collapses.
+- Each row shows the step's folder path under its name, starting below Home, or "Unfiled" for steps outside every folder.
+- Running rows show elapsed time, queued rows show how long they have waited and Slurm's pending reason, starting rows show how long they have been preparing, and uploads show progress. A build of a commit other than the current one carries that commit's short hash.
+- Running, queued and starting rows have a Stop button that cancels the build at the commit it is building.
+
 ## Development
 
 A NixOS VM runs a server environment:
