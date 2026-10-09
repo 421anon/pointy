@@ -125,6 +125,43 @@ type ClusterStatus
     | ClusterUnknown
 
 
+type StepPhase
+    = PhasePreparing
+    | PhaseQueued
+    | PhaseRunning
+
+
+type alias StepActivity =
+    { stepId : Int
+    , phase : StepPhase
+    , since : Time.Posix
+    , reason : Maybe String
+    , commits : List String
+    }
+
+
+type StepOutcome
+    = OutcomeSucceeded
+    | OutcomeFailed
+    | OutcomeStopped
+
+
+type alias FinishedStep =
+    { stepId : Int
+    , outcome : StepOutcome
+    , finishedAt : Time.Posix
+    , detail : Maybe String
+    }
+
+
+type alias ClusterSnapshot =
+    { status : ClusterStatus
+    , detail : Maybe String
+    , activeSteps : List StepActivity
+    , recentSteps : List FinishedStep
+    }
+
+
 type AddMode
     = AddNew
     | LinkExisting
@@ -1536,7 +1573,9 @@ type Model
         , agent : AgentState
         , clusterStatus : ApiData ClusterStatus
         , clusterDetail : Maybe String
-        , runningStepIds : List Int
+        , activeSteps : List StepActivity
+        , recentSteps : List FinishedStep
+        , statusBarCollapsed : Set String
         , statusBarOpen : Bool
         , sidebarOpen : Bool
         , sidebarScroll : SidebarScroll
@@ -1663,9 +1702,19 @@ getClusterDetail (Model model) =
     model.clusterDetail
 
 
-getRunningStepIds : Model -> List Int
-getRunningStepIds (Model model) =
-    model.runningStepIds
+getActiveSteps : Model -> List StepActivity
+getActiveSteps (Model model) =
+    model.activeSteps
+
+
+getRecentSteps : Model -> List FinishedStep
+getRecentSteps (Model model) =
+    model.recentSteps
+
+
+getStatusBarCollapsed : Model -> Set String
+getStatusBarCollapsed (Model model) =
+    model.statusBarCollapsed
 
 
 getStatusBarOpen : Model -> Bool
@@ -2003,7 +2052,9 @@ initialModel key route flags =
         , agent = { initAgentState | lastChat = flags.lastChat }
         , clusterStatus = ApiData.Loading Nothing
         , clusterDetail = Nothing
-        , runningStepIds = []
+        , activeSteps = []
+        , recentSteps = []
+        , statusBarCollapsed = Set.empty
         , statusBarOpen = False
         , sidebarOpen = not flags.isNarrow
         , sidebarScroll = { top = False, left = False, right = False }
@@ -2670,35 +2721,85 @@ invertTreeOps before ops =
     List.concatMap inverseFor (List.reverse (List.unique touchedParents))
 
 
-type alias RunningStepSummary =
+type TrayState
+    = TrayRunning Time.Posix
+    | TrayQueued Time.Posix (Maybe String)
+    | TrayStarting (Maybe Time.Posix)
+    | TrayTransferring (Maybe Float)
+    | TrayFinished StepOutcome Time.Posix (Maybe String)
+
+
+type alias TrayStep =
     { stepId : Int
     , stepName : String
-    , projectId : Int
-    , projectName : String
+    , projectId : Maybe Int
+    , projectName : Maybe String
+    , state : TrayState
+    , commits : List String
     }
 
 
-getRunningStepSummaries : Model -> List RunningStepSummary
-getRunningStepSummaries (Model model) =
+recentStepWindowMillis : Int
+recentStepWindowMillis =
+    10 * 60 * 1000
+
+
+getTraySteps : Model -> List TrayStep
+getTraySteps (Model model) =
     let
         projects =
             ApiData.withDefault Dict.empty model.projects
 
-        ingesting stepId =
-            Dict.member stepId model.uploadProgress
-                || Maybe.unwrap False (.state >> (==) IngestRunning) (Dict.get stepId model.ingestJobs)
-                || Set.member stepId model.pendingIngestSteps
-
-        shownStatus step =
-            if Maybe.unwrap False ingesting step.id then
-                Just StatusRunning
+        ratio done total =
+            if total > 0 then
+                Just (clamp 0 1 (toFloat done / toFloat total))
 
             else
-                ApiData.unwrap Nothing (.status >> ApiData.toMaybe) step.runState
+                Nothing
 
-        runningIds =
-            model.runningStepIds
-                ++ (Dict.filter (\_ step -> shownStatus step == Just StatusRunning) model.steps |> Dict.keys)
+        transfer stepId =
+            case ( Dict.get stepId model.uploadProgress, Dict.get stepId model.ingestJobs |> Maybe.filter (.state >> (==) IngestRunning) ) of
+                ( Just upload, _ ) ->
+                    Just (TrayTransferring (ratio upload.sent upload.size))
+
+                ( Nothing, Just job ) ->
+                    Just (TrayTransferring (Maybe.join (Maybe.map2 ratio job.done job.total)))
+
+                ( Nothing, Nothing ) ->
+                    if Set.member stepId model.pendingIngestSteps then
+                        Just (TrayTransferring Nothing)
+
+                    else
+                        Nothing
+
+        transfers =
+            (Dict.keys model.uploadProgress ++ Dict.keys model.ingestJobs ++ Set.toList model.pendingIngestSteps)
+                |> List.filterMap (\stepId -> transfer stepId |> Maybe.map (\state -> ( stepId, state, [] )))
+
+        activityState activity =
+            case activity.phase of
+                PhaseRunning ->
+                    TrayRunning activity.since
+
+                PhaseQueued ->
+                    TrayQueued activity.since activity.reason
+
+                PhasePreparing ->
+                    TrayStarting (Just activity.since)
+
+        building =
+            List.map (\activity -> ( activity.stepId, activityState activity, activity.commits )) model.activeSteps
+
+        recent =
+            model.recentSteps
+                |> List.filter (\finished -> Time.posixToMillis model.now - Time.posixToMillis finished.finishedAt < recentStepWindowMillis)
+                |> List.map (\finished -> ( finished.stepId, TrayFinished finished.outcome finished.finishedAt finished.detail, [] ))
+
+        reportedRunning =
+            model.steps
+                |> Dict.filter (\_ step -> ApiData.unwrap Nothing (.status >> ApiData.toMaybe) step.runState == Just StatusRunning)
+                |> Dict.keys
+                |> List.map (\stepId -> ( stepId, TrayStarting Nothing, [] ))
 
         routeProjectIds =
             case model.route.page of
@@ -2721,19 +2822,26 @@ getRunningStepSummaries (Model model) =
                 |> List.head
                 |> Maybe.andThen (\( parentId, _ ) -> Dict.get parentId projects)
 
-        summary stepId =
-            Maybe.map2
-                (\step project ->
-                    { stepId = stepId
-                    , stepName = step.name
-                    , projectId = Maybe.withDefault Route.rootProjectId project.id
-                    , projectName = project.name
-                    }
-                )
-                (Dict.get stepId model.steps)
-                (containingProject stepId)
+        trayStep ( stepId, state, commits ) =
+            Dict.get stepId model.steps
+                |> Maybe.map
+                    (\step ->
+                        let
+                            project =
+                                containingProject stepId
+                        in
+                        { stepId = stepId
+                        , stepName = step.name
+                        , projectId = Maybe.map (.id >> Maybe.withDefault Route.rootProjectId) project
+                        , projectName = Maybe.map .name project
+                        , state = state
+                        , commits = commits
+                        }
+                    )
     in
-    runningIds |> List.unique |> List.filterMap summary
+    (transfers ++ building ++ recent ++ reportedRunning)
+        |> List.uniqueBy (\( stepId, _, _ ) -> stepId)
+        |> List.filterMap trayStep
 
 
 getModalConfirm : Model -> ModalConfirmConfig

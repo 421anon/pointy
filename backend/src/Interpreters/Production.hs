@@ -86,5 +86,5 @@ queryArgs :: SlurmQuery -> [String]
 queryArgs = \case
     JobStatesByName name -> ["-h", "-n", name, "-o", "%T"]
     JobIdsByName name -> ["-h", "-n", name, "-o", "%i"]
-    AllJobs -> ["-h", "-o", "%i|%j|%k|%T"]
+    AllJobs -> ["-h", "-o", "%i|%j|%k|%T|%M|%r"]
 

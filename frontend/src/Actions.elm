@@ -1450,15 +1450,16 @@ buildViewedRevision spec id =
             )
 
 
-stopStep : StepSpec -> Int -> Flow Model ()
-stopStep spec id =
+stopStep : Int -> Flow Model ()
+stopStep id =
+    Flow.get |> Flow.andThen (\model -> stopStepAt id (stepRevisionById id model))
+
+
+stopStepAt : Int -> Maybe String -> Flow Model ()
+stopStepAt id commit =
     Flow.over pendingStops (Set.insert id)
-        |> Flow.seq Flow.get
-        |> Flow.andThen
-            (\model ->
-                setLocalStepStatus id (Success StatusRunning)
-                    |> Flow.seq (callApi void (Api.stopStep id (stepRevisionById id model)))
-            )
+        |> Flow.seq (setLocalStepStatus id (Success StatusRunning))
+        |> Flow.seq (callApi void (Api.stopStep id commit))
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
             (\_ -> Flow.over pendingStops (Set.remove id))
@@ -4203,45 +4204,32 @@ startClusterStatusStream =
 
 onClusterStatusIn : Decode.Value -> Flow Model ()
 onClusterStatusIn value =
-    let
-        decoder =
-            Decode.map3
-                (\statusStr detail ids ->
-                    ( clusterStatusFromString statusStr, detail, ids )
-                )
-                (Decode.field "status" Decode.string)
-                (Decode.maybe (Decode.field "detail" Decode.string))
-                (Decode.field "runningStepIds" (Decode.list Decode.int))
-    in
-    case Decode.decodeValue decoder value of
-        Ok ( status, detail, ids ) ->
-            Flow.setAll clusterStatus (ApiData.Success status)
-                |> Flow.seq (Flow.setAll clusterDetail detail)
-                |> Flow.seq (Flow.setAll runningStepIds ids)
+    case Decode.decodeValue ApiDecode.clusterSnapshot value of
+        Ok snapshot ->
+            Flow.setAll clusterStatus (ApiData.Success snapshot.status)
+                |> Flow.seq (Flow.setAll clusterDetail snapshot.detail)
+                |> Flow.seq (Flow.setAll activeSteps snapshot.activeSteps)
+                |> Flow.seq (Flow.setAll recentSteps snapshot.recentSteps)
 
         Err _ ->
             Flow.pure ()
 
 
-clusterStatusFromString : String -> Model.ClusterStatus
-clusterStatusFromString statusStr =
-    case statusStr of
-        "available" ->
-            Model.ClusterAvailable
-
-        "degraded" ->
-            Model.ClusterDegraded
-
-        "unavailable" ->
-            Model.ClusterUnavailable
-
-        _ ->
-            Model.ClusterUnknown
-
-
 toggleStatusBar : Flow Model ()
 toggleStatusBar =
     Flow.over statusBarOpen not
+
+
+toggleStatusBarGroup : String -> Flow Model ()
+toggleStatusBarGroup group =
+    Flow.over statusBarCollapsed
+        (\collapsed ->
+            if Set.member group collapsed then
+                Set.remove group collapsed
+
+            else
+                Set.insert group collapsed
+        )
 
 
 type alias StepLocation =

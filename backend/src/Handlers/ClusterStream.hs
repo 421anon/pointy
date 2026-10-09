@@ -6,24 +6,26 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Handlers.ClusterStream (clusterStatusFromAvailability, clusterStatusStreamHandler, encodeSnapshot, startClusterPoller) where
+module Handlers.ClusterStream (clusterStatusFromAvailability, clusterStatusStreamHandler, deriveJobProgress, encodeSnapshot, startClusterPoller) where
 
-import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), setClusterStatus, snapshotAndSubscribe)
+import BuildRunner (JobComment (..), JobId (..), SlurmJob (..), decodeJobComment, isRunningState, parseSlurmJobLine)
+import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), FinishedStep (..), JobProgress (..), StepActivity (..), StepOutcome (..), StepPhase (..), TrackedBuild (..), setClusterStatus, snapshotAndSubscribe, trackedBuilds, updateJobProgress, wholeSeconds)
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.STM (TChan)
-import Control.Monad (forever, void)
+import Control.Concurrent.STM (TChan, atomically)
+import Control.Monad (forever, unless, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
-import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, (:>))
-import Effects (AppM, Slurm, clusterAvailability)
+import Effects (AppM, Slurm, SlurmQuery (..), clusterAvailability, querySlurm)
 import Servant (Header, Headers, addHeader)
 import qualified Servant.Types.SourceT as S
 import qualified Sse
@@ -65,6 +67,48 @@ startClusterPoller = do
         threadDelay Sse.heartbeatDelayMicros
         (status', detail') <- runAppEffects checkClusterStatus
         setClusterStatus status' detail'
+    void $ forkIO $ forever $ do
+        threadDelay jobPollDelayMicros
+        builds <- atomically trackedBuilds
+        unless (Map.null builds) $ do
+            result <- runAppEffects (querySlurm AllJobs)
+            case result of
+                Left _ -> pure ()
+                Right stdout -> do
+                    now <- wholeSeconds <$> getCurrentTime
+                    updateJobProgress (deriveJobProgress now (mapMaybe parseSlurmJobLine (lines stdout)))
+
+jobPollDelayMicros :: Int
+jobPollDelayMicros = 5 * 1000000
+
+deriveJobProgress :: UTCTime -> [SlurmJob] -> Map Int TrackedBuild -> Map Int JobProgress -> Map Int JobProgress
+deriveJobProgress now jobs builds previous =
+    Map.mapWithKey progressFor (Map.fromListWith furthest (mapMaybe trackedJob jobs))
+  where
+    trackedJob job = do
+        comment <- decodeJobComment =<< slurmJobComment job
+        build <- Map.lookup (jobCommentStep comment) builds
+        if jobCommentKind comment == "step"
+            && isRunningState (slurmJobState job)
+            && Map.member (T.pack (jobCommentCommit comment)) (trackedCommits build)
+            then Just (jobCommentStep comment, job)
+            else Nothing
+    furthest a b = if jobPhase a >= jobPhase b then a else b
+    progressFor stepId job =
+        let phase = jobPhase job
+            jobId = T.pack (unJobId (slurmJobId job))
+            reason = if phase == Queued then T.pack <$> slurmJobReason job else Nothing
+            since = case Map.lookup stepId previous of
+                Just known | progressJobId known == jobId && progressPhase known == phase -> progressSince known
+                _ -> phaseStart stepId phase job
+         in JobProgress jobId phase since reason
+    phaseStart _ Running job = maybe now (\seconds -> addUTCTime (negate (fromIntegral seconds)) now) (slurmJobElapsed job)
+    phaseStart stepId _ _ = maybe now trackedSince (Map.lookup stepId builds)
+
+jobPhase :: SlurmJob -> StepPhase
+jobPhase job
+    | slurmJobState job == "PENDING" = Queued
+    | otherwise = Running
 
 clusterStatusStreamHandler ::
     AppM
@@ -91,8 +135,35 @@ encodeSnapshot snapshot =
         object
             [ "status" .= statusText (clusterStatus snapshot)
             , "detail" .= clusterDetail snapshot
-            , "runningStepIds" .= Set.toList (runningStepIds snapshot)
+            , "activeSteps" .= map encodeActivity (Map.toList (activeSteps snapshot))
+            , "recentSteps" .= map encodeFinished (recentSteps snapshot)
             ]
+  where
+    encodeActivity (stepId, activity) =
+        object
+            [ "stepId" .= stepId
+            , "phase" .= phaseText (activityPhase activity)
+            , "since" .= activitySince activity
+            , "reason" .= activityReason activity
+            , "commits" .= activityCommits activity
+            ]
+    encodeFinished finished =
+        object
+            [ "stepId" .= finishedStepId finished
+            , "outcome" .= outcomeText (finishedOutcome finished)
+            , "finishedAt" .= finishedAt finished
+            , "detail" .= finishedDetail finished
+            ]
+
+phaseText :: StepPhase -> Text
+phaseText Preparing = "preparing"
+phaseText Queued = "queued"
+phaseText Running = "running"
+
+outcomeText :: StepOutcome -> Text
+outcomeText Succeeded = "succeeded"
+outcomeText Failed = "failed"
+outcomeText Stopped = "stopped"
 
 statusText :: ClusterStatus -> Text
 statusText Available = "available"

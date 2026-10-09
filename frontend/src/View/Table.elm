@@ -881,7 +881,7 @@ viewRunStop spec stopping record =
                             True
             in
             [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep spec id))
+            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep id))
             , Html.viewIf (isRunning && stopping) viewStoppingIndicator
             ]
 

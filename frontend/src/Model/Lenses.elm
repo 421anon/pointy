@@ -1031,9 +1031,19 @@ clusterDetail =
     lens ".clusterDetail" Model.getClusterDetail (\(Model m) d -> Model { m | clusterDetail = d })
 
 
-runningStepIds : Lens ls Model (List Int) x y
-runningStepIds =
-    lens ".runningStepIds" Model.getRunningStepIds (\(Model m) ids -> Model { m | runningStepIds = ids })
+activeSteps : Lens ls Model (List Model.StepActivity) x y
+activeSteps =
+    lens ".activeSteps" Model.getActiveSteps (\(Model m) steps_ -> Model { m | activeSteps = steps_ })
+
+
+recentSteps : Lens ls Model (List Model.FinishedStep) x y
+recentSteps =
+    lens ".recentSteps" Model.getRecentSteps (\(Model m) steps_ -> Model { m | recentSteps = steps_ })
+
+
+statusBarCollapsed : Lens ls Model (Set String) x y
+statusBarCollapsed =
+    lens ".statusBarCollapsed" Model.getStatusBarCollapsed (\(Model m) groups -> Model { m | statusBarCollapsed = groups })
 
 
 statusBarOpen : Lens ls Model Bool x y
