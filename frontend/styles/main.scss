@@ -360,6 +360,20 @@ body {
   font-size: var(--font-size-sm);
 }
 
+.listing-header-hidden {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text-secondary);
+    text-decoration: underline;
+  }
+}
+
 .listing-rows {
   background: var(--bg-elevated);
 }
@@ -395,6 +409,10 @@ body {
   &.drag-source > *,
   &.listing-row-cut > * {
     opacity: 0.4;
+  }
+
+  &.listing-row-hidden:not(.drag-source, .listing-row-cut) .record-name-container {
+    opacity: 0.6;
   }
 
   &.drop-before,
@@ -501,6 +519,11 @@ body {
   color: var(--color-gray-500);
   padding: 1px var(--spacing-2xs);
   margin-left: var(--spacing-sm);
+}
+
+.listing-row-hidden-marker {
+  font-size: 14px;
+  color: var(--text-muted);
 }
 
 .listing-row-mtime {

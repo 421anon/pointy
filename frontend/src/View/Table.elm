@@ -239,6 +239,9 @@ viewListing { model, scope, stepConfig, rows, header } =
         rowContext =
             { scope = scope, editable = editable, selected = selected }
 
+        hiddenCount =
+            List.length (List.filter (.link >> .hidden) rows)
+
         groups =
             if prefs.groupByType then
                 groupRows prefs stepConfig rows
@@ -261,7 +264,15 @@ viewListing { model, scope, stepConfig, rows, header } =
                 [ iconCustom True "folder_open" [ class "listing-header-icon" ]
                 , Html.span [ class "listing-content-header" ] [ Html.text "Contents" ]
                 , Html.span [ class "listing-header-count" ]
-                    [ Html.text ("(" ++ String.fromInt (List.length rows) ++ ")") ]
+                    [ Html.text ("(" ++ String.fromInt (List.length (visibleRows prefs rows)) ++ ")") ]
+                , Html.viewIf (hiddenCount > 0 && not prefs.showHidden)
+                    (Html.button
+                        [ class "listing-header-hidden"
+                        , title "Show hidden"
+                        , Events.onClick Actions.toggleListingShowHidden
+                        ]
+                        [ Html.text (String.fromInt hiddenCount ++ " hidden") ]
+                    )
                 ]
             , Html.div [ class "listing-header-controls" ]
                 (viewListingSort prefs
@@ -453,6 +464,8 @@ viewRow model rowContext orderedRefs edgeAttrs row =
                         [ Html.text row.name
                         , Html.span [ class "listing-row-id", title ("id: " ++ String.fromInt row.link.id) ]
                             [ Html.text (String.fromInt row.link.id) ]
+                        , Html.viewIf row.link.hidden
+                            (iconCustom True "visibility_off" [ class "listing-row-hidden-marker", title "Hidden" ])
                         , Html.viewMaybe
                             (\editAction ->
                                 iconCustom True
@@ -511,6 +524,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
             , ( "listing-row-selected", isSelected )
             , ( "listing-row-cut", Model.Selection.isCut model scope ref )
             , ( "drag-source", Model.Selection.isDragged model scope ref )
+            , ( "listing-row-hidden", row.link.hidden )
             ]
          , id rowId
          ]
