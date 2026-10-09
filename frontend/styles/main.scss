@@ -3195,8 +3195,7 @@ body:has(dialog[open]) {
   }
 }
 
-.status-bar__group-header,
-.status-bar__stop {
+.status-bar__group-header {
   &:focus-visible {
     outline: 2px solid var(--state-info);
     outline-offset: -2px;
@@ -3465,38 +3464,16 @@ body:has(dialog[open]) {
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-xs);
   width: 100%;
-  min-width: 0;
-  padding: var(--spacing-xs) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-sm);
   font: inherit;
   font-size: var(--font-size-sm);
   color: var(--text-secondary);
   text-align: start;
   cursor: pointer;
-  background: var(--bg-secondary);
+  background-color: var(--bg-secondary);
   border: 0;
-  border-block-end: 1px solid var(--line-color);
-
-  &:hover {
-    color: var(--text-primary);
-  }
-}
-
-.status-bar__group-chevron.material-symbols-outlined {
-  font-size: 16px;
-  color: var(--text-muted);
-}
-
-.status-bar__group-title {
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.status-bar__group-count {
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .status-bar__list {
@@ -3507,7 +3484,8 @@ body:has(dialog[open]) {
 
 .status-bar__item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) var(--spacing-5xl);
+  justify-items: center;
   align-items: center;
   height: var(--spacing-5xl);
 }
@@ -3563,16 +3541,6 @@ body:has(dialog[open]) {
   font-weight: 600;
 }
 
-.status-bar__step-commit {
-  flex: 0 0 auto;
-  padding: 0 var(--spacing-xs);
-  color: var(--state-warning);
-  font-family: Consolas, Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace;
-  font-size: var(--font-size-sm);
-  border: 1px solid currentColor;
-  border-radius: var(--radius-sm);
-}
-
 .status-bar__project-name {
   width: 12em;
 }
@@ -3595,39 +3563,6 @@ body:has(dialog[open]) {
 
   &--starting {
     color: var(--text-muted);
-  }
-}
-
-.status-bar__stop,
-.status-bar__stop-placeholder {
-  width: var(--spacing-5xl);
-  height: 100%;
-}
-
-.status-bar__stop {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  color: var(--text-muted);
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
-
-  &:not(:disabled):hover {
-    color: var(--state-danger);
-    background: var(--bg-hover);
-  }
-
-  &:disabled {
-    cursor: default;
-
-    .material-symbols-outlined {
-      animation: spin 1s linear infinite;
-    }
   }
 }
 

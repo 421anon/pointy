@@ -16,6 +16,7 @@ import Set exposing (Set)
 import Time
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
+import View.Table as Table
 
 
 type GroupKind
@@ -431,9 +432,9 @@ viewGroup model collapsed group =
                  else
                     "expand_more"
                 )
-                [ class "status-bar__group-chevron", attribute "aria-hidden" "true" ]
-            , Html.span [ class "status-bar__group-title" ] [ Html.text (groupTitle group.kind) ]
-            , Html.span [ class "status-bar__group-count" ] [ Html.text (String.fromInt (List.length group.steps)) ]
+                [ class "listing-group-icon", attribute "aria-hidden" "true" ]
+            , Html.text (groupTitle group.kind)
+            , Html.span [ class "listing-group-count" ] [ Html.text ("(" ++ String.fromInt (List.length group.steps) ++ ")") ]
             ]
         , if isCollapsed then
             Html.nothing
@@ -509,10 +510,10 @@ viewStep model step =
                 , case offHead of
                     Just commit ->
                         Html.span
-                            [ class "status-bar__step-commit"
+                            [ class "step-review-revision"
                             , title ("Building commit " ++ String.left 7 commit ++ ", not the current version")
                             ]
-                            [ Html.text ("@" ++ String.left 7 commit) ]
+                            [ Html.span [ class "step-review-revision-hash" ] [ Html.text (String.left 7 commit) ] ]
 
                     Nothing ->
                         Html.nothing
@@ -530,43 +531,14 @@ viewStep model step =
                 , attribute "aria-hidden" "true"
                 ]
             ]
-        , if stoppable then
-            let
-                stopping =
-                    Set.member step.stepId (Model.getPendingStops model)
-            in
-            Html.button
-                [ class "status-bar__stop"
-                , type_ "button"
-                , disabled stopping
-                , Events.onClick (Actions.stopStepAt step.stepId (List.head step.commits))
-                , title
-                    (if stopping then
-                        "Stopping…"
+        , if not stoppable then
+            Html.nothing
 
-                     else
-                        "Stop step"
-                    )
-                , attribute "aria-label"
-                    (if stopping then
-                        "Stopping step " ++ String.fromInt step.stepId
-
-                     else
-                        "Stop step " ++ String.fromInt step.stepId
-                    )
-                ]
-                [ iconCustom False
-                    (if stopping then
-                        "progress_activity"
-
-                     else
-                        "stop_circle"
-                    )
-                    [ attribute "aria-hidden" "true" ]
-                ]
+          else if Set.member step.stepId (Model.getPendingStops model) then
+            Table.viewStoppingIndicator
 
           else
-            Html.span [ class "status-bar__stop-placeholder" ] []
+            Table.viewStopButton "Stop" (Actions.stopStepAt step.stepId (List.head step.commits))
         ]
 
 
