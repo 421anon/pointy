@@ -28,7 +28,6 @@ type GroupKind
 type alias Group =
     { kind : GroupKind
     , steps : List TrayStep
-    , sharedPrefix : Maybe String
     }
 
 
@@ -131,14 +130,9 @@ groupSteps steps =
                         Nothing
 
                     members ->
-                        let
-                            ordered =
-                                List.sortBy stepOrder members
-                        in
                         Just
                             { kind = kind
-                            , steps = ordered
-                            , sharedPrefix = sharedNamePrefix (List.map .stepName ordered)
+                            , steps = List.sortBy stepOrder members
                             }
             )
 
@@ -154,55 +148,6 @@ stepOrder step =
 
         _ ->
             ( 0, step.stepId )
-
-
-sharedNamePrefix : List String -> Maybe String
-sharedNamePrefix names =
-    case List.map String.words names of
-        first :: second :: rest ->
-            let
-                common =
-                    List.foldl commonWords first (second :: rest)
-
-                usable =
-                    List.length common
-                        > 0
-                        && List.all (\words -> List.length words > List.length common) (first :: second :: rest)
-            in
-            if usable then
-                Just (String.join " " common)
-
-            else
-                Nothing
-
-        _ ->
-            Nothing
-
-
-commonWords : List String -> List String -> List String
-commonWords words acc =
-    case ( words, acc ) of
-        ( w :: ws, a :: rest ) ->
-            if w == a then
-                a :: commonWords ws rest
-
-            else
-                []
-
-        _ ->
-            []
-
-
-withoutPrefix : Maybe String -> String -> String
-withoutPrefix prefix name =
-    case prefix of
-        Just shared ->
-            String.words name
-                |> List.drop (List.length (String.words shared))
-                |> String.join " "
-
-        Nothing ->
-            name
 
 
 viewHealth : Model -> Html msg
@@ -489,28 +434,18 @@ viewGroup model collapsed group =
                 [ class "status-bar__group-chevron", attribute "aria-hidden" "true" ]
             , Html.span [ class "status-bar__group-title" ] [ Html.text (groupTitle group.kind) ]
             , Html.span [ class "status-bar__group-count" ] [ Html.text (String.fromInt (List.length group.steps)) ]
-            , case group.sharedPrefix of
-                Just prefix ->
-                    Html.span
-                        [ class "status-bar__group-prefix"
-                        , title ("Every step here starts with “" ++ prefix ++ "”")
-                        ]
-                        [ Html.text prefix ]
-
-                Nothing ->
-                    Html.nothing
             ]
         , if isCollapsed then
             Html.nothing
 
           else
             Html.ul [ class "status-bar__list", id listId ]
-                (List.map (viewStep model group.sharedPrefix) group.steps)
+                (List.map (viewStep model) group.steps)
         ]
 
 
-viewStep : Model -> Maybe String -> TrayStep -> Html (Flow Model ())
-viewStep model prefix step =
+viewStep : Model -> TrayStep -> Html (Flow Model ())
+viewStep model step =
     let
         now =
             Model.getNow model
@@ -570,7 +505,7 @@ viewStep model prefix step =
                 []
             , Html.span [ class "status-bar__step-details" ]
                 [ Html.span [ class "status-bar__step-id" ] [ Html.text (String.fromInt step.stepId) ]
-                , Html.span [ class "status-bar__step-name" ] [ Html.text (withoutPrefix prefix step.stepName) ]
+                , Html.span [ class "status-bar__step-name" ] [ Html.text step.stepName ]
                 , case offHead of
                     Just commit ->
                         Html.span
