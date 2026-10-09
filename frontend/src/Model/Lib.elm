@@ -20,23 +20,27 @@ canonicalPathTo model targetId =
         targetId
 
 
-canonicalNamePath : Model -> Int -> String
-canonicalNamePath model projectId =
+canonicalPathNames : Model -> Int -> List String
+canonicalPathNames model projectId =
     let
         projects_ =
             projectsDict model
-
-        names =
-            Model.canonicalProjectPath (try currentProjectPath model |> Maybe.withDefault []) projects_ projectId
-                |> List.filterMap (\id -> Dict.get id projects_ |> Maybe.map .name)
-
-        rootName =
-            Dict.get Route.rootProjectId projects_
-                |> Maybe.map .name
-                |> Maybe.filter (not << String.isEmpty)
-                |> Maybe.withDefault "Home"
     in
-    "/" ++ String.join "/" (rootName :: names)
+    Model.canonicalProjectPath (try currentProjectPath model |> Maybe.withDefault []) projects_ projectId
+        |> List.filterMap (\id -> Dict.get id projects_ |> Maybe.map .name)
+
+
+rootProjectName : Model -> String
+rootProjectName model =
+    Dict.get Route.rootProjectId (projectsDict model)
+        |> Maybe.map .name
+        |> Maybe.filter (not << String.isEmpty)
+        |> Maybe.withDefault "Home"
+
+
+canonicalNamePath : Model -> Int -> String
+canonicalNamePath model projectId =
+    "/" ++ String.join "/" (rootProjectName model :: canonicalPathNames model projectId)
 
 
 entityParents : Model -> ChildKind -> Int -> List ( Int, ChildLink )

@@ -3496,7 +3496,7 @@ body:has(dialog[open]) {
 
 .status-bar__step {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, max-content) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--spacing-sm);
   width: 100%;
@@ -3515,10 +3515,16 @@ body:has(dialog[open]) {
 
 .status-bar__step-details {
   display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.status-bar__step-line {
+  display: flex;
   align-items: baseline;
   min-width: 0;
   gap: var(--spacing-sm);
-  overflow: hidden;
 }
 
 .status-bar__step-id {
@@ -3529,7 +3535,7 @@ body:has(dialog[open]) {
 }
 
 .status-bar__step-name,
-.status-bar__project-name {
+.status-bar__step-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3541,11 +3547,7 @@ body:has(dialog[open]) {
   font-weight: 600;
 }
 
-.status-bar__project-name {
-  width: 12em;
-}
-
-.status-bar__project-name,
+.status-bar__step-path,
 .status-bar__chevron {
   color: var(--text-muted);
   font-size: var(--font-size-sm);
@@ -3626,12 +3628,7 @@ body:has(dialog[open]) {
   }
 
   .status-bar__step {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
     padding-inline: var(--spacing-md) var(--spacing-xs);
-  }
-
-  .status-bar__project-name {
-    display: none;
   }
 
   .status-bar__step-meta {

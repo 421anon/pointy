@@ -10,7 +10,7 @@ import Html.Events as Events
 import Html.Extra as Html
 import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
 import Model.Lenses exposing (route)
-import Model.Lib exposing (canonicalNamePath)
+import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
 import Set exposing (Set)
 import Time
@@ -454,6 +454,17 @@ viewStep model step =
         folderPath =
             Maybe.map (canonicalNamePath model) step.projectId
 
+        folderTrail =
+            case Maybe.map (canonicalPathNames model) step.projectId of
+                Just [] ->
+                    rootProjectName model
+
+                Just names ->
+                    String.join " / " names
+
+                Nothing ->
+                    "Unfiled"
+
         meta =
             stateMeta now step.state
 
@@ -505,24 +516,26 @@ viewStep model step =
                 ]
                 []
             , Html.span [ class "status-bar__step-details" ]
-                [ Html.span [ class "status-bar__step-id" ] [ Html.text (String.fromInt step.stepId) ]
-                , Html.span [ class "status-bar__step-name" ] [ Html.text step.stepName ]
-                , case offHead of
-                    Just commit ->
-                        Html.span
-                            [ class "step-review-revision"
-                            , title ("Building commit " ++ String.left 7 commit ++ ", not the current version")
-                            ]
-                            [ Html.span [ class "step-review-revision-hash" ] [ Html.text (String.left 7 commit) ] ]
+                [ Html.span [ class "status-bar__step-line" ]
+                    [ Html.span [ class "status-bar__step-id" ] [ Html.text (String.fromInt step.stepId) ]
+                    , Html.span [ class "status-bar__step-name" ] [ Html.text step.stepName ]
+                    , case offHead of
+                        Just commit ->
+                            Html.span
+                                [ class "step-review-revision"
+                                , title ("Building commit " ++ String.left 7 commit ++ ", not the current version")
+                                ]
+                                [ Html.span [ class "step-review-revision-hash" ] [ Html.text (String.left 7 commit) ] ]
 
-                    Nothing ->
-                        Html.nothing
+                        Nothing ->
+                            Html.nothing
+                    ]
+                , Html.span
+                    [ class "status-bar__step-path"
+                    , title (Maybe.withDefault "Not in any folder" folderPath)
+                    ]
+                    [ Html.text folderTrail ]
                 ]
-            , Html.span
-                [ class "status-bar__project-name"
-                , title (Maybe.withDefault "Not in any folder" folderPath)
-                ]
-                [ Html.text (Maybe.withDefault "Unfiled" step.projectName) ]
             , Html.span [ class ("status-bar__step-meta status-bar__step-meta--" ++ meta.tone) ]
                 [ Html.text meta.short ]
             , iconCustom False

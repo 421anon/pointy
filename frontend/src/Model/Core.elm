@@ -2710,7 +2710,6 @@ type alias TrayStep =
     { stepId : Int
     , stepName : String
     , projectId : Maybe Int
-    , projectName : Maybe String
     , state : TrayState
     , commits : List String
     }
@@ -2800,7 +2799,6 @@ getTraySteps (Model model) =
                         { stepId = stepId
                         , stepName = step.name
                         , projectId = Maybe.map (.id >> Maybe.withDefault Route.rootProjectId) project
-                        , projectName = Maybe.map .name project
                         , state = state
                         , commits = commits
                         }
