@@ -77,16 +77,17 @@ data ReviewRequest = ReviewRequest
 instance FromJSON ReviewRequest where
     parseJSON = withObject "ReviewRequest" $ \fields -> ReviewRequest <$> fields .: "reviewedBy" <*> fields .:? "reviewComments" .!= ""
 
-data StepReviewReport = StepReviewReport (Maybe Review) (Maybe (Text, Maybe Text)) ReviewComparison
+data StepReviewReport = StepReviewReport (Maybe Review) (Maybe FilePath) (Maybe (Text, Maybe Text)) ReviewComparison
 
 instance ToJSON StepReviewReport where
-    toJSON (StepReviewReport mReview mStatus comparison) =
+    toJSON (StepReviewReport mReview mCertificate mStatus comparison) =
         object
             [ "reviewedRevision" .= fmap reviewedRevision mReview
             , "reviewedBy" .= fmap reviewedBy mReview
             , "reviewComments" .= fmap reviewComments mReview
             , "reviewedStatus" .= fmap fst mStatus
             , "reviewedStatusError" .= (mStatus >>= snd)
+            , "reviewedCertificate" .= mCertificate
             , "comparison" .= (comparisonText :: Text)
             , "comparisonDetail" .= detail
             ]
@@ -117,7 +118,7 @@ getProjectReviewHandler projectId commit = do
         reviewedCertificates <- reviewedPaths (readRepoPath context) stepCertificatesOrLegacyOutPaths reviews
         let reviewedStepPaths = Map.mapMaybe (either (const Nothing) Just) (Map.intersectionWith (liftA2 StepPaths) reviewedCertificates reviewedOutputs)
         statuses <- lift . resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedCertificates
-        let stepReport stepId review = StepReviewReport review (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
+        let stepReport stepId review = StepReviewReport review (either (const Nothing) Just =<< Map.lookup stepId reviewedCertificates) (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
     orFail err500 result
 

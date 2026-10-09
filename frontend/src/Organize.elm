@@ -485,32 +485,20 @@ dropReorder scope ref before =
     Flow.get
         |> Flow.andThen
             (\model ->
-                case get organizeDrag model of
-                    Just drag ->
-                        let
-                            prefs =
-                                get listingPreferences model
+                let
+                    prefs =
+                        get listingPreferences model
 
-                            rendered =
-                                Selection.displayOrder prefs
-                                    (List.map Model.childRefOf (Model.sortChildLinks (Selection.folderLinks model scope)))
-
-                            desired =
-                                Selection.reorderForEdgeDrop rendered drag.refs ref before
-
-                            newOrder =
-                                Selection.storedOrder prefs desired
-                        in
-                        Flow.when (Selection.edgeDropAllowed model scope ref before) <|
-                            if Selection.displayOrder prefs newOrder == rendered then
-                                Flow.pure ()
-
-                            else
-                                organizeWithUndo "Reorder"
-                                    [ OrderOp scope newOrder ]
-
-                    Nothing ->
-                        Flow.pure ()
+                    rendered =
+                        Selection.displayOrder prefs
+                            (List.map Model.childRefOf (Model.sortChildLinks (Selection.folderLinks model scope)))
+                in
+                Selection.reorderDrag model scope
+                    |> Maybe.map .refs
+                    |> Maybe.andThen (Selection.reorderForEdgeDrop rendered ref before)
+                    |> Maybe.map (Selection.storedOrder prefs)
+                    |> Maybe.filter ((/=) rendered << Selection.displayOrder prefs)
+                    |> Maybe.unwrap (Flow.pure ()) (organizeWithUndo "Reorder" << List.singleton << OrderOp scope)
             )
 
 
@@ -526,13 +514,15 @@ onOrganizeDragEvent value =
             Flow.setAll organizeDrag Nothing
 
         Ok (OrganizeDragDrop { target, linkModifier }) ->
-            (case target of
-                OrganizeDropFolder { folderId } ->
-                    dropIntoFolder folderId linkModifier
+            clearSelection
+                |> Flow.seq
+                    (case target of
+                        OrganizeDropFolder { folderId } ->
+                            dropIntoFolder folderId linkModifier
 
-                OrganizeDropEdge { parentScope, ref, before } ->
-                    dropReorder parentScope ref before
-            )
+                        OrganizeDropEdge { parentScope, ref, before } ->
+                            dropReorder parentScope ref before
+                    )
                 |> Flow.seq (Flow.setAll organizeDrag Nothing)
 
         Err _ ->

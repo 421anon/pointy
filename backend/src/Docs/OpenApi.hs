@@ -236,7 +236,7 @@ instance ToSchema StepReviewReport where
         pure $
             objectSchema
                 "StepReviewReport"
-                [("reviewedRevision", stringField), ("reviewedBy", stringField), ("reviewComments", stringField), ("reviewedStatus", stringField), ("reviewedStatusError", stringField), ("comparison", stringField), ("comparisonDetail", stringField)]
+                [("reviewedRevision", stringField), ("reviewedBy", stringField), ("reviewComments", stringField), ("reviewedStatus", stringField), ("reviewedStatusError", stringField), ("reviewedCertificate", stringField), ("comparison", stringField), ("comparisonDetail", stringField)]
 
 pointyOpenApi :: OpenApi
 pointyOpenApi =

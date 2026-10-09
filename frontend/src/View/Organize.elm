@@ -47,10 +47,10 @@ dropAllowedToken model folderId =
         |> String.join " "
 
 
-dropEdgeAttrs : Maybe ( Int, Int ) -> Int -> List (Html.Attribute msg)
+dropEdgeAttrs : (Int -> Bool) -> Int -> List (Html.Attribute msg)
 dropEdgeAttrs gaps index =
-    [ ( True, "before" ), ( False, "after" ) ]
-        |> List.filter (\( before, _ ) -> Selection.edgeAllowed gaps index before)
+    [ ( index, "before" ), ( index + 1, "after" ) ]
+        |> List.filter (Tuple.first >> gaps)
         |> List.map Tuple.second
         |> String.join " "
         |> attribute "data-drop-edges"
@@ -67,7 +67,9 @@ rowDragAttrs scope link =
 
 rowDragHandleAttrs : List (Html.Attribute msg)
 rowDragHandleAttrs =
-    [ attribute "draggable" "true" ]
+    [ attribute "draggable" "true"
+    , attribute "data-drag-handle" ""
+    ]
 
 
 selectionRefsAttr : Model -> List (Html.Attribute msg)

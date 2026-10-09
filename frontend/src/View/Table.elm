@@ -93,7 +93,8 @@ type alias ListingRowContext =
 
 
 type alias ListingGroup =
-    { title : String
+    { key : String
+    , title : String
     , icon : Maybe String
     , rows : List ListingRow
     }
@@ -180,25 +181,27 @@ groupRows prefs stepConfig rows =
             )
 
         typeNames =
-            List.map .typeName steps_ |> List.unique |> List.sortBy typeOrder
+            Dict.keys stepConfig ++ List.map .typeName steps_ |> List.unique |> List.sortBy typeOrder
 
         groupFor typeName =
-            { title = Dict.get typeName stepConfig |> Maybe.andThen .displayName |> Maybe.withDefault typeName
+            { key = Model.childKindName Model.StepChild ++ "-" ++ typeName
+            , title = Dict.get typeName stepConfig |> Maybe.andThen .displayName |> Maybe.withDefault typeName
             , icon = Dict.get typeName stepConfig |> Maybe.andThen .icon
             , rows = List.filter (\row -> row.typeName == typeName) steps_
             }
     in
-    { title = "Folders", icon = Just "folder", rows = folders }
+    { key = Model.childKindName Model.ProjectChild, title = "Folders", icon = Just "folder", rows = folders }
         :: List.map groupFor typeNames
 
 
-visibleRows : Model.ListingPreferences -> List ListingRow -> List ListingRow
-visibleRows prefs rows =
-    if prefs.showHidden then
-        rows
+isVisibleRow : Model.ListingPreferences -> ListingRow -> Bool
+isVisibleRow prefs row =
+    prefs.showHidden || not row.link.hidden
 
-    else
-        List.filter (\row -> not row.link.hidden) rows
+
+visibleRows : Model.ListingPreferences -> List ListingRow -> List ListingRow
+visibleRows =
+    List.filter << isVisibleRow
 
 
 viewListing :
@@ -237,13 +240,11 @@ viewListing { model, scope, stepConfig, rows, header } =
             { scope = scope, editable = editable, selected = selected }
 
         groups =
-            (if prefs.groupByType then
+            if prefs.groupByType then
                 groupRows prefs stepConfig rows
 
-             else
-                [ { title = "", icon = Nothing, rows = sortRows prefs rows } ]
-            )
-                |> List.filter (\group -> not (List.isEmpty (visibleRows prefs group.rows)))
+            else
+                [ { key = "", title = "", icon = Nothing, rows = sortRows prefs rows } ]
     in
     Html.div
         ([ class "listing", id "project-listing" ]
@@ -271,7 +272,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                     ++ viewClipboardButtons model
                 )
             ]
-        , Html.div
+        , Html.Keyed.node "div"
             ([ class "listing-groups" ]
                 ++ (if editable then
                         [ Events.custom "contextmenu"
@@ -286,7 +287,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                         []
                    )
             )
-            (List.map (viewListingGroup model rowContext prefs) groups)
+            (List.map (\group -> ( group.key, viewListingGroup model rowContext prefs group )) groups)
         ]
 
 
@@ -372,25 +373,29 @@ viewListingGroup model rowContext prefs group =
 
         gaps =
             Model.Selection.reorderGaps model rowContext.scope orderedRefs
+
+        viewRowSlot index row =
+            Tuple.mapSecond (Tuple.pair (Model.rowDomId row.link.kind row.link.id)) <|
+                if isVisibleRow prefs row then
+                    ( index + 1, viewRow model rowContext orderedRefs (View.Organize.dropEdgeAttrs gaps index) row )
+
+                else
+                    ( index, Html.nothing )
     in
-    Html.div [ class "listing-group" ]
-        [ Html.viewIf (not (String.isEmpty group.title))
-            (Html.div [ class "listing-group-header" ]
-                [ Html.viewMaybe (\groupIcon -> iconCustom False groupIcon [ class "listing-group-icon" ]) group.icon
-                , Html.text group.title
-                , Html.span [ class "listing-group-count" ]
-                    [ Html.text ("(" ++ String.fromInt (List.length visible) ++ ")") ]
-                ]
-            )
-        , Html.Keyed.node "div"
-            [ class "listing-rows" ]
-            (List.indexedMap (\index -> viewRowKeyed model rowContext orderedRefs (View.Organize.dropEdgeAttrs gaps index)) visible)
-        ]
-
-
-viewRowKeyed : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> ( String, Html (Flow Model ()) )
-viewRowKeyed model rowContext orderedRefs edgeAttrs row =
-    ( Model.rowDomId row.link.kind row.link.id, viewRow model rowContext orderedRefs edgeAttrs row )
+    Html.viewIf (not (List.isEmpty visible)) <|
+        Html.div [ class "listing-group" ]
+            [ Html.viewIf (not (String.isEmpty group.title))
+                (Html.div [ class "listing-group-header" ]
+                    [ Html.viewMaybe (\groupIcon -> iconCustom False groupIcon [ class "listing-group-icon" ]) group.icon
+                    , Html.text group.title
+                    , Html.span [ class "listing-group-count" ]
+                        [ Html.text ("(" ++ String.fromInt (List.length visible) ++ ")") ]
+                    ]
+                )
+            , Html.Keyed.node "div"
+                [ class "listing-rows" ]
+                (Tuple.second (List.mapAccuml viewRowSlot 0 group.rows))
+            ]
 
 
 viewRow : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> Html (Flow Model ())

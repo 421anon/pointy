@@ -8,8 +8,6 @@ module Model.Selection exposing
     , displayOrder
     , dropActionToken
     , dropAllowed
-    , edgeAllowed
-    , edgeDropAllowed
     , folderLinks
     , hasSelection
     , isCut
@@ -21,6 +19,7 @@ module Model.Selection exposing
     , organizeTargets
     , pruneSelection
     , rangeSelect
+    , reorderDrag
     , reorderForEdgeDrop
     , reorderGaps
     , resolveDropAction
@@ -41,7 +40,7 @@ import Dict exposing (Dict)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, ListingScope, ListingSelection, Model, OrganizeAction(..), OrganizeDialogMode(..), OrganizeDrag, OrganizeDropAction(..))
-import Model.Lenses exposing (currentProjectPath, isReadOnlyRoute, listingPreferences, listingSelection, organizeClipboard, organizeDrag, projectsDict, route, steps)
+import Model.Lenses exposing (currentProjectPath, isReadOnlyRoute, listingPreferences, listingSelection, listingSort, organizeClipboard, organizeDrag, projectsDict, route, steps)
 import Model.Lib as Lib
 import Route
 
@@ -230,20 +229,34 @@ visibleRefs model scope =
         |> List.map Model.childRefOf
 
 
-reorderDropAllowed : Model -> Bool
-reorderDropAllowed model =
-    let
-        prefs =
-            get listingPreferences model
-    in
-    prefs.sort == Model.SortManual && not prefs.groupByType && not (isReadOnlyRoute model)
-
-
-reorderGaps : Model -> ListingScope -> List ChildRef -> Maybe ( Int, Int )
-reorderGaps model scope displayed =
+reorderDrag : Model -> ListingScope -> Maybe OrganizeDrag
+reorderDrag model scope =
     get organizeDrag model
-        |> Maybe.filter (\drag -> drag.sourceScope == scope && reorderDropAllowed model)
-        |> Maybe.map (\drag -> landingGaps (get listingPreferences model) displayed drag.refs)
+        |> Maybe.filter (\drag -> drag.sourceScope == scope && get (listingPreferences << listingSort) model == Model.SortManual && not (isReadOnlyRoute model))
+
+
+reorderGaps : Model -> ListingScope -> List ChildRef -> Int -> Bool
+reorderGaps model scope displayed =
+    reorderDrag model scope
+        |> Maybe.map .refs
+        |> Maybe.filter (List.all (\ref -> List.any (Model.sameEntity ref) displayed))
+        |> Maybe.unwrap (always False) (changingGaps (get listingPreferences model) displayed)
+
+
+changingGaps : Model.ListingPreferences -> List ChildRef -> List ChildRef -> Int -> Bool
+changingGaps prefs displayed payload =
+    let
+        landing =
+            landingGaps prefs displayed payload
+
+        carried =
+            List.findIndices (\ref -> List.any (Model.sameEntity ref) payload) displayed
+
+        unchanged =
+            Maybe.map2 (\first last -> ( first, last + 1 )) (List.head carried) (List.last carried)
+                |> Maybe.filter (\( first, afterLast ) -> afterLast - first == List.length carried)
+    in
+    \gap -> within gap landing && not (Maybe.unwrap False (within gap) unchanged)
 
 
 landingGaps : Model.ListingPreferences -> List ChildRef -> List ChildRef -> ( Int, Int )
@@ -282,32 +295,9 @@ landingGaps prefs displayed payload =
         ( 0, end )
 
 
-edgeAllowed : Maybe ( Int, Int ) -> Int -> Bool -> Bool
-edgeAllowed gaps index before =
-    case gaps of
-        Just ( first, last ) ->
-            let
-                gap =
-                    if before then
-                        index
-
-                    else
-                        index + 1
-            in
-            first <= gap && gap <= last
-
-        Nothing ->
-            False
-
-
-edgeDropAllowed : Model -> ListingScope -> ChildRef -> Bool -> Bool
-edgeDropAllowed model scope ref before =
-    let
-        displayed =
-            displayOrder (get listingPreferences model) (visibleRefs model scope)
-    in
-    List.findIndex (Model.sameEntity ref) displayed
-        |> Maybe.unwrap False (\index -> edgeAllowed (reorderGaps model scope displayed) index before)
+within : Int -> ( Int, Int ) -> Bool
+within gap ( first, last ) =
+    first <= gap && gap <= last
 
 
 moveValid : Model -> ListingScope -> Int -> ChildRef -> Bool
@@ -319,7 +309,7 @@ moveValid model sourceScope targetId ref =
 
 resolveInto : Model -> OrganizeDrag -> Int -> List OrganizeDropAction
 resolveInto model drag targetId =
-    if not (listingEditable model) then
+    if not (listingEditable model) || List.any (Lib.linkCreatesCycle (projectsDict model) targetId) drag.refs then
         []
 
     else
@@ -399,39 +389,28 @@ storedOrder prefs refs =
         refs
 
 
-reorderForEdgeDrop : List ChildRef -> List ChildRef -> ChildRef -> Bool -> List ChildRef
-reorderForEdgeDrop visual payload ref before =
+reorderForEdgeDrop : List ChildRef -> ChildRef -> Bool -> List ChildRef -> Maybe (List ChildRef)
+reorderForEdgeDrop visual ref before payload =
     let
-        present =
-            List.filter (\r -> List.any (Model.sameEntity r) payload) visual
-
         stays r =
-            not (List.any (Model.sameEntity r) present)
+            not (List.any (Model.sameEntity r) payload)
 
-        withoutPayload =
-            List.filter stays visual
+        ( withoutPayload, present ) =
+            List.partition stays visual
 
-        insertAt =
-            case List.findIndex (Model.sameEntity ref) visual of
-                Just index ->
-                    List.take
-                        (if before then
-                            index
+        insertAt index =
+            List.take
+                (if before then
+                    index
 
-                         else
-                            index + 1
-                        )
-                        visual
-                        |> List.count stays
-
-                Nothing ->
-                    List.length withoutPayload
+                 else
+                    index + 1
+                )
+                visual
+                |> List.count stays
     in
-    if List.isEmpty present then
-        visual
-
-    else
-        List.take insertAt withoutPayload ++ present ++ List.drop insertAt withoutPayload
+    List.findIndex (Model.sameEntity ref) visual
+        |> Maybe.map (insertAt >> (\at -> List.take at withoutPayload ++ present ++ List.drop at withoutPayload))
 
 
 organizeTargets : Model -> OrganizeDialogMode -> ListingScope -> List ChildRef -> List ( Int, String )
@@ -440,12 +419,9 @@ organizeTargets model mode sourceScope refs =
         projects_ =
             projectsDict model
 
-        projectRefs =
-            List.filter (\ref -> ref.kind == ProjectChild) refs
-
         excluded id =
             (mode == OrganizeMove && sourceScope == id)
-                || List.any (\ref -> ref.id == id || Model.isAncestorProject projects_ ref.id id) projectRefs
+                || List.any (Lib.linkCreatesCycle projects_ id) refs
     in
     Dict.toList projects_
         |> List.filter (\( id, _ ) -> not (excluded id))
