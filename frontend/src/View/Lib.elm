@@ -6,9 +6,11 @@ import Api.ApiData as ApiData
 import Components.Select as Select
 import Dict
 import Flow exposing (Flow)
+import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
+import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
@@ -41,12 +43,73 @@ viewSearchBox model =
         state =
             get searchBox model
 
-        availableItems =
+        searchItems =
             if state.active || not (String.isEmpty state.input) then
-                Lib.getSearchItems model
+                Lib.stepSearchItems model
 
             else
                 []
+
+        availableItems =
+            List.map Tuple.first searchItems
+
+        documents =
+            searchItems
+                |> List.filterMap
+                    (\( item, document ) ->
+                        item.id |> Maybe.map (\id -> ( id, document ))
+                    )
+                |> Dict.fromList
+
+        toSearchDocument item =
+            item.id
+                |> Maybe.andThen (\id -> Dict.get id documents)
+                |> Maybe.withDefault { fields = [], demoted = False }
+
+        toMenuItemDetail query match item =
+            let
+                fieldDetail field =
+                    case field.tag of
+                        Lib.SearchNote ->
+                            Just ("Note: " ++ Fuzzy.excerpt query field.text)
+
+                        Lib.SearchArg key ->
+                            Just (key ++ ": " ++ Fuzzy.excerpt query field.text)
+
+                        _ ->
+                            Nothing
+
+                fallback =
+                    let
+                        path =
+                            folderFor match item
+                                |> Maybe.map (Lib.canonicalNamePath model)
+                                |> Maybe.withDefault "/unfiled"
+
+                        typeName =
+                            item.id
+                                |> Maybe.andThen (\id -> Dict.get id (get Lenses.steps model))
+                                |> Maybe.map (\step -> Lib.stepTypeName model step.type_)
+                                |> Maybe.withDefault ""
+                    in
+                    typeName ++ " · " ++ path
+            in
+            List.findMap fieldDetail match.fields
+                |> Maybe.withDefault fallback
+                |> Just
+
+        folderFor match item =
+            Lib.searchFolder match |> Maybe.orElse item.mProjectId
+
+        onSelect match item =
+            case item.id of
+                Just stepId ->
+                    folderFor match item
+                        |> Maybe.map (\projectId -> Actions.onSelectSearch projectId stepId)
+                        |> Maybe.withDefault (Organize.openLinkExisting stepId)
+
+                Nothing ->
+                    Flow.pure ()
     in
     Select.view
         { optic = searchBox
@@ -62,23 +125,15 @@ viewSearchBox model =
         , toInputItemName = .name
         , toInputItemTooltip = \_ -> []
         , onInputItemClick = \_ -> Nothing
-        , toMenuItemName = \item -> item.id |> Maybe.map (\id -> "[" ++ String.fromInt id ++ "] " ++ item.name) |> Maybe.withDefault item.name
-        , toMenuItemTooltip = \_ -> []
+        , toMenuItemName = .name
+        , toMenuItemTooltip = \item -> item.id |> Maybe.map (\id -> [ "id: " ++ String.fromInt id ]) |> Maybe.withDefault []
+        , toSearchDocument = toSearchDocument
+        , toMenuItemDetail = toMenuItemDetail
         , onChange = Flow.pure ()
         , onRemove = \_ -> Flow.pure ()
         , activeAfterSelect = False
         , clearInputAfterSelect = False
-        , onSelect =
-            \item ->
-                case ( item.id, item.mProjectId ) of
-                    ( Just stepId, Just projectId ) ->
-                        Actions.onSelectSearch projectId stepId
-
-                    ( Just stepId, Nothing ) ->
-                        Organize.openLinkExisting stepId
-
-                    ( Nothing, _ ) ->
-                        Flow.pure ()
+        , onSelect = onSelect
         , alignRight = True
         , inputItemStyle = \_ -> []
         }

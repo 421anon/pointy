@@ -46,6 +46,25 @@
     }
 }
 
+.select-menu-item-label,
+.select-menu-item-detail {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.select-menu-item-detail {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.select-menu-item-match {
+    background: none;
+    color: inherit;
+    font-weight: 700;
+}
+
 .material-symbols-outlined.remove-selected-icon {
   cursor: pointer;
 }

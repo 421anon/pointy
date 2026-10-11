@@ -25,6 +25,7 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - The listing header counts only the rows shown. While Show hidden is off and the folder has hidden items, a muted "N hidden" note follows the count and turns Show hidden on when clicked. With Show hidden on, hidden rows have dimmed names and an eye-off marker. Folder status summaries still count the steps in hidden rows.
 - Open outputs and file viewers keep their contents and scroll positions when hidden rows or listing groups appear or disappear, and through new commits and review changes while the step's build is unchanged.
 - While the clipboard holds cut or copied items, Paste and Clear clipboard appear in the listing header, and Clear clipboard also joins the selection action bar and row menus while rows are selected; Ctrl/Cmd+V also pastes into the current folder. Cut items fade until the cut is pasted or cleared, and pasting a cut back into its source folder just ends it.
+- The step search box matches words in any order, ranked by relevance and tolerant of typos and abbreviations. It searches step names, ids, types, folders, notes and argument values, shows where each result matched, and opens a step in the folder that matched. Steps whose every folder link is hidden rank lower.
 
 ## Activity tray
 

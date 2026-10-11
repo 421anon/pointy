@@ -13,6 +13,7 @@ import Extra.Accessors exposing (A_Traversal, by, remkT, where_)
 import Extra.Decode as Decode
 import Extra.Http as Http
 import Flow exposing (Flow)
+import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (..)
 import Html.Events as Events
@@ -1125,13 +1126,15 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                 , toInputItemName = .name
                 , toInputItemTooltip = toItemTooltip
                 , onInputItemClick = \_ -> Nothing
+                , toSearchDocument = .name >> Fuzzy.labelDocument
                 , toMenuItemName = .name
                 , toMenuItemTooltip = toItemTooltip
+                , toMenuItemDetail = \_ _ _ -> Nothing
                 , onChange = Flow.pure ()
                 , onRemove = \_ -> Flow.pure ()
                 , activeAfterSelect = True
                 , clearInputAfterSelect = True
-                , onSelect = \_ -> Flow.pure ()
+                , onSelect = \_ _ -> Flow.pure ()
                 , alignRight = False
                 , inputItemStyle = \_ -> []
                 }
@@ -1359,13 +1362,15 @@ viewProjectExtraFormFields model tableLens =
                         , toInputItemName = .name >> presetMenuLabel
                         , toInputItemTooltip = always []
                         , onInputItemClick = \_ -> Nothing
+                        , toSearchDocument = .name >> presetMenuLabel >> Fuzzy.labelDocument
                         , toMenuItemName = .name >> presetMenuLabel
                         , toMenuItemTooltip = always []
+                        , toMenuItemDetail = \_ _ _ -> Nothing
                         , onChange = Flow.pure ()
                         , onRemove = \_ -> Flow.pure ()
                         , activeAfterSelect = False
                         , clearInputAfterSelect = False
-                        , onSelect = onPickPreset
+                        , onSelect = always onPickPreset
                         , alignRight = False
                         , inputItemStyle = \_ -> []
                         }
@@ -1401,13 +1406,15 @@ viewProjectExtraFormFields model tableLens =
                         , toInputItemName = .name >> templateLabel
                         , toInputItemTooltip = always []
                         , onInputItemClick = \_ -> Nothing
+                        , toSearchDocument = .name >> templateLabel >> Fuzzy.labelDocument
                         , toMenuItemName = .name >> templateLabel
                         , toMenuItemTooltip = always []
+                        , toMenuItemDetail = \_ _ _ -> Nothing
                         , onChange = Flow.pure ()
                         , onRemove = .name >> Actions.removeProjectTemplate tableLens
                         , activeAfterSelect = True
                         , clearInputAfterSelect = True
-                        , onSelect = .name >> Actions.addProjectTemplate tableLens
+                        , onSelect = always (.name >> Actions.addProjectTemplate tableLens)
                         , alignRight = False
                         , inputItemStyle = .name >> stringToColor >> style "background-color" >> List.singleton
                         }
@@ -1533,6 +1540,9 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                         }
                                     )
                             )
+
+                menuLabel item =
+                    Maybe.map2 (\id s -> "[" ++ String.fromInt id ++ "] [" ++ typeDisplayName s.type_ ++ "] " ++ item.name) item.id (getStep item.id) |> Maybe.withDefault item.name
             in
             Select.view
                 { optic = stateLens
@@ -1548,15 +1558,15 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 , toInputItemName = .name
                 , toInputItemTooltip = toTooltip
                 , onInputItemClick = .id >> Maybe.andThen toHighlightRoute >> Maybe.map Actions.goToRoute
-                , toMenuItemName =
-                    \item ->
-                        Maybe.map2 (\id s -> "[" ++ String.fromInt id ++ "] [" ++ typeDisplayName s.type_ ++ "] " ++ item.name) item.id (getStep item.id) |> Maybe.withDefault item.name
+                , toSearchDocument = menuLabel >> Fuzzy.labelDocument
+                , toMenuItemName = menuLabel
                 , toMenuItemTooltip = toTooltip
+                , toMenuItemDetail = \_ _ _ -> Nothing
                 , onChange = Flow.pure ()
                 , onRemove = .id >> Maybe.unwrap (Flow.pure ()) onRemoveStep
                 , activeAfterSelect = activeAfterSelect
                 , clearInputAfterSelect = True
-                , onSelect = .id >> Maybe.unwrap (Flow.pure ()) onSelectStep
+                , onSelect = always (.id >> Maybe.unwrap (Flow.pure ()) onSelectStep)
                 , alignRight = False
                 , inputItemStyle = \item -> getStep item.id |> Maybe.map (.type_ >> stringToColor >> style "background-color") |> Maybe.toList
                 }
