@@ -446,11 +446,6 @@ loadProjects =
                             |> Flow.seq
                                 (Api.fetchProjects target stepConfig_
                                     |> Flow.andThen
-                                        (\projectsResult ->
-                                            Api.fetchUnfiled target stepConfig_
-                                                |> Flow.map (\unfiledResult -> ( projectsResult, unfiledResult ))
-                                        )
-                                    |> Flow.andThen
                                         (\result ->
                                             Flow.get
                                                 |> Flow.andThen
@@ -469,16 +464,16 @@ loadProjects =
             )
 
 
-applyLoadedProjects : Maybe String -> ( Result Http.Error (Dict Int ApiDecode.ProjectDecode), Result Http.Error (Dict Int StepRecord) ) -> Flow Model ()
+applyLoadedProjects : Maybe String -> Result Http.Error (Dict Int ApiDecode.ProjectDecode) -> Flow Model ()
 applyLoadedProjects target result =
     case result of
-        ( Ok projectDecodes_, Ok unfiledSteps ) ->
+        Ok projectDecodes_ ->
             Flow.get
                 |> Flow.andThen
                     (\model ->
                         let
                             fetchedSteps =
-                                Dict.foldl (\_ decode acc -> Dict.union acc decode.stepDefs) unfiledSteps projectDecodes_
+                                Dict.foldl (\_ decode acc -> Dict.union acc decode.stepDefs) Dict.empty projectDecodes_
 
                             fetchedProjects =
                                 Dict.map (\_ decode -> decode.record) projectDecodes_
@@ -504,10 +499,7 @@ applyLoadedProjects target result =
                             |> Flow.seq (Flow.async loadProjectReviews)
                     )
 
-        ( Err err, _ ) ->
-            loadProjectsFailed err
-
-        ( _, Err err ) ->
+        Err err ->
             loadProjectsFailed err
 
 

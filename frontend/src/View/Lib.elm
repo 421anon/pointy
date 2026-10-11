@@ -15,7 +15,6 @@ import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
 import Model.Lib as Lib
-import Organize
 import Route
 import View.Icons exposing (iconCustom)
 import View.Organize
@@ -83,8 +82,7 @@ viewSearchBox model =
                     let
                         path =
                             folderFor match item
-                                |> Maybe.map (Lib.canonicalNamePath model)
-                                |> Maybe.withDefault "/unfiled"
+                                |> Maybe.unwrap "" (\projectId -> " · " ++ Lib.canonicalNamePath model projectId)
 
                         typeName =
                             item.id
@@ -92,7 +90,7 @@ viewSearchBox model =
                                 |> Maybe.map (\step -> Lib.stepTypeName model step.type_)
                                 |> Maybe.withDefault ""
                     in
-                    typeName ++ " · " ++ path
+                    typeName ++ path
             in
             List.findMap fieldDetail match.fields
                 |> Maybe.withDefault fallback
@@ -102,14 +100,8 @@ viewSearchBox model =
             Lib.searchFolder match |> Maybe.orElse item.mProjectId
 
         onSelect match item =
-            case item.id of
-                Just stepId ->
-                    folderFor match item
-                        |> Maybe.map (\projectId -> Actions.onSelectSearch projectId stepId)
-                        |> Maybe.withDefault (Organize.openLinkExisting stepId)
-
-                Nothing ->
-                    Flow.pure ()
+            Maybe.map2 Actions.onSelectSearch (folderFor match item) item.id
+                |> Maybe.withDefault (Flow.pure ())
 
         relatedItems =
             Lib.relatedSearchItems model

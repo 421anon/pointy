@@ -1104,12 +1104,8 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                     item.ref
                         |> Maybe.unwrap []
                             (\ref ->
-                                case Model.Lib.entityOtherParents model ref.kind ref.id Nothing of
-                                    [] ->
-                                        [ "unfiled" ]
-
-                                    parents ->
-                                        List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model linkedParentId) parents
+                                Model.Lib.entityOtherParents model ref.kind ref.id Nothing
+                                    |> List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model linkedParentId)
                             )
             in
             Select.view

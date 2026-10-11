@@ -5,8 +5,7 @@ module Search.Document (
     buildDocuments,
 ) where
 
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
-import Control.Monad.Trans.Class (lift)
+import Control.Monad.Except (ExceptT, throwError)
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Object, Value (..), eitherDecode)
 import qualified Data.Aeson.Key as Key
@@ -23,9 +22,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
-import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effects (Eval)
-import ProjectFiles (RawProjectFile (..), loadRawProjectFilesAt, loadUnfiledStepEntries)
+import ProjectFiles (RawProjectFile (..), loadRawProjectFilesAt)
 import ProjectTree (ChildRef (..), normalizeProjects, projectChildRefs)
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext, runNixEvalJsonInRepo)
@@ -60,14 +59,7 @@ buildDocuments ctx = do
     stepConfigOutput <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
     stepConfig <- either (throwError . ("Failed to read the step configuration: " ++)) pure (decodeJson stepConfigOutput)
     let entries = stepEntriesOf projects
-    unfiledResult <- lift $ runExceptT (loadUnfiledStepEntries ctx (map entryId entries))
-    unfiled <- case unfiledResult of
-        Left err -> do
-            liftIO (putStrLn ("Warning: Failed to read the unfiled steps: " ++ err))
-            pure []
-        Right steps -> pure steps
-    let allEntries = entries ++ mapMaybe unfiledEntryOf unfiled
-        names = Map.fromList [(entryId entry, entryName entry) | entry <- allEntries]
+        names = Map.fromList [(entryId entry, entryName entry) | entry <- entries]
         paths = folderPaths projects
     pure
         [ StepDocument
@@ -76,13 +68,9 @@ buildDocuments ctx = do
             , documentText = text
             , documentHash = hexDigest (hash (TE.encodeUtf8 text) :: Digest SHA256)
             }
-        | entry <- allEntries
+        | entry <- entries
         , let text = documentTextFor stepConfig names paths entry
         ]
-
-unfiledEntryOf :: Value -> Maybe StepEntry
-unfiledEntryOf (Object child) = entryOf child
-unfiledEntryOf _ = Nothing
 
 decodePayload :: Maybe Text -> Maybe Value
 decodePayload Nothing = Nothing
@@ -198,8 +186,7 @@ documentTextFor stepConfig names paths entry =
     args = T.intercalate ", " (concatMap (flattenArg names) (entryArgValues entry))
     folderLine = case Map.lookup (entryId entry) paths of
         Just path | not (T.null path) -> ["Folder: " <> path]
-        Just _ -> []
-        Nothing -> ["Folder: unfiled"]
+        _ -> []
     typeLabel = case Map.lookup (entryType entry) typeNames of
         Just label -> label
         Nothing -> entryType entry

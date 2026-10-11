@@ -454,16 +454,17 @@ viewStep model step =
         folderPath =
             Maybe.map (canonicalNamePath model) step.projectId
 
-        folderTrail =
-            case Maybe.map (canonicalPathNames model) step.projectId of
-                Just [] ->
-                    rootProjectName model
+        folderLine projectId =
+            let
+                trail =
+                    case canonicalPathNames model projectId of
+                        [] ->
+                            rootProjectName model
 
-                Just names ->
-                    String.join " / " names
-
-                Nothing ->
-                    "Unfiled"
+                        names ->
+                            String.join " / " names
+            in
+            Html.span [ class "status-bar__step-path", title (canonicalNamePath model projectId) ] [ Html.text trail ]
 
         meta =
             stateMeta now step.state
@@ -530,11 +531,7 @@ viewStep model step =
                         Nothing ->
                             Html.nothing
                     ]
-                , Html.span
-                    [ class "status-bar__step-path"
-                    , title (Maybe.withDefault "Not in any folder" folderPath)
-                    ]
-                    [ Html.text folderTrail ]
+                , Maybe.map folderLine step.projectId |> Maybe.withDefault Html.nothing
                 ]
             , Html.span [ class ("status-bar__step-meta status-bar__step-meta--" ++ meta.tone) ]
                 [ Html.text meta.short ]

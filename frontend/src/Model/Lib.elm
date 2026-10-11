@@ -77,26 +77,23 @@ entityPathLabel model kind id =
         unnamed =
             "#" ++ String.fromInt id
 
-        ( name, typeLabel, path ) =
+        ( name, typeLabel, mPath ) =
             case kind of
                 ProjectChild ->
                     ( Dict.get id projects_ |> Maybe.map .name |> Maybe.withDefault unnamed
                     , "(folder) "
-                    , canonicalNamePath model id
+                    , Just (canonicalNamePath model id)
                     )
 
                 StepChild ->
                     ( stepName |> Maybe.map .name |> Maybe.withDefault unnamed
                     , stepName |> Maybe.map (\step -> "(" ++ step.type_ ++ ") ") |> Maybe.withDefault "(step) "
-                    , case Model.childLinksTo StepChild id projects_ of
-                        [] ->
-                            "/unfiled"
-
-                        ( parentId, _ ) :: _ ->
-                            canonicalNamePath model parentId
+                    , Model.childLinksTo StepChild id projects_
+                        |> List.head
+                        |> Maybe.map (\( parentId, _ ) -> canonicalNamePath model parentId)
                     )
     in
-    typeLabel ++ name ++ " — " ++ path
+    typeLabel ++ name ++ Maybe.unwrap "" (\path -> " — " ++ path) mPath
 
 
 linkCreatesCycle : Dict Int ProjectRecord -> Int -> ChildRef -> Bool
@@ -144,7 +141,7 @@ type SearchField
     = SearchName
     | SearchId
     | SearchType
-    | SearchFolder (Maybe Int)
+    | SearchFolder Int
     | SearchNote
     | SearchArg String
 
@@ -163,8 +160,8 @@ searchFolder match =
     List.findMap
         (\field ->
             case field.tag of
-                SearchFolder mProjectId ->
-                    mProjectId
+                SearchFolder projectId ->
+                    Just projectId
 
                 _ ->
                     Nothing
@@ -198,30 +195,25 @@ stepSearchItems model =
                 |> Maybe.withDefault []
 
         folderFields parents =
-            case parents of
-                [] ->
-                    [ { tag = SearchFolder Nothing, text = "unfiled", weight = 40, precision = Fuzzy.Words } ]
+            List.concatMap
+                (\( parentId, _ ) ->
+                    if parentId == Route.rootProjectId then
+                        []
 
-                _ ->
-                    List.concatMap
-                        (\( parentId, _ ) ->
-                            if parentId == Route.rootProjectId then
-                                []
+                    else
+                        let
+                            ancestors =
+                                ancestorNames parentId
+                        in
+                        [ { tag = SearchFolder parentId, text = folderName parentId, weight = 50, precision = Fuzzy.Loose } ]
+                            ++ (if List.isEmpty ancestors then
+                                    []
 
-                            else
-                                let
-                                    ancestors =
-                                        ancestorNames parentId
-                                in
-                                [ { tag = SearchFolder (Just parentId), text = folderName parentId, weight = 50, precision = Fuzzy.Loose } ]
-                                    ++ (if List.isEmpty ancestors then
-                                            []
-
-                                        else
-                                            [ { tag = SearchFolder (Just parentId), text = String.join " " ancestors, weight = 40, precision = Fuzzy.Words } ]
-                                       )
-                        )
-                        parents
+                                else
+                                    [ { tag = SearchFolder parentId, text = String.join " " ancestors, weight = 40, precision = Fuzzy.Words } ]
+                               )
+                )
+                parents
 
         argFields args =
             Dict.toList args
@@ -265,7 +257,7 @@ stepSearchItems model =
                     ++ folderFields parents
                     ++ noteFields
                     ++ argFields step.args
-            , demoted = not (List.isEmpty parents) && List.all (Tuple.second >> .hidden) parents
+            , demoted = List.all (Tuple.second >> .hidden) parents
             }
 
         itemFor parents id step =
@@ -280,13 +272,10 @@ stepSearchItems model =
     in
     Dict.toList steps_
         |> List.sortBy (\( id, step ) -> ( Maybe.unwrap 0 (Time.posixToMillis >> negate) step.lastModifiedAt, String.length step.name, id ))
-        |> List.map
+        |> List.filterMap
             (\( id, step ) ->
-                let
-                    parents =
-                        Dict.get id stepParents |> Maybe.withDefault []
-                in
-                ( itemFor parents id step, documentFor parents id step )
+                Dict.get id stepParents
+                    |> Maybe.map (\parents -> ( itemFor parents id step, documentFor parents id step ))
             )
 
 
@@ -330,18 +319,19 @@ relatedSearchItems model =
         |> Maybe.withDefault []
         |> List.filterMap
             (\related ->
-                Dict.get related.stepId (get steps model)
-                    |> Maybe.map
-                        (\step ->
-                            { item =
-                                { id = Just related.stepId
-                                , name = step.name
-                                , mProjectId = stepParentProjectId model related.stepId
-                                , ref = Just { kind = StepChild, id = related.stepId }
-                                }
-                            , detail = related.detail
+                Maybe.map2
+                    (\step projectId ->
+                        { item =
+                            { id = Just related.stepId
+                            , name = step.name
+                            , mProjectId = Just projectId
+                            , ref = Just { kind = StepChild, id = related.stepId }
                             }
-                        )
+                        , detail = related.detail
+                        }
+                    )
+                    (Dict.get related.stepId (get steps model))
+                    (stepParentProjectId model related.stepId)
             )
 
 

@@ -270,11 +270,6 @@ projectDecode stepConfig_ =
             )
 
 
-unfiledSteps : StepConfig -> Decoder (Dict Int StepRecord)
-unfiledSteps stepConfig_ =
-    Decode.field "children" (Decode.list (childEntry stepConfig_) |> Decode.map stepDefs)
-
-
 projectRollup : Decoder Model.ProjectRollup
 projectRollup =
     Decode.succeed

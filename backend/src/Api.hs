@@ -285,12 +285,6 @@ type GetProjects =
         :> QueryParam "commit" Text
         :> Get '[RawJSON] DynamicJson
 
-type GetUnfiled =
-    "unfiled"
-        :> Description "Returns steps not linked from any project, with evaluated definitions, optionally at a specific user-repo commit. Unreadable raw project links fail the request. Step definitions carry lastModifiedAt and createdAt."
-        :> QueryParam "commit" Text
-        :> Get '[RawJSON] DynamicJson
-
 type GetProjectRollup =
     "project-rollup"
         :> Description "Returns, for every direct child project of a project in its effective order, the number of steps reachable below it and the counts of their statuses, recursively and counting each step once per child project, optionally at a specific user-repo commit."
@@ -470,7 +464,6 @@ type API =
         :<|> CreateSrcFile
         :<|> DeleteSrcFile
         :<|> GetProjects
-        :<|> GetUnfiled
         :<|> GetProjectRollup
         :<|> CreateProject
         :<|> UpdateProject

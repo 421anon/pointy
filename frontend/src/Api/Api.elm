@@ -25,7 +25,6 @@ module Api.Api exposing
     , fetchSrcFileSeek
     , fetchStepConfig
     , fetchStepLog
-    , fetchUnfiled
     , fetchUserRepoInfo
     , postTreeOps
     , refreshProjectStatus
@@ -327,15 +326,6 @@ fetchProjects commit stepConfig =
         Http.get
             { url = appendCommitQuery "/backend/projects" commit
             , expect = Http.expectJson identity (Decode.projectDecodes stepConfig)
-            }
-
-
-fetchUnfiled : Maybe String -> StepConfig -> Flow s (Result Http.Error (Dict Int StepRecord))
-fetchUnfiled commit stepConfig =
-    Flow.lift <|
-        Http.get
-            { url = appendCommitQuery "/backend/unfiled" commit
-            , expect = Http.expectJson identity (Decode.unfiledSteps stepConfig)
             }
 
 

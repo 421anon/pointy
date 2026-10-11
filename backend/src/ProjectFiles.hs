@@ -13,7 +13,6 @@ module ProjectFiles (
     writeTreePlan,
     RawProjectFile (..),
     loadRawProjectFilesAt,
-    loadUnfiledStepEntries,
     loadTreeState,
     applyTreeOpsIn,
     applyTreeOpsInWith,
@@ -197,25 +196,6 @@ rawProjectsAtExpression =
         ++ "in { id = builtins.fromJSON (builtins.substring 0 (builtins.stringLength name - 4) name); "
         ++ "payload = if attempt.success then attempt.value else null; }; "
         ++ "in map load (builtins.filter isProject names)"
-
-loadUnfiledStepEntries :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) [Value]
-loadUnfiledStepEntries ctx members = do
-    output <- runNixEvalJsonApplyInRepo ctx (unfiledStepsExpression members) "#pointy"
-    either (throwError . ("Failed to parse the unfiled steps: " ++)) pure (eitherDecode (TLE.encodeUtf8 (TL.pack output)))
-
-unfiledStepsExpression :: [Int] -> String
-unfiledStepsExpression members =
-    "pointy: let\n"
-        ++ "  members = [ "
-        ++ unwords (map show members)
-        ++ " ];\n"
-        ++ "  stepIds = map (name: builtins.fromJSON name) (builtins.attrNames pointy.steps);\n"
-        ++ "  unfiledIds = builtins.filter (id: !(builtins.elem id members)) stepIds;\n"
-        ++ "  entry = id: let\n"
-        ++ "    n = builtins.toString id;\n"
-        ++ "    t = builtins.tryEval (pointy.steps.${n}.def);\n"
-        ++ "  in if t.success then { step = { inherit id; hidden = false; sortKey = null; def = t.value; }; } else null;\n"
-        ++ "in builtins.filter (entry: entry != null) (builtins.map entry unfiledIds)"
 
 applyTreeOpsIn :: (Eval :> es, IOE :> es) => FilePath -> [TreeOp] -> ExceptT String (Eff es) (TreeState, TreePlan)
 applyTreeOpsIn worktreePath = applyTreeOpsInWith worktreePath (\_ _ -> return ())

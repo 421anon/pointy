@@ -2,16 +2,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Handlers.ProjectReads (unfiledHandler, projectRollupHandler) where
+module Handlers.ProjectReads (projectRollupHandler) where
 
 import ApiTypes (DynamicJson (..))
 import BuildLog (resolveStatusesBatched)
 import BuildStatus (StepPaths (..), markBuiltOutputs, stepStatusNames)
 import Certificates (evalProjectDefinitions, getProjectCertificates, getStepCertificates, projectSchemaVersion, rawStatusesFor, schemaVersionWithKeys)
-import Control.Monad.Except (ExceptT, throwError)
+import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (Object, Result (..), Value (..), eitherDecode, fromJSON, object, toJSON, (.=))
+import Data.Aeson (Object, Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Map.Strict (Map)
@@ -20,58 +20,13 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
-import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (App, AppM, Eval)
-import Handlers.Projects (annotateRecordChildren, readJsonAtCommit, readRecordMtimes)
-import ProjectFiles (RawProjectFile (..), loadRawProjectFilesAt, loadUnfiledStepEntries)
-import ProjectTree (ChildRef (..), normalizeProject, projectChildRefs)
+import Handlers.Projects (readJsonAtCommit)
+import ProjectTree (ChildRef (..), projectChildRefs)
 import RollupCache (currentRollupGeneration, insertRollupCache, lookupRollupCache)
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..))
-
-unfiledHandler :: Maybe T.Text -> AppM DynamicJson
-unfiledHandler commit =
-    readJsonAtCommit commit $ \ctx -> do
-        membership <- projectMembership ctx
-        times <- liftIO $ readRecordMtimes (readRepoPath ctx) (readCommitHash ctx)
-        steps <- loadUnfiledStepEntries ctx (Set.toList (linkedStepIds membership))
-        pure (object ["children" .= annotateRecordChildren times (toJSON steps)])
-
-projectMembership :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map Int [ChildRef])
-projectMembership ctx = do
-    files <- loadRawProjectFilesAt ctx
-    Map.fromList <$> mapM projectRefs files
-  where
-    projectRefs file = do
-        let projectId = rawFileId file
-            unreadable reason = throwError ("projects/" ++ show projectId ++ ".nix cannot be read: " ++ reason)
-        payload <- maybe (unreadable "the file could not be evaluated") pure (rawFilePayload file)
-        value <- either (unreadable . ("invalid JSON: " ++)) pure (eitherDecode (TLE.encodeUtf8 (TL.fromStrict payload)))
-        case value of
-            Object fields -> do
-                current <- either unreadable pure (currentFields fields)
-                case KeyMap.lookup "children" current of
-                    Just (Array items) -> either unreadable (\refs -> pure (projectId, refs)) (traverse childRefOf (V.toList items))
-                    _ -> unreadable "the file has no children attribute"
-            _ -> unreadable "the project file is not an attribute set"
-    currentFields fields = case KeyMap.lookup "children" fields of
-        Just (Array _) -> Right fields
-        Just _ -> Left "the children attribute is not a list"
-        Nothing -> case KeyMap.lookup "steps" fields of
-            Just (Array _) -> case normalizeProject (Object fields) of
-                Object normalized -> Right normalized
-                _ -> Left "the project file is not an attribute set"
-            Just _ -> Left "the steps attribute is not a list"
-            Nothing -> Left "the file has no children attribute"
-    childRefOf item = case fromJSON item of
-        Success ref -> Right ref
-        Error err -> Left err
-
-linkedStepIds :: Map Int [ChildRef] -> Set Int
-linkedStepIds membership = Set.fromList [stepId | refs <- Map.elems membership, StepChild stepId <- refs]
 
 projectRollupHandler :: Int -> Maybe T.Text -> AppM DynamicJson
 projectRollupHandler projectId commit =
