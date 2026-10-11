@@ -75,6 +75,18 @@
     cursor: default;
 }
 
+.select-menu-notice {
+    padding: var(--spacing-sm);
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    font-style: italic;
+    cursor: default;
+
+    .select-menu-item + & {
+        border-top: 1px solid var(--border-color);
+    }
+}
+
 .material-symbols-outlined.remove-selected-icon {
   cursor: pointer;
 }

@@ -129,11 +129,20 @@ viewRelatedHeading =
         [ Html.text "Related" ]
 
 
-rankedItems : Fuzzy.Query -> (a -> Fuzzy.Document tag) -> List a -> List ( a, Fuzzy.Match tag )
-rankedItems query toDocument items =
+viewNotice : String -> Html (Flow s ())
+viewNotice notice =
+    Html.div
+        [ class "select-menu-notice"
+        , Events.preventDefaultOn "mousedown" (Decode.succeed ( Flow.pure (), True ))
+        ]
+        [ Html.text notice ]
+
+
+rankedItems : Fuzzy.Query -> (a -> Fuzzy.Indexed tag) -> List a -> List ( a, Fuzzy.Match tag )
+rankedItems query toIndexed items =
     let
         ranked =
-            Fuzzy.rank query toDocument items
+            Fuzzy.rank query toIndexed items
     in
     if Fuzzy.isEmpty query then
         ranked
@@ -166,8 +175,10 @@ view :
     , toInputItemName : Item ref -> String
     , toInputItemTooltip : Item ref -> List String
     , onInputItemClick : Item ref -> Maybe (Flow s ())
-    , toSearchDocument : Item ref -> Fuzzy.Document tag
+    , toSearchDocument : Item ref -> Fuzzy.Indexed tag
     , related : List (RelatedItem ref)
+    , statusNotice : Maybe String
+    , emptyNotice : Maybe String
     , toMenuItemName : Item ref -> String
     , toMenuItemTooltip : Item ref -> List String
     , toMenuItemDetail : Fuzzy.Query -> Fuzzy.Match tag -> Item ref -> Maybe String
@@ -181,7 +192,7 @@ view :
     , inputItemStyle : Item ref -> List (Html.Attribute Never)
     }
     -> Html (Flow s ())
-view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toSearchDocument, related, toMenuItemName, toMenuItemTooltip, toMenuItemDetail, onChange, onInputChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
+view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toSearchDocument, related, statusNotice, emptyNotice, toMenuItemName, toMenuItemTooltip, toMenuItemDetail, onChange, onInputChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
     let
         optic_ =
             remkT optic
@@ -384,14 +395,22 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                 ++ keyedSelectedChips
                 ++ [ inputElement ]
             )
-        , if not readOnly && selectState.active && not (List.isEmpty menuItems) then
+        , let
+            notice =
+                if List.isEmpty menuItems then
+                    statusNotice |> Maybe.orElse emptyNotice
+
+                else
+                    statusNotice
+          in
+          if not readOnly && selectState.active && (not (List.isEmpty menuItems) || Maybe.isJust notice) then
             let
                 firstRelatedIndex =
                     List.findIndex .isRelated menuItems
             in
             Html.div
                 [ class "select-menu", id "select-menu" ]
-                (menuItems
+                ((menuItems
                     |> List.indexedMap
                         (\index menuItem ->
                             [ Html.viewIf (Just index == firstRelatedIndex) viewRelatedHeading
@@ -411,6 +430,8 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                             ]
                         )
                     |> List.concat
+                 )
+                    ++ [ Html.viewMaybe viewNotice notice ]
                 )
 
           else

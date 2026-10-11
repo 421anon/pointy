@@ -8,6 +8,7 @@ import Csv.Parser
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Flow exposing (Flow)
+import Fuzzy
 import Grid
 import Json.Decode as Decode exposing (Value)
 import List.Extra as List
@@ -1522,8 +1523,16 @@ type alias SearchInfo =
 type alias RelatedSearchJob =
     { query : String
     , commit : Maybe String
-    , exclude : List Int
     }
+
+
+type SearchField
+    = SearchName
+    | SearchId
+    | SearchType
+    | SearchFolder Int
+    | SearchNote
+    | SearchArg String
 
 
 type alias RelatedStep =
@@ -1559,6 +1568,7 @@ type Model
         , modalConfirm : ModalConfirmConfig
         , downstreamEntities : Dict Int (List Int)
         , searchBox : SelectState ChildRef
+        , stepSearchIndex : Dict Int (Fuzzy.Indexed SearchField)
         , searchInfo : ApiData SearchInfo
         , relatedSearch : RelatedSearchState
         , relatedSearchDebounce : Debounce RelatedSearchJob
@@ -2035,6 +2045,7 @@ initialModel key route flags =
         , modalConfirm = initModalConfirmConfig
         , downstreamEntities = Dict.empty
         , searchBox = initSelectState
+        , stepSearchIndex = Dict.empty
         , searchInfo = NotAsked
         , relatedSearch = initRelatedSearchState
         , relatedSearchDebounce = Debounce.init
@@ -2859,6 +2870,11 @@ getReviewDraft (Model model) =
 getSearchBox : Model -> SelectState ChildRef
 getSearchBox (Model model) =
     model.searchBox
+
+
+getStepSearchIndex : Model -> Dict Int (Fuzzy.Indexed SearchField)
+getStepSearchIndex (Model model) =
+    model.stepSearchIndex
 
 
 getSearchInfo : Model -> ApiData SearchInfo

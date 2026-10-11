@@ -1,14 +1,14 @@
 module Model.Lib exposing (..)
 
-import Accessors exposing (get, has, over, try)
+import Accessors exposing (get, has, over, set, try)
 import Api.ApiData as ApiData
 import Components.Select as Select exposing (Item)
 import Dict exposing (Dict)
 import Fuzzy
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord)
-import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, relatedSearch, stepConfig, steps)
+import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord, SearchField(..))
+import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, relatedSearch, stepConfig, stepSearchIndex, steps)
 import Model.Shadow exposing (StepArgValue(..))
 import Route
 import Set exposing (Set)
@@ -135,15 +135,6 @@ linkCandidates model parentId =
                 |> List.map (\id -> { kind = ProjectChild, id = id })
     in
     List.filterMap candidate (stepRefs ++ projectRefs)
-
-
-type SearchField
-    = SearchName
-    | SearchId
-    | SearchType
-    | SearchFolder Int
-    | SearchNote
-    | SearchArg String
 
 
 stepTypeName : Model -> String -> String
@@ -277,6 +268,30 @@ stepSearchItems model =
                 Dict.get id stepParents
                     |> Maybe.map (\parents -> ( itemFor parents id step, documentFor parents id step ))
             )
+
+
+stepSearchEntries : Model -> List ( Item ChildRef, Fuzzy.Indexed SearchField )
+stepSearchEntries model =
+    let
+        cached =
+            get stepSearchIndex model
+    in
+    stepSearchItems model
+        |> List.map
+            (\( item, document ) ->
+                ( item
+                , Fuzzy.reindex (item.id |> Maybe.andThen (\id -> Dict.get id cached)) document
+                )
+            )
+
+
+cacheStepSearchEntries : List ( Item ChildRef, Fuzzy.Indexed SearchField ) -> Model -> Model
+cacheStepSearchEntries entries =
+    set stepSearchIndex
+        (entries
+            |> List.filterMap (\( item, indexed ) -> item.id |> Maybe.map (\id -> ( id, indexed )))
+            |> Dict.fromList
+        )
 
 
 stepParentLinks : Model -> Dict Int (List ( Int, ChildLink ))

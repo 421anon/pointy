@@ -42,37 +42,43 @@ viewSearchBox model =
         state =
             get searchBox model
 
-        searchItems =
-            if state.active || not (String.isEmpty state.input) then
-                Lib.stepSearchItems model
+        searching =
+            state.active && not (Fuzzy.isEmpty (Fuzzy.parse state.input))
+
+        searchEntries =
+            if searching then
+                Lib.stepSearchEntries model
 
             else
                 []
 
         availableItems =
-            List.map Tuple.first searchItems
+            List.map Tuple.first searchEntries
 
-        documents =
-            searchItems
+        indexes =
+            searchEntries
                 |> List.filterMap
-                    (\( item, document ) ->
-                        item.id |> Maybe.map (\id -> ( id, document ))
+                    (\( item, indexed ) ->
+                        item.id |> Maybe.map (\id -> ( id, indexed ))
                     )
                 |> Dict.fromList
 
+        unindexed =
+            Fuzzy.index { fields = [], demoted = False }
+
         toSearchDocument item =
             item.id
-                |> Maybe.andThen (\id -> Dict.get id documents)
-                |> Maybe.withDefault { fields = [], demoted = False }
+                |> Maybe.andThen (\id -> Dict.get id indexes)
+                |> Maybe.withDefault unindexed
 
         toMenuItemDetail query match item =
             let
                 fieldDetail field =
                     case field.tag of
-                        Lib.SearchNote ->
+                        Model.SearchNote ->
                             Just ("Note: " ++ Fuzzy.excerpt query field.text)
 
-                        Lib.SearchArg key ->
+                        Model.SearchArg key ->
                             Just (key ++ ": " ++ Fuzzy.excerpt query field.text)
 
                         _ ->
@@ -104,7 +110,26 @@ viewSearchBox model =
                 |> Maybe.withDefault (Flow.pure ())
 
         relatedItems =
-            Lib.relatedSearchItems model
+            if searching then
+                Lib.relatedSearchItems model
+
+            else
+                []
+
+        statusNotice =
+            if searching then
+                case (get Lenses.relatedSearch model).results of
+                    ApiData.Loading _ ->
+                        Just "Looking for related steps…"
+
+                    ApiData.Error _ ->
+                        Just "Related steps are unavailable right now"
+
+                    _ ->
+                        Nothing
+
+            else
+                Nothing
     in
     Select.view
         { optic = searchBox
@@ -124,6 +149,13 @@ viewSearchBox model =
         , toMenuItemTooltip = \item -> item.id |> Maybe.map (\id -> [ "id: " ++ String.fromInt id ]) |> Maybe.withDefault []
         , toSearchDocument = toSearchDocument
         , related = relatedItems
+        , statusNotice = statusNotice
+        , emptyNotice =
+            if searching then
+                Just "No matching steps"
+
+            else
+                Nothing
         , toMenuItemDetail = toMenuItemDetail
         , onChange = Flow.pure ()
         , onInputChange = Actions.onSearchInputChange

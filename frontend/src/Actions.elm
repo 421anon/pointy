@@ -494,6 +494,7 @@ applyLoadedProjects target result =
                                     reapplyOrganizeQueue
                                 )
                             |> Flow.seq (Flow.modify Selection.pruneSelection)
+                            |> Flow.seq refreshStepSearchIndex
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async loadProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
@@ -1186,35 +1187,40 @@ loadSearchInfo =
         |> Flow.return ()
 
 
+refreshStepSearchIndex : Flow Model ()
+refreshStepSearchIndex =
+    Flow.modify (\model -> Model.Lib.cacheStepSearchEntries (Model.Lib.stepSearchEntries model) model)
+
+
 onSearchInputChange : String -> Flow Model ()
 onSearchInputChange query =
-    if String.length (String.trim query) < 3 then
-        clearRelatedSearch
+    refreshStepSearchIndex
+        |> Flow.seq
+            (if String.length (String.trim query) < 3 then
+                clearRelatedSearch
 
-    else
-        Flow.get
-            |> Flow.andThen
-                (\model ->
-                    if Model.getSearchInfo model |> ApiData.withDefault { semantic = False, judge = False } |> .semantic then
-                        let
-                            job =
-                                { query = String.trim query
-                                , commit = try (route << Route.page << Route.viewedCommitT) model
-                                , exclude =
-                                    Select.rankedItems (Fuzzy.parse query) Tuple.second (Model.Lib.stepSearchItems model)
-                                        |> List.filterMap (\( ( item, _ ), _ ) -> item.id)
-                                }
+             else
+                Flow.get
+                    |> Flow.andThen
+                        (\model ->
+                            if Model.getSearchInfo model |> ApiData.withDefault { semantic = False, judge = False } |> .semantic then
+                                let
+                                    job =
+                                        { query = String.trim query
+                                        , commit = try (route << Route.page << Route.viewedCommitT) model
+                                        }
 
-                            ( newDebounce, debounceCmd ) =
-                                Debounce.push searchDebounceConfig job (Model.getRelatedSearchDebounce model)
-                        in
-                        Flow.over relatedSearch (\state -> { state | query = job.query, results = ApiData.loading Nothing })
-                            |> Flow.seq (Flow.over relatedSearchDebounce (always newDebounce))
-                            |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+                                    ( newDebounce, debounceCmd ) =
+                                        Debounce.push searchDebounceConfig job (Model.getRelatedSearchDebounce model)
+                                in
+                                Flow.over relatedSearch (\state -> { state | query = job.query, results = ApiData.loading Nothing })
+                                    |> Flow.seq (Flow.over relatedSearchDebounce (always newDebounce))
+                                    |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
 
-                    else
-                        Flow.pure ()
-                )
+                            else
+                                Flow.pure ()
+                        )
+            )
 
 
 relatedSearchDebounceMsg : Debounce.Msg -> Flow Model ()
@@ -1236,11 +1242,17 @@ relatedSearchDebounceMsg msg =
 
 runRelatedSearchJob : Model.RelatedSearchJob -> Flow Model ()
 runRelatedSearchJob job =
-    Api.searchSteps
-        job.commit
-        { query = job.query
-        , exclude = job.exclude
-        }
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Api.searchSteps
+                    job.commit
+                    { query = job.query
+                    , exclude =
+                        Select.rankedItems (Fuzzy.parse job.query) Tuple.second (Model.Lib.stepSearchEntries model)
+                            |> List.filterMap (\( ( item, _ ), _ ) -> item.id)
+                    }
+            )
         |> Flow.andThen (applyRelatedSearchResult job)
 
 

@@ -1,4 +1,4 @@
-module Fuzzy exposing (Document, Field, Match, Precision(..), Query, Segment(..), excerpt, highlight, isEmpty, labelDocument, parse, rank)
+module Fuzzy exposing (Document, Field, Indexed, Match, Precision(..), Query, Segment(..), excerpt, highlight, index, isEmpty, labelDocument, parse, rank, reindex)
 
 import Array exposing (Array)
 import List.Extra as List
@@ -25,6 +25,10 @@ type alias Document tag =
     }
 
 
+type Indexed tag
+    = Indexed (Document tag) (List ( Field tag, Prepared ))
+
+
 type alias Match tag =
     { score : Int
     , fields : List (Field tag)
@@ -43,9 +47,9 @@ type Segment
 type alias Prepared =
     { joined : String
     , length : Int
-    , words : List ( Int, Char )
+    , starts : List Int
+    , initials : String
     , units : List ( Int, Char )
-    , origin : Array ( Int, Int )
     }
 
 
@@ -58,132 +62,306 @@ type alias Hit =
 
 
 type CharKind
-    = Digit
+    = Boundary
+    | Digit
     | Upper
     | Lower
 
 
 type alias Fold =
     { joined : List Char
-    , joinedLength : Int
-    , words : List ( Int, Char )
-    , units : List ( Int, Char )
-    , origin : List ( Int, Int )
-    , previous : Maybe CharKind
+    , length : Int
+    , starts : List Int
+    , initials : List Char
+    , previous : CharKind
     , position : Int
+    , origin : List ( Int, Int )
     }
-
-
-separators : String
-separators =
-    "_-./\\()[]{}<>:;,'\"`|+=*#@!?~&^%$"
 
 
 isSeparator : Char -> Bool
 isSeparator c =
-    isSpace c || String.contains (String.fromChar c) separators
+    case c of
+        ' ' ->
+            True
+
+        '\t' ->
+            True
+
+        '\n' ->
+            True
+
+        '\u{000D}' ->
+            True
+
+        '\u{000B}' ->
+            True
+
+        '\u{000C}' ->
+            True
+
+        '\u{00A0}' ->
+            True
+
+        '_' ->
+            True
+
+        '-' ->
+            True
+
+        '.' ->
+            True
+
+        '/' ->
+            True
+
+        '\\' ->
+            True
+
+        '(' ->
+            True
+
+        ')' ->
+            True
+
+        '[' ->
+            True
+
+        ']' ->
+            True
+
+        '{' ->
+            True
+
+        '}' ->
+            True
+
+        '<' ->
+            True
+
+        '>' ->
+            True
+
+        ':' ->
+            True
+
+        ';' ->
+            True
+
+        ',' ->
+            True
+
+        '\'' ->
+            True
+
+        '"' ->
+            True
+
+        '`' ->
+            True
+
+        '|' ->
+            True
+
+        '+' ->
+            True
+
+        '=' ->
+            True
+
+        '*' ->
+            True
+
+        '#' ->
+            True
+
+        '@' ->
+            True
+
+        '!' ->
+            True
+
+        '?' ->
+            True
+
+        '~' ->
+            True
+
+        '&' ->
+            True
+
+        '^' ->
+            True
+
+        '%' ->
+            True
+
+        '$' ->
+            True
+
+        _ ->
+            False
 
 
-isSpace : Char -> Bool
-isSpace c =
-    List.member c [ ' ', '\t', '\n', '\u{000D}', '\u{000B}', '\u{000C}', '\u{00A0}' ]
-
-
-charKind : Char -> CharKind
-charKind c =
+charKind : Char -> Char -> CharKind
+charKind c lowered =
     if Char.isDigit c then
         Digit
 
-    else if Char.toLower c /= c then
+    else if lowered /= c then
         Upper
 
     else
         Lower
 
 
-startsWord : Maybe CharKind -> CharKind -> Bool
+startsWord : CharKind -> CharKind -> Bool
 startsWord previous kind =
     case previous of
-        Nothing ->
+        Boundary ->
             True
 
-        Just Lower ->
+        Lower ->
             kind == Upper || kind == Digit
 
-        Just Upper ->
+        Upper ->
             kind == Digit
 
-        Just Digit ->
+        Digit ->
             kind /= Digit
 
 
 charLength : Char -> Int
 charLength c =
-    String.length (String.fromChar c)
+    if Char.toCode c > 0xFFFF then
+        2
+
+    else
+        1
 
 
-prepare : String -> Prepared
-prepare text =
-    let
-        state =
-            String.foldl foldStep initialFold text
-    in
-    { joined = String.fromList (List.reverse state.joined)
-    , length = state.joinedLength
-    , words = List.reverse state.words
-    , units = List.reverse state.units
-    , origin = Array.fromList (List.reverse state.origin)
-    }
+foldText : Bool -> String -> Fold
+foldText withOrigin text =
+    String.foldl (foldStep withOrigin)
+        { joined = []
+        , length = 0
+        , starts = []
+        , initials = []
+        , previous = Boundary
+        , position = 0
+        , origin = []
+        }
+        text
 
 
-initialFold : Fold
-initialFold =
-    { joined = []
-    , joinedLength = 0
-    , words = []
-    , units = []
-    , origin = []
-    , previous = Nothing
-    , position = 0
-    }
-
-
-foldStep : Char -> Fold -> Fold
-foldStep c state =
+foldStep : Bool -> Char -> Fold -> Fold
+foldStep withOrigin c state =
     let
         nextPosition =
             state.position + charLength c
     in
     if isSeparator c then
-        { state | position = nextPosition, previous = Nothing }
+        { state | position = nextPosition, previous = Boundary }
 
     else
         let
-            kind =
-                charKind c
-
             lowered =
                 Char.toLower c
+
+            kind =
+                charKind c lowered
 
             loweredLength =
                 charLength lowered
 
             offset =
-                state.joinedLength
+                state.length
+
+            startsHere =
+                startsWord state.previous kind
         in
-        { position = nextPosition
-        , previous = Just kind
-        , joinedLength = offset + loweredLength
-        , joined = lowered :: state.joined
-        , words =
-            if startsWord state.previous kind then
-                ( offset, lowered ) :: state.words
+        { joined = lowered :: state.joined
+        , length = offset + loweredLength
+        , starts =
+            if startsHere then
+                offset :: state.starts
 
             else
-                state.words
-        , units = ( offset, lowered ) :: state.units
-        , origin = List.repeat loweredLength ( state.position, nextPosition ) ++ state.origin
+                state.starts
+        , initials =
+            if startsHere then
+                lowered :: state.initials
+
+            else
+                state.initials
+        , previous = kind
+        , position = nextPosition
+        , origin =
+            if withOrigin then
+                List.repeat loweredLength ( state.position, nextPosition ) ++ state.origin
+
+            else
+                state.origin
         }
+
+
+prepared : Precision -> Fold -> Prepared
+prepared precision state =
+    let
+        joined =
+            String.fromList (List.reverse state.joined)
+    in
+    { joined = joined
+    , length = state.length
+    , starts = List.reverse state.starts
+    , initials = String.fromList (List.reverse state.initials)
+    , units =
+        if precision == Loose then
+            unitsOf joined
+
+        else
+            []
+    }
+
+
+prepare : Precision -> String -> Prepared
+prepare precision text =
+    prepared precision (foldText False text)
+
+
+prepareWithOrigin : Precision -> String -> ( Prepared, Array ( Int, Int ) )
+prepareWithOrigin precision text =
+    let
+        state =
+            foldText True text
+    in
+    ( prepared precision state, Array.fromList (List.reverse state.origin) )
+
+
+unitsOf : String -> List ( Int, Char )
+unitsOf joined =
+    String.foldl (\c ( offset, units ) -> ( offset + charLength c, ( offset, c ) :: units )) ( 0, [] ) joined
+        |> Tuple.second
+        |> List.reverse
+
+
+index : Document tag -> Indexed tag
+index document =
+    Indexed document (List.map (\field -> ( field, prepare field.precision field.text )) document.fields)
+
+
+reindex : Maybe (Indexed tag) -> Document tag -> Indexed tag
+reindex cached document =
+    case cached of
+        Just ((Indexed previous _) as indexed) ->
+            if previous == document then
+                indexed
+
+            else
+                index document
+
+        Nothing ->
+            index document
 
 
 parse : String -> Query
@@ -195,7 +373,7 @@ joinedToken : String -> Maybe String
 joinedToken word =
     let
         joined =
-            (prepare word).joined
+            (prepare Words word).joined
     in
     if String.isEmpty joined then
         Nothing
@@ -217,124 +395,148 @@ labelDocument text =
 
 
 tokenHit : Precision -> Prepared -> String -> Maybe Hit
-tokenHit precision prepared token =
+tokenHit precision prepared_ token =
     case precision of
         Whole ->
-            if token == prepared.joined then
+            if token == prepared_.joined then
                 Just
                     { score = 100
                     , start = 0
-                    , end = prepared.length
-                    , positions = List.range 0 (prepared.length - 1)
+                    , end = prepared_.length
+                    , positions = List.range 0 (prepared_.length - 1)
                     }
 
             else
                 Nothing
 
         Words ->
-            prefixHit prepared token
-                |> Maybe.orElseLazy (\_ -> acronymHit prepared token)
-                |> Maybe.orElseLazy (\_ -> substringHit prepared token)
-                |> Maybe.orElseLazy (\_ -> typoHit prepared token)
+            prefixHit prepared_ token
+                |> Maybe.orElseLazy (\_ -> acronymHit prepared_ token)
+                |> Maybe.orElseLazy (\_ -> substringHit prepared_ token)
+                |> Maybe.orElseLazy (\_ -> typoHit prepared_ token)
 
         Loose ->
-            prefixHit prepared token
-                |> Maybe.orElseLazy (\_ -> acronymHit prepared token)
-                |> Maybe.orElseLazy (\_ -> substringHit prepared token)
-                |> Maybe.orElseLazy (\_ -> List.foldl keepBetter Nothing (List.filterMap identity [ subsequenceHit prepared token, typoHit prepared token ]))
+            prefixHit prepared_ token
+                |> Maybe.orElseLazy (\_ -> acronymHit prepared_ token)
+                |> Maybe.orElseLazy (\_ -> substringHit prepared_ token)
+                |> Maybe.orElseLazy (\_ -> List.foldl keepBetter Nothing (List.filterMap identity [ subsequenceHit prepared_ token, typoHit prepared_ token ]))
+
+
+dropBelow : Int -> List Int -> List Int
+dropBelow value offsets =
+    case offsets of
+        offset :: rest ->
+            if offset < value then
+                dropBelow value rest
+
+            else
+                offsets
+
+        [] ->
+            []
+
+
+startsAt : Int -> List Int -> Bool
+startsAt value offsets =
+    case offsets of
+        offset :: _ ->
+            offset == value
+
+        [] ->
+            False
 
 
 prefixHit : Prepared -> String -> Maybe Hit
-prefixHit prepared token =
+prefixHit prepared_ token =
     let
         tokenLength =
             String.length token
 
-        boundaries =
-            List.map Tuple.first prepared.words
+        toHit ( score, start, end ) =
+            { score = score
+            , start = start
+            , end = end
+            , positions = List.range start (end - 1)
+            }
 
-        check ( offset, _ ) best =
-            if String.startsWith token (String.dropLeft offset prepared.joined) then
-                let
-                    end =
-                        offset + tokenLength
+        go starts ends best =
+            case starts of
+                [] ->
+                    best
 
-                    score =
-                        if end == prepared.length || List.member end boundaries then
-                            100
+                offset :: rest ->
+                    if String.slice offset (offset + tokenLength) prepared_.joined == token then
+                        let
+                            end =
+                                offset + tokenLength
 
-                        else if offset == 0 then
-                            85
+                            remainingEnds =
+                                dropBelow end ends
+
+                            score =
+                                if end == prepared_.length || startsAt end remainingEnds then
+                                    100
+
+                                else if offset == 0 then
+                                    85
+
+                                else
+                                    80
+
+                            candidate =
+                                ( score, offset, end )
+                        in
+                        if score == 100 then
+                            Just candidate
 
                         else
-                            80
-                in
-                case best of
-                    Just ( bestScore, _, _ ) ->
-                        if score > bestScore then
-                            Just ( score, offset, end )
+                            case best of
+                                Just ( bestScore, _, _ ) ->
+                                    if score > bestScore then
+                                        go rest remainingEnds (Just candidate)
 
-                        else
-                            best
+                                    else
+                                        go rest remainingEnds best
 
-                    Nothing ->
-                        Just ( score, offset, end )
+                                Nothing ->
+                                    go rest remainingEnds (Just candidate)
 
-            else
-                best
+                    else
+                        go rest ends best
     in
-    List.foldl check Nothing prepared.words
-        |> Maybe.map
-            (\( score, start, end ) ->
-                { score = score
-                , start = start
-                , end = end
-                , positions = List.range start (end - 1)
-                }
-            )
+    go prepared_.starts prepared_.starts Nothing
+        |> Maybe.map toHit
 
 
 acronymHit : Prepared -> String -> Maybe Hit
-acronymHit prepared token =
+acronymHit prepared_ token =
     let
         tokenChars =
             String.toList token
 
-        wordChars =
-            List.map Tuple.second prepared.words
-
-        wordOffsets =
-            List.map Tuple.first prepared.words
-
         tokenLength =
             List.length tokenChars
-
-        matchAt index =
-            List.take tokenLength (List.drop index wordChars) == tokenChars
     in
     if tokenLength < 2 then
         Nothing
 
     else
-        List.filter matchAt (List.range 0 (List.length wordChars - 1))
+        String.indexes token prepared_.initials
             |> List.head
             |> Maybe.map
-                (\index ->
+                (\initialsOffset ->
                     let
-                        starts =
-                            List.take tokenLength (List.drop index wordOffsets)
+                        wordIndex =
+                            List.length (String.toList (String.left initialsOffset prepared_.initials))
 
-                        initials =
-                            List.take tokenLength (List.drop index wordChars)
+                        starts =
+                            List.take tokenLength (List.drop wordIndex prepared_.starts)
 
                         lastOffset =
-                            List.reverse starts |> List.head |> Maybe.withDefault 0
+                            List.last starts |> Maybe.withDefault 0
 
                         lastLength =
-                            List.reverse initials
-                                |> List.head
-                                |> Maybe.map charLength
-                                |> Maybe.withDefault 1
+                            List.last tokenChars |> Maybe.unwrap 1 charLength
                     in
                     { score = 70
                     , start = List.head starts |> Maybe.withDefault 0
@@ -345,18 +547,18 @@ acronymHit prepared token =
 
 
 substringHit : Prepared -> String -> Maybe Hit
-substringHit prepared token =
-    case String.indexes token prepared.joined of
-        index :: _ ->
+substringHit prepared_ token =
+    case String.indexes token prepared_.joined of
+        index_ :: _ ->
             let
                 tokenLength =
                     String.length token
             in
             Just
                 { score = 50
-                , start = index
-                , end = index + tokenLength
-                , positions = List.range index (index + tokenLength - 1)
+                , start = index_
+                , end = index_ + tokenLength
+                , positions = List.range index_ (index_ + tokenLength - 1)
                 }
 
         [] ->
@@ -364,62 +566,64 @@ substringHit prepared token =
 
 
 subsequenceHit : Prepared -> String -> Maybe Hit
-subsequenceHit prepared token =
-    let
-        tokenChars =
-            String.toList token
+subsequenceHit prepared_ token =
+    case String.toList token of
+        first :: rest ->
+            let
+                tokenLength =
+                    1 + List.length rest
 
-        tokenLength =
-            List.length tokenChars
-    in
-    if tokenLength < 3 then
-        Nothing
+                bound =
+                    3 * tokenLength
 
-    else
-        case tokenChars of
-            [] ->
+                candidate start remaining =
+                    matchSubsequence rest start bound remaining
+                        |> Maybe.map
+                            (\offsets ->
+                                let
+                                    positions =
+                                        start :: offsets
+
+                                    last =
+                                        List.last positions |> Maybe.withDefault start
+
+                                    span =
+                                        last - start + 1
+
+                                    bonus =
+                                        if List.member start prepared_.starts then
+                                            5
+
+                                        else
+                                            0
+                                in
+                                { score = max 10 (30 - 2 * (span - tokenLength)) + bonus
+                                , start = start
+                                , end = last + 1
+                                , positions = positions
+                                }
+                            )
+
+                go units best =
+                    case units of
+                        ( start, unitChar ) :: remaining ->
+                            if unitChar == first then
+                                go remaining (Maybe.unwrap best (\hit -> keepBetter hit best) (candidate start remaining))
+
+                            else
+                                go remaining best
+
+                        [] ->
+                            best
+            in
+            if tokenLength < 3 then
                 Nothing
 
-            first :: rest ->
-                let
-                    bound =
-                        3 * tokenLength
+            else
+                go prepared_.units Nothing
 
-                    wordStarts =
-                        List.map Tuple.first prepared.words
-
-                    candidate ( start, _ ) =
-                        matchSubsequence rest start bound (List.dropWhile (\( offset, _ ) -> offset <= start) prepared.units)
-                            |> Maybe.map
-                                (\offsets ->
-                                    let
-                                        positions =
-                                            start :: offsets
-
-                                        last =
-                                            List.reverse positions |> List.head |> Maybe.withDefault start
-
-                                        span =
-                                            last - start + 1
-
-                                        bonus =
-                                            if List.member start wordStarts then
-                                                5
-
-                                            else
-                                                0
-                                    in
-                                    { score = max 10 (30 - 2 * (span - tokenLength)) + bonus
-                                    , start = start
-                                    , end = last + 1
-                                    , positions = positions
-                                    }
-                                )
-                in
-                prepared.units
-                    |> List.filter (\( _, unitChar ) -> unitChar == first)
-                    |> List.filterMap candidate
-                    |> List.foldl keepBetter Nothing
+        [] ->
+            Nothing
 
 
 matchSubsequence : List Char -> Int -> Int -> List ( Int, Char ) -> Maybe (List Int)
@@ -455,39 +659,43 @@ findSubsequenceChar c start bound units =
 
 
 typoHit : Prepared -> String -> Maybe Hit
-typoHit prepared token =
+typoHit prepared_ token =
     let
         tokenChars =
             String.toList token
+
+        tokenLength =
+            String.length token
+
+        go starts =
+            case starts of
+                start :: rest ->
+                    let
+                        end =
+                            List.head rest |> Maybe.withDefault prepared_.length
+
+                        width =
+                            end - start
+                    in
+                    if width >= 4 && abs (width - tokenLength) <= 2 && withinOneEdit tokenChars (String.toList (String.slice start end prepared_.joined)) then
+                        Just
+                            { score = 20
+                            , start = start
+                            , end = end
+                            , positions = List.range start (end - 1)
+                            }
+
+                    else
+                        go rest
+
+                [] ->
+                    Nothing
     in
     if List.length tokenChars < 5 then
         Nothing
 
     else
-        wordSpans prepared
-            |> List.filter (\( _, _, word ) -> String.length word >= 4)
-            |> List.filter (\( _, _, word ) -> withinOneEdit tokenChars (String.toList word))
-            |> List.head
-            |> Maybe.map
-                (\( start, end, _ ) ->
-                    { score = 20
-                    , start = start
-                    , end = end
-                    , positions = List.range start (end - 1)
-                    }
-                )
-
-
-wordSpans : Prepared -> List ( Int, Int, String )
-wordSpans prepared =
-    let
-        offsets =
-            List.map Tuple.first prepared.words
-
-        ends =
-            List.drop 1 offsets ++ [ prepared.length ]
-    in
-    List.map2 (\start end -> ( start, end, String.slice start end prepared.joined )) offsets ends
+        go prepared_.starts
 
 
 withinOneEdit : List Char -> List Char -> Bool
@@ -541,40 +749,36 @@ keepBetter hit best =
             Just hit
 
 
-rank : Query -> (a -> Document tag) -> List a -> List ( a, Match tag )
-rank (Query tokens) toDocument items =
+rank : Query -> (a -> Indexed tag) -> List a -> List ( a, Match tag )
+rank (Query tokens) toIndexed items =
     if List.isEmpty tokens then
         List.map (\item -> ( item, { score = 0, fields = [] } )) items
 
     else
-        List.filterMap (rankItem tokens toDocument) items
+        List.filterMap (rankItem tokens toIndexed) items
             |> List.sortBy (Tuple.second >> .score >> negate)
 
 
-rankItem : List String -> (a -> Document tag) -> a -> Maybe ( a, Match tag )
-rankItem tokens toDocument item =
+rankItem : List String -> (a -> Indexed tag) -> a -> Maybe ( a, Match tag )
+rankItem tokens toIndexed item =
     let
-        document =
-            toDocument item
+        (Indexed document fields) =
+            toIndexed item
     in
-    if List.isEmpty document.fields then
+    if List.isEmpty fields then
         Nothing
 
     else
         let
             fieldHits =
                 List.map
-                    (\field ->
-                        let
-                            prepared =
-                                prepare field.text
-                        in
-                        ( field, prepared, List.map (tokenHit field.precision prepared) tokens )
+                    (\( field, prepared_ ) ->
+                        ( field, prepared_, List.map (tokenHit field.precision prepared_) tokens )
                     )
-                    document.fields
+                    fields
 
             bests =
-                List.indexedMap (\index _ -> List.foldl (bestField index) Nothing fieldHits) tokens
+                List.indexedMap (\tokenIndex _ -> List.foldl (bestField tokenIndex) Nothing fieldHits) tokens
         in
         if List.any Maybe.isNothing bests then
             Nothing
@@ -612,8 +816,8 @@ rankItem tokens toDocument item =
 
 
 bestField : Int -> ( Field tag, Prepared, List (Maybe Hit) ) -> Maybe ( Int, Field tag, Hit ) -> Maybe ( Int, Field tag, Hit )
-bestField index ( field, _, hits ) best =
-    case List.head (List.drop index hits) of
+bestField tokenIndex ( field, _, hits ) best =
+    case List.head (List.drop tokenIndex hits) of
         Just (Just hit) ->
             let
                 weighted =
@@ -635,10 +839,10 @@ bestField index ( field, _, hits ) best =
 
 
 fieldBonus : List String -> String -> ( Field tag, Prepared, List (Maybe Hit) ) -> Int
-fieldBonus tokens concatTokens ( field, prepared, hits ) =
+fieldBonus tokens concatTokens ( field, prepared_, hits ) =
     let
         whole =
-            if prepared.joined == concatTokens then
+            if prepared_.joined == concatTokens then
                 100 * field.weight
 
             else
@@ -677,14 +881,14 @@ highlight precision (Query tokens) text =
 
     else
         let
-            prepared =
-                prepare text
+            ( prepared_, origin ) =
+                prepareWithOrigin precision text
 
             ranges =
                 tokens
-                    |> List.filterMap (tokenHit precision prepared)
+                    |> List.filterMap (tokenHit precision prepared_)
                     |> List.concatMap .positions
-                    |> List.filterMap (\position -> Array.get position prepared.origin)
+                    |> List.filterMap (\position -> Array.get position origin)
                     |> List.unique
                     |> List.sortBy Tuple.first
                     |> mergeRanges
@@ -752,15 +956,15 @@ mergeInto ranges current acc =
 excerpt : Query -> String -> String
 excerpt (Query tokens) text =
     let
-        prepared =
-            prepare text
+        ( prepared_, origin ) =
+            prepareWithOrigin Words text
 
         start =
             tokens
-                |> List.filterMap (tokenHit Words prepared)
+                |> List.filterMap (tokenHit Words prepared_)
                 |> List.map .start
                 |> List.minimum
-                |> Maybe.andThen (\offset -> Array.get offset prepared.origin)
+                |> Maybe.andThen (\offset -> Array.get offset origin)
                 |> Maybe.unwrap 0 Tuple.first
     in
     window start text
