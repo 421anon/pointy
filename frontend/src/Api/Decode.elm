@@ -37,6 +37,39 @@ userRepoInfo =
         |> required "branch" Decode.string
 
 
+type alias SearchInfo =
+    { semantic : Bool
+    , judge : Bool
+    }
+
+
+searchInfo : Decoder SearchInfo
+searchInfo =
+    Decode.succeed SearchInfo
+        |> required "semantic" Decode.bool
+        |> required "judge" Decode.bool
+
+
+type alias SearchResult =
+    { stepId : Int
+    , similarity : Float
+    , relevance : Maybe Float
+    }
+
+
+searchResults : Decoder (List SearchResult)
+searchResults =
+    Decode.field "results" (Decode.list searchResult)
+
+
+searchResult : Decoder SearchResult
+searchResult =
+    Decode.succeed SearchResult
+        |> required "step_id" Decode.int
+        |> required "similarity" Decode.float
+        |> optional "relevance" (maybe Decode.float) Nothing
+
+
 snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
 snapshot =
     Decode.succeed (\pid c s -> { projectId = pid, commit = c, steps = s })

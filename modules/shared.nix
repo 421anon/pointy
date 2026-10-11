@@ -68,7 +68,7 @@ in
       default = null;
       description = ''
         Path on the host to a `KEY=VALUE` env file containing runtime secrets for the
-        agent runner (e.g. DEEPSEEK_API_KEY). Sourced by systemd via EnvironmentFile.
+        backend and agent runner (e.g. NEURALWATT_API_KEY). Sourced by systemd via EnvironmentFile.
         When set, /home/backend/agent-env is symlinked to this path before the backend
         service starts. Use this with sops-nix / agenix by pointing at the decrypted
         runtime path (typically /run/secrets/...).

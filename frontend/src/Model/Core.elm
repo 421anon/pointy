@@ -1513,6 +1513,36 @@ initAutocompleteState =
     { query = "", suggestions = NotAsked, activeIndex = 0, activeRequest = Nothing }
 
 
+type alias SearchInfo =
+    { semantic : Bool
+    , judge : Bool
+    }
+
+
+type alias RelatedSearchJob =
+    { query : String
+    , commit : Maybe String
+    , exclude : List Int
+    }
+
+
+type alias RelatedStep =
+    { stepId : Int
+    , detail : String
+    }
+
+
+type alias RelatedSearchState =
+    { query : String
+    , results : ApiData (List RelatedStep)
+    }
+
+
+initRelatedSearchState : RelatedSearchState
+initRelatedSearchState =
+    { query = "", results = NotAsked }
+
+
 type Model
     = Model
         { projects : ApiData (Dict Int ProjectRecord)
@@ -1529,6 +1559,9 @@ type Model
         , modalConfirm : ModalConfirmConfig
         , downstreamEntities : Dict Int (List Int)
         , searchBox : SelectState ChildRef
+        , searchInfo : ApiData SearchInfo
+        , relatedSearch : RelatedSearchState
+        , relatedSearchDebounce : Debounce RelatedSearchJob
         , stepConfig : ApiData StepConfig
         , presets : ApiData Presets
         , commitHash : ApiData String
@@ -2002,6 +2035,9 @@ initialModel key route flags =
         , modalConfirm = initModalConfirmConfig
         , downstreamEntities = Dict.empty
         , searchBox = initSelectState
+        , searchInfo = NotAsked
+        , relatedSearch = initRelatedSearchState
+        , relatedSearchDebounce = Debounce.init
         , stepConfig = NotAsked
         , presets = NotAsked
         , commitHash = NotAsked
@@ -2823,3 +2859,18 @@ getReviewDraft (Model model) =
 getSearchBox : Model -> SelectState ChildRef
 getSearchBox (Model model) =
     model.searchBox
+
+
+getSearchInfo : Model -> ApiData SearchInfo
+getSearchInfo (Model model) =
+    model.searchInfo
+
+
+getRelatedSearch : Model -> RelatedSearchState
+getRelatedSearch (Model model) =
+    model.relatedSearch
+
+
+getRelatedSearchDebounce : Model -> Debounce RelatedSearchJob
+getRelatedSearchDebounce (Model model) =
+    model.relatedSearchDebounce

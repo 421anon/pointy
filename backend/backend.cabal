@@ -10,6 +10,8 @@ library
   import:           warnings
   exposed-modules:
     Agent.Git
+    Agent.Model
+    Agent.PiConfig
     Agent.Policy
     Agent.Runner
     Agent.Sandbox
@@ -46,6 +48,7 @@ library
     Handlers.StatusStream
     Handlers.StepConfig
     Handlers.StepReview
+    Handlers.StepSearch
     Handlers.Steps
     Handlers.Store
     Handlers.Upload
@@ -66,6 +69,9 @@ library
     ProjectFiles
     ProjectTree
     RollupCache
+    Search.Document
+    Search.Http
+    Search.Store
     Sse
     Storage
     UserRepo
@@ -75,29 +81,36 @@ library
 
   build-depends:
     , aeson
+    , base16-bytestring
     , async
     , base               ^>=4.19.2.0
+    , binary
     , bytestring
     , cassava
     , conduit
     , conduit-extra
     , containers
+    , crypton
     , data-fix
     , directory
     , effectful
     , filelock
     , filepath
     , hnix
+    , http-client
+    , http-client-tls
     , http-media
     , http-types
     , lens
     , lens-aeson
+    , memory
     , mtl
     , network-uri
     , openapi3
     , prettyprinter
     , process
     , resourcet
+    , scientific
     , servant
     , servant-multipart
     , servant-openapi3
@@ -109,8 +122,8 @@ library
     , tomland
     , transformers
     , unix
+    , unordered-containers
     , vector
-    , scientific
     , wai
     , wai-cors
     , wai-extra

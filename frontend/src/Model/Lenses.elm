@@ -13,7 +13,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, ReviewDraft, ScratchState, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -683,6 +683,21 @@ plainScrollTopAt target recordId_ path =
 searchBox : Lens ls Model (SelectState ChildRef) x y
 searchBox =
     lens ".searchBox" Model.getSearchBox (\(Model m) searchBox_ -> Model { m | searchBox = searchBox_ })
+
+
+searchInfo : Lens ls Model (ApiData SearchInfo) x y
+searchInfo =
+    lens ".searchInfo" Model.getSearchInfo (\(Model m) value -> Model { m | searchInfo = value })
+
+
+relatedSearch : Lens ls Model RelatedSearchState x y
+relatedSearch =
+    lens ".relatedSearch" Model.getRelatedSearch (\(Model m) value -> Model { m | relatedSearch = value })
+
+
+relatedSearchDebounce : Lens ls Model (Debounce RelatedSearchJob) x y
+relatedSearchDebounce =
+    lens ".relatedSearchDebounce" Model.getRelatedSearchDebounce (\(Model m) value -> Model { m | relatedSearchDebounce = value })
 
 
 organizeQueue : Lens ls Model OrganizeQueue x y

@@ -16,9 +16,12 @@ module Interpreters.Fixture (
 
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad (filterM)
+import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as Key
+import Data.ByteArray (convert)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
@@ -26,9 +29,10 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.Vector.Unboxed as VU
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (AppEffects, Eval (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
+import Effects (AppEffects, Eval (..), Inference (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Fixture.Document (FixtureDocument (..), appliedAnswer, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobsEnded)
 import Processes (cli)
@@ -66,7 +70,41 @@ resetFixture state = do
 
 runFixture :: FixtureState -> Eff AppEffects a -> IO a
 runFixture state action =
-    runEff (runSlurmFixture state (runNixFixture state (runEvalFixture state action)))
+    runEff (runInferenceFixture (runSlurmFixture state (runNixFixture state (runEvalFixture state action))))
+
+runInferenceFixture :: (IOE :> es) => Eff (Inference : es) a -> Eff es a
+runInferenceFixture = interpret $ \_ -> \case
+    Embed texts -> pure (Right (map fixtureVector texts))
+    JudgeCandidates query candidates -> pure (Right (Map.fromList [(stepId, fixtureRelevance query document) | (stepId, document) <- candidates]))
+
+fixtureDimensions :: Int
+fixtureDimensions = 64
+
+fixtureVector :: Text -> VU.Vector Float
+fixtureVector text =
+    let tokens = T.words (T.toLower text)
+        components =
+            [ sum [tokenComponent token index | token <- tokens]
+            | index <- [0 .. fixtureDimensions - 1]
+            ]
+        norm = sqrt (sum [component * component | component <- components])
+     in VU.fromList [if norm == 0 then 0 else component / norm | component <- components]
+
+tokenComponent :: Text -> Int -> Float
+tokenComponent token index =
+    let digest = hash (TE.encodeUtf8 (token <> ":" <> T.pack (show index))) :: Digest SHA256
+        bytes = BS.unpack (BS.take 2 (convert digest))
+     in case bytes of
+            [a, b] -> fromIntegral (fromIntegral a * 256 + fromIntegral b :: Int) / 32768 - 1
+            _ -> 0
+
+fixtureRelevance :: Text -> Text -> Double
+fixtureRelevance query document =
+    let similarity = max 0 (cosine (fixtureVector query) (fixtureVector document))
+     in min 1 (sqrt similarity)
+
+cosine :: VU.Vector Float -> VU.Vector Float -> Double
+cosine a b = realToFrac (VU.sum (VU.zipWith (*) a b))
 
 runEvalFixture :: (IOE :> es) => FixtureState -> Eff (Eval : es) a -> Eff es a
 runEvalFixture state = interpret $ \_ -> \case

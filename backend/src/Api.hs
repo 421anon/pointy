@@ -16,6 +16,7 @@ import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
+import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
@@ -437,6 +438,21 @@ type AgentTurnStream =
         :> Description "Streams output of an agent turn as server-sent events."
         :> SseStream
 
+type StepSearchInfoEndpoint =
+    "step-search"
+        :> "info"
+        :> Description "Reports whether semantic step search and the judge are configured."
+        :> Get '[JSON] StepSearchInfo
+
+type StepSearchEndpoint =
+    "step-search"
+        :> Description "Returns steps related to a search query, ranked by embedding similarity and optionally filtered by the judge."
+        :> QueryParam "commit" Text
+        :> ReqBody '[JSON] StepSearchRequest
+        :> Post '[JSON] StepSearchResponse
+
+type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
+
 type API =
     GetCommitHash
         :<|> GetUserRepoInfo
@@ -495,3 +511,4 @@ type API =
         :<|> RenameSession
         :<|> DeleteSession
         :<|> AgentUsageEndpoint
+        :<|> StepSearch

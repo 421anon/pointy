@@ -19,6 +19,7 @@ module Agent.Runner (
 ) where
 
 import Agent.Git (AgentSessionView, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, sessionHasActiveRunner)
+import Agent.Model (chatModelArgs, prepareChatModel)
 import Agent.Policy (promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
 import Agent.Session (
@@ -433,6 +434,7 @@ runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
+    chat <- prepareChatModel
     let paths = sessionPaths session_
         runnerHome = sandboxHome paths
         expand = expandSandboxArg paths
@@ -443,7 +445,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile = do
             (True, Nothing) -> []
             (False, _) -> ["-c"]
         runnerArgs =
-            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ runnerConfigArgs expand (agentRunnerArgs cfg)
+            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ chatModelArgs chat ++ runnerConfigArgs expand (agentRunnerArgs cfg)
         wrapperScript =
             "set -e; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
         warmBindArgs = maybe [] bindPathReadOnly mWarmFile

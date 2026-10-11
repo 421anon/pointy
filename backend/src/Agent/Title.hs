@@ -3,6 +3,7 @@
 
 module Agent.Title (generateSessionTitle) where
 
+import Agent.Model (chatModelArgs, prepareChatModel)
 import Agent.Sandbox (bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
 import Agent.Session (AgentSession (..))
 import Config (AgentConfig (..))
@@ -35,6 +36,7 @@ generateSessionTitle :: AgentConfig -> AgentSession -> Text -> IO (Either String
 generateSessionTitle cfg session_ request = do
     nixBind <- nixDaemonBindArgs
     piConfigDir <- piAgentConfigDir
+    chat <- prepareChatModel
     let paths = sessionPaths session_
         runnerHome = sandboxHome paths
         expand = expandSandboxArg paths
@@ -42,6 +44,7 @@ generateSessionTitle cfg session_ request = do
         runnerArgs =
             agentRunnerCommand cfg
                 : ["--no-session", "--no-tools"]
+                ++ chatModelArgs chat
                 ++ runnerConfigArgs expand (agentRunnerArgs cfg)
                 ++ ["--system-prompt", T.unpack titleSystemPrompt]
                 ++ ["-p", T.unpack titlePrompt]

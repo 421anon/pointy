@@ -26,18 +26,18 @@ import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (App, AppM, Eval)
 import Handlers.Projects (annotateRecordChildren, readJsonAtCommit, readRecordMtimes)
-import ProjectFiles (RawProjectFile (..), loadRawProjectFilesAt)
+import ProjectFiles (RawProjectFile (..), loadRawProjectFilesAt, loadUnfiledStepEntries)
 import ProjectTree (ChildRef (..), normalizeProject, projectChildRefs)
 import RollupCache (currentRollupGeneration, insertRollupCache, lookupRollupCache)
 import Text.Read (readMaybe)
-import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo)
+import UserRepo (ReadRepoContext (..))
 
 unfiledHandler :: Maybe T.Text -> AppM DynamicJson
 unfiledHandler commit =
     readJsonAtCommit commit $ \ctx -> do
         membership <- projectMembership ctx
         times <- liftIO $ readRecordMtimes (readRepoPath ctx) (readCommitHash ctx)
-        steps <- unfiledStepEntries ctx (Set.toList (linkedStepIds membership))
+        steps <- loadUnfiledStepEntries ctx (Set.toList (linkedStepIds membership))
         pure (object ["children" .= annotateRecordChildren times (toJSON steps)])
 
 projectMembership :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map Int [ChildRef])
@@ -72,24 +72,6 @@ projectMembership ctx = do
 
 linkedStepIds :: Map Int [ChildRef] -> Set Int
 linkedStepIds membership = Set.fromList [stepId | refs <- Map.elems membership, StepChild stepId <- refs]
-
-unfiledStepEntries :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) [Value]
-unfiledStepEntries ctx members = do
-    output <- runNixEvalJsonApplyInRepo ctx expression "#pointy"
-    case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
-        Right steps -> pure steps
-        Left err -> throwError ("Failed to parse the unfiled steps: " ++ err)
-  where
-    expression =
-        "pointy: let\n"
-            ++ "  members = [ " ++ unwords (map show members) ++ " ];\n"
-            ++ "  stepIds = map (name: builtins.fromJSON name) (builtins.attrNames pointy.steps);\n"
-            ++ "  unfiledIds = builtins.filter (id: !(builtins.elem id members)) stepIds;\n"
-            ++ "  entry = id: let\n"
-            ++ "    n = builtins.toString id;\n"
-            ++ "    t = builtins.tryEval (pointy.steps.${n}.def);\n"
-            ++ "  in if t.success then { step = { inherit id; hidden = false; sortKey = null; def = t.value; }; } else null;\n"
-            ++ "in builtins.filter (entry: entry != null) (builtins.map entry unfiledIds)"
 
 projectRollupHandler :: Int -> Maybe T.Text -> AppM DynamicJson
 projectRollupHandler projectId commit =

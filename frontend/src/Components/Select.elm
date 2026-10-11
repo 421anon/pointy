@@ -1,4 +1,4 @@
-module Components.Select exposing (Item, SelectState, initSelectState, itemRef, selected, view)
+module Components.Select exposing (Item, RelatedItem, SelectState, initSelectState, itemRef, rankedItems, selected, view)
 
 import Accessors exposing (An_Optic, Lens, get, lens, over, set)
 import Browser.Dom
@@ -37,6 +37,12 @@ type alias Item ref =
     }
 
 
+type alias RelatedItem ref =
+    { item : Item ref
+    , detail : String
+    }
+
+
 itemRef : Lens ls (Item ref) (Maybe ref) x y
 itemRef =
     lens ".ref" .ref (\item ref_ -> { item | ref = ref_ })
@@ -59,6 +65,14 @@ type ChipAction
 
 type MenuAction
     = MenuSelect
+
+
+type alias MenuItem ref tag =
+    { item : Item ref
+    , match : Fuzzy.Match tag
+    , isRelated : Bool
+    , detail : Maybe String
+    }
 
 
 viewChip : Bool -> Bool -> String -> String -> List (Html.Attribute Never) -> Html ChipAction
@@ -106,6 +120,28 @@ viewMenuItem isActive domId label mDetail tooltip =
         ]
 
 
+viewRelatedHeading : Html (Flow s ())
+viewRelatedHeading =
+    Html.div
+        [ class "select-menu-heading"
+        , Events.preventDefaultOn "mousedown" (Decode.succeed ( Flow.pure (), True ))
+        ]
+        [ Html.text "Related" ]
+
+
+rankedItems : Fuzzy.Query -> (a -> Fuzzy.Document tag) -> List a -> List ( a, Fuzzy.Match tag )
+rankedItems query toDocument items =
+    let
+        ranked =
+            Fuzzy.rank query toDocument items
+    in
+    if Fuzzy.isEmpty query then
+        ranked
+
+    else
+        List.take 50 ranked
+
+
 viewSegment : Fuzzy.Segment -> Html msg
 viewSegment segment =
     case segment of
@@ -131,19 +167,21 @@ view :
     , toInputItemTooltip : Item ref -> List String
     , onInputItemClick : Item ref -> Maybe (Flow s ())
     , toSearchDocument : Item ref -> Fuzzy.Document tag
+    , related : List (RelatedItem ref)
     , toMenuItemName : Item ref -> String
     , toMenuItemTooltip : Item ref -> List String
     , toMenuItemDetail : Fuzzy.Query -> Fuzzy.Match tag -> Item ref -> Maybe String
     , activeAfterSelect : Bool
     , clearInputAfterSelect : Bool
     , onChange : Flow s ()
+    , onInputChange : String -> Flow s ()
     , onRemove : Item ref -> Flow s ()
     , onSelect : Fuzzy.Match tag -> Item ref -> Flow s ()
     , alignRight : Bool
     , inputItemStyle : Item ref -> List (Html.Attribute Never)
     }
     -> Html (Flow s ())
-view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toSearchDocument, toMenuItemName, toMenuItemTooltip, toMenuItemDetail, onChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
+view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toSearchDocument, related, toMenuItemName, toMenuItemTooltip, toMenuItemDetail, onChange, onInputChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
     let
         optic_ =
             remkT optic
@@ -151,16 +189,54 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
         query =
             Fuzzy.parse selectState.input
 
-        filteredAvailableItems =
+        menuItems : List (MenuItem ref tag)
+        menuItems =
             let
-                ranked =
-                    Fuzzy.rank query toSearchDocument availableItems
-            in
-            if Fuzzy.isEmpty query then
-                ranked
+                filteredAvailableItems =
+                    rankedItems query toSearchDocument availableItems
 
-            else
-                List.take 50 ranked
+                fuzzyEntries =
+                    List.map
+                        (\( item, match ) ->
+                            { item = item
+                            , match = match
+                            , isRelated = False
+                            , detail = toMenuItemDetail query match item
+                            }
+                        )
+                        filteredAvailableItems
+
+                relatedEntries : List (MenuItem ref tag)
+                relatedEntries =
+                    let
+                        shownIds : List Int
+                        shownIds =
+                            List.filterMap (\( item, _ ) -> item.id) filteredAvailableItems
+
+                        notShown entry =
+                            case entry.item.id of
+                                Just id ->
+                                    not (List.member id shownIds)
+
+                                Nothing ->
+                                    True
+                    in
+                    related
+                        |> List.filter notShown
+                        |> List.map
+                            (\entry ->
+                                { item = entry.item
+                                , match = { score = 0, fields = [] }
+                                , isRelated = True
+                                , detail = Just entry.detail
+                                }
+                            )
+            in
+            fuzzyEntries ++ relatedEntries
+
+        menuItemDetail : MenuItem ref tag -> Maybe (List Fuzzy.Segment)
+        menuItemDetail menuItem =
+            menuItem.detail |> Maybe.map (Fuzzy.highlight Fuzzy.Words query)
 
         keyedSelectedChips =
             selected_
@@ -226,7 +302,7 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                                                         (\activeIndex_ ->
                                                             let
                                                                 nextIndex =
-                                                                    min (List.length filteredAvailableItems - 1) (activeIndex_ + 1)
+                                                                    min (List.length menuItems - 1) (activeIndex_ + 1)
                                                             in
                                                             Flow.modify (set activeIndex nextIndex)
                                                                 |> Flow.seq (ensureVisible (menuItemId nextIndex))
@@ -253,14 +329,14 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                                                 )
                                           )
                                         , ( Keyboard.enter
-                                          , filteredAvailableItems
+                                          , menuItems
                                                 |> List.drop selectState.activeIndex
                                                 |> List.head
                                                 |> Maybe.unwrap Flow.none
-                                                    (\( item, match ) ->
-                                                        Flow.modify (over optic_ (over selected (List.push item) >> setInputAction clearInputAfterSelect item >> set activeIndex 0))
+                                                    (\menuItem ->
+                                                        Flow.modify (over optic_ (over selected (List.push menuItem.item) >> setInputAction clearInputAfterSelect menuItem.item >> set activeIndex 0))
                                                             |> Flow.seq (Flow.modify (set (optic_ << active) activeAfterSelect))
-                                                            |> Flow.seq (onSelect match item)
+                                                            |> Flow.seq (onSelect menuItem.match menuItem.item)
                                                             |> Flow.seq onChange
                                                     )
                                                 |> Decode.succeed
@@ -281,7 +357,7 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                                         ]
                             in
                             [ Events.on "keydown" handleKey
-                            , Events.onInput (\inp -> Flow.modify (over optic_ (set input inp << set active True << set activeIndex 0)))
+                            , Events.onInput (\inp -> Flow.modify (over optic_ (set input inp << set active True << set activeIndex 0)) |> Flow.seq (onInputChange inp))
                             , Events.onClick (Flow.modify (set (optic_ << active) True))
                             , Events.onBlur (Flow.modify (over optic_ (set active False << set activeIndex 0)))
                             ]
@@ -308,26 +384,33 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
                 ++ keyedSelectedChips
                 ++ [ inputElement ]
             )
-        , if not readOnly && selectState.active && not (List.isEmpty filteredAvailableItems) then
+        , if not readOnly && selectState.active && not (List.isEmpty menuItems) then
+            let
+                firstRelatedIndex =
+                    List.findIndex .isRelated menuItems
+            in
             Html.div
                 [ class "select-menu", id "select-menu" ]
-                (filteredAvailableItems
+                (menuItems
                     |> List.indexedMap
-                        (\index ( item_, match ) ->
-                            viewMenuItem
+                        (\index menuItem ->
+                            [ Html.viewIf (Just index == firstRelatedIndex) viewRelatedHeading
+                            , viewMenuItem
                                 (index == selectState.activeIndex)
                                 (menuItemId index)
-                                (Fuzzy.highlight Fuzzy.Loose query (toMenuItemName item_))
-                                (toMenuItemDetail query match item_ |> Maybe.map (Fuzzy.highlight Fuzzy.Words query))
-                                (String.join "\n" (toMenuItemTooltip item_))
+                                (Fuzzy.highlight Fuzzy.Loose query (toMenuItemName menuItem.item))
+                                (menuItemDetail menuItem)
+                                (String.join "\n" (toMenuItemTooltip menuItem.item))
                                 |> map
                                     (\MenuSelect ->
-                                        Flow.modify (over optic_ (over selected (List.push item_) >> setInputAction clearInputAfterSelect item_))
+                                        Flow.modify (over optic_ (over selected (List.push menuItem.item) >> setInputAction clearInputAfterSelect menuItem.item))
                                             |> Flow.seq (Flow.modify (set (optic_ << active) activeAfterSelect))
-                                            |> Flow.seq (onSelect match item_)
+                                            |> Flow.seq (onSelect menuItem.match menuItem.item)
                                             |> Flow.seq onChange
                                     )
+                            ]
                         )
+                    |> List.concat
                 )
 
           else

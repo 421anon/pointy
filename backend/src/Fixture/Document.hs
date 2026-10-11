@@ -77,6 +77,7 @@ rawAnswer document attr =
 
 appliedAnswer :: FixtureDocument -> String -> String -> Either String String
 appliedAnswer document applyExpr attr
+    | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
     | "certified" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
@@ -129,6 +130,14 @@ rawProjectFiles document =
         | (attr, project) <- Map.toList (documentJson document)
         , Just projectId <- [readMaybe =<< stripPrefix "#pointy.projects." attr :: Maybe Int]
         ]
+
+projectIds :: FixtureDocument -> [String]
+projectIds document =
+    [ name
+    | attr <- Map.keys (documentJson document)
+    , Just name <- [stripPrefix "#pointy.projects." attr]
+    , all isDigit name
+    ]
 
 unfiledEntries :: FixtureDocument -> String -> [Value]
 unfiledEntries document applyExpr =

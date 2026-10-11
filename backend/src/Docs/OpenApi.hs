@@ -28,6 +28,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
+import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
@@ -135,6 +136,12 @@ nullableField openApiType = Inline (mempty & type_ ?~ openApiType & nullable ?~ 
 
 integerField :: Referenced Schema
 integerField = Inline (mempty & type_ ?~ OpenApiInteger)
+
+numberField :: Referenced Schema
+numberField = Inline (mempty & type_ ?~ OpenApiNumber)
+
+boolField :: Referenced Schema
+boolField = Inline (mempty & type_ ?~ OpenApiBoolean)
 
 arrayOf :: Referenced Schema -> Referenced Schema
 arrayOf itemSchema = Inline (mempty & type_ ?~ OpenApiArray & items ?~ OpenApiItemsObject itemSchema)
@@ -279,3 +286,21 @@ withPathSummaries = paths %~ imap nameOperations
       where
         setSummary :: ALens' PathItem (Maybe Operation) -> PathItem -> PathItem
         setSummary methodLens = cloneLens methodLens . _Just . summary ?~ pack path
+
+instance ToSchema StepSearchRequest where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "StepSearchRequest"
+                [ ("query", stringField)
+                , ("exclude", arrayOf integerField)
+                ]
+                & schema . required .~ ["query"]
+
+instance ToSchema StepSearchResponse where
+    declareNamedSchema _ =
+        pure $ objectSchema "StepSearchResponse" [("results", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & properties .~ fromList [("step_id", integerField), ("similarity", numberField), ("relevance", nullableField OpenApiNumber)])))]
+
+instance ToSchema StepSearchInfo where
+    declareNamedSchema _ =
+        pure $ objectSchema "StepSearchInfo" [("semantic", boolField), ("judge", boolField)]

@@ -110,6 +110,9 @@ viewSearchBox model =
 
                 Nothing ->
                     Flow.pure ()
+
+        relatedItems =
+            Lib.relatedSearchItems model
     in
     Select.view
         { optic = searchBox
@@ -128,8 +131,10 @@ viewSearchBox model =
         , toMenuItemName = .name
         , toMenuItemTooltip = \item -> item.id |> Maybe.map (\id -> [ "id: " ++ String.fromInt id ]) |> Maybe.withDefault []
         , toSearchDocument = toSearchDocument
+        , related = relatedItems
         , toMenuItemDetail = toMenuItemDetail
         , onChange = Flow.pure ()
+        , onInputChange = Actions.onSearchInputChange
         , onRemove = \_ -> Flow.pure ()
         , activeAfterSelect = False
         , clearInputAfterSelect = False

@@ -2,13 +2,13 @@ module Model.Lib exposing (..)
 
 import Accessors exposing (get, has, over, try)
 import Api.ApiData as ApiData
-import Components.Select exposing (Item)
+import Components.Select as Select exposing (Item)
 import Dict exposing (Dict)
 import Fuzzy
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord)
-import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, stepConfig, steps)
+import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, relatedSearch, stepConfig, steps)
 import Model.Shadow exposing (StepArgValue(..))
 import Route
 import Set exposing (Set)
@@ -187,24 +187,7 @@ stepSearchItems model =
                 |> Dict.fromList
 
         stepParents =
-            Dict.foldl
-                (\parentId project acc ->
-                    List.foldl
-                        (\link acc_ ->
-                            if link.kind == StepChild then
-                                Dict.update link.id
-                                    (\existing -> Just (( parentId, link ) :: Maybe.withDefault [] existing))
-                                    acc_
-
-                            else
-                                acc_
-                        )
-                        acc
-                        project.children
-                )
-                Dict.empty
-                projects_
-                |> Dict.map (\_ links -> List.reverse links)
+            stepParentLinks model
 
         folderName projectId =
             Dict.get projectId projects_ |> Maybe.unwrap "" .name
@@ -304,6 +287,61 @@ stepSearchItems model =
                         Dict.get id stepParents |> Maybe.withDefault []
                 in
                 ( itemFor parents id step, documentFor parents id step )
+            )
+
+
+stepParentLinks : Model -> Dict Int (List ( Int, ChildLink ))
+stepParentLinks model =
+    Dict.foldl
+        (\parentId project acc ->
+            List.foldl
+                (\link acc_ ->
+                    if link.kind == StepChild then
+                        Dict.update link.id
+                            (\existing -> Just (( parentId, link ) :: Maybe.withDefault [] existing))
+                            acc_
+
+                    else
+                        acc_
+                )
+                acc
+                project.children
+        )
+        Dict.empty
+        (projectsDict model)
+        |> Dict.map (\_ -> List.reverse)
+
+
+stepParentProjectId : Model -> Int -> Maybe Int
+stepParentProjectId model stepId =
+    Dict.get stepId (stepParentLinks model)
+        |> Maybe.andThen
+            (\links ->
+                (List.find (not << .hidden << Tuple.second) links |> Maybe.orElse (List.head links))
+                    |> Maybe.map Tuple.first
+            )
+
+
+relatedSearchItems : Model -> List (Select.RelatedItem ChildRef)
+relatedSearchItems model =
+    get relatedSearch model
+        |> .results
+        |> ApiData.toMaybe
+        |> Maybe.withDefault []
+        |> List.filterMap
+            (\related ->
+                Dict.get related.stepId (get steps model)
+                    |> Maybe.map
+                        (\step ->
+                            { item =
+                                { id = Just related.stepId
+                                , name = step.name
+                                , mProjectId = stepParentProjectId model related.stepId
+                                , ref = Just { kind = StepChild, id = related.stepId }
+                                }
+                            , detail = related.detail
+                            }
+                        )
             )
 
 

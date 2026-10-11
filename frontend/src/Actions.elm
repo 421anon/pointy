@@ -11,7 +11,7 @@ import Browser
 import Browser.Dom as Dom
 import Browser.Navigation as Nav
 import Channels
-import Components.Select exposing (itemRef, selected)
+import Components.Select as Select exposing (itemRef, selected)
 import Debounce
 import Dict exposing (Dict)
 import Dict.Accessors
@@ -20,6 +20,7 @@ import Extra.FlowError as FlowError exposing (FlowError)
 import Extra.Http as Http
 import Extra.List as List
 import Flow exposing (Flow)
+import Fuzzy
 import Grid
 import Http
 import Json.Decode as Decode
@@ -1160,6 +1161,139 @@ autocompleteDebounceConfig =
     { strategy = Debounce.later autocompleteDebounceDelay
     , transform = autocompleteDebounceMsg
     }
+
+
+searchDebounceDelay : Float
+searchDebounceDelay =
+    350
+
+
+searchDebounceConfig : Debounce.Config (Flow Model ())
+searchDebounceConfig =
+    { strategy = Debounce.later searchDebounceDelay
+    , transform = relatedSearchDebounceMsg
+    }
+
+
+loadSearchInfo : Flow Model ()
+loadSearchInfo =
+    callApi searchInfo Api.fetchSearchInfo
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok info ->
+                        if info.semantic then
+                            Flow.pure ()
+
+                        else
+                            clearRelatedSearch
+
+                    Err _ ->
+                        clearRelatedSearch
+            )
+        |> Flow.return ()
+
+
+onSearchInputChange : String -> Flow Model ()
+onSearchInputChange query =
+    if String.length (String.trim query) < 3 then
+        clearRelatedSearch
+
+    else
+        Flow.get
+            |> Flow.andThen
+                (\model ->
+                    if Model.getSearchInfo model |> ApiData.withDefault { semantic = False, judge = False } |> .semantic then
+                        let
+                            job =
+                                { query = String.trim query
+                                , commit = try (route << Route.page << Route.viewedCommitT) model
+                                , exclude =
+                                    Select.rankedItems (Fuzzy.parse query) Tuple.second (Model.Lib.stepSearchItems model)
+                                        |> List.filterMap (\( ( item, _ ), _ ) -> item.id)
+                                }
+
+                            ( newDebounce, debounceCmd ) =
+                                Debounce.push searchDebounceConfig job (Model.getRelatedSearchDebounce model)
+                        in
+                        Flow.over relatedSearch (\state -> { state | query = job.query, results = ApiData.loading Nothing })
+                            |> Flow.seq (Flow.over relatedSearchDebounce (always newDebounce))
+                            |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+
+                    else
+                        Flow.pure ()
+                )
+
+
+relatedSearchDebounceMsg : Debounce.Msg -> Flow Model ()
+relatedSearchDebounceMsg msg =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    send job =
+                        Task.perform (\_ -> runRelatedSearchJob job) (Task.succeed ())
+
+                    ( newDebounce, debounceCmd ) =
+                        Debounce.update searchDebounceConfig (Debounce.takeLast send) msg (Model.getRelatedSearchDebounce model)
+                in
+                Flow.over relatedSearchDebounce (always newDebounce)
+                    |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+            )
+
+
+runRelatedSearchJob : Model.RelatedSearchJob -> Flow Model ()
+runRelatedSearchJob job =
+    Api.searchSteps
+        job.commit
+        { query = job.query
+        , exclude = job.exclude
+        }
+        |> Flow.andThen (applyRelatedSearchResult job)
+
+
+applyRelatedSearchResult : Model.RelatedSearchJob -> Result Http.Error (List ApiDecode.SearchResult) -> Flow Model ()
+applyRelatedSearchResult job result =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    state =
+                        Model.getRelatedSearch model
+                in
+                if state.query /= job.query then
+                    Flow.pure ()
+
+                else
+                    Flow.over relatedSearch
+                        (\current ->
+                            { current
+                                | results =
+                                    ApiData.fromResult
+                                        (result
+                                            |> Result.map
+                                                (List.map
+                                                    (\entry ->
+                                                        { stepId = entry.stepId
+                                                        , detail =
+                                                            case entry.relevance of
+                                                                Just relevance ->
+                                                                    "Relevance " ++ String.fromInt (round (relevance * 100)) ++ "%"
+
+                                                                Nothing ->
+                                                                    "Similarity " ++ String.fromInt (round (entry.similarity * 100)) ++ "%"
+                                                        }
+                                                    )
+                                                )
+                                        )
+                            }
+                        )
+            )
+
+
+clearRelatedSearch : Flow Model ()
+clearRelatedSearch =
+    Flow.over relatedSearch (always Model.initRelatedSearchState)
 
 
 autocompleteStateWithJob : Model.AutocompleteJob -> Maybe Model.AutocompleteState -> Model.AutocompleteState

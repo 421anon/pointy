@@ -9,20 +9,56 @@
 module Interpreters.Production (runProduction, submitArgs) where
 
 import BuildRunner (shellCommand)
+import Config (Config (..), EmbeddingConfig (..), JudgeConfig (..), ProviderConfig (..), SearchConfig (..), loadConfig, resolveConfigPath)
 import Data.List (intercalate)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (AppEffects, Eval (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
+import Effects (AppEffects, Eval (..), Inference (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Ingest (runIngest)
 import Processes (cli)
 import NixEvaluator (defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression)
+import Search.Http (embedRequest, judgeRequest)
 import System.Exit (ExitCode (..))
 
 
 runProduction :: Eff AppEffects a -> IO a
-runProduction action = runEff (runSlurmProduction (runNixProduction (runEvalProduction action)))
+runProduction action = runEff (runInferenceProduction (runSlurmProduction (runNixProduction (runEvalProduction action))))
+
+runInferenceProduction :: (IOE :> es) => Eff (Inference : es) a -> Eff es a
+runInferenceProduction = interpret $ \_ -> \case
+    Embed texts -> do
+        request <- liftIO inferenceEmbedRequest
+        case request of
+            Left err -> pure (Left err)
+            Right (embedding, provider) -> liftIO (embedRequest embedding provider texts)
+    JudgeCandidates query candidates -> do
+        request <- liftIO inferenceJudgeRequest
+        case request of
+            Left err -> pure (Left err)
+            Right (judge, provider) -> liftIO (judgeRequest judge provider query candidates)
+
+inferenceEmbedRequest :: IO (Either String (EmbeddingConfig, ProviderConfig))
+inferenceEmbedRequest = do
+    config <- resolveConfigPath >>= loadConfig
+    pure $ case configSearch config of
+        Just search
+            | not (T.null (embeddingProvider (searchEmbedding search))) ->
+                case Map.lookup (embeddingProvider (searchEmbedding search)) (configProviders config) of
+                    Just provider -> Right (searchEmbedding search, provider)
+                    Nothing -> Left ("The embedding provider \"" <> T.unpack (embeddingProvider (searchEmbedding search)) <> "\" is not configured.")
+        _ -> Left "Semantic search is not configured."
+
+inferenceJudgeRequest :: IO (Either String (JudgeConfig, ProviderConfig))
+inferenceJudgeRequest = do
+    config <- resolveConfigPath >>= loadConfig
+    pure $ case configSearch config >>= searchJudge of
+        Just judge -> case Map.lookup (judgeProvider judge) (configProviders config) of
+            Just provider -> Right (judge, provider)
+            Nothing -> Left ("The judge provider \"" <> T.unpack (judgeProvider judge) <> "\" is not configured.")
+        Nothing -> Left "The judge is not configured."
 
 
 runEvalProduction :: (IOE :> es) => Eff (Eval : es) a -> Eff es a

@@ -61,6 +61,7 @@ initializeWorkspace : Flow Model ()
 initializeWorkspace =
     Flow.async Actions.listenAndProcessAgentTurns
         |> Flow.seq Actions.loadUserRepoInfo
+        |> Flow.seq Actions.loadSearchInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects

@@ -22,10 +22,8 @@ enforcement = "scheduler"
 sbox-command = "sbox"
 sbox-args = ["--bind", "{home}", "{home}"]
 runner-command = "pi"
-# The explicit --model is required: pi's built-in registry keeps deepseek-v4-pro
-# (its per-provider default) even when models.json only declares flash, and a
-# continued/forked session restores its recorded model. --model wins over both.
-runner-args = ["--model", "deepseek/deepseek-v4-flash"]
+# The backend passes the chat model from [models.chat] to the runner itself.
+runner-args = []
 # Pre-warm a Pi session by running this prompt once against a fresh checkout.
 # On first turn of each new draft, the backend forks that session so the agent
 # already has project context and vocabulary. Set to empty string to disable.
@@ -34,3 +32,55 @@ runner-args = ["--model", "deepseek/deepseek-v4-flash"]
 timeout-seconds = 1800
 output-limit-bytes = 1048576
 session-retention-days = 7
+
+# AI providers. Each provider names the environment variable that holds its API key,
+# so keys never live in this file. The backend reads them from its EnvironmentFile.
+# Nothing here is required: with no [models.*] tables the agent has no chat model and
+# step search stays lexical only.
+[[providers]]
+name = "neuralwatt"
+base-url = "https://api.neuralwatt.com/v1"
+api-key-env = "NEURALWATT_API_KEY"
+timeout-seconds = 60
+
+# The chat model the agent panel runs on. The backend writes it into Pi's models.json
+# and settings.json before the runner starts, and passes --model explicitly.
+# [models.chat]
+# provider = "neuralwatt"
+# protocol = "openai-completions"
+# model = "deepseek-v4.1-flash-speed"
+# thinking = "high"
+#
+# [models.chat.pi]
+# name = "DeepSeek V4.1 Flash (Speed)"
+# contextWindow = 1000000
+# maxTokens = 384000
+# input = ["text", "image"]
+# reasoning = true
+# thinkingLevelMap = { minimal = "low", low = "low", medium = "high", high = "high", xhigh = "xhigh", max = "max" }
+# Pi levels the model does not support; they are hidden and skipped when cycling.
+# disabledThinkingLevels = ["off"]
+# Prices per million tokens; all four are required and must be written as decimals.
+# cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
+# compat = { supportsStore = false, supportsDeveloperRole = false, supportsReasoningEffort = true, requiresReasoningContentOnAssistantMessages = true }
+
+# Embedding and judge models extend the step search box with a "Related" section.
+# [search]
+# limit = 10
+# judge-candidates = 24
+#
+# [search.embedding]
+# provider = "neuralwatt"
+# protocol = "openai-embeddings"
+# model = "qwen3-embedding-8b"
+# query-template = "Instruct: Given a search typed into a research notebook, retrieve the analysis steps it refers to\nQuery: {query}"
+# document-template = "{document}"
+# batch-size = 128
+# min-similarity = 0.5
+#
+# [search.judge]
+# provider = "neuralwatt"
+# protocol = "systemone"
+# model = "clef-flash"
+# instructions = "Is step {id} something the person searching for \"{query}\" wants to find?"
+# min-relevance = 0.5
