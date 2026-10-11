@@ -878,6 +878,7 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
         , "message_update"
         , "agent_start"
         , "agent_end"
+        , "agent_settled"
         , "turn_start"
         , "turn_end"
         , "tool_execution_start"

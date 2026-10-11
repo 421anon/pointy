@@ -27,14 +27,7 @@
           },
           "compat": {
             "requiresReasoningContentOnAssistantMessages": true,
-            "thinkingFormat": "deepseek",
-            "reasoningEffortMap": {
-              "minimal": "high",
-              "low": "high",
-              "medium": "high",
-              "high": "high",
-              "xhigh": "max"
-            }
+            "thinkingFormat": "deepseek"
           }
         }
       ]

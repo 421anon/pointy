@@ -1,4 +1,5 @@
 {
   "defaultProvider": "deepseek",
-  "defaultModel": "deepseek-v4-flash"
+  "defaultModel": "deepseek-v4-flash",
+  "defaultProjectTrust": "always"
 }
