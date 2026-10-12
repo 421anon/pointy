@@ -16,7 +16,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Scientific (toBoundedInteger)
+import Data.Scientific (FPFormat (Fixed), floatingOrInteger, formatScientific, toBoundedInteger)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -42,7 +42,7 @@ data StepEntry = StepEntry
     , entryName :: Text
     , entryType :: Text
     , entryNote :: Text
-    , entryArgValues :: [Value]
+    , entryArgs :: [(Text, Value)]
     }
 
 buildDocuments :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) [StepDocument]
@@ -148,8 +148,8 @@ entryOf child = do
             , entryName = if T.null (textField "name") then T.pack (show stepId) else textField "name"
             , entryType = textField "type"
             , entryNote = textField "note"
-            , entryArgValues = case KeyMap.lookup "args" definition of
-                Just (Object fields) -> map snd (KeyMap.toList fields)
+            , entryArgs = case KeyMap.lookup "args" definition of
+                Just (Object fields) -> [(Key.toText key, value) | (key, value) <- KeyMap.toList fields]
                 _ -> []
             }
 
@@ -157,7 +157,7 @@ flattenArg :: Map Int Text -> Value -> [Text]
 flattenArg _ (String value) = [value]
 flattenArg _ (Bool True) = ["true"]
 flattenArg _ (Bool False) = ["false"]
-flattenArg _ (Number value) = [T.pack (show value)]
+flattenArg _ (Number value) = [either (const (T.pack (formatScientific Fixed Nothing value))) (T.pack . show) (floatingOrInteger value :: Either Double Integer)]
 flattenArg names (Array items) = concatMap (flattenArg names) (V.toList items)
 flattenArg names (Object fields) =
     case (KeyMap.lookup "step" fields, KeyMap.lookup "hash" fields) of
@@ -165,7 +165,7 @@ flattenArg names (Object fields) =
             case toBoundedInteger stepId :: Maybe Int of
                 Just stepReference -> [fromMaybe (T.pack (show stepReference)) (Map.lookup stepReference names)]
                 Nothing -> []
-        (_, Just (String contentHash)) -> [contentHash]
+        (_, Just (String _)) -> []
         _ -> concatMap (flattenArg names . snd) (KeyMap.toList fields)
 flattenArg _ Null = []
 
@@ -180,22 +180,35 @@ documentTextFor stepConfig names paths entry =
             ]
             ++ folderLine
             ++ ["Note: " <> entryNote entry | not (T.null (entryNote entry))]
-            ++ ["Arguments: " <> args | not (T.null args)]
+            ++ argumentLines
         )
   where
-    args = T.intercalate ", " (concatMap (flattenArg names) (entryArgValues entry))
+    argumentLines =
+        [ fieldLabel key <> ": " <> T.intercalate ", " values
+        | (key, value) <- entryArgs entry
+        , let values = flattenArg names value
+        , not (null values)
+        ]
     folderLine = case Map.lookup (entryId entry) paths of
         Just path | not (T.null path) -> ["Folder: " <> path]
         _ -> []
-    typeLabel = case Map.lookup (entryType entry) typeNames of
-        Just label -> label
-        Nothing -> entryType entry
-    typeNames =
-        Map.fromList
-            [ (Key.toText name, label)
-            | (name, Object config) <- KeyMap.toList stepConfigObject
-            , Just (String label) <- [KeyMap.lookup "name" config]
-            ]
-    stepConfigObject = case stepConfig of
-        Object fields -> fields
+    typeConfig = case stepConfig of
+        Object root
+            | Just (Object templates) <- KeyMap.lookup "templates" root
+            , Just (Object config) <- KeyMap.lookup (Key.fromText (entryType entry)) templates ->
+                config
         _ -> KeyMap.empty
+    typeLabel = case KeyMap.lookup "displayName" typeConfig of
+        Just (String label) | not (T.null label) -> label
+        _ -> entryType entry
+    fieldLabels =
+        Map.fromList
+            [ (name, label)
+            | Just (Array fields) <- [KeyMap.lookup "fields" typeConfig]
+            , Object field <- V.toList fields
+            , Just (String name) <- [KeyMap.lookup "name" field]
+            , let label = case KeyMap.lookup "label" field of
+                    Just (String text) | not (T.null text) -> text
+                    _ -> name
+            ]
+    fieldLabel key = Map.findWithDefault key key fieldLabels

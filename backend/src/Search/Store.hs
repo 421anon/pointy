@@ -73,7 +73,7 @@ storeSearch store searchConfig commit query exclude = do
     case index of
         Nothing -> pure []
         Just indexed -> do
-            embedding <- embedTexts [renderTemplate (embeddingQueryTemplate (searchEmbedding searchConfig)) query]
+            embedding <- embedTexts [renderTemplate "{query}" (embeddingQueryTemplate (searchEmbedding searchConfig)) query]
             case embedding of
                 Right [queryVector] -> judgeRank searchConfig indexed query queryVector (Set.fromList exclude)
                 Right vectors -> warn ("The embedding provider returned " <> show (length vectors) <> " vectors for one query.") >> pure []
@@ -148,7 +148,7 @@ buildIndex store searchConfig key = do
         Right steps -> do
             let embedding = searchEmbedding searchConfig
                 namespace = keyNamespace key
-                texts = Map.fromList [(documentHash document, renderTemplate (embeddingDocumentTemplate embedding) (documentText document)) | document <- steps]
+                texts = Map.fromList [(documentHash document, renderTemplate "{document}" (embeddingDocumentTemplate embedding) (documentText document)) | document <- steps]
             stored <- liftIO (loadVectors namespace)
             let known = Map.restrictKeys stored (Map.keysSet texts)
                 missing = Map.toList (Map.withoutKeys texts (Map.keysSet known))
@@ -188,8 +188,8 @@ chunks :: Int -> [a] -> [[a]]
 chunks _ [] = []
 chunks size items = let (batch, rest) = splitAt size items in batch : chunks size rest
 
-renderTemplate :: Text -> Text -> Text
-renderTemplate template value = T.replace "{query}" value (T.replace "{document}" value template)
+renderTemplate :: Text -> Text -> Text -> Text
+renderTemplate placeholder template value = T.replace placeholder value template
 
 vectorNamespace :: EmbeddingConfig -> Text
 vectorNamespace embedding =

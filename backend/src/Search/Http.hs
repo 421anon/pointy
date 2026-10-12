@@ -67,7 +67,7 @@ judgeRequest judge provider query candidates = do
             pure (response >>= parseJudge (map fst candidates))
   where
     instructionsFor stepId =
-        T.replace "{id}" (T.pack (show stepId)) (T.replace "{query}" query (judgeInstructions judge))
+        T.replace "{query}" query (T.replace "{id}" (T.pack (show stepId)) (judgeInstructions judge))
 
 questionId :: Int -> Key.Key
 questionId stepId = Key.fromText ("s" <> T.pack (show stepId))
