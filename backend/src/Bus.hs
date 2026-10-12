@@ -13,6 +13,7 @@ data ProjectSnapshot = ProjectSnapshot
     { projectId :: Int
     , commit :: Text
     , statuses :: Map Int (Text, Maybe Text)
+    , certificates :: Map Int Text
     }
     deriving (Show)
 
@@ -27,13 +28,14 @@ recentSnapshots = unsafePerformIO $ newTVarIO []
 replayLimit :: Int
 replayLimit = 256
 
-broadcastSnapshot :: Int -> Text -> Map Int (Text, Maybe Text) -> IO ()
-broadcastSnapshot pid c reported = do
+broadcastSnapshot :: Int -> Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
+broadcastSnapshot pid c certified reported = do
     atomically $ do
         building <- buildingStepsAt c
         let stats = Map.filterWithKey (\sid (st, _) -> Set.notMember sid building || st `elem` map pack ["running", "success"]) reported
-        writeTChan statusBus (ProjectSnapshot pid c stats)
-        modifyTVar' recentSnapshots (take replayLimit . (ProjectSnapshot pid c stats :))
+            snapshot = ProjectSnapshot pid c stats (Map.intersection certified stats)
+        writeTChan statusBus snapshot
+        modifyTVar' recentSnapshots (take replayLimit . (snapshot :))
     invalidateRollupCache
 
 subscribe :: IO (TChan ProjectSnapshot)

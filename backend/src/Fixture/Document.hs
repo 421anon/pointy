@@ -16,9 +16,9 @@ import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecode, object,
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit, ord)
-import Data.List (isInfixOf, stripPrefix, tails)
+import Data.List (isInfixOf, stripPrefix)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Text.Read (readMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -77,6 +77,7 @@ rawAnswer document attr =
 
 appliedAnswer :: FixtureDocument -> String -> String -> Either String String
 appliedAnswer document applyExpr attr
+    | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
     | "certified" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
@@ -87,7 +88,6 @@ appliedAnswer document applyExpr attr
     | stepEntries "p" `isInfixOf` applyExpr = Right (encodeValue (projectStepIdsAnswer (toJSON (map stepIdNumber (projectStepIds document (fromMaybe "" (listToMaybe (idsIn applyExpr))))))))
     | "reviewedRevision" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (\id_ -> [entryOf (documentReviews document) id_]) (idsIn applyExpr))))
     | "isProject" `isInfixOf` applyExpr = Right (encodeValue (rawProjectFiles document))
-    | "unfiledIds" `isInfixOf` applyExpr = Right (encodeValue (toJSON (unfiledEntries document applyExpr)))
     | "toString id" `isInfixOf` applyExpr = Right (encodeValue (versioned (toJSON (Map.fromList [(stepId, fixtureKey stepId) | stepId <- idsIn applyExpr]))))
     | ".key); in if t.success" `isInfixOf` applyExpr = Right (encodeValue (keyAnswer applyExpr))
     | "certificate.success" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (stepPathsValue document) (idsIn applyExpr))))
@@ -130,23 +130,13 @@ rawProjectFiles document =
         , Just projectId <- [readMaybe =<< stripPrefix "#pointy.projects." attr :: Maybe Int]
         ]
 
-unfiledEntries :: FixtureDocument -> String -> [Value]
-unfiledEntries document applyExpr =
-    [ object ["step" .= object ["id" .= stepId, "hidden" .= False, "sortKey" .= Null, "def" .= definition]]
-    | (attr, definition) <- Map.toList (documentJson document)
-    , Just stepId <- [definitionStepId attr]
-    , stepId `notElem` members
+projectIds :: FixtureDocument -> [String]
+projectIds document =
+    [ name
+    | attr <- Map.keys (documentJson document)
+    , Just name <- [stripPrefix "#pointy.projects." attr]
+    , all isDigit name
     ]
-  where
-    members :: [Int]
-    members = case mapMaybe (stripPrefix "members = [") (tails applyExpr) of
-        rest : _ -> mapMaybe readMaybe (words (takeWhile (/= ']') rest))
-        [] -> []
-    definitionStepId attr = do
-        rest <- stripPrefix "#pointy.steps." attr
-        let (digits, suffix) = span isDigit rest
-        if suffix == ".def" then readMaybe digits else Nothing
-
 
 certified :: FixtureDocument -> Bool
 certified = not . Map.null . documentCertificates

@@ -16,6 +16,7 @@ module Effects (
     Eval (..),
     Nix (..),
     Slurm (..),
+    Inference (..),
     SubmitRequest (..),
     SlurmQuery (..),
     toHandler,
@@ -34,11 +35,15 @@ module Effects (
     querySlurm,
     cancelJob,
     clusterAvailability,
+    embedTexts,
+    judgeCandidates,
 ) where
 
 import Control.Monad.Except (ExceptT, MonadError, mapExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.Map.Strict (Map)
 import Data.Text (Text)
+import qualified Data.Vector.Unboxed as VU
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode)
 import System.FilePath (takeFileName, (</>))
@@ -49,9 +54,9 @@ import NixEvaluator (RepoSource)
 import Servant.Server (ServerError)
 import Servant.Server.Internal.Handler (Handler (..))
 
-type AppEffects = '[Eval, Nix, Slurm, IOE]
+type AppEffects = '[Eval, Nix, Slurm, Inference, IOE]
 
-type App es = (Eval :> es, Nix :> es, Slurm :> es, IOE :> es)
+type App es = (Eval :> es, Nix :> es, Slurm :> es, Inference :> es, IOE :> es)
 
 type AppM = ExceptT ServerError (Eff AppEffects)
 
@@ -83,6 +88,12 @@ data Slurm :: Effect where
     ClusterAvailability :: Slurm m (Either String String)
 
 type instance DispatchOf Slurm = Dynamic
+
+data Inference :: Effect where
+    Embed :: [Text] -> Inference m (Either String [VU.Vector Float])
+    JudgeCandidates :: Text -> [(Int, Text)] -> Inference m (Either String (Map Int Double))
+
+type instance DispatchOf Inference = Dynamic
 
 data SubmitRequest = SubmitRequest
     { submitJobName :: String
@@ -147,3 +158,9 @@ cancelJob = send . CancelJob
 
 clusterAvailability :: (Slurm :> es) => Eff es (Either String String)
 clusterAvailability = send ClusterAvailability
+
+embedTexts :: (Inference :> es) => [Text] -> Eff es (Either String [VU.Vector Float])
+embedTexts = send . Embed
+
+judgeCandidates :: (Inference :> es) => Text -> [(Int, Text)] -> Eff es (Either String (Map Int Double))
+judgeCandidates query candidates = send (JudgeCandidates query candidates)

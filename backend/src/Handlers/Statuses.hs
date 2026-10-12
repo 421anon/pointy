@@ -93,15 +93,16 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
             let finalStats = case mStatusOverride of
                     Just (sid, st) -> Map.insert sid st stats
                     Nothing -> stats
+            let certified = Map.map (pack . stepCertificate) certificates
             let (immediate, pending) = partitionImmediateStatuses finalStats
-            liftIO $ broadcastSnapshot pid targetCommit immediate
+            liftIO $ broadcastSnapshot pid targetCommit certified immediate
             when (not (Map.null pending)) $
                 liftIO $
                     forkReporting ("Pending status resolution for project " ++ show pid) $ do
-                        resolved <- markBuiltOutputs certificates =<< resolveStatusesFor (Map.map (pack . stepCertificate) certificates) store pending
+                        resolved <- markBuiltOutputs certificates =<< resolveStatusesFor certified store pending
                         liftIO $
                             forM_ (Map.toList resolved) $ \(sid, status_) ->
-                                broadcastSnapshot pid targetCommit (Map.singleton sid status_)
+                                broadcastSnapshot pid targetCommit certified (Map.singleton sid status_)
 
 withStepProjects :: App es => Int -> Text -> (Int -> Eff es ()) -> Eff es ()
 withStepProjects sid targetCommit action = do
@@ -142,7 +143,8 @@ broadcastStepStatusResolved pid targetCommit sid certificate rawStatus = do
     when (resolvedStatus /= rawStatus) $
         broadcastMarked resolvedStatus
   where
-    broadcastMarked status = liftIO . broadcastSnapshot pid targetCommit =<< markBuiltOutputs (foldMap (Map.singleton sid) certificate) (Map.singleton sid status)
+    paths = foldMap (Map.singleton sid) certificate
+    broadcastMarked status = liftIO . broadcastSnapshot pid targetCommit (Map.map (pack . stepCertificate) paths) =<< markBuiltOutputs paths (Map.singleton sid status)
 
 broadcastStatusForStepProjects :: App es => Int -> Text -> Maybe (Text, Maybe Text) -> Eff es ()
 broadcastStatusForStepProjects sid targetCommit mStatusOverride =
@@ -159,12 +161,12 @@ broadcastFailedStepForProjects :: App es => Int -> Text -> Eff es ()
 broadcastFailedStepForProjects sid targetCommit =
     withStepProjects sid targetCommit $ \pid -> do
         certificates <- fromRight Map.empty <$> getProjectCertificates pid targetCommit
-        liftIO . broadcastSnapshot pid targetCommit =<< resolveStatuses certificates (Map.singleton sid ("failure", Nothing))
+        liftIO . broadcastSnapshot pid targetCommit (Map.map (pack . stepCertificate) certificates) =<< resolveStatuses certificates (Map.singleton sid ("failure", Nothing))
 
 broadcastKnownStepStatus :: App es => Int -> Text -> (Text, Maybe Text) -> Eff es ()
 broadcastKnownStepStatus sid targetCommit status =
     withStepProjects sid targetCommit $ \pid ->
-        liftIO $ broadcastSnapshot pid targetCommit (Map.singleton sid status)
+        liftIO $ broadcastSnapshot pid targetCommit Map.empty (Map.singleton sid status)
 
 trackBuild :: (IOE :> es) => Int -> Text -> Eff es a -> Eff es a
 trackBuild sid commit = bracket_ (liftIO $ beginBuild sid commit) (liftIO $ endBuild sid commit)

@@ -7,10 +7,11 @@ module Agent.WarmSession (
     getOrBuildWarmSession,
 ) where
 
+import Agent.Model (chatModelArgs, prepareChatModel)
 import Agent.Policy (renderEmbeddedBootstrapPrompt)
 import Agent.Sandbox (SandboxPaths (..), agentMemoryMax, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerEnvironment, sandboxProcess)
 import Agent.Session (agentSessionsRoot)
-import Config (AgentConfig (..))
+import Config (AgentConfig (..), ChatModelConfig, chatQualifier)
 import Control.Concurrent.Async (async, wait)
 import Control.Exception (IOException, try)
 import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict, encode)
@@ -47,6 +48,7 @@ import UserRepo (runGitIn, userRepoPath)
 data WarmSessionMeta = WarmSessionMeta
     { warmBaseCommit :: Text
     , warmBootstrapPrompt :: Text
+    , warmModel :: Text
     , warmSessionFile :: FilePath
     , warmCreatedAt :: UTCTime
     }
@@ -86,16 +88,21 @@ getOrBuildWarmSession cfg baseCommit onProcessStarted = do
     if T.null configuredPrompt
         then return Nothing
         else do
+            chat <- prepareChatModel
             memoryMax <- agentMemoryMax
             let bootstrapPrompt = renderEmbeddedBootstrapPrompt memoryMax configuredPrompt
+                model = maybe "" chatQualifier chat
             existing <- loadWarmMeta
             case existing of
-                Just meta | warmBaseCommit meta == baseCommit && warmBootstrapPrompt meta == bootstrapPrompt -> do
-                    valid <- isValidSessionFile (warmSessionFile meta)
-                    if valid
-                        then return $ Just $ Right meta
-                        else Just <$> buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted
-                _ -> Just <$> buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted
+                Just meta
+                    | warmBaseCommit meta == baseCommit
+                    , warmBootstrapPrompt meta == bootstrapPrompt
+                    , warmModel meta == model -> do
+                        valid <- isValidSessionFile (warmSessionFile meta)
+                        if valid
+                            then return $ Just $ Right meta
+                            else Just <$> buildWarmSession cfg baseCommit bootstrapPrompt chat onProcessStarted
+                _ -> Just <$> buildWarmSession cfg baseCommit bootstrapPrompt chat onProcessStarted
 
 isValidSessionFile :: FilePath -> IO Bool
 isValidSessionFile path = do
@@ -104,8 +111,8 @@ isValidSessionFile path = do
         then return False
         else (> 0) <$> getFileSize path
 
-buildWarmSession :: AgentConfig -> Text -> Text -> (ProcessHandle -> IO ()) -> IO (Either String WarmSessionMeta)
-buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted = do
+buildWarmSession :: AgentConfig -> Text -> Text -> Maybe ChatModelConfig -> (ProcessHandle -> IO ()) -> IO (Either String WarmSessionMeta)
+buildWarmSession cfg baseCommit bootstrapPrompt chat onProcessStarted = do
     repoPath <- userRepoPath
     templateDir <- warmTemplateDir
     let worktreeDir = templateDir </> "worktree"
@@ -122,7 +129,7 @@ buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted = do
             case worktreeResult of
                 Left err -> return $ Left err
                 Right () -> do
-                    exitCode <- runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessStarted
+                    exitCode <- runBootstrapProcess cfg chat bootstrapPrompt worktreeDir home piSessionDir onProcessStarted
                     case exitCode of
                         ExitFailure code ->
                             return $ Left $ "Bootstrap runner exited with code " ++ show code
@@ -137,6 +144,7 @@ buildWarmSession cfg baseCommit bootstrapPrompt onProcessStarted = do
                                             WarmSessionMeta
                                                 { warmBaseCommit = baseCommit
                                                 , warmBootstrapPrompt = bootstrapPrompt
+                                                , warmModel = maybe "" chatQualifier chat
                                                 , warmSessionFile = sessionFile
                                                 , warmCreatedAt = now
                                                 }
@@ -153,8 +161,8 @@ createBootstrapWorktree repoPath worktreeDir baseCommit = do
         ExitFailure code ->
             Left $ "git worktree add failed (" ++ show code ++ "): " ++ stderr
 
-runBootstrapProcess :: AgentConfig -> Text -> FilePath -> FilePath -> FilePath -> (ProcessHandle -> IO ()) -> IO ExitCode
-runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessStarted = do
+runBootstrapProcess :: AgentConfig -> Maybe ChatModelConfig -> Text -> FilePath -> FilePath -> FilePath -> (ProcessHandle -> IO ()) -> IO ExitCode
+runBootstrapProcess cfg chat bootstrapPrompt worktreeDir home piSessionDir onProcessStarted = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
     piConfigDir <- piAgentConfigDir
@@ -167,7 +175,7 @@ runBootstrapProcess cfg bootstrapPrompt worktreeDir home piSessionDir onProcessS
     let expand =
             expandSandboxArg
                 SandboxPaths{sandboxWorktree = worktreeDir, sandboxHome = home, sandboxSessionId = ""}
-        runnerArgs = [agentRunnerCommand cfg, "--tools", "read,grep,find,ls", "-p", T.unpack bootstrapPrompt]
+        runnerArgs = [agentRunnerCommand cfg] ++ chatModelArgs chat ++ ["--tools", "read,grep,find,ls", "-p", T.unpack bootstrapPrompt]
         args =
             map expand (agentSboxArgs cfg)
                 ++ bindPathReadOnly piConfigDir

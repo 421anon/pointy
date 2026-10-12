@@ -16,8 +16,9 @@ module Agent.Sandbox (
 ) where
 
 import Agent.Session (AgentSession (..))
-import Config (AgentConfig (..))
+import Config (AgentConfig (..), ChatModelConfig (..), Config (..), ProviderConfig (..), loadConfig, resolveConfigPath)
 import Data.List (stripPrefix)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -91,15 +92,16 @@ expandSandboxArg paths = T.unpack . flip (foldr (uncurry T.replace)) placeholder
 runnerEnvironment :: [(String, String)] -> IO [(String, String)]
 runnerEnvironment ownVars = do
     baseEnv <- getEnvironment
+    chatKeyEnv <- chatApiKeyEnv
     return $
         ("PATH", fromMaybe fallbackPath (lookup "PATH" baseEnv))
             : ownVars
             ++ remoteVars
-            ++ filter ((`elem` passthroughKeys) . fst) baseEnv
+            ++ filter ((`elem` passthroughKeys chatKeyEnv) . fst) baseEnv
   where
     fallbackPath = "/run/current-system/sw/bin:/usr/bin:/bin"
     remoteVars = maybe [] (\remote -> [("NIX_REMOTE", remote)]) (storeRemote nixStore)
-    passthroughKeys =
+    passthroughKeys chatKey =
         [ "USER"
         , "LOGNAME"
         , "SHELL"
@@ -109,17 +111,17 @@ runnerEnvironment ownVars = do
         , "TZ"
         , "XDG_RUNTIME_DIR"
         , "XDG_DATA_DIRS"
-        , "DEEPSEEK_API_KEY"
-        , "ANTHROPIC_API_KEY"
-        , "OPENAI_API_KEY"
-        , "GROQ_API_KEY"
-        , "CEREBRAS_API_KEY"
-        , "XAI_API_KEY"
-        , "OPENROUTER_API_KEY"
-        , "MISTRAL_API_KEY"
-        , "GOOGLE_API_KEY"
-        , "GEMINI_API_KEY"
         ]
+            ++ maybe [] (\key -> [key]) chatKey
+
+chatApiKeyEnv :: IO (Maybe String)
+chatApiKeyEnv = do
+    config <- resolveConfigPath >>= loadConfig
+    case configChat config of
+        Nothing -> pure Nothing
+        Just chat -> case Map.lookup (chatProvider chat) (configProviders config) of
+            Nothing -> pure Nothing
+            Just provider -> pure (Just (T.unpack (providerApiKeyEnv provider)))
 
 runnerConfigArgs :: (Text -> String) -> [Text] -> [String]
 runnerConfigArgs expand = strip
@@ -129,7 +131,7 @@ runnerConfigArgs expand = strip
         | arg `elem` managedWithValue = strip (drop 1 rest)
         | arg `elem` managedFlags = strip rest
         | otherwise = expand arg : strip rest
-    managedWithValue = ["--mode", "--session", "--fork"]
+    managedWithValue = ["--mode", "--session", "--fork", "--model", "--thinking", "--provider"]
     managedFlags = ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"]
 
 agentMemoryMax :: IO (Maybe Text)

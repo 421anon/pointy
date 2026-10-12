@@ -1,4 +1,4 @@
-module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewStoppingIndicator, viewUploadProgress)
 
 import Accessors exposing (has, just, key, lens, set, try)
 import Actions
@@ -93,7 +93,8 @@ type alias ListingRowContext =
 
 
 type alias ListingGroup =
-    { title : String
+    { key : String
+    , title : String
     , icon : Maybe String
     , rows : List ListingRow
     }
@@ -180,25 +181,27 @@ groupRows prefs stepConfig rows =
             )
 
         typeNames =
-            List.map .typeName steps_ |> List.unique |> List.sortBy typeOrder
+            Dict.keys stepConfig ++ List.map .typeName steps_ |> List.unique |> List.sortBy typeOrder
 
         groupFor typeName =
-            { title = Dict.get typeName stepConfig |> Maybe.andThen .displayName |> Maybe.withDefault typeName
+            { key = Model.childKindName Model.StepChild ++ "-" ++ typeName
+            , title = Dict.get typeName stepConfig |> Maybe.andThen .displayName |> Maybe.withDefault typeName
             , icon = Dict.get typeName stepConfig |> Maybe.andThen .icon
             , rows = List.filter (\row -> row.typeName == typeName) steps_
             }
     in
-    { title = "Folders", icon = Just "folder", rows = folders }
+    { key = Model.childKindName Model.ProjectChild, title = "Folders", icon = Just "folder", rows = folders }
         :: List.map groupFor typeNames
 
 
-visibleRows : Model.ListingPreferences -> List ListingRow -> List ListingRow
-visibleRows prefs rows =
-    if prefs.showHidden then
-        rows
+isVisibleRow : Model.ListingPreferences -> ListingRow -> Bool
+isVisibleRow prefs row =
+    prefs.showHidden || not row.link.hidden
 
-    else
-        List.filter (\row -> not row.link.hidden) rows
+
+visibleRows : Model.ListingPreferences -> List ListingRow -> List ListingRow
+visibleRows =
+    List.filter << isVisibleRow
 
 
 viewListing :
@@ -236,14 +239,15 @@ viewListing { model, scope, stepConfig, rows, header } =
         rowContext =
             { scope = scope, editable = editable, selected = selected }
 
+        hiddenCount =
+            List.length (List.filter (.link >> .hidden) rows)
+
         groups =
-            (if prefs.groupByType then
+            if prefs.groupByType then
                 groupRows prefs stepConfig rows
 
-             else
-                [ { title = "", icon = Nothing, rows = sortRows prefs rows } ]
-            )
-                |> List.filter (\group -> not (List.isEmpty (visibleRows prefs group.rows)))
+            else
+                [ { key = "", title = "", icon = Nothing, rows = sortRows prefs rows } ]
     in
     Html.div
         ([ class "listing", id "project-listing" ]
@@ -260,7 +264,15 @@ viewListing { model, scope, stepConfig, rows, header } =
                 [ iconCustom True "folder_open" [ class "listing-header-icon" ]
                 , Html.span [ class "listing-content-header" ] [ Html.text "Contents" ]
                 , Html.span [ class "listing-header-count" ]
-                    [ Html.text ("(" ++ String.fromInt (List.length rows) ++ ")") ]
+                    [ Html.text ("(" ++ String.fromInt (List.length (visibleRows prefs rows)) ++ ")") ]
+                , Html.viewIf (hiddenCount > 0 && not prefs.showHidden)
+                    (Html.button
+                        [ class "listing-header-hidden"
+                        , title "Show hidden"
+                        , Events.onClick Actions.toggleListingShowHidden
+                        ]
+                        [ Html.text (String.fromInt hiddenCount ++ " hidden") ]
+                    )
                 ]
             , Html.div [ class "listing-header-controls" ]
                 (viewListingSort prefs
@@ -271,7 +283,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                     ++ viewClipboardButtons model
                 )
             ]
-        , Html.div
+        , Html.Keyed.node "div"
             ([ class "listing-groups" ]
                 ++ (if editable then
                         [ Events.custom "contextmenu"
@@ -286,7 +298,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                         []
                    )
             )
-            (List.map (viewListingGroup model rowContext prefs) groups)
+            (List.map (\group -> ( group.key, viewListingGroup model rowContext prefs group )) groups)
         ]
 
 
@@ -372,25 +384,29 @@ viewListingGroup model rowContext prefs group =
 
         gaps =
             Model.Selection.reorderGaps model rowContext.scope orderedRefs
+
+        viewRowSlot index row =
+            Tuple.mapSecond (Tuple.pair (Model.rowDomId row.link.kind row.link.id)) <|
+                if isVisibleRow prefs row then
+                    ( index + 1, viewRow model rowContext orderedRefs (View.Organize.dropEdgeAttrs gaps index) row )
+
+                else
+                    ( index, Html.nothing )
     in
-    Html.div [ class "listing-group" ]
-        [ Html.viewIf (not (String.isEmpty group.title))
-            (Html.div [ class "listing-group-header" ]
-                [ Html.viewMaybe (\groupIcon -> iconCustom False groupIcon [ class "listing-group-icon" ]) group.icon
-                , Html.text group.title
-                , Html.span [ class "listing-group-count" ]
-                    [ Html.text ("(" ++ String.fromInt (List.length visible) ++ ")") ]
-                ]
-            )
-        , Html.Keyed.node "div"
-            [ class "listing-rows" ]
-            (List.indexedMap (\index -> viewRowKeyed model rowContext orderedRefs (View.Organize.dropEdgeAttrs gaps index)) visible)
-        ]
-
-
-viewRowKeyed : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> ( String, Html (Flow Model ()) )
-viewRowKeyed model rowContext orderedRefs edgeAttrs row =
-    ( Model.rowDomId row.link.kind row.link.id, viewRow model rowContext orderedRefs edgeAttrs row )
+    Html.viewIf (not (List.isEmpty visible)) <|
+        Html.div [ class "listing-group" ]
+            [ Html.viewIf (not (String.isEmpty group.title))
+                (Html.div [ class "listing-group-header" ]
+                    [ Html.viewMaybe (\groupIcon -> iconCustom False groupIcon [ class "listing-group-icon" ]) group.icon
+                    , Html.text group.title
+                    , Html.span [ class "listing-group-count" ]
+                        [ Html.text ("(" ++ String.fromInt (List.length visible) ++ ")") ]
+                    ]
+                )
+            , Html.Keyed.node "div"
+                [ class "listing-rows" ]
+                (Tuple.second (List.mapAccuml viewRowSlot 0 group.rows))
+            ]
 
 
 viewRow : Model -> ListingRowContext -> List Model.ChildRef -> List (Html.Attribute (Flow Model ())) -> ListingRow -> Html (Flow Model ())
@@ -448,6 +464,8 @@ viewRow model rowContext orderedRefs edgeAttrs row =
                         [ Html.text row.name
                         , Html.span [ class "listing-row-id", title ("id: " ++ String.fromInt row.link.id) ]
                             [ Html.text (String.fromInt row.link.id) ]
+                        , Html.viewIf row.link.hidden
+                            (iconCustom True "visibility_off" [ class "listing-row-hidden-marker", title "Hidden" ])
                         , Html.viewMaybe
                             (\editAction ->
                                 iconCustom True
@@ -506,6 +524,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
             , ( "listing-row-selected", isSelected )
             , ( "listing-row-cut", Model.Selection.isCut model scope ref )
             , ( "drag-source", Model.Selection.isDragged model scope ref )
+            , ( "listing-row-hidden", row.link.hidden )
             ]
          , id rowId
          ]
@@ -881,7 +900,7 @@ viewRunStop spec stopping record =
                             True
             in
             [ Html.viewIf canRun (viewRunButton "Run" (Actions.runStep spec id))
-            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep spec id))
+            , Html.viewIf (isRunning && not stopping) (viewStopButton "Stop" (Actions.stopStep id))
             , Html.viewIf (isRunning && stopping) viewStoppingIndicator
             ]
 
@@ -1084,19 +1103,15 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                     item.ref
                         |> Maybe.unwrap []
                             (\ref ->
-                                case Model.Lib.entityOtherParents model ref.kind ref.id Nothing of
-                                    [] ->
-                                        [ "unfiled" ]
-
-                                    parents ->
-                                        List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model linkedParentId) parents
+                                Model.Lib.entityOtherParents model ref.kind ref.id Nothing
+                                    |> List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model linkedParentId)
                             )
             in
             Select.view
                 { optic = TableSpec.getLens spec << selectExistingSteps
                 , selectState = state
                 , selected_ = state.selected
-                , availableItems = availableItems
+                , matches = Select.rankLabels .name state.input availableItems
                 , readOnly = False
                 , hasChanged = False
                 , label = "Link existing"
@@ -1106,13 +1121,17 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                 , toInputItemName = .name
                 , toInputItemTooltip = toItemTooltip
                 , onInputItemClick = \_ -> Nothing
+                , related = []
+                , statusNotice = Nothing
+                , emptyNotice = Nothing
                 , toMenuItemName = .name
                 , toMenuItemTooltip = toItemTooltip
                 , onChange = Flow.pure ()
+                , onInputChange = \_ -> Flow.pure ()
                 , onRemove = \_ -> Flow.pure ()
                 , activeAfterSelect = True
                 , clearInputAfterSelect = True
-                , onSelect = \_ -> Flow.pure ()
+                , onSelect = \_ _ -> Flow.pure ()
                 , alignRight = False
                 , inputItemStyle = \_ -> []
                 }
@@ -1330,7 +1349,7 @@ viewProjectExtraFormFields model tableLens =
                         { optic = presetStateLens
                         , selectState = presetDisplayState
                         , selected_ = []
-                        , availableItems = availablePresets
+                        , matches = Select.rankLabels (.name >> presetMenuLabel) presetDisplayState.input availablePresets
                         , readOnly = False
                         , hasChanged = False
                         , label = "Preset"
@@ -1340,13 +1359,17 @@ viewProjectExtraFormFields model tableLens =
                         , toInputItemName = .name >> presetMenuLabel
                         , toInputItemTooltip = always []
                         , onInputItemClick = \_ -> Nothing
+                        , related = []
+                        , statusNotice = Nothing
+                        , emptyNotice = Nothing
                         , toMenuItemName = .name >> presetMenuLabel
                         , toMenuItemTooltip = always []
                         , onChange = Flow.pure ()
+                        , onInputChange = \_ -> Flow.pure ()
                         , onRemove = \_ -> Flow.pure ()
                         , activeAfterSelect = False
                         , clearInputAfterSelect = False
-                        , onSelect = onPickPreset
+                        , onSelect = always onPickPreset
                         , alignRight = False
                         , inputItemStyle = \_ -> []
                         }
@@ -1362,12 +1385,15 @@ viewProjectExtraFormFields model tableLens =
                 stateLens =
                     remkT tableLens << edited << just << templatesSelect
 
+                templatesState =
+                    try stateLens model |> Maybe.withDefault Select.initSelectState
+
                 templatesSelectView =
                     Select.view
                         { optic = stateLens
-                        , selectState = try stateLens model |> Maybe.withDefault Select.initSelectState
+                        , selectState = templatesState
                         , selected_ = selectedItems
-                        , availableItems = availableItems
+                        , matches = Select.rankLabels (.name >> templateLabel) templatesState.input availableItems
                         , readOnly = False
                         , hasChanged = False
                         , label = "Templates"
@@ -1382,13 +1408,17 @@ viewProjectExtraFormFields model tableLens =
                         , toInputItemName = .name >> templateLabel
                         , toInputItemTooltip = always []
                         , onInputItemClick = \_ -> Nothing
+                        , related = []
+                        , statusNotice = Nothing
+                        , emptyNotice = Nothing
                         , toMenuItemName = .name >> templateLabel
                         , toMenuItemTooltip = always []
                         , onChange = Flow.pure ()
+                        , onInputChange = \_ -> Flow.pure ()
                         , onRemove = .name >> Actions.removeProjectTemplate tableLens
                         , activeAfterSelect = True
                         , clearInputAfterSelect = True
-                        , onSelect = .name >> Actions.addProjectTemplate tableLens
+                        , onSelect = always (.name >> Actions.addProjectTemplate tableLens)
                         , alignRight = False
                         , inputItemStyle = .name >> stringToColor >> style "background-color" >> List.singleton
                         }
@@ -1514,12 +1544,15 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                         }
                                     )
                             )
+
+                menuLabel item =
+                    Maybe.map2 (\id s -> "[" ++ String.fromInt id ++ "] [" ++ typeDisplayName s.type_ ++ "] " ++ item.name) item.id (getStep item.id) |> Maybe.withDefault item.name
             in
             Select.view
                 { optic = stateLens
                 , selectState = selectState
                 , selected_ = selectedItems
-                , availableItems = availableItems
+                , matches = Select.rankLabels menuLabel selectState.input availableItems
                 , readOnly = cfg.readOnly
                 , hasChanged = cfg.changed
                 , label = cfg.label
@@ -1529,15 +1562,17 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 , toInputItemName = .name
                 , toInputItemTooltip = toTooltip
                 , onInputItemClick = .id >> Maybe.andThen toHighlightRoute >> Maybe.map Actions.goToRoute
-                , toMenuItemName =
-                    \item ->
-                        Maybe.map2 (\id s -> "[" ++ String.fromInt id ++ "] [" ++ typeDisplayName s.type_ ++ "] " ++ item.name) item.id (getStep item.id) |> Maybe.withDefault item.name
+                , related = []
+                , statusNotice = Nothing
+                , emptyNotice = Nothing
+                , toMenuItemName = menuLabel
                 , toMenuItemTooltip = toTooltip
                 , onChange = Flow.pure ()
+                , onInputChange = \_ -> Flow.pure ()
                 , onRemove = .id >> Maybe.unwrap (Flow.pure ()) onRemoveStep
                 , activeAfterSelect = activeAfterSelect
                 , clearInputAfterSelect = True
-                , onSelect = .id >> Maybe.unwrap (Flow.pure ()) onSelectStep
+                , onSelect = always (.id >> Maybe.unwrap (Flow.pure ()) onSelectStep)
                 , alignRight = False
                 , inputItemStyle = \item -> getStep item.id |> Maybe.map (.type_ >> stringToColor >> style "background-color") |> Maybe.toList
                 }

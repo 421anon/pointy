@@ -175,7 +175,7 @@ viewDirectorySection model spec step =
                             , renderDirectoryContents model
                                 spec
                                 (Just stepId)
-                                (Just (OutputDir stepId rs.commit))
+                                (Just (OutputDir stepId rs.outputsCommit))
                                 (has (success << where_ hasBuiltOutput) rs.status)
                                 []
                                 "directory-view"

@@ -37,17 +37,51 @@ userRepoInfo =
         |> required "branch" Decode.string
 
 
-snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status } }
+type alias SearchInfo =
+    { semantic : Bool
+    , judge : Bool
+    }
+
+
+searchInfo : Decoder SearchInfo
+searchInfo =
+    Decode.succeed SearchInfo
+        |> required "semantic" Decode.bool
+        |> required "judge" Decode.bool
+
+
+type alias SearchResult =
+    { stepId : Int
+    , similarity : Float
+    , relevance : Maybe Float
+    }
+
+
+searchResults : Decoder (List SearchResult)
+searchResults =
+    Decode.field "results" (Decode.list searchResult)
+
+
+searchResult : Decoder SearchResult
+searchResult =
+    Decode.succeed SearchResult
+        |> required "step_id" Decode.int
+        |> required "similarity" Decode.float
+        |> optional "relevance" (maybe Decode.float) Nothing
+
+
+snapshot : Decoder { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
 snapshot =
     Decode.succeed (\pid c s -> { projectId = pid, commit = c, steps = s })
         |> required "projectId" Decode.int
         |> required "commit" Decode.string
         |> required "steps"
             (Decode.list
-                (Decode.succeed (\sid st mErr -> { stepId = sid, status = applyError st mErr })
+                (Decode.succeed (\sid st mErr mCertificate -> { stepId = sid, status = applyError st mErr, certificate = mCertificate })
                     |> required "stepId" Decode.int
                     |> required "status" status
                     |> optional "error" (Decode.map Just Decode.string) Nothing
+                    |> optional "certificate" (Decode.map Just Decode.string) Nothing
                 )
             )
 
@@ -236,11 +270,6 @@ projectDecode stepConfig_ =
             )
 
 
-unfiledSteps : StepConfig -> Decoder (Dict Int StepRecord)
-unfiledSteps stepConfig_ =
-    Decode.field "children" (Decode.list (childEntry stepConfig_) |> Decode.map stepDefs)
-
-
 projectRollup : Decoder Model.ProjectRollup
 projectRollup =
     Decode.succeed
@@ -328,12 +357,13 @@ reviewComparison comparison detail =
 
 reviewReport : Decoder Model.ReviewReport
 reviewReport =
-    Decode.succeed (\revision reviewedBy comments reviewedStatus_ reviewedStatusError comparison detail -> { revision = revision, reviewedBy = reviewedBy, comments = comments, reviewedStatus = Maybe.map (\status_ -> applyError status_ reviewedStatusError) reviewedStatus_, comparison = comparison, detail = detail })
+    Decode.succeed (\revision reviewedBy comments reviewedStatus_ reviewedStatusError reviewedCertificate comparison detail -> { revision = revision, reviewedBy = reviewedBy, comments = comments, reviewedStatus = Maybe.map (\status_ -> applyError status_ reviewedStatusError) reviewedStatus_, reviewedCertificate = reviewedCertificate, comparison = comparison, detail = detail })
         |> optional "reviewedRevision" (maybe Decode.string) Nothing
         |> optional "reviewedBy" Decode.string ""
         |> optional "reviewComments" Decode.string ""
         |> optional "reviewedStatus" (maybe status) Nothing
         |> optional "reviewedStatusError" (maybe Decode.string) Nothing
+        |> optional "reviewedCertificate" (maybe Decode.string) Nothing
         |> required "comparison" Decode.string
         |> optional "comparisonDetail" (maybe Decode.string) Nothing
         |> Decode.andThen
@@ -343,6 +373,7 @@ reviewReport =
                         (\mComparison ->
                             { review = Maybe.map2 (\revision comparison -> { revision = revision, reviewedBy = fields.reviewedBy, comments = fields.comments, comparison = comparison }) fields.revision mComparison
                             , reviewedStatus = Maybe.andThen (always fields.reviewedStatus) mComparison
+                            , reviewedCertificate = fields.reviewedCertificate
                             }
                         )
             )
@@ -858,6 +889,64 @@ ingestState =
 
                     other ->
                         Decode.fail ("Unknown ingest state: " ++ other)
+            )
+
+
+clusterSnapshot : Decoder Model.ClusterSnapshot
+clusterSnapshot =
+    Decode.succeed Model.ClusterSnapshot
+        |> required "status" clusterStatus
+        |> optional "detail" (Decode.nullable Decode.string) Nothing
+        |> required "activeSteps" (Decode.list stepActivity)
+
+
+clusterStatus : Decoder Model.ClusterStatus
+clusterStatus =
+    Decode.string
+        |> Decode.map
+            (\reported ->
+                case reported of
+                    "available" ->
+                        Model.ClusterAvailable
+
+                    "degraded" ->
+                        Model.ClusterDegraded
+
+                    "unavailable" ->
+                        Model.ClusterUnavailable
+
+                    _ ->
+                        Model.ClusterUnknown
+            )
+
+
+stepActivity : Decoder Model.StepActivity
+stepActivity =
+    Decode.succeed Model.StepActivity
+        |> required "stepId" Decode.int
+        |> required "phase" stepPhase
+        |> required "since" Iso8601.decoder
+        |> optional "reason" (Decode.nullable Decode.string) Nothing
+        |> required "commits" (Decode.list Decode.string)
+
+
+stepPhase : Decoder Model.StepPhase
+stepPhase =
+    Decode.string
+        |> Decode.andThen
+            (\phase ->
+                case phase of
+                    "preparing" ->
+                        Decode.succeed Model.PhasePreparing
+
+                    "queued" ->
+                        Decode.succeed Model.PhaseQueued
+
+                    "running" ->
+                        Decode.succeed Model.PhaseRunning
+
+                    other ->
+                        Decode.fail ("Unknown step phase: " ++ other)
             )
 
 

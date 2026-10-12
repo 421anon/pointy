@@ -6,7 +6,7 @@ import Agent.Git (sweepStaleRunningSessions)
 import Agent.Sandbox (prepareAgentCgroup)
 import App (runServer)
 import BuildRunner (reconcileWatchedJobs)
-import Config (loadConfig, resolveConfigPath)
+import Config (loadConfig, resolveConfigPath, warnMissingProviderKeys)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad (forever)
 import Control.Monad.Except (runExceptT)
@@ -23,6 +23,7 @@ main = do
     putStrLn "Loading configuration..."
     configPath <- resolveConfigPath
     config <- loadConfig configPath
+    warnMissingProviderKeys config
     putStrLn "Limiting agent sandbox memory..."
     prepareAgentCgroup
     putStrLn "Ensuring user repo is configured..."

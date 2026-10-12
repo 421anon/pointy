@@ -274,11 +274,14 @@ viewReviewPopover model spec stepId record =
         isReviewed =
             Maybe.isJust record.review
 
+        status =
+            TableSpec.getStatus spec record
+
         isBuilt =
-            ApiData.toMaybe (TableSpec.getStatus spec record) == Just Model.StatusSuccess
+            ApiData.toMaybe status == Just Model.StatusSuccess
 
         canRecord =
-            Maybe.unwrap isBuilt (\reviewed -> List.member (ApiData.toMaybe reviewed.comparison) [ Just Model.SameContent, Just Model.SameOutPath ]) record.review
+            Maybe.unwrap (status == ApiData.Success Model.StatusSuccess) (\reviewed -> List.member (ApiData.toMaybe reviewed.comparison) [ Just Model.SameContent, Just Model.SameOutPath ]) record.review
 
         draft =
             Model.getReviewDraft model

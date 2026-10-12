@@ -6,6 +6,7 @@ import Api.ApiData as ApiData
 import Components.Select as Select
 import Dict
 import Flow exposing (Flow)
+import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
@@ -13,7 +14,6 @@ import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
 import Model.Lib as Lib
-import Organize
 import Route
 import View.Icons exposing (iconCustom)
 import View.Organize
@@ -41,18 +41,50 @@ viewSearchBox model =
         state =
             get searchBox model
 
-        availableItems =
-            if state.active || not (String.isEmpty state.input) then
-                Lib.getSearchItems model
+        stepSearch =
+            Model.getStepSearch model
+
+        searching =
+            state.active && stepSearch.input == state.input && not (Fuzzy.isEmpty (Fuzzy.parse state.input))
+
+        matches =
+            if searching then
+                stepSearch.matches
 
             else
                 []
+
+        onSelect match item =
+            Maybe.map2 Actions.onSelectSearch (Lib.stepSearchFolder match item) item.id
+                |> Maybe.withDefault (Flow.pure ())
+
+        relatedItems =
+            if searching then
+                Lib.relatedSearchItems model
+
+            else
+                []
+
+        statusNotice =
+            if searching then
+                case (get Lenses.relatedSearch model).results of
+                    ApiData.Loading _ ->
+                        Just "Looking for related steps…"
+
+                    ApiData.Error _ ->
+                        Just "Related steps are unavailable right now"
+
+                    _ ->
+                        Nothing
+
+            else
+                Nothing
     in
     Select.view
         { optic = searchBox
         , selectState = state
         , selected_ = []
-        , availableItems = availableItems
+        , matches = matches
         , readOnly = False
         , hasChanged = False
         , label = ""
@@ -62,23 +94,22 @@ viewSearchBox model =
         , toInputItemName = .name
         , toInputItemTooltip = \_ -> []
         , onInputItemClick = \_ -> Nothing
-        , toMenuItemName = \item -> item.id |> Maybe.map (\id -> "[" ++ String.fromInt id ++ "] " ++ item.name) |> Maybe.withDefault item.name
-        , toMenuItemTooltip = \_ -> []
+        , toMenuItemName = .name
+        , toMenuItemTooltip = \item -> item.id |> Maybe.map (\id -> [ "id: " ++ String.fromInt id ]) |> Maybe.withDefault []
+        , related = relatedItems
+        , statusNotice = statusNotice
+        , emptyNotice =
+            if searching then
+                Just "No matching steps"
+
+            else
+                Nothing
         , onChange = Flow.pure ()
+        , onInputChange = Actions.onSearchInputChange
         , onRemove = \_ -> Flow.pure ()
         , activeAfterSelect = False
         , clearInputAfterSelect = False
-        , onSelect =
-            \item ->
-                case ( item.id, item.mProjectId ) of
-                    ( Just stepId, Just projectId ) ->
-                        Actions.onSelectSearch projectId stepId
-
-                    ( Just stepId, Nothing ) ->
-                        Organize.openLinkExisting stepId
-
-                    ( Nothing, _ ) ->
-                        Flow.pure ()
+        , onSelect = onSelect
         , alignRight = True
         , inputItemStyle = \_ -> []
         }

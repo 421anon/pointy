@@ -19,12 +19,12 @@ module Api.Api exposing
     , fetchProjects
     , fetchScratchListing
     , fetchScratchRoot
+    , fetchSearchInfo
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchSrcFileSeek
     , fetchStepConfig
     , fetchStepLog
-    , fetchUnfiled
     , fetchUserRepoInfo
     , postTreeOps
     , refreshProjectStatus
@@ -34,6 +34,7 @@ module Api.Api exposing
     , runStep
     , saveRecord
     , saveSrcFile
+    , searchSteps
     , srcFileDownloadUrl
     , srcFileRawUrl
     , stepFileBundleUrl
@@ -328,15 +329,6 @@ fetchProjects commit stepConfig =
             }
 
 
-fetchUnfiled : Maybe String -> StepConfig -> Flow s (Result Http.Error (Dict Int StepRecord))
-fetchUnfiled commit stepConfig =
-    Flow.lift <|
-        Http.get
-            { url = appendCommitQuery "/backend/unfiled" commit
-            , expect = Http.expectJson identity (Decode.unfiledSteps stepConfig)
-            }
-
-
 fetchStepConfig : Maybe String -> Flow s (Result Http.Error StepConfig)
 fetchStepConfig commit =
     Flow.lift <|
@@ -379,6 +371,30 @@ fetchCommitHash =
         Http.get
             { url = "/backend/commit-hash"
             , expect = Http.expectString identity
+            }
+
+
+fetchSearchInfo : Flow s (Result Http.Error Decode.SearchInfo)
+fetchSearchInfo =
+    Flow.lift <|
+        Http.get
+            { url = "/backend/step-search/info"
+            , expect = Http.expectJson identity Decode.searchInfo
+            }
+
+
+searchSteps : Maybe String -> { query : String, exclude : List Int } -> Flow s (Result Http.Error (List Decode.SearchResult))
+searchSteps commit searchRequest =
+    Flow.lift <|
+        Http.post
+            { url = appendCommitQuery "/backend/step-search" commit
+            , body =
+                Http.jsonBody <|
+                    Json.Encode.object
+                        [ ( "query", Json.Encode.string searchRequest.query )
+                        , ( "exclude", Json.Encode.list Json.Encode.int searchRequest.exclude )
+                        ]
+            , expect = Http.expectJson identity Decode.searchResults
             }
 
 

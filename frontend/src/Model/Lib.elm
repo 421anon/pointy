@@ -1,15 +1,18 @@
 module Model.Lib exposing (..)
 
-import Accessors exposing (get, has, over, try)
+import Accessors exposing (get, has, over, set, try)
 import Api.ApiData as ApiData
-import Components.Select exposing (Item)
+import Components.Select as Select exposing (Item)
 import Dict exposing (Dict)
+import Fuzzy
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord)
-import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, stepConfig, steps)
+import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord, SearchField(..))
+import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, relatedSearch, searchBox, stepConfig, stepSearch, steps)
+import Model.Shadow exposing (StepArgValue(..))
 import Route
 import Set exposing (Set)
+import Time
 
 
 canonicalPathTo : Model -> Int -> List Int
@@ -20,23 +23,27 @@ canonicalPathTo model targetId =
         targetId
 
 
-canonicalNamePath : Model -> Int -> String
-canonicalNamePath model projectId =
+canonicalPathNames : Model -> Int -> List String
+canonicalPathNames model projectId =
     let
         projects_ =
             projectsDict model
-
-        names =
-            Model.canonicalProjectPath (try currentProjectPath model |> Maybe.withDefault []) projects_ projectId
-                |> List.filterMap (\id -> Dict.get id projects_ |> Maybe.map .name)
-
-        rootName =
-            Dict.get Route.rootProjectId projects_
-                |> Maybe.map .name
-                |> Maybe.filter (not << String.isEmpty)
-                |> Maybe.withDefault "Home"
     in
-    "/" ++ String.join "/" (rootName :: names)
+    Model.canonicalProjectPath (try currentProjectPath model |> Maybe.withDefault []) projects_ projectId
+        |> List.filterMap (\id -> Dict.get id projects_ |> Maybe.map .name)
+
+
+rootProjectName : Model -> String
+rootProjectName model =
+    Dict.get Route.rootProjectId (projectsDict model)
+        |> Maybe.map .name
+        |> Maybe.filter (not << String.isEmpty)
+        |> Maybe.withDefault "Home"
+
+
+canonicalNamePath : Model -> Int -> String
+canonicalNamePath model projectId =
+    "/" ++ String.join "/" (rootProjectName model :: canonicalPathNames model projectId)
 
 
 entityParents : Model -> ChildKind -> Int -> List ( Int, ChildLink )
@@ -70,26 +77,23 @@ entityPathLabel model kind id =
         unnamed =
             "#" ++ String.fromInt id
 
-        ( name, typeLabel, path ) =
+        ( name, typeLabel, mPath ) =
             case kind of
                 ProjectChild ->
                     ( Dict.get id projects_ |> Maybe.map .name |> Maybe.withDefault unnamed
                     , "(folder) "
-                    , canonicalNamePath model id
+                    , Just (canonicalNamePath model id)
                     )
 
                 StepChild ->
                     ( stepName |> Maybe.map .name |> Maybe.withDefault unnamed
                     , stepName |> Maybe.map (\step -> "(" ++ step.type_ ++ ") ") |> Maybe.withDefault "(step) "
-                    , case Model.childLinksTo StepChild id projects_ of
-                        [] ->
-                            "/unfiled"
-
-                        ( parentId, _ ) :: _ ->
-                            canonicalNamePath model parentId
+                    , Model.childLinksTo StepChild id projects_
+                        |> List.head
+                        |> Maybe.map (\( parentId, _ ) -> canonicalNamePath model parentId)
                     )
     in
-    typeLabel ++ name ++ " — " ++ path
+    typeLabel ++ name ++ Maybe.unwrap "" (\path -> " — " ++ path) mPath
 
 
 linkCreatesCycle : Dict Int ProjectRecord -> Int -> ChildRef -> Bool
@@ -133,48 +137,328 @@ linkCandidates model parentId =
     List.filterMap candidate (stepRefs ++ projectRefs)
 
 
-getSearchItems : Model -> List (Item ChildRef)
-getSearchItems model =
+stepTypeName : Model -> String -> String
+stepTypeName model type_ =
+    get stepConfig model
+        |> ApiData.toMaybe
+        |> Maybe.andThen (Dict.get type_)
+        |> Maybe.andThen .displayName
+        |> Maybe.withDefault type_
+
+
+searchFolder : Fuzzy.Match SearchField -> Maybe Int
+searchFolder match =
+    List.findMap
+        (\field ->
+            case field.tag of
+                SearchFolder projectId ->
+                    Just projectId
+
+                _ ->
+                    Nothing
+        )
+        match.fields
+
+
+stepSearchItems : Model -> List ( Item ChildRef, Fuzzy.Document SearchField )
+stepSearchItems model =
     let
         projects_ =
             projectsDict model
 
-        projectPathNames =
+        steps_ =
+            get steps model
+
+        pathNamesByProject =
             Dict.keys projects_
-                |> List.map (\projectId -> ( projectId, canonicalNamePath model projectId ))
+                |> List.map (\projectId -> ( projectId, canonicalPathNames model projectId ))
                 |> Dict.fromList
 
-        stepParent =
-            Dict.foldl
-                (\parentId project acc ->
-                    List.foldl
-                        (\link acc_ ->
-                            if link.kind == StepChild then
-                                Dict.insert link.id parentId acc_
+        stepParents =
+            stepParentLinks model
 
-                            else
-                                acc_
-                        )
-                        acc
-                        project.children
+        folderName projectId =
+            Dict.get projectId projects_ |> Maybe.unwrap "" .name
+
+        ancestorNames projectId =
+            Dict.get projectId pathNamesByProject
+                |> Maybe.andThen List.init
+                |> Maybe.withDefault []
+
+        folderFields parents =
+            List.concatMap
+                (\( parentId, _ ) ->
+                    if parentId == Route.rootProjectId then
+                        []
+
+                    else
+                        let
+                            ancestors =
+                                ancestorNames parentId
+                        in
+                        [ { tag = SearchFolder parentId, text = folderName parentId, weight = 50, precision = Fuzzy.Loose } ]
+                            ++ (if List.isEmpty ancestors then
+                                    []
+
+                                else
+                                    [ { tag = SearchFolder parentId, text = String.join " " ancestors, weight = 40, precision = Fuzzy.Words } ]
+                               )
                 )
-                Dict.empty
-                projects_
+                parents
 
-        pathLabel stepId =
-            Dict.get stepId stepParent
-                |> Maybe.andThen (\parentId -> Dict.get parentId projectPathNames)
-                |> Maybe.withDefault "/unfiled"
+        argFields args =
+            Dict.toList args
+                |> List.concatMap
+                    (\( key, value ) ->
+                        List.map
+                            (\text -> { tag = SearchArg key, text = text, weight = 25, precision = Fuzzy.Words })
+                            (flattenArgValue steps_ value)
+                    )
+
+        documentFor parents id step =
+            let
+                type_ =
+                    step.type_
+
+                typeName =
+                    stepTypeName model type_
+
+                typeText =
+                    if typeName == type_ then
+                        type_
+
+                    else
+                        typeName ++ " " ++ type_
+
+                noteText =
+                    String.join " " (String.words step.note)
+
+                noteFields =
+                    if String.isEmpty noteText then
+                        []
+
+                    else
+                        [ { tag = SearchNote, text = noteText, weight = 35, precision = Fuzzy.Words } ]
+            in
+            { fields =
+                [ { tag = SearchName, text = step.name, weight = 100, precision = Fuzzy.Loose }
+                , { tag = SearchId, text = String.fromInt id, weight = 120, precision = Fuzzy.Whole }
+                , { tag = SearchType, text = typeText, weight = 70, precision = Fuzzy.Loose }
+                ]
+                    ++ folderFields parents
+                    ++ noteFields
+                    ++ argFields step.args
+            , demoted = List.all (Tuple.second >> .hidden) parents
+            }
+
+        itemFor parents id step =
+            { id = Just id
+            , name = step.name
+            , mProjectId =
+                List.find (not << .hidden << Tuple.second) parents
+                    |> Maybe.orElse (List.head parents)
+                    |> Maybe.map Tuple.first
+            , ref = Just { kind = StepChild, id = id }
+            }
     in
-    Dict.toList (get steps model)
-        |> List.map
+    Dict.toList steps_
+        |> List.sortBy (\( id, step ) -> ( Maybe.unwrap 0 (Time.posixToMillis >> negate) step.lastModifiedAt, String.length step.name, id ))
+        |> List.filterMap
             (\( id, step ) ->
-                { id = Just id
-                , name = "(" ++ step.type_ ++ ") " ++ step.name ++ " — " ++ pathLabel id
-                , mProjectId = Dict.get id stepParent
-                , ref = Just { kind = StepChild, id = id }
-                }
+                Dict.get id stepParents
+                    |> Maybe.map (\parents -> ( itemFor parents id step, documentFor parents id step ))
             )
+
+
+refreshStepSearch : Model -> Model
+refreshStepSearch model =
+    let
+        cached =
+            (get stepSearch model).entries
+                |> List.filterMap (\( item, indexed ) -> item.id |> Maybe.map (\id -> ( id, indexed )))
+                |> Dict.fromList
+
+        entries =
+            stepSearchItems model
+                |> List.map
+                    (\( item, document ) ->
+                        ( item
+                        , Fuzzy.reindex (item.id |> Maybe.andThen (\id -> Dict.get id cached)) document
+                        )
+                    )
+    in
+    rankStepSearch (over stepSearch (\state -> { state | entries = entries }) model)
+
+
+rankStepSearch : Model -> Model
+rankStepSearch model =
+    let
+        input =
+            (get searchBox model).input
+
+        query =
+            Fuzzy.parse input
+
+        state =
+            get stepSearch model
+
+        matches =
+            if Fuzzy.isEmpty query then
+                []
+
+            else
+                Select.rankedItems query Tuple.second state.entries
+                    |> List.map
+                        (\( ( item, _ ), match ) ->
+                            { item = item
+                            , match = match
+                            , detail = Just (stepSearchDetail model query match item)
+                            }
+                        )
+    in
+    set stepSearch { state | input = input, matches = matches } model
+
+
+searchSteps : Model -> Model
+searchSteps model =
+    if Fuzzy.isEmpty (Fuzzy.parse (get stepSearch model).input) then
+        refreshStepSearch model
+
+    else
+        rankStepSearch model
+
+
+warmStepSearch : Model -> Model
+warmStepSearch model =
+    let
+        state =
+            get stepSearch model
+    in
+    if List.isEmpty state.entries || not (Fuzzy.isEmpty (Fuzzy.parse state.input)) then
+        refreshStepSearch model
+
+    else
+        model
+
+
+stepSearchFolder : Fuzzy.Match SearchField -> Item ChildRef -> Maybe Int
+stepSearchFolder match item =
+    searchFolder match |> Maybe.orElse item.mProjectId
+
+
+stepSearchDetail : Model -> Fuzzy.Query -> Fuzzy.Match SearchField -> Item ChildRef -> String
+stepSearchDetail model query match item =
+    let
+        fieldDetail field =
+            case field.tag of
+                SearchNote ->
+                    Just ("Note: " ++ Fuzzy.excerpt query field.text)
+
+                SearchArg key ->
+                    Just (key ++ ": " ++ Fuzzy.excerpt query field.text)
+
+                _ ->
+                    Nothing
+
+        fallback () =
+            let
+                path =
+                    stepSearchFolder match item
+                        |> Maybe.unwrap "" (\projectId -> " · " ++ canonicalNamePath model projectId)
+
+                typeName =
+                    item.id
+                        |> Maybe.andThen (\id -> Dict.get id (get steps model))
+                        |> Maybe.unwrap "" (\step -> stepTypeName model step.type_)
+            in
+            typeName ++ path
+    in
+    List.findMap fieldDetail match.fields
+        |> Maybe.withDefaultLazy fallback
+
+
+stepParentLinks : Model -> Dict Int (List ( Int, ChildLink ))
+stepParentLinks model =
+    Dict.foldl
+        (\parentId project acc ->
+            List.foldl
+                (\link acc_ ->
+                    if link.kind == StepChild then
+                        Dict.update link.id
+                            (\existing -> Just (( parentId, link ) :: Maybe.withDefault [] existing))
+                            acc_
+
+                    else
+                        acc_
+                )
+                acc
+                project.children
+        )
+        Dict.empty
+        (projectsDict model)
+        |> Dict.map (\_ -> List.reverse)
+
+
+stepParentProjectId : Model -> Int -> Maybe Int
+stepParentProjectId model stepId =
+    Dict.get stepId (stepParentLinks model)
+        |> Maybe.andThen
+            (\links ->
+                (List.find (not << .hidden << Tuple.second) links |> Maybe.orElse (List.head links))
+                    |> Maybe.map Tuple.first
+            )
+
+
+relatedSearchItems : Model -> List (Select.RelatedItem ChildRef)
+relatedSearchItems model =
+    get relatedSearch model
+        |> .results
+        |> ApiData.toMaybe
+        |> Maybe.withDefault []
+        |> List.filterMap
+            (\related ->
+                Maybe.map2
+                    (\step projectId ->
+                        { item =
+                            { id = Just related.stepId
+                            , name = step.name
+                            , mProjectId = Just projectId
+                            , ref = Just { kind = StepChild, id = related.stepId }
+                            }
+                        , detail = related.detail
+                        }
+                    )
+                    (Dict.get related.stepId (get steps model))
+                    (stepParentProjectId model related.stepId)
+            )
+
+
+flattenArgValue : Dict Int Model.StepRecord -> StepArgValue -> List String
+flattenArgValue steps_ value =
+    case value of
+        TStringValue text ->
+            [ text ]
+
+        TEnumValue text ->
+            [ text ]
+
+        TStepValue stepId ->
+            Dict.get stepId steps_ |> Maybe.map .name |> Maybe.toList
+
+        TListValue items ->
+            List.concatMap (flattenArgValue steps_) items
+
+        TRecordValue record ->
+            List.concatMap (flattenArgValue steps_) (Dict.values record)
+
+        TIntValue _ ->
+            []
+
+        TBoolValue _ ->
+            []
+
+        TUploadHashValue _ ->
+            []
 
 
 isWorkspaceReloading : Model -> Bool

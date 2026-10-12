@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Handlers.Projects (getProjectsHandler, readJsonAtCommit, patchProjectHandler, batchProjectOpsHandler, postProjectHandler, readRecordMtimes, annotateRecordChildren) where
+module Handlers.Projects (getProjectsHandler, readJsonAtCommit, patchProjectHandler, batchProjectOpsHandler, postProjectHandler) where
 
 import ApiTypes (DynamicJson (..))
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
@@ -101,9 +101,6 @@ utcStamp raw =
 
 annotateRecordMtimes :: RecordTimes -> Value -> Value
 annotateRecordMtimes times = onObject (KeyMap.map (annotateProject times))
-
-annotateRecordChildren :: RecordTimes -> Value -> Value
-annotateRecordChildren times = onArray (V.map (annotateChild times))
 
 annotateProject :: RecordTimes -> Value -> Value
 annotateProject times = onObject (stampRecord "projects/" times . adjustKey "children" (onArray (V.map (annotateChild times))))

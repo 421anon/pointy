@@ -91,11 +91,38 @@ run options = do
 writeConfig :: FilePath -> FilePath -> FilePath -> T.Text -> IO ()
 writeConfig configPath origin keyfile branch =
     TIO.writeFile configPath $
-        T.unlines
+        T.unlines $
             [ "[user-repo]"
             , "url = \"file://" <> T.pack origin <> "\""
             , "keyfile = \"" <> T.pack keyfile <> "\""
             , "branch = \"" <> branch <> "\""
+            , "[[providers]]"
+            , "name = \"fixture\""
+            , "base-url = \"http://127.0.0.1:1/v1\""
+            , "api-key-env = \"POINTY_FIXTURE_API_KEY\""
+            , "[models.chat]"
+            , "provider = \"fixture\""
+            , "protocol = \"openai-completions\""
+            , "model = \"fixture-chat\""
+            , "[models.chat.pi]"
+            , "name = \"Fixture Chat\""
+            , "contextWindow = 128000"
+            , "maxTokens = 8192"
+            , "input = [\"text\"]"
+            , "[search]"
+            , "limit = 10"
+            , "judge-candidates = 24"
+            , "[search.embedding]"
+            , "provider = \"fixture\""
+            , "protocol = \"openai-embeddings\""
+            , "model = \"fixture-embedding\""
+            , "batch-size = 128"
+            , "min-similarity = 0.0"
+            , "[search.judge]"
+            , "provider = \"fixture\""
+            , "protocol = \"systemone\""
+            , "model = \"fixture-judge\""
+            , "min-relevance = 0.05"
             ]
 
 cloneRepo :: FilePath -> FilePath -> IO ()

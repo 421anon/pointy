@@ -11,7 +11,7 @@ import Browser
 import Browser.Dom as Dom
 import Browser.Navigation as Nav
 import Channels
-import Components.Select exposing (itemRef, selected)
+import Components.Select as Select exposing (itemRef, selected)
 import Debounce
 import Dict exposing (Dict)
 import Dict.Accessors
@@ -20,6 +20,7 @@ import Extra.FlowError as FlowError exposing (FlowError)
 import Extra.Http as Http
 import Extra.List as List
 import Flow exposing (Flow)
+import Fuzzy
 import Grid
 import Http
 import Json.Decode as Decode
@@ -62,7 +63,7 @@ toggleListingFoldersFirst =
 
 toggleListingShowHidden : Flow Model ()
 toggleListingShowHidden =
-    Flow.over (listingPreferences << listingShowHidden) not
+    Flow.modify (over (listingPreferences << listingShowHidden) not >> Selection.pruneSelection)
 
 
 toggleListingGroupByType : Flow Model ()
@@ -445,11 +446,6 @@ loadProjects =
                             |> Flow.seq
                                 (Api.fetchProjects target stepConfig_
                                     |> Flow.andThen
-                                        (\projectsResult ->
-                                            Api.fetchUnfiled target stepConfig_
-                                                |> Flow.map (\unfiledResult -> ( projectsResult, unfiledResult ))
-                                        )
-                                    |> Flow.andThen
                                         (\result ->
                                             Flow.get
                                                 |> Flow.andThen
@@ -468,16 +464,16 @@ loadProjects =
             )
 
 
-applyLoadedProjects : Maybe String -> ( Result Http.Error (Dict Int ApiDecode.ProjectDecode), Result Http.Error (Dict Int StepRecord) ) -> Flow Model ()
+applyLoadedProjects : Maybe String -> Result Http.Error (Dict Int ApiDecode.ProjectDecode) -> Flow Model ()
 applyLoadedProjects target result =
     case result of
-        ( Ok projectDecodes_, Ok unfiledSteps ) ->
+        Ok projectDecodes_ ->
             Flow.get
                 |> Flow.andThen
                     (\model ->
                         let
                             fetchedSteps =
-                                Dict.foldl (\_ decode acc -> Dict.union acc decode.stepDefs) unfiledSteps projectDecodes_
+                                Dict.foldl (\_ decode acc -> Dict.union acc decode.stepDefs) Dict.empty projectDecodes_
 
                             fetchedProjects =
                                 Dict.map (\_ decode -> decode.record) projectDecodes_
@@ -497,15 +493,14 @@ applyLoadedProjects target result =
                                     (target == Nothing && try (route << Route.page << Route.viewedCommitT) model == Nothing)
                                     reapplyOrganizeQueue
                                 )
+                            |> Flow.seq (Flow.modify Selection.pruneSelection)
+                            |> Flow.seq (Flow.modify Model.Lib.warmStepSearch)
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async loadProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
                     )
 
-        ( Err err, _ ) ->
-            loadProjectsFailed err
-
-        ( _, Err err ) ->
+        Err err ->
             loadProjectsFailed err
 
 
@@ -537,25 +532,24 @@ replayStepStatusBuffer =
             )
 
 
-applyStepStatus : String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-applyStepStatus snapshotCommit status_ rs =
+applyStepStatus : String -> Maybe String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStepStatus snapshotCommit mCertificate status_ rs =
     let
-        collapsedDirectoryView =
-            { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
-
-        current =
-            ApiData.toMaybe rs
-                |> Maybe.withDefault { commit = snapshotCommit, status = NotAsked, directoryView = collapsedDirectoryView }
-
-        directoryView_ =
-            if current.commit == snapshotCommit then
-                current.directoryView
-
-            else
-                collapsedDirectoryView
+        showsSameOutputs current =
+            current.commit == snapshotCommit || (Maybe.isJust mCertificate && current.certificate == mCertificate)
 
         updated =
-            { current | commit = snapshotCommit, status = status_, directoryView = directoryView_ }
+            case ApiData.toMaybe rs |> Maybe.filter showsSameOutputs of
+                Just current ->
+                    { current | commit = snapshotCommit, certificate = Maybe.orElse current.certificate mCertificate, status = status_ }
+
+                Nothing ->
+                    { commit = snapshotCommit
+                    , certificate = mCertificate
+                    , status = status_
+                    , outputsCommit = snapshotCommit
+                    , directoryView = { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
+                    }
     in
     if rs == Success updated then
         rs
@@ -564,23 +558,23 @@ applyStepStatus snapshotCommit status_ rs =
         Success updated
 
 
-applyStatusSnapshot : String -> Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-applyStatusSnapshot snapshotCommit newStatus rs =
+applyStatusSnapshot : Model.StatusReport -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+applyStatusSnapshot report rs =
     let
         pendingRun =
             has
                 (success
-                    << where_ (.commit >> (==) snapshotCommit)
+                    << where_ (.commit >> (==) report.commit)
                     << status
                     << where_ ((==) (Loading (Just StatusRunning)))
                 )
                 rs
     in
-    if pendingRun && List.member newStatus [ StatusNotStarted, StatusBuiltNotCertified ] then
+    if pendingRun && List.member report.status [ StatusNotStarted, StatusBuiltNotCertified ] then
         rs
 
     else
-        applyStepStatus snapshotCommit (Success newStatus) rs
+        applyStepStatus report.commit report.certificate (Success report.status) rs
 
 
 setLocalStepStatus : Int -> ApiData Status -> Flow Model ()
@@ -591,7 +585,7 @@ setLocalStepStatus stepId status_ =
                 stepRevisionById stepId model
                     |> Maybe.unwrap (Flow.pure ())
                         (\revision ->
-                            Flow.over (stepRecordById stepId << runState) (applyStepStatus revision status_)
+                            Flow.over (stepRecordById stepId << runState) (applyStepStatus revision Nothing status_)
                         )
             )
 
@@ -767,7 +761,8 @@ loadProjectReviews =
                                 |> Flow.andThen
                                     (\model ->
                                         if reviewTarget model == Just target then
-                                            Flow.modify (over (projectSteps projectId_) (mergeReviewReport commit_ result))
+                                            Flow.modify (over (projectSteps projectId_) (mergeReviewReport result))
+                                                |> Flow.seq (refreshViewedStepStatuses (projectSteps projectId_ << where_ (lostReviewSince model)))
 
                                         else
                                             Flow.modify (over (projectSteps projectId_) (over (review << just << comparison) ApiData.stopLoading))
@@ -777,51 +772,47 @@ loadProjectReviews =
             )
 
 
-mergeReviewReport : String -> Result Http.Error (Dict Int Model.ReviewReport) -> StepRecord -> StepRecord
-mergeReviewReport commit_ result record =
+mergeReviewReport : Result Http.Error (Dict Int Model.ReviewReport) -> StepRecord -> StepRecord
+mergeReviewReport result record =
     case result of
         Ok reports ->
             record.id
                 |> Maybe.andThen (\stepId -> Dict.get stepId reports)
                 |> Maybe.unwrap (over (review << just << comparison) ApiData.stopLoading record)
-                    (applyReviewReport commit_ record)
+                    (applyReviewReport record)
 
         Err err ->
             set (review << just << comparison) (Error err) record
 
 
-applyReviewReport : String -> StepRecord -> Model.ReviewReport -> StepRecord
-applyReviewReport commit_ record report =
+lostReviewSince : Model -> StepRecord -> Bool
+lostReviewSince before record =
+    not (has (review << just) record) && Maybe.unwrap False (\stepId -> has (stepRecordById stepId << review << just) before) record.id
+
+
+applyReviewReport : StepRecord -> Model.ReviewReport -> StepRecord
+applyReviewReport record report =
     { record
         | review = report.review
-        , runState =
-            case ( report.review, record.review ) of
-                ( Just reviewed, _ ) ->
-                    reviewedRunState reviewed.revision report.reviewedStatus record.runState
-
-                ( Nothing, Just _ ) ->
-                    applyStepStatus commit_ NotAsked record.runState
-
-                ( Nothing, Nothing ) ->
-                    record.runState
+        , runState = Maybe.unwrap record.runState (\reviewed -> reviewedRunState reviewed.revision report.reviewedCertificate report.reviewedStatus record.runState) report.review
     }
 
 
-reviewedRunState : String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
-reviewedRunState revision mStatus runState_ =
+reviewedRunState : String -> Maybe String -> Maybe Model.Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
+reviewedRunState revision mCertificate mStatus runState_ =
     case ( ApiData.toMaybe runState_ |> Maybe.filter (.commit >> (==) revision), mStatus ) of
         ( Just current, Just status_ ) ->
             if current.status == Loading (Just Model.StatusRunning) && status_ /= Model.StatusRunning then
                 Success current
 
             else
-                Success { current | status = Success status_ }
+                applyStepStatus revision mCertificate (Success status_) runState_
 
         ( Just current, Nothing ) ->
             Success current
 
         ( Nothing, _ ) ->
-            applyStepStatus revision (Success (Maybe.withDefault Model.StatusNotStarted mStatus)) NotAsked
+            applyStepStatus revision mCertificate (Success (Maybe.withDefault Model.StatusNotStarted mStatus)) runState_
 
 
 refreshReviews : Flow Model ()
@@ -849,7 +840,7 @@ settleReview stepId mReview message result =
         Ok False ->
             Flow.setAll (stepRecordById stepId << review) mReview
                 |> Flow.seq refreshReviews
-                |> Flow.seq (Flow.when (Maybe.isNothing mReview) (refreshViewedStepStatus stepId))
+                |> Flow.seq (Flow.when (Maybe.isNothing mReview) (refreshViewedStepStatuses (stepRecordById stepId)))
                 |> Flow.seq (Flow.setAll reviewDraft Nothing)
                 |> Flow.seq (Flow.async (addToast True message))
 
@@ -857,10 +848,14 @@ settleReview stepId mReview message result =
             Flow.async (addToast False (Http.errorMessage err))
 
 
-refreshViewedStepStatus : Int -> Flow Model ()
-refreshViewedStepStatus stepId =
-    Flow.over (stepRecordById stepId << runState << success << status) ApiData.toLoading
-        |> Flow.seq (Flow.forAll currentProjectId (Flow.try viewedRevision << requestProjectStatus))
+refreshViewedStepStatuses : A_Traversal Model StepRecord -> Flow Model ()
+refreshViewedStepStatuses records =
+    Flow.whenHas records
+        (always
+            (Flow.over (remkT records << runState << success << status) ApiData.toLoading
+                |> Flow.seq (Flow.forAll currentProjectId (Flow.try viewedRevision << requestProjectStatus))
+            )
+        )
 
 
 reviewStep : Model.ReviewDraft -> Flow Model ()
@@ -1160,6 +1155,143 @@ autocompleteDebounceConfig =
     }
 
 
+searchDebounceDelay : Float
+searchDebounceDelay =
+    350
+
+
+searchDebounceConfig : Debounce.Config (Flow Model ())
+searchDebounceConfig =
+    { strategy = Debounce.later searchDebounceDelay
+    , transform = relatedSearchDebounceMsg
+    }
+
+
+loadSearchInfo : Flow Model ()
+loadSearchInfo =
+    callApi searchInfo Api.fetchSearchInfo
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok info ->
+                        if info.semantic then
+                            Flow.pure ()
+
+                        else
+                            clearRelatedSearch
+
+                    Err _ ->
+                        clearRelatedSearch
+            )
+        |> Flow.return ()
+
+
+onSearchInputChange : String -> Flow Model ()
+onSearchInputChange query =
+    Flow.modify Model.Lib.searchSteps
+        |> Flow.seq
+            (if String.length (String.trim query) < 3 then
+                clearRelatedSearch
+
+             else
+                Flow.get
+                    |> Flow.andThen
+                        (\model ->
+                            if Model.getSearchInfo model |> ApiData.withDefault { semantic = False, judge = False } |> .semantic then
+                                let
+                                    job =
+                                        { query = String.trim query
+                                        , commit = try (route << Route.page << Route.viewedCommitT) model
+                                        }
+
+                                    ( newDebounce, debounceCmd ) =
+                                        Debounce.push searchDebounceConfig job (Model.getRelatedSearchDebounce model)
+                                in
+                                Flow.over relatedSearch (\state -> { state | query = job.query, results = ApiData.loading Nothing })
+                                    |> Flow.seq (Flow.over relatedSearchDebounce (always newDebounce))
+                                    |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+
+                            else
+                                Flow.pure ()
+                        )
+            )
+
+
+relatedSearchDebounceMsg : Debounce.Msg -> Flow Model ()
+relatedSearchDebounceMsg msg =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    send job =
+                        Task.perform (\_ -> runRelatedSearchJob job) (Task.succeed ())
+
+                    ( newDebounce, debounceCmd ) =
+                        Debounce.update searchDebounceConfig (Debounce.takeLast send) msg (Model.getRelatedSearchDebounce model)
+                in
+                Flow.over relatedSearchDebounce (always newDebounce)
+                    |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+            )
+
+
+runRelatedSearchJob : Model.RelatedSearchJob -> Flow Model ()
+runRelatedSearchJob job =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Api.searchSteps
+                    job.commit
+                    { query = job.query
+                    , exclude = List.filterMap (.item >> .id) (Model.getStepSearch model).matches
+                    }
+            )
+        |> Flow.andThen (applyRelatedSearchResult job)
+
+
+applyRelatedSearchResult : Model.RelatedSearchJob -> Result Http.Error (List ApiDecode.SearchResult) -> Flow Model ()
+applyRelatedSearchResult job result =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    state =
+                        Model.getRelatedSearch model
+                in
+                if state.query /= job.query then
+                    Flow.pure ()
+
+                else
+                    Flow.over relatedSearch
+                        (\current ->
+                            { current
+                                | results =
+                                    ApiData.fromResult
+                                        (result
+                                            |> Result.map
+                                                (List.map
+                                                    (\entry ->
+                                                        { stepId = entry.stepId
+                                                        , detail =
+                                                            case entry.relevance of
+                                                                Just relevance ->
+                                                                    "Relevance " ++ String.fromInt (round (relevance * 100)) ++ "%"
+
+                                                                Nothing ->
+                                                                    "Similarity " ++ String.fromInt (round (entry.similarity * 100)) ++ "%"
+                                                        }
+                                                    )
+                                                )
+                                        )
+                            }
+                        )
+            )
+
+
+clearRelatedSearch : Flow Model ()
+clearRelatedSearch =
+    Flow.over relatedSearch (always Model.initRelatedSearchState)
+
+
 autocompleteStateWithJob : Model.AutocompleteJob -> Maybe Model.AutocompleteState -> Model.AutocompleteState
 autocompleteStateWithJob job maybeState =
     if String.isEmpty job.query then
@@ -1450,15 +1582,16 @@ buildViewedRevision spec id =
             )
 
 
-stopStep : StepSpec -> Int -> Flow Model ()
-stopStep spec id =
+stopStep : Int -> Flow Model ()
+stopStep id =
+    Flow.get |> Flow.andThen (\model -> stopStepAt id (stepRevisionById id model))
+
+
+stopStepAt : Int -> Maybe String -> Flow Model ()
+stopStepAt id commit =
     Flow.over pendingStops (Set.insert id)
-        |> Flow.seq Flow.get
-        |> Flow.andThen
-            (\model ->
-                setLocalStepStatus id (Success StatusRunning)
-                    |> Flow.seq (callApi void (Api.stopStep id (stepRevisionById id model)))
-            )
+        |> Flow.seq (setLocalStepStatus id (Success StatusRunning))
+        |> Flow.seq (callApi void (Api.stopStep id commit))
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
             (\_ -> Flow.over pendingStops (Set.remove id))
@@ -1903,7 +2036,7 @@ seekAndMerge target recordId path anchor bytes_ =
         apiCall =
             case target of
                 Route.Output ->
-                    Flow.forAll (stepShownRevision recordId)
+                    Flow.forAll (stepOutputsRevision recordId)
                         (\commit_ ->
                             Api.fetchFileSeek recordId (Just commit_) path anchor bytes_
                         )
@@ -2094,7 +2227,7 @@ toggleOutputEntry recordId mOpen path =
             folderExpandedAt recordId path |> orElseT (fileIsViewingAt recordId path)
 
         stepCommit =
-            stepShownRevision recordId
+            stepOutputsRevision recordId
 
         extrasLensFor p =
             if List.isEmpty p then
@@ -3883,7 +4016,7 @@ onStepStatusIn value =
         Ok (SSESnapshot { commit, steps }) ->
             let
                 statuses =
-                    Dict.fromList (List.map (\step -> ( step.stepId, ( commit, step.status ) )) steps)
+                    Dict.fromList (List.map (\step -> ( step.stepId, { commit = commit, status = step.status, certificate = step.certificate } )) steps)
             in
             Flow.get
                 |> Flow.andThen
@@ -3909,7 +4042,7 @@ headMovedRemotely model snapshotCommit =
         && not (isReadOnlyRoute model)
 
 
-rollupAffectedFor : Model -> Dict Int ( String, Status ) -> Bool
+rollupAffectedFor : Model -> Dict Int Model.StatusReport -> Bool
 rollupAffectedFor model statuses =
     case try currentProjectId model of
         Nothing ->
@@ -3921,10 +4054,10 @@ rollupAffectedFor model statuses =
                     stepsBelow (projectsDict model) projectId
             in
             Dict.foldl
-                (\stepId ( _, status_ ) acc ->
+                (\stepId report acc ->
                     acc
                         || (Set.member stepId reachable
-                                && has (stepRecordById stepId << runState << success << status << where_ (ApiData.toMaybe >> (/=) (Just status_))) model
+                                && has (stepRecordById stepId << runState << success << status << where_ (ApiData.toMaybe >> (/=) (Just report.status))) model
                            )
                 )
                 False
@@ -3945,12 +4078,12 @@ stepsBelow projects_ rootId =
             Set.empty
 
 
-applyStepStatuses : Dict Int ( String, Status ) -> Flow Model ()
+applyStepStatuses : Dict Int Model.StatusReport -> Flow Model ()
 applyStepStatuses statuses =
     Flow.get |> Flow.andThen (applyListedStatuses statuses)
 
 
-applyListedStatuses : Dict Int ( String, Status ) -> Model -> Flow Model ()
+applyListedStatuses : Dict Int Model.StatusReport -> Model -> Flow Model ()
 applyListedStatuses statuses model =
     let
         listed =
@@ -3964,13 +4097,13 @@ applyListedStatuses statuses model =
 
         hooks =
             statuses
-                |> Dict.filter (\_ -> Model.hasBuiltOutput << Tuple.second)
+                |> Dict.filter (\_ -> Model.hasBuiltOutput << .status)
                 |> Dict.keys
                 |> List.map runAndClearStepStatusHook
 
         settles =
             Dict.toList statuses
-                |> List.map (\( stepId, ( commit, status_ ) ) -> settlePendingBuild commit stepId status_)
+                |> List.map (\( stepId, report ) -> settlePendingBuild report.commit stepId report.status)
 
         reviewReloads =
             listed
@@ -4004,34 +4137,34 @@ settlePendingStops =
             )
 
 
-renewsReview : Dict Int ( String, Status ) -> StepRecord -> Bool
+renewsReview : Dict Int Model.StatusReport -> StepRecord -> Bool
 renewsReview statuses record =
     has (review << just) record
         && has (runState << success << status << where_ ((==) (Success StatusRunning))) record
         && announcedSuccess statuses record
 
 
-announcedStatus : Dict Int ( String, Status ) -> StepRecord -> Maybe ( String, Status )
+announcedStatus : Dict Int Model.StatusReport -> StepRecord -> Maybe Model.StatusReport
 announcedStatus statuses =
     get recordId >> Maybe.andThen (flip Dict.get statuses)
 
 
-announcedSuccess : Dict Int ( String, Status ) -> StepRecord -> Bool
+announcedSuccess : Dict Int Model.StatusReport -> StepRecord -> Bool
 announcedSuccess statuses =
     announcedStatus statuses >> Maybe.unwrap False succeeded
 
 
-succeeded : ( String, Status ) -> Bool
+succeeded : Model.StatusReport -> Bool
 succeeded =
-    Tuple.second >> (==) StatusSuccess
+    .status >> (==) StatusSuccess
 
 
-applyStatusToStepRecord : Model -> Dict Int ( String, Status ) -> StepRecord -> StepRecord
+applyStatusToStepRecord : Model -> Dict Int Model.StatusReport -> StepRecord -> StepRecord
 applyStatusToStepRecord model statuses record =
     case announcedStatus statuses record of
-        Just ( commit, status_ ) ->
-            if acceptsCommit model commit record then
-                applySnapshotToRecord commit status_ record
+        Just report ->
+            if acceptsCommit model report.commit record then
+                applySnapshotToRecord report record
 
             else
                 record
@@ -4045,14 +4178,14 @@ acceptsCommit model commit =
     Maybe.unwrap True ((==) commit) << Model.stepRevision model
 
 
-applySnapshotToRecord : String -> Status -> StepRecord -> StepRecord
-applySnapshotToRecord commit status_ record =
+applySnapshotToRecord : Model.StatusReport -> StepRecord -> StepRecord
+applySnapshotToRecord report record =
     let
         current =
             get runState record
 
         updated =
-            applyStatusSnapshot commit status_ current
+            applyStatusSnapshot report current
     in
     if updated == current then
         record
@@ -4107,45 +4240,31 @@ startClusterStatusStream =
 
 onClusterStatusIn : Decode.Value -> Flow Model ()
 onClusterStatusIn value =
-    let
-        decoder =
-            Decode.map3
-                (\statusStr detail ids ->
-                    ( clusterStatusFromString statusStr, detail, ids )
-                )
-                (Decode.field "status" Decode.string)
-                (Decode.maybe (Decode.field "detail" Decode.string))
-                (Decode.field "runningStepIds" (Decode.list Decode.int))
-    in
-    case Decode.decodeValue decoder value of
-        Ok ( status, detail, ids ) ->
-            Flow.setAll clusterStatus (ApiData.Success status)
-                |> Flow.seq (Flow.setAll clusterDetail detail)
-                |> Flow.seq (Flow.setAll runningStepIds ids)
+    case Decode.decodeValue ApiDecode.clusterSnapshot value of
+        Ok snapshot ->
+            Flow.setAll clusterStatus (ApiData.Success snapshot.status)
+                |> Flow.seq (Flow.setAll clusterDetail snapshot.detail)
+                |> Flow.seq (Flow.setAll activeSteps snapshot.activeSteps)
 
         Err _ ->
             Flow.pure ()
 
 
-clusterStatusFromString : String -> Model.ClusterStatus
-clusterStatusFromString statusStr =
-    case statusStr of
-        "available" ->
-            Model.ClusterAvailable
-
-        "degraded" ->
-            Model.ClusterDegraded
-
-        "unavailable" ->
-            Model.ClusterUnavailable
-
-        _ ->
-            Model.ClusterUnknown
-
-
 toggleStatusBar : Flow Model ()
 toggleStatusBar =
     Flow.over statusBarOpen not
+
+
+toggleStatusBarGroup : String -> Flow Model ()
+toggleStatusBarGroup group =
+    Flow.over statusBarCollapsed
+        (\collapsed ->
+            if Set.member group collapsed then
+                Set.remove group collapsed
+
+            else
+                Set.insert group collapsed
+        )
 
 
 type alias StepLocation =

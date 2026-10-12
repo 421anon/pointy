@@ -21,6 +21,7 @@ module Agent.Runner (
 ) where
 
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
+import Agent.Model (chatModelArgs, prepareChatModel)
 import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
 import Agent.Session (
@@ -466,6 +467,7 @@ runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool
 runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewedSteps = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
+    chat <- prepareChatModel
     let conflictWorktrees = [candidateWorktree pending | Just pending <- [preparedApply session_], applyConflictsPending pending]
     readOnlySteps <- filterM doesPathExist [root </> path | root <- worktreePath session_ : conflictWorktrees, stepId <- reviewedSteps, path <- ["steps" </> show stepId ++ ".nix", "srcFiles" </> show stepId]]
     let paths = sessionPaths session_
@@ -478,7 +480,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
             (True, Nothing) -> []
             (False, _) -> ["-c"]
         runnerArgs =
-            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ runnerConfigArgs expand (agentRunnerArgs cfg)
+            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ chatModelArgs chat ++ runnerConfigArgs expand (agentRunnerArgs cfg)
         wrapperScript =
             "set -e; cd \"$POINTY_AGENT_WORKTREE\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
         warmBindArgs = maybe [] bindPathReadOnly mWarmFile
@@ -897,6 +899,7 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
         , "message_update"
         , "agent_start"
         , "agent_end"
+        , "agent_settled"
         , "turn_start"
         , "turn_end"
         , "tool_execution_start"

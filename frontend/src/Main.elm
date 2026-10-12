@@ -61,6 +61,7 @@ initializeWorkspace : Flow Model ()
 initializeWorkspace =
     Flow.async Actions.listenAndProcessAgentTurns
         |> Flow.seq Actions.loadUserRepoInfo
+        |> Flow.seq Actions.loadSearchInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
@@ -212,6 +213,7 @@ subscriptions model =
         [ uploadProgressSubscription model
         , gutterDragSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
+        , statusBarClockSubscription model
         , Browser.Events.onKeyDown Organize.shortcutDecoder
         , Ports.organizeDragIn Organize.onOrganizeDragEvent
         , Ports.agentAutoApplyIn Actions.syncAgentAutoApply
@@ -224,6 +226,15 @@ subscriptions model =
                     Flow.pure ()
             )
         ]
+
+
+statusBarClockSubscription : Model -> Sub (Flow Model ())
+statusBarClockSubscription model =
+    if Model.Core.getStatusBarOpen model && not (List.isEmpty (Model.Core.getActiveSteps model)) then
+        Time.every 1000 (\time -> Flow.setAll now time)
+
+    else
+        Sub.none
 
 
 gutterDragSubscription : Model -> Sub (Flow Model ())

@@ -633,12 +633,13 @@ broadcastRefreshed commit certificates = do
     case membership of
         Left err -> liftIO $ putStrLn $ "Certificate refresh for " ++ unpack commit ++ " could not read projects: " ++ err
         Right projects -> do
-            (statuses, _) <- rawStatusesFor (Map.map (pack . stepCertificate) certificates)
+            let certified = Map.map (pack . stepCertificate) certificates
+            (statuses, _) <- rawStatusesFor certified
             marked <- markBuiltOutputs certificates statuses
             forM_ (Map.toList projects) $ \(pid, stepIds) -> do
                 let targets = Set.intersection (Set.fromList stepIds) (Map.keysSet marked)
                 when (not (Set.null targets)) $
-                    liftIO $ broadcastSnapshot pid commit (Map.restrictKeys marked targets)
+                    liftIO $ broadcastSnapshot pid commit certified (Map.restrictKeys marked targets)
 
 rawStatusesFor :: App es => Map Int Text -> Eff es (Map Int (Text, Maybe Text), StepStore)
 rawStatusesFor certificates = do

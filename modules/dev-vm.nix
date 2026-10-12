@@ -90,7 +90,7 @@ in
     fi
     install -m 0600 -o backend -g backend /shared/dev-config/dev-config.toml /home/backend/config.toml
 
-    # Optional agent secrets (e.g. DEEPSEEK_API_KEY=...) sourced as systemd EnvironmentFile.
+    # Optional provider secrets (e.g. NEURALWATT_API_KEY=...) sourced as systemd EnvironmentFile.
     if [ -f /shared/dev-config/agent-env ]; then
       install -m 0600 -o backend -g backend /shared/dev-config/agent-env /home/backend/agent-env
     fi

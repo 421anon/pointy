@@ -18,7 +18,7 @@ import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
 import Handlers.Presets (getPresetsHandler)
-import Handlers.ProjectReads (projectRollupHandler, unfiledHandler)
+import Handlers.ProjectReads (projectRollupHandler)
 import Handlers.Projects (batchProjectOpsHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (jobEndedHandler, restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
@@ -27,6 +27,7 @@ import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.StepReview (getProjectReviewHandler, removeReviewHandler, reviewDiffHandler, reviewStepHandler)
+import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
@@ -59,7 +60,6 @@ server =
         :<|> createSrcFileHandler
         :<|> deleteSrcFileHandler
         :<|> getProjectsHandler
-        :<|> unfiledHandler
         :<|> projectRollupHandler
         :<|> postProjectHandler
         :<|> patchProjectHandler
@@ -100,6 +100,8 @@ server =
         :<|> (\request -> liftHandler (renameSessionHandler request))
         :<|> (\request -> liftHandler (purgeSessionHandler request))
         :<|> liftHandler usageHandler
+        :<|> stepSearchInfoHandler
+        :<|> (\commit request -> stepSearchHandler commit request)
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy
 corsPolicy req = case pathInfo req of
