@@ -1,4 +1,4 @@
-module Components.Select exposing (Item, RelatedItem, SelectState, initSelectState, itemRef, rankedItems, selected, view)
+module Components.Select exposing (Item, Ranked, RelatedItem, SelectState, initSelectState, itemRef, rankLabels, rankedItems, selected, view)
 
 import Accessors exposing (An_Optic, Lens, get, lens, over, set)
 import Browser.Dom
@@ -65,6 +65,13 @@ type ChipAction
 
 type MenuAction
     = MenuSelect
+
+
+type alias Ranked ref tag =
+    { item : Item ref
+    , match : Fuzzy.Match tag
+    , detail : Maybe String
+    }
 
 
 type alias MenuItem ref tag =
@@ -151,6 +158,12 @@ rankedItems query toIndexed items =
         List.take 50 ranked
 
 
+rankLabels : (Item ref -> String) -> String -> List (Item ref) -> List (Ranked ref ())
+rankLabels toLabel query items =
+    rankedItems (Fuzzy.parse query) (toLabel >> Fuzzy.labelDocument >> Fuzzy.index) items
+        |> List.map (\( item, match ) -> { item = item, match = match, detail = Nothing })
+
+
 viewSegment : Fuzzy.Segment -> Html msg
 viewSegment segment =
     case segment of
@@ -165,7 +178,7 @@ view :
     { optic : An_Optic pr ls s (SelectState ref)
     , selectState : SelectState ref
     , selected_ : List (Item ref)
-    , availableItems : List (Item ref)
+    , matches : List (Ranked ref tag)
     , readOnly : Bool
     , hasChanged : Bool
     , label : String
@@ -175,13 +188,11 @@ view :
     , toInputItemName : Item ref -> String
     , toInputItemTooltip : Item ref -> List String
     , onInputItemClick : Item ref -> Maybe (Flow s ())
-    , toSearchDocument : Item ref -> Fuzzy.Indexed tag
     , related : List (RelatedItem ref)
     , statusNotice : Maybe String
     , emptyNotice : Maybe String
     , toMenuItemName : Item ref -> String
     , toMenuItemTooltip : Item ref -> List String
-    , toMenuItemDetail : Fuzzy.Query -> Fuzzy.Match tag -> Item ref -> Maybe String
     , activeAfterSelect : Bool
     , clearInputAfterSelect : Bool
     , onChange : Flow s ()
@@ -192,7 +203,7 @@ view :
     , inputItemStyle : Item ref -> List (Html.Attribute Never)
     }
     -> Html (Flow s ())
-view { optic, selectState, selected_, availableItems, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, toSearchDocument, related, statusNotice, emptyNotice, toMenuItemName, toMenuItemTooltip, toMenuItemDetail, onChange, onInputChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
+view { optic, selectState, selected_, matches, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, related, statusNotice, emptyNotice, toMenuItemName, toMenuItemTooltip, onChange, onInputChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
     let
         optic_ =
             remkT optic
@@ -203,26 +214,23 @@ view { optic, selectState, selected_, availableItems, readOnly, hasChanged, labe
         menuItems : List (MenuItem ref tag)
         menuItems =
             let
-                filteredAvailableItems =
-                    rankedItems query toSearchDocument availableItems
-
                 fuzzyEntries =
                     List.map
-                        (\( item, match ) ->
-                            { item = item
-                            , match = match
+                        (\ranked ->
+                            { item = ranked.item
+                            , match = ranked.match
                             , isRelated = False
-                            , detail = toMenuItemDetail query match item
+                            , detail = ranked.detail
                             }
                         )
-                        filteredAvailableItems
+                        matches
 
                 relatedEntries : List (MenuItem ref tag)
                 relatedEntries =
                     let
                         shownIds : List Int
                         shownIds =
-                            List.filterMap (\( item, _ ) -> item.id) filteredAvailableItems
+                            List.filterMap (.item >> .id) matches
 
                         notShown entry =
                             case entry.item.id of

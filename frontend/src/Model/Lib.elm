@@ -8,7 +8,7 @@ import Fuzzy
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord, SearchField(..))
-import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, relatedSearch, stepConfig, stepSearchIndex, steps)
+import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, presets, projects, projectsDict, relatedSearch, searchBox, stepConfig, stepSearch, steps)
 import Model.Shadow exposing (StepArgValue(..))
 import Route
 import Set exposing (Set)
@@ -270,28 +270,111 @@ stepSearchItems model =
             )
 
 
-stepSearchEntries : Model -> List ( Item ChildRef, Fuzzy.Indexed SearchField )
-stepSearchEntries model =
+refreshStepSearch : Model -> Model
+refreshStepSearch model =
     let
         cached =
-            get stepSearchIndex model
+            (get stepSearch model).entries
+                |> List.filterMap (\( item, indexed ) -> item.id |> Maybe.map (\id -> ( id, indexed )))
+                |> Dict.fromList
+
+        entries =
+            stepSearchItems model
+                |> List.map
+                    (\( item, document ) ->
+                        ( item
+                        , Fuzzy.reindex (item.id |> Maybe.andThen (\id -> Dict.get id cached)) document
+                        )
+                    )
     in
-    stepSearchItems model
-        |> List.map
-            (\( item, document ) ->
-                ( item
-                , Fuzzy.reindex (item.id |> Maybe.andThen (\id -> Dict.get id cached)) document
-                )
-            )
+    rankStepSearch (over stepSearch (\state -> { state | entries = entries }) model)
 
 
-cacheStepSearchEntries : List ( Item ChildRef, Fuzzy.Indexed SearchField ) -> Model -> Model
-cacheStepSearchEntries entries =
-    set stepSearchIndex
-        (entries
-            |> List.filterMap (\( item, indexed ) -> item.id |> Maybe.map (\id -> ( id, indexed )))
-            |> Dict.fromList
-        )
+rankStepSearch : Model -> Model
+rankStepSearch model =
+    let
+        input =
+            (get searchBox model).input
+
+        query =
+            Fuzzy.parse input
+
+        state =
+            get stepSearch model
+
+        matches =
+            if Fuzzy.isEmpty query then
+                []
+
+            else
+                Select.rankedItems query Tuple.second state.entries
+                    |> List.map
+                        (\( ( item, _ ), match ) ->
+                            { item = item
+                            , match = match
+                            , detail = Just (stepSearchDetail model query match item)
+                            }
+                        )
+    in
+    set stepSearch { state | input = input, matches = matches } model
+
+
+searchSteps : Model -> Model
+searchSteps model =
+    if Fuzzy.isEmpty (Fuzzy.parse (get stepSearch model).input) then
+        refreshStepSearch model
+
+    else
+        rankStepSearch model
+
+
+warmStepSearch : Model -> Model
+warmStepSearch model =
+    let
+        state =
+            get stepSearch model
+    in
+    if List.isEmpty state.entries || not (Fuzzy.isEmpty (Fuzzy.parse state.input)) then
+        refreshStepSearch model
+
+    else
+        model
+
+
+stepSearchFolder : Fuzzy.Match SearchField -> Item ChildRef -> Maybe Int
+stepSearchFolder match item =
+    searchFolder match |> Maybe.orElse item.mProjectId
+
+
+stepSearchDetail : Model -> Fuzzy.Query -> Fuzzy.Match SearchField -> Item ChildRef -> String
+stepSearchDetail model query match item =
+    let
+        fieldDetail field =
+            case field.tag of
+                SearchNote ->
+                    Just ("Note: " ++ Fuzzy.excerpt query field.text)
+
+                SearchArg key ->
+                    Just (key ++ ": " ++ Fuzzy.excerpt query field.text)
+
+                _ ->
+                    Nothing
+
+        fallback () =
+            let
+                path =
+                    stepSearchFolder match item
+                        |> Maybe.unwrap "" (\projectId -> " · " ++ canonicalNamePath model projectId)
+
+                typeName =
+                    item.id
+                        |> Maybe.andThen (\id -> Dict.get id (get steps model))
+                        |> Maybe.unwrap "" (\step -> stepTypeName model step.type_)
+            in
+            typeName ++ path
+    in
+    List.findMap fieldDetail match.fields
+        |> Maybe.withDefaultLazy fallback
 
 
 stepParentLinks : Model -> Dict Int (List ( Int, ChildLink ))

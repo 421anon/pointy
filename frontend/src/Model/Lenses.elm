@@ -9,7 +9,6 @@ import Dict exposing (Dict)
 import Dict.Accessors
 import Extra.Accessors exposing (by, orElseT, where_)
 import Flow exposing (Flow)
-import Fuzzy
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
@@ -696,9 +695,9 @@ relatedSearch =
     lens ".relatedSearch" Model.getRelatedSearch (\(Model m) value -> Model { m | relatedSearch = value })
 
 
-stepSearchIndex : Lens ls Model (Dict Int (Fuzzy.Indexed Model.SearchField)) x y
-stepSearchIndex =
-    lens ".stepSearchIndex" Model.getStepSearchIndex (\(Model m) value -> Model { m | stepSearchIndex = value })
+stepSearch : Lens ls Model Model.StepSearchState x y
+stepSearch =
+    lens ".stepSearch" Model.getStepSearch (\(Model m) value -> Model { m | stepSearch = value })
 
 
 relatedSearchDebounce : Lens ls Model (Debounce RelatedSearchJob) x y

@@ -13,7 +13,6 @@ import Extra.Accessors exposing (A_Traversal, by, remkT, where_)
 import Extra.Decode as Decode
 import Extra.Http as Http
 import Flow exposing (Flow)
-import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (..)
 import Html.Events as Events
@@ -1112,7 +1111,7 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                 { optic = TableSpec.getLens spec << selectExistingSteps
                 , selectState = state
                 , selected_ = state.selected
-                , availableItems = availableItems
+                , matches = Select.rankLabels .name state.input availableItems
                 , readOnly = False
                 , hasChanged = False
                 , label = "Link existing"
@@ -1122,13 +1121,11 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                 , toInputItemName = .name
                 , toInputItemTooltip = toItemTooltip
                 , onInputItemClick = \_ -> Nothing
-                , toSearchDocument = .name >> Fuzzy.labelDocument >> Fuzzy.index
                 , related = []
                 , statusNotice = Nothing
                 , emptyNotice = Nothing
                 , toMenuItemName = .name
                 , toMenuItemTooltip = toItemTooltip
-                , toMenuItemDetail = \_ _ _ -> Nothing
                 , onChange = Flow.pure ()
                 , onInputChange = \_ -> Flow.pure ()
                 , onRemove = \_ -> Flow.pure ()
@@ -1352,7 +1349,7 @@ viewProjectExtraFormFields model tableLens =
                         { optic = presetStateLens
                         , selectState = presetDisplayState
                         , selected_ = []
-                        , availableItems = availablePresets
+                        , matches = Select.rankLabels (.name >> presetMenuLabel) presetDisplayState.input availablePresets
                         , readOnly = False
                         , hasChanged = False
                         , label = "Preset"
@@ -1362,13 +1359,11 @@ viewProjectExtraFormFields model tableLens =
                         , toInputItemName = .name >> presetMenuLabel
                         , toInputItemTooltip = always []
                         , onInputItemClick = \_ -> Nothing
-                        , toSearchDocument = .name >> presetMenuLabel >> Fuzzy.labelDocument >> Fuzzy.index
                         , related = []
                         , statusNotice = Nothing
                         , emptyNotice = Nothing
                         , toMenuItemName = .name >> presetMenuLabel
                         , toMenuItemTooltip = always []
-                        , toMenuItemDetail = \_ _ _ -> Nothing
                         , onChange = Flow.pure ()
                         , onInputChange = \_ -> Flow.pure ()
                         , onRemove = \_ -> Flow.pure ()
@@ -1390,12 +1385,15 @@ viewProjectExtraFormFields model tableLens =
                 stateLens =
                     remkT tableLens << edited << just << templatesSelect
 
+                templatesState =
+                    try stateLens model |> Maybe.withDefault Select.initSelectState
+
                 templatesSelectView =
                     Select.view
                         { optic = stateLens
-                        , selectState = try stateLens model |> Maybe.withDefault Select.initSelectState
+                        , selectState = templatesState
                         , selected_ = selectedItems
-                        , availableItems = availableItems
+                        , matches = Select.rankLabels (.name >> templateLabel) templatesState.input availableItems
                         , readOnly = False
                         , hasChanged = False
                         , label = "Templates"
@@ -1410,13 +1408,11 @@ viewProjectExtraFormFields model tableLens =
                         , toInputItemName = .name >> templateLabel
                         , toInputItemTooltip = always []
                         , onInputItemClick = \_ -> Nothing
-                        , toSearchDocument = .name >> templateLabel >> Fuzzy.labelDocument >> Fuzzy.index
                         , related = []
                         , statusNotice = Nothing
                         , emptyNotice = Nothing
                         , toMenuItemName = .name >> templateLabel
                         , toMenuItemTooltip = always []
-                        , toMenuItemDetail = \_ _ _ -> Nothing
                         , onChange = Flow.pure ()
                         , onInputChange = \_ -> Flow.pure ()
                         , onRemove = .name >> Actions.removeProjectTemplate tableLens
@@ -1556,7 +1552,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 { optic = stateLens
                 , selectState = selectState
                 , selected_ = selectedItems
-                , availableItems = availableItems
+                , matches = Select.rankLabels menuLabel selectState.input availableItems
                 , readOnly = cfg.readOnly
                 , hasChanged = cfg.changed
                 , label = cfg.label
@@ -1566,13 +1562,11 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 , toInputItemName = .name
                 , toInputItemTooltip = toTooltip
                 , onInputItemClick = .id >> Maybe.andThen toHighlightRoute >> Maybe.map Actions.goToRoute
-                , toSearchDocument = menuLabel >> Fuzzy.labelDocument >> Fuzzy.index
                 , related = []
                 , statusNotice = Nothing
                 , emptyNotice = Nothing
                 , toMenuItemName = menuLabel
                 , toMenuItemTooltip = toTooltip
-                , toMenuItemDetail = \_ _ _ -> Nothing
                 , onChange = Flow.pure ()
                 , onInputChange = \_ -> Flow.pure ()
                 , onRemove = .id >> Maybe.unwrap (Flow.pure ()) onRemoveStep

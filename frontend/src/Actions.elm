@@ -494,7 +494,7 @@ applyLoadedProjects target result =
                                     reapplyOrganizeQueue
                                 )
                             |> Flow.seq (Flow.modify Selection.pruneSelection)
-                            |> Flow.seq refreshStepSearchIndex
+                            |> Flow.seq (Flow.modify Model.Lib.warmStepSearch)
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async loadProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
@@ -1187,14 +1187,9 @@ loadSearchInfo =
         |> Flow.return ()
 
 
-refreshStepSearchIndex : Flow Model ()
-refreshStepSearchIndex =
-    Flow.modify (\model -> Model.Lib.cacheStepSearchEntries (Model.Lib.stepSearchEntries model) model)
-
-
 onSearchInputChange : String -> Flow Model ()
 onSearchInputChange query =
-    refreshStepSearchIndex
+    Flow.modify Model.Lib.searchSteps
         |> Flow.seq
             (if String.length (String.trim query) < 3 then
                 clearRelatedSearch
@@ -1248,9 +1243,7 @@ runRelatedSearchJob job =
                 Api.searchSteps
                     job.commit
                     { query = job.query
-                    , exclude =
-                        Select.rankedItems (Fuzzy.parse job.query) Tuple.second (Model.Lib.stepSearchEntries model)
-                            |> List.filterMap (\( ( item, _ ), _ ) -> item.id)
+                    , exclude = List.filterMap (.item >> .id) (Model.getStepSearch model).matches
                     }
             )
         |> Flow.andThen (applyRelatedSearchResult job)

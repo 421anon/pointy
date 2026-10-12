@@ -1,6 +1,7 @@
 module Fuzzy exposing (Document, Field, Indexed, Match, Precision(..), Query, Segment(..), excerpt, highlight, index, isEmpty, labelDocument, parse, rank, reindex)
 
 import Array exposing (Array)
+import Dict exposing (Dict)
 import List.Extra as List
 import Maybe.Extra as Maybe
 
@@ -49,7 +50,8 @@ type alias Prepared =
     , length : Int
     , starts : List Int
     , initials : String
-    , units : List ( Int, Char )
+    , units : List ( Int, Int )
+    , words : Dict Int (List ( Int, String ))
     }
 
 
@@ -208,7 +210,7 @@ charKind c lowered =
     if Char.isDigit c then
         Digit
 
-    else if lowered /= c then
+    else if Char.toCode lowered /= Char.toCode c then
         Upper
 
     else
@@ -217,18 +219,27 @@ charKind c lowered =
 
 startsWord : CharKind -> CharKind -> Bool
 startsWord previous kind =
-    case previous of
-        Boundary ->
+    case ( previous, kind ) of
+        ( Boundary, _ ) ->
             True
 
-        Lower ->
-            kind == Upper || kind == Digit
+        ( Lower, Upper ) ->
+            True
 
-        Upper ->
-            kind == Digit
+        ( Lower, Digit ) ->
+            True
 
-        Digit ->
-            kind /= Digit
+        ( Upper, Digit ) ->
+            True
+
+        ( Digit, Digit ) ->
+            False
+
+        ( Digit, _ ) ->
+            True
+
+        _ ->
+            False
 
 
 charLength : Char -> Int
@@ -310,18 +321,55 @@ prepared precision state =
     let
         joined =
             String.fromList (List.reverse state.joined)
+
+        starts =
+            List.reverse state.starts
     in
     { joined = joined
     , length = state.length
-    , starts = List.reverse state.starts
+    , starts = starts
     , initials = String.fromList (List.reverse state.initials)
     , units =
-        if precision == Loose then
-            unitsOf joined
+        case precision of
+            Loose ->
+                unitsOf joined
 
-        else
-            []
+            _ ->
+                []
+    , words =
+        case precision of
+            Whole ->
+                Dict.empty
+
+            _ ->
+                wordsByLength joined state.length starts
     }
+
+
+wordsByLength : String -> Int -> List Int -> Dict Int (List ( Int, String ))
+wordsByLength joined length starts =
+    let
+        go remaining acc =
+            case remaining of
+                start :: rest ->
+                    let
+                        end =
+                            List.head rest |> Maybe.withDefault length
+
+                        width =
+                            end - start
+                    in
+                    if width >= 4 then
+                        go rest (Dict.update width (\existing -> Just (( start, String.slice start end joined ) :: Maybe.withDefault [] existing)) acc)
+
+                    else
+                        go rest acc
+
+                [] ->
+                    acc
+    in
+    go starts Dict.empty
+        |> Dict.map (\_ -> List.reverse)
 
 
 prepare : Precision -> String -> Prepared
@@ -338,9 +386,9 @@ prepareWithOrigin precision text =
     ( prepared precision state, Array.fromList (List.reverse state.origin) )
 
 
-unitsOf : String -> List ( Int, Char )
+unitsOf : String -> List ( Int, Int )
 unitsOf joined =
-    String.foldl (\c ( offset, units ) -> ( offset + charLength c, ( offset, c ) :: units )) ( 0, [] ) joined
+    String.foldl (\c ( offset, units ) -> ( offset + charLength c, ( offset, Char.toCode c ) :: units )) ( 0, [] ) joined
         |> Tuple.second
         |> List.reverse
 
@@ -410,16 +458,24 @@ tokenHit precision prepared_ token =
                 Nothing
 
         Words ->
-            prefixHit prepared_ token
-                |> Maybe.orElseLazy (\_ -> acronymHit prepared_ token)
-                |> Maybe.orElseLazy (\_ -> substringHit prepared_ token)
-                |> Maybe.orElseLazy (\_ -> typoHit prepared_ token)
+            if String.contains token prepared_.joined then
+                prefixHit prepared_ token
+                    |> Maybe.orElseLazy (\_ -> acronymHit prepared_ token)
+                    |> Maybe.orElseLazy (\_ -> substringHit prepared_ token)
+
+            else
+                acronymHit prepared_ token
+                    |> Maybe.orElseLazy (\_ -> typoHit prepared_ token)
 
         Loose ->
-            prefixHit prepared_ token
-                |> Maybe.orElseLazy (\_ -> acronymHit prepared_ token)
-                |> Maybe.orElseLazy (\_ -> substringHit prepared_ token)
-                |> Maybe.orElseLazy (\_ -> List.foldl keepBetter Nothing (List.filterMap identity [ subsequenceHit prepared_ token, typoHit prepared_ token ]))
+            if String.contains token prepared_.joined then
+                prefixHit prepared_ token
+                    |> Maybe.orElseLazy (\_ -> acronymHit prepared_ token)
+                    |> Maybe.orElseLazy (\_ -> substringHit prepared_ token)
+
+            else
+                acronymHit prepared_ token
+                    |> Maybe.orElseLazy (\_ -> List.foldl keepBetter Nothing (List.filterMap identity [ subsequenceHit prepared_ token, typoHit prepared_ token ]))
 
 
 dropBelow : Int -> List Int -> List Int
@@ -567,7 +623,7 @@ substringHit prepared_ token =
 
 subsequenceHit : Prepared -> String -> Maybe Hit
 subsequenceHit prepared_ token =
-    case String.toList token of
+    case List.map Char.toCode (String.toList token) of
         first :: rest ->
             let
                 tokenLength =
@@ -606,8 +662,8 @@ subsequenceHit prepared_ token =
 
                 go units best =
                     case units of
-                        ( start, unitChar ) :: remaining ->
-                            if unitChar == first then
+                        ( start, unitCode ) :: remaining ->
+                            if unitCode == first then
                                 go remaining (Maybe.unwrap best (\hit -> keepBetter hit best) (candidate start remaining))
 
                             else
@@ -626,14 +682,14 @@ subsequenceHit prepared_ token =
             Nothing
 
 
-matchSubsequence : List Char -> Int -> Int -> List ( Int, Char ) -> Maybe (List Int)
-matchSubsequence chars start bound units =
-    case chars of
+matchSubsequence : List Int -> Int -> Int -> List ( Int, Int ) -> Maybe (List Int)
+matchSubsequence codes start bound units =
+    case codes of
         [] ->
             Just []
 
-        c :: rest ->
-            case findSubsequenceChar c start bound units of
+        code :: rest ->
+            case findSubsequenceCode code start bound units of
                 Just ( offset, remaining ) ->
                     Maybe.map ((::) offset) (matchSubsequence rest start bound remaining)
 
@@ -641,78 +697,60 @@ matchSubsequence chars start bound units =
                     Nothing
 
 
-findSubsequenceChar : Char -> Int -> Int -> List ( Int, Char ) -> Maybe ( Int, List ( Int, Char ) )
-findSubsequenceChar c start bound units =
+findSubsequenceCode : Int -> Int -> Int -> List ( Int, Int ) -> Maybe ( Int, List ( Int, Int ) )
+findSubsequenceCode code start bound units =
     case units of
         [] ->
             Nothing
 
-        ( offset, unitChar ) :: rest ->
+        ( offset, unitCode ) :: rest ->
             if offset - start >= bound then
                 Nothing
 
-            else if unitChar == c then
+            else if unitCode == code then
                 Just ( offset, rest )
 
             else
-                findSubsequenceChar c start bound rest
+                findSubsequenceCode code start bound rest
 
 
 typoHit : Prepared -> String -> Maybe Hit
 typoHit prepared_ token =
     let
-        tokenChars =
-            String.toList token
-
         tokenLength =
             String.length token
 
-        go starts =
-            case starts of
-                start :: rest ->
-                    let
-                        end =
-                            List.head rest |> Maybe.withDefault prepared_.length
-
-                        width =
-                            end - start
-                    in
-                    if width >= 4 && abs (width - tokenLength) <= 2 && withinOneEdit tokenChars (String.toList (String.slice start end prepared_.joined)) then
-                        Just
-                            { score = 20
-                            , start = start
-                            , end = end
-                            , positions = List.range start (end - 1)
-                            }
-
-                    else
-                        go rest
-
-                [] ->
-                    Nothing
+        firstTypo width =
+            Dict.get width prepared_.words
+                |> Maybe.andThen (List.find (\( _, word ) -> withinOneEdit token word))
+                |> Maybe.map (\( start, _ ) -> ( start, start + width ))
     in
-    if List.length tokenChars < 5 then
+    if tokenLength < 5 then
         Nothing
 
     else
-        go prepared_.starts
+        [ tokenLength - 1, tokenLength, tokenLength + 1 ]
+            |> List.filterMap firstTypo
+            |> List.minimumBy Tuple.first
+            |> Maybe.map
+                (\( start, end ) ->
+                    { score = 20
+                    , start = start
+                    , end = end
+                    , positions = List.range start (end - 1)
+                    }
+                )
 
 
-withinOneEdit : List Char -> List Char -> Bool
+withinOneEdit : String -> String -> Bool
 withinOneEdit a b =
     if a == b then
         True
 
     else
-        case ( a, b ) of
-            ( [], [ _ ] ) ->
-                True
-
-            ( [ _ ], [] ) ->
-                True
-
-            ( x :: xs, y :: ys ) ->
-                if x == y then
+        case ( String.uncons a, String.uncons b ) of
+            ( Just ( x, xs ), Just ( y, ys ) ) ->
+                if Char.toCode x == Char.toCode y then
                     withinOneEdit xs ys
 
                 else
@@ -721,17 +759,23 @@ withinOneEdit a b =
                         || a == ys
                         || transposed x xs y ys
 
-            _ ->
-                False
+            ( Nothing, Just ( _, ys ) ) ->
+                String.isEmpty ys
+
+            ( Just ( _, xs ), Nothing ) ->
+                String.isEmpty xs
+
+            ( Nothing, Nothing ) ->
+                True
 
 
-transposed : Char -> List Char -> Char -> List Char -> Bool
+transposed : Char -> String -> Char -> String -> Bool
 transposed x xs y ys =
-    case xs of
-        x2 :: xs_ ->
-            y == x2 && ys == x :: xs_
+    case ( String.uncons xs, String.uncons ys ) of
+        ( Just ( x2, restX ), Just ( y2, restY ) ) ->
+            Char.toCode x2 == Char.toCode y && Char.toCode y2 == Char.toCode x && restX == restY
 
-        [] ->
+        _ ->
             False
 
 

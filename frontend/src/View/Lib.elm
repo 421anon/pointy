@@ -10,7 +10,6 @@ import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
-import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
@@ -42,71 +41,21 @@ viewSearchBox model =
         state =
             get searchBox model
 
-        searching =
-            state.active && not (Fuzzy.isEmpty (Fuzzy.parse state.input))
+        stepSearch =
+            Model.getStepSearch model
 
-        searchEntries =
+        searching =
+            state.active && stepSearch.input == state.input && not (Fuzzy.isEmpty (Fuzzy.parse state.input))
+
+        matches =
             if searching then
-                Lib.stepSearchEntries model
+                stepSearch.matches
 
             else
                 []
 
-        availableItems =
-            List.map Tuple.first searchEntries
-
-        indexes =
-            searchEntries
-                |> List.filterMap
-                    (\( item, indexed ) ->
-                        item.id |> Maybe.map (\id -> ( id, indexed ))
-                    )
-                |> Dict.fromList
-
-        unindexed =
-            Fuzzy.index { fields = [], demoted = False }
-
-        toSearchDocument item =
-            item.id
-                |> Maybe.andThen (\id -> Dict.get id indexes)
-                |> Maybe.withDefault unindexed
-
-        toMenuItemDetail query match item =
-            let
-                fieldDetail field =
-                    case field.tag of
-                        Model.SearchNote ->
-                            Just ("Note: " ++ Fuzzy.excerpt query field.text)
-
-                        Model.SearchArg key ->
-                            Just (key ++ ": " ++ Fuzzy.excerpt query field.text)
-
-                        _ ->
-                            Nothing
-
-                fallback =
-                    let
-                        path =
-                            folderFor match item
-                                |> Maybe.unwrap "" (\projectId -> " · " ++ Lib.canonicalNamePath model projectId)
-
-                        typeName =
-                            item.id
-                                |> Maybe.andThen (\id -> Dict.get id (get Lenses.steps model))
-                                |> Maybe.map (\step -> Lib.stepTypeName model step.type_)
-                                |> Maybe.withDefault ""
-                    in
-                    typeName ++ path
-            in
-            List.findMap fieldDetail match.fields
-                |> Maybe.withDefault fallback
-                |> Just
-
-        folderFor match item =
-            Lib.searchFolder match |> Maybe.orElse item.mProjectId
-
         onSelect match item =
-            Maybe.map2 Actions.onSelectSearch (folderFor match item) item.id
+            Maybe.map2 Actions.onSelectSearch (Lib.stepSearchFolder match item) item.id
                 |> Maybe.withDefault (Flow.pure ())
 
         relatedItems =
@@ -135,7 +84,7 @@ viewSearchBox model =
         { optic = searchBox
         , selectState = state
         , selected_ = []
-        , availableItems = availableItems
+        , matches = matches
         , readOnly = False
         , hasChanged = False
         , label = ""
@@ -147,7 +96,6 @@ viewSearchBox model =
         , onInputItemClick = \_ -> Nothing
         , toMenuItemName = .name
         , toMenuItemTooltip = \item -> item.id |> Maybe.map (\id -> [ "id: " ++ String.fromInt id ]) |> Maybe.withDefault []
-        , toSearchDocument = toSearchDocument
         , related = relatedItems
         , statusNotice = statusNotice
         , emptyNotice =
@@ -156,7 +104,6 @@ viewSearchBox model =
 
             else
                 Nothing
-        , toMenuItemDetail = toMenuItemDetail
         , onChange = Flow.pure ()
         , onInputChange = Actions.onSearchInputChange
         , onRemove = \_ -> Flow.pure ()

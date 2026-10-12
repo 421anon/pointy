@@ -3,7 +3,7 @@ module Model.Core exposing (..)
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Array
 import Browser.Navigation
-import Components.Select exposing (SelectState, initSelectState)
+import Components.Select exposing (Item, Ranked, SelectState, initSelectState)
 import Csv.Parser
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
@@ -1535,6 +1535,18 @@ type SearchField
     | SearchArg String
 
 
+type alias StepSearchState =
+    { entries : List ( Item ChildRef, Fuzzy.Indexed SearchField )
+    , input : String
+    , matches : List (Ranked ChildRef SearchField)
+    }
+
+
+initStepSearchState : StepSearchState
+initStepSearchState =
+    { entries = [], input = "", matches = [] }
+
+
 type alias RelatedStep =
     { stepId : Int
     , detail : String
@@ -1568,7 +1580,7 @@ type Model
         , modalConfirm : ModalConfirmConfig
         , downstreamEntities : Dict Int (List Int)
         , searchBox : SelectState ChildRef
-        , stepSearchIndex : Dict Int (Fuzzy.Indexed SearchField)
+        , stepSearch : StepSearchState
         , searchInfo : ApiData SearchInfo
         , relatedSearch : RelatedSearchState
         , relatedSearchDebounce : Debounce RelatedSearchJob
@@ -2045,7 +2057,7 @@ initialModel key route flags =
         , modalConfirm = initModalConfirmConfig
         , downstreamEntities = Dict.empty
         , searchBox = initSelectState
-        , stepSearchIndex = Dict.empty
+        , stepSearch = initStepSearchState
         , searchInfo = NotAsked
         , relatedSearch = initRelatedSearchState
         , relatedSearchDebounce = Debounce.init
@@ -2872,9 +2884,9 @@ getSearchBox (Model model) =
     model.searchBox
 
 
-getStepSearchIndex : Model -> Dict Int (Fuzzy.Indexed SearchField)
-getStepSearchIndex (Model model) =
-    model.stepSearchIndex
+getStepSearch : Model -> StepSearchState
+getStepSearch (Model model) =
+    model.stepSearch
 
 
 getSearchInfo : Model -> ApiData SearchInfo
