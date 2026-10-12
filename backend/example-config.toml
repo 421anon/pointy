@@ -76,7 +76,7 @@ timeout-seconds = 60
 # query-template = "Instruct: Given a search typed into a research notebook, retrieve the analysis steps it refers to\nQuery: {query}"
 # document-template = "{document}"
 # batch-size = 128
-# min-similarity = 0.5
+# min-similarity = 0.4
 #
 # [search.judge]
 # provider = "neuralwatt"

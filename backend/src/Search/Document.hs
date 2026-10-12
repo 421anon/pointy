@@ -5,6 +5,7 @@ module Search.Document (
     buildDocuments,
 ) where
 
+import Certificates (evalProjectDefinitions)
 import Control.Monad.Except (ExceptT, throwError)
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Object, Value (..), eitherDecode)
@@ -24,8 +25,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (Eval)
-import ProjectFiles (RawProjectFile (..), loadRawProjectFilesAt)
-import ProjectTree (ChildRef (..), normalizeProjects, projectChildRefs)
+import ProjectTree (ChildRef (..), projectChildRefs)
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext, runNixEvalJsonInRepo)
 
@@ -47,15 +47,7 @@ data StepEntry = StepEntry
 
 buildDocuments :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) [StepDocument]
 buildDocuments ctx = do
-    rawFiles <- loadRawProjectFilesAt ctx
-    let projects =
-            normalizeProjects $
-                Object $
-                    KeyMap.fromList
-                        [ (Key.fromText (T.pack (show (rawFileId rawFile))), payload)
-                        | rawFile <- rawFiles
-                        , Just payload <- [decodePayload (rawFilePayload rawFile)]
-                        ]
+    projects <- evalProjectDefinitions ctx
     stepConfigOutput <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
     stepConfig <- either (throwError . ("Failed to read the step configuration: " ++)) pure (decodeJson stepConfigOutput)
     let entries = stepEntriesOf projects
@@ -71,10 +63,6 @@ buildDocuments ctx = do
         | entry <- entries
         , let text = documentTextFor stepConfig names paths entry
         ]
-
-decodePayload :: Maybe Text -> Maybe Value
-decodePayload Nothing = Nothing
-decodePayload (Just payload) = either (const Nothing) Just (decodeJson (T.unpack payload))
 
 decodeJson :: String -> Either String Value
 decodeJson = eitherDecode . BL.fromStrict . TE.encodeUtf8 . T.pack
@@ -169,24 +157,31 @@ flattenArg names (Object fields) =
         _ -> concatMap (flattenArg names . snd) (KeyMap.toList fields)
 flattenArg _ Null = []
 
+maxArgumentLength :: Int
+maxArgumentLength = 1500
+
+maxDocumentLength :: Int
+maxDocumentLength = 6000
+
 documentTextFor :: Value -> Map Int Text -> Map Int Text -> StepEntry -> Text
 documentTextFor stepConfig names paths entry =
-    T.intercalate
-        "\n"
-        ( filter
-            (not . T.null)
-            [ "Step: " <> entryName entry
-            , "Type: " <> typeLabel
-            ]
-            ++ folderLine
-            ++ ["Note: " <> entryNote entry | not (T.null (entryNote entry))]
-            ++ argumentLines
-        )
+    T.take maxDocumentLength $
+        T.intercalate
+            "\n"
+            ( filter
+                (not . T.null)
+                [ "Step: " <> entryName entry
+                , "Type: " <> typeLabel
+                ]
+                ++ folderLine
+                ++ ["Note: " <> entryNote entry | not (T.null (entryNote entry))]
+                ++ argumentLines
+            )
   where
     argumentLines =
-        [ fieldLabel key <> ": " <> T.intercalate ", " values
+        [ fieldLabel key <> ": " <> T.take maxArgumentLength (T.intercalate ", " values)
         | (key, value) <- entryArgs entry
-        , let values = flattenArg names value
+        , let values = filter (not . T.null . T.strip) (flattenArg names value)
         , not (null values)
         ]
     folderLine = case Map.lookup (entryId entry) paths of
