@@ -259,6 +259,22 @@ function installGutterDragListeners(app) {
   document.addEventListener("pointercancel", emitEnd);
 }
 
+export function storedAutoApply() {
+  return localStorage.getItem("agent:autoApply") !== "false";
+}
+
+export function agentClientId() {
+  const stored = localStorage.getItem("agent:clientId");
+  if (stored) return stored;
+  const created = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+  try {
+    localStorage.setItem("agent:clientId", created);
+  } catch {}
+  return created;
+}
+
 export function connectPorts(app) {
   elmApp = app;
   function emitToElm(type, data) {
@@ -296,6 +312,10 @@ export function connectPorts(app) {
     localStorage.setItem("agent:lastChat", sessionId);
   }
 
+  function storeAutoApply(enabled) {
+    localStorage.setItem("agent:autoApply", String(enabled));
+  }
+
   const ffiFns = {
     openDialog,
     closeDialog,
@@ -306,6 +326,7 @@ export function connectPorts(app) {
     toggleTheme,
     agentPrompt,
     storeLastChat,
+    storeAutoApply,
     setUnsentTreeOps,
   };
 
@@ -334,6 +355,12 @@ export function connectPorts(app) {
   if (app.ports && app.ports.openIngestStream) {
     app.ports.openIngestStream.subscribe(() => openIngestStream(app));
   }
+
+  window.addEventListener("storage", (event) => {
+    if ((event.key === null || event.key === "agent:autoApply") && app.ports && app.ports.agentAutoApplyIn) {
+      app.ports.agentAutoApplyIn.send(storedAutoApply());
+    }
+  });
 
   window.addEventListener("beforeunload", () => {
     closeStepStatusStream();

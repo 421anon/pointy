@@ -13,9 +13,11 @@ extra = []
 enforcement = "scheduler"
 
 [agent]
-# The backend invokes runner-command through sbox-command from the session worktree.
+# For a turn, the backend invokes runner-command through sbox-command from {home}, which
+# becomes sbox's project directory; it binds the session worktree read-write, mounts the
+# files of reviewed steps read-only, and starts the runner inside the worktree.
 # Argument templates expand the following placeholders:
-#   {worktree}    absolute path to the session worktree (the sandbox CWD)
+#   {worktree}    absolute path to the session worktree (the runner's working directory)
 #   {home}        per-session HOME directory ({worktree}/../home), pre-created and bind-mounted into the sandbox
 #   {sessionRoot} {worktree}/.., useful for binding turn logs etc.
 #   {sessionId}   short opaque session id

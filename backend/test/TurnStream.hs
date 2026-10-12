@@ -34,6 +34,8 @@ main = withSystemTempDirectory "turn-stream-test" $ \home -> do
             , createdAt = now
             , updatedAt = now
             , agentCurrentProjectId = Nothing
+            , autoApply = True
+            , autoApplyClient = Nothing
             }
     logPath <- turnLogFilePath "s1" "t1"
     let turn =
@@ -41,6 +43,7 @@ main = withSystemTempDirectory "turn-stream-test" $ \home -> do
                 { turnId = "t1"
                 , turnSessionId = "s1"
                 , turnPrompt = "hello"
+                , turnAutomatic = False
                 , turnStatus = "running"
                 , turnExitCode = Nothing
                 , turnStartedAt = now

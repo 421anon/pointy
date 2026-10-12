@@ -217,6 +217,7 @@ subscriptions model =
         , statusBarClockSubscription model
         , Browser.Events.onKeyDown Organize.shortcutDecoder
         , Ports.organizeDragIn Organize.onOrganizeDragEvent
+        , Ports.agentAutoApplyIn Actions.syncAgentAutoApply
         , Browser.Events.onVisibilityChange
             (\visibility ->
                 if visibility == Browser.Events.Visible then

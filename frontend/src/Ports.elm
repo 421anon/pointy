@@ -1,4 +1,4 @@
-port module Ports exposing (agentTurnIn, clusterStatusIn, ffiIn, ffiOut, gutterDragEnd, ingestJobsIn, openAgentTurnStream, openClusterStatusStream, openIngestStream, openStepStatusStream, organizeDragIn, stepStatusIn)
+port module Ports exposing (agentAutoApplyIn, agentTurnIn, clusterStatusIn, ffiIn, ffiOut, gutterDragEnd, ingestJobsIn, openAgentTurnStream, openClusterStatusStream, openIngestStream, openStepStatusStream, organizeDragIn, stepStatusIn)
 
 import Json.Decode
 import Json.Encode
@@ -20,6 +20,9 @@ port openAgentTurnStream : { sessionId : String, turnId : String } -> Cmd msg
 
 
 port agentTurnIn : (Json.Decode.Value -> msg) -> Sub msg
+
+
+port agentAutoApplyIn : (Bool -> msg) -> Sub msg
 
 
 port gutterDragEnd : (Json.Decode.Value -> msg) -> Sub msg
