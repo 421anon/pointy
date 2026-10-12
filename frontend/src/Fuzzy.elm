@@ -813,56 +813,65 @@ rankItem tokens toIndexed item =
         Nothing
 
     else
-        let
-            fieldHits =
-                List.map
-                    (\( field, prepared_ ) ->
-                        ( field, prepared_, List.map (tokenHit field.precision prepared_) tokens )
+        tokenHits fields tokens []
+            |> Maybe.map
+                (\hitsByToken ->
+                    let
+                        tokenBests =
+                            List.filterMap (List.map2 Tuple.pair fields >> List.foldl bestField Nothing) hitsByToken
+
+                        base =
+                            List.sum (List.map (\( score, _, _ ) -> score) tokenBests)
+
+                        matchFields =
+                            List.unique (List.map (\( _, field, _ ) -> field) tokenBests)
+
+                        concatTokens =
+                            String.concat tokens
+
+                        bonus =
+                            List.map2 (\( field, prepared_ ) hits -> fieldBonus tokens concatTokens ( field, prepared_, hits )) fields (List.transpose hitsByToken)
+                                |> List.maximum
+                                |> Maybe.withDefault 0
+
+                        total =
+                            base + bonus
+                    in
+                    ( item
+                    , { score =
+                            if document.demoted then
+                                total // 2
+
+                            else
+                                total
+                      , fields = matchFields
+                      }
                     )
-                    fields
-
-            bests =
-                List.indexedMap (\tokenIndex _ -> List.foldl (bestField tokenIndex) Nothing fieldHits) tokens
-        in
-        if List.any Maybe.isNothing bests then
-            Nothing
-
-        else
-            let
-                tokenBests =
-                    List.filterMap identity bests
-
-                base =
-                    List.sum (List.map (\( score, _, _ ) -> score) tokenBests)
-
-                matchFields =
-                    List.unique (List.map (\( _, field, _ ) -> field) tokenBests)
-
-                bonus =
-                    List.map (fieldBonus tokens (String.concat tokens)) fieldHits
-                        |> List.maximum
-                        |> Maybe.withDefault 0
-
-                total =
-                    base + bonus
-            in
-            Just
-                ( item
-                , { score =
-                        if document.demoted then
-                            total // 2
-
-                        else
-                            total
-                  , fields = matchFields
-                  }
                 )
 
 
-bestField : Int -> ( Field tag, Prepared, List (Maybe Hit) ) -> Maybe ( Int, Field tag, Hit ) -> Maybe ( Int, Field tag, Hit )
-bestField tokenIndex ( field, _, hits ) best =
-    case List.head (List.drop tokenIndex hits) of
-        Just (Just hit) ->
+tokenHits : List ( Field tag, Prepared ) -> List String -> List (List (Maybe Hit)) -> Maybe (List (List (Maybe Hit)))
+tokenHits fields tokens acc =
+    case tokens of
+        [] ->
+            Just (List.reverse acc)
+
+        token :: rest ->
+            let
+                hits =
+                    List.map (\( field, prepared_ ) -> tokenHit field.precision prepared_ token) fields
+            in
+            if List.any Maybe.isJust hits then
+                tokenHits fields rest (hits :: acc)
+
+            else
+                Nothing
+
+
+bestField : ( ( Field tag, Prepared ), Maybe Hit ) -> Maybe ( Int, Field tag, Hit ) -> Maybe ( Int, Field tag, Hit )
+bestField ( ( field, _ ), mHit ) best =
+    case mHit of
+        Just hit ->
             let
                 weighted =
                     hit.score * field.weight
@@ -878,7 +887,7 @@ bestField tokenIndex ( field, _, hits ) best =
                 Nothing ->
                     Just ( weighted, field, hit )
 
-        _ ->
+        Nothing ->
             best
 
 
