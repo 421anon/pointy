@@ -52,9 +52,13 @@ hasBuiltOutput status =
             True
 
 
-showsOutputs : StepRunState -> Bool
-showsOutputs runState =
-    Maybe.unwrap False hasBuiltOutput (ApiData.toMaybe runState.status) || showsLastBuilt runState
+shownStatus : StepRunState -> ApiData Status
+shownStatus runState =
+    if showsLastBuilt runState then
+        Success StatusSuccess
+
+    else
+        runState.status
 
 
 showsLastBuilt : StepRunState -> Bool

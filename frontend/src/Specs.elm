@@ -22,10 +22,10 @@ steps name entry =
         , childKind = StepChild
         , lens = Lenses.stepFormsAt name
         , encodeRecord = Encode.stepValue stepType
-        , status = \r -> ApiData.unwrap (ApiData.loading Nothing) .status r.runState
+        , status = \r -> ApiData.unwrap (ApiData.loading Nothing) Model.shownStatus r.runState
         , validationErrors = always []
         , isLocked = .review >> (/=) Nothing
-        , directoryView = try (Lenses.runState << ApiData.success << where_ Model.showsOutputs << Lenses.directoryView)
+        , directoryView = \r -> ApiData.toMaybe r.runState |> Maybe.map .directoryView
         , srcFilesView =
             if has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType then
                 Just << .srcFiles
