@@ -550,7 +550,7 @@ applyStepStatus snapshotCommit mCertificate status_ rs =
                     , certificate = mCertificate
                     , status = status_
                     , outputsCommit = snapshotCommit
-                    , directoryView = Model.emptyFolder
+                    , directoryView = { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
                     }
     in
     if rs == Success updated then
@@ -1004,7 +1004,6 @@ upsertStep spec =
                                 , srcFileDraft = r.srcFileDraft
                                 , srcFileWriting = r.srcFileWriting
                                 , lastBuilt = r.lastBuilt
-                                , lastBuiltFolders = r.lastBuiltFolders
                             }
 
                         saveSrcFiles =
@@ -1663,14 +1662,14 @@ cloneStep spec record =
     in
     Flow.getAll (steps << values << name)
         (\existingNames ->
-            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) { record | runState = NotAsked, lastBuilt = Dict.empty, lastBuiltFolders = Dict.empty })
+            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) { record | runState = NotAsked, lastBuilt = Dict.empty })
                 |> Flow.return ()
         )
 
 
 shareEntity : Int -> Route.HighlightTarget -> List String -> Maybe Route.LineRange -> Flow Model ()
 shareEntity entityId target pathSegments mRange =
-    Flow.try (orElseT (sharedLastBuiltRevision entityId target) (orElseT (route << Route.page << Route.viewedCommitT) (commitHash << success)))
+    Flow.try (orElseT (route << Route.page << Route.viewedCommitT) (commitHash << success))
         (\mCommit_ ->
             Flow.forAll currentProjectPath
                 (\projectPath_ ->

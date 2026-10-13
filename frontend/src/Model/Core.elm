@@ -450,7 +450,6 @@ type alias StepRecord =
         , srcFileDraft : Maybe SrcFileDraft
         , srcFileWriting : Bool
         , lastBuilt : Dict String (ApiData (Maybe LastBuilt))
-        , lastBuiltFolders : Dict String DirectoryFolder
         }
 
 
@@ -488,11 +487,16 @@ blankStep type_ =
     , isUpdating = False
     , lastModifiedAt = Nothing
     , createdAt = Nothing
-    , srcFiles = emptyFolder
+    , srcFiles =
+        { children = NotAsked
+        , expanded = False
+        , extras = NotAsked
+        , size = Nothing
+        , mimeType = Nothing
+        }
     , srcFileDraft = Nothing
     , srcFileWriting = False
     , lastBuilt = Dict.empty
-    , lastBuiltFolders = Dict.empty
     }
 
 
@@ -2261,16 +2265,6 @@ type alias DirectoryFolder =
     }
 
 
-emptyFolder : DirectoryFolder
-emptyFolder =
-    { children = NotAsked
-    , expanded = False
-    , extras = NotAsked
-    , size = Nothing
-    , mimeType = Nothing
-    }
-
-
 type DirectoryItem
     = File DirectoryFile
     | Folder DirectoryFolder
@@ -2582,7 +2576,6 @@ mergeSteps fetched previous =
                         , srcFileDraft = old.srcFileDraft
                         , srcFileWriting = old.srcFileWriting
                         , lastBuilt = old.lastBuilt
-                        , lastBuiltFolders = old.lastBuiltFolders
                     }
 
                 Nothing ->

@@ -129,9 +129,9 @@ review =
     lens "review" .review (\t r -> { t | review = r })
 
 
-revision : Lens ls { a | revision : b } b x y
-revision =
-    lens ".revision" .revision (\record revision_ -> { record | revision = revision_ })
+reviewRevision : Lens ls { a | revision : b } b x y
+reviewRevision =
+    lens "reviewRevision" .revision (\reviewed revision_ -> { reviewed | revision = revision_ })
 
 
 isReadOnlyRoute : Model -> Bool
@@ -261,12 +261,12 @@ viewedRevision =
 stepShownRevision : Int -> Traversal Model String x y
 stepShownRevision stepId =
     orElseT (stepRecordById stepId << runState << success << commit)
-        (orElseT (stepRecordById stepId << review << just << revision) viewedRevision)
+        (orElseT (stepRecordById stepId << review << just << reviewRevision) viewedRevision)
 
 
 stepOutputsRevision : Int -> Traversal Model String x y
 stepOutputsRevision stepId =
-    orElseT (stepRecordById stepId << outputsRevision) (stepShownRevision stepId)
+    orElseT (stepRecordById stepId << runState << success << outputsCommit) (stepShownRevision stepId)
 
 
 lastBuilt : Lens ls { a | lastBuilt : b } b x y
@@ -292,73 +292,19 @@ notStartedRevision statusShown =
     notStartedRun statusShown << commit
 
 
-lastBuiltShown : Traversal StepRecord LastBuilt x y
-lastBuiltShown =
+lastBuiltShown : StepRecord -> Maybe LastBuilt
+lastBuiltShown record =
     let
-        settledAt record revision_ =
-            has (lastBuiltAt revision_ << just << where_ ApiData.settled) record
+        lastBuiltEntry revision_ =
+            try (lastBuiltAt revision_ << just) record
 
-        shownRevision record run =
-            if settledAt record run.commit then
-                run.commit
-
-            else
-                run.outputsCommit
-
-        shownIn record =
-            try (notStartedRun (orElseT success ApiData.reloading)) record
-                |> Maybe.unwrap void (\run -> lastBuiltAt (shownRevision record run) << just << success << just)
+        shownEntry run =
+            Maybe.filter ApiData.settled (lastBuiltEntry run.commit)
+                |> Maybe.orElse (lastBuiltEntry run.outputsCommit)
     in
-    traversal "lastBuiltShown"
-        (\record -> all (shownIn record) record)
-        (\f record -> over (shownIn record) f record)
-
-
-lastBuiltFolders : Lens ls { a | lastBuiltFolders : b } b x y
-lastBuiltFolders =
-    lens ".lastBuiltFolders" .lastBuiltFolders (\record lastBuiltFolders_ -> { record | lastBuiltFolders = lastBuiltFolders_ })
-
-
-lastBuiltFolderAt : String -> Lens ls StepRecord DirectoryFolder x y
-lastBuiltFolderAt revision_ =
-    lastBuiltFolders << lens ("[" ++ revision_ ++ "]") (Dict.get revision_ >> Maybe.withDefault Model.emptyFolder) (\folders folder_ -> Dict.insert revision_ folder_ folders)
-
-
-lastBuiltFolder : Traversal StepRecord DirectoryFolder x y
-lastBuiltFolder =
-    let
-        folderIn record =
-            try (lastBuiltShown << revision) record
-                |> Maybe.unwrap void lastBuiltFolderAt
-    in
-    traversal "lastBuiltFolder"
-        (\record -> all (folderIn record) record)
-        (\f record -> over (folderIn record) f record)
-
-
-outputDirectory : Traversal StepRecord DirectoryFolder x y
-outputDirectory =
-    orElseT lastBuiltFolder (runState << success << directoryView)
-
-
-outputsRevision : Traversal StepRecord String x y
-outputsRevision =
-    orElseT (lastBuiltShown << revision) (runState << success << outputsCommit)
-
-
-sharedLastBuiltRevision : Int -> HighlightTarget -> Traversal Model String x y
-sharedLastBuiltRevision stepId target =
-    case target of
-        Output ->
-            stepRecordById stepId << lastBuiltShown << revision
-
-        Source ->
-            void
-
-
-hasBrowsableOutput : StepRecord -> Bool
-hasBrowsableOutput record =
-    has lastBuiltShown record || has (runState << success << status << success << where_ Model.hasBuiltOutput) record
+    try (notStartedRun (orElseT success ApiData.reloading)) record
+        |> Maybe.andThen shownEntry
+        |> Maybe.andThen (try (success << just))
 
 
 selectExistingSteps : Lens ls { a | selectExistingSteps : b } b x y
@@ -629,7 +575,7 @@ entryAtPath path =
 
 directoryItemAtPath : Int -> List String -> Traversal Model DirectoryItem x y
 directoryItemAtPath recordId_ path =
-    stepRecordById recordId_ << outputDirectory << entryAtPath path
+    stepRecordById recordId_ << runState << success << directoryView << entryAtPath path
 
 
 srcFilesItemAtPath : Int -> List String -> Traversal Model DirectoryItem x y
@@ -659,7 +605,7 @@ extrasAt recordId_ path =
 
 rootExtrasAt : Int -> Traversal Model (ApiData (Dict String Value)) x y
 rootExtrasAt recordId_ =
-    stepRecordById recordId_ << outputDirectory << folderExtras
+    stepRecordById recordId_ << runState << success << directoryView << folderExtras
 
 
 folderExpandedAt : Int -> List String -> Traversal Model Bool x y

@@ -25,8 +25,7 @@ steps name entry =
         , status = \r -> ApiData.unwrap (ApiData.loading Nothing) .status r.runState
         , validationErrors = always []
         , isLocked = .review >> (/=) Nothing
-        , directoryView = try Lenses.outputDirectory
-        , hasBrowsableOutput = Lenses.hasBrowsableOutput
+        , directoryView = \r -> ApiData.toMaybe r.runState |> Maybe.map .directoryView
         , srcFilesView =
             if has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType then
                 Just << .srcFiles
@@ -53,7 +52,6 @@ allProjects presets =
         , validationErrors = .validationErrors
         , isLocked = always False
         , directoryView = always Nothing
-        , hasBrowsableOutput = always False
         , srcFilesView = always Nothing
         , defaultRecord =
             \model ->
