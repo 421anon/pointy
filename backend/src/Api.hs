@@ -5,7 +5,7 @@ module Api (API) where
 
 import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
-import ApiTypes (DynamicJson, RawJSON)
+import ApiTypes (DynamicJson, RawJSON, Turtle)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
@@ -447,6 +447,13 @@ type StepSearchEndpoint =
 
 type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 
+type ArtifactRdf =
+    "rdf"
+        :> "artifact"
+        :> Description "Describes a step at a commit and every step upstream of it as Turtle. Segments are the artifact permalink's project path, step id and commit; nginx routes /artifact/ requests accepting text/turtle here."
+        :> CaptureAll "segments" Text
+        :> Get '[Turtle] (Headers '[Header "Cache-Control" Text, Header "Vary" Text] Text)
+
 type API =
     GetCommitHash
         :<|> GetUserRepoInfo
@@ -505,3 +512,4 @@ type API =
         :<|> DeleteSession
         :<|> AgentUsageEndpoint
         :<|> StepSearch
+        :<|> ArtifactRdf

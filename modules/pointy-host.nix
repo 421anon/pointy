@@ -52,6 +52,16 @@ in
         root = "${cfg.frontendPackage}";
         tryFiles = "$uri $uri/ /index.html";
       };
+      locations."/artifact/" = {
+        root = "${cfg.frontendPackage}";
+        tryFiles = "/index.html =404";
+        extraConfig = ''
+          add_header Vary Accept;
+          if ($http_accept ~* "text/turtle") {
+            rewrite ^/artifact/(.*)$ /backend/rdf/artifact/$1 last;
+          }
+        '';
+      };
       locations."/docs/" = lib.mkIf (cfg.docsPackage != null) {
         alias = "${cfg.docsPackage}/";
         extraConfig = ''

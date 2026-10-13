@@ -37,6 +37,11 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - Running rows show elapsed time, queued rows show how long they have waited and Slurm's pending reason, starting rows show how long they have been preparing, and uploads show progress. A build of a commit other than the current one carries that commit's short hash.
 - Running, queued and starting rows have a Stop button that cancels the build at the commit it is building.
 
+## Linked data
+
+- An artifact permalink, `/artifact/<project path>/<step id>/<commit>`, requested with `Accept: text/turtle` returns that step and every step upstream of it at that commit as Turtle. Each step is a `prov:Plan` with its name as `rdfs:label`, its template, its output store path, `prov:wasDerivedFrom` edges to the steps it consumes and `schema:about` links. Upstream steps are named by the permalink of the first folder holding them, or with an empty project path when no folder does. The response never changes, so it is served as immutable.
+- A step file may list the records its data is about beside `note`, for example a sample in an electronic lab notebook: `about = [ "https://herbie.example.org/graph/samples/…/" ];`. Only absolute http(s) addresses are published.
+
 ## Development
 
 A NixOS VM runs a server environment:

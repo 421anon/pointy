@@ -13,6 +13,7 @@ import Effects (AppEffects, AppM, toHandler)
 import qualified EffectRunner
 import EffectRunner (installRunner)
 import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnLogStreamHandler, usageHandler)
+import Handlers.ArtifactRdf (artifactRdfHandler)
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
@@ -100,8 +101,8 @@ server =
         :<|> (\request -> liftHandler (renameSessionHandler request))
         :<|> (\request -> liftHandler (purgeSessionHandler request))
         :<|> liftHandler usageHandler
-        :<|> stepSearchInfoHandler
-        :<|> (\commit request -> stepSearchHandler commit request)
+        :<|> (stepSearchInfoHandler :<|> (\commit request -> stepSearchHandler commit request))
+        :<|> artifactRdfHandler
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy
 corsPolicy req = case pathInfo req of

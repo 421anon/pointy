@@ -17,6 +17,9 @@ module ProjectTree (
     stepEntries,
     projectStepEntries,
     projectChildRefs,
+    projectIds,
+    projectObject,
+    stepFolderPaths,
     applyTreeOps,
 ) where
 
@@ -199,6 +202,34 @@ projectChildRefs :: Object -> [ChildRef]
 projectChildRefs project = case KeyMap.lookup "children" project of
     Just (Array items) -> map entryRef (effectiveOrder (mapMaybe (either (const Nothing) Just . parseEntry) (V.toList items)))
     _ -> []
+
+projectIds :: Value -> [Int]
+projectIds (Object projects) =
+    mapMaybe projectIdOf (KeyMap.toList projects)
+  where
+    projectIdOf (key, _) = readMaybe (T.unpack (Key.toText key))
+projectIds _ = []
+
+projectObject :: Value -> Int -> Maybe Object
+projectObject (Object projects) projectId = case KeyMap.lookup (Key.fromText (T.pack (show projectId))) projects of
+    Just (Object project) -> Just project
+    _ -> Nothing
+projectObject _ _ = Nothing
+
+stepFolderPaths :: Value -> Map Int [Int]
+stepFolderPaths projects = Map.fromListWith (\_ first -> first) (concatMap (walk Set.empty []) roots)
+  where
+    ids = projectIds projects
+    childRefsOf projectId = maybe [] projectChildRefs (projectObject projects projectId)
+    nestedIds = Set.fromList [nested | projectId <- ids, ProjectChild nested <- childRefsOf projectId]
+    roots = filter (`Set.notMember` nestedIds) ids
+    walk visited ancestors projectId =
+        let path = if projectId == 0 then [] else ancestors ++ [projectId]
+            children = childRefsOf projectId
+            visited' = Set.insert projectId visited
+            here = [(stepId, path) | StepChild stepId <- children]
+            nested = [walk visited' path child | ProjectChild child <- children, Set.notMember child visited']
+         in here ++ concat nested
 
 renumberEntries :: [Entry] -> [Entry]
 renumberEntries = zipWith number [0 :: Int ..]

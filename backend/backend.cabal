@@ -22,6 +22,7 @@ library
     Api
     ApiTypes
     App
+    ArtifactRdf
     BuildLog
     BuildRunner
     Bus
@@ -33,6 +34,7 @@ library
     Fixture.Document
     Fixture.Server
     Handlers.Agent
+    Handlers.ArtifactRdf
     Handlers.Autocomplete
     Handlers.CommitHash
     Handlers.ClusterStream
@@ -395,6 +397,19 @@ test-suite turn-watchdog
     , text
     , time
     , unix
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite artifact-rdf
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          ArtifactRdfTest.hs
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , text
 
   hs-source-dirs:   test
   default-language: Haskell2010
