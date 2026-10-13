@@ -904,12 +904,15 @@ reviewStep draft =
         |> Flow.andThen
             (\model ->
                 let
+                    shownOutputs =
+                        try (lastBuiltOutputsCommit draft.stepId Route.Output) model
+
                     mCommit_ =
-                        try (route << Route.page << Route.viewedCommitT) model
+                        Maybe.orElse (try (route << Route.page << Route.viewedCommitT) model) shownOutputs
                 in
                 whenStepIdle draft.stepId
                     (Api.reviewStep draft mCommit_
-                        |> Flow.andThen (settleReview draft.stepId (Maybe.map (\revision -> { revision = revision, reviewedBy = draft.reviewedBy, comments = draft.comments, comparison = NotAsked }) (Model.viewedRevision model)) "Step reviewed.")
+                        |> Flow.andThen (settleReview draft.stepId (Maybe.map (\revision -> { revision = revision, reviewedBy = draft.reviewedBy, comments = draft.comments, comparison = NotAsked }) (Maybe.orElse (Model.viewedRevision model) shownOutputs)) "Step reviewed.")
                     )
             )
 

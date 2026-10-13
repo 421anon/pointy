@@ -1955,21 +1955,6 @@ $delimited-grid-row-height: 28px;
   text-underline-offset: 3px;
 }
 
-a.step-review-link {
-  cursor: pointer;
-  text-decoration: none;
-
-  &:hover,
-  &:focus-visible {
-    color: var(--text-primary);
-    background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
-  }
-}
-
-.step-review-link-hash {
-  font-family: monospace;
-}
-
 .icon-btn-inactive {
   cursor: default;
   opacity: 0.45;

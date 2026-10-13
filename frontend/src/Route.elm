@@ -9,7 +9,6 @@ module Route exposing
     , Page(..)
     , ProjectParams
     , Route
-    , atCommit
     , backToHead
     , chat
     , chatHref
@@ -232,16 +231,6 @@ backToHead page_ =
                 }
 
         NotFound _ ->
-            page_
-
-
-atCommit : String -> Int -> Page -> Page
-atCommit commit stepId page_ =
-    case page_ of
-        Project params ->
-            Project { params | mCommit = Just commit, mHighlight = Just { id = stepId, target = Output, path = [], range = Nothing }, mCompare = Nothing }
-
-        _ ->
             page_
 
 

@@ -97,7 +97,7 @@ viewReviewControls model spec stepId record =
         content =
             viewReviewPopover model spec stepId record
                 ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId mReviewedAt) record.review
-                ++ Maybe.unwrap [] (List.singleton << viewLastBuilt model stepId) (Lenses.lastBuiltShown record)
+                ++ Maybe.unwrap [] (List.singleton << viewLastBuilt model) (Lenses.lastBuiltShown record)
     in
     if List.isEmpty content then
         Nothing
@@ -183,30 +183,28 @@ viewReviewIndicator model spec stepId mReviewedAt reviewed =
         ++ [ Html.viewIf (ApiData.toMaybe reviewed.comparison == Just Model.ViewedOutputUnbuilt) (viewBuildViewedLink model spec stepId) ]
 
 
-viewLastBuilt : Model -> Int -> Model.LastBuilt -> Html msg
-viewLastBuilt model stepId lastBuilt =
+viewLastBuilt : Model -> Model.LastBuilt -> Html msg
+viewLastBuilt model lastBuilt =
     let
         shortRevision =
             String.left 7 lastBuilt.revision
 
         explanation =
-            "The current definition is not built. Its last built version, at revision "
+            "Last built at revision "
                 ++ shortRevision
-                ++ " ("
+                ++ ", "
                 ++ Time.Distance.inWords lastBuilt.committedAt (Model.getNow model)
                 ++ ", at "
                 ++ formatUtcMinute lastBuilt.committedAt
-                ++ "), differs from it. Output files show that version. Click to open that revision."
+                ++ ". The current definition differs from that version and is not built yet; until it is, the status, output files and review refer to that version."
     in
-    Html.a
-        [ Html.Attributes.class "step-review-chip step-review-link"
-        , Route.href (Route.fromPage (Route.atCommit lastBuilt.revision stepId (Model.getRoute model).page))
+    Html.span
+        [ Html.Attributes.class "step-review-revision"
         , Html.Attributes.title explanation
-        , Html.Attributes.attribute "aria-label" ("Last built. " ++ explanation)
+        , Html.Attributes.attribute "aria-label" explanation
         ]
         [ iconCustom False "history" [ Html.Attributes.attribute "aria-hidden" "true" ]
-        , Html.text "Last built"
-        , Html.span [ Html.Attributes.class "step-review-link-hash" ] [ Html.text shortRevision ]
+        , Html.span [ Html.Attributes.class "step-review-revision-hash" ] [ Html.text shortRevision ]
         ]
 
 
@@ -350,6 +348,11 @@ viewReviewPopover model spec stepId record =
             Html.viewMaybe (\reason -> Html.p [ Html.Attributes.class "step-review-note" ] [ Html.text reason ])
                 (Maybe.andThen (.comparison >> blockedReason) (Maybe.filter (always (not canRecord)) record.review))
 
+        lastBuiltNote =
+            Html.viewMaybe
+                (\lastBuilt -> Html.p [ Html.Attributes.class "step-review-note" ] [ Html.text ("This reviews the last built version, at revision " ++ String.left 7 lastBuilt.revision ++ ", whose output files are shown. The current definition is not built.") ])
+                (Lenses.lastBuiltShown record)
+
         popover =
             Html.div
                 [ Html.Attributes.class "step-review-popover"
@@ -368,6 +371,7 @@ viewReviewPopover model spec stepId record =
                     ]
                 , Html.div [ Html.Attributes.class "step-review-popover-body" ]
                     [ blockedNote
+                    , lastBuiltNote
                     , field "Reviewed by" <|
                         Html.input
                             [ Html.Attributes.class "step-review-input"
