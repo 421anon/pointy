@@ -2738,7 +2738,7 @@ select.field-changed,
 
   50% {
     opacity: 0.7;
-    transform: scale(1.15);
+    transform: scale(0.85);
   }
 }
 
@@ -3351,7 +3351,9 @@ body:has(dialog[open]) {
 
 .status-bar__count--starting .status-bar__marker,
 .status-bar__marker--starting {
-  border: 2px dashed var(--text-muted);
+  border: 2px solid var(--text-muted);
+  border-block-start-color: transparent;
+  animation: spin 1s linear infinite;
 }
 
 .status-bar__count--transferring .status-bar__marker,
@@ -3611,6 +3613,11 @@ body:has(dialog[open]) {
 
   .status-bar__expand-icon {
     transition: none;
+  }
+
+  .status-bar__count--starting .status-bar__marker,
+  .status-bar__marker--starting {
+    animation: none;
   }
 }
 

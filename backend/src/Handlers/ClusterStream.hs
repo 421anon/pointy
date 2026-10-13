@@ -83,7 +83,7 @@ jobPollDelayMicros = 5 * 1000000
 
 deriveJobProgress :: UTCTime -> [SlurmJob] -> Map Int TrackedBuild -> Map Int JobProgress -> Map Int JobProgress
 deriveJobProgress now jobs builds previous =
-    Map.mapWithKey progressFor (Map.fromListWith furthest (mapMaybe trackedJob jobs))
+    Map.union (Map.mapWithKey progressFor (Map.fromListWith furthest (mapMaybe trackedJob jobs))) previous
   where
     trackedJob job = do
         comment <- decodeJobComment =<< slurmJobComment job
