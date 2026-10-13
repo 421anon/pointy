@@ -443,6 +443,7 @@ loadProjects =
                                 Model.getProjectsRequest model + 1
                         in
                         Flow.setAll projectsRequest request
+                            |> Flow.seq (Flow.when (not (has (projects << success) model)) (Flow.setAll projects (Loading Nothing)))
                             |> Flow.seq
                                 (Api.fetchProjects target stepConfig_
                                     |> Flow.andThen
@@ -494,7 +495,7 @@ applyLoadedProjects target result =
                                     reapplyOrganizeQueue
                                 )
                             |> Flow.seq (Flow.modify Selection.pruneSelection)
-                            |> Flow.seq (Flow.modify Model.Lib.warmStepSearch)
+                            |> Flow.seq (Flow.async (Flow.yield () |> Flow.seq (Flow.modify Model.Lib.warmStepSearch)))
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async loadProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)

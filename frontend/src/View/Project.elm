@@ -24,12 +24,12 @@ viewCurrentProject model =
                     Html.span [ class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading step config..." ]
 
                 Just _ ->
-                    Html.nothing
+                    viewLoadingProject
 
         Loading mProject ->
             mProject
                 |> Maybe.map (viewProject model)
-                |> Maybe.withDefault (Html.span [ class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading project..." ])
+                |> Maybe.withDefault viewLoadingProject
 
         Error _ ->
             if try currentProjectPath model == Just [] && has (projects << ApiData.success) model then
@@ -37,6 +37,11 @@ viewCurrentProject model =
 
             else
                 viewProjectNotFound
+
+
+viewLoadingProject : Html msg
+viewLoadingProject =
+    Html.span [ class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading project..." ]
 
 
 viewRootProjectMissing : Html (Flow Model ())
