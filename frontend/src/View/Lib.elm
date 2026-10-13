@@ -148,10 +148,14 @@ statusPresentation status =
 
 rollupChildFor : Model -> Maybe Int -> Int -> Maybe Model.RollupChild
 rollupChildFor model mParentProjectId folderProjectId =
-    mParentProjectId
-        |> Maybe.andThen (\parentId -> Dict.get parentId (Model.getProjectRollups model))
+    rollupFor model mParentProjectId
         |> Maybe.andThen ApiData.toMaybe
         |> Maybe.andThen (\rollup -> Model.rollupChildById rollup folderProjectId)
+
+
+rollupFor : Model -> Maybe Int -> Maybe (ApiData.ApiData Model.ProjectRollup)
+rollupFor model =
+    Maybe.andThen (\parentId -> Dict.get parentId (Model.getProjectRollups model))
 
 
 viewRollupSummary : Model -> Maybe Int -> Int -> Html msg
@@ -169,17 +173,42 @@ viewRollupSummary model mParentProjectId folderProjectId =
                 [ Html.span [ class ("status-indicator " ++ presentation.className) ] []
                 , Html.text (String.fromInt count)
                 ]
+
+        chips child =
+            List.map (\( status, count ) -> chip status count) (List.filter (\( _, count ) -> count > 0) (Model.rollupStatusEntries child.statuses))
+                ++ [ Html.span [ class "rollup-chip rollup-total", Html.Attributes.title "Total steps" ]
+                        [ Html.text (String.fromInt child.steps) ]
+                   ]
+
+        loading =
+            case rollupFor model mParentProjectId of
+                Just (ApiData.Loading _) ->
+                    True
+
+                _ ->
+                    False
     in
-    Html.viewMaybe
-        (\child ->
-            Html.span [ class "rollup-summary" ]
-                (List.map (\( status, count ) -> chip status count) (List.filter (\( _, count ) -> count > 0) (Model.rollupStatusEntries child.statuses))
-                    ++ [ Html.span [ class "rollup-chip rollup-total", Html.Attributes.title "Total steps" ]
-                            [ Html.text (String.fromInt child.steps) ]
-                       ]
-                )
-        )
-        (rollupChildFor model mParentProjectId folderProjectId)
+    case ( rollupChildFor model mParentProjectId folderProjectId, loading ) of
+        ( Just child, False ) ->
+            Html.span [ class "rollup-summary" ] (chips child)
+
+        ( Just child, True ) ->
+            Html.span
+                [ class "rollup-summary rollup-summary--updating"
+                , Html.Attributes.attribute "aria-busy" "true"
+                , Html.Attributes.title "Updating step counts"
+                ]
+                (chips child)
+
+        ( Nothing, True ) ->
+            Html.span
+                [ class "rollup-summary"
+                , Html.Attributes.attribute "aria-busy" "true"
+                ]
+                [ Html.span [ class "rollup-chip rollup-chip--skeleton", Html.Attributes.title "Loading step counts" ] [] ]
+
+        ( Nothing, False ) ->
+            Html.nothing
 
 
 viewAlsoInLinks : Model -> Maybe Int -> Model.ChildRef -> List (Html (Flow Model ()))

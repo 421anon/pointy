@@ -285,6 +285,46 @@ body {
   }
 }
 
+.rollup-summary--updating {
+  animation: rollup-updating 1.2s ease-in-out infinite alternate;
+}
+
+.rollup-chip--skeleton {
+  width: 28px;
+  height: 12px;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(
+    90deg,
+    var(--shimmer-base) 20%,
+    var(--shimmer-shine) 50%,
+    var(--shimmer-base) 80%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.2s linear infinite;
+  opacity: 0.35;
+}
+
+@keyframes rollup-updating {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rollup-summary--updating {
+    animation: none;
+    opacity: 0.6;
+  }
+
+  .rollup-chip--skeleton {
+    animation: none;
+  }
+}
+
 .workspace > .app {
   flex: 1;
   min-width: 0;

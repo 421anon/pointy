@@ -297,6 +297,7 @@ organizeApply ops =
         (over store (Model.applyTreeOps ops)
             >> Selection.pruneSelection
         )
+        |> Flow.seq (Flow.forAll currentProjectId (\projectId -> Flow.over (projectRollups << Dict.Accessors.id projectId << just) ApiData.toLoading))
         |> Flow.seq (Flow.over organizeQueue (\queue -> { queue | pending = queue.pending ++ ops }))
         |> Flow.seq publishUnsentTreeOps
         |> Flow.seq scheduleOrganizeFlush
@@ -725,7 +726,7 @@ settleProjectRollup projectId mCommit request result =
                     Flow.pure ()
 
                 else
-                    Flow.over projectRollups (Dict.insert projectId (ApiData.fromResult result))
+                    Flow.over projectRollups (Dict.insert projectId (settledRollup (Model.getOrganizeQueue model) result))
                         |> Flow.seq
                             (Flow.pure result
                                 |> FlowError.foldResult (\_ -> Flow.pure ()) (\err -> addToast False (Http.errorMessage err))
@@ -738,6 +739,20 @@ rollupTarget model =
     Maybe.map
         (\path -> ( Route.pathProjectId path, try (route << Route.page << Route.viewedCommitT) model ))
         (try currentProjectPath model)
+
+
+settledRollup : Model.OrganizeQueue -> Result Http.Error Model.ProjectRollup -> ApiData Model.ProjectRollup
+settledRollup queue result =
+    case result of
+        Ok rollup ->
+            if List.isEmpty queue.pending && List.isEmpty queue.inFlight then
+                Success rollup
+
+            else
+                Loading (Just rollup)
+
+        Err err ->
+            Error err
 
 
 loadProjectReviews : Flow Model ()
@@ -4058,7 +4073,7 @@ rollupAffectedFor model statuses =
                 (\stepId report acc ->
                     acc
                         || (Set.member stepId reachable
-                                && has (stepRecordById stepId << runState << success << status << where_ (ApiData.toMaybe >> (/=) (Just report.status))) model
+                                && not (has (stepRecordById stepId << runState << success << status << where_ ((==) (Success report.status))) model)
                            )
                 )
                 False
