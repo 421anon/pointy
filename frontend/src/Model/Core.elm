@@ -52,6 +52,11 @@ hasBuiltOutput status =
             True
 
 
+runStatus : { a | runState : ApiData StepRunState } -> ApiData Status
+runStatus =
+    .runState >> ApiData.unwrap (ApiData.loading Nothing) .status
+
+
 shownStatus : StepRunState -> ApiData Status
 shownStatus runState =
     if showsLastBuilt runState then

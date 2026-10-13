@@ -878,7 +878,7 @@ viewRunStop spec stopping record =
         Just id ->
             let
                 status =
-                    ApiData.unwrap (ApiData.loading Nothing) .status record.runState
+                    Model.runStatus record
 
                 isRunning =
                     status

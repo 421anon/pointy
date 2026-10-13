@@ -169,7 +169,7 @@ viewReviewIndicator model spec stepId mReviewedAt reviewed =
                 [ iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
 
         reviewedRevision =
-            viewReviewedRevision model mReviewedAt reviewed.revision
+            viewRevision [] (reviewedAtExplanation model mReviewedAt) reviewed.revision
 
         comparisonControls =
             if ApiData.toMaybe reviewed.comparison == Just Model.DifferentContent then
@@ -185,11 +185,8 @@ viewReviewIndicator model spec stepId mReviewedAt reviewed =
 
 viewLastBuilt : Model -> Model.LastBuilt -> Html msg
 viewLastBuilt model lastBuilt =
-    let
-        shortRevision =
-            String.left 7 lastBuilt.revision
-
-        explanation =
+    viewRevision [ iconCustom False "history" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
+        (\shortRevision ->
             "Last built at revision "
                 ++ shortRevision
                 ++ ", "
@@ -197,15 +194,8 @@ viewLastBuilt model lastBuilt =
                 ++ ", at "
                 ++ formatUtcMinute lastBuilt.committedAt
                 ++ ". The current definition differs from that version and is not built yet; until it is, the status, output files and review refer to that version."
-    in
-    Html.span
-        [ Html.Attributes.class "step-review-revision"
-        , Html.Attributes.title explanation
-        , Html.Attributes.attribute "aria-label" explanation
-        ]
-        [ iconCustom False "history" [ Html.Attributes.attribute "aria-hidden" "true" ]
-        , Html.span [ Html.Attributes.class "step-review-revision-hash" ] [ Html.text shortRevision ]
-        ]
+        )
+        lastBuilt.revision
 
 
 viewDiffSection : Model -> StepRecord -> Html (Flow Model ())
@@ -253,23 +243,21 @@ viewBuildViewedLink model spec stepId =
             ]
 
 
-viewReviewedRevision : Model -> Maybe Posix -> String -> Html (Flow Model ())
-viewReviewedRevision model mReviewedAt reviewedRevision =
+viewRevision : List (Html msg) -> (String -> String) -> String -> Html msg
+viewRevision icons explain revision =
     let
         shortRevision =
-            String.left 7 reviewedRevision
+            String.left 7 revision
 
         explanation =
-            reviewedAtExplanation model mReviewedAt shortRevision
+            explain shortRevision
     in
     Html.span
         [ Html.Attributes.class "step-review-revision"
         , Html.Attributes.title explanation
         , Html.Attributes.attribute "aria-label" explanation
         ]
-        [ Html.span [ Html.Attributes.class "step-review-revision-hash" ]
-            [ Html.text shortRevision ]
-        ]
+        (icons ++ [ Html.span [ Html.Attributes.class "step-review-revision-hash" ] [ Html.text shortRevision ] ])
 
 
 reviewedAtExplanation : Model -> Maybe Posix -> String -> String
