@@ -99,6 +99,18 @@ main = do
                 (Map.singleton 7 (JobProgress "41" Queued trackedAt (Just "Priority")))
             )
         )
+    assertEqual
+        "a step whose job has left Slurm keeps its last phase until its build ends"
+        (Just (JobProgress "41" Running earlierStart Nothing))
+        ( Map.lookup
+            7
+            ( deriveJobProgress
+                now
+                (jobs ["41|" ++ jobName ++ "|" ++ stepComment 7 commitA ++ "|COMPLETED|0:10|None"])
+                buildsAtA
+                (Map.singleton 7 (JobProgress "41" Running earlierStart Nothing))
+            )
+        )
     assertBool
         "activity payload carries phase, reason and start"
         ( "\"phase\":\"queued\"" `occursIn` activityPayload

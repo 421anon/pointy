@@ -2835,9 +2835,9 @@ getTraySteps (Model model) =
         building =
             List.map (\activity -> ( activity.stepId, activityState activity, activity.commits )) model.activeSteps
 
-        reportedRunning =
+        requestedRuns =
             model.steps
-                |> Dict.filter (\_ step -> ApiData.unwrap Nothing (.status >> ApiData.toMaybe) step.runState == Just StatusRunning)
+                |> Dict.filter (\_ step -> ApiData.unwrap False (.status >> (==) (Loading (Just StatusRunning))) step.runState)
                 |> Dict.keys
                 |> List.map (\stepId -> ( stepId, TrayStarting Nothing, [] ))
 
@@ -2878,7 +2878,7 @@ getTraySteps (Model model) =
                         }
                     )
     in
-    (transfers ++ building ++ reportedRunning)
+    (transfers ++ building ++ requestedRuns)
         |> List.uniqueBy (\( stepId, _, _ ) -> stepId)
         |> List.filterMap trayStep
 
