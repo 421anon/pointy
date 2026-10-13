@@ -178,6 +178,12 @@ type alias StepRunState =
     }
 
 
+type alias LastBuilt =
+    { revision : String
+    , committedAt : Time.Posix
+    }
+
+
 type alias StatusReport =
     { commit : String
     , status : Status
@@ -443,6 +449,8 @@ type alias StepRecord =
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
         , srcFileWriting : Bool
+        , lastBuilt : Dict String (ApiData (Maybe LastBuilt))
+        , lastBuiltFolders : Dict String DirectoryFolder
         }
 
 
@@ -480,15 +488,11 @@ blankStep type_ =
     , isUpdating = False
     , lastModifiedAt = Nothing
     , createdAt = Nothing
-    , srcFiles =
-        { children = NotAsked
-        , expanded = False
-        , extras = NotAsked
-        , size = Nothing
-        , mimeType = Nothing
-        }
+    , srcFiles = emptyFolder
     , srcFileDraft = Nothing
     , srcFileWriting = False
+    , lastBuilt = Dict.empty
+    , lastBuiltFolders = Dict.empty
     }
 
 
@@ -2026,6 +2030,7 @@ type alias Flags =
 
 type StepStatusEvent
     = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
+    | SSELastBuilt { commit : String, steps : List ( Int, LastBuilt ) }
     | SSEHeartbeat
     | SSEError String
 
@@ -2253,6 +2258,16 @@ type alias DirectoryFolder =
     , extras : ApiData (Dict String Value)
     , size : Maybe Int
     , mimeType : Maybe String
+    }
+
+
+emptyFolder : DirectoryFolder
+emptyFolder =
+    { children = NotAsked
+    , expanded = False
+    , extras = NotAsked
+    , size = Nothing
+    , mimeType = Nothing
     }
 
 
@@ -2566,6 +2581,8 @@ mergeSteps fetched previous =
                         , srcFiles = old.srcFiles
                         , srcFileDraft = old.srcFileDraft
                         , srcFileWriting = old.srcFileWriting
+                        , lastBuilt = old.lastBuilt
+                        , lastBuiltFolders = old.lastBuiltFolders
                     }
 
                 Nothing ->

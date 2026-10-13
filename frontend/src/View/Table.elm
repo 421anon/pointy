@@ -1,6 +1,6 @@
-module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewStoppingIndicator, viewUploadProgress)
+module View.Table exposing (ListingRow, actionsPopoverId, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewStoppingIndicator, viewUploadProgress)
 
-import Accessors exposing (has, just, key, lens, set, try)
+import Accessors exposing (just, key, lens, set, try)
 import Actions
 import Ansi.Log as AnsiLog
 import Api.ApiData as ApiData exposing (ApiData(..))
@@ -9,7 +9,7 @@ import Components.Combobox as Combobox
 import Components.Markdown as Markdown
 import Components.Select as Select
 import Dict
-import Extra.Accessors exposing (A_Traversal, by, remkT, where_)
+import Extra.Accessors exposing (A_Traversal, by, remkT)
 import Extra.Decode as Decode
 import Extra.Http as Http
 import Flow exposing (Flow)
@@ -43,11 +43,6 @@ import Time.Distance
 import View.Icons exposing (icon, iconCustom)
 import View.Lib
 import View.Organize
-
-
-hasBrowsableOutput : ApiData Status -> Bool
-hasBrowsableOutput =
-    has (ApiData.success << where_ Model.hasBuiltOutput)
 
 
 stepFormReadOnly : Model -> TableSpec (BaseRecord a) -> BaseRecord a -> Bool
@@ -824,7 +819,7 @@ viewRowActions model parentId link spec record =
                 |> Flow.seq loadSourceFiles
 
         recordActions =
-            [ { shouldShow = hasBrowsableOutput << TableSpec.getStatus spec
+            [ { shouldShow = TableSpec.getHasBrowsableOutput spec
               , render = \r -> Html.viewMaybe (dirButton isDirectoryOpen []) r.id
               }
             , { shouldShow = \r -> not isReadOnly && TableSpec.getIsLocked spec r

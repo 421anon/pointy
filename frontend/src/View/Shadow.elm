@@ -33,7 +33,7 @@ import View.FileBrowser as FileBrowser
 import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
-import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+import View.Table exposing (ListingRow, actionsPopoverId, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
 
 
 type alias ComparisonChip =
@@ -97,6 +97,7 @@ viewReviewControls model spec stepId record =
         content =
             viewReviewPopover model spec stepId record
                 ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId mReviewedAt) record.review
+                ++ Maybe.unwrap [] (List.singleton << viewLastBuilt model stepId) (try Lenses.lastBuiltShown record)
     in
     if List.isEmpty content then
         Nothing
@@ -180,6 +181,37 @@ viewReviewIndicator model spec stepId mReviewedAt reviewed =
     in
     (reviewedRevision :: comparisonControls)
         ++ [ Html.viewIf (ApiData.toMaybe reviewed.comparison == Just Model.ViewedOutputUnbuilt) (viewBuildViewedLink model spec stepId) ]
+
+
+viewLastBuilt : Model -> Int -> Model.LastBuilt -> Html msg
+viewLastBuilt model stepId lastBuilt =
+    let
+        shortRevision =
+            String.left 7 lastBuilt.revision
+
+        age =
+            Time.Distance.inWords lastBuilt.committedAt (Model.getNow model)
+
+        explanation =
+            "The current definition is not built. Its last built version, at revision "
+                ++ shortRevision
+                ++ " ("
+                ++ age
+                ++ ", at "
+                ++ formatUtcMinute lastBuilt.committedAt
+                ++ "), differs from it. Output files show that version. Click to open that revision."
+    in
+    Html.a
+        [ Html.Attributes.class "step-review-chip step-review-link"
+        , Route.href (Route.fromPage (Route.atCommit lastBuilt.revision stepId (Model.getRoute model).page))
+        , Html.Attributes.title explanation
+        , Html.Attributes.attribute "aria-label" ("Last built. " ++ explanation)
+        ]
+        [ iconCustom False "history" [ Html.Attributes.attribute "aria-hidden" "true" ]
+        , Html.text "Last built"
+        , Html.span [ Html.Attributes.class "step-review-link-hash" ] [ Html.text shortRevision ]
+        , Html.text age
+        ]
 
 
 viewDiffSection : Model -> StepRecord -> Html (Flow Model ())
@@ -897,7 +929,7 @@ listingRow model parentId stepConfig presentTypes link =
             , statusSortKey = statusSortRank (TableSpec.getStatus spec step)
             , isUpdating = step.isUpdating
             , openRow =
-                if hasBrowsableOutput (TableSpec.getStatus spec step) then
+                if TableSpec.getHasBrowsableOutput spec step then
                     Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ())) step.id
 
                 else

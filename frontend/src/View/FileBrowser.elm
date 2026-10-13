@@ -3,7 +3,7 @@ module View.FileBrowser exposing (viewDirectorySection, viewHtmlFrame, viewSrcFi
 import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.Api as Api
-import Api.ApiData as ApiData exposing (ApiData(..), success)
+import Api.ApiData as ApiData exposing (ApiData(..))
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
@@ -18,8 +18,8 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
+import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, hasBrowsableOutput, mHighlight, mimeType, outputDirectory, outputsRevision, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
@@ -167,19 +167,19 @@ viewDirectorySection model spec step =
             Html.nothing
 
         Just stepId ->
-            ApiData.toMaybe step.runState
+            Maybe.map2 Tuple.pair (try outputsRevision step) (try outputDirectory step)
                 |> Html.viewMaybe
-                    (\rs ->
+                    (\( revision, directory ) ->
                         Html.div [ class "output-files-section" ]
                             [ Html.h3 [] [ Html.text "Output Files" ]
                             , renderDirectoryContents model
                                 spec
                                 (Just stepId)
-                                (Just (OutputDir stepId rs.outputsCommit))
-                                (has (success << where_ hasBuiltOutput) rs.status)
+                                (Just (OutputDir stepId revision))
+                                (hasBrowsableOutput step)
                                 []
                                 "directory-view"
-                                rs.directoryView.children
+                                directory.children
                             ]
                     )
 

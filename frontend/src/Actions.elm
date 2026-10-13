@@ -548,7 +548,7 @@ applyStepStatus snapshotCommit mCertificate status_ rs =
                     , certificate = mCertificate
                     , status = status_
                     , outputsCommit = snapshotCommit
-                    , directoryView = { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing }
+                    , directoryView = Model.emptyFolder
                     }
     in
     if rs == Success updated then
@@ -987,6 +987,8 @@ upsertStep spec =
                                 , srcFiles = Model.closeDirectoryFileViews r.srcFiles
                                 , srcFileDraft = r.srcFileDraft
                                 , srcFileWriting = r.srcFileWriting
+                                , lastBuilt = r.lastBuilt
+                                , lastBuiltFolders = r.lastBuiltFolders
                             }
 
                         saveSrcFiles =
@@ -1645,14 +1647,14 @@ cloneStep spec record =
     in
     Flow.getAll (steps << values << name)
         (\existingNames ->
-            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) { record | runState = NotAsked })
+            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) { record | runState = NotAsked, lastBuilt = Dict.empty, lastBuiltFolders = Dict.empty })
                 |> Flow.return ()
         )
 
 
 shareEntity : Int -> Route.HighlightTarget -> List String -> Maybe Route.LineRange -> Flow Model ()
 shareEntity entityId target pathSegments mRange =
-    Flow.try (orElseT (route << Route.page << Route.viewedCommitT) (commitHash << success))
+    Flow.try (orElseT (sharedLastBuiltRevision entityId target) (orElseT (route << Route.page << Route.viewedCommitT) (commitHash << success)))
         (\mCommit_ ->
             Flow.forAll currentProjectPath
                 (\projectPath_ ->
@@ -4026,6 +4028,9 @@ onStepStatusIn value =
                             |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async loadProjectRollup))
                     )
 
+        Ok (SSELastBuilt { commit, steps }) ->
+            Flow.modify (flip (List.foldl (announceLastBuilt commit)) steps)
+
         Ok SSEHeartbeat ->
             Flow.pure ()
 
@@ -4111,6 +4116,7 @@ applyListedStatuses statuses model =
                 |> List.map (always (Flow.async loadProjectReviews))
     in
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
+        |> Flow.seq requestLastBuiltVersions
         |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (unlisted buffer) (unlisted statuses)))
         |> Flow.seq (Flow.batchM (hooks ++ settles ++ reviewReloads))
         |> Flow.seq settlePendingStops
@@ -4231,6 +4237,36 @@ settlePendingBuild snapshotCommit stepId status_ =
                     _ ->
                         Flow.pure ()
             )
+
+
+requestLastBuiltVersions : Flow Model ()
+requestLastBuiltVersions =
+    Flow.getAll stepRecords (List.filterMap lastBuiltLookup >> List.foldl (Flow.seq << requestLastBuiltVersion) (Flow.pure ()))
+
+
+lastBuiltLookup : StepRecord -> Maybe ( Int, String )
+lastBuiltLookup record =
+    Maybe.map2 Tuple.pair record.id (try (notStartedRevision success << where_ (not << flip Dict.member record.lastBuilt)) record)
+
+
+requestLastBuiltVersion : ( Int, String ) -> Flow Model ()
+requestLastBuiltVersion ( stepId, viewed ) =
+    let
+        entry =
+            stepRecordById stepId << lastBuiltAt viewed
+    in
+    Flow.setAll entry (Just (Loading Nothing))
+        |> Flow.seq
+            (Flow.async
+                (Api.fetchLastBuiltVersion stepId viewed
+                    |> Flow.andThen (Flow.setAll (entry << just << where_ (not << ApiData.settled)) << ApiData.fromResult)
+                )
+            )
+
+
+announceLastBuilt : String -> ( Int, Model.LastBuilt ) -> Model -> Model
+announceLastBuilt viewed ( stepId, announced ) =
+    set (stepRecordById stepId << lastBuiltAt viewed) (Just (Success (Just announced)))
 
 
 startClusterStatusStream : Flow Model Decode.Value

@@ -10,6 +10,7 @@ module Model.TableSpec exposing
     , getDisplayName
     , getEncodeRecord
     , getFindRecord
+    , getHasBrowsableOutput
     , getIsLocked
     , getLens
     , getName
@@ -37,6 +38,7 @@ type TableSpec a
         , validationErrors : a -> List String
         , isLocked : a -> Bool
         , directoryView : a -> Maybe DirectoryFolder
+        , hasBrowsableOutput : a -> Bool
         , srcFilesView : a -> Maybe DirectoryFolder
         , encodeRecord : a -> Json.Encode.Value
         , defaultRecord : Model -> a
@@ -116,6 +118,11 @@ isShareableStatus status =
 getDirectoryView : TableSpec a -> a -> Maybe DirectoryFolder
 getDirectoryView (TableSpec spec) =
     spec.directoryView
+
+
+getHasBrowsableOutput : TableSpec a -> a -> Bool
+getHasBrowsableOutput (TableSpec spec) =
+    spec.hasBrowsableOutput
 
 
 getSrcFilesView : TableSpec a -> a -> Maybe DirectoryFolder

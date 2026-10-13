@@ -5,12 +5,15 @@
 
 module Handlers.StatusStream (EventStream, stepStatusStreamHandler, projectStatusHandler, streamLoop) where
 
-import Bus (ProjectSnapshot, subscribe)
+import BuiltSteps (LastBuiltVersion)
+import Bus (StatusEvent (..), subscribe)
 import qualified Bus
 import Control.Concurrent.STM (TChan)
+import Control.Lens ((?~))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (encode, object, toJSON, (.=))
+import Data.Aeson.Lens (atKey)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
@@ -66,11 +69,12 @@ projectStatusHandler projectId commit = do
             (broadcastProjectStatus projectId targetCommit Nothing)
     pure NoContent
 
-streamLoop :: TChan ProjectSnapshot -> IO (S.StepT IO BS.ByteString)
+streamLoop :: TChan StatusEvent -> IO (S.StepT IO BS.ByteString)
 streamLoop busChan =
-    Sse.broadcastLoop snapshotEvent busChan
+    Sse.broadcastLoop statusEvent busChan
   where
-    snapshotEvent snapshot = ("snapshot", encodeSnapshot (Bus.projectId snapshot) (Bus.commit snapshot) (Bus.certificates snapshot) (Bus.statuses snapshot))
+    statusEvent (SnapshotEvent snapshot) = ("snapshot", encodeSnapshot (Bus.projectId snapshot) (Bus.commit snapshot) (Bus.certificates snapshot) (Bus.statuses snapshot))
+    statusEvent (LastBuiltEvent targetCommit versions) = ("last-built", encodeLastBuilt targetCommit versions)
 
 encodeSnapshot :: Int -> Text -> Map Int Text -> Map Int (Text, Maybe Text) -> LBS.ByteString
 encodeSnapshot projectId targetCommit certificates statuses =
@@ -88,5 +92,14 @@ encodeSnapshot projectId targetCommit certificates statuses =
                             )
                     )
                     (Map.toList statuses)
+            ]
+        )
+
+encodeLastBuilt :: Text -> Map Int LastBuiltVersion -> LBS.ByteString
+encodeLastBuilt targetCommit versions =
+    encode
+        ( object
+            [ "commit" .= targetCommit
+            , "steps" .= Map.elems (Map.mapWithKey (\sid -> (atKey "stepId" ?~ toJSON sid) . toJSON) versions)
             ]
         )

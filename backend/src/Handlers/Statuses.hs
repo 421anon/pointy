@@ -25,6 +25,7 @@ module Handlers.Statuses (
 import BuildLog (StepStore, resolveStatusesBatched)
 import BuildRunner (buildKeyForOutPath, waitForCompletion)
 import BuildStatus (StepPaths (..), checkStatus, markBuiltOutputs, partitionImmediateStatuses, resolveStatuses, resolveStepStatus)
+import BuiltSteps (recordBuiltStatuses)
 import Bus (broadcastSnapshot)
 import Certificates (ProjectDef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate, isCertificateBuilding, rawStatusesFor, runningBuildKeys)
 import ClusterBus (beginBuild, endBuild)
@@ -96,13 +97,16 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
             let certified = Map.map (pack . stepCertificate) certificates
             let (immediate, pending) = partitionImmediateStatuses finalStats
             liftIO $ broadcastSnapshot pid targetCommit certified immediate
-            when (not (Map.null pending)) $
-                liftIO $
-                    forkReporting ("Pending status resolution for project " ++ show pid) $ do
-                        resolved <- markBuiltOutputs certificates =<< resolveStatusesFor certified store pending
-                        liftIO $
-                            forM_ (Map.toList resolved) $ \(sid, status_) ->
-                                broadcastSnapshot pid targetCommit certified (Map.singleton sid status_)
+            if Map.null pending
+                then liftIO $ recordBuiltStatuses targetCommit certificates immediate
+                else
+                    liftIO $
+                        forkReporting ("Pending status resolution for project " ++ show pid) $ do
+                            resolved <- markBuiltOutputs certificates =<< resolveStatusesFor certified store pending
+                            liftIO $ do
+                                forM_ (Map.toList resolved) $ \(sid, status_) ->
+                                    broadcastSnapshot pid targetCommit certified (Map.singleton sid status_)
+                                recordBuiltStatuses targetCommit certificates (Map.union resolved immediate)
 
 withStepProjects :: App es => Int -> Text -> (Int -> Eff es ()) -> Eff es ()
 withStepProjects sid targetCommit action = do
@@ -161,7 +165,10 @@ broadcastFailedStepForProjects :: App es => Int -> Text -> Eff es ()
 broadcastFailedStepForProjects sid targetCommit =
     withStepProjects sid targetCommit $ \pid -> do
         certificates <- fromRight Map.empty <$> getProjectCertificates pid targetCommit
-        liftIO . broadcastSnapshot pid targetCommit (Map.map (pack . stepCertificate) certificates) =<< resolveStatuses certificates (Map.singleton sid ("failure", Nothing))
+        statuses <- resolveStatuses certificates (Map.singleton sid ("failure", Nothing))
+        liftIO $ do
+            broadcastSnapshot pid targetCommit (Map.map (pack . stepCertificate) certificates) statuses
+            recordBuiltStatuses targetCommit certificates statuses
 
 broadcastKnownStepStatus :: App es => Int -> Text -> (Text, Maybe Text) -> Eff es ()
 broadcastKnownStepStatus sid targetCommit status =

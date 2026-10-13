@@ -8,6 +8,7 @@ module Certificates (
     getProjectCertificates,
     getStepCertificate,
     getStepCertificates,
+    storedStepPaths,
     projectSchemaVersion,
     schemaVersionWithKeys,
     evalProjectDefinitions,
@@ -26,6 +27,7 @@ module Certificates (
 import BuildLog (StepStore, buildStepStore, rawStatusesBatched)
 import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName)
 import BuildStatus (StepPaths (..), markBuiltOutputs)
+import BuiltSteps (recordBuiltStatuses)
 import Bus (broadcastSnapshot)
 import CertificateStore (lookupCertificate, lookupOutput, storeCertificate, storeOutput)
 import Control.Concurrent (forkIO)
@@ -148,6 +150,14 @@ getStepCertificates stepIds targetCommit = runExceptT $ do
     let ids = Set.toList (Set.fromList stepIds)
     paths <- certificatesForKeys ctx targetCommit ids
     pure $ fillInvalid ids paths
+
+storedStepPaths :: (Eval :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String (Map Int StepPaths))
+storedStepPaths targetCommit stepIds = runExceptT $ do
+    ctx <- prepareCommit targetCommit
+    keys <- resolveKeys ctx stepIds
+    liftIO (Map.mapMaybe id <$> traverse (maybe (pure Nothing) storedPaths) keys)
+  where
+    storedPaths key = lookupCertificate key >>= traverse (\certificate -> StepPaths certificate . fromMaybe certificate <$> lookupOutput key)
 
 projectSchemaVersion :: (Eval :> es, IOE :> es) => ReadRepoContext -> Eff es Int
 projectSchemaVersion ctx = either (const 0) id <$> runExceptT (runJson ctx "#pointy" schemaVersionExpression)
@@ -636,6 +646,7 @@ broadcastRefreshed commit certificates = do
             let certified = Map.map (pack . stepCertificate) certificates
             (statuses, _) <- rawStatusesFor certified
             marked <- markBuiltOutputs certificates statuses
+            liftIO $ recordBuiltStatuses commit certificates marked
             forM_ (Map.toList projects) $ \(pid, stepIds) -> do
                 let targets = Set.intersection (Set.fromList stepIds) (Map.keysSet marked)
                 when (not (Set.null targets)) $

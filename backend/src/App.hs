@@ -17,6 +17,7 @@ import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
+import Handlers.LastBuilt (stepLastBuiltHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectReads (projectRollupHandler)
 import Handlers.Projects (batchProjectOpsHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
@@ -79,6 +80,7 @@ server =
         :<|> runStepHandler
         :<|> stopStepHandler
         :<|> stepLogHandler
+        :<|> stepLastBuiltHandler
         :<|> jobEndedHandler
         :<|> uploadHandler
         :<|> scratchRootHandler
