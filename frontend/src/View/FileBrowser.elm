@@ -3,7 +3,7 @@ module View.FileBrowser exposing (viewDirectorySection, viewHtmlFrame, viewSrcFi
 import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
 import Api.Api as Api
-import Api.ApiData as ApiData exposing (ApiData(..), success)
+import Api.ApiData as ApiData exposing (ApiData(..))
 import Basics.Extra exposing (flip)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
@@ -18,7 +18,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, StepRunState, plainLineHeight, showsLastBuilt, showsOutputs, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -170,18 +170,36 @@ viewDirectorySection model spec step =
             ApiData.toMaybe step.runState
                 |> Html.viewMaybe
                     (\rs ->
-                        Html.div [ class "output-files-section" ]
-                            [ Html.h3 [] [ Html.text "Output Files" ]
+                        Html.div [ classList [ ( "output-files-section", True ), ( "output-files-section--last-built", showsLastBuilt rs ) ] ]
+                            [ Html.h3 [] (Html.text "Output Files" :: viewLastBuiltOutputsNote rs)
                             , renderDirectoryContents model
                                 spec
                                 (Just stepId)
                                 (Just (OutputDir stepId rs.outputsCommit))
-                                (has (success << where_ hasBuiltOutput) rs.status)
+                                (showsOutputs rs)
                                 []
                                 "directory-view"
                                 rs.directoryView.children
                             ]
                     )
+
+
+viewLastBuiltOutputsNote : StepRunState -> List (Html msg)
+viewLastBuiltOutputsNote rs =
+    if showsLastBuilt rs then
+        let
+            shortRevision =
+                String.left 7 rs.outputsCommit
+
+            explanation =
+                "These outputs are from the last built version, at revision " ++ shortRevision ++ ". The current definition is not built."
+        in
+        [ Html.span [ class "output-files-last-built", Html.Attributes.title explanation, Html.Attributes.attribute "aria-label" explanation ]
+            [ icon False "history", Html.text ("Last built " ++ shortRevision) ]
+        ]
+
+    else
+        []
 
 
 viewSrcFilesSection : Model -> StepType -> StepSpec -> StepRecord -> Html (Flow Model ())

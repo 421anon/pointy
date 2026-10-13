@@ -25,7 +25,7 @@ steps name entry =
         , status = \r -> ApiData.unwrap (ApiData.loading Nothing) .status r.runState
         , validationErrors = always []
         , isLocked = .review >> (/=) Nothing
-        , directoryView = \r -> ApiData.toMaybe r.runState |> Maybe.map .directoryView
+        , directoryView = try (Lenses.runState << ApiData.success << where_ Model.showsOutputs << Lenses.directoryView)
         , srcFilesView =
             if has (Shadow.derivation << snd << where_ ((==) WithSrcFiles)) stepType then
                 Just << .srcFiles

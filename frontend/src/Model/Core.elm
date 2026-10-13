@@ -52,6 +52,16 @@ hasBuiltOutput status =
             True
 
 
+showsOutputs : StepRunState -> Bool
+showsOutputs runState =
+    Maybe.unwrap False hasBuiltOutput (ApiData.toMaybe runState.status) || showsLastBuilt runState
+
+
+showsLastBuilt : StepRunState -> Bool
+showsLastBuilt runState =
+    runState.outputsCommit /= runState.commit && ApiData.toMaybe runState.status == Just StatusNotStarted
+
+
 type alias RollupStatuses =
     { notStarted : Int
     , running : Int

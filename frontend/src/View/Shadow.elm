@@ -33,7 +33,7 @@ import View.FileBrowser as FileBrowser
 import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
-import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+import View.Table exposing (ListingRow, actionsPopoverId, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
 
 
 type alias ComparisonChip =
@@ -196,7 +196,7 @@ viewLastBuilt model stepId lastBuilt =
                 ++ Time.Distance.inWords lastBuilt.committedAt (Model.getNow model)
                 ++ ", at "
                 ++ formatUtcMinute lastBuilt.committedAt
-                ++ "), differs from it. Click to view that revision and its outputs."
+                ++ "), differs from it. Output files show that version. Click to open that revision."
     in
     Html.a
         [ Html.Attributes.class "step-review-chip step-review-link"
@@ -925,7 +925,7 @@ listingRow model parentId stepConfig presentTypes link =
             , statusSortKey = statusSortRank (TableSpec.getStatus spec step)
             , isUpdating = step.isUpdating
             , openRow =
-                if hasBrowsableOutput (TableSpec.getStatus spec step) then
+                if Maybe.isJust (TableSpec.getDirectoryView spec step) then
                     Maybe.map (\id -> Actions.toggleOutputEntry id Nothing [] |> Flow.map (always ())) step.id
 
                 else
