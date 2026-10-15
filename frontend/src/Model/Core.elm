@@ -757,6 +757,40 @@ type alias AgentTurn =
     , turnExitCode : Maybe Int
     , turnLogPath : String
     , turnLog : String
+    , turnImageCount : Int
+    }
+
+
+turnImageUrl : String -> Int -> String
+turnImageUrl turnId_ index =
+    "/backend/agent/turn/" ++ turnId_ ++ "/image/" ++ String.fromInt index
+
+
+turnImageUrls : AgentTurn -> List String
+turnImageUrls turn =
+    List.map (turnImageUrl turn.turnId) (List.range 0 (turn.turnImageCount - 1))
+
+
+type alias AgentAttachment =
+    { name : String
+    , size : Int
+    , dataUrl : String
+    }
+
+
+agentImageMimeTypes : List String
+agentImageMimeTypes =
+    [ "image/png", "image/jpeg", "image/gif", "image/webp" ]
+
+
+agentImagesMaxBytes : Int
+agentImagesMaxBytes =
+    6 * 1024 * 1024
+
+
+type alias AgentLightbox =
+    { images : List String
+    , index : Int
     }
 
 
@@ -832,6 +866,7 @@ type ChatTurnStatus
 type alias ChatTurn =
     { turnId : String
     , prompt : Maybe String
+    , images : List String
     , assistant : String
     , status : ChatTurnStatus
     }
@@ -961,6 +996,9 @@ type alias AgentState =
     , isRestoringChat : Bool
     , autoApply : Bool
     , clientId : String
+    , attachments : List AgentAttachment
+    , isDraggingFiles : Bool
+    , lightbox : Maybe AgentLightbox
     }
 
 
@@ -982,6 +1020,9 @@ initAgentState =
     , isRestoringChat = False
     , autoApply = True
     , clientId = ""
+    , attachments = []
+    , isDraggingFiles = False
+    , lightbox = Nothing
     }
 
 
@@ -1079,14 +1120,14 @@ appendPersistedTurn turn entries =
                 if turn.turnAutomatic then
                     Nothing
 
-                else if String.isEmpty (String.trim turn.turnPrompt) then
+                else if String.isEmpty (String.trim turn.turnPrompt) && turn.turnImageCount == 0 then
                     Just "Prompt unavailable"
 
                 else
                     Just turn.turnPrompt
 
             seeded =
-                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, images = turnImageUrls turn, assistant = "", status = chatStatusFromTurn turn } ]
 
             logLines =
                 turnLogLines turn
@@ -1235,7 +1276,7 @@ appendChatLine rawLine entries =
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
                     mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, assistant = "", status = ChatPending } ]
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, images = [], assistant = "", status = ChatPending } ]
 
                 Err _ ->
                     entries

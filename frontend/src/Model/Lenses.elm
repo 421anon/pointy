@@ -978,6 +978,21 @@ autoApply =
     lens ".autoApply" .autoApply (\t autoApply_ -> { t | autoApply = autoApply_ })
 
 
+attachments : Lens ls { a | attachments : b } b x y
+attachments =
+    lens ".attachments" .attachments (\t attachments_ -> { t | attachments = attachments_ })
+
+
+isDraggingFiles : Lens ls { a | isDraggingFiles : b } b x y
+isDraggingFiles =
+    lens ".isDraggingFiles" .isDraggingFiles (\t dragging -> { t | isDraggingFiles = dragging })
+
+
+lightbox : Lens ls { a | lightbox : b } b x y
+lightbox =
+    lens ".lightbox" .lightbox (\t lightbox_ -> { t | lightbox = lightbox_ })
+
+
 sessionAt : String -> Traversal AgentState AgentSessionSummary x y
 sessionAt sessionId =
     sessions << orElseT success ApiData.reloading << by (.session >> .sessionId) sessionId

@@ -72,6 +72,7 @@ main = withSystemTempDirectory "session-store-test" $ \home -> do
     assertEqual "sessions stored before the auto-apply switch keep auto-apply on" (Right (True, Nothing)) ((\s -> (autoApply s, autoApplyClient s)) <$> legacy)
     legacyTurns <- listTurns "s-legacy"
     assertEqual "turns stored before automatic fixes are not automatic" [False] (map turnAutomatic legacyTurns)
+    assertEqual "turns stored before image attachments have no images" [[]] (map turnImages legacyTurns)
 
 sessionIdFor :: Int -> Text
 sessionIdFor n = "s" <> T.pack (show n)
@@ -102,6 +103,7 @@ turnFor now sid n =
         { turnId = "turn-" <> sid <> "-" <> T.pack (show n)
         , turnSessionId = sid
         , turnPrompt = "prompt"
+        , turnImages = []
         , turnAutomatic = False
         , turnStatus = "running"
         , turnExitCode = Nothing

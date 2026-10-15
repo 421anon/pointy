@@ -8,6 +8,7 @@ module Agent.Session (
     PreparedApply (..),
     applyConflictsPending,
     AgentTurn (..),
+    AgentImage (..),
     turnIsUnfinished,
     latestUnfinishedTurn,
     inferTurnExitCode,
@@ -18,6 +19,8 @@ module Agent.Session (
     turnsDir,
     turnMetadataPath,
     turnLogFilePath,
+    turnImagePath,
+    saveTurnImages,
     newTurnId,
     newSessionId,
     normalizeSessionName,
@@ -37,7 +40,7 @@ module Agent.Session (
 
 import Agent.TurnSignal (signalTurnLog)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
-import Control.Monad (filterM)
+import Control.Monad (filterM, unless, zipWithM_)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -118,10 +121,23 @@ instance FromJSON AgentSession where
             <*> obj .:? "autoApply" .!= True
             <*> obj .:? "autoApplyClient"
 
+newtype AgentImage = AgentImage
+    { imageMimeType :: Text
+    }
+    deriving (Show, Eq)
+
+instance ToJSON AgentImage where
+    toJSON image = object ["mimeType" .= imageMimeType image]
+
+instance FromJSON AgentImage where
+    parseJSON = withObject "AgentImage" $ \obj ->
+        AgentImage <$> obj .: "mimeType"
+
 data AgentTurn = AgentTurn
     { turnId :: Text
     , turnSessionId :: Text
     , turnPrompt :: Text
+    , turnImages :: [AgentImage]
     , turnAutomatic :: Bool
     , turnStatus :: Text
     , turnExitCode :: Maybe Int
@@ -138,6 +154,7 @@ instance ToJSON AgentTurn where
             [ "turnId" .= turnId turn
             , "turnSessionId" .= turnSessionId turn
             , "turnPrompt" .= turnPrompt turn
+            , "turnImages" .= turnImages turn
             , "turnAutomatic" .= turnAutomatic turn
             , "turnStatus" .= turnStatus turn
             , "turnExitCode" .= turnExitCode turn
@@ -153,6 +170,7 @@ instance FromJSON AgentTurn where
             <$> obj .: "turnId"
             <*> obj .: "turnSessionId"
             <*> obj .:? "turnPrompt" .!= ""
+            <*> obj .:? "turnImages" .!= []
             <*> obj .:? "turnAutomatic" .!= False
             <*> obj .: "turnStatus"
             <*> obj .:? "turnExitCode"
@@ -218,6 +236,18 @@ turnLogFilePath :: Text -> Text -> IO FilePath
 turnLogFilePath sid tid = do
     dir <- turnsDir sid
     return $ dir </> (T.unpack tid ++ ".log")
+
+turnImagesDir :: Text -> Text -> IO FilePath
+turnImagesDir sid tid = (</> (T.unpack tid ++ "-images")) <$> turnsDir sid
+
+turnImagePath :: Text -> Text -> Int -> IO FilePath
+turnImagePath sid tid index = (</> show index) <$> turnImagesDir sid tid
+
+saveTurnImages :: Text -> Text -> [BS.ByteString] -> IO ()
+saveTurnImages sid tid images = unless (null images) $ do
+    dir <- turnImagesDir sid tid
+    createDirectoryIfMissing True dir
+    zipWithM_ (BS.writeFile . (dir </>) . show) [0 :: Int ..] images
 
 newSessionId :: IO Text
 newSessionId = do

@@ -19,6 +19,8 @@ import Extra.Accessors exposing (A_Traversal, by, orElseT, remkT, where_)
 import Extra.FlowError as FlowError exposing (FlowError)
 import Extra.Http as Http
 import Extra.List as List
+import File exposing (File)
+import File.Select
 import Flow exposing (Flow)
 import Fuzzy
 import Grid
@@ -3642,6 +3644,106 @@ setPendingSteer sessionId prompt =
     Flow.setAll (agent << liveTurnAt sessionId << just << pendingSteer) prompt
 
 
+agentImagesWhileWorkingMessage : String
+agentImagesWhileWorkingMessage =
+    "Wait for the agent to finish before attaching images."
+
+
+agentImagesSteeringMessage : String
+agentImagesSteeringMessage =
+    "Images can't be sent while the agent is working. Remove them or wait for it to finish."
+
+
+pickAgentImages : Flow Model ()
+pickAgentImages =
+    Flow.lift (File.Select.files Model.agentImageMimeTypes (::))
+        |> Flow.andThen stageAgentImages
+
+
+setAgentFileDrag : Bool -> Flow Model ()
+setAgentFileDrag =
+    Flow.setAll (agent << isDraggingFiles)
+
+
+dropAgentImages : List File -> Flow Model ()
+dropAgentImages =
+    flip Flow.seq (setAgentFileDrag False) << stageAgentImages
+
+
+stageAgentImages : List File -> Flow Model ()
+stageAgentImages files =
+    Flow.forAll agent
+        (\agentState ->
+            if has (selectedSessionId << just << where_ (flip agentSessionRunning agentState)) agentState then
+                addToast False agentImagesWhileWorkingMessage
+
+            else
+                let
+                    ( images, others ) =
+                        List.partition (File.mime >> flip List.member Model.agentImageMimeTypes) files
+
+                    fitting =
+                        fitAgentImages (List.sum (List.map .size agentState.attachments)) images
+                in
+                Flow.when (not (List.isEmpty others)) (addToast False "Only PNG, JPEG, GIF, and WebP images can be attached.")
+                    |> Flow.seq
+                        (Flow.when (List.length fitting < List.length images)
+                            (addToast False ("Images can add up to at most " ++ String.fromInt (Model.agentImagesMaxBytes // (1024 * 1024)) ++ " MB per message."))
+                        )
+                    |> Flow.seq (Flow.performTask (Task.sequence (List.map File.toUrl fitting)))
+                    |> Flow.andThen (Flow.over (agent << attachments) << flip (++) << List.map2 agentAttachment fitting)
+        )
+
+
+fitAgentImages : Int -> List File -> List File
+fitAgentImages stagedBytes =
+    let
+        keepFitting image ( room, kept ) =
+            if File.size image <= room then
+                ( room - File.size image, image :: kept )
+
+            else
+                ( room, kept )
+    in
+    List.foldl keepFitting ( Model.agentImagesMaxBytes - stagedBytes, [] ) >> Tuple.second >> List.reverse
+
+
+agentAttachment : File -> String -> Model.AgentAttachment
+agentAttachment image =
+    Model.AgentAttachment (File.name image) (File.size image)
+
+
+removeAgentAttachment : Int -> Flow Model ()
+removeAgentAttachment =
+    Flow.over (agent << attachments) << List.removeAt
+
+
+agentLightboxId : String
+agentLightboxId =
+    "agent-lightbox"
+
+
+openAgentLightbox : List String -> Int -> Flow Model ()
+openAgentLightbox images =
+    Flow.seq (openDialog agentLightboxId) << Flow.setAll (agent << lightbox) << Just << Model.AgentLightbox images
+
+
+closeAgentLightbox : Flow Model ()
+closeAgentLightbox =
+    closeDialog agentLightboxId
+
+
+agentLightboxClosed : Flow Model ()
+agentLightboxClosed =
+    Flow.setAll (agent << lightbox) Nothing
+
+
+stepAgentLightbox : Int -> Flow Model ()
+stepAgentLightbox delta =
+    Flow.over (agent << lightbox << just)
+        (\shown -> { shown | index = modBy (max 1 (List.length shown.images)) (shown.index + delta) })
+
+
 createAgentSession : Flow Model ()
 createAgentSession =
     withAgentRequest Model.CreatingAgentSession
@@ -3798,58 +3900,66 @@ discardAgentChanges sessionId =
 
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
-    submitAgentPromptFrom readAgentPrompt
+    Flow.forAll (agent << attachments) (submitAgentPromptFrom readAgentPrompt)
 
 
-submitAgentPromptFrom : Flow Model String -> Flow Model ()
-submitAgentPromptFrom promptSource =
+submitAgentPromptFrom : Flow Model String -> List Model.AgentAttachment -> Flow Model ()
+submitAgentPromptFrom promptSource images =
     withSelectedAgentSession
         (\view ->
             Flow.forAll agent
                 (\agentState ->
-                    if agentSessionRunning view.session.sessionId agentState then
+                    if not (agentSessionRunning view.session.sessionId agentState) then
+                        sendAgentTurn view promptSource images
+
+                    else if List.isEmpty images then
                         steerAgentTurn view promptSource
 
                     else
-                        sendAgentTurn view promptSource
+                        addToast False agentImagesSteeringMessage
                 )
         )
 
 
-withAgentPrompt : Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
-withAgentPrompt promptSource send =
+withAgentPrompt : Bool -> Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
+withAgentPrompt blankAllowed promptSource send =
     promptSource
         |> Flow.andThen
             (\rawPrompt ->
-                case String.trim rawPrompt of
-                    "" ->
-                        addToast False "Enter an agent prompt first."
+                let
+                    prompt =
+                        String.trim rawPrompt
+                in
+                if String.isEmpty prompt && not blankAllowed then
+                    addToast False "Enter an agent prompt first."
 
-                    prompt ->
-                        send prompt
+                else
+                    send prompt
             )
 
 
-sendAgentTurn : Model.AgentSessionView -> Flow Model String -> Flow Model ()
-sendAgentTurn view promptSource =
+sendAgentTurn : Model.AgentSessionView -> Flow Model String -> List Model.AgentAttachment -> Flow Model ()
+sendAgentTurn view promptSource images =
     let
         sessionId =
             view.session.sessionId
     in
     withAgentRequest (Model.SendingAgentPrompt sessionId)
-        (withAgentPrompt promptSource
+        (withAgentPrompt (not (List.isEmpty images))
+            promptSource
             (\prompt ->
                 Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view))
                     |> Flow.seq
                         (Flow.over (agent << liveTurnAt sessionId << just << entries)
                             (\entriesBefore ->
                                 entriesBefore
-                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, assistant = "", status = Model.ChatPending } ]
+                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, images = List.map .dataUrl images, assistant = "", status = Model.ChatPending } ]
                             )
                         )
                     |> Flow.seq clearAgentPrompt
+                    |> Flow.seq (Flow.over (agent << attachments) (List.removeWhen (flip List.member images)))
                     |> Flow.seq scrollAgentChatToBottom
-                    |> Flow.seq (Flow.forAll agent (AgentApi.sendTurn sessionId prompt >> Flow.try currentProjectId))
+                    |> Flow.seq (Flow.forAll agent (AgentApi.sendTurn sessionId prompt images >> Flow.try currentProjectId))
                     |> FlowError.foldResult
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
@@ -3863,6 +3973,7 @@ sendAgentTurn view promptSource =
                             in
                             Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
                                 |> Flow.seq (Flow.over (agent << liveTurnAt sessionId << just << entries) (Model.failLatestPendingChatTurn message))
+                                |> Flow.seq (Flow.over (agent << attachments) ((++) images))
                                 |> Flow.seq (addToast False message)
                         )
             )
@@ -3876,7 +3987,8 @@ steerAgentTurn view promptSource =
             view.session.sessionId
     in
     withAgentRequest (Model.SteeringAgentTurn sessionId)
-        (withAgentPrompt promptSource
+        (withAgentPrompt False
+            promptSource
             (\prompt ->
                 sendSteer sessionId { wire = prompt, shown = prompt }
                     |> Flow.seq clearAgentPrompt
@@ -3958,7 +4070,7 @@ investigateStepWithAgent stepId log =
                                 |> Flow.seq (openAgentChat view.session.sessionId)
                                 |> Flow.seq (applyAgentChatFromUrl True)
                                 |> Flow.seq (clearRequestIfMatches Model.CreatingAgentSession)
-                                |> Flow.seq (submitAgentPromptFrom (Flow.pure (investigateStepPrompt stepId log)))
+                                |> Flow.seq (submitAgentPromptFrom (Flow.pure (investigateStepPrompt stepId log)) [])
                         )
                         (\err -> addToast False (Http.errorMessage err))
                 )

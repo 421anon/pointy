@@ -10,6 +10,7 @@ library
   import:           warnings
   exposed-modules:
     Agent.Git
+    Agent.Images
     Agent.Model
     Agent.PiConfig
     Agent.Policy
@@ -262,6 +263,22 @@ test-suite session-store
     , temporary
     , text
     , time
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite agent-images
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          AgentImages.hs
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , bytestring
+    , memory
+    , servant-server
+    , text
 
   hs-source-dirs:   test
   default-language: Haskell2010

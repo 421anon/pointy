@@ -122,6 +122,13 @@ function onDragStart(app, event) {
 }
 
 function onDragOver(event) {
+  if (event.defaultPrevented) return;
+  if (event.dataTransfer?.types.includes("Files")) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "none";
+    clearIndicator();
+    return;
+  }
   const hit = hitTest(event);
   if (!hit) {
     if (event.dataTransfer) event.dataTransfer.dropEffect = "none";

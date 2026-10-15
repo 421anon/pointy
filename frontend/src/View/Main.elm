@@ -65,6 +65,7 @@ view model =
                 , View.Organize.viewOrganizeDialog model
                 , View.Organize.viewContextMenu model
                 , Compare.viewCompareDialog model
+                , AgentPanel.viewLightbox model
                 , viewScratchPicker model
                 , StatusBar.view model
                 ]

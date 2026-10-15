@@ -154,10 +154,48 @@
 }
 
 .agent-panel__body {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
   background: var(--bg-primary);
+}
+
+.agent-panel__drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-lg);
+  border: 2px dashed var(--state-info);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-primary) 82%, var(--state-info));
+  color: var(--text-primary);
+  font-weight: 600;
+  text-align: center;
+
+  * {
+    pointer-events: none;
+  }
+
+  .material-symbols-outlined {
+    font-size: 36px;
+    color: var(--state-info);
+  }
+
+  &.is-blocked {
+    border-color: var(--text-muted);
+    background: color-mix(in srgb, var(--bg-primary) 90%, var(--text-muted));
+    color: var(--text-secondary);
+
+    .material-symbols-outlined {
+      color: var(--text-muted);
+    }
+  }
 }
 
 .agent-panel__closed {
@@ -237,9 +275,78 @@
 
 .agent-panel__composer-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: var(--spacing-xs);
   align-items: end;
+}
+
+.agent-panel .agent-panel__attach-button {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+.agent-panel__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-panel__attachment {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.agent-panel__attachment-preview {
+  @include mixins.button-base;
+  display: block;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-color);
+  background: var(--bg-primary);
+
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  &:hover {
+    border-color: var(--text-muted);
+  }
+}
+
+.agent-panel .agent-panel__attachment-remove {
+  @include mixins.button-base;
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line-color);
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-subtle);
+
+  .material-symbols-outlined {
+    font-size: 14px;
+  }
+
+  &:hover {
+    background: var(--state-danger);
+    border-color: var(--state-danger);
+    color: #fff;
+  }
 }
 
 .agent-panel__composer-actions {
@@ -853,12 +960,139 @@
   opacity: 0.7;
 }
 
+.agent-panel__chat-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-xs);
+  max-width: 100%;
+}
+
+.agent-panel__chat-image {
+  @include mixins.button-base;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  cursor: zoom-in;
+
+  img {
+    display: block;
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+  }
+
+  &:hover {
+    border-color: var(--text-muted);
+  }
+}
+
+.agent-panel__chat-images.is-single .agent-panel__chat-image img {
+  width: auto;
+  min-width: 64px;
+  max-width: 100%;
+  height: 180px;
+}
+
+.agent-lightbox {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #fff;
+  overscroll-behavior: contain;
+
+  &::backdrop {
+    background-color: rgba(0, 0, 0, 0.85);
+  }
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+.agent-lightbox__stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+.agent-lightbox__image {
+  display: block;
+  max-width: 90vw;
+  max-height: 90vh;
+  max-height: 90dvh;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-elevated);
+}
+
+.agent-lightbox .agent-lightbox__button {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+
+  .material-symbols-outlined {
+    font-size: 28px;
+  }
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+  }
+}
+
+.agent-lightbox__close {
+  top: var(--spacing-lg);
+  right: var(--spacing-lg);
+}
+
+.agent-lightbox__nav {
+  top: 50%;
+  transform: translateY(-50%);
+
+  &--prev {
+    left: var(--spacing-lg);
+  }
+
+  &--next {
+    right: var(--spacing-lg);
+  }
+}
+
+.agent-lightbox__counter {
+  position: absolute;
+  bottom: var(--spacing-lg);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--spacing-2xs) var(--spacing-sm);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
 .agent-panel__chat-sending {
   padding: 0 var(--spacing-xs);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
 }
 
+.agent-panel__attach-button--skeleton,
 .agent-panel__prompt--skeleton,
 .agent-panel__run-button--skeleton {
   opacity: 0.4;

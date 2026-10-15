@@ -37,6 +37,13 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - Running rows show elapsed time, queued rows show how long they have waited and Slurm's pending reason, starting rows show how long they have been preparing, and uploads show progress. A build of a commit other than the current one carries that commit's short hash.
 - Running, queued and starting rows have a Stop button that cancels the build at the commit it is building.
 
+## Agent chat
+
+- Messages can carry PNG, JPEG, GIF and WebP images, up to 6 MB in total per message. Attach them with the image button beside the prompt, by pasting into the prompt, or by dropping files onto the chat. A paste that also carries text, as when copying spreadsheet cells, pastes the text. Other files and images past the limit are turned away with a notice, keeping the images already attached.
+- Attached images show as thumbnails above the prompt, each removable, and a message can be sent with images and no text. Images stay attached if sending fails.
+- While the agent is working, images can't be attached and messages with images can't be sent as steering; remove them or wait for the agent to finish.
+- Clicking an image in the chat or the composer opens it full size. Arrow keys and the side buttons move between a message's images; Esc, the close button or a click outside the image closes it.
+
 ## Development
 
 A NixOS VM runs a server environment:

@@ -432,6 +432,15 @@ type AgentTurnStream =
         :> Description "Streams output of an agent turn as server-sent events."
         :> SseStream
 
+type AgentTurnImage =
+    "agent"
+        :> "turn"
+        :> Capture "id" Text
+        :> "image"
+        :> Description "Serves an image attached to an agent turn, by its 0-based index in turnImages."
+        :> Capture "index" Int
+        :> Raw
+
 type StepSearchInfoEndpoint =
     "step-search"
         :> "info"
@@ -497,6 +506,7 @@ type API =
         :<|> StopTurn
         :<|> SteerTurn
         :<|> AgentTurnStream
+        :<|> AgentTurnImage
         :<|> ApplyChanges
         :<|> SetAutoApply
         :<|> DiscardSession

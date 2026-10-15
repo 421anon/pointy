@@ -21,6 +21,7 @@ module Agent.Runner (
 ) where
 
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
+import Agent.Images (PromptImage (..), piImageContent, promptImageRecord)
 import Agent.Model (chatModelArgs, prepareChatModel)
 import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
 import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
@@ -37,6 +38,7 @@ import Agent.Session (
     normalizeSessionName,
     saveSession,
     saveTurn,
+    saveTurnImages,
     touchSession,
     turnIsUnfinished,
     turnLogFilePath,
@@ -249,20 +251,21 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
-startAgentTurn sid prompt mCurrentProjectId enabled client = do
+startAgentTurn :: Text -> Text -> [PromptImage] -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
+startAgentTurn sid prompt images mCurrentProjectId enabled client = do
+    when (T.null (T.strip prompt) && null images) $ Except.throwError "empty_prompt"
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
-    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId UserTurn
+    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt images mCurrentProjectId UserTurn
 
 data TurnOrigin = UserTurn | AutomaticFix (Maybe Text)
 
-beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
-beginAgentTurn session_ prompt mCurrentProjectId origin = do
+beginAgentTurn :: AgentSession -> Text -> [PromptImage] -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
+beginAgentTurn session_ prompt images mCurrentProjectId origin = do
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     (refreshedSession, syncNotes) <- refreshSessionBase session_
     reviewedSteps <- findReviewedSteps refreshedSession
@@ -277,6 +280,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
                 { turnId = tid
                 , turnSessionId = sid
                 , turnPrompt = prompt
+                , turnImages = map promptImageRecord images
                 , turnAutomatic = automatic
                 , turnStatus = "running"
                 , turnExitCode = Nothing
@@ -292,6 +296,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
         noteDiscardedConflict (configAgent cfg) logPath refreshedSession freshSession
         existingTurns <- listTurns sid
         let isFirstTurn = null existingTurns
+        saveTurnImages sid tid (map promptImageBytes images)
         saveTurn turn
         let pendingApply =
                 case preparedApply freshSession of
@@ -333,11 +338,11 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             when stopInherited $ modifyTVar' stopRequestedTurns (Set.insert tid)
         let unnamed = isNothing (sessionName freshSession >>= normalizeSessionName)
             titling = not (T.null (T.strip (agentTitlePrompt (configAgent cfg))))
-        when (unnamed && titling && not automatic) $
+        when (unnamed && titling && not automatic && not (T.null (T.strip prompt))) $
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
     return turn
   where
     (automatic, inheritedStop) = case origin of
@@ -430,8 +435,8 @@ nameChat cfg session_ logPath prompt =
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Bool -> [Int] -> IO ()
-runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedSteps =
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [PromptImage] -> Bool -> Bool -> [Int] -> IO ()
+runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject reviewedSteps =
     continueUnlessStopped run
         `finally` atomically (retireTurn sid tid)
   where
@@ -456,7 +461,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedS
             let mWarmFile = case mWarmResult of
                     Just (Right meta) -> Just (warmSessionFile meta)
                     _ -> Nothing
-            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile reviewedSteps) :: IO (Either SomeException ExitCode)
+            result <- try (runConfiguredProcess cfg session_ turn prompt images isFirstTurn mWarmFile reviewedSteps) :: IO (Either SomeException ExitCode)
             exitCode <- case result of
                 Left err -> do
                     appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
@@ -464,8 +469,8 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedS
                 Right code -> return code
             finishTurn cfg session_ turn sentCurrentProject exitCode
 
-runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> [Int] -> IO ExitCode
-runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewedSteps = do
+runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [PromptImage] -> Bool -> Maybe FilePath -> [Int] -> IO ExitCode
+runConfiguredProcess cfg session_ turn promptText images isFirstTurn mWarmFile reviewedSteps = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
     chat <- prepareChatModel
@@ -523,7 +528,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
         run = do
             stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
             unless stopped $ do
-                writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText]
+                writeRpc hin $ Aeson.object $ ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText] ++ ["images" Aeson..= map piImageContent images | not (null images)]
                 writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
                 atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
                 takeWaitingSteers (sessionId session_) input
@@ -1034,7 +1039,7 @@ beginAutomaticFix sid fixedTurnId = do
     let automaticInARow = length (takeWhile turnAutomatic (sortOn (Down . turnStartedAt) turns_))
     when (status session_ `elem` ["evaluation_failed", "prepare_conflict"] && (isNothing fixedTurnId || automaticInARow < automaticFixLimit)) $
         void $
-            beginAgentTurn session_ automaticFixPrompt Nothing (AutomaticFix fixedTurnId)
+            beginAgentTurn session_ automaticFixPrompt [] Nothing (AutomaticFix fixedTurnId)
 
 applySessionChanges :: Text -> Bool -> Maybe Text -> ExceptT String IO ()
 applySessionChanges sid enabled client = do

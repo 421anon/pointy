@@ -77,8 +77,8 @@ autoApplyFields setting =
     ]
 
 
-sendTurn : String -> String -> AutoApplySetting a -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt setting mCurrentProjectId =
+sendTurn : String -> String -> List Model.AgentAttachment -> AutoApplySetting a -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt images setting mCurrentProjectId =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
@@ -87,12 +87,23 @@ sendTurn sessionId prompt setting mCurrentProjectId =
                     Encode.object
                         ([ ( "sessionId", Encode.string sessionId )
                          , ( "prompt", Encode.string prompt )
+                         , ( "images", Encode.list encodeImage images )
                          , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
                          ]
                             ++ autoApplyFields setting
                         )
             , expect = Http.expectJson identity turnDecoder
             }
+
+
+encodeImage : Model.AgentAttachment -> Encode.Value
+encodeImage attachment =
+    Encode.object [ ( "data", Encode.string (dataUrlPayload attachment.dataUrl) ) ]
+
+
+dataUrlPayload : String -> String
+dataUrlPayload =
+    String.split "," >> List.drop 1 >> String.join ","
 
 
 steer : String -> String -> Flow s (Result Http.Error ())
@@ -233,6 +244,7 @@ turnDecoder =
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
         |> required "turnLogPath" Decode.string
         |> optional "turnLog" Decode.string ""
+        |> optional "turnImages" (Decode.map List.length (Decode.list Decode.value)) 0
 
 
 turnEvent : Decoder Model.AgentTurnEvent

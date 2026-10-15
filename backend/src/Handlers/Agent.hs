@@ -22,6 +22,7 @@ module Handlers.Agent (
     renameSessionHandler,
     purgeSessionHandler,
     usageHandler,
+    turnImageHandler,
 ) where
 
 import Agent.Git (
@@ -36,18 +37,26 @@ import Agent.Git (
     purgeAgentSession,
     renameAgentSession,
  )
+import Agent.Images (ImageUpload, decodeImageUploads)
 import Agent.Runner (applySessionChanges, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
-import Agent.Session (AgentSessionSummary, AgentTurn)
+import Agent.Session (AgentImage (..), AgentSessionSummary, AgentTurn (..), findTurn, turnImagePath)
+import Control.Lens (ix, (^?))
+import Control.Monad (unless)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Effects (AppM)
 import GHC.Generics (Generic)
 import Interpreters.Production (runProduction)
-import Servant (Handler, NoContent (..), err400, err404, err409, err500, errBody, throwError)
+import Network.HTTP.Types (status200, status404)
+import Network.Wai (Application, responseFile, responseLBS)
+import Servant (Handler, NoContent (..), Tagged (..), err400, err404, err409, err500, errBody, throwError)
+import System.Directory (doesFileExist)
 import UserRepo (withUserRepoExclusiveIO, withUserRepoSharedIO)
 
 data TurnRequest = TurnRequest
@@ -56,6 +65,7 @@ data TurnRequest = TurnRequest
     , turnRequestCurrentProjectId :: Maybe Int
     , turnRequestAutoApply :: Bool
     , turnRequestClientId :: Maybe Text
+    , turnRequestImages :: [ImageUpload]
     }
     deriving (Show, Eq, Generic)
 
@@ -67,6 +77,7 @@ instance FromJSON TurnRequest where
             <*> obj .:? "currentProjectId"
             <*> obj .:? "autoApply" .!= True
             <*> obj .:? "clientId"
+            <*> obj .:? "images" .!= []
 
 data SessionRequest = SessionRequest
     { sessionRequestSessionId :: Text
@@ -127,16 +138,33 @@ getSessionHandler :: Text -> Handler AgentSessionView
 getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
-postTurnHandler req =
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+postTurnHandler req = do
+    images <- either throwAgentError return (decodeImageUploads (turnRequestImages req))
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) images (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
 
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =
     runAgentAction $ stopAgentTurn (sessionRequestSessionId req)
 
 steerTurnHandler :: TurnRequest -> Handler NoContent
-steerTurnHandler req =
+steerTurnHandler req = do
+    unless (null (turnRequestImages req)) $ throwAgentError "images_not_supported_when_steering"
     NoContent <$ runAgentAction (steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req))
+
+turnImageHandler :: Text -> Int -> Tagged AppM Application
+turnImageHandler tid index = Tagged $ \_ respond -> do
+    found <- findTurn tid
+    case found >>= \turn -> (,) (turnSessionId turn) <$> turnImages turn ^? ix index of
+        Nothing -> respond notFound
+        Just (sid, image) -> do
+            path <- turnImagePath sid tid index
+            exists <- doesFileExist path
+            respond $
+                if exists
+                    then responseFile status200 [("Content-Type", TE.encodeUtf8 (imageMimeType image)), ("Cache-Control", "private, max-age=31536000, immutable")] path Nothing
+                    else notFound
+  where
+    notFound = responseLBS status404 [("Content-Type", "text/plain")] "turn image not found"
 
 applyChangesHandler :: ApplyRequest -> Handler AgentSessionView
 applyChangesHandler req = do
@@ -184,6 +212,9 @@ throwAgentError err =
     statuses =
         [ ("empty_session_name", err400)
         , ("empty_prompt", err400)
+        , ("image_data_invalid", err400)
+        , ("images_too_large", err400)
+        , ("images_not_supported_when_steering", err400)
         , ("session_not_found", err404)
         ]
             ++ [(conflict, err409) | conflict <- conflicts]

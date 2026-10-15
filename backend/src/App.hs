@@ -12,7 +12,7 @@ import Effectful (Eff)
 import Effects (AppEffects, AppM, toHandler)
 import qualified EffectRunner
 import EffectRunner (installRunner)
-import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnLogStreamHandler, usageHandler)
+import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnImageHandler, turnLogStreamHandler, usageHandler)
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.CommitHash (getCommitHashHandler)
@@ -93,6 +93,7 @@ server =
         :<|> (\request -> liftHandler (stopTurnHandler request))
         :<|> (\request -> liftHandler (steerTurnHandler request))
         :<|> (\turnId -> liftHandler (turnLogStreamHandler turnId))
+        :<|> turnImageHandler
         :<|> (\request -> liftHandler (applyChangesHandler request))
         :<|> (\request -> liftHandler (autoApplyHandler request))
         :<|> (\request -> liftHandler (discardSessionHandler request))

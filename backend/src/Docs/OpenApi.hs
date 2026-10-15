@@ -11,14 +11,15 @@
 module Docs.OpenApi (pointyOpenApi) where
 
 import Agent.Git (AgentGitState, AgentSessionView, AgentUsage)
-import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedApply)
+import Agent.Images (imageMimeTypes, imagesByteLimit)
+import Agent.Session (AgentImage, AgentSession, AgentSessionSummary, AgentTurn, PreparedApply)
 import Api (API)
 import ApiTypes (DynamicJson)
 import Control.Lens (ALens', cloneLens, imap, (%~), (&), (.~), (?~), _Just)
 import Data.Aeson (object)
 import qualified Data.ByteString as BS
 import Data.OpenApi hiding (Header)
-import Data.Text (Text, pack)
+import Data.Text (Text, intercalate, pack)
 import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
@@ -172,8 +173,27 @@ instance ToSchema TurnRequest where
                 , ("currentProjectId", nullableField OpenApiInteger)
                 , ("autoApply", boolField)
                 , ("clientId", stringField)
+                , ("images", imageUploadsField)
                 ]
                 & schema . required .~ ["sessionId", "prompt"]
+
+imageUploadsField :: Referenced Schema
+imageUploadsField =
+    Inline $
+        mempty
+            & type_ ?~ OpenApiArray
+            & items ?~ OpenApiItemsObject (Inline upload)
+            & description ?~ ("Images attached to the prompt, at most " <> pack (show (imagesByteLimit `div` (1024 * 1024))) <> " MiB of decoded bytes in total; the prompt may be blank when images are given. The format is detected from the bytes and must be one of " <> intercalate ", " imageMimeTypes <> ". /agent/steer rejects requests with images.")
+  where
+    upload =
+        mempty
+            & type_ ?~ OpenApiObject
+            & properties .~ fromList [("data", Inline (mempty & type_ ?~ OpenApiString & format ?~ "byte"))]
+            & required .~ ["data"]
+
+instance ToSchema AgentImage where
+    declareNamedSchema _ =
+        pure $ objectSchema "AgentImage" [("mimeType", stringField)]
 
 instance ToSchema SessionRequest where
     declareNamedSchema _ =
