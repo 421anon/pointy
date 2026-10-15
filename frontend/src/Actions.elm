@@ -537,13 +537,24 @@ replayStepStatusBuffer =
 applyStepStatus : String -> Maybe String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
 applyStepStatus snapshotCommit mCertificate status_ rs =
     let
+        notStarted =
+            ApiData.toMaybe status_ == Just StatusNotStarted
+
         showsSameOutputs current =
-            current.commit == snapshotCommit || (Maybe.isJust mCertificate && current.certificate == mCertificate)
+            (current.commit == snapshotCommit || (Maybe.isJust mCertificate && current.certificate == mCertificate))
+                && (notStarted || not (Model.showsLastBuilt current))
+
+        outputsCommitAfter current =
+            if notStarted && not (Model.showsLastBuilt current) then
+                snapshotCommit
+
+            else
+                current.outputsCommit
 
         updated =
             case ApiData.toMaybe rs |> Maybe.filter showsSameOutputs of
                 Just current ->
-                    { current | commit = snapshotCommit, certificate = Maybe.orElse current.certificate mCertificate, status = status_ }
+                    { current | commit = snapshotCommit, certificate = Maybe.orElse current.certificate mCertificate, status = status_, outputsCommit = outputsCommitAfter current }
 
                 Nothing ->
                     { commit = snapshotCommit
@@ -558,6 +569,19 @@ applyStepStatus snapshotCommit mCertificate status_ rs =
 
     else
         Success updated
+
+
+showLastBuiltOutputs : Maybe Model.LastBuilt -> Model.StepRunState -> Model.StepRunState
+showLastBuiltOutputs mLastBuilt current =
+    let
+        outputs =
+            Maybe.unwrap current.commit .revision mLastBuilt
+    in
+    if ApiData.toMaybe current.status /= Just StatusNotStarted || outputs == current.outputsCommit then
+        current
+
+    else
+        { current | outputsCommit = outputs, directoryView = { children = NotAsked, expanded = False, extras = NotAsked, size = Nothing, mimeType = Nothing } }
 
 
 applyStatusSnapshot : Model.StatusReport -> ApiData Model.StepRunState -> ApiData Model.StepRunState
@@ -880,12 +904,15 @@ reviewStep draft =
         |> Flow.andThen
             (\model ->
                 let
+                    shownOutputs =
+                        try (lastBuiltOutputsCommit draft.stepId Route.Output) model
+
                     mCommit_ =
-                        try (route << Route.page << Route.viewedCommitT) model
+                        Maybe.orElse (try (route << Route.page << Route.viewedCommitT) model) shownOutputs
                 in
                 whenStepIdle draft.stepId
                     (Api.reviewStep draft mCommit_
-                        |> Flow.andThen (settleReview draft.stepId (Maybe.map (\revision -> { revision = revision, reviewedBy = draft.reviewedBy, comments = draft.comments, comparison = NotAsked }) (Model.viewedRevision model)) "Step reviewed.")
+                        |> Flow.andThen (settleReview draft.stepId (Maybe.map (\revision -> { revision = revision, reviewedBy = draft.reviewedBy, comments = draft.comments, comparison = NotAsked }) (Maybe.orElse (Model.viewedRevision model) shownOutputs)) "Step reviewed.")
                     )
             )
 
@@ -1003,6 +1030,7 @@ upsertStep spec =
                                 , srcFiles = Model.closeDirectoryFileViews r.srcFiles
                                 , srcFileDraft = r.srcFileDraft
                                 , srcFileWriting = r.srcFileWriting
+                                , lastBuilt = r.lastBuilt
                             }
 
                         saveSrcFiles =
@@ -1661,14 +1689,14 @@ cloneStep spec record =
     in
     Flow.getAll (steps << values << name)
         (\existingNames ->
-            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) { record | runState = NotAsked })
+            createStep record.id spec (set name (generateUniqueCloneName record.name existingNames) { record | runState = NotAsked, lastBuilt = Dict.empty })
                 |> Flow.return ()
         )
 
 
 shareEntity : Int -> Route.HighlightTarget -> List String -> Maybe Route.LineRange -> Flow Model ()
 shareEntity entityId target pathSegments mRange =
-    Flow.try (orElseT (route << Route.page << Route.viewedCommitT) (commitHash << success))
+    Flow.try (orElseT (lastBuiltOutputsCommit entityId target) (orElseT (route << Route.page << Route.viewedCommitT) (commitHash << success)))
         (\mCommit_ ->
             Flow.forAll currentProjectPath
                 (\projectPath_ ->
@@ -1690,6 +1718,15 @@ shareEntity entityId target pathSegments mRange =
                 )
         )
         |> Flow.seq (addToast True "Share link copied to clipboard")
+
+
+lastBuiltOutputsCommit : Int -> Route.HighlightTarget -> A_Traversal Model String
+lastBuiltOutputsCommit stepId target =
+    if target == Route.Output then
+        remkT (stepRecordById stepId << runState << success << where_ Model.showsLastBuilt << outputsCommit)
+
+    else
+        remkT void
 
 
 callApi : An_Optic pr ls Model (ApiData a) -> FlowError Http.Error Model a -> FlowError Http.Error Model a
@@ -4042,6 +4079,9 @@ onStepStatusIn value =
                             |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async loadProjectRollup))
                     )
 
+        Ok (SSELastBuilt { commit, steps }) ->
+            Flow.modify (flip (List.foldl (announceLastBuilt commit)) steps)
+
         Ok SSEHeartbeat ->
             Flow.pure ()
 
@@ -4127,6 +4167,7 @@ applyListedStatuses statuses model =
                 |> List.map (always (Flow.async loadProjectReviews))
     in
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
+        |> Flow.seq requestLastBuiltVersions
         |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (unlisted buffer) (unlisted statuses)))
         |> Flow.seq (Flow.batchM (hooks ++ settles ++ reviewReloads))
         |> Flow.seq settlePendingStops
@@ -4247,6 +4288,46 @@ settlePendingBuild snapshotCommit stepId status_ =
                     _ ->
                         Flow.pure ()
             )
+
+
+requestLastBuiltVersions : Flow Model ()
+requestLastBuiltVersions =
+    Flow.over (remkT stepRecords) syncLastBuiltOutputs
+        |> Flow.seq (Flow.getAll stepRecords (List.filterMap lastBuiltLookup >> List.foldl (Flow.seq << requestLastBuiltVersion) (Flow.pure ())))
+
+
+lastBuiltLookup : StepRecord -> Maybe ( Int, String )
+lastBuiltLookup record =
+    Maybe.map2 Tuple.pair record.id (try (notStartedRevision success << where_ (not << flip Dict.member record.lastBuilt)) record)
+
+
+syncLastBuiltOutputs : StepRecord -> StepRecord
+syncLastBuiltOutputs record =
+    try (notStartedRevision success) record
+        |> Maybe.andThen (\viewed -> try (lastBuiltAt viewed << just << where_ ApiData.settled) record)
+        |> Maybe.unwrap record (\entry -> over (runState << success) (showLastBuiltOutputs (Maybe.join (ApiData.toMaybe entry))) record)
+
+
+requestLastBuiltVersion : ( Int, String ) -> Flow Model ()
+requestLastBuiltVersion ( stepId, viewed ) =
+    let
+        entry =
+            stepRecordById stepId << lastBuiltAt viewed
+    in
+    Flow.setAll entry (Just (Loading Nothing))
+        |> Flow.seq
+            (Flow.async
+                (Api.fetchLastBuiltVersion stepId viewed
+                    |> Flow.andThen (Flow.setAll (entry << just << where_ (not << ApiData.settled)) << ApiData.fromResult)
+                    |> Flow.seq (Flow.over (stepRecordById stepId) syncLastBuiltOutputs)
+                )
+            )
+
+
+announceLastBuilt : String -> ( Int, Model.LastBuilt ) -> Model -> Model
+announceLastBuilt viewed ( stepId, announced ) =
+    set (stepRecordById stepId << lastBuiltAt viewed) (Just (Success (Just announced)))
+        >> over (stepRecordById stepId) syncLastBuiltOutputs
 
 
 startClusterStatusStream : Flow Model Decode.Value

@@ -97,6 +97,7 @@ viewReviewControls model spec stepId record =
         content =
             viewReviewPopover model spec stepId record
                 ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId mReviewedAt) record.review
+                ++ Maybe.unwrap [] (List.singleton << viewLastBuilt model) (Lenses.lastBuiltShown record)
     in
     if List.isEmpty content then
         Nothing
@@ -168,7 +169,7 @@ viewReviewIndicator model spec stepId mReviewedAt reviewed =
                 [ iconCustom False "open_in_new" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
 
         reviewedRevision =
-            viewReviewedRevision model mReviewedAt reviewed.revision
+            viewRevision [] (reviewedAtExplanation model mReviewedAt) reviewed.revision
 
         comparisonControls =
             if ApiData.toMaybe reviewed.comparison == Just Model.DifferentContent then
@@ -180,6 +181,21 @@ viewReviewIndicator model spec stepId mReviewedAt reviewed =
     in
     (reviewedRevision :: comparisonControls)
         ++ [ Html.viewIf (ApiData.toMaybe reviewed.comparison == Just Model.ViewedOutputUnbuilt) (viewBuildViewedLink model spec stepId) ]
+
+
+viewLastBuilt : Model -> Model.LastBuilt -> Html msg
+viewLastBuilt model lastBuilt =
+    viewRevision [ iconCustom False "history" [ Html.Attributes.attribute "aria-hidden" "true" ] ]
+        (\shortRevision ->
+            "Last built at revision "
+                ++ shortRevision
+                ++ ", "
+                ++ Time.Distance.inWords lastBuilt.committedAt (Model.getNow model)
+                ++ ", at "
+                ++ formatUtcMinute lastBuilt.committedAt
+                ++ ". The current definition differs from that version and is not built yet; until it is, the status, output files and review refer to that version."
+        )
+        lastBuilt.revision
 
 
 viewDiffSection : Model -> StepRecord -> Html (Flow Model ())
@@ -227,23 +243,21 @@ viewBuildViewedLink model spec stepId =
             ]
 
 
-viewReviewedRevision : Model -> Maybe Posix -> String -> Html (Flow Model ())
-viewReviewedRevision model mReviewedAt reviewedRevision =
+viewRevision : List (Html msg) -> (String -> String) -> String -> Html msg
+viewRevision icons explain revision =
     let
         shortRevision =
-            String.left 7 reviewedRevision
+            String.left 7 revision
 
         explanation =
-            reviewedAtExplanation model mReviewedAt shortRevision
+            explain shortRevision
     in
     Html.span
         [ Html.Attributes.class "step-review-revision"
         , Html.Attributes.title explanation
         , Html.Attributes.attribute "aria-label" explanation
         ]
-        [ Html.span [ Html.Attributes.class "step-review-revision-hash" ]
-            [ Html.text shortRevision ]
-        ]
+        (icons ++ [ Html.span [ Html.Attributes.class "step-review-revision-hash" ] [ Html.text shortRevision ] ])
 
 
 reviewedAtExplanation : Model -> Maybe Posix -> String -> String
@@ -322,6 +336,11 @@ viewReviewPopover model spec stepId record =
             Html.viewMaybe (\reason -> Html.p [ Html.Attributes.class "step-review-note" ] [ Html.text reason ])
                 (Maybe.andThen (.comparison >> blockedReason) (Maybe.filter (always (not canRecord)) record.review))
 
+        lastBuiltNote =
+            Html.viewMaybe
+                (\lastBuilt -> Html.p [ Html.Attributes.class "step-review-note" ] [ Html.text ("This reviews the last built version, at revision " ++ String.left 7 lastBuilt.revision ++ ", whose output files are shown. The current definition is not built.") ])
+                (Lenses.lastBuiltShown record)
+
         popover =
             Html.div
                 [ Html.Attributes.class "step-review-popover"
@@ -340,6 +359,7 @@ viewReviewPopover model spec stepId record =
                     ]
                 , Html.div [ Html.Attributes.class "step-review-popover-body" ]
                     [ blockedNote
+                    , lastBuiltNote
                     , field "Reviewed by" <|
                         Html.input
                             [ Html.Attributes.class "step-review-input"

@@ -18,7 +18,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, plainLineHeight, shownStatus, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -176,7 +176,7 @@ viewDirectorySection model spec step =
                                 spec
                                 (Just stepId)
                                 (Just (OutputDir stepId rs.outputsCommit))
-                                (has (success << where_ hasBuiltOutput) rs.status)
+                                (has (success << where_ hasBuiltOutput) (shownStatus rs))
                                 []
                                 "directory-view"
                                 rs.directoryView.children

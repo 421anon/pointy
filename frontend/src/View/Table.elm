@@ -878,7 +878,7 @@ viewRunStop spec stopping record =
         Just id ->
             let
                 status =
-                    TableSpec.getStatus spec record
+                    Model.runStatus record
 
                 isRunning =
                     status

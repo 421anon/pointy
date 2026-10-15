@@ -16,7 +16,7 @@ module BuildStatus (
 import BuildLog (LogAccess (..), ResolvedLog (..), isStorePath, lastMeaningfulLine, lookupDeriver, resolveBuildLog, validPaths)
 import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
 import Control.Monad ((<=<))
-import Data.Aeson (FromJSON (..), withObject, (.:))
+import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -35,6 +35,9 @@ stepStatusNames = ["not-started", "running", "success", "failure", "built-not-ce
 
 instance FromJSON StepPaths where
     parseJSON = withObject "StepPaths" $ \o -> StepPaths <$> o .: "certificate" <*> o .: "output"
+
+instance ToJSON StepPaths where
+    toJSON (StepPaths certificate output) = object ["certificate" .= certificate, "output" .= output]
 
 checkStatus :: (Nix :> es, Slurm :> es) => FilePath -> Eff es (Text, Maybe Text)
 checkStatus certificate = do

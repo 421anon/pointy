@@ -52,6 +52,25 @@ hasBuiltOutput status =
             True
 
 
+runStatus : { a | runState : ApiData StepRunState } -> ApiData Status
+runStatus =
+    .runState >> ApiData.unwrap (ApiData.loading Nothing) .status
+
+
+shownStatus : StepRunState -> ApiData Status
+shownStatus runState =
+    if showsLastBuilt runState then
+        Success StatusSuccess
+
+    else
+        runState.status
+
+
+showsLastBuilt : StepRunState -> Bool
+showsLastBuilt runState =
+    runState.outputsCommit /= runState.commit && ApiData.toMaybe runState.status == Just StatusNotStarted
+
+
 type alias RollupStatuses =
     { notStarted : Int
     , running : Int
@@ -175,6 +194,12 @@ type alias StepRunState =
     , status : ApiData Status
     , outputsCommit : String
     , directoryView : DirectoryFolder
+    }
+
+
+type alias LastBuilt =
+    { revision : String
+    , committedAt : Time.Posix
     }
 
 
@@ -443,6 +468,7 @@ type alias StepRecord =
         , srcFiles : DirectoryFolder
         , srcFileDraft : Maybe SrcFileDraft
         , srcFileWriting : Bool
+        , lastBuilt : Dict String (ApiData (Maybe LastBuilt))
         }
 
 
@@ -489,6 +515,7 @@ blankStep type_ =
         }
     , srcFileDraft = Nothing
     , srcFileWriting = False
+    , lastBuilt = Dict.empty
     }
 
 
@@ -2026,6 +2053,7 @@ type alias Flags =
 
 type StepStatusEvent
     = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
+    | SSELastBuilt { commit : String, steps : List ( Int, LastBuilt ) }
     | SSEHeartbeat
     | SSEError String
 
@@ -2566,6 +2594,7 @@ mergeSteps fetched previous =
                         , srcFiles = old.srcFiles
                         , srcFileDraft = old.srcFileDraft
                         , srcFileWriting = old.srcFileWriting
+                        , lastBuilt = old.lastBuilt
                     }
 
                 Nothing ->

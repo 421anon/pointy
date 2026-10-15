@@ -14,7 +14,6 @@ import List.Extra as List
 import Model.Core as Model exposing (Model, ProjectRecord)
 import Model.Lenses as Lenses
 import Model.Shadow exposing (StepConfig)
-import Model.TableSpec as TableSpec
 import Regex exposing (Regex)
 import Route exposing (Route)
 import Set
@@ -161,16 +160,12 @@ mentionRunAction stepConfig stepId { step } =
     Dict.get step.type_ stepConfig
         |> Maybe.andThen
             (\entry ->
-                let
-                    spec =
-                        Specs.steps step.type_ entry
-                in
-                case TableSpec.getStatus spec step |> ApiData.toMaybe of
+                case Model.runStatus step |> ApiData.toMaybe of
                     Just Model.StatusSuccess ->
                         Nothing
 
                     Just _ ->
-                        Just (Actions.runStep spec stepId)
+                        Just (Actions.runStep (Specs.steps step.type_ entry) stepId)
 
                     Nothing ->
                         Nothing

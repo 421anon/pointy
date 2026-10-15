@@ -15,6 +15,8 @@ module Handlers.RunStep (
 
 import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog)
 import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
+import BuildStatus (StepPaths (..))
+import BuiltSteps (recordBuiltSteps)
 import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
@@ -221,7 +223,9 @@ registerCertificationRoots ctx sid certificate = do
     rootStorePath certificate
     result <- runExceptT $ getStepOutPath ctx sid
     case result of
-        Right outPath -> rootStorePath (T.unpack outPath)
+        Right outPath -> do
+            rootStorePath (T.unpack outPath)
+            liftIO $ recordBuiltSteps (T.pack (readCommitHash ctx)) (Map.singleton sid (StepPaths certificate (T.unpack outPath)))
         Left _ -> return ()
 
 buildExtras :: App es => ReadRepoContext -> Int -> Eff es ()

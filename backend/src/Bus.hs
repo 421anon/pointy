@@ -1,5 +1,6 @@
-module Bus (ProjectSnapshot (..), broadcastSnapshot, subscribe) where
+module Bus (ProjectSnapshot (..), StatusEvent (..), broadcastLastBuilt, broadcastSnapshot, subscribe) where
 
+import BuiltSteps (LastBuiltVersion)
 import ClusterBus (buildingStepsAt)
 import Control.Concurrent.STM
 import Data.Map.Strict (Map)
@@ -17,30 +18,41 @@ data ProjectSnapshot = ProjectSnapshot
     }
     deriving (Show)
 
+data StatusEvent
+    = SnapshotEvent ProjectSnapshot
+    | LastBuiltEvent Text (Map Int LastBuiltVersion)
+    deriving (Show)
+
 {-# NOINLINE statusBus #-}
-statusBus :: TChan ProjectSnapshot
+statusBus :: TChan StatusEvent
 statusBus = unsafePerformIO newBroadcastTChanIO
 
-{-# NOINLINE recentSnapshots #-}
-recentSnapshots :: TVar [ProjectSnapshot]
-recentSnapshots = unsafePerformIO $ newTVarIO []
+{-# NOINLINE recentEvents #-}
+recentEvents :: TVar [StatusEvent]
+recentEvents = unsafePerformIO $ newTVarIO []
 
 replayLimit :: Int
 replayLimit = 256
+
+publish :: StatusEvent -> STM ()
+publish event = do
+    writeTChan statusBus event
+    modifyTVar' recentEvents (take replayLimit . (event :))
 
 broadcastSnapshot :: Int -> Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
 broadcastSnapshot pid c certified reported = do
     atomically $ do
         building <- buildingStepsAt c
         let stats = Map.filterWithKey (\sid (st, _) -> Set.notMember sid building || st `elem` map pack ["running", "success"]) reported
-            snapshot = ProjectSnapshot pid c stats (Map.intersection certified stats)
-        writeTChan statusBus snapshot
-        modifyTVar' recentSnapshots (take replayLimit . (snapshot :))
+        publish (SnapshotEvent (ProjectSnapshot pid c stats (Map.intersection certified stats)))
     invalidateRollupCache
 
-subscribe :: IO (TChan ProjectSnapshot)
+broadcastLastBuilt :: Text -> Map Int LastBuiltVersion -> IO ()
+broadcastLastBuilt c = atomically . publish . LastBuiltEvent c
+
+subscribe :: IO (TChan StatusEvent)
 subscribe = atomically $ do
     chan <- dupTChan statusBus
-    recent <- readTVar recentSnapshots
+    recent <- readTVar recentEvents
     mapM_ (unGetTChan chan) recent
     pure chan

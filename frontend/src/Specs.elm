@@ -22,7 +22,7 @@ steps name entry =
         , childKind = StepChild
         , lens = Lenses.stepFormsAt name
         , encodeRecord = Encode.stepValue stepType
-        , status = \r -> ApiData.unwrap (ApiData.loading Nothing) .status r.runState
+        , status = \r -> ApiData.unwrap (ApiData.loading Nothing) Model.shownStatus r.runState
         , validationErrors = always []
         , isLocked = .review >> (/=) Nothing
         , directoryView = \r -> ApiData.toMaybe r.runState |> Maybe.map .directoryView

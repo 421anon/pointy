@@ -39,6 +39,7 @@ library
     Handlers.ClusterStream
     Handlers.Download
     Handlers.IngestStream
+    Handlers.LastBuilt
     Handlers.Presets
     Handlers.ProjectReads
     Handlers.Projects
@@ -63,6 +64,7 @@ library
     NixEvaluator
     NixStore
     NixUtils
+    BuiltSteps
     BuildStatus
     Certificates
     CertificateStore
@@ -402,6 +404,29 @@ test-suite turn-watchdog
     , text
     , time
     , unix
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite last-built
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          LastBuilt.hs
+  ghc-options:      -threaded
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , bytestring
+    , containers
+    , directory
+    , effectful
+    , filepath
+    , process
+    , stm
+    , temporary
+    , text
+    , time
 
   hs-source-dirs:   test
   default-language: Haskell2010

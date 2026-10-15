@@ -12,6 +12,7 @@ module Api.Api exposing
     , fetchExtras
     , fetchFileContents
     , fetchFileSeek
+    , fetchLastBuiltVersion
     , fetchNotices
     , fetchPresets
     , fetchProjectReviews
@@ -53,7 +54,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
+import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, LastBuilt, Notice, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -438,6 +439,15 @@ fetchNotices id commit =
         Http.get
             { url = appendCommitQuery ("/backend/notices?id=" ++ String.fromInt id) commit
             , expect = Http.expectJson identity (Json.Decode.list Decode.notice)
+            }
+
+
+fetchLastBuiltVersion : Int -> String -> Flow s (Result Http.Error (Maybe LastBuilt))
+fetchLastBuiltVersion id commit =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery ("/backend/step-last-built?id=" ++ String.fromInt id) (Just commit)
+            , expect = Http.expectJson identity (Json.Decode.nullable Decode.lastBuilt)
             }
 
 

@@ -297,6 +297,14 @@ export function connectPorts(app) {
       }
     });
 
+    stepStatusSource.addEventListener("last-built", (event) => {
+      try {
+        emitToElm("last-built", JSON.parse(event.data));
+      } catch (err) {
+        emitToElm("error", `Failed to parse last-built event: ${String(err)}`);
+      }
+    });
+
     stepStatusSource.addEventListener("heartbeat", (event) => {
       try {
         emitToElm("heartbeat", JSON.parse(event.data));

@@ -1,19 +1,19 @@
 module Model.Lenses exposing (..)
 
-import Accessors exposing (A_Prism, Lens, Prism, Traversal, all, each, get, just, lens, new, over, prism, set, traversal, try, values)
+import Accessors exposing (A_Prism, Lens, Prism, Traversal, all, each, get, has, just, lens, new, over, prism, set, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Browser.Navigation
 import Components.Select exposing (SelectState)
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
 import Dict.Accessors
-import Extra.Accessors exposing (by, orElseT, where_)
+import Extra.Accessors exposing (A_Traversal, by, orElseT, remkT, where_)
 import Flow exposing (Flow)
 import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, LastBuilt, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -267,6 +267,44 @@ stepShownRevision stepId =
 stepOutputsRevision : Int -> Traversal Model String x y
 stepOutputsRevision stepId =
     orElseT (stepRecordById stepId << runState << success << outputsCommit) (stepShownRevision stepId)
+
+
+lastBuilt : Lens ls { a | lastBuilt : b } b x y
+lastBuilt =
+    lens ".lastBuilt" .lastBuilt (\record lastBuilt_ -> { record | lastBuilt = lastBuilt_ })
+
+
+lastBuiltAt : String -> Lens ls StepRecord (Maybe (ApiData (Maybe LastBuilt))) x y
+lastBuiltAt revision_ =
+    lastBuilt << Dict.Accessors.at revision_
+
+
+notStartedRun : A_Traversal (ApiData Model.Status) Model.Status -> Traversal StepRecord Model.StepRunState x y
+notStartedRun statusShown =
+    where_ (.review >> Maybe.isNothing)
+        << runState
+        << success
+        << where_ (has (status << remkT statusShown << where_ ((==) Model.StatusNotStarted)))
+
+
+notStartedRevision : A_Traversal (ApiData Model.Status) Model.Status -> Traversal StepRecord String x y
+notStartedRevision statusShown =
+    notStartedRun statusShown << commit
+
+
+lastBuiltShown : StepRecord -> Maybe LastBuilt
+lastBuiltShown record =
+    let
+        lastBuiltEntry revision_ =
+            try (lastBuiltAt revision_ << just) record
+
+        shownEntry run =
+            Maybe.filter ApiData.settled (lastBuiltEntry run.commit)
+                |> Maybe.orElse (lastBuiltEntry run.outputsCommit)
+    in
+    try (notStartedRun (orElseT success ApiData.reloading)) record
+        |> Maybe.andThen shownEntry
+        |> Maybe.andThen (try (success << just))
 
 
 selectExistingSteps : Lens ls { a | selectExistingSteps : b } b x y

@@ -19,6 +19,9 @@ stepStatusEvent =
                     "snapshot" ->
                         Decode.field "data" snapshot |> Decode.map SSESnapshot
 
+                    "last-built" ->
+                        Decode.field "data" lastBuiltVersions |> Decode.map SSELastBuilt
+
                     "heartbeat" ->
                         Decode.succeed SSEHeartbeat
 
@@ -84,6 +87,20 @@ snapshot =
                     |> optional "certificate" (Decode.map Just Decode.string) Nothing
                 )
             )
+
+
+lastBuiltVersions : Decoder { commit : String, steps : List ( Int, Model.LastBuilt ) }
+lastBuiltVersions =
+    Decode.succeed (\c s -> { commit = c, steps = s })
+        |> required "commit" Decode.string
+        |> required "steps" (Decode.list (Decode.map2 Tuple.pair (Decode.field "stepId" Decode.int) lastBuilt))
+
+
+lastBuilt : Decoder Model.LastBuilt
+lastBuilt =
+    Decode.succeed Model.LastBuilt
+        |> required "revision" Decode.string
+        |> required "committedAt" Iso8601.decoder
 
 
 applyError : Status -> Maybe String -> Status

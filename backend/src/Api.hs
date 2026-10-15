@@ -6,6 +6,7 @@ module Api (API) where
 import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import ApiTypes (DynamicJson, RawJSON)
+import BuiltSteps (LastBuiltVersion)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
@@ -108,6 +109,13 @@ type StepLog =
         :> ReqId
         :> QueryParam "commit" Text
         :> Get '[PlainText] Text
+
+type StepLastBuilt =
+    "step-last-built"
+        :> Description "Returns the revision and commit time of the step's last built version: its definition at the nearest first-parent ancestor of the given revision whose build is still in the store. Null when none is known; a one-time background search of the history may then start and announce what it finds as a last-built event on the step status stream."
+        :> ReqId
+        :> QueryParam' '[Required, Strict] "commit" Text
+        :> Get '[JSON] (Maybe LastBuiltVersion)
 
 type JobEnded =
     "job-ended"
@@ -496,6 +504,7 @@ type API =
         :<|> RunStep
         :<|> StopStep
         :<|> StepLog
+        :<|> StepLastBuilt
         :<|> JobEnded
         :<|> Upload
         :<|> GetScratchRoot

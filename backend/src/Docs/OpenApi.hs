@@ -14,6 +14,7 @@ import Agent.Git (AgentGitState, AgentSessionView, AgentUsage)
 import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedApply)
 import Api (API)
 import ApiTypes (DynamicJson)
+import BuiltSteps (LastBuiltVersion)
 import Control.Lens (ALens', cloneLens, imap, (%~), (&), (.~), (?~), _Just)
 import Data.Aeson (object)
 import qualified Data.ByteString as BS
@@ -253,6 +254,13 @@ instance ToSchema StepReviewReport where
             objectSchema
                 "StepReviewReport"
                 [("reviewedRevision", stringField), ("reviewedBy", stringField), ("reviewComments", stringField), ("reviewedStatus", stringField), ("reviewedStatusError", stringField), ("reviewedCertificate", stringField), ("comparison", stringField), ("comparisonDetail", stringField)]
+
+instance ToSchema LastBuiltVersion where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "LastBuiltVersion"
+                [("revision", stringField), ("committedAt", Inline (mempty & type_ ?~ OpenApiString & format ?~ "date-time"))]
 
 pointyOpenApi :: OpenApi
 pointyOpenApi =

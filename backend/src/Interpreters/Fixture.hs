@@ -10,8 +10,9 @@ module Interpreters.Fixture (
     newFixtureState,
     resetFixture,
     runFixture,
-
-
+    runInferenceFixture,
+    runNixFixture,
+    runSlurmFixture,
 ) where
 
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
