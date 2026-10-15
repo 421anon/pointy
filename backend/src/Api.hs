@@ -11,7 +11,7 @@ import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.CloudAuth (CloudLoginForm, CloudLoginResponse)
+import Handlers.TokenAuth (TokenLoginForm, TokenLoginResponse)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
@@ -448,17 +448,17 @@ type StepSearchEndpoint =
 
 type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 
-type CloudAuth =
-    "cloud-auth"
-        :> Description "Answers nginx whether the request carries a Pointy Cloud session token for this instance's account."
+type TokenAuth =
+    "token-auth"
+        :> Description "Answers nginx whether the request carries a valid session token for this instance's audience."
         :> Header "Cookie" Text
         :> GetNoContent
 
-type CloudLogin =
-    "cloud-login"
-        :> Description "Accepts a Pointy Cloud session token posted by the cloud login page and stores it in a cookie scoped to this instance's host."
-        :> ReqBody '[FormUrlEncoded] CloudLoginForm
-        :> Verb 'POST 303 '[PlainText] CloudLoginResponse
+type TokenLogin =
+    "token-login"
+        :> Description "Accepts a session token posted by an external login page and stores it in a cookie scoped to this instance's host."
+        :> ReqBody '[FormUrlEncoded] TokenLoginForm
+        :> Verb 'POST 303 '[PlainText] TokenLoginResponse
 
 type API =
     GetCommitHash
@@ -517,6 +517,6 @@ type API =
         :<|> RenameSession
         :<|> DeleteSession
         :<|> AgentUsageEndpoint
-        :<|> CloudAuth
-        :<|> CloudLogin
+        :<|> TokenAuth
+        :<|> TokenLogin
         :<|> StepSearch

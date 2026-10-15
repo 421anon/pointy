@@ -18,28 +18,28 @@ in
       description = "Path to an htpasswd file gating the nginx vhost. When null, no basic auth is applied.";
     };
 
-    cloudAuth = lib.mkOption {
+    tokenAuth = lib.mkOption {
       type = lib.types.nullOr (lib.types.submodule {
         options = {
-          url = lib.mkOption {
+          loginUrl = lib.mkOption {
             type = lib.types.str;
-            description = "Base URL of the Pointy Cloud frontend users log in at.";
-            example = "https://pointy.cloud";
+            description = "Login page unauthenticated visitors are redirected to. After login it must POST a form with a `token` field to /token-login on this host.";
+            example = "https://login.example.com/";
           };
-          account = lib.mkOption {
+          audience = lib.mkOption {
             type = lib.types.str;
-            description = "Pointy Cloud account whose users may use this instance.";
-            example = "welker";
+            description = "Required `aud` claim of the session token, naming this instance.";
+            example = "lab";
           };
           publicKeyFile = lib.mkOption {
             type = lib.types.path;
-            description = "Ed25519 public key in PEM format that verifies the session tokens Pointy Cloud signs.";
-            example = lib.literalExpression "./pointy-cloud-jwt.pub";
+            description = "Ed25519 public key in PEM format that verifies the session token signatures.";
+            example = lib.literalExpression "./session.pub";
           };
         };
       });
       default = null;
-      description = "Admit only users holding a Pointy Cloud session token for the account. The backend verifies the token on every request and nginx redirects everyone else to the cloud login page. When null, no cloud login is required.";
+      description = "Admit only requests carrying an unexpired EdDSA-signed JWT session token for the audience. The backend verifies the token on every request and nginx redirects everyone else to the login page. When null, the instance is open.";
     };
 
     frontendPackage = lib.mkOption {
@@ -55,15 +55,15 @@ in
   };
 
   config = {
-    systemd.services.backend.environment = lib.mkIf (cfg.cloudAuth != null) {
-      POINTY_CLOUD_ACCOUNT = cfg.cloudAuth.account;
-      POINTY_CLOUD_PUBLIC_KEY = "${cfg.cloudAuth.publicKeyFile}";
+    systemd.services.backend.environment = lib.mkIf (cfg.tokenAuth != null) {
+      POINTY_TOKEN_AUDIENCE = cfg.tokenAuth.audience;
+      POINTY_TOKEN_PUBLIC_KEY = "${cfg.tokenAuth.publicKeyFile}";
     };
 
     services.nginx.virtualHosts.${cfg.hostname} = lib.mkMerge [
-      (lib.mkIf (cfg.cloudAuth != null) (import ./cloud-auth-vhost.nix {
+      (lib.mkIf (cfg.tokenAuth != null) (import ./token-auth-vhost.nix {
         backendUrl = "http://127.0.0.1:8081";
-        loginUrl = "${cfg.cloudAuth.url}/";
+        inherit (cfg.tokenAuth) loginUrl;
       }))
       {
         forceSSL = true;

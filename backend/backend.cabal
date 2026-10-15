@@ -34,7 +34,7 @@ library
     Fixture.Server
     Handlers.Agent
     Handlers.Autocomplete
-    Handlers.CloudAuth
+    Handlers.TokenAuth
     Handlers.CommitHash
     Handlers.ClusterStream
     Handlers.Download

@@ -1,7 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Handlers.CloudAuth (CloudLoginForm, CloudLoginResponse, cloudAuthHandler, cloudLoginHandler) where
+module Handlers.TokenAuth (TokenLoginForm, TokenLoginResponse, tokenAuthHandler, tokenLoginHandler) where
 
 import Control.Monad.IO.Class (liftIO)
 import Crypto.Error (maybeCryptoError)
@@ -29,9 +29,9 @@ import System.IO.Unsafe (unsafePerformIO)
 import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, renderSetCookie, sameSiteLax)
 import Web.FormUrlEncoded (FromForm (..), parseUnique)
 
-data CloudAuth = CloudAuth
-    { cloudAccount :: Text
-    , cloudPublicKey :: Ed25519.PublicKey
+data TokenAuth = TokenAuth
+    { tokenAudience :: Text
+    , tokenPublicKey :: Ed25519.PublicKey
     }
 
 data Claims = Claims
@@ -45,20 +45,20 @@ instance FromJSON Claims where
             <$> obj .: "aud"
             <*> obj .: "exp"
 
-newtype CloudLoginForm = CloudLoginForm Text
+newtype TokenLoginForm = TokenLoginForm Text
 
-instance FromForm CloudLoginForm where
-    fromForm form = CloudLoginForm <$> parseUnique "token" form
+instance FromForm TokenLoginForm where
+    fromForm form = TokenLoginForm <$> parseUnique "token" form
 
-type CloudLoginResponse = Headers '[Header "Location" Text, Header "Set-Cookie" Text] NoContent
+type TokenLoginResponse = Headers '[Header "Location" Text, Header "Set-Cookie" Text] NoContent
 
-{-# NOINLINE cloudAuth #-}
-cloudAuth :: Maybe CloudAuth
-cloudAuth = unsafePerformIO $ do
-    account <- lookupEnv "POINTY_CLOUD_ACCOUNT"
-    keyFile <- lookupEnv "POINTY_CLOUD_PUBLIC_KEY"
-    case (account, keyFile) of
-        (Just name, Just path) -> Just . CloudAuth (T.pack name) <$> readPublicKey path
+{-# NOINLINE tokenAuth #-}
+tokenAuth :: Maybe TokenAuth
+tokenAuth = unsafePerformIO $ do
+    audience <- lookupEnv "POINTY_TOKEN_AUDIENCE"
+    keyFile <- lookupEnv "POINTY_TOKEN_PUBLIC_KEY"
+    case (audience, keyFile) of
+        (Just name, Just path) -> Just . TokenAuth (T.pack name) <$> readPublicKey path
         _ -> pure Nothing
 
 readPublicKey :: FilePath -> IO Ed25519.PublicKey
@@ -74,15 +74,15 @@ readPublicKey path = do
 sessionCookieName :: ByteString
 sessionCookieName = "pointy-session"
 
-cloudAuthHandler :: Maybe Text -> Handler NoContent
-cloudAuthHandler cookies = do
+tokenAuthHandler :: Maybe Text -> Handler NoContent
+tokenAuthHandler cookies = do
     now <- liftIO currentSeconds
     if isJust (validToken now =<< lookup sessionCookieName . parseCookies . encodeUtf8 =<< cookies)
         then pure NoContent
         else throwError err401
 
-cloudLoginHandler :: CloudLoginForm -> Handler CloudLoginResponse
-cloudLoginHandler (CloudLoginForm token) = do
+tokenLoginHandler :: TokenLoginForm -> Handler TokenLoginResponse
+tokenLoginHandler (TokenLoginForm token) = do
     now <- liftIO currentSeconds
     case validToken now (encodeUtf8 token) of
         Just expires -> pure $ addHeader "/" $ addHeader (sessionCookie token (expires - now)) NoContent
@@ -106,14 +106,14 @@ currentSeconds = floor <$> getPOSIXTime
 
 validToken :: Integer -> ByteString -> Maybe Integer
 validToken now token = do
-    auth <- cloudAuth
+    auth <- tokenAuth
     [header, payload, signature] <- pure (BC.split '.' token)
     signatureBytes <- either (const Nothing) Just (convertFromBase Base64URLUnpadded signature :: Either String ByteString)
     parsedSignature <- maybeCryptoError (Ed25519.signature signatureBytes)
     claimsBytes <- either (const Nothing) Just (convertFromBase Base64URLUnpadded payload :: Either String ByteString)
     claims <- decodeStrict claimsBytes
-    if Ed25519.verify (cloudPublicKey auth) (header <> "." <> payload) parsedSignature
-        && claimsAudience claims == cloudAccount auth
+    if Ed25519.verify (tokenPublicKey auth) (header <> "." <> payload) parsedSignature
+        && claimsAudience claims == tokenAudience auth
         && claimsExpires claims > now
         then Just (claimsExpires claims)
         else Nothing

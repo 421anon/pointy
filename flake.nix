@@ -71,7 +71,7 @@
           };
         in
         {
-          lib.cloudAuthVhost = import ./modules/cloud-auth-vhost.nix;
+          lib.tokenAuthVhost = import ./modules/token-auth-vhost.nix;
 
           lib.mkFixtureServer =
             { fixture
