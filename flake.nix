@@ -71,6 +71,8 @@
           };
         in
         {
+          lib.cloudAuthVhost = import ./modules/cloud-auth-vhost.nix;
+
           lib.mkFixtureServer =
             { fixture
             , state

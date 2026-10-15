@@ -23,6 +23,7 @@ import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.CloudAuth (CloudLoginForm)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -182,6 +183,10 @@ instance ToSchema SessionRequest where
 instance ToSchema RenameSessionRequest where
     declareNamedSchema _ =
         pure $ objectSchema "RenameSessionRequest" [("sessionId", stringField), ("name", stringField)]
+
+instance ToSchema CloudLoginForm where
+    declareNamedSchema _ =
+        pure $ objectSchema "CloudLoginForm" [("token", stringField)]
 
 instance ToSchema ApplyRequest where
     declareNamedSchema _ =
