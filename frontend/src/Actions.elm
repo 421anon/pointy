@@ -412,7 +412,7 @@ sendOrganizeResult result =
         |> Flow.seq
             (case result of
                 Ok () ->
-                    Flow.async loadProjectRollup
+                    Flow.async refreshProjectRollup
                         |> Flow.seq refetchCommitHash
 
                 Err err ->
@@ -498,7 +498,7 @@ applyLoadedProjects target result =
                             |> Flow.seq (Flow.modify Selection.pruneSelection)
                             |> Flow.seq (Flow.async (Flow.yield () |> Flow.seq (Flow.modify Model.Lib.warmStepSearch)))
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
-                            |> Flow.seq (Flow.async loadProjectRollup)
+                            |> Flow.seq (Flow.async refreshProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
                     )
 

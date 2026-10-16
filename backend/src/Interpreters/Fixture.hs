@@ -29,10 +29,11 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import qualified Data.Vector.Unboxed as VU
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (AppEffects, Eval (..), Inference (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
+import Effects (AppEffects, Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Fixture.Document (FixtureDocument (..), appliedAnswer, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobsEnded)
 import Processes (cli)
@@ -126,13 +127,12 @@ evalNixJson state expression = do
 runNixFixture :: (IOE :> es) => FixtureState -> Eff (Nix : es) a -> Eff es a
 runNixFixture state = interpret $ \_ -> \case
     PathValid path -> liftIO (fixturePathValid (fixtureDocument state) path)
-    RunNixCli args -> liftIO $ do
-        answerNix (fixtureDocument state) args
+    RunNixCli args -> liftIO $ answerNix (fixtureDocument state) args
     RunNixStoreCli args -> case args of
         ("--realise" : "--dry-run" : paths) -> liftIO (dryRunAnswer (fixtureDocument state) paths)
         ["--query", "--references", drv] -> pure (storePathsAnswer "references" (documentReferences (fixtureDocument state)) drv)
         ["--query", "--outputs", drv] -> pure (storePathsAnswer "outputs" (documentOutputs (fixtureDocument state)) drv)
-        _ -> pure (ExitFailure 1, "", "fixture: unsupported nix-store invocation: " ++ unwords args)
+        _ -> pure (ExitFailure 1, BS.empty, bytes ("fixture: unsupported nix-store invocation: " ++ unwords args))
     RegisterGcRoot _ _ -> pure ()
     IngestDirectory _ _ _ -> pure (Left "fixture: the ingest program is not available")
     ProbeMimeType path -> liftIO $ do
@@ -140,37 +140,46 @@ runNixFixture state = interpret $ \_ -> \case
         pure $ case code of
             ExitSuccess -> Just (T.strip (T.pack stdout))
             ExitFailure _ -> Nothing
+    LocalLogStamp drv -> liftIO $ fixtureLogStamp (fixtureDocument state) drv
 
-answerNix :: FixtureDocument -> [String] -> IO (ExitCode, String, String)
+bytes :: String -> BS.ByteString
+bytes = TE.encodeUtf8 . T.pack
+
+fixtureLogStamp :: FixtureDocument -> FilePath -> IO (Maybe LogStamp)
+fixtureLogStamp document drv = fmap (fmap stamp) (logAnswer document drv)
+  where
+    stamp content = LogStamp (posixSecondsToUTCTime 0) (fromIntegral (BS.length (bytes content)))
+
+answerNix :: FixtureDocument -> [String] -> IO (ExitCode, BS.ByteString, BS.ByteString)
 answerNix document args = case args of
     ["log", drv] -> logFor drv
     ["--offline", "log", drv] -> logFor drv
     ["--option", "substituters", "", "log", drv] -> logFor drv
     ["--option", "substituters", "", "--offline", "log", drv] -> logFor drv
     ["path-info", "--derivation", path] -> pure $ case derivationAnswer document path of
-        Just drv -> (ExitSuccess, drv ++ "\n", "")
-        Nothing -> (ExitFailure 1, "", "fixture: no derivation recorded for " ++ path)
+        Just drv -> (ExitSuccess, bytes (drv ++ "\n"), BS.empty)
+        Nothing -> (ExitFailure 1, BS.empty, bytes ("fixture: no derivation recorded for " ++ path))
     ("--offline" : "path-info" : "--json" : paths) | not (null paths) ->
-        pure (ExitSuccess, pathInfoJson document paths, "")
+        pure (ExitSuccess, bytes (pathInfoJson document paths), BS.empty)
     ("derivation" : "show" : paths) | not (null paths) ->
-        pure (ExitSuccess, derivationShowJson document paths, "")
-    _ -> pure (ExitFailure 1, "", "fixture: unsupported nix invocation: " ++ unwords args)
+        pure (ExitSuccess, bytes (derivationShowJson document paths), BS.empty)
+    _ -> pure (ExitFailure 1, BS.empty, bytes ("fixture: unsupported nix invocation: " ++ unwords args))
   where
     logFor drv = do
         recorded <- logAnswer document drv
         pure $ case recorded of
-            Just log -> (ExitSuccess, log, "")
-            Nothing -> (ExitFailure 1, "", "fixture: no build log recorded for " ++ drv)
+            Just log -> (ExitSuccess, bytes log, BS.empty)
+            Nothing -> (ExitFailure 1, BS.empty, bytes ("fixture: no build log recorded for " ++ drv))
 
-storePathsAnswer :: String -> Map.Map FilePath [FilePath] -> FilePath -> (ExitCode, String, String)
+storePathsAnswer :: String -> Map.Map FilePath [FilePath] -> FilePath -> (ExitCode, BS.ByteString, BS.ByteString)
 storePathsAnswer label recorded drv = case Map.lookup drv recorded of
-    Just paths -> (ExitSuccess, unlines paths, "")
-    Nothing -> (ExitFailure 1, "", "fixture: no " ++ label ++ " recorded for " ++ drv)
+    Just paths -> (ExitSuccess, bytes (unlines paths), BS.empty)
+    Nothing -> (ExitFailure 1, BS.empty, bytes ("fixture: no " ++ label ++ " recorded for " ++ drv))
 
-dryRunAnswer :: FixtureDocument -> [FilePath] -> IO (ExitCode, String, String)
+dryRunAnswer :: FixtureDocument -> [FilePath] -> IO (ExitCode, BS.ByteString, BS.ByteString)
 dryRunAnswer document drvs = do
     unbuilt <- filterM (fmap not . derivationBuilt document) drvs
-    pure (ExitSuccess, "", buildPlan unbuilt)
+    pure (ExitSuccess, BS.empty, bytes (buildPlan unbuilt))
   where
     buildPlan [] = ""
     buildPlan [drv] = unlines ["this derivation will be built:", "  " ++ drv]

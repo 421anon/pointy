@@ -37,10 +37,12 @@ import Control.Concurrent (threadDelay)
 import Control.Monad (void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.ByteString (ByteString)
 import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket, finally)
 import Effects (App, Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, runNixCli)
@@ -78,12 +80,12 @@ instance RepoContext ReadRepoContext where
 instance RepoContext WriteRepoContext where
     evaluatorSource = RepoWorktree . writeWorktreePath
 
-runNix :: (Nix :> es) => [String] -> ExceptT String (Eff es) String
+runNix :: (Nix :> es) => [String] -> ExceptT String (Eff es) ByteString
 runNix args = ExceptT $ do
     (code, stdout, stderr) <- runNixCli args
     pure $ case code of
         ExitSuccess -> Right stdout
-        ExitFailure _ -> Left stderr
+        ExitFailure _ -> Left (T.unpack (TE.decodeUtf8Lenient stderr))
 
 runNixEvalJsonInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
 runNixEvalJsonInRepo ctx attr = ExceptT $ evalJson (evaluatorSource ctx) attr

@@ -15,6 +15,7 @@ module Effects (
     AppM,
     Eval (..),
     Nix (..),
+    LogStamp (..),
     Slurm (..),
     Inference (..),
     SubmitRequest (..),
@@ -26,6 +27,7 @@ module Effects (
     evalImpure,
     runNixCli,
     runNixStoreCli,
+    localLogStamp,
     pathValid,
     registerGcRoot,
     rootStorePath,
@@ -41,8 +43,10 @@ module Effects (
 
 import Control.Monad.Except (ExceptT, MonadError, mapExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.ByteString (ByteString)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import Data.Time.Clock (UTCTime)
 import qualified Data.Vector.Unboxed as VU
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Exit (ExitCode)
@@ -72,14 +76,21 @@ data Eval :: Effect where
 type instance DispatchOf Eval = Dynamic
 
 data Nix :: Effect where
-    RunNixCli :: [String] -> Nix m (ExitCode, String, String)
-    RunNixStoreCli :: [String] -> Nix m (ExitCode, String, String)
+    RunNixCli :: [String] -> Nix m (ExitCode, ByteString, ByteString)
+    RunNixStoreCli :: [String] -> Nix m (ExitCode, ByteString, ByteString)
     PathValid :: FilePath -> Nix m Bool
     RegisterGcRoot :: FilePath -> FilePath -> Nix m ()
     IngestDirectory :: FilePath -> String -> (Integer -> Integer -> IO ()) -> Nix m (Either String IngestResult)
     ProbeMimeType :: FilePath -> Nix m (Maybe Text)
+    LocalLogStamp :: FilePath -> Nix m (Maybe LogStamp)
 
 type instance DispatchOf Nix = Dynamic
+
+data LogStamp = LogStamp
+    { logStampModified :: UTCTime
+    , logStampSize :: Integer
+    }
+    deriving (Eq, Show)
 
 data Slurm :: Effect where
     SubmitJob :: SubmitRequest -> Slurm m (Either String String)
@@ -121,11 +132,14 @@ evalJsonApply source applyExpr attr = send (EvalJsonApply source applyExpr attr)
 evalImpure :: (Eval :> es) => String -> Eff es (Either String String)
 evalImpure = send . EvalImpure
 
-runNixCli :: (Nix :> es) => [String] -> Eff es (ExitCode, String, String)
+runNixCli :: (Nix :> es) => [String] -> Eff es (ExitCode, ByteString, ByteString)
 runNixCli = send . RunNixCli
 
-runNixStoreCli :: (Nix :> es) => [String] -> Eff es (ExitCode, String, String)
+runNixStoreCli :: (Nix :> es) => [String] -> Eff es (ExitCode, ByteString, ByteString)
 runNixStoreCli = send . RunNixStoreCli
+
+localLogStamp :: (Nix :> es) => FilePath -> Eff es (Maybe LogStamp)
+localLogStamp = send . LocalLogStamp
 
 pathValid :: (Nix :> es) => FilePath -> Eff es Bool
 pathValid = send . PathValid

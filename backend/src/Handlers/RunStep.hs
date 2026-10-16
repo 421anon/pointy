@@ -31,6 +31,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
@@ -104,9 +105,9 @@ stepLogHandler eid commit = do
         Right (Just rl) -> return (renderResolvedLog rl)
 
 renderResolvedLog :: ResolvedLog -> T.Text
-renderResolvedLog (ResolvedLog _ logText StepDrv) = T.pack logText
+renderResolvedLog (ResolvedLog _ logText StepDrv) = TE.decodeUtf8Lenient logText
 renderResolvedLog (ResolvedLog drv logText (InputDrv _ _)) =
-    T.pack ("Build prerequisite failed: " ++ drv ++ "\n-----\n" ++ logText)
+    "Build prerequisite failed: " <> T.pack drv <> "\n-----\n" <> TE.decodeUtf8Lenient logText
 
 repoInstallable :: ReadRepoContext -> String -> String
 repoInstallable (ReadRepoContext repoPath targetCommit) fragment =

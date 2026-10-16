@@ -8,7 +8,7 @@ import ApiTypes (DynamicJson (..))
 import BuildLog (resolveStatusesBatched)
 import BuildStatus (StepPaths (..), markBuiltOutputs, stepStatusNames)
 import Certificates (evalProjectDefinitions, getProjectCertificates, getStepCertificates, projectSchemaVersion, rawStatusesFor, schemaVersionWithKeys)
-import Control.Monad.Except (ExceptT)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (Object, Value (..), object, (.=))
@@ -20,11 +20,11 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effects (App, AppM, Eval)
 import Handlers.Projects (readJsonAtCommit)
 import ProjectTree (ChildRef (..), projectChildRefs)
-import RollupCache (currentRollupGeneration, insertRollupCache, lookupRollupCache)
+import RollupCache (lookupRollupCache, withRollupCache)
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..))
 
@@ -36,10 +36,11 @@ projectRollupHandler projectId commit =
         case cached of
             Just value -> pure value
             Nothing -> do
-                generation <- liftIO currentRollupGeneration
-                rollup <- projectRollup ctx projectId
-                liftIO $ insertRollupCache generation targetCommit projectId rollup
-                pure rollup
+                result <-
+                    lift $
+                        withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
+                            withRollupCache targetCommit projectId (unlift (runExceptT (projectRollup ctx projectId)))
+                either throwError pure result
 
 projectRollup :: App es => ReadRepoContext -> Int -> ExceptT String (Eff es) Value
 projectRollup ctx projectId = do

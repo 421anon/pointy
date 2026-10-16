@@ -174,7 +174,7 @@ applyRoute forceRevealHighlight newRoute =
                                     )
                                 |> Flow.seq
                                     (Flow.when (listingFolder newRoute /= listingFolder currentRoute && viewedCommitOf newRoute == viewedCommitOf currentRoute)
-                                        (Flow.async Actions.loadProjectRollup)
+                                        (Flow.async Actions.refreshProjectRollup)
                                     )
                         )
                     |> Flow.seq
