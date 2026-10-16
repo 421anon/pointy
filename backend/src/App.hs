@@ -15,7 +15,7 @@ import EffectRunner (installRunner)
 import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnLogStreamHandler, usageHandler)
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
-import Handlers.TokenAuth (tokenAuthHandler, tokenLoginHandler)
+import Handlers.TokenAuth (tokenAuthHandler, tokenLoginHandler, tokenLogoutHandler, tokenSessionHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
 import Handlers.Presets (getPresetsHandler)
@@ -102,7 +102,9 @@ server =
         :<|> (\request -> liftHandler (purgeSessionHandler request))
         :<|> liftHandler usageHandler
         :<|> (\cookies -> liftHandler (tokenAuthHandler cookies))
+        :<|> (\cookies -> liftHandler (tokenSessionHandler cookies))
         :<|> (\form -> liftHandler (tokenLoginHandler form))
+        :<|> liftHandler tokenLogoutHandler
         :<|> stepSearchInfoHandler
         :<|> (\commit request -> stepSearchHandler commit request)
 

@@ -1106,6 +1106,11 @@ rollupRequests =
     lens ".rollupRequests" Model.getRollupRequests (\(Model m) requests -> Model { m | rollupRequests = requests })
 
 
+tokenSession : Lens ls Model (Maybe Model.TokenSession) x y
+tokenSession =
+    lens ".tokenSession" Model.getTokenSession (\(Model m) value -> Model { m | tokenSession = value })
+
+
 toasts : Lens ls Model (List (Toast (Flow Model ()))) x y
 toasts =
     lens ".toasts" Model.getToasts (\(Model t) toasts_ -> Model { t | toasts = toasts_ })

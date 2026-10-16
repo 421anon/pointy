@@ -3482,6 +3482,37 @@ body:has(dialog[open]) {
   padding: 0;
 }
 
+.status-bar__user {
+  display: flex;
+
+  > .status-bar__control {
+    max-width: 12rem;
+  }
+
+  form {
+    display: contents;
+  }
+}
+
+.status-bar__user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar__user-identity {
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+  border-bottom: 1px solid var(--line-color);
+
+  > span {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+  }
+}
+
 .status-bar__icon-dark {
   display: block;
 }
@@ -3693,7 +3724,8 @@ body:has(dialog[open]) {
 
 
   .status-bar__agent span:not(.material-symbols-outlined),
-  .status-bar__help span:not(.material-symbols-outlined) {
+  .status-bar__help span:not(.material-symbols-outlined),
+  .status-bar__user-name {
     display: none;
   }
 

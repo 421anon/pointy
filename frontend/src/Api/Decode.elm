@@ -37,6 +37,13 @@ userRepoInfo =
         |> required "branch" Decode.string
 
 
+tokenSession : Decoder Model.TokenSession
+tokenSession =
+    Decode.succeed Model.TokenSession
+        |> required "account" Decode.string
+        |> required "user" (Decode.nullable Decode.string)
+
+
 type alias SearchInfo =
     { semantic : Bool
     , judge : Bool

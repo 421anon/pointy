@@ -711,6 +711,12 @@ type alias UserRepoInfo =
     }
 
 
+type alias TokenSession =
+    { account : String
+    , user : Maybe String
+    }
+
+
 type alias SessionTimestamp =
     { posix : Time.Posix
     , nanos : Int
@@ -1618,6 +1624,7 @@ type Model
         , projectRollups : Dict Int (ApiData ProjectRollup)
         , projectsRequest : Int
         , rollupRequests : Dict Int Int
+        , tokenSession : Maybe TokenSession
         }
 
 
@@ -1780,6 +1787,11 @@ getProjectsRequest (Model model) =
 getRollupRequests : Model -> Dict Int Int
 getRollupRequests (Model model) =
     model.rollupRequests
+
+
+getTokenSession : Model -> Maybe TokenSession
+getTokenSession (Model model) =
+    model.tokenSession
 
 
 getOrigin : Model -> String
@@ -2097,6 +2109,7 @@ initialModel key route flags =
         , projectRollups = Dict.empty
         , projectsRequest = 0
         , rollupRequests = Dict.empty
+        , tokenSession = Nothing
         }
 
 

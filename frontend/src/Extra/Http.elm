@@ -18,6 +18,9 @@ errorMessage error =
         Http.BadStatus 400 ->
             "Invalid request."
 
+        Http.BadStatus 401 ->
+            "Session expired. Log in again."
+
         Http.BadStatus 404 ->
             "Not found."
 

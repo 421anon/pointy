@@ -19,5 +19,11 @@
       auth_request off;
     '';
   };
-  locations."@login".return = "302 ${loginUrl}";
+  locations."= /token-logout".proxyPass = "${backendUrl}/token-logout";
+  locations."@login".extraConfig = ''
+    if ($http_sec_fetch_mode ~ "^(cors|same-origin|no-cors)$") {
+      return 401;
+    }
+    return 302 ${loginUrl};
+  '';
 }

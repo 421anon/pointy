@@ -28,7 +28,7 @@ in
           };
           audience = lib.mkOption {
             type = lib.types.str;
-            description = "Required `aud` claim of the session token, naming this instance.";
+            description = "Required `aud` claim of the session token, naming this instance. The UI shows the token's `name` claim, or `sub` without one, as the signed-in user.";
             example = "lab";
           };
           publicKeyFile = lib.mkOption {
@@ -39,7 +39,7 @@ in
         };
       });
       default = null;
-      description = "Admit only requests carrying an unexpired EdDSA-signed JWT session token for the audience. The backend verifies the token on every request and nginx redirects everyone else to the login page. When null, the instance is open.";
+      description = "Admit only requests carrying an unexpired EdDSA-signed JWT session token for the audience. The backend verifies the token on every request; nginx redirects unauthenticated navigations to the login page and answers unauthenticated background requests with 401. The status bar shows the signed-in user with a log out action, which clears the session cookie and returns to the login page. When null, the instance is open.";
     };
 
     frontendPackage = lib.mkOption {

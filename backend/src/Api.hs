@@ -11,7 +11,7 @@ import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.TokenAuth (TokenLoginForm, TokenLoginResponse)
+import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
@@ -454,11 +454,22 @@ type TokenAuth =
         :> Header "Cookie" Text
         :> GetNoContent
 
+type TokenSessionEndpoint =
+    "token-session"
+        :> Description "Returns the account and user of the session token in this request's cookie. 404 when the instance is not behind token auth."
+        :> Header "Cookie" Text
+        :> Get '[JSON] TokenSession
+
 type TokenLogin =
     "token-login"
         :> Description "Accepts a session token posted by an external login page and stores it in a cookie scoped to this instance's host."
         :> ReqBody '[FormUrlEncoded] TokenLoginForm
-        :> Verb 'POST 303 '[PlainText] TokenLoginResponse
+        :> Verb 'POST 303 '[PlainText] SessionRedirect
+
+type TokenLogout =
+    "token-logout"
+        :> Description "Clears the session cookie on this instance's host and redirects to the root, so the next request goes through the login page again."
+        :> Verb 'POST 303 '[PlainText] SessionRedirect
 
 type API =
     GetCommitHash
@@ -518,5 +529,7 @@ type API =
         :<|> DeleteSession
         :<|> AgentUsageEndpoint
         :<|> TokenAuth
+        :<|> TokenSessionEndpoint
         :<|> TokenLogin
+        :<|> TokenLogout
         :<|> StepSearch

@@ -597,6 +597,11 @@ loadUserRepoInfo =
     callApi userRepoInfo Api.fetchUserRepoInfo |> Flow.return ()
 
 
+loadTokenSession : Flow Model ()
+loadTokenSession =
+    Api.fetchTokenSession |> Flow.andThen (Flow.setAll tokenSession)
+
+
 loadStepConfig : Flow Model ()
 loadStepConfig =
     Flow.get
