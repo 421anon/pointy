@@ -3506,6 +3506,7 @@ body:has(dialog[open]) {
   padding: var(--spacing-xs) var(--spacing-sm);
   margin-bottom: var(--spacing-xs);
   border-bottom: 1px solid var(--line-color);
+  color: var(--text-primary);
 
   > span {
     color: var(--text-muted);
