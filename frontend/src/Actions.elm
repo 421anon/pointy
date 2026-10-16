@@ -709,6 +709,7 @@ loadProjectRollup =
                                             |> (+) 1
                                 in
                                 Flow.over rollupRequests (Dict.insert projectId request)
+                                    |> Flow.seq (Flow.over rollupInFlight (Dict.insert projectId False))
                                     |> Flow.seq
                                         (Flow.over projectRollups
                                             (Dict.update projectId (Maybe.withDefault ApiData.NotAsked >> ApiData.toLoading >> Just))
@@ -719,23 +720,53 @@ loadProjectRollup =
         )
 
 
+refreshProjectRollup : Flow Model ()
+refreshProjectRollup =
+    Flow.forAll currentProjectPath
+        (\projectPath ->
+            let
+                projectId =
+                    Route.pathProjectId projectPath
+            in
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        if Dict.member projectId (Model.getRollupInFlight model) then
+                            Flow.over rollupInFlight (Dict.insert projectId True)
+
+                        else
+                            loadProjectRollup
+                    )
+        )
+
+
 settleProjectRollup : Int -> Maybe String -> Int -> Result Http.Error Model.ProjectRollup -> Flow Model ()
 settleProjectRollup projectId mCommit request result =
     Flow.get
         |> Flow.andThen
             (\model ->
-                if
-                    (Dict.get projectId (Model.getRollupRequests model) /= Just request)
-                        || (rollupTarget model /= Just ( projectId, mCommit ))
-                then
+                if Dict.get projectId (Model.getRollupRequests model) /= Just request then
                     Flow.pure ()
 
                 else
-                    Flow.over projectRollups (Dict.insert projectId (settledRollup (Model.getOrganizeQueue model) result))
+                    let
+                        stale =
+                            Dict.get projectId (Model.getRollupInFlight model) == Just True
+
+                        current =
+                            rollupTarget model == Just ( projectId, mCommit )
+                    in
+                    Flow.over rollupInFlight (Dict.remove projectId)
                         |> Flow.seq
-                            (Flow.pure result
-                                |> FlowError.foldResult (\_ -> Flow.pure ()) (\err -> addToast False (Http.errorMessage err))
+                            (Flow.when current
+                                (Flow.over projectRollups (Dict.insert projectId (settledRollup (Model.getOrganizeQueue model) result))
+                                    |> Flow.seq
+                                        (Flow.pure result
+                                            |> FlowError.foldResult (\_ -> Flow.pure ()) (\err -> addToast False (Http.errorMessage err))
+                                        )
+                                )
                             )
+                        |> Flow.seq (Flow.when stale (Flow.async loadProjectRollup))
             )
 
 
@@ -4044,7 +4075,7 @@ onStepStatusIn value =
                     (\model ->
                         Flow.when (headMovedRemotely model commit) (Flow.async (resyncWorkspace commit))
                             |> Flow.seq (applyStepStatuses statuses)
-                            |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async loadProjectRollup))
+                            |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async refreshProjectRollup))
                     )
 
         Ok SSEHeartbeat ->

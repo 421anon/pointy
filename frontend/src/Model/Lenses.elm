@@ -1106,6 +1106,11 @@ rollupRequests =
     lens ".rollupRequests" Model.getRollupRequests (\(Model m) requests -> Model { m | rollupRequests = requests })
 
 
+rollupInFlight : Lens ls Model (Dict Int Bool) x y
+rollupInFlight =
+    lens ".rollupInFlight" Model.getRollupInFlight (\(Model m) inFlight -> Model { m | rollupInFlight = inFlight })
+
+
 tokenSession : Lens ls Model (Maybe Model.TokenSession) x y
 tokenSession =
     lens ".tokenSession" Model.getTokenSession (\(Model m) value -> Model { m | tokenSession = value })

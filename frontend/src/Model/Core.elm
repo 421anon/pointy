@@ -1624,6 +1624,7 @@ type Model
         , projectRollups : Dict Int (ApiData ProjectRollup)
         , projectsRequest : Int
         , rollupRequests : Dict Int Int
+        , rollupInFlight : Dict Int Bool
         , tokenSession : Maybe TokenSession
         }
 
@@ -1787,6 +1788,11 @@ getProjectsRequest (Model model) =
 getRollupRequests : Model -> Dict Int Int
 getRollupRequests (Model model) =
     model.rollupRequests
+
+
+getRollupInFlight : Model -> Dict Int Bool
+getRollupInFlight (Model model) =
+    model.rollupInFlight
 
 
 getTokenSession : Model -> Maybe TokenSession
@@ -2109,6 +2115,7 @@ initialModel key route flags =
         , projectRollups = Dict.empty
         , projectsRequest = 0
         , rollupRequests = Dict.empty
+        , rollupInFlight = Dict.empty
         , tokenSession = Nothing
         }
 
