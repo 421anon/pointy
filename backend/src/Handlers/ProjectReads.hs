@@ -8,7 +8,7 @@ import ApiTypes (DynamicJson (..))
 import BuildLog (resolveStatusesBatched)
 import BuildStatus (StepPaths (..), markBuiltOutputs, stepStatusNames)
 import Certificates (evalProjectDefinitions, getProjectCertificates, getStepCertificates, projectSchemaVersion, rawStatusesFor, schemaVersionWithKeys)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (Object, Value (..), object, (.=))
@@ -20,12 +20,14 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
+import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift, SeqUnlift), (:>), withEffToIO)
 import Effects (App, AppM, Eval)
 import Handlers.Projects (readJsonAtCommitWithHead)
-import Handlers.StepReview (reviewedPaths, reviewedStepStatuses, stepOutPaths, stepReviews)
+import Handlers.StepReview (reviewedPaths, reviewedStatuses, stepCertificatesOrLegacyOutPaths, stepOutPaths, stepReviews)
 import ProjectTree (ChildRef (..), projectChildRefs)
 import RollupCache (lookupRollupCache, withRollupCache)
+import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
+import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
 import UserRepo (ReadRepoContext (..))
 
@@ -45,6 +47,29 @@ projectRollupHandler projectId commit =
 
 projectRollup :: App es => ReadRepoContext -> ReadRepoContext -> Int -> ExceptT String (Eff es) Value
 projectRollup headContext ctx projectId = do
+    basis <-
+        ExceptT $
+            withEffToIO SeqUnlift $ \unlift ->
+                cachedSuccess rollupBases (readCommitHash ctx, readCommitHash headContext, projectId) (unlift (runExceptT (rollupBasis headContext ctx projectId)))
+    statuses <- lift $ rollupStatuses basis
+    let rows = [rollupRow statuses (basisCertificates basis) child (Map.findWithDefault Set.empty child (basisSubtrees basis)) | child <- basisChildren basis]
+    pure $ object ["project_id" .= projectId, "children" .= rows]
+
+data RollupBasis = RollupBasis
+    { basisChildren :: [Int]
+    , basisSubtrees :: Map Int (Set Int)
+    , basisCertificates :: Map Int (Map Int StepPaths)
+    , basisUnreviewed :: Map Int StepPaths
+    , basisReviewedCertificates :: Map Int (Either String FilePath)
+    , basisReviewedOutputs :: Map Int (Either String FilePath)
+    }
+
+{-# NOINLINE rollupBases #-}
+rollupBases :: SingleFlightCache (String, String, Int) RollupBasis
+rollupBases = unsafePerformIO (newSingleFlightCache 16)
+
+rollupBasis :: App es => ReadRepoContext -> ReadRepoContext -> Int -> ExceptT String (Eff es) RollupBasis
+rollupBasis headContext ctx projectId = do
     projects <- evalProjectDefinitions ctx
     let children = directProjectChildren projects projectId
         graph = projectChildMap projects
@@ -63,16 +88,25 @@ projectRollup headContext ctx projectId = do
             else projectCertificatesOf ctx needed
     let allCertificates = Map.unions (Map.elems certificates)
     reviews <- stepReviews headContext (Map.keys allCertificates)
-    let unreviewed = Map.withoutKeys allCertificates (Map.keysSet (Map.mapMaybe id reviews))
-        unreviewedPaths = Map.map (T.pack . stepCertificate) unreviewed
-    (rawStatuses, store) <- lift $ rawStatusesFor unreviewedPaths
-    resolved <- lift $ resolveStatusesBatched store rawStatuses
-    unreviewedStatuses <- lift $ markBuiltOutputs unreviewed resolved
     reviewedOutputs <- reviewedPaths (readRepoPath headContext) stepOutPaths reviews
-    (_, reviewedStatuses) <- reviewedStepStatuses (readRepoPath headContext) reviewedOutputs reviews
-    let statuses = Map.union reviewedStatuses unreviewedStatuses
-        rows = [rollupRow statuses certificates child (Map.findWithDefault Set.empty child subtrees) | child <- children]
-    pure $ object ["project_id" .= projectId, "children" .= rows]
+    reviewedCertificates <- reviewedPaths (readRepoPath headContext) stepCertificatesOrLegacyOutPaths reviews
+    pure
+        RollupBasis
+            { basisChildren = children
+            , basisSubtrees = subtrees
+            , basisCertificates = certificates
+            , basisUnreviewed = Map.withoutKeys allCertificates (Map.keysSet (Map.mapMaybe id reviews))
+            , basisReviewedCertificates = reviewedCertificates
+            , basisReviewedOutputs = reviewedOutputs
+            }
+
+rollupStatuses :: App es => RollupBasis -> Eff es (Map Int (Text, Maybe Text))
+rollupStatuses basis = do
+    let unreviewed = basisUnreviewed basis
+    (rawStatuses, store) <- rawStatusesFor (Map.map (T.pack . stepCertificate) unreviewed)
+    unreviewedStatuses <- markBuiltOutputs unreviewed =<< resolveStatusesBatched store rawStatuses
+    reviewed <- reviewedStatuses (basisReviewedCertificates basis) (basisReviewedOutputs basis)
+    pure (Map.union reviewed unreviewedStatuses)
 
 projectCertificatesOf :: (Eval :> es, IOE :> es) => ReadRepoContext -> Set Int -> ExceptT String (Eff es) (Map Int (Map Int StepPaths))
 projectCertificatesOf ctx needed = Map.fromList <$> mapM (\pid -> (,) pid <$> projectCertificates ctx pid) (Set.toList needed)

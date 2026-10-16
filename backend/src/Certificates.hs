@@ -53,6 +53,7 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), withEffToIO, (:>))
 import Effects (App, Eval, Nix, Slurm, runNixCli)
 import ProjectTree (ChildRef (..), normalizeProject, normalizeProjects, projectStepEntries, stepEntries)
+import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
 import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), RepoContext, WriteRepoContext, ensureRepoCommit, runNixEvalJsonApplyInRepo, userRepoPath, withReadRepoTransactionIO, withWriteRepoTransactionRaw)
@@ -281,15 +282,10 @@ data ProjectsEntry = ProjectsEntry
     }
 
 projectsEntry :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) ProjectsEntry
-projectsEntry ctx@(ReadRepoContext repoPath commit) = do
-    slot <- liftIO $ projectsSlot (repoPath, commit)
+projectsEntry ctx@(ReadRepoContext repoPath commit) =
     ExceptT $
         withEffToIO SeqUnlift $ \unlift ->
-            modifyMVar slot $ \case
-                Just entry -> pure (Just entry, Right entry)
-                Nothing -> do
-                    outcome <- unlift (runExceptT (evaluateProjectsEntry ctx))
-                    pure (either (const Nothing) Just outcome, outcome)
+            cachedSuccess projectsCache (repoPath, commit) (unlift (runExceptT (evaluateProjectsEntry ctx)))
 
 evaluateProjectsEntry :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) ProjectsEntry
 evaluateProjectsEntry ctx@(ReadRepoContext repoPath commit) = do
@@ -300,18 +296,9 @@ evaluateProjectsEntry ctx@(ReadRepoContext repoPath commit) = do
     let value = projectsValue evaluation
     pure (ProjectsEntry value (decodeProjectDefinitions value))
 
-{-# NOINLINE projectsCacheRef #-}
-projectsCacheRef :: MVar [((FilePath, String), MVar (Maybe ProjectsEntry))]
-projectsCacheRef = unsafePerformIO (newMVar [])
-
-projectsCacheLimit :: Int
-projectsCacheLimit = 4
-
-projectsSlot :: (FilePath, String) -> IO (MVar (Maybe ProjectsEntry))
-projectsSlot key =
-    modifyMVar projectsCacheRef $ \entries -> do
-        slot <- maybe (newMVar Nothing) pure (lookup key entries)
-        pure (take projectsCacheLimit ((key, slot) : filter ((/= key) . fst) entries), slot)
+{-# NOINLINE projectsCache #-}
+projectsCache :: SingleFlightCache (FilePath, String) ProjectsEntry
+projectsCache = unsafePerformIO (newSingleFlightCache 4)
 
 reportDegradedProjects :: FilePath -> String -> [String] -> IO ()
 reportDegradedProjects repoPath commit failures = do
