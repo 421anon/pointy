@@ -3492,6 +3492,12 @@ body:has(dialog[open]) {
   form {
     display: contents;
   }
+
+  .listing-popover:popover-open {
+    position: fixed;
+    position-area: top span-left;
+    margin-block: 0 var(--spacing-xs);
+  }
 }
 
 .status-bar__user-name {
