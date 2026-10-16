@@ -12,6 +12,7 @@ module Api.Api exposing
     , fetchExtras
     , fetchFileContents
     , fetchFileSeek
+    , fetchInstanceConfig
     , fetchNotices
     , fetchPresets
     , fetchProjectReviews
@@ -41,6 +42,8 @@ module Api.Api exposing
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
+    , updateInstanceConfig
+    , updateUserRepo
     , uploadFiles
     , wrapScratch
     )
@@ -517,6 +520,27 @@ fetchUserRepoInfo =
             { url = "/backend/user-repo-info"
             , expect = Http.expectJson identity Decode.userRepoInfo
             }
+
+
+updateUserRepo : String -> String -> Flow s (Result Http.Error ())
+updateUserRepo url branch =
+    request "PUT"
+        "/backend/user-repo-info"
+        (Http.jsonBody (Json.Encode.object [ ( "url", Json.Encode.string url ), ( "branch", Json.Encode.string branch ) ]))
+
+
+fetchInstanceConfig : Flow s (Result Http.Error String)
+fetchInstanceConfig =
+    Flow.lift <|
+        Http.get
+            { url = "/backend/instance-config"
+            , expect = Http.expectStringResponse identity (stringResponse identity)
+            }
+
+
+updateInstanceConfig : String -> Flow s (Result Http.Error ())
+updateInstanceConfig contents =
+    request "PUT" "/backend/instance-config" (Http.stringBody "text/plain; charset=utf-8" contents)
 
 
 fetchSrcDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int -> Maybe String -> List String -> Flow s (Result Http.Error (Dict String DirectoryItem))

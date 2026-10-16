@@ -35,6 +35,7 @@ userRepoInfo =
     Decode.succeed Model.UserRepoInfo
         |> required "url" Decode.string
         |> required "branch" Decode.string
+        |> required "publicKey" (Decode.nullable Decode.string)
 
 
 tokenSession : Decoder Model.TokenSession

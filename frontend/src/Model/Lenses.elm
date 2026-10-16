@@ -796,6 +796,36 @@ scratchPickerStepId =
     scratch << lens ".pickerStepId" .pickerStepId (\state stepId -> { state | pickerStepId = stepId })
 
 
+settings : Lens ls Model Model.SettingsState x y
+settings =
+    lens ".settings" Model.getSettingsState (\(Model m) state -> Model { m | settings = state })
+
+
+settingsRepoUrl : Lens ls Model String x y
+settingsRepoUrl =
+    settings << lens ".repoUrl" .repoUrl (\state value -> { state | repoUrl = value })
+
+
+settingsRepoBranch : Lens ls Model String x y
+settingsRepoBranch =
+    settings << lens ".repoBranch" .repoBranch (\state value -> { state | repoBranch = value })
+
+
+settingsConfig : Lens ls Model (ApiData String) x y
+settingsConfig =
+    settings << lens ".config" .config (\state value -> { state | config = value })
+
+
+settingsSaving : Lens ls Model Bool x y
+settingsSaving =
+    settings << lens ".saving" .saving (\state value -> { state | saving = value })
+
+
+settingsError : Lens ls Model (Maybe String) x y
+settingsError =
+    settings << lens ".error" .error (\state value -> { state | error = value })
+
+
 stepStatusHooks : Lens ls Model (Dict Int (Flow Model ())) x y
 stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })

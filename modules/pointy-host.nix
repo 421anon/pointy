@@ -39,7 +39,7 @@ in
         };
       });
       default = null;
-      description = "Admit only requests carrying an unexpired EdDSA-signed JWT session token for the audience. The backend verifies the token on every request; nginx redirects unauthenticated navigations to the login page and answers unauthenticated background requests with 401. The status bar shows the signed-in user with a log out action, which clears the session cookie and returns to the login page. When null, the instance is open.";
+      description = "Admit only requests carrying an unexpired EdDSA-signed JWT session token for the audience. The backend verifies the token on every request; nginx redirects unauthenticated navigations to the login page and answers unauthenticated background requests with 401. The status bar shows the signed-in user with a menu to set up the user repository, edit the instance configuration and log out, which clears the session cookie and returns to the login page. When null, the instance is open.";
     };
 
     frontendPackage = lib.mkOption {

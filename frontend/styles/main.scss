@@ -3913,6 +3913,57 @@ body:has(dialog[open]) {
   gap: var(--spacing-md);
 }
 
+.dialog.settings-dialog {
+  width: min(640px, calc(100vw - var(--spacing-xl) - var(--spacing-xl)));
+  max-height: 90vh;
+}
+
+.settings-content {
+  gap: var(--spacing-md);
+}
+
+.settings-header,
+.settings-key {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.settings-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.settings-key .form-input {
+  font-family: monospace;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+}
+
+.settings-config {
+  min-height: 50vh;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.settings-error {
+  margin: 0;
+  max-height: 10rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--state-danger);
+  font-size: var(--font-size-sm);
+}
+
 .shimmer-text {
   --shimmer-duration: 2.2s;
 

@@ -23,7 +23,8 @@ import Handlers.ProjectReads (projectRollupHandler)
 import Handlers.Projects (batchProjectOpsHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (jobEndedHandler, restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
-import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
+import Handlers.Settings (getInstanceConfigHandler, getUserRepoInfoHandler, updateInstanceConfigHandler, updateUserRepoHandler)
+import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
@@ -47,6 +48,9 @@ server :: ServerT API AppM
 server =
     liftHandler getCommitHashHandler
         :<|> getUserRepoInfoHandler
+        :<|> updateUserRepoHandler
+        :<|> getInstanceConfigHandler
+        :<|> updateInstanceConfigHandler
         :<|> stepListHandler
         :<|> stepDownloadHandler
         :<|> stepSeekHandler
@@ -135,7 +139,14 @@ corsPolicy req = case pathInfo req of
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "OPTIONS"]
+                , corsMethods = ["GET", "PUT", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["instance-config"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["GET", "PUT", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     ["src-files", "raw"] ->

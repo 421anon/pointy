@@ -6,6 +6,9 @@
 module UserRepo (
     userRepoPath,
     ensureUserRepo,
+    syncUserRepo,
+    deployPublicKey,
+    checkRepoAccess,
     runNix,
     runNixEvalJsonInRepo,
     runNixEvalRawInRepo,
@@ -52,7 +55,7 @@ import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FileLock (SharedExclusive (..))
 import qualified System.FileLock
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (createTempDirectory, withSystemTempDirectory)
 import System.Posix.Process (getProcessID)
 import System.Process (
@@ -188,27 +191,55 @@ getRemoteUrl = do
 
 ensureUserRepo :: Config -> IO ()
 ensureUserRepo cfg = do
-    repoPath <- userRepoPath
     lockPath <- userRepoLockPath
-    let backupPath = repoPath ++ "-replaced"
-        userRepo = configUserRepo cfg
-
     lockExists <- doesFileExist lockPath
     when lockExists $ do
         putStrLn "Removing stale lockfile..."
         removeFile lockPath
+    syncUserRepo cfg >>= either (putStrLn . ("Warning: User repo is not available: " ++)) pure
 
-    exists <- doesDirectoryExist repoPath
+syncUserRepo :: Config -> IO (Either String ())
+syncUserRepo cfg = runExceptT $ do
+    let userRepo = configUserRepo cfg
+    ExceptT $ ensureDeployKey (userRepoKeyfile userRepo)
+    repoPath <- liftIO userRepoPath
+    exists <- liftIO $ doesDirectoryExist repoPath
+    mUrl <- liftIO $ if exists then getRemoteUrl else pure Nothing
+    if mUrl == Just (userRepoUrl userRepo)
+        then liftIO $ do
+            putStrLn "User repo already configured correctly"
+            cleanWorktrees repoPath
+        else do
+            when exists $ liftIO $ moveAside repoPath
+            ExceptT $ cloneRepoFresh userRepo
+
+ensureDeployKey :: FilePath -> IO (Either String ())
+ensureDeployKey keyfile = do
+    exists <- doesFileExist keyfile
     if exists
-        then do
-            mUrl <- getRemoteUrl
-            let urlMatches = mUrl == Just (userRepoUrl userRepo)
-            if urlMatches
-                then do
-                    putStrLn "User repo already configured correctly"
-                    cleanWorktrees repoPath
-                else replaceAndClone backupPath userRepo
-        else cloneRepoFresh userRepo
+        then pure (Right ())
+        else do
+            putStrLn $ "Generating deploy key " ++ keyfile
+            createDirectoryIfMissing True (takeDirectory keyfile)
+            (exitCode, _, stderr) <- readCreateProcessWithExitCode (proc "ssh-keygen" ["-q", "-t", "ed25519", "-N", "", "-C", "pointy-deploy", "-f", keyfile]) ""
+            pure $ case exitCode of
+                ExitSuccess -> Right ()
+                ExitFailure code -> Left $ "ssh-keygen failed (exit " ++ show code ++ "): " ++ stderr
+
+deployPublicKey :: FilePath -> IO (Maybe Text)
+deployPublicKey keyfile = do
+    (exitCode, stdout, _) <- readCreateProcessWithExitCode (proc "ssh-keygen" ["-y", "-P", "", "-f", keyfile]) ""
+    pure $ case exitCode of
+        ExitSuccess -> Just (T.strip (T.pack stdout))
+        ExitFailure _ -> Nothing
+
+checkRepoAccess :: FilePath -> Text -> Text -> IO (Either String ())
+checkRepoAccess keyfile url branch = do
+    (exitCode, _, stderr) <- runGitWithSshKey keyfile "." ["ls-remote", "--exit-code", T.unpack url, "refs/heads/" ++ T.unpack branch]
+    pure $ case exitCode of
+        ExitSuccess -> Right ()
+        ExitFailure 2 -> Left $ "Branch " ++ T.unpack branch ++ " does not exist in " ++ T.unpack url ++ "."
+        ExitFailure _ -> Left $ "Cannot read " ++ T.unpack url ++ " with the deploy key. Add the public key as a deploy key with write access, then try again.\n" ++ stderr
 
 cleanWorktrees :: FilePath -> IO ()
 cleanWorktrees repoPath = do
@@ -218,9 +249,9 @@ cleanWorktrees repoPath = do
         ExitSuccess -> return ()
         ExitFailure code -> putStrLn $ "Warning: git worktree prune failed (exit " ++ show code ++ "): " ++ stderr
 
-replaceAndClone :: FilePath -> UserRepoConfig -> IO ()
-replaceAndClone backupPath cfg = do
-    repoPath <- userRepoPath
+moveAside :: FilePath -> IO ()
+moveAside repoPath = do
+    let backupPath = repoPath ++ "-replaced"
     putStrLn "User repo configuration mismatch, replacing..."
     backupExists <- doesDirectoryExist backupPath
     when backupExists $ do
@@ -228,9 +259,8 @@ replaceAndClone backupPath cfg = do
         removeDirectoryRecursive backupPath
     putStrLn $ "Moving " ++ repoPath ++ " to " ++ backupPath
     renameDirectory repoPath backupPath
-    cloneRepoFresh cfg
 
-cloneRepoFresh :: UserRepoConfig -> IO ()
+cloneRepoFresh :: UserRepoConfig -> IO (Either String ())
 cloneRepoFresh cfg = do
     repoPath <- userRepoPath
     putStrLn $ "Cloning bare repo " ++ T.unpack (userRepoUrl cfg) ++ " branch " ++ T.unpack (userRepoBranch cfg)
@@ -244,9 +274,8 @@ cloneRepoFresh cfg = do
                 ExitSuccess -> return $ Right ()
                 ExitFailure code -> return $ Left $ "Failed to clone repo (exit " ++ show code ++ "): " ++ stderr ++ stdout
     res <- retry 3 action
-    case res of
-        Right () -> putStrLn "User repo cloned successfully"
-        Left err -> error err
+    when (res == Right ()) $ putStrLn "User repo cloned successfully"
+    pure res
 
 commitContext :: FilePath -> Text -> ExceptT String IO ReadRepoContext
 commitContext repoPath hash = do

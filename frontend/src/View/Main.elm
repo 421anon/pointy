@@ -24,6 +24,7 @@ import View.Dialog as Dialog
 import View.Organize
 import View.Project exposing (viewCurrentProject)
 import View.Scratch exposing (viewScratchPicker)
+import View.Settings
 import View.Shadow
 import View.Sidebar
 
@@ -66,6 +67,8 @@ view model =
                 , View.Organize.viewContextMenu model
                 , Compare.viewCompareDialog model
                 , viewScratchPicker model
+                , View.Settings.viewUserRepoDialog model
+                , View.Settings.viewInstanceConfigDialog model
                 , StatusBar.view model
                 ]
     }

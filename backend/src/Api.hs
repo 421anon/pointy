@@ -14,7 +14,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
-import Handlers.SrcFiles (UserRepoInfo)
+import Handlers.Settings (UserRepoInfo, UserRepoUpdate)
 import Handlers.StatusStream (EventStream)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
@@ -39,8 +39,25 @@ type GetCommitHash =
 
 type GetUserRepoInfo =
     "user-repo-info"
-        :> Description "Returns the configured user repository URL and branch."
+        :> Description "Returns the configured user repository URL and branch, and the public half of the deploy key the backend reaches it with."
         :> Get '[JSON] UserRepoInfo
+
+type UpdateUserRepo =
+    "user-repo-info"
+        :> Description "Points the instance at another user repository after checking the deploy key can read its branch. Rewrites [user-repo] in the configuration and returns once the backend has applied it."
+        :> ReqBody '[JSON] UserRepoUpdate
+        :> Put '[JSON] NoContent
+
+type GetInstanceConfig =
+    "instance-config"
+        :> Description "Returns the backend configuration file."
+        :> Get '[PlainText] Text
+
+type UpdateInstanceConfig =
+    "instance-config"
+        :> Description "Replaces the backend configuration file after validating it and returns once the backend has applied it. 400 with the reason when it is invalid or cannot be applied."
+        :> ReqBody '[PlainText] Text
+        :> Put '[JSON] NoContent
 
 type ListStepFiles =
     "step-files"
@@ -474,6 +491,9 @@ type TokenLogout =
 type API =
     GetCommitHash
         :<|> GetUserRepoInfo
+        :<|> UpdateUserRepo
+        :<|> GetInstanceConfig
+        :<|> UpdateInstanceConfig
         :<|> ListStepFiles
         :<|> DownloadStepFile
         :<|> StepFileSeek

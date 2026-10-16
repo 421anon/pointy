@@ -27,7 +27,7 @@ import Handlers.TokenAuth (TokenLoginForm, TokenSession)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
-import Handlers.SrcFiles (UserRepoInfo)
+import Handlers.Settings (UserRepoInfo, UserRepoUpdate)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
@@ -238,6 +238,9 @@ instance ToSchema ScratchListing where
 
 instance ToSchema ScratchWrapRequest where
     declareNamedSchema _ = pure $ objectSchema "ScratchWrapRequest" [("path", stringField)]
+
+instance ToSchema UserRepoUpdate where
+    declareNamedSchema _ = pure $ objectSchema "UserRepoUpdate" [("url", stringField), ("branch", stringField)]
 
 instance ToSchema UserRepoInfo
 instance ToSchema AutocompleteRequest
