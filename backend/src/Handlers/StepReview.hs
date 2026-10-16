@@ -14,6 +14,9 @@ module Handlers.StepReview (
     requireStepUnreviewed,
     reviewDiffHandler,
     reviewStepHandler,
+    reviewedPaths,
+    reviewedStepStatuses,
+    stepOutPaths,
     stepReviews,
     readableStepReviews,
 ) where
@@ -37,7 +40,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
-import Effects (AppEffects, AppM, Eval, Nix)
+import Effects (AppEffects, AppM, Eval, Nix, Slurm)
 import GHC.Generics (Generic)
 import ProjectFiles (rewriteNixFile, stepFilePath)
 import BuildStatus (StepPaths (..), checkStatus, resolveStatuses)
@@ -117,9 +120,7 @@ getProjectReviewHandler projectId commit = do
         reviews <- (<> Map.fromList [(stepId, Nothing) | stepId <- stepIds]) <$> stepReviews context stepIds
         reviewedOutputs <- reviewedPaths (readRepoPath context) stepOutPaths reviews
         comparisons <- stepComparisons viewed reviews reviewedOutputs
-        reviewedCertificates <- reviewedPaths (readRepoPath context) stepCertificatesOrLegacyOutPaths reviews
-        let reviewedStepPaths = Map.mapMaybe (either (const Nothing) Just) (Map.intersectionWith (liftA2 StepPaths) reviewedCertificates reviewedOutputs)
-        statuses <- lift . resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedCertificates
+        (reviewedCertificates, statuses) <- reviewedStepStatuses (readRepoPath context) reviewedOutputs reviews
         let stepReport stepId review = StepReviewReport review (either (const Nothing) Just =<< Map.lookup stepId reviewedCertificates) (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
     orFail err500 result
@@ -503,6 +504,13 @@ readableStepReviews ctx stepIds =
     stepReviews ctx stepIds `catchError` const (Map.unions <$> mapM readable stepIds)
   where
     readable stepId = stepReviews ctx [stepId] `catchError` const (pure Map.empty)
+
+reviewedStepStatuses :: (Eval :> es, IOE :> es, Nix :> es, Slurm :> es) => FilePath -> StepOutPaths -> StepReviews -> ExceptT String (Eff es) (StepOutPaths, Map Int (Text, Maybe Text))
+reviewedStepStatuses repoPath reviewedOutputs reviews = do
+    reviewedCertificates <- reviewedPaths repoPath stepCertificatesOrLegacyOutPaths reviews
+    let reviewedStepPaths = Map.mapMaybe (either (const Nothing) Just) (Map.intersectionWith (liftA2 StepPaths) reviewedCertificates reviewedOutputs)
+    statuses <- lift . resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedCertificates
+    pure (reviewedCertificates, statuses)
 
 reviewedPaths :: (IOE :> es, Eval :> es) => FilePath -> (ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths) -> StepReviews -> ExceptT String (Eff es) StepOutPaths
 reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)

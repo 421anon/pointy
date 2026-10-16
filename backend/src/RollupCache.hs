@@ -9,44 +9,46 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import System.IO.Unsafe (unsafePerformIO)
 
+type RollupKey = (String, String, Int)
+
 {-# NOINLINE rollupCacheRef #-}
-rollupCacheRef :: MVar (Int, [((String, Int), Value)])
+rollupCacheRef :: MVar (Int, [(RollupKey, Value)])
 rollupCacheRef = unsafePerformIO (newMVar (0, []))
 
 rollupCacheLimit :: Int
 rollupCacheLimit = 16
 
 {-# NOINLINE rollupInFlightRef #-}
-rollupInFlightRef :: TVar (Map (String, Int) (TMVar (Either String Value)))
+rollupInFlightRef :: TVar (Map RollupKey (TMVar (Either String Value)))
 rollupInFlightRef = unsafePerformIO (newTVarIO Map.empty)
 
-lookupRollupCache :: String -> Int -> IO (Maybe Value)
-lookupRollupCache commit projectId = lookup (commit, projectId) . snd <$> readMVar rollupCacheRef
+lookupRollupCache :: RollupKey -> IO (Maybe Value)
+lookupRollupCache key = lookup key . snd <$> readMVar rollupCacheRef
 
 currentRollupGeneration :: IO Int
 currentRollupGeneration = fst <$> readMVar rollupCacheRef
 
-insertRollupCache :: Int -> String -> Int -> Value -> IO ()
-insertRollupCache generation commit projectId value =
+insertRollupCache :: Int -> RollupKey -> Value -> IO ()
+insertRollupCache generation key value =
     modifyMVar_ rollupCacheRef $ \(current, entries) ->
         return $
             if generation /= current
                 then (current, entries)
-                else (current, take rollupCacheLimit $ ((commit, projectId), value) : filter ((/= (commit, projectId)) . fst) entries)
+                else (current, take rollupCacheLimit $ (key, value) : filter ((/= key) . fst) entries)
 
 invalidateRollupCache :: IO ()
 invalidateRollupCache = modifyMVar_ rollupCacheRef $ \(generation, _) -> return (generation + 1, [])
 
-withRollupCache :: String -> Int -> IO (Either String Value) -> IO (Either String Value)
-withRollupCache commit projectId compute = mask $ \restore -> do
+withRollupCache :: RollupKey -> IO (Either String Value) -> IO (Either String Value)
+withRollupCache key compute = mask $ \restore -> do
     generation <- currentRollupGeneration
     role <- atomically $ do
         inFlight <- readTVar rollupInFlightRef
-        case Map.lookup (commit, projectId) inFlight of
+        case Map.lookup key inFlight of
             Just pending -> pure (Left pending)
             Nothing -> do
                 pending <- newEmptyTMVar
-                writeTVar rollupInFlightRef (Map.insert (commit, projectId) pending inFlight)
+                writeTVar rollupInFlightRef (Map.insert key pending inFlight)
                 pure (Right pending)
     case role of
         Left pending -> atomically (readTMVar pending)
@@ -55,7 +57,7 @@ withRollupCache commit projectId compute = mask $ \restore -> do
             case outcome of
                 Right result -> do
                     publish pending result
-                    forM_ result (insertRollupCache generation commit projectId)
+                    forM_ result (insertRollupCache generation key)
                     pure result
                 Left err -> do
                     publish pending (Left (show (err :: SomeException)))
@@ -64,4 +66,4 @@ withRollupCache commit projectId compute = mask $ \restore -> do
     publish pending result =
         atomically $ do
             putTMVar pending result
-            modifyTVar' rollupInFlightRef (Map.delete (commit, projectId))
+            modifyTVar' rollupInFlightRef (Map.delete key)

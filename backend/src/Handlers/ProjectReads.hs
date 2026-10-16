@@ -22,7 +22,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effects (App, AppM, Eval)
-import Handlers.Projects (readJsonAtCommit)
+import Handlers.Projects (readJsonAtCommitWithHead)
+import Handlers.StepReview (reviewedPaths, reviewedStepStatuses, stepOutPaths, stepReviews)
 import ProjectTree (ChildRef (..), projectChildRefs)
 import RollupCache (lookupRollupCache, withRollupCache)
 import Text.Read (readMaybe)
@@ -30,20 +31,20 @@ import UserRepo (ReadRepoContext (..))
 
 projectRollupHandler :: Int -> Maybe T.Text -> AppM DynamicJson
 projectRollupHandler projectId commit =
-    readJsonAtCommit commit $ \ctx -> do
-        let targetCommit = readCommitHash ctx
-        cached <- liftIO $ lookupRollupCache targetCommit projectId
+    readJsonAtCommitWithHead commit $ \headContext ctx -> do
+        let key = (readCommitHash ctx, readCommitHash headContext, projectId)
+        cached <- liftIO $ lookupRollupCache key
         case cached of
             Just value -> pure value
             Nothing -> do
                 result <-
                     lift $
                         withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
-                            withRollupCache targetCommit projectId (unlift (runExceptT (projectRollup ctx projectId)))
+                            withRollupCache key (unlift (runExceptT (projectRollup headContext ctx projectId)))
                 either throwError pure result
 
-projectRollup :: App es => ReadRepoContext -> Int -> ExceptT String (Eff es) Value
-projectRollup ctx projectId = do
+projectRollup :: App es => ReadRepoContext -> ReadRepoContext -> Int -> ExceptT String (Eff es) Value
+projectRollup headContext ctx projectId = do
     projects <- evalProjectDefinitions ctx
     let children = directProjectChildren projects projectId
         graph = projectChildMap projects
@@ -61,11 +62,16 @@ projectRollup ctx projectId = do
                     Left _ -> projectCertificatesOf ctx needed
             else projectCertificatesOf ctx needed
     let allCertificates = Map.unions (Map.elems certificates)
-        certificatePaths = Map.map (T.pack . stepCertificate) allCertificates
-    (rawStatuses, store) <- lift $ rawStatusesFor certificatePaths
+    reviews <- stepReviews headContext (Map.keys allCertificates)
+    let unreviewed = Map.withoutKeys allCertificates (Map.keysSet (Map.mapMaybe id reviews))
+        unreviewedPaths = Map.map (T.pack . stepCertificate) unreviewed
+    (rawStatuses, store) <- lift $ rawStatusesFor unreviewedPaths
     resolved <- lift $ resolveStatusesBatched store rawStatuses
-    statuses <- lift $ markBuiltOutputs allCertificates resolved
-    let rows = [rollupRow statuses certificates child (Map.findWithDefault Set.empty child subtrees) | child <- children]
+    unreviewedStatuses <- lift $ markBuiltOutputs unreviewed resolved
+    reviewedOutputs <- reviewedPaths (readRepoPath headContext) stepOutPaths reviews
+    (_, reviewedStatuses) <- reviewedStepStatuses (readRepoPath headContext) reviewedOutputs reviews
+    let statuses = Map.union reviewedStatuses unreviewedStatuses
+        rows = [rollupRow statuses certificates child (Map.findWithDefault Set.empty child subtrees) | child <- children]
     pure $ object ["project_id" .= projectId, "children" .= rows]
 
 projectCertificatesOf :: (Eval :> es, IOE :> es) => ReadRepoContext -> Set Int -> ExceptT String (Eff es) (Map Int (Map Int StepPaths))
