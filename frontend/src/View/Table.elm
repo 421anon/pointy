@@ -463,7 +463,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
 
                 Nothing ->
                     Html.span [ class "record-name-container" ]
-                        [ Html.text row.name
+                        [ Html.text (row.name ++ "\u{2060}")
                         , Html.span [ class "listing-row-id", title ("id: " ++ String.fromInt row.link.id) ]
                             [ Html.text (String.fromInt row.link.id) ]
                         , Html.viewIf row.link.hidden
@@ -556,7 +556,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
                     (\typeIcon -> iconCustom False typeIcon [ class "listing-row-type-icon", title row.displayName ])
                     row.typeIcon
                 , nameView
-                , Html.span [] row.alwaysVisibleActions
+                , Html.viewIf (not (List.isEmpty row.alwaysVisibleActions)) (Html.span [] row.alwaysVisibleActions)
                 , Html.viewIf isFolder row.statusPill
                 , Html.Lazy.lazy2 viewMtimeBadge row.mTime (Model.getNow model)
                 , Html.viewIf row.isUpdating <|

@@ -1867,9 +1867,8 @@ $delimited-grid-row-height: 28px;
 }
 
 .icon-btn-inline {
-  min-width: 20px;
+  min-width: 0;
   min-height: 20px;
-  margin-left: var(--spacing-2xs);
   color: var(--text-secondary);
 
   > .material-symbols-outlined {
