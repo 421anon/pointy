@@ -47,6 +47,9 @@ view model =
         groups =
             groupSteps steps
 
+        summary =
+            summarize (Model.getClusterStatus model) groups
+
         isOpen =
             Model.getStatusBarOpen model && not (List.isEmpty steps)
     in
@@ -65,7 +68,7 @@ view model =
              )
                 ++ [ Html.div [ class "status-bar__surface" ]
                         [ viewHealth model
-                        , viewSummary groups (not (List.isEmpty steps)) isOpen
+                        , viewSummary summary (not (List.isEmpty steps)) isOpen
                         , viewRepoContext model
                         , viewIndependentControls model
                         ]
@@ -182,18 +185,11 @@ viewHealth model =
         ]
 
 
-viewSummary : List Group -> Bool -> Bool -> Html (Flow Model ())
-viewSummary groups expandable isOpen =
+viewSummary : Summary -> Bool -> Bool -> Html (Flow Model ())
+viewSummary summary expandable isOpen =
     let
-        counts =
-            List.map summaryCount groups
-
         spoken =
-            if List.isEmpty counts then
-                "Idle"
-
-            else
-                String.join ", " (List.map (\count -> String.fromInt count.count ++ " " ++ count.label) counts)
+            spokenSummary summary
     in
     Html.button
         ([ class "status-bar__main"
@@ -221,11 +217,15 @@ viewSummary groups expandable isOpen =
             [ class "status-bar__counts"
             , attribute "aria-live" "polite"
             ]
-            (if List.isEmpty counts then
-                [ Html.span [ class "status-bar__count status-bar__count--idle" ] [ Html.text "Idle" ] ]
+            (case summary of
+                SummaryLoading ->
+                    []
 
-             else
-                List.map viewCount counts
+                SummaryIdle ->
+                    [ Html.span [ class "status-bar__count status-bar__count--idle" ] [ Html.text "Idle" ] ]
+
+                SummaryActive counts ->
+                    List.map viewCount counts
             )
         , if expandable then
             iconCustom False
@@ -269,6 +269,39 @@ summaryCount group =
 
         TransferGroup ->
             { kind = "transferring", count = count, label = "uploading" }
+
+
+type Summary
+    = SummaryLoading
+    | SummaryIdle
+    | SummaryActive (List SummaryCount)
+
+
+summarize : ApiData ClusterStatus -> List Group -> Summary
+summarize clusterStatus groups =
+    case List.map summaryCount groups of
+        [] ->
+            if ApiData.settled clusterStatus then
+                SummaryIdle
+
+            else
+                SummaryLoading
+
+        counts ->
+            SummaryActive counts
+
+
+spokenSummary : Summary -> String
+spokenSummary summary =
+    case summary of
+        SummaryLoading ->
+            "Loading activity"
+
+        SummaryIdle ->
+            "Idle"
+
+        SummaryActive counts ->
+            String.join ", " (List.map (\count -> String.fromInt count.count ++ " " ++ count.label) counts)
 
 
 viewCount : SummaryCount -> Html msg

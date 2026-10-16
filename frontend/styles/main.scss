@@ -3331,7 +3331,12 @@ body:has(dialog[open]) {
   color: var(--text-muted);
 
   .status-bar__state-indicator {
-    animation: pulse-running 1.5s ease-in-out infinite;
+    width: 1em;
+    height: 1em;
+    background: transparent;
+    border: 2px solid currentColor;
+    border-block-start-color: transparent;
+    animation: spin 1s linear infinite;
   }
 }
 
@@ -3694,7 +3699,8 @@ body:has(dialog[open]) {
   }
 
   .status-bar__count--starting .status-bar__marker,
-  .status-bar__marker--starting {
+  .status-bar__marker--starting,
+  .status-bar__state--loading .status-bar__state-indicator {
     animation: none;
   }
 }
