@@ -2039,6 +2039,7 @@ type alias Flags =
     , autoApply : Bool
     , clientId : String
     , isNarrow : Bool
+    , now : Int
     }
 
 
@@ -2102,7 +2103,7 @@ initialModel key route flags =
         , organizeDrag = Nothing
         , gutterDrag = Nothing
         , compareState = CompareIdle
-        , now = Time.millisToPosix 0
+        , now = Time.millisToPosix flags.now
         , agent = { initAgentState | lastChat = flags.lastChat, autoApply = flags.autoApply, clientId = flags.clientId }
         , clusterStatus = ApiData.Loading Nothing
         , clusterDetail = Nothing

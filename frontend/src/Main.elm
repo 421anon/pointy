@@ -68,7 +68,6 @@ initializeWorkspace =
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
         |> Flow.seq Actions.anchorAgentChatUnlessHighlighting
-        |> Flow.seq (Flow.performTask Time.now |> Flow.andThen (Flow.setAll now))
         |> Flow.seq (Flow.async Actions.startClusterStatusStream)
         |> Flow.seq (Flow.async Ingest.startIngestStream)
         |> Flow.seq Ingest.loadScratch
