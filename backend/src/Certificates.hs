@@ -50,7 +50,7 @@ import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Encoding as TE
 import EffectRunner (runAppEffects)
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), withEffToIO, (:>))
 import Effects (App, Eval, Nix, Slurm, runNixCli)
 import ProjectTree (ChildRef (..), normalizeProject, normalizeProjects, projectStepEntries, stepEntries)
 import System.Exit (ExitCode (..))
@@ -273,12 +273,45 @@ data EntryList
     | LegacyStepEntries
 
 evalProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) Value
-evalProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
+evalProjectDefinitions ctx = projectsEntryValue <$> projectsEntry ctx
+
+data ProjectsEntry = ProjectsEntry
+    { projectsEntryValue :: Value
+    , projectsEntryDefinitions :: Either String (Map String ProjectDef)
+    }
+
+projectsEntry :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) ProjectsEntry
+projectsEntry ctx@(ReadRepoContext repoPath commit) = do
+    slot <- liftIO $ projectsSlot (repoPath, commit)
+    ExceptT $
+        withEffToIO SeqUnlift $ \unlift ->
+            modifyMVar slot $ \case
+                Just entry -> pure (Just entry, Right entry)
+                Nothing -> do
+                    outcome <- unlift (runExceptT (evaluateProjectsEntry ctx))
+                    pure (either (const Nothing) Just outcome, outcome)
+
+evaluateProjectsEntry :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) ProjectsEntry
+evaluateProjectsEntry ctx@(ReadRepoContext repoPath commit) = do
     evaluation <- evaluateProjectDefinitions ctx
     unless (null (projectsFailures evaluation)) $
         liftIO $
             reportDegradedProjects repoPath commit (map failureMessage (projectsFailures evaluation))
-    pure (projectsValue evaluation)
+    let value = projectsValue evaluation
+    pure (ProjectsEntry value (decodeProjectDefinitions value))
+
+{-# NOINLINE projectsCacheRef #-}
+projectsCacheRef :: MVar [((FilePath, String), MVar (Maybe ProjectsEntry))]
+projectsCacheRef = unsafePerformIO (newMVar [])
+
+projectsCacheLimit :: Int
+projectsCacheLimit = 4
+
+projectsSlot :: (FilePath, String) -> IO (MVar (Maybe ProjectsEntry))
+projectsSlot key =
+    modifyMVar projectsCacheRef $ \entries -> do
+        slot <- maybe (newMVar Nothing) pure (lookup key entries)
+        pure (take projectsCacheLimit ((key, slot) : filter ((/= key) . fst) entries), slot)
 
 reportDegradedProjects :: FilePath -> String -> [String] -> IO ()
 reportDegradedProjects repoPath commit failures = do
@@ -447,32 +480,7 @@ stepDefinitionExpression sid =
     "pointy: if pointy.steps ? " ++ show (show sid) ++ " then pointy.steps." ++ show (show sid) ++ ".def else null"
 
 cachedProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map String ProjectDef)
-cachedProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
-    cached <- liftIO $ lookupCachedProjectDefinitions repoPath commit
-    case cached of
-        Just definitions -> return definitions
-        Nothing -> do
-            projects <- evalProjectDefinitions ctx
-            definitions <- either throwError return (decodeProjectDefinitions projects)
-            liftIO $ insertCachedProjectDefinitions repoPath commit definitions
-            return definitions
-
-{-# NOINLINE projectDefinitionsCacheRef #-}
-projectDefinitionsCacheRef :: MVar [((FilePath, String), Map String ProjectDef)]
-projectDefinitionsCacheRef = unsafePerformIO (newMVar [])
-
-projectDefinitionsCacheLimit :: Int
-projectDefinitionsCacheLimit = 4
-
-lookupCachedProjectDefinitions :: FilePath -> String -> IO (Maybe (Map String ProjectDef))
-lookupCachedProjectDefinitions repoPath commit = do
-    cache <- readMVar projectDefinitionsCacheRef
-    return $ lookup (repoPath, commit) cache
-
-insertCachedProjectDefinitions :: FilePath -> String -> Map String ProjectDef -> IO ()
-insertCachedProjectDefinitions repoPath commit definitions = do
-    modifyMVar_ projectDefinitionsCacheRef $ \entries ->
-        return $ take projectDefinitionsCacheLimit $ ((repoPath, commit), definitions) : filter ((/= (repoPath, commit)) . fst) entries
+cachedProjectDefinitions ctx = projectsEntry ctx >>= either throwError pure . projectsEntryDefinitions
 
 evalProjectDefinition :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) String
 evalProjectDefinition ctx pid = runNixEvalJsonApplyInRepo ctx projectDefinition (projectAttr pid)
