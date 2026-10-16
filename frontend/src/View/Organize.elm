@@ -11,8 +11,9 @@ module View.Organize exposing
     , viewRowCheckbox
     )
 
-import Accessors exposing (get)
+import Accessors exposing (get, try)
 import Actions
+import Dict exposing (Dict)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (attribute, checked, class, classList, disabled, id, style, title, type_, value)
@@ -20,8 +21,8 @@ import Html.Events as Events
 import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildLink, ChildRef, Model, OrganizeAction(..), OrganizeDialog, OrganizeDialogMode(..))
-import Model.Lenses exposing (listingSelection, organizeContextMenu, organizeDialog)
+import Model.Core as Model exposing (ChildLink, ChildRef, Model, OrganizeAction(..), OrganizeDialog, OrganizeDialogMode(..), ProjectRecord)
+import Model.Lenses exposing (listingSelection, loadedProjects, organizeContextMenu, organizeDialog)
 import Model.Selection as Selection
 import Organize
 import Set exposing (Set)
@@ -33,16 +34,16 @@ refToken ref =
     Model.childKindName ref.kind ++ ":" ++ String.fromInt ref.id
 
 
-dropTargetAttrs : Model -> Int -> List (Html.Attribute msg)
-dropTargetAttrs model folderId =
+dropTargetAttrs : Model -> Dict Int ProjectRecord -> Int -> List (Html.Attribute msg)
+dropTargetAttrs model projects_ folderId =
     [ attribute "data-drop-folder" (String.fromInt folderId)
-    , attribute "data-drop-allowed" (dropAllowedToken model folderId)
+    , attribute "data-drop-allowed" (dropAllowedToken model projects_ folderId)
     ]
 
 
-dropAllowedToken : Model -> Int -> String
-dropAllowedToken model folderId =
-    Selection.dropAllowed model folderId
+dropAllowedToken : Model -> Dict Int ProjectRecord -> Int -> String
+dropAllowedToken model projects_ folderId =
+    Selection.dropAllowed model projects_ folderId
         |> List.map Selection.dropActionToken
         |> String.join " "
 
@@ -111,11 +112,11 @@ viewMenuPopover config =
         ]
 
 
-viewActionBar : Model -> Html (Flow Model ())
-viewActionBar model =
+viewActionBar : Model -> Dict Int ProjectRecord -> Html (Flow Model ())
+viewActionBar model projects_ =
     let
         actions =
-            barActions model
+            barActions model projects_
     in
     Html.viewIf (Selection.listingEditable model && Selection.hasSelection model && not (List.isEmpty actions)) <|
         Html.div [ class "listing-action-bar-anchor" ]
@@ -128,9 +129,9 @@ viewActionBar model =
             ]
 
 
-barActions : Model -> List ( OrganizeAction, Selection.ActionSpec )
-barActions model =
-    List.filter (Tuple.second >> .inBar) (Selection.selectionActions model)
+barActions : Model -> Dict Int ProjectRecord -> List ( OrganizeAction, Selection.ActionSpec )
+barActions model projects_ =
+    List.filter (Tuple.second >> .inBar) (Selection.selectionActions model projects_)
 
 
 viewActionButton : ( OrganizeAction, Selection.ActionSpec ) -> Html (Flow Model ())
@@ -150,15 +151,15 @@ viewContextMenu : Model -> Html (Flow Model ())
 viewContextMenu model =
     Html.viewIf (Selection.listingEditable model) <|
         Html.viewMaybe
-            (\menu ->
+            (\( menu, projects_ ) ->
                 let
                     actions =
                         case menu.ref of
                             Just _ ->
-                                barActions model
+                                barActions model projects_
 
                             Nothing ->
-                                List.filter (Tuple.second >> .inBar >> not) (Selection.selectionActions model)
+                                List.filter (Tuple.second >> .inBar >> not) (Selection.selectionActions model projects_)
                 in
                 Html.viewIf (not (List.isEmpty actions)) <|
                     Html.div
@@ -168,7 +169,7 @@ viewContextMenu model =
                         ]
                         (List.map viewActionButton actions)
             )
-            (get organizeContextMenu model)
+            (Maybe.map2 Tuple.pair (get organizeContextMenu model) (try loadedProjects model))
 
 
 viewRowCheckbox : Set ( String, Int ) -> Model.ListingScope -> ChildLink -> Html (Flow Model ())
@@ -194,11 +195,14 @@ viewOrganizeDialog model =
         [ id Organize.dialogId
         , class "dialog organize-dialog"
         ]
-        [ Html.viewMaybe (viewOrganizeDialogContent model) (get organizeDialog model) ]
+        [ Html.viewMaybe
+            (\( dialog, projects_ ) -> viewOrganizeDialogContent model projects_ dialog)
+            (Maybe.map2 Tuple.pair (get organizeDialog model) (try loadedProjects model))
+        ]
 
 
-viewOrganizeDialogContent : Model -> OrganizeDialog -> Html (Flow Model ())
-viewOrganizeDialogContent model dialog =
+viewOrganizeDialogContent : Model -> Dict Int ProjectRecord -> OrganizeDialog -> Html (Flow Model ())
+viewOrganizeDialogContent model projects_ dialog =
     let
         ( dialogTitle, confirmLabel ) =
             case dialog.mode of
@@ -266,7 +270,7 @@ viewOrganizeDialogContent model dialog =
                     ]
                     []
                 , Html.div [ class "organize-dialog-targets" ]
-                    (List.map (viewTargetOption dialog) (filteredTargets model dialog))
+                    (List.map (viewTargetOption dialog) (filteredTargets model projects_ dialog))
                 ]
             )
         , Html.div [ class "dialog-actions" ]
@@ -286,13 +290,13 @@ viewOrganizeDialogContent model dialog =
         ]
 
 
-filteredTargets : Model -> OrganizeDialog -> List ( Int, String )
-filteredTargets model dialog =
+filteredTargets : Model -> Dict Int ProjectRecord -> OrganizeDialog -> List ( Int, String )
+filteredTargets model projects_ dialog =
     let
         query =
             String.toLower (String.trim dialog.query)
     in
-    Selection.organizeTargets model dialog.mode dialog.sourceScope dialog.refs
+    Selection.organizeTargets model projects_ dialog.mode dialog.sourceScope dialog.refs
         |> List.filter
             (\( _, path ) ->
                 String.isEmpty query || String.contains query (String.toLower path)

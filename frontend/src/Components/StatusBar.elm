@@ -9,7 +9,7 @@ import Html.Attributes exposing (action, attribute, class, classList, disabled, 
 import Html.Events as Events
 import Html.Extra as Html
 import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
-import Model.Lenses exposing (route)
+import Model.Lenses exposing (loadedProjects, route)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
 import Set exposing (Set)
@@ -527,20 +527,23 @@ viewStep model step =
         now =
             Model.getNow model
 
-        folderPath =
-            Maybe.map (canonicalNamePath model) step.projectId
+        mFolder =
+            Maybe.map2 Tuple.pair (try loadedProjects model) step.projectId
 
-        folderLine projectId =
+        folderPath =
+            Maybe.map (\( projects_, projectId ) -> canonicalNamePath model projects_ projectId) mFolder
+
+        folderLine ( projects_, projectId ) =
             let
                 trail =
-                    case canonicalPathNames model projectId of
+                    case canonicalPathNames model projects_ projectId of
                         [] ->
-                            rootProjectName model
+                            rootProjectName projects_
 
                         names ->
                             String.join " / " names
             in
-            Html.span [ class "status-bar__step-path", title (canonicalNamePath model projectId) ] [ Html.text trail ]
+            Html.span [ class "status-bar__step-path", title (canonicalNamePath model projects_ projectId) ] [ Html.text trail ]
 
         meta =
             stateMeta now step.state
@@ -607,7 +610,7 @@ viewStep model step =
                         Nothing ->
                             Html.nothing
                     ]
-                , Maybe.map folderLine step.projectId |> Maybe.withDefault Html.nothing
+                , Maybe.map folderLine mFolder |> Maybe.withDefault Html.nothing
                 ]
             , Html.span [ class ("status-bar__step-meta status-bar__step-meta--" ++ meta.tone) ]
                 [ Html.text meta.short ]

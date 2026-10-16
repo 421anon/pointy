@@ -168,16 +168,27 @@ projects =
     lens ".projects" Model.getProjects (\(Model m) projects_ -> Model { m | projects = projects_ })
 
 
-store : Lens ls Model ( Dict Int ProjectRecord, Dict Int StepRecord ) x y
+loadedProjects : Traversal Model (Dict Int ProjectRecord) x y
+loadedProjects =
+    projects << ApiData.available
+
+
+store : Traversal Model ( Dict Int ProjectRecord, Dict Int StepRecord ) x y
 store =
-    lens ".store"
-        (\model -> ( projectsDict model, get steps model ))
-        (\model ( projects_, steps_ ) -> set steps steps_ (set projects (ApiData.Success projects_) model))
+    traversal ".store"
+        (\model -> all loadedProjects model |> List.map (\projects_ -> ( projects_, get steps model )))
+        (\fn model ->
+            case try loadedProjects model of
+                Just projects_ ->
+                    let
+                        ( updatedProjects, updatedSteps ) =
+                            fn ( projects_, get steps model )
+                    in
+                    model |> set loadedProjects updatedProjects |> set steps updatedSteps
 
-
-projectsDict : Model -> Dict Int ProjectRecord
-projectsDict =
-    get projects >> ApiData.withDefault Dict.empty
+                Nothing ->
+                    model
+        )
 
 
 projectSteps : Int -> Traversal Model StepRecord x y
@@ -194,7 +205,7 @@ projectSteps projectId =
 
 projectRecordById : Int -> Traversal Model ProjectRecord x y
 projectRecordById projectId =
-    projects << success << Dict.Accessors.id projectId << just
+    loadedProjects << Dict.Accessors.id projectId << just
 
 
 steps : Lens ls Model (Dict Int StepRecord) x y

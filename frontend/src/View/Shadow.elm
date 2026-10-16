@@ -4,7 +4,7 @@ import Accessors exposing (get, just, snd, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData)
-import Dict
+import Dict exposing (Dict)
 import Extra.Accessors exposing (remkT)
 import Extra.Http as Http
 import Flow exposing (Flow)
@@ -385,8 +385,8 @@ viewReviewPopover model spec stepId record =
         [ trigger, popover ]
 
 
-viewProject : Model -> ProjectRecord -> Html (Flow Model ())
-viewProject model proj =
+viewProject : Model -> Dict Int ProjectRecord -> ProjectRecord -> Html (Flow Model ())
+viewProject model projects_ proj =
     let
         isReadOnly =
             isReadOnlyRoute model
@@ -407,7 +407,7 @@ viewProject model proj =
             Maybe.withDefault Route.rootProjectId proj.id
 
         listingRows =
-            List.filterMap (listingRow model projectId stepConfig (presentStepTypes model projectId)) proj.children
+            List.filterMap (listingRow model projects_ projectId stepConfig (presentStepTypes model projects_ projectId)) proj.children
 
         projectEditForm =
             Html.viewIf (not isReadOnly) <|
@@ -418,6 +418,7 @@ viewProject model proj =
                             |> Maybe.map
                                 (\editedProject ->
                                     viewAddOrEditRecordForm model
+                                        projects_
                                         projectId
                                         spec
                                         (get Lenses.projectForms model)
@@ -447,9 +448,10 @@ viewProject model proj =
                     Html.div [ Html.Attributes.class "sections" ]
                         [ projectEditForm
                         , configErrors
-                        , viewPendingStepForm model projectId stepConfig
+                        , viewPendingStepForm model projects_ projectId stepConfig
                         , viewListing
                             { model = model
+                            , projects = projects_
                             , scope = projectId
                             , stepConfig = stepConfig
                             , rows = listingRows
@@ -460,7 +462,7 @@ viewProject model proj =
     viewPage
         { header =
             [ Html.div [ Html.Attributes.class "project-header" ]
-                [ viewBreadcrumbs model proj
+                [ viewBreadcrumbs model projects_ proj
                 , Html.viewIf (not isReadOnly) <|
                     Html.viewMaybe
                         (\spec ->
@@ -468,7 +470,7 @@ viewProject model proj =
                         )
                         mProjectSpec
                 ]
-            , viewSearchBox model
+            , viewSearchBox model projects_
             ]
         , content = listing
         }
@@ -612,8 +614,8 @@ viewNewMenu model proj =
             }
 
 
-viewPendingStepForm : Model -> Int -> StepConfig -> Html (Flow Model ())
-viewPendingStepForm model parentId stepConfig =
+viewPendingStepForm : Model -> Dict Int ProjectRecord -> Int -> StepConfig -> Html (Flow Model ())
+viewPendingStepForm model projects_ parentId stepConfig =
     let
         forms =
             stepConfig
@@ -634,6 +636,7 @@ viewPendingStepForm model parentId stepConfig =
                                             stepFormReadOnly model spec record
                                     in
                                     viewAddOrEditRecordForm model
+                                        projects_
                                         parentId
                                         spec
                                         (get (Lenses.stepFormsAt typeName) model)
@@ -649,13 +652,13 @@ viewPendingStepForm model parentId stepConfig =
         Html.div [ Html.Attributes.class "listing-pending-form" ] forms
 
 
-presentStepTypes : Model -> Model.ListingScope -> List String
-presentStepTypes model scope =
+presentStepTypes : Model -> Dict Int ProjectRecord -> Model.ListingScope -> List String
+presentStepTypes model projects_ scope =
     let
         steps_ =
             Model.getSteps model
     in
-    Model.Selection.folderLinks model scope
+    Model.Selection.folderLinks projects_ scope
         |> List.filter (\sibling -> sibling.kind == Model.StepChild)
         |> List.filterMap (\sibling -> Dict.get sibling.id steps_ |> Maybe.map .type_)
         |> List.foldl
@@ -669,8 +672,8 @@ presentStepTypes model scope =
             []
 
 
-listingRow : Model -> Int -> StepConfig -> List String -> Model.ChildLink -> Maybe ListingRow
-listingRow model parentId stepConfig presentTypes link =
+listingRow : Model -> Dict Int ProjectRecord -> Int -> StepConfig -> List String -> Model.ChildLink -> Maybe ListingRow
+listingRow model projects_ parentId stepConfig presentTypes link =
     let
         folderRow project =
             let
@@ -700,7 +703,7 @@ listingRow model parentId stepConfig presentTypes link =
             , actionsPopover =
                 viewRecordActionsPopover
                     (actionsPopoverId link)
-                    (viewRowActions model parentId link spec project)
+                    (viewRowActions model projects_ parentId link spec project)
             , mTime = project.lastModifiedAt
             , cTime = project.createdAt
             , statusSortKey = Maybe.withDefault 5 (View.Lib.rollupChildFor model (Just parentId) link.id |> Maybe.map (.statuses >> Model.rollupStatusRank))
@@ -741,6 +744,7 @@ listingRow model parentId stepConfig presentTypes link =
                     Maybe.map
                         (\edited ->
                             viewAddOrEditRecordForm model
+                                projects_
                                 parentId
                                 spec
                                 (get Lenses.projectForms model)
@@ -827,6 +831,7 @@ listingRow model parentId stepConfig presentTypes link =
                         Html.viewMaybe
                             (\edited ->
                                 viewAddOrEditRecordForm model
+                                    projects_
                                     parentId
                                     spec
                                     (get (Lenses.stepFormsAt step.type_) model)
@@ -881,6 +886,7 @@ listingRow model parentId stepConfig presentTypes link =
             , actionsPopover =
                 viewStepRecordActions
                     model
+                    projects_
                     parentId
                     link
                     step.type_
@@ -915,7 +921,7 @@ listingRow model parentId stepConfig presentTypes link =
     in
     case link.kind of
         Model.ProjectChild ->
-            Dict.get link.id (Lenses.projectsDict model)
+            Dict.get link.id projects_
                 |> Maybe.map folderRow
 
         Model.StepChild ->
@@ -963,17 +969,14 @@ statusSortRank status =
             5
 
 
-viewBreadcrumbs : Model -> ProjectRecord -> Html (Flow Model ())
-viewBreadcrumbs model proj =
+viewBreadcrumbs : Model -> Dict Int ProjectRecord -> ProjectRecord -> Html (Flow Model ())
+viewBreadcrumbs model projects_ proj =
     let
         projectPath_ =
             try Lenses.currentProjectPath model |> Maybe.withDefault []
 
         mCommit_ =
             Route.viewedCommit (Model.getRoute model).page
-
-        projectsById =
-            Lenses.projectsDict model
 
         editable =
             Model.Selection.listingEditable model
@@ -983,7 +986,7 @@ viewBreadcrumbs model proj =
                 proj.name
 
             else
-                Dict.get projectId_ projectsById
+                Dict.get projectId_ projects_
                     |> Maybe.map .name
                     |> Maybe.withDefault ("#" ++ String.fromInt projectId_)
 
@@ -993,7 +996,7 @@ viewBreadcrumbs model proj =
                  , Html.Attributes.class "project-breadcrumb"
                  ]
                     ++ (if editable then
-                            dropTargetAttrs model (Route.pathProjectId pathPrefix)
+                            dropTargetAttrs model projects_ (Route.pathProjectId pathPrefix)
 
                         else
                             []
@@ -1018,7 +1021,7 @@ viewBreadcrumbs model proj =
         (List.concatMap (\pathPrefix -> [ crumb pathPrefix, iconCustom True "chevron_right" [ Html.Attributes.class "project-breadcrumb-separator" ] ]) ancestorPaths
             ++ [ Html.h2 []
                     [ crumb projectPath_
-                    , View.Lib.viewAlsoInButton "also-in-breadcrumb" model (Just currentParentId) currentRef
+                    , View.Lib.viewAlsoInButton "also-in-breadcrumb" model projects_ (Just currentParentId) currentRef
                     ]
                ]
         )

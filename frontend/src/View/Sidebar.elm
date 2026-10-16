@@ -202,7 +202,7 @@ viewFolderNode model editable projects mCommit_ ancestors isOpen link =
                  , attribute "aria-current" (View.Lib.boolText isCurrent)
                  ]
                     ++ (if editable then
-                            dropTargetAttrs model projectId
+                            dropTargetAttrs model projects projectId
 
                         else
                             []

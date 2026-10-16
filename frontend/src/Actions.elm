@@ -261,7 +261,7 @@ organize label ops =
             (\model ->
                 let
                     inverse =
-                        Model.invertTreeOps (get store model) ops
+                        try store model |> Maybe.unwrap [] (\store_ -> Model.invertTreeOps store_ ops)
 
                     undoId =
                         (Model.getOrganizeQueue model).nextUndoId
@@ -444,7 +444,7 @@ loadProjects =
                                 Model.getProjectsRequest model + 1
                         in
                         Flow.setAll projectsRequest request
-                            |> Flow.seq (Flow.when (not (has (projects << success) model)) (Flow.setAll projects (Loading Nothing)))
+                            |> Flow.seq (Flow.when (not (has loadedProjects model)) (Flow.setAll projects (Loading Nothing)))
                             |> Flow.seq
                                 (Api.fetchProjects target stepConfig_
                                     |> Flow.andThen
@@ -484,7 +484,7 @@ applyLoadedProjects target result =
                                 Model.mergeSteps fetchedSteps (get steps model)
 
                             mergedProjects =
-                                Model.mergeProjects fetchedProjects (ApiData.withDefault Dict.empty (get projects model))
+                                try loadedProjects model |> Maybe.unwrap fetchedProjects (Model.mergeProjects fetchedProjects)
                         in
                         Flow.modify
                             (set projects (ApiData.Success mergedProjects)
@@ -1065,24 +1065,28 @@ recheckStepStatuses saved stepId downstream =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    parentsOf id =
-                        List.map Tuple.first (Model.Lib.entityParents model StepChild id)
+                try loadedProjects model
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\projects_ ->
+                            let
+                                parentsOf id =
+                                    List.map Tuple.first (Model.childLinksTo StepChild id projects_)
 
-                    ( rechecked, broadcastByServer ) =
-                        if saved then
-                            ( downstream, Set.fromList (parentsOf stepId) )
+                                ( rechecked, broadcastByServer ) =
+                                    if saved then
+                                        ( downstream, Set.fromList (parentsOf stepId) )
 
-                        else
-                            ( Set.insert stepId downstream, Set.empty )
+                                    else
+                                        ( Set.insert stepId downstream, Set.empty )
 
-                    projectIds =
-                        Set.diff (Set.fromList (List.concatMap parentsOf (Set.toList rechecked))) broadcastByServer
-                in
-                Set.foldl
-                    (\projectId acc -> acc |> Flow.seq (Flow.async (requestProjectStatus projectId Nothing)))
-                    (Flow.pure ())
-                    projectIds
+                                projectIds =
+                                    Set.diff (Set.fromList (List.concatMap parentsOf (Set.toList rechecked))) broadcastByServer
+                            in
+                            Set.foldl
+                                (\projectId acc -> acc |> Flow.seq (Flow.async (requestProjectStatus projectId Nothing)))
+                                (Flow.pure ())
+                                projectIds
+                        )
             )
 
 
@@ -2877,16 +2881,20 @@ onSelectSearch projectId stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                goToRoute
-                    (Route.fromPage
-                        (Route.Project
-                            { projectPath = canonicalPathTo model projectId
-                            , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                            , mCommit = try (route << Route.page << Route.viewedCommitT) model
-                            , mCompare = Nothing
-                            }
+                try loadedProjects model
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\projects_ ->
+                            goToRoute
+                                (Route.fromPage
+                                    (Route.Project
+                                        { projectPath = canonicalPathTo model projects_ projectId
+                                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                                        , mCommit = try (route << Route.page << Route.viewedCommitT) model
+                                        , mCompare = Nothing
+                                        }
+                                    )
+                                )
                         )
-                    )
             )
 
 
@@ -4096,14 +4104,11 @@ headMovedRemotely model snapshotCommit =
 
 rollupAffectedFor : Model -> Dict Int Model.StatusReport -> Bool
 rollupAffectedFor model statuses =
-    case try currentProjectId model of
-        Nothing ->
-            False
-
-        Just projectId ->
+    case ( try currentProjectId model, try loadedProjects model ) of
+        ( Just projectId, Just projects_ ) ->
             let
                 reachable =
-                    stepsBelow (projectsDict model) projectId
+                    stepsBelow projects_ projectId
             in
             Dict.foldl
                 (\stepId report acc ->
@@ -4114,6 +4119,9 @@ rollupAffectedFor model statuses =
                 )
                 False
                 statuses
+
+        _ ->
+            False
 
 
 stepsBelow : Dict Int ProjectRecord -> Int -> Set Int
@@ -4379,10 +4387,15 @@ openRunningStep stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                stepOutputLocation (try currentProjectId model) (stepLocations ((==) stepId) (projectsDict model) (Model.getSteps model)) stepId
-                    |> Maybe.unwrap (Flow.pure ())
-                        (\location ->
-                            Flow.setAll statusBarOpen False
-                                |> Flow.seq (goToRoute (stepOutputRoute (canonicalPathTo model location.projectId) stepId))
-                        )
+                case try loadedProjects model of
+                    Just projects_ ->
+                        stepOutputLocation (try currentProjectId model) (stepLocations ((==) stepId) projects_ (Model.getSteps model)) stepId
+                            |> Maybe.unwrap (Flow.pure ())
+                                (\location ->
+                                    Flow.setAll statusBarOpen False
+                                        |> Flow.seq (goToRoute (stepOutputRoute (canonicalPathTo model projects_ location.projectId) stepId))
+                                )
+
+                    Nothing ->
+                        Flow.pure ()
             )
