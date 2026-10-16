@@ -60,6 +60,35 @@ viewHtmlFrame frame =
         ]
 
 
+isBrowserNative : String -> Bool
+isBrowserNative mime =
+    List.member mime
+        [ "text/html"
+        , "text/plain"
+        , "text/css"
+        , "text/xml"
+        , "application/xhtml+xml"
+        , "application/xml"
+        , "application/json"
+        , "application/javascript"
+        , "image/png"
+        , "image/jpeg"
+        , "image/gif"
+        , "image/webp"
+        , "image/avif"
+        , "image/bmp"
+        , "image/svg+xml"
+        , "video/mp4"
+        , "video/webm"
+        , "video/ogg"
+        , "audio/mpeg"
+        , "audio/ogg"
+        , "audio/wav"
+        , "audio/x-wav"
+        , "audio/webm"
+        ]
+
+
 srcDir : Prism pr DirContext Int x y
 srcDir =
     prism ">SrcDir"
@@ -387,8 +416,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         Nothing
 
                 externalArtifactUrl =
-                    case ( try currentProjectPath model, mDirCtx ) of
-                        ( Just projectPath_, Just (OutputDir stepId_ commit_) ) ->
+                    case ( try currentProjectPath model, mDirCtx, has (mimeType << just << where_ isBrowserNative) file ) of
+                        ( Just projectPath_, Just (OutputDir stepId_ commit_), True ) ->
                             Just <|
                                 Route.toString <|
                                     Route.fromPage <|
