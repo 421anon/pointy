@@ -464,7 +464,7 @@ loadConfig :: FilePath -> IO Config
 loadConfig path = do
     result <- Toml.decodeFileEither configCodec path
     case result of
-        Left errs -> error $ "Failed to parse config: " ++ show errs
+        Left errs -> error $ "Failed to parse config: " ++ T.unpack (Toml.prettyTomlDecodeErrors errs)
         Right config -> do
             validateConfig config
             pure config

@@ -7,6 +7,7 @@ import Agent.Sandbox (prepareAgentCgroup)
 import App (runServer)
 import BuildRunner (reconcileWatchedJobs)
 import Config (loadConfig, resolveConfigPath, warnMissingProviderKeys)
+import ConfigWatch (watchConfig)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad (forever)
 import Control.Monad.Except (runExceptT)
@@ -51,6 +52,8 @@ main = do
             putStrLn "Running statuses restored."
         putStrLn "Starting cluster status poller..."
         startClusterPoller
+        putStrLn "Watching the configuration file..."
+        watchConfig
         putStrLn "Starting Slurm job reconciler..."
         _ <- forkIO $ forever $ do
             threadDelay reconcileDelayMicros

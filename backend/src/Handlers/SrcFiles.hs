@@ -1,18 +1,15 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Handlers.SrcFiles (getStepSrcFilesPath, listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, srcRawHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler, getUserRepoInfoHandler, UserRepoInfo (..)) where
+module Handlers.SrcFiles (getStepSrcFilesPath, listSrcFilesHandler, downloadSrcFilesHandler, seekSrcFilesHandler, srcRawHandler, saveSrcFileHandler, createSrcFileHandler, deleteSrcFileHandler) where
 
-import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (ToJSON, eitherDecode)
+import Data.Aeson (eitherDecode)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -23,7 +20,6 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
 import Effects (AppM, Eval)
-import GHC.Generics (Generic)
 import Handlers.Store (DirEntry, FileChunk, downloadHandler, fromRawBase, listHandler, parseSeekOffset, seekHandler)
 import Handlers.StepReview (ensureStepsUnreviewed)
 import Network.HTTP.Types (mkStatus)
@@ -34,18 +30,6 @@ import qualified Servant.Types.SourceT as S
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, (</>))
 import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, commitContext, runNixEvalJsonApplyInRepo, withReadRepoTransaction)
-
-data UserRepoInfo = UserRepoInfo
-    { url :: Text
-    , branch :: Text
-    }
-    deriving (Generic, ToJSON)
-
-getUserRepoInfoHandler :: AppM UserRepoInfo
-getUserRepoInfoHandler = do
-    cfg <- liftIO $ resolveConfigPath >>= loadConfig
-    let userRepo = configUserRepo cfg
-    return $ UserRepoInfo (userRepoUrl userRepo) (userRepoBranch userRepo)
 
 resolveStepSrcFiles :: (IOE :> es, Eval :> es) => Maybe Text -> Int -> Eff es (Either ServerError (Maybe FilePath))
 resolveStepSrcFiles mCommit stepId = do

@@ -27,6 +27,7 @@ library
     Bus
     ClusterBus
     Config
+    ConfigWatch
     Docs.OpenApi
     EffectRunner
     Effects
@@ -44,6 +45,7 @@ library
     Handlers.Projects
     Handlers.RunStep
     Handlers.Scratch
+    Handlers.Settings
     Handlers.SrcFiles
     Handlers.Statuses
     Handlers.StatusStream
@@ -101,6 +103,7 @@ library
     , effectful
     , filelock
     , filepath
+    , hinotify
     , hnix
     , http-api-data
     , http-client

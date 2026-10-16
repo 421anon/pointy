@@ -708,6 +708,26 @@ initScratchState =
 type alias UserRepoInfo =
     { url : String
     , branch : String
+    , publicKey : Maybe String
+    }
+
+
+type alias SettingsState =
+    { repoUrl : String
+    , repoBranch : String
+    , config : ApiData String
+    , saving : Bool
+    , error : Maybe String
+    }
+
+
+initSettingsState : SettingsState
+initSettingsState =
+    { repoUrl = ""
+    , repoBranch = ""
+    , config = NotAsked
+    , saving = False
+    , error = Nothing
     }
 
 
@@ -1593,6 +1613,7 @@ type Model
         , ingestJobs : Dict Int IngestJob
         , pendingIngestSteps : Set Int
         , scratch : ScratchState
+        , settings : SettingsState
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
@@ -1916,6 +1937,11 @@ getScratchState (Model model) =
     model.scratch
 
 
+getSettingsState : Model -> SettingsState
+getSettingsState (Model model) =
+    model.settings
+
+
 getStepStatusHooks : Model -> Dict Int (Flow Model ())
 getStepStatusHooks (Model model) =
     model.stepStatusHooks
@@ -2086,6 +2112,7 @@ initialModel key route flags =
         , ingestJobs = Dict.empty
         , pendingIngestSteps = Set.empty
         , scratch = initScratchState
+        , settings = initSettingsState
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
         , pendingBuilds = Dict.empty
