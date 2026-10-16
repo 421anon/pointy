@@ -883,15 +883,18 @@
   height: 10px;
   max-width: 100%;
   border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    var(--shimmer-base) 20%,
-    var(--shimmer-shine) 50%,
-    var(--shimmer-base) 80%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 2.2s linear infinite;
-  opacity: 0.55;
+  background: color-mix(in srgb, var(--shimmer-base) 55%, transparent);
+}
+
+.agent-panel__pulse,
+.agent-panel__skeleton-line {
+  animation: agent-pulse 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes agent-pulse {
+  to {
+    opacity: 0.4;
+  }
 }
 
 .agent-panel__skeleton-line:first-child {
@@ -1274,7 +1277,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-panel__chat-cursor {
+  .agent-panel__chat-cursor,
+  .agent-panel__pulse,
+  .agent-panel__skeleton-line {
     animation: none;
   }
 

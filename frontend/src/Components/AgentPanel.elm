@@ -251,7 +251,7 @@ viewSessionsLoading =
         ]
         [ Html.div [ class "agent-panel__session-title-card" ]
             [ Html.div [ class "agent-panel__session-title-row" ]
-                [ Html.div [ class "agent-panel__session-title shimmer-text shimmer-text--high-contrast" ]
+                [ Html.div [ class "agent-panel__session-title agent-panel__pulse" ]
                     [ Html.text "Loading chat" ]
                 ]
             ]
@@ -361,7 +361,7 @@ viewSessionSidebarContent agent listed =
         )
         listingError
     , Html.viewIf refreshing
-        (Html.p [ class "agent-panel__refreshing shimmer-text shimmer-text--medium-contrast", attribute "role" "status" ]
+        (Html.p [ class "agent-panel__refreshing agent-panel__pulse", attribute "role" "status" ]
             [ Html.text "Refreshing chats" ]
         )
     , if firstLoad then
@@ -425,7 +425,7 @@ viewCreatingSessionRow =
         ]
         [ Html.div [ class "agent-panel__session-row-main" ]
             [ Html.div [ class "agent-panel__session-name" ] [ Html.text "New chat" ]
-            , Html.div [ class "agent-panel__session-meta shimmer-text shimmer-text--medium-contrast" ] [ Html.text "Creating" ]
+            , Html.div [ class "agent-panel__session-meta agent-panel__pulse" ] [ Html.text "Creating" ]
             ]
         ]
 
@@ -618,7 +618,7 @@ viewCreatingSession autoApply =
                         [ Html.h3 [ class "agent-panel__session-title" ] [ Html.text "New chat" ]
                         , Html.div [ class "agent-panel__session-title-meta" ]
                             [ Html.span
-                                [ class "agent-panel__creating shimmer-text shimmer-text--medium-contrast"
+                                [ class "agent-panel__creating agent-panel__pulse"
                                 , attribute "role" "status"
                                 ]
                                 [ Html.text "Creating chat" ]
@@ -1150,7 +1150,7 @@ viewPendingSteer prompt =
         [ Html.div [ class "agent-panel__chat-message agent-panel__chat-message--user" ]
             [ Html.div [ class "agent-panel__chat-label" ] [ Html.text "You" ]
             , Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user is-sending" ] [ Html.text prompt ]
-            , Html.div [ class "agent-panel__chat-sending shimmer-text shimmer-text--medium-contrast", attribute "role" "status" ]
+            , Html.div [ class "agent-panel__chat-sending agent-panel__pulse", attribute "role" "status" ]
                 [ Html.text "Steering" ]
             ]
         ]
@@ -1248,12 +1248,11 @@ viewAutoApplyEcho enabled =
 
 
 viewAgentMessageContent : Dict.Dict Int Model.ProjectRecord -> Dict.Dict Int Model.StepRecord -> Route.Route -> StepConfig -> Bool -> String -> Html (Flow Model ())
-viewAgentMessageContent projects_ steps_ route_ stepConfig_ shimmer body =
+viewAgentMessageContent projects_ steps_ route_ stepConfig_ pulse body =
     Html.div
         [ classList
             [ ( "agent-panel__chat-content", True )
-            , ( "shimmer-text", shimmer )
-            , ( "shimmer-text--medium-contrast", shimmer )
+            , ( "agent-panel__pulse", pulse )
             ]
         ]
         (AgentMentions.toHtml { projects = projects_, steps = steps_, route = route_, stepConfig = stepConfig_ } body)
@@ -1266,7 +1265,7 @@ viewAgentQuestion sessionId answerBlocked answering question =
             (List.indexedMap (viewQuestionOption sessionId answerBlocked question) question.options)
         , Html.div [ class "agent-panel__question-actions" ]
             [ if answering then
-                Html.span [ class "agent-panel__question-hint shimmer-text shimmer-text--medium-contrast", attribute "role" "status" ]
+                Html.span [ class "agent-panel__question-hint agent-panel__pulse", attribute "role" "status" ]
                     [ Html.text "Sending answer" ]
 
               else
