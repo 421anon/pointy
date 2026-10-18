@@ -67,23 +67,23 @@ updateInstanceConfigHandler = applied . replaceConfig
 
 getConfigFormHandler :: AppM Value
 getConfigFormHandler = do
-    config <- liftIO readConfigText >>= either (badRequest . ("The configuration can't be shown as a form: " ++)) pure . decodeConfig
+    config <- savedConfig "The configuration can't be shown as a form: "
     pure $ object ["fields" .= filter ((/= "user-repo") . fieldKey) configFields, "values" .= configJson config]
 
 updateConfigFormHandler :: Value -> AppM NoContent
 updateConfigFormHandler values = do
-    current <- liftIO (configJson <$> currentConfig)
+    current <- configJson <$> savedConfig "The configuration on disk can't be read: "
     config <- either badRequest pure (decodeConfigJson (withUserRepoOf current values))
     applied (replaceConfig (renderConfig config))
   where
     withUserRepoOf (Object current) (Object submitted) = Object (maybe submitted (\repo -> KeyMap.insert "user-repo" repo submitted) (KeyMap.lookup "user-repo" current))
     withUserRepoOf _ submitted = submitted
 
-currentUserRepo :: IO UserRepoConfig
-currentUserRepo = configUserRepo <$> currentConfig
+savedConfig :: String -> AppM Config
+savedConfig context = liftIO readConfigText >>= either (badRequest . (context ++)) pure . decodeConfig
 
-currentConfig :: IO Config
-currentConfig = resolveConfigPath >>= loadConfig
+currentUserRepo :: IO UserRepoConfig
+currentUserRepo = configUserRepo <$> (resolveConfigPath >>= loadConfig)
 
 applied :: IO (Either String ()) -> AppM NoContent
 applied = (NoContent <$) . orBadRequest

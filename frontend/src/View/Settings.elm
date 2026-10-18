@@ -172,7 +172,7 @@ viewConfigField providers path names field node =
                             [ Html.input
                                 [ type_ "checkbox"
                                 , checked (Maybe.isJust table)
-                                , Events.stopPropagationOn "click" (Decode.map (\enabled -> ( Settings.editConfig path (ConfigForm.toggleTable fields enabled), True )) Events.targetChecked)
+                                , Events.onCheck (Settings.editConfig path << ConfigForm.toggleTable fields)
                                 ]
                                 []
                             , Html.text (sectionName names)
@@ -258,10 +258,10 @@ viewConfigInput providers field kind input set =
                 )
 
         IntegerKind ->
-            viewNumberInput "1" field input set
+            viewNumberInput [ type_ "number", step "1" ] field input set
 
         NumberKind ->
-            viewNumberInput "any" field input set
+            viewNumberInput [ attribute "inputmode" "decimal" ] field input set
 
         TextKind ->
             Html.input [ class "form-input", spellcheck False, required field.required, value input, Events.onInput set ] []
@@ -277,9 +277,9 @@ viewConfigInput providers field kind input set =
                 []
 
 
-viewNumberInput : String -> ConfigField -> String -> (String -> Flow Model ()) -> Html (Flow Model ())
-viewNumberInput increment field input set =
-    Html.input [ class "form-input", type_ "number", step increment, required field.required, value input, Events.onInput set ] []
+viewNumberInput : List (Html.Attribute (Flow Model ())) -> ConfigField -> String -> (String -> Flow Model ()) -> Html (Flow Model ())
+viewNumberInput kindAttributes field input set =
+    Html.input (kindAttributes ++ [ class "form-input", spellcheck False, required field.required, value input, Events.onInput set ]) []
 
 
 viewSelect : (String -> Flow Model ()) -> String -> List ( String, String ) -> Html (Flow Model ())
@@ -325,12 +325,10 @@ viewDialog dialogId heading model body onSave =
     Html.node "dialog"
         [ id dialogId
         , class "dialog settings-dialog"
-        , Events.onClick (Actions.closeDialog dialogId)
+        , Events.on "click" (Decode.at [ "target", "id" ] Decode.string |> Decode.andThen (closeOnBackdrop dialogId))
         ]
         [ Html.div
-            [ class "dialog-content settings-content"
-            , Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
-            ]
+            [ class "dialog-content settings-content" ]
             (Html.div [ class "settings-header" ]
                 [ Html.span [ class "dialog-title" ] [ Html.text heading ]
                 , Html.button
@@ -362,3 +360,12 @@ viewDialog dialogId heading model body onSave =
                    ]
             )
         ]
+
+
+closeOnBackdrop : String -> String -> Decode.Decoder (Flow Model ())
+closeOnBackdrop dialogId targetId =
+    if targetId == dialogId then
+        Decode.succeed (Actions.closeDialog dialogId)
+
+    else
+        Decode.fail "Click inside the dialog"

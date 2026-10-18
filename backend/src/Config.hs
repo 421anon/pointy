@@ -387,13 +387,13 @@ searchCodec =
 configCodec :: JSONCodec Config
 configCodec =
     object "Config" $
-        Config
+        (\userRepo providers chat search slurm agent -> Config userRepo slurm agent providers chat search)
             <$> requiredFieldWith "user-repo" userRepoCodec "Repository holding templates and data." .= configUserRepo
-            <*> optionalFieldWithOmittedDefaultWith "slurm" slurmCodec defaultSlurmConfig "How builds are submitted to Slurm." .= configSlurm
-            <*> optionalFieldWithOmittedDefaultWith "agent" agentCodec defaultAgentConfig "How the agent panel runs agent turns." .= configAgent
             <*> optionalFieldWithOmittedDefaultWith "providers" providersCodec Map.empty "AI providers models run on." .= configProviders
             <*> optionalFieldWithOmittedDefaultWith "models" modelsCodec Nothing "Models the instance uses." .= configChat
             <*> optionalFieldWith "search" searchCodec "Embedding and judge models that add a Related section to step search. Off keeps search lexical." .= configSearch
+            <*> optionalFieldWithOmittedDefaultWith "slurm" slurmCodec defaultSlurmConfig "How builds are submitted to Slurm." .= configSlurm
+            <*> optionalFieldWithOmittedDefaultWith "agent" agentCodec defaultAgentConfig "How the agent panel runs agent turns." .= configAgent
   where
     modelsCodec = object "Models" (optionalFieldWith "chat" chatModelCodec "Chat model the agent panel runs on. Off leaves the agent without a model." .= id)
 
@@ -490,14 +490,14 @@ warnMissingProviderKeys config =
 
 providerReferences :: Config -> [(Text, String)]
 providerReferences config =
-    filter (not . T.null . fst) $
-        [ (chatProvider chat, "[models.chat]")
-        | chat <- mapMaybe id [configChat config]
-        ]
-            ++ [ (embeddingProvider (searchEmbedding search), "[search.embedding]")
-               | search <- mapMaybe id [configSearch config]
-               ]
-            ++ [ (judgeProvider judge, "[search.judge]")
-               | search <- mapMaybe id [configSearch config]
-               , judge <- mapMaybe id [searchJudge search]
-               ]
+    [ (chatProvider chat, "[models.chat]")
+    | chat <- mapMaybe id [configChat config]
+    ]
+        ++ [ (embeddingProvider (searchEmbedding search), "[search.embedding]")
+           | search <- mapMaybe id [configSearch config]
+           , not (T.null (embeddingProvider (searchEmbedding search)))
+           ]
+        ++ [ (judgeProvider judge, "[search.judge]")
+           | search <- mapMaybe id [configSearch config]
+           , judge <- mapMaybe id [searchJudge search]
+           ]
