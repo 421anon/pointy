@@ -1,6 +1,7 @@
 module Api.Decode exposing (..)
 
 import Api.ApiData exposing (ApiData(..))
+import ConfigForm
 import Dict exposing (Dict)
 import Http
 import Iso8601
@@ -36,6 +37,67 @@ userRepoInfo =
         |> required "url" Decode.string
         |> required "branch" Decode.string
         |> required "publicKey" (Decode.nullable Decode.string)
+
+
+configForm : Decoder Model.ConfigForm
+configForm =
+    Decode.map2 ConfigForm.init
+        (Decode.field "fields" (Decode.list configField))
+        (Decode.field "values" Decode.value)
+
+
+configField : Decoder Model.ConfigField
+configField =
+    Decode.succeed Model.ConfigField
+        |> required "key" Decode.string
+        |> required "doc" (Decode.nullable Decode.string)
+        |> required "required" Decode.bool
+        |> required "default" (Decode.nullable Decode.value)
+        |> custom configKind
+
+
+configKind : Decoder Model.ConfigKind
+configKind =
+    Decode.field "kind" Decode.string
+        |> Decode.andThen
+            (\kind ->
+                case kind of
+                    "text" ->
+                        Decode.succeed Model.TextKind
+
+                    "multiline" ->
+                        Decode.succeed Model.MultilineKind
+
+                    "provider" ->
+                        Decode.succeed Model.ProviderKind
+
+                    "integer" ->
+                        Decode.succeed Model.IntegerKind
+
+                    "number" ->
+                        Decode.succeed Model.NumberKind
+
+                    "bool" ->
+                        Decode.succeed Model.BoolKind
+
+                    "enum" ->
+                        Decode.field "values" (Decode.list Decode.string) |> Decode.map Model.EnumKind
+
+                    "list" ->
+                        Decode.succeed Model.ListKind
+
+                    "map" ->
+                        Decode.succeed Model.MapKind
+
+                    "table" ->
+                        Decode.field "fields" (Decode.list (Decode.lazy (\_ -> configField))) |> Decode.map Model.TableKind
+
+                    "tables" ->
+                        Decode.field "fields" (Decode.list (Decode.lazy (\_ -> configField))) |> Decode.map Model.TablesKind
+
+                    _ ->
+                        Decode.fail ("Unknown configuration field kind: " ++ kind)
+            )
 
 
 tokenSession : Decoder Model.TokenSession

@@ -8,6 +8,7 @@ module Api.Api exposing
     , deleteSrcFile
     , fetchAutocomplete
     , fetchCommitHash
+    , fetchConfigForm
     , fetchDirectoryContents
     , fetchExtras
     , fetchFileContents
@@ -42,6 +43,7 @@ module Api.Api exposing
     , stepFileBundleUrl
     , stepFileDownloadUrl
     , stopStep
+    , updateConfigForm
     , updateInstanceConfig
     , updateUserRepo
     , uploadFiles
@@ -541,6 +543,24 @@ fetchInstanceConfig =
 updateInstanceConfig : String -> Flow s (Result Http.Error ())
 updateInstanceConfig contents =
     request "PUT" "/backend/instance-config" (Http.stringBody "text/plain; charset=utf-8" contents)
+
+
+fetchConfigForm : Flow s (Result Http.Error Model.Core.ConfigForm)
+fetchConfigForm =
+    Flow.lift <|
+        Http.get
+            { url = "/backend/instance-config/form"
+            , expect =
+                Http.expectStringResponse identity
+                    (stringResponse identity
+                        >> Result.andThen (Json.Decode.decodeString Decode.configForm >> Result.mapError (Json.Decode.errorToString >> Http.BadBody))
+                    )
+            }
+
+
+updateConfigForm : Json.Encode.Value -> Flow s (Result Http.Error ())
+updateConfigForm values =
+    request "PUT" "/backend/instance-config/form" (Http.jsonBody values)
 
 
 fetchSrcDirectoryContents : Json.Decode.Decoder ( String, DirectoryItem ) -> Int -> Maybe String -> List String -> Flow s (Result Http.Error (Dict String DirectoryItem))

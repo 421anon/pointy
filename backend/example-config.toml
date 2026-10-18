@@ -62,7 +62,7 @@ timeout-seconds = 60
 # thinkingLevelMap = { minimal = "low", low = "low", medium = "high", high = "high", xhigh = "xhigh", max = "max" }
 # Pi levels the model does not support; they are hidden and skipped when cycling.
 # disabledThinkingLevels = ["off"]
-# Prices per million tokens; all four are required and must be written as decimals.
+# Prices per million tokens; all four are required.
 # cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
 # compat = { supportsStore = false, supportsDeveloperRole = false, supportsReasoningEffort = true, requiresReasoningContentOnAssistantMessages = true }
 

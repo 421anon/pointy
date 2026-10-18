@@ -15,7 +15,7 @@ import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedAppl
 import Api (API)
 import ApiTypes (DynamicJson)
 import Control.Lens (ALens', cloneLens, imap, (%~), (&), (.~), (?~), _Just)
-import Data.Aeson (object)
+import Data.Aeson (Value, object)
 import qualified Data.ByteString as BS
 import Data.OpenApi hiding (Header)
 import Data.Text (Text, pack)
@@ -39,6 +39,9 @@ import Servant.Types.SourceT (SourceT)
 
 instance ToSchema DynamicJson where
     declareNamedSchema _ = pure (NamedSchema (Just "DynamicJson") (mempty & example ?~ object []))
+
+instance ToSchema Value where
+    declareNamedSchema _ = pure (NamedSchema (Just "JsonValue") mempty)
 
 instance ToSchema ProjectFields where
     declareNamedSchema _ =

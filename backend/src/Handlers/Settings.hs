@@ -9,13 +9,17 @@ module Handlers.Settings (
     updateUserRepoHandler,
     getInstanceConfigHandler,
     updateInstanceConfigHandler,
+    getConfigFormHandler,
+    updateConfigFormHandler,
 ) where
 
-import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
+import Config (Config (..), UserRepoConfig (..), configFields, configJson, decodeConfig, decodeConfigJson, loadConfig, renderConfig, resolveConfigPath)
+import ConfigSchema (ConfigField (..))
 import ConfigWatch (readConfigText, replaceConfig)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), ToJSON, withObject, (.:))
+import Data.Aeson (FromJSON (..), ToJSON, Value (..), object, withObject, (.:), (.=))
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -61,8 +65,25 @@ getInstanceConfigHandler = liftIO readConfigText
 updateInstanceConfigHandler :: Text -> AppM NoContent
 updateInstanceConfigHandler = applied . replaceConfig
 
+getConfigFormHandler :: AppM Value
+getConfigFormHandler = do
+    config <- liftIO readConfigText >>= either (badRequest . ("The configuration can't be shown as a form: " ++)) pure . decodeConfig
+    pure $ object ["fields" .= filter ((/= "user-repo") . fieldKey) configFields, "values" .= configJson config]
+
+updateConfigFormHandler :: Value -> AppM NoContent
+updateConfigFormHandler values = do
+    current <- liftIO (configJson <$> currentConfig)
+    config <- either badRequest pure (decodeConfigJson (withUserRepoOf current values))
+    applied (replaceConfig (renderConfig config))
+  where
+    withUserRepoOf (Object current) (Object submitted) = Object (maybe submitted (\repo -> KeyMap.insert "user-repo" repo submitted) (KeyMap.lookup "user-repo" current))
+    withUserRepoOf _ submitted = submitted
+
 currentUserRepo :: IO UserRepoConfig
-currentUserRepo = configUserRepo <$> (resolveConfigPath >>= loadConfig)
+currentUserRepo = configUserRepo <$> currentConfig
+
+currentConfig :: IO Config
+currentConfig = resolveConfigPath >>= loadConfig
 
 applied :: IO (Either String ()) -> AppM NoContent
 applied = (NoContent <$) . orBadRequest

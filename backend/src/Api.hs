@@ -6,6 +6,7 @@ module Api (API) where
 import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import ApiTypes (DynamicJson, RawJSON)
+import Data.Aeson (Value)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
@@ -488,12 +489,27 @@ type TokenLogout =
         :> Description "Clears the session cookie on this instance's host and redirects to the root, so the next request goes through the login page again."
         :> Verb 'POST 303 '[PlainText] SessionRedirect
 
+type GetConfigForm =
+    "instance-config"
+        :> "form"
+        :> Description "Describes every configuration field except [user-repo], with its documentation, default, whether it is required and its kind, along with the current values as JSON. 400 when the configuration file cannot be read."
+        :> Get '[JSON] Value
+
+type UpdateConfigForm =
+    "instance-config"
+        :> "form"
+        :> Description "Rewrites the configuration file from JSON values shaped like the form's, keeping the current [user-repo], and returns once the backend has applied it. 400 with the reason when the values are invalid or cannot be applied."
+        :> ReqBody '[JSON] Value
+        :> Put '[JSON] NoContent
+
 type API =
     GetCommitHash
         :<|> GetUserRepoInfo
         :<|> UpdateUserRepo
         :<|> GetInstanceConfig
         :<|> UpdateInstanceConfig
+        :<|> GetConfigForm
+        :<|> UpdateConfigForm
         :<|> ListStepFiles
         :<|> DownloadStepFile
         :<|> StepFileSeek

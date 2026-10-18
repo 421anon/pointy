@@ -27,6 +27,7 @@ library
     Bus
     ClusterBus
     Config
+    ConfigSchema
     ConfigWatch
     Docs.OpenApi
     EffectRunner
@@ -86,6 +87,7 @@ library
     , aeson
     , asn1-encoding
     , asn1-types
+    , autodocodec
     , base16-bytestring
     , async
     , base               ^>=4.19.2.0
@@ -129,7 +131,7 @@ library
     , temporary
     , text
     , time
-    , tomland
+    , toml-parser
     , transformers
     , unix
     , unordered-containers

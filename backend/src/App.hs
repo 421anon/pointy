@@ -23,7 +23,7 @@ import Handlers.ProjectReads (projectRollupHandler)
 import Handlers.Projects (batchProjectOpsHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (jobEndedHandler, restoreJobsFromSlurm, runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
-import Handlers.Settings (getInstanceConfigHandler, getUserRepoInfoHandler, updateInstanceConfigHandler, updateUserRepoHandler)
+import Handlers.Settings (getConfigFormHandler, getInstanceConfigHandler, getUserRepoInfoHandler, updateConfigFormHandler, updateInstanceConfigHandler, updateUserRepoHandler)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
@@ -51,6 +51,8 @@ server =
         :<|> updateUserRepoHandler
         :<|> getInstanceConfigHandler
         :<|> updateInstanceConfigHandler
+        :<|> getConfigFormHandler
+        :<|> updateConfigFormHandler
         :<|> stepListHandler
         :<|> stepDownloadHandler
         :<|> stepSeekHandler
@@ -136,6 +138,13 @@ corsPolicy req = case pathInfo req of
                 , corsOrigins = Nothing
                 }
     ["user-repo-info"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["GET", "PUT", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["instance-config", "form"] ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]

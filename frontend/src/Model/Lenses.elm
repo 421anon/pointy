@@ -805,6 +805,16 @@ settingsConfig =
     settings << lens ".config" .config (\state value -> { state | config = value })
 
 
+settingsForm : Lens ls Model (ApiData Model.ConfigForm) x y
+settingsForm =
+    settings << lens ".form" .form (\state value -> { state | form = value })
+
+
+settingsEditAsToml : Lens ls Model Bool x y
+settingsEditAsToml =
+    settings << lens ".editAsToml" .editAsToml (\state value -> { state | editAsToml = value })
+
+
 settingsSaving : Lens ls Model Bool x y
 settingsSaving =
     settings << lens ".saving" .saving (\state value -> { state | saving = value })
