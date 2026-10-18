@@ -27,6 +27,8 @@ library
     Bus
     ClusterBus
     Config
+    ConfigSchema
+    ConfigWatch
     Docs.OpenApi
     EffectRunner
     Effects
@@ -44,6 +46,7 @@ library
     Handlers.Projects
     Handlers.RunStep
     Handlers.Scratch
+    Handlers.Settings
     Handlers.SrcFiles
     Handlers.Statuses
     Handlers.StatusStream
@@ -85,6 +88,7 @@ library
     , aeson
     , asn1-encoding
     , asn1-types
+    , autodocodec
     , base16-bytestring
     , async
     , base               ^>=4.19.2.0
@@ -102,6 +106,7 @@ library
     , effectful
     , filelock
     , filepath
+    , hinotify
     , hnix
     , http-api-data
     , http-client
@@ -127,7 +132,7 @@ library
     , temporary
     , text
     , time
-    , tomland
+    , toml-parser
     , transformers
     , unix
     , unordered-containers

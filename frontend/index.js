@@ -34,10 +34,10 @@ window
 
 function setupTextarea(textarea) {
   textarea.style.height = "auto";
-  textarea.style.height = textarea.scrollHeight + "px";
+  textarea.style.height = textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight + "px";
   textarea.oninput = () => {
     textarea.style.height = "auto";
-    textarea.style.height = textarea.scrollHeight + "px";
+    textarea.style.height = textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight + "px";
   };
 }
 

@@ -37,6 +37,14 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - Running rows show elapsed time, queued rows show how long they have waited and Slurm's pending reason, starting rows show how long they have been preparing, and uploads show progress. A build of a commit other than the current one carries that commit's short hash.
 - Running, queued and starting rows have a Stop button that cancels the build at the commit it is building.
 
+## Instance settings
+
+- The user menu in the status bar opens User repository and Instance configuration. Without tokenAuth the menu is labelled Settings and has no Log out.
+- User repository shows the public half of the backend's deploy key (the `keyfile` in `[user-repo]`, generated on startup when missing) with a copy button, and the SSH clone URL and branch. Add the key as a deploy key with write access on GitHub (Settings → Deploy keys) or GitLab (Settings → Repository → Deploy keys). Saving first checks the key can read the branch, then rewrites `[user-repo]` in the configuration.
+- Instance configuration shows `config.toml` as a form generated from the configuration's definition in `backend/src/Config.hs`: every setting appears with its description, prefilled with its current value or default; choices appear as dropdowns, provider fields list the `[[providers]]` entered in the same form, and each top-level section can be collapsed, which only hides it. Optional sections have a checkbox: `[search]` has an Enabled checkbox inside it and its heading is marked "(off)" when unchecked, and nested ones such as `[search.judge]` have it in their heading. Saving the form rewrites `config.toml` without its comments. Edit as TOML switches to the raw file, which keeps comments; the dialog opens there when the file cannot be shown as a form. Either way, saving rejects values the backend cannot load, naming the offending key, and leaves the old file in place.
+- The backend watches `config.toml` with inotify, so edits from the UI or on disk apply without a restart: it reloads the file, re-clones the user repository when its URL changed, and fetches the configured branch. Saving from the UI waits for that, then reloads the page; if applying fails the dialog shows why.
+- The backend starts even when the user repository is unreachable, so a new instance can be pointed at its repository from the UI.
+
 ## Development
 
 A NixOS VM runs a server environment:

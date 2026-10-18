@@ -708,7 +708,70 @@ initScratchState =
 type alias UserRepoInfo =
     { url : String
     , branch : String
+    , publicKey : Maybe String
     }
+
+
+type alias SettingsState =
+    { repoUrl : String
+    , repoBranch : String
+    , config : ApiData String
+    , form : ApiData ConfigForm
+    , editAsToml : Bool
+    , saving : Bool
+    , error : Maybe String
+    }
+
+
+initSettingsState : SettingsState
+initSettingsState =
+    { repoUrl = ""
+    , repoBranch = ""
+    , config = NotAsked
+    , form = NotAsked
+    , editAsToml = False
+    , saving = False
+    , error = Nothing
+    }
+
+
+type alias ConfigForm =
+    { fields : List ConfigField
+    , values : ConfigValues
+    }
+
+
+type alias ConfigField =
+    { key : String
+    , doc : Maybe String
+    , required : Bool
+    , default : Maybe Value
+    , kind : ConfigKind
+    }
+
+
+type ConfigKind
+    = TextKind
+    | MultilineKind
+    | ProviderKind
+    | IntegerKind
+    | NumberKind
+    | BoolKind
+    | EnumKind (List String)
+    | ListKind
+    | MapKind
+    | TableKind (List ConfigField)
+    | TablesKind (List ConfigField)
+
+
+type alias ConfigValues =
+    Dict String ConfigNode
+
+
+type ConfigNode
+    = ConfigInput String
+    | ConfigTable (Maybe ConfigValues)
+    | ConfigTables (List ConfigValues)
 
 
 type alias TokenSession =
@@ -1593,6 +1656,7 @@ type Model
         , ingestJobs : Dict Int IngestJob
         , pendingIngestSteps : Set Int
         , scratch : ScratchState
+        , settings : SettingsState
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
@@ -1916,6 +1980,11 @@ getScratchState (Model model) =
     model.scratch
 
 
+getSettingsState : Model -> SettingsState
+getSettingsState (Model model) =
+    model.settings
+
+
 getStepStatusHooks : Model -> Dict Int (Flow Model ())
 getStepStatusHooks (Model model) =
     model.stepStatusHooks
@@ -2087,6 +2156,7 @@ initialModel key route flags =
         , ingestJobs = Dict.empty
         , pendingIngestSteps = Set.empty
         , scratch = initScratchState
+        , settings = initSettingsState
         , stepStatusHooks = Dict.empty
         , stepStatusBuffer = Dict.empty
         , pendingBuilds = Dict.empty

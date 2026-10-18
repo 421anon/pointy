@@ -6,6 +6,7 @@ module Api (API) where
 import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import ApiTypes (DynamicJson, RawJSON)
+import Data.Aeson (Value)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
@@ -14,7 +15,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
-import Handlers.SrcFiles (UserRepoInfo)
+import Handlers.Settings (UserRepoInfo, UserRepoUpdate)
 import Handlers.StatusStream (EventStream)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
@@ -39,8 +40,25 @@ type GetCommitHash =
 
 type GetUserRepoInfo =
     "user-repo-info"
-        :> Description "Returns the configured user repository URL and branch."
+        :> Description "Returns the configured user repository URL and branch, and the public half of the deploy key the backend reaches it with."
         :> Get '[JSON] UserRepoInfo
+
+type UpdateUserRepo =
+    "user-repo-info"
+        :> Description "Points the instance at another user repository after checking the deploy key can read its branch. Rewrites [user-repo] in the configuration and returns once the backend has applied it."
+        :> ReqBody '[JSON] UserRepoUpdate
+        :> Put '[JSON] NoContent
+
+type GetInstanceConfig =
+    "instance-config"
+        :> Description "Returns the backend configuration file."
+        :> Get '[PlainText] Text
+
+type UpdateInstanceConfig =
+    "instance-config"
+        :> Description "Replaces the backend configuration file after validating it and returns once the backend has applied it. 400 with the reason when it is invalid or cannot be applied."
+        :> ReqBody '[PlainText] Text
+        :> Put '[JSON] NoContent
 
 type ListStepFiles =
     "step-files"
@@ -471,9 +489,27 @@ type TokenLogout =
         :> Description "Clears the session cookie on this instance's host and redirects to the root, so the next request goes through the login page again."
         :> Verb 'POST 303 '[PlainText] SessionRedirect
 
+type GetConfigForm =
+    "instance-config"
+        :> "form"
+        :> Description "Describes every configuration field except [user-repo], with its documentation, default, whether it is required and its kind, along with the current values as JSON. 400 when the configuration file cannot be read."
+        :> Get '[JSON] Value
+
+type UpdateConfigForm =
+    "instance-config"
+        :> "form"
+        :> Description "Rewrites the configuration file from JSON values shaped like the form's, keeping the current [user-repo], and returns once the backend has applied it. 400 with the reason when the values are invalid or cannot be applied."
+        :> ReqBody '[JSON] Value
+        :> Put '[JSON] NoContent
+
 type API =
     GetCommitHash
         :<|> GetUserRepoInfo
+        :<|> UpdateUserRepo
+        :<|> GetInstanceConfig
+        :<|> UpdateInstanceConfig
+        :<|> GetConfigForm
+        :<|> UpdateConfigForm
         :<|> ListStepFiles
         :<|> DownloadStepFile
         :<|> StepFileSeek

@@ -8,11 +8,13 @@ import Html exposing (Html)
 import Html.Attributes exposing (action, attribute, class, classList, disabled, href, id, method, rel, target, title, type_)
 import Html.Events as Events
 import Html.Extra as Html
+import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
 import Model.Lenses exposing (loadedProjects, route)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
 import Set exposing (Set)
+import Settings
 import Time
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
@@ -427,43 +429,55 @@ viewIndependentControls model =
 
 viewUserMenu : Model -> Html (Flow Model ())
 viewUserMenu model =
-    Html.viewMaybe
-        (\session ->
-            let
-                user =
-                    Maybe.withDefault session.account session.user
+    let
+        session =
+            Model.getTokenSession model
 
-                label =
-                    "Signed in as " ++ user ++ " · " ++ session.account
-            in
-            Organize.viewMenuPopover
-                { popoverId = "status-bar-user-menu"
-                , wrapperClass = "status-bar__user"
-                , triggerAttrs =
-                    [ class "status-bar__control"
-                    , type_ "button"
-                    , title label
-                    , attribute "aria-label" label
-                    ]
-                , triggerContent =
-                    [ iconCustom False "account_circle" [ attribute "aria-hidden" "true" ]
-                    , Html.span [ class "status-bar__user-name" ] [ Html.text user ]
-                    ]
-                , content =
-                    [ Html.div [ class "status-bar__user-identity" ]
+        user =
+            Maybe.unwrap "Settings" (\signedIn -> Maybe.withDefault signedIn.account signedIn.user) session
+
+        label =
+            Maybe.unwrap "Settings" (\signedIn -> "Signed in as " ++ user ++ " · " ++ signedIn.account) session
+    in
+    Organize.viewMenuPopover
+        { popoverId = "status-bar-user-menu"
+        , wrapperClass = "status-bar__user"
+        , triggerAttrs =
+            [ class "status-bar__control"
+            , type_ "button"
+            , title label
+            , attribute "aria-label" label
+            ]
+        , triggerContent =
+            [ iconCustom False "account_circle" [ attribute "aria-hidden" "true" ]
+            , Html.span [ class "status-bar__user-name" ] [ Html.text user ]
+            ]
+        , content =
+            [ Html.viewMaybe
+                (\signedIn ->
+                    Html.div [ class "status-bar__user-identity" ]
                         [ Html.strong [] [ Html.text user ]
-                        , Html.span [] [ Html.text session.account ]
+                        , Html.span [] [ Html.text signedIn.account ]
                         ]
-                    , Html.form [ method "post", action "/token-logout" ]
-                        [ Html.button [ class "listing-menu-item", type_ "submit" ]
-                            [ iconCustom False "logout" [ attribute "aria-hidden" "true" ]
-                            , Html.text "Log out"
-                            ]
+                )
+                session
+            , Html.button [ class "listing-menu-item", type_ "button", Events.onClick Settings.openUserRepo ]
+                [ iconCustom False "source" [ attribute "aria-hidden" "true" ]
+                , Html.text "User repository"
+                ]
+            , Html.button [ class "listing-menu-item", type_ "button", Events.onClick Settings.openInstanceConfig ]
+                [ iconCustom False "settings" [ attribute "aria-hidden" "true" ]
+                , Html.text "Instance configuration"
+                ]
+            , Html.viewIf (Maybe.isJust session) <|
+                Html.form [ method "post", action "/token-logout" ]
+                    [ Html.button [ class "listing-menu-item", type_ "submit" ]
+                        [ iconCustom False "logout" [ attribute "aria-hidden" "true" ]
+                        , Html.text "Log out"
                         ]
                     ]
-                }
-        )
-        (Model.getTokenSession model)
+            ]
+        }
 
 
 viewPanel : Model -> List Group -> Html (Flow Model ())

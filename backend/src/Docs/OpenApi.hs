@@ -15,7 +15,7 @@ import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedAppl
 import Api (API)
 import ApiTypes (DynamicJson)
 import Control.Lens (ALens', cloneLens, imap, (%~), (&), (.~), (?~), _Just)
-import Data.Aeson (object)
+import Data.Aeson (Value, object)
 import qualified Data.ByteString as BS
 import Data.OpenApi hiding (Header)
 import Data.Text (Text, pack)
@@ -27,7 +27,7 @@ import Handlers.TokenAuth (TokenLoginForm, TokenSession)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
-import Handlers.SrcFiles (UserRepoInfo)
+import Handlers.Settings (UserRepoInfo, UserRepoUpdate)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
@@ -39,6 +39,9 @@ import Servant.Types.SourceT (SourceT)
 
 instance ToSchema DynamicJson where
     declareNamedSchema _ = pure (NamedSchema (Just "DynamicJson") (mempty & example ?~ object []))
+
+instance ToSchema Value where
+    declareNamedSchema _ = pure (NamedSchema (Just "JsonValue") mempty)
 
 instance ToSchema ProjectFields where
     declareNamedSchema _ =
@@ -238,6 +241,9 @@ instance ToSchema ScratchListing where
 
 instance ToSchema ScratchWrapRequest where
     declareNamedSchema _ = pure $ objectSchema "ScratchWrapRequest" [("path", stringField)]
+
+instance ToSchema UserRepoUpdate where
+    declareNamedSchema _ = pure $ objectSchema "UserRepoUpdate" [("url", stringField), ("branch", stringField)]
 
 instance ToSchema UserRepoInfo
 instance ToSchema AutocompleteRequest

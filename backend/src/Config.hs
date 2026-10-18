@@ -1,6 +1,5 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PatternSynonyms #-}
 
 module Config (
     Config (..),
@@ -22,26 +21,33 @@ module Config (
     chatQualifier,
     chatProtocolName,
     loadConfig,
+    decodeConfig,
+    decodeConfigJson,
+    configJson,
+    configFields,
+    renderConfig,
     warnMissingProviderKeys,
     defaultConfigPath,
     resolveConfigPath,
 ) where
 
+import Autodocodec (HasCodec (..), JSONCodec, ObjectCodec, boolCodec, dimapCodec, listCodec, object, optionalFieldWith, optionalFieldWith', optionalFieldWithOmittedDefaultWith, parseJSONVia, requiredFieldWith, scientificCodec, stringCodec, stringConstCodec, textCodec, toJSONVia, (.=))
+import ConfigSchema (ConfigField, codecFields, decodeToml, multilineTextCodec, providerNameCodec, renderToml)
 import Control.Monad (forM_, when)
-import qualified Data.HashMap.Strict as HashMap
+import Data.Aeson (Value)
+import Data.Aeson.Types (parseEither)
+import Data.Bifunctor (first)
+import qualified Data.ByteString as BS
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
+import qualified Data.Scientific as Scientific
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding (decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 import System.Environment (lookupEnv)
-import Toml (TomlCodec, (.=))
-import qualified Toml
-import Toml.Codec.Types (Codec (..))
-import Toml.Type.Key (KeysDiff (..), keysDiff, pattern (:||))
-import Toml.Type.PrefixTree (PrefixMap, PrefixTree (..))
-import qualified Toml.Type.PrefixTree as Prefix
-import Toml.Type.TOML (TOML (..))
 
 data UserRepoConfig = UserRepoConfig
     { userRepoUrl :: Text
@@ -57,7 +63,7 @@ data SlurmConfig = SlurmConfig
     , slurmExtra :: [Text]
     , slurmEnforcement :: Text
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 data AgentConfig = AgentConfig
     { agentSboxCommand :: FilePath
@@ -70,7 +76,7 @@ data AgentConfig = AgentConfig
     , agentBootstrapPrompt :: Text
     , agentTitlePrompt :: Text
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 data ProviderConfig = ProviderConfig
     { providerName :: Text
@@ -78,7 +84,7 @@ data ProviderConfig = ProviderConfig
     , providerApiKeyEnv :: Text
     , providerTimeoutSeconds :: Int
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 data ChatProtocol
     = ChatOpenAiCompletions
@@ -107,7 +113,7 @@ data ChatModelConfig = ChatModelConfig
     , chatThinking :: Maybe Text
     , chatPi :: PiModelConfig
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 data PiModelConfig = PiModelConfig
     { piName :: Maybe Text
@@ -120,7 +126,7 @@ data PiModelConfig = PiModelConfig
     , piCost :: Maybe PiCostConfig
     , piCompat :: PiCompatConfig
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 data PiCostConfig = PiCostConfig
     { piCostInput :: Double
@@ -128,7 +134,7 @@ data PiCostConfig = PiCostConfig
     , piCostCacheRead :: Double
     , piCostCacheWrite :: Double
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 data PiCompatConfig = PiCompatConfig
     { piSupportsStore :: Maybe Bool
@@ -143,7 +149,7 @@ data PiCompatConfig = PiCompatConfig
     , piRequiresReasoningContentOnAssistantMessages :: Maybe Bool
     , piThinkingFormat :: Maybe Text
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 emptyPiCompat :: PiCompatConfig
 emptyPiCompat =
@@ -185,7 +191,7 @@ data EmbeddingConfig = EmbeddingConfig
     , embeddingBatchSize :: Int
     , embeddingMinSimilarity :: Double
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
 emptyEmbeddingConfig :: EmbeddingConfig
 emptyEmbeddingConfig =
@@ -234,211 +240,200 @@ chatQualifier chat = case chatThinking chat of
     Nothing -> chatProvider chat <> "/" <> chatModel chat
     Just level -> chatProvider chat <> "/" <> chatModel chat <> ":" <> level
 
-userRepoCodec :: TomlCodec UserRepoConfig
+userRepoCodec :: JSONCodec UserRepoConfig
 userRepoCodec =
-    UserRepoConfig
-        <$> Toml.text "url" .= userRepoUrl
-        <*> Toml.string "keyfile" .= userRepoKeyfile
-        <*> Toml.text "branch" .= userRepoBranch
+    object "UserRepo" $
+        UserRepoConfig
+            <$> requiredFieldWith "url" textCodec "SSH clone URL of the repository holding templates and data." .= userRepoUrl
+            <*> requiredFieldWith "keyfile" stringCodec "Private deploy key the backend reaches the repository with. Generated on startup when missing." .= userRepoKeyfile
+            <*> requiredFieldWith "branch" textCodec "Branch the instance works on." .= userRepoBranch
 
 defaultSlurmConfig :: SlurmConfig
 defaultSlurmConfig = SlurmConfig "" Nothing Nothing [] "scheduler"
 
-slurmCodec :: TomlCodec SlurmConfig
+slurmCodec :: JSONCodec SlurmConfig
 slurmCodec =
-    SlurmConfig
-        <$> Toml.dimap nonEmptyText (fromMaybe "") (Toml.dioptional (Toml.text "partition")) .= slurmPartition
-        <*> Toml.dioptional (Toml.text "account") .= slurmAccount
-        <*> Toml.dioptional (Toml.text "time-limit") .= slurmTimeLimit
-        <*> Toml.dimap nonEmptyExtra (fromMaybe []) (Toml.dioptional (Toml.arrayOf Toml._Text "extra")) .= slurmExtra
-        <*> Toml.dimap nonEmptyText (fromMaybe "scheduler") (Toml.dioptional (Toml.text "enforcement")) .= slurmEnforcement
+    object "Slurm" $
+        SlurmConfig
+            <$> defaulted "partition" textCodec slurmPartition "Partition builds are submitted to. Empty uses Slurm's default."
+            <*> optionalFieldWith "account" textCodec "Account builds are charged to. Unset uses Slurm's default." .= slurmAccount
+            <*> optionalFieldWith "time-limit" textCodec "Time limit passed to sbatch --time. Unset uses Slurm's default." .= slurmTimeLimit
+            <*> defaulted "extra" textListCodec slurmExtra "Extra arguments passed to sbatch."
+            <*> defaulted "enforcement" (textEnumCodec ("scheduler" :| ["metadata-only"])) slurmEnforcement "scheduler passes a step's CPU and memory requirements to Slurm; metadata-only records them without enforcing them."
   where
-    nonEmptyText text
-        | text == "" = Nothing
-        | otherwise = Just text
-    nonEmptyExtra extra = case extra of
-        [] -> Nothing
-        xs -> Just xs
+    defaulted :: (Eq field) => Text -> JSONCodec field -> (SlurmConfig -> field) -> Text -> ObjectCodec SlurmConfig field
+    defaulted = defaultedFrom defaultSlurmConfig
 
-agentCodec :: TomlCodec AgentConfig
+agentCodec :: JSONCodec AgentConfig
 agentCodec =
-    mkAgentConfig
-        <$> Toml.dioptional (Toml.string "sbox-command") .= (Just . agentSboxCommand)
-        <*> Toml.dioptional (Toml.arrayOf Toml._Text "sbox-args") .= (Just . agentSboxArgs)
-        <*> Toml.dioptional (Toml.string "runner-command") .= (Just . agentRunnerCommand)
-        <*> Toml.dioptional (Toml.arrayOf Toml._Text "runner-args") .= (Just . agentRunnerArgs)
-        <*> Toml.dioptional (Toml.int "timeout-seconds") .= (Just . agentTimeoutSeconds)
-        <*> Toml.dioptional (Toml.int "output-limit-bytes") .= (Just . agentOutputLimitBytes)
-        <*> Toml.dioptional (Toml.int "session-retention-days") .= (Just . agentSessionRetentionDays)
-        <*> Toml.dioptional (Toml.text "bootstrap-prompt") .= (Just . agentBootstrapPrompt)
-        <*> Toml.dioptional (Toml.text "title-prompt") .= (Just . agentTitlePrompt)
-  where
-    mkAgentConfig msbox msboxArgs mrunner mrunnerArgs mtimeout mlimit mretention mbootstrap mtitle =
+    object "Agent" $
         AgentConfig
-            { agentSboxCommand = fromMaybe (agentSboxCommand defaultAgentConfig) msbox
-            , agentSboxArgs = fromMaybe (agentSboxArgs defaultAgentConfig) msboxArgs
-            , agentRunnerCommand = fromMaybe (agentRunnerCommand defaultAgentConfig) mrunner
-            , agentRunnerArgs = fromMaybe (agentRunnerArgs defaultAgentConfig) mrunnerArgs
-            , agentTimeoutSeconds = fromMaybe (agentTimeoutSeconds defaultAgentConfig) mtimeout
-            , agentOutputLimitBytes = fromMaybe (agentOutputLimitBytes defaultAgentConfig) mlimit
-            , agentSessionRetentionDays = fromMaybe (agentSessionRetentionDays defaultAgentConfig) mretention
-            , agentBootstrapPrompt = fromMaybe (agentBootstrapPrompt defaultAgentConfig) mbootstrap
-            , agentTitlePrompt = fromMaybe (agentTitlePrompt defaultAgentConfig) mtitle
-            }
-
-optionalAt :: (Toml.Key -> TomlCodec a) -> Toml.Key -> TomlCodec (Maybe a)
-optionalAt codecAt key =
-    Codec
-        { codecRead = \toml -> if hasKey toml then Just <$> codecRead (codecAt key) toml else pure Nothing
-        , codecWrite = traverse (codecWrite (codecAt key))
-        }
+            <$> defaulted "sbox-command" stringCodec agentSboxCommand "Sandbox command each agent turn runs in, started from {home}."
+            <*> defaulted "sbox-args" textListCodec agentSboxArgs "Arguments to sbox-command. {worktree} expands to the session worktree, {home} to the session's home directory, {sessionRoot} to the worktree's parent and {sessionId} to the session id."
+            <*> defaulted "runner-command" stringCodec agentRunnerCommand "Agent runner started inside the sandbox."
+            <*> defaulted "runner-args" textListCodec agentRunnerArgs "Extra arguments to runner-command. The chat model is passed separately."
+            <*> defaulted "timeout-seconds" intCodec agentTimeoutSeconds "Longest an agent turn may run, in seconds."
+            <*> defaulted "output-limit-bytes" intCodec agentOutputLimitBytes "Most output kept from an agent turn, in bytes."
+            <*> defaulted "session-retention-days" intCodec agentSessionRetentionDays "Days agent sessions are kept."
+            <*> defaulted "bootstrap-prompt" multilineTextCodec agentBootstrapPrompt "Prompt run once against a fresh checkout so new chats start with project context. Empty disables it."
+            <*> defaulted "title-prompt" multilineTextCodec agentTitlePrompt "Prompt that names a chat after its first message."
   where
-    hasKey toml =
-        HashMap.member key (tomlPairs toml)
-            || isJust (Prefix.lookup key (tomlTables toml))
-            || isJust (implicitTables key (tomlTables toml))
-            || HashMap.member key (tomlTableArrays toml)
+    defaulted :: (Eq field) => Text -> JSONCodec field -> (AgentConfig -> field) -> Text -> ObjectCodec AgentConfig field
+    defaulted = defaultedFrom defaultAgentConfig
 
-tableAt :: TomlCodec a -> Toml.Key -> TomlCodec a
-tableAt codec key =
-    Codec
-        { codecRead = \toml -> case implicitTables key (tomlTables toml) of
-            Just children | isNothing (Prefix.lookup key (tomlTables toml)) -> codecRead codec mempty{tomlTables = children}
-            _ -> codecRead (Toml.table codec key) toml
-        , codecWrite = codecWrite (Toml.table codec key)
-        }
+providersCodec :: JSONCodec (Map Text ProviderConfig)
+providersCodec = dimapCodec (Map.fromList . map (\provider -> (providerName provider, provider))) Map.elems (listCodec providerCodec)
 
-implicitTables :: Toml.Key -> PrefixMap TOML -> Maybe (PrefixMap TOML)
-implicitTables key@(piece :|| _) tables = HashMap.lookup piece tables >>= descend
-  where
-    descend (Leaf full value) = case keysDiff key full of
-        FstIsPref rest -> Just (Prefix.single rest value)
-        _ -> Nothing
-    descend (Branch prefix value children) = case keysDiff key prefix of
-        Equal -> Just children
-        FstIsPref rest@(next :|| _) -> Just (HashMap.singleton next (Branch rest value children))
-        SndIsPref rest -> implicitTables rest children
-        _ -> Nothing
-
-defaultedAt :: a -> (Toml.Key -> TomlCodec a) -> Toml.Key -> TomlCodec a
-defaultedAt fallback codecAt key = Toml.dimap Just (fromMaybe fallback) (optionalAt codecAt key)
-
-providersCodec :: TomlCodec (Map Text ProviderConfig)
-providersCodec =
-    Toml.dimap Map.elems (Map.fromList . map (\provider -> (providerName provider, provider))) (defaultedAt [] (Toml.list providerEntryCodec) "providers")
-  where
-    providerEntryCodec =
+providerCodec :: JSONCodec ProviderConfig
+providerCodec =
+    object "Provider" $
         ProviderConfig
-            <$> Toml.text "name" .= providerName
-            <*> Toml.text "base-url" .= providerBaseUrl
-            <*> Toml.text "api-key-env" .= providerApiKeyEnv
-            <*> defaultedAt 10 Toml.int "timeout-seconds" .= providerTimeoutSeconds
+            <$> requiredFieldWith "name" textCodec "Name models refer to in their provider field." .= providerName
+            <*> requiredFieldWith "base-url" textCodec "Base URL of the provider's API." .= providerBaseUrl
+            <*> requiredFieldWith "api-key-env" textCodec "Environment variable holding the API key, so keys never live in this file." .= providerApiKeyEnv
+            <*> optionalFieldWithOmittedDefaultWith "timeout-seconds" intCodec 10 "Request timeout in seconds." .= providerTimeoutSeconds
 
-enumTextCodec :: (Text -> Maybe a) -> (a -> Text) -> Toml.Key -> TomlCodec a
-enumTextCodec parse render =
-    Toml.textBy render (\value -> maybe (Left ("Unknown value: " <> value)) Right (parse value))
-
-piModelCodec :: TomlCodec PiModelConfig
-piModelCodec =
-    PiModelConfig
-        <$> optionalAt Toml.text "name" .= piName
-        <*> optionalAt Toml.int "contextWindow" .= piContextWindow
-        <*> optionalAt Toml.int "maxTokens" .= piMaxTokens
-        <*> defaultedAt [] (Toml.arrayOf Toml._Text) "input" .= piInput
-        <*> optionalAt Toml.bool "reasoning" .= piReasoning
-        <*> defaultedAt Map.empty (Toml.tableMap Toml._KeyText Toml.text) "thinkingLevelMap" .= piThinkingLevelMap
-        <*> defaultedAt [] (Toml.arrayOf Toml._Text) "disabledThinkingLevels" .= piDisabledThinkingLevels
-        <*> optionalAt (tableAt piCostCodec) "cost" .= piCost
-        <*> defaultedAt emptyPiCompat (tableAt piCompatCodec) "compat" .= piCompat
-
-piCostCodec :: TomlCodec PiCostConfig
-piCostCodec =
-    PiCostConfig
-        <$> Toml.double "input" .= piCostInput
-        <*> Toml.double "output" .= piCostOutput
-        <*> Toml.double "cacheRead" .= piCostCacheRead
-        <*> Toml.double "cacheWrite" .= piCostCacheWrite
-
-piCompatCodec :: TomlCodec PiCompatConfig
-piCompatCodec =
-    PiCompatConfig
-        <$> optionalAt Toml.bool "supportsStore" .= piSupportsStore
-        <*> optionalAt Toml.bool "supportsDeveloperRole" .= piSupportsDeveloperRole
-        <*> optionalAt Toml.bool "supportsReasoningEffort" .= piSupportsReasoningEffort
-        <*> optionalAt Toml.bool "supportsUsageInStreaming" .= piSupportsUsageInStreaming
-        <*> optionalAt Toml.bool "supportsFinishReason" .= piSupportsFinishReason
-        <*> optionalAt Toml.text "maxTokensField" .= piMaxTokensField
-        <*> optionalAt Toml.bool "requiresToolResultName" .= piRequiresToolResultName
-        <*> optionalAt Toml.bool "requiresAssistantAfterToolResult" .= piRequiresAssistantAfterToolResult
-        <*> optionalAt Toml.bool "requiresThinkingAsText" .= piRequiresThinkingAsText
-        <*> optionalAt Toml.bool "requiresReasoningContentOnAssistantMessages" .= piRequiresReasoningContentOnAssistantMessages
-        <*> optionalAt Toml.text "thinkingFormat" .= piThinkingFormat
-
-chatModelCodec :: TomlCodec ChatModelConfig
+chatModelCodec :: JSONCodec ChatModelConfig
 chatModelCodec =
-    ChatModelConfig
-        <$> Toml.text "provider" .= chatProvider
-        <*> enumTextCodec chatProtocolOf chatProtocolName "protocol" .= chatProtocol
-        <*> Toml.text "model" .= chatModel
-        <*> optionalAt Toml.text "thinking" .= chatThinking
-        <*> defaultedAt emptyPiModel (tableAt piModelCodec) "pi" .= chatPi
+    object "ChatModel" $
+        ChatModelConfig
+            <$> requiredFieldWith "provider" providerNameCodec "Provider the model runs on." .= chatProvider
+            <*> requiredFieldWith "protocol" chatProtocolCodec "API the provider serves the model with." .= chatProtocol
+            <*> requiredFieldWith "model" textCodec "Model id at the provider." .= chatModel
+            <*> optionalFieldWith "thinking" textCodec "Thinking level the agent uses, e.g. high." .= chatThinking
+            <*> optionalFieldWithOmittedDefaultWith "pi" piModelCodec emptyPiModel "Model details written into Pi's models.json." .= chatPi
+
+chatProtocolCodec :: JSONCodec ChatProtocol
+chatProtocolCodec =
+    stringConstCodec ((\protocol -> (protocol, chatProtocolName protocol)) <$> ChatOpenAiCompletions :| [ChatOpenAiResponses, ChatAnthropicMessages, ChatGoogleGenerativeAi])
+
+piModelCodec :: JSONCodec PiModelConfig
+piModelCodec =
+    object "PiModel" $
+        PiModelConfig
+            <$> optionalFieldWith "name" textCodec "Name Pi shows for the model." .= piName
+            <*> optionalFieldWith "contextWindow" intCodec "Context window in tokens." .= piContextWindow
+            <*> optionalFieldWith "maxTokens" intCodec "Most tokens a response may use." .= piMaxTokens
+            <*> defaulted "input" textListCodec piInput "Input types the model accepts, e.g. text and image."
+            <*> optionalFieldWith "reasoning" boolCodec "Whether the model reasons before answering." .= piReasoning
+            <*> defaulted "thinkingLevelMap" codec piThinkingLevelMap "Pi thinking levels mapped to the model's own levels."
+            <*> defaulted "disabledThinkingLevels" textListCodec piDisabledThinkingLevels "Pi thinking levels the model does not support; they are hidden and skipped when cycling."
+            <*> optionalFieldWith "cost" piCostCodec "Prices per million tokens." .= piCost
+            <*> defaulted "compat" piCompatCodec piCompat "Compatibility flags for the provider's API."
   where
-    chatProtocolOf name = case name of
-        "openai-completions" -> Just ChatOpenAiCompletions
-        "openai-responses" -> Just ChatOpenAiResponses
-        "anthropic-messages" -> Just ChatAnthropicMessages
-        "google-generative-ai" -> Just ChatGoogleGenerativeAi
-        _ -> Nothing
+    defaulted :: (Eq field) => Text -> JSONCodec field -> (PiModelConfig -> field) -> Text -> ObjectCodec PiModelConfig field
+    defaulted = defaultedFrom emptyPiModel
 
-embeddingProtocolCodec :: TomlCodec EmbeddingProtocol
-embeddingProtocolCodec =
-    enumTextCodec (\name -> if name == "openai-embeddings" then Just EmbeddingsOpenAi else Nothing) (const "openai-embeddings") "protocol"
+piCostCodec :: JSONCodec PiCostConfig
+piCostCodec =
+    object "PiCost" $
+        PiCostConfig
+            <$> requiredFieldWith "input" doubleCodec "Input tokens." .= piCostInput
+            <*> requiredFieldWith "output" doubleCodec "Output tokens." .= piCostOutput
+            <*> requiredFieldWith "cacheRead" doubleCodec "Tokens read from the cache." .= piCostCacheRead
+            <*> requiredFieldWith "cacheWrite" doubleCodec "Tokens written to the cache." .= piCostCacheWrite
 
-judgeProtocolCodec :: TomlCodec JudgeProtocol
-judgeProtocolCodec =
-    enumTextCodec (\name -> if name == "systemone" then Just JudgeSystemOne else Nothing) (const "systemone") "protocol"
+piCompatCodec :: JSONCodec PiCompatConfig
+piCompatCodec =
+    object "PiCompat" $
+        PiCompatConfig
+            <$> optionalFieldWith' "supportsStore" boolCodec .= piSupportsStore
+            <*> optionalFieldWith' "supportsDeveloperRole" boolCodec .= piSupportsDeveloperRole
+            <*> optionalFieldWith' "supportsReasoningEffort" boolCodec .= piSupportsReasoningEffort
+            <*> optionalFieldWith' "supportsUsageInStreaming" boolCodec .= piSupportsUsageInStreaming
+            <*> optionalFieldWith' "supportsFinishReason" boolCodec .= piSupportsFinishReason
+            <*> optionalFieldWith' "maxTokensField" textCodec .= piMaxTokensField
+            <*> optionalFieldWith' "requiresToolResultName" boolCodec .= piRequiresToolResultName
+            <*> optionalFieldWith' "requiresAssistantAfterToolResult" boolCodec .= piRequiresAssistantAfterToolResult
+            <*> optionalFieldWith' "requiresThinkingAsText" boolCodec .= piRequiresThinkingAsText
+            <*> optionalFieldWith' "requiresReasoningContentOnAssistantMessages" boolCodec .= piRequiresReasoningContentOnAssistantMessages
+            <*> optionalFieldWith' "thinkingFormat" textCodec .= piThinkingFormat
 
-embeddingCodec :: TomlCodec EmbeddingConfig
+embeddingCodec :: JSONCodec EmbeddingConfig
 embeddingCodec =
-    EmbeddingConfig
-        <$> Toml.text "provider" .= embeddingProvider
-        <*> embeddingProtocolCodec .= embeddingProtocol
-        <*> Toml.text "model" .= embeddingModel
-        <*> optionalAt Toml.int "dimensions" .= embeddingDimensions
-        <*> defaultedAt "{query}" Toml.text "query-template" .= embeddingQueryTemplate
-        <*> defaultedAt "{document}" Toml.text "document-template" .= embeddingDocumentTemplate
-        <*> defaultedAt 128 Toml.int "batch-size" .= embeddingBatchSize
-        <*> defaultedAt 0.4 Toml.double "min-similarity" .= embeddingMinSimilarity
-
-judgeCodec :: TomlCodec JudgeConfig
-judgeCodec =
-    JudgeConfig
-        <$> Toml.text "provider" .= judgeProvider
-        <*> judgeProtocolCodec .= judgeProtocol
-        <*> Toml.text "model" .= judgeModel
-        <*> defaultedAt "Is step {id} one of the steps the person searching for \"{query}\" wants to find?" Toml.text "instructions" .= judgeInstructions
-        <*> defaultedAt 0.5 Toml.double "min-relevance" .= judgeMinRelevance
-
-searchCodec :: TomlCodec SearchConfig
-searchCodec =
-    SearchConfig
-        <$> defaultedAt 10 Toml.int "limit" .= searchLimit
-        <*> defaultedAt 24 Toml.int "judge-candidates" .= searchJudgeCandidates
-        <*> defaultedAt emptyEmbeddingConfig (tableAt embeddingCodec) "embedding" .= searchEmbedding
-        <*> optionalAt (tableAt judgeCodec) "judge" .= searchJudge
-
-configCodec :: TomlCodec Config
-configCodec =
-    mkConfig
-        <$> Toml.table userRepoCodec "user-repo" .= configUserRepo
-        <*> Toml.dimap Just (fromMaybe defaultSlurmConfig) (Toml.dioptional (Toml.table slurmCodec "slurm")) .= configSlurm
-        <*> Toml.dioptional (Toml.table agentCodec "agent") .= (Just . configAgent)
-        <*> providersCodec .= configProviders
-        <*> optionalAt (tableAt chatModelCodec) "models.chat" .= configChat
-        <*> optionalAt (tableAt searchCodec) "search" .= configSearch
+    object "Embedding" $
+        EmbeddingConfig
+            <$> requiredFieldWith "provider" providerNameCodec "Provider the embedding model runs on. None keeps step search lexical." .= embeddingProvider
+            <*> requiredFieldWith "protocol" (stringConstCodec ((EmbeddingsOpenAi, "openai-embeddings") :| [])) "API the provider serves the model with." .= embeddingProtocol
+            <*> requiredFieldWith "model" textCodec "Model id at the provider." .= embeddingModel
+            <*> optionalFieldWith "dimensions" intCodec "Embedding size to request." .= embeddingDimensions
+            <*> defaulted "query-template" multilineTextCodec embeddingQueryTemplate "Text embedded for a search, with {query} standing for the search."
+            <*> defaulted "document-template" multilineTextCodec embeddingDocumentTemplate "Text embedded for a step, with {document} standing for the step."
+            <*> defaulted "batch-size" intCodec embeddingBatchSize "Steps embedded per request."
+            <*> defaulted "min-similarity" doubleCodec embeddingMinSimilarity "Lowest similarity a related step may have."
   where
-    mkConfig userRepo slurm mAgent providers chat search =
-        Config userRepo slurm (fromMaybe defaultAgentConfig mAgent) providers chat search
+    defaulted :: (Eq field) => Text -> JSONCodec field -> (EmbeddingConfig -> field) -> Text -> ObjectCodec EmbeddingConfig field
+    defaulted = defaultedFrom emptyEmbeddingConfig
+
+judgeCodec :: JSONCodec JudgeConfig
+judgeCodec =
+    object "Judge" $
+        JudgeConfig
+            <$> requiredFieldWith "provider" providerNameCodec "Provider the judge model runs on." .= judgeProvider
+            <*> requiredFieldWith "protocol" (stringConstCodec ((JudgeSystemOne, "systemone") :| [])) "API the provider serves the model with." .= judgeProtocol
+            <*> requiredFieldWith "model" textCodec "Model id at the provider." .= judgeModel
+            <*> optionalFieldWithOmittedDefaultWith "instructions" multilineTextCodec "Is step {id} one of the steps the person searching for \"{query}\" wants to find?" "Question the judge answers for each candidate, with {id} standing for the step and {query} for the search." .= judgeInstructions
+            <*> optionalFieldWithOmittedDefaultWith "min-relevance" doubleCodec 0.5 "Lowest relevance a related step may have." .= judgeMinRelevance
+
+searchCodec :: JSONCodec SearchConfig
+searchCodec =
+    object "Search" $
+        SearchConfig
+            <$> optionalFieldWithOmittedDefaultWith "limit" intCodec 10 "Most related steps shown." .= searchLimit
+            <*> optionalFieldWithOmittedDefaultWith "judge-candidates" intCodec 24 "Related steps the judge reviews, at most 64." .= searchJudgeCandidates
+            <*> optionalFieldWithOmittedDefaultWith "embedding" embeddingCodec emptyEmbeddingConfig "Embedding model that finds related steps." .= searchEmbedding
+            <*> optionalFieldWith "judge" judgeCodec "Model that keeps only the related steps the search is after. Off shows them all." .= searchJudge
+
+configCodec :: JSONCodec Config
+configCodec =
+    object "Config" $
+        (\userRepo providers chat search slurm agent -> Config userRepo slurm agent providers chat search)
+            <$> requiredFieldWith "user-repo" userRepoCodec "Repository holding templates and data." .= configUserRepo
+            <*> optionalFieldWithOmittedDefaultWith "providers" providersCodec Map.empty "AI providers models run on." .= configProviders
+            <*> optionalFieldWithOmittedDefaultWith "models" modelsCodec Nothing "Models the instance uses." .= configChat
+            <*> optionalFieldWith "search" searchCodec "Embedding and judge models that add a Related section to step search. Off keeps search lexical." .= configSearch
+            <*> optionalFieldWithOmittedDefaultWith "slurm" slurmCodec defaultSlurmConfig "How builds are submitted to Slurm." .= configSlurm
+            <*> optionalFieldWithOmittedDefaultWith "agent" agentCodec defaultAgentConfig "How the agent panel runs agent turns." .= configAgent
+  where
+    modelsCodec = object "Models" (optionalFieldWith "chat" chatModelCodec "Chat model the agent panel runs on. Off leaves the agent without a model." .= id)
+
+defaultedFrom :: (Eq field) => record -> Text -> JSONCodec field -> (record -> field) -> Text -> ObjectCodec record field
+defaultedFrom defaults key fieldCodec field doc = optionalFieldWithOmittedDefaultWith key fieldCodec (field defaults) doc .= field
+
+textListCodec :: JSONCodec [Text]
+textListCodec = listCodec textCodec
+
+textEnumCodec :: NonEmpty Text -> JSONCodec Text
+textEnumCodec = stringConstCodec . fmap (\value -> (value, value))
+
+intCodec :: JSONCodec Int
+intCodec = codec
+
+doubleCodec :: JSONCodec Double
+doubleCodec = dimapCodec Scientific.toRealFloat Scientific.fromFloatDigits scientificCodec
+
+configFields :: [ConfigField]
+configFields = codecFields configCodec
+
+configJson :: Config -> Value
+configJson = toJSONVia configCodec
+
+renderConfig :: Config -> Text
+renderConfig = renderToml configFields . configJson
+
+decodeConfig :: Text -> Either String Config
+decodeConfig contents = decodeToml contents >>= decodeConfigJson
+
+decodeConfigJson :: Value -> Either String Config
+decodeConfigJson = first (T.unpack . readable . T.pack) . parseEither (parseJSONVia configCodec)
+  where
+    readable message = maybe message located (T.stripPrefix "Error in $" message)
+    located rest = case T.breakOn ":" rest of
+        ("", detail) -> explained detail
+        (path, detail) -> T.dropWhile (== '.') (T.replace "']" "" (T.replace "['" "." path)) <> ": " <> explained detail
+    explained detail = case map (T.takeWhile (/= '"') . T.drop 10 . snd) (T.breakOnAll "Expected \"" detail) of
+        [] -> T.strip (T.drop 1 detail)
+        choices -> "expected one of " <> T.intercalate ", " choices
 
 defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
@@ -462,9 +457,9 @@ resolveConfigPath = fromMaybe defaultConfigPath <$> lookupEnv "POINTY_CONFIG_PAT
 
 loadConfig :: FilePath -> IO Config
 loadConfig path = do
-    result <- Toml.decodeFileEither configCodec path
-    case result of
-        Left errs -> error $ "Failed to parse config: " ++ show errs
+    contents <- decodeUtf8With lenientDecode <$> BS.readFile path
+    case decodeConfig contents of
+        Left err -> error ("Failed to parse config: " ++ err)
         Right config -> do
             validateConfig config
             pure config
@@ -495,14 +490,14 @@ warnMissingProviderKeys config =
 
 providerReferences :: Config -> [(Text, String)]
 providerReferences config =
-    filter (not . T.null . fst) $
-        [ (chatProvider chat, "[models.chat]")
-        | chat <- mapMaybe id [configChat config]
-        ]
-            ++ [ (embeddingProvider (searchEmbedding search), "[search.embedding]")
-               | search <- mapMaybe id [configSearch config]
-               ]
-            ++ [ (judgeProvider judge, "[search.judge]")
-               | search <- mapMaybe id [configSearch config]
-               , judge <- mapMaybe id [searchJudge search]
-               ]
+    [ (chatProvider chat, "[models.chat]")
+    | chat <- mapMaybe id [configChat config]
+    ]
+        ++ [ (embeddingProvider (searchEmbedding search), "[search.embedding]")
+           | search <- mapMaybe id [configSearch config]
+           , not (T.null (embeddingProvider (searchEmbedding search)))
+           ]
+        ++ [ (judgeProvider judge, "[search.judge]")
+           | search <- mapMaybe id [configSearch config]
+           , judge <- mapMaybe id [searchJudge search]
+           ]
