@@ -3914,12 +3914,13 @@ body:has(dialog[open]) {
 }
 
 .dialog.settings-dialog {
-  width: min(640px, calc(100vw - var(--spacing-xl) - var(--spacing-xl)));
+  width: min(640px, calc(100vw - var(--spacing-md) - var(--spacing-md)));
   max-height: 90vh;
 }
 
 .settings-content {
-  gap: var(--spacing-md);
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
 }
 
 .settings-header,
@@ -3968,7 +3969,7 @@ body:has(dialog[open]) {
 .config-section {
   min-width: 0;
   margin: 0;
-  padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-sm);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
 }
@@ -3976,7 +3977,7 @@ body:has(dialog[open]) {
 .config-section-body {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: var(--spacing-sm);
 }
 
 .config-section > legend,
@@ -3992,7 +3993,7 @@ body:has(dialog[open]) {
 }
 
 .config-section[open] > summary {
-  margin-bottom: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
 }
 
 .config-toggle {
@@ -4008,12 +4009,6 @@ body:has(dialog[open]) {
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 600px) {
-  .config-section {
-    padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-sm);
-  }
-}
-
 .config-textarea {
   min-height: 0;
   padding-block: 7px;
@@ -4022,20 +4017,34 @@ body:has(dialog[open]) {
 }
 
 .config-entry {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
-  padding: var(--spacing-md);
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm);
   border: 1px dashed var(--border-color);
   border-radius: var(--radius-sm);
 }
 
 .config-remove {
-  align-self: flex-end;
+  position: absolute;
+  top: var(--spacing-xs);
+  right: var(--spacing-xs);
 }
 
 .config-add {
   align-self: flex-start;
+}
+
+@media (max-width: 600px) {
+  .settings-content {
+    padding: var(--spacing-sm);
+  }
+
+  .config-section,
+  .config-entry {
+    padding: var(--spacing-xs);
+  }
 }
 
 .settings-error {

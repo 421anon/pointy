@@ -245,7 +245,7 @@ viewConfigEntry : List String -> List PathStep -> List String -> List ConfigFiel
 viewConfigEntry providers path names fields index entry =
     Html.div [ class "config-entry" ]
         (Html.button
-            [ class "icon-btn config-remove"
+            [ class "icon-btn icon-btn-inline config-remove"
             , type_ "button"
             , title "Remove"
             , Events.onClick (Settings.editConfig path (ConfigForm.removeEntry index))
