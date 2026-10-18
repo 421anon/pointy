@@ -8,11 +8,10 @@ import Dict
 import Extra.Http as Http
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, checked, class, disabled, id, placeholder, property, readonly, required, rows, selected, spellcheck, step, title, type_, value)
+import Html.Attributes exposing (attribute, checked, class, disabled, id, placeholder, readonly, required, rows, selected, spellcheck, step, title, type_, value)
 import Html.Events as Events
 import Html.Extra as Html
 import Json.Decode as Decode
-import Json.Encode as Encode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ConfigField, ConfigForm, ConfigKind(..), ConfigNode(..), ConfigValues, Model)
 import Model.Lenses exposing (settingsConfig, settingsEditAsToml, settingsRepoBranch, settingsRepoUrl, userRepoInfo)
@@ -206,39 +205,27 @@ viewConfigField providers path names field node =
 
 viewSection : List String -> String -> Maybe ( Bool, Bool -> Flow Model () ) -> List (Html (Flow Model ())) -> Html (Flow Model ())
 viewSection names heading toggle body =
-    case ( names, toggle ) of
-        ( [ _ ], Nothing ) ->
+    case names of
+        [ _ ] ->
             Html.details [ class "config-section", attribute "open" "" ]
-                [ Html.summary [] [ Html.text heading ]
-                , Html.div [ class "config-section-body" ] body
-                ]
-
-        ( [ _ ], Just ( enabled, setEnabled ) ) ->
-            Html.details
-                [ class "config-section"
-                , property "open" (Encode.bool enabled)
-                , Events.on "toggle" (Decode.map setEnabled (Decode.at [ "target", "open" ] Decode.bool))
-                ]
                 [ Html.summary []
                     [ Html.text heading
-                    , Html.viewIf (not enabled) (Html.span [ class "settings-hint" ] [ Html.text " (off)" ])
+                    , Html.viewIf (Maybe.unwrap False (not << Tuple.first) toggle) (Html.span [ class "settings-hint" ] [ Html.text " (off)" ])
                     ]
-                , Html.div [ class "config-section-body" ] body
+                , Html.div [ class "config-section-body" ] (Maybe.unwrap [] (List.singleton << viewToggle "Enabled") toggle ++ body)
                 ]
 
-        ( _, Nothing ) ->
-            Html.fieldset [ class "config-section config-section-body" ] (Html.legend [] [ Html.text heading ] :: body)
-
-        ( _, Just ( enabled, setEnabled ) ) ->
+        _ ->
             Html.fieldset [ class "config-section config-section-body" ]
-                (Html.legend []
-                    [ Html.label [ class "config-toggle" ]
-                        [ Html.input [ type_ "checkbox", checked enabled, Events.onCheck setEnabled ] []
-                        , Html.text heading
-                        ]
-                    ]
-                    :: body
-                )
+                (Html.legend [] [ Maybe.unwrap (Html.text heading) (viewToggle heading) toggle ] :: body)
+
+
+viewToggle : String -> ( Bool, Bool -> Flow Model () ) -> Html (Flow Model ())
+viewToggle label ( enabled, setEnabled ) =
+    Html.label [ class "config-toggle" ]
+        [ Html.input [ type_ "checkbox", checked enabled, Events.onCheck setEnabled ] []
+        , Html.text label
+        ]
 
 
 viewConfigEntry : List String -> List PathStep -> List String -> List ConfigField -> Int -> ConfigValues -> Html (Flow Model ())

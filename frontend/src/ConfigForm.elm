@@ -209,16 +209,12 @@ updateNode path change node =
 
 
 toggleTable : List ConfigField -> Bool -> ConfigNode -> ConfigNode
-toggleTable fields enabled node =
-    case ( enabled, node ) of
-        ( True, ConfigTable Nothing ) ->
-            ConfigTable (Just (initValues fields (Encode.object [])))
+toggleTable fields enabled _ =
+    if enabled then
+        ConfigTable (Just (initValues fields (Encode.object [])))
 
-        ( False, _ ) ->
-            ConfigTable Nothing
-
-        _ ->
-            node
+    else
+        ConfigTable Nothing
 
 
 addEntry : List ConfigField -> ConfigNode -> ConfigNode
