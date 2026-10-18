@@ -13,7 +13,7 @@ module Handlers.Settings (
     updateConfigFormHandler,
 ) where
 
-import Config (Config (..), UserRepoConfig (..), configFields, configJson, decodeConfig, decodeConfigJson, loadConfig, renderConfig, resolveConfigPath)
+import Config (Config (..), UserRepoConfig (..), configFields, configJson, decodeConfig, decodeConfigJson, renderConfig)
 import ConfigSchema (ConfigField (..))
 import ConfigWatch (readConfigText, replaceConfig)
 import Control.Monad (when)
@@ -45,16 +45,16 @@ instance FromJSON UserRepoUpdate where
     parseJSON = withObject "UserRepoUpdate" $ \object_ -> UserRepoUpdate <$> object_ .: "url" <*> object_ .: "branch"
 
 getUserRepoInfoHandler :: AppM UserRepoInfo
-getUserRepoInfoHandler = liftIO $ do
-    UserRepoConfig repoUrl keyfile repoBranch <- currentUserRepo
-    UserRepoInfo repoUrl repoBranch <$> deployPublicKey keyfile
+getUserRepoInfoHandler = do
+    UserRepoConfig repoUrl keyfile repoBranch <- savedUserRepo
+    liftIO $ UserRepoInfo repoUrl repoBranch <$> deployPublicKey keyfile
 
 updateUserRepoHandler :: UserRepoUpdate -> AppM NoContent
 updateUserRepoHandler update = do
     let newUrl = T.strip (updateUrl update)
         newBranch = T.strip (updateBranch update)
     when (T.null newUrl || T.null newBranch) $ badRequest "Enter both the repository URL and the branch."
-    keyfile <- liftIO $ userRepoKeyfile <$> currentUserRepo
+    keyfile <- userRepoKeyfile <$> savedUserRepo
     orBadRequest (checkRepoAccess keyfile newUrl newBranch)
     contents <- liftIO readConfigText
     applied $ replaceConfig (withUserRepoTable (UserRepoConfig newUrl keyfile newBranch) contents)
@@ -72,7 +72,7 @@ getConfigFormHandler = do
 
 updateConfigFormHandler :: Value -> AppM NoContent
 updateConfigFormHandler values = do
-    current <- configJson <$> savedConfig "The configuration on disk can't be read: "
+    current <- configJson <$> savedConfig savedConfigError
     config <- either badRequest pure (decodeConfigJson (withUserRepoOf current values))
     applied (replaceConfig (renderConfig config))
   where
@@ -82,8 +82,11 @@ updateConfigFormHandler values = do
 savedConfig :: String -> AppM Config
 savedConfig context = liftIO readConfigText >>= either (badRequest . (context ++)) pure . decodeConfig
 
-currentUserRepo :: IO UserRepoConfig
-currentUserRepo = configUserRepo <$> (resolveConfigPath >>= loadConfig)
+savedUserRepo :: AppM UserRepoConfig
+savedUserRepo = configUserRepo <$> savedConfig savedConfigError
+
+savedConfigError :: String
+savedConfigError = "The configuration on disk can't be read: "
 
 applied :: IO (Either String ()) -> AppM NoContent
 applied = (NoContent <$) . orBadRequest

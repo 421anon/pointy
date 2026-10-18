@@ -139,6 +139,8 @@ viewConfigEditor contents =
     Html.textarea
         [ class "form-input form-input-textarea settings-config"
         , spellcheck False
+        , rows 1
+        , attribute "data-auto-resize" "true"
         , value contents
         , attribute "aria-label" "Configuration"
         , Events.onInput (Success >> Flow.setAll settingsConfig)
@@ -165,30 +167,27 @@ viewConfigField : List String -> List PathStep -> List String -> ConfigField -> 
 viewConfigField providers path names field node =
     case ( field.kind, node ) of
         ( TableKind fields, ConfigTable table ) ->
-            Html.fieldset [ class "config-section" ]
-                (Html.legend []
-                    [ if ConfigForm.isOptional field then
-                        Html.label [ class "config-toggle" ]
-                            [ Html.input
-                                [ type_ "checkbox"
-                                , checked (Maybe.isJust table)
-                                , Events.onCheck (Settings.editConfig path << ConfigForm.toggleTable fields)
-                                ]
-                                []
-                            , Html.text (sectionName names)
+            viewSection names
+                (if ConfigForm.isOptional field then
+                    Html.label [ class "config-toggle" ]
+                        [ Html.input
+                            [ type_ "checkbox"
+                            , checked (Maybe.isJust table)
+                            , Events.onCheck (Settings.editConfig path << ConfigForm.toggleTable fields)
                             ]
+                            []
+                        , Html.text (sectionName names)
+                        ]
 
-                      else
-                        Html.text (sectionName names)
-                    ]
-                    :: viewDoc field.doc
-                    :: Maybe.unwrap [] (viewConfigFields providers path names fields) table
+                 else
+                    Html.text (sectionName names)
                 )
+                (viewDoc field.doc :: Maybe.unwrap [] (viewConfigFields providers path names fields) table)
 
         ( TablesKind fields, ConfigTables entries ) ->
-            Html.fieldset [ class "config-section" ]
-                (Html.legend [] [ Html.text ("[" ++ sectionName names ++ "]") ]
-                    :: viewDoc field.doc
+            viewSection names
+                (Html.text ("[" ++ sectionName names ++ "]"))
+                (viewDoc field.doc
                     :: List.indexedMap (viewConfigEntry providers path names fields) entries
                     ++ [ Html.button
                             [ class "btn config-add"
@@ -208,6 +207,18 @@ viewConfigField providers path names field node =
 
         _ ->
             Html.nothing
+
+
+viewSection : List String -> Html (Flow Model ()) -> List (Html (Flow Model ())) -> Html (Flow Model ())
+viewSection names heading body =
+    if List.length names == 1 then
+        Html.details [ class "config-section", attribute "open" "" ]
+            [ Html.summary [] [ heading ]
+            , Html.div [ class "config-section-body" ] body
+            ]
+
+    else
+        Html.fieldset [ class "config-section config-section-body" ] (Html.legend [] [ heading ] :: body)
 
 
 viewConfigEntry : List String -> List PathStep -> List String -> List ConfigField -> Int -> ConfigValues -> Html (Flow Model ())
@@ -270,7 +281,8 @@ viewConfigInput providers field kind input set =
             Html.textarea
                 [ class "form-input form-input-textarea config-textarea"
                 , spellcheck False
-                , rows (max 2 (List.length (String.lines input)))
+                , rows 1
+                , attribute "data-auto-resize" "true"
                 , value input
                 , Events.onInput set
                 ]

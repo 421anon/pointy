@@ -3948,7 +3948,7 @@ body:has(dialog[open]) {
 }
 
 .settings-config {
-  min-height: 50vh;
+  max-height: 70vh;
   white-space: pre;
   overflow-wrap: normal;
   overflow-x: auto;
@@ -3966,9 +3966,6 @@ body:has(dialog[open]) {
 }
 
 .config-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
   min-width: 0;
   margin: 0;
   padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
@@ -3976,11 +3973,26 @@ body:has(dialog[open]) {
   border-radius: var(--radius-sm);
 }
 
-.config-section > legend {
+.config-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.config-section > legend,
+.config-section > summary {
   padding: 0 var(--spacing-xs);
   font-family: monospace;
   font-size: var(--font-size-sm);
   color: var(--text-primary);
+}
+
+.config-section > summary {
+  cursor: pointer;
+}
+
+.config-section[open] > summary {
+  margin-bottom: var(--spacing-md);
 }
 
 .config-toggle {
@@ -4004,6 +4016,8 @@ body:has(dialog[open]) {
 
 .config-textarea {
   min-height: 0;
+  padding-block: 7px;
+  max-height: 16rem;
   resize: vertical;
 }
 

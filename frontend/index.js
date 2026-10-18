@@ -31,14 +31,28 @@ window
     }
   });
 
-function setupTextarea(textarea) {
+function fitTextarea(textarea) {
   textarea.style.height = "auto";
-  textarea.style.height = textarea.scrollHeight + "px";
-  textarea.oninput = () => {
-    textarea.style.height = "auto";
-    textarea.style.height = textarea.scrollHeight + "px";
-  };
+  textarea.style.height =
+    textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight + "px";
 }
+
+function setupTextarea(textarea) {
+  fitTextarea(textarea);
+  textarea.oninput = () => fitTextarea(textarea);
+}
+
+document.addEventListener(
+  "toggle",
+  (event) => {
+    if (event.target.open) {
+      event.target
+        .querySelectorAll("textarea[data-auto-resize]")
+        .forEach(fitTextarea);
+    }
+  },
+  true,
+);
 
 setTimeout(
   () =>

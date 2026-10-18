@@ -54,7 +54,7 @@ data UserRepoConfig = UserRepoConfig
     , userRepoKeyfile :: FilePath
     , userRepoBranch :: Text
     }
-    deriving (Show, Eq)
+    deriving (Show)
 
 data SlurmConfig = SlurmConfig
     { slurmPartition :: Text
@@ -213,7 +213,7 @@ data JudgeConfig = JudgeConfig
     , judgeInstructions :: Text
     , judgeMinRelevance :: Double
     }
-    deriving (Show, Eq)
+    deriving (Show)
 
 data SearchConfig = SearchConfig
     { searchLimit :: Int
@@ -221,7 +221,7 @@ data SearchConfig = SearchConfig
     , searchEmbedding :: EmbeddingConfig
     , searchJudge :: Maybe JudgeConfig
     }
-    deriving (Show, Eq)
+    deriving (Show)
 
 data Config where
     Config ::
@@ -233,7 +233,7 @@ data Config where
         , configSearch :: Maybe SearchConfig
         } ->
         Config
-    deriving (Show, Eq)
+    deriving (Show)
 
 chatQualifier :: ChatModelConfig -> Text
 chatQualifier chat = case chatThinking chat of

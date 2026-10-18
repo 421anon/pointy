@@ -71,17 +71,8 @@ inputDecoder kind =
         MapKind ->
             Decode.map (List.map (\( key, value ) -> key ++ " = " ++ value) >> String.join "\n") (Decode.keyValuePairs Decode.string)
 
-        IntegerKind ->
-            Decode.map (Encode.encode 0) Decode.value
-
-        NumberKind ->
-            Decode.map (Encode.encode 0) Decode.value
-
-        BoolKind ->
-            Decode.map (Encode.encode 0) Decode.value
-
         _ ->
-            Decode.string
+            Decode.oneOf [ Decode.string, Decode.map (Encode.encode 0) Decode.value ]
 
 
 onlyChoice : ConfigField -> String

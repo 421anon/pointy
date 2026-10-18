@@ -144,14 +144,7 @@ corsPolicy req = case pathInfo req of
                 , corsMethods = ["GET", "PUT", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
-    ["instance-config", "form"] ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "PUT", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
-    ["instance-config"] ->
+    ("instance-config" : _) ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
