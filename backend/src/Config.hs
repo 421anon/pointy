@@ -21,11 +21,14 @@ module Config (
     chatQualifier,
     chatProtocolName,
     loadConfig,
+    readConfigFile,
+    parseConfig,
     decodeConfig,
     decodeConfigJson,
     configJson,
     configFields,
     renderConfig,
+    renderUserRepo,
     warnMissingProviderKeys,
     defaultConfigPath,
     resolveConfigPath,
@@ -34,7 +37,8 @@ module Config (
 import Autodocodec (HasCodec (..), JSONCodec, ObjectCodec, boolCodec, dimapCodec, listCodec, object, optionalFieldWith, optionalFieldWith', optionalFieldWithOmittedDefaultWith, parseJSONVia, requiredFieldWith, scientificCodec, stringCodec, stringConstCodec, textCodec, toJSONVia, (.=))
 import ConfigSchema (ConfigField, codecFields, decodeToml, multilineTextCodec, providerNameCodec, renderToml)
 import Control.Monad (forM_, when)
-import Data.Aeson (Value)
+import Data.Aeson (Value (..))
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
@@ -261,8 +265,7 @@ slurmCodec =
             <*> defaulted "extra" textListCodec slurmExtra "Extra arguments passed to sbatch."
             <*> defaulted "enforcement" (textEnumCodec ("scheduler" :| ["metadata-only"])) slurmEnforcement "scheduler passes a step's CPU and memory requirements to Slurm; metadata-only records them without enforcing them."
   where
-    defaulted :: (Eq field) => Text -> JSONCodec field -> (SlurmConfig -> field) -> Text -> ObjectCodec SlurmConfig field
-    defaulted = defaultedFrom defaultSlurmConfig
+    defaulted key = defaultedFrom defaultSlurmConfig key
 
 agentCodec :: JSONCodec AgentConfig
 agentCodec =
@@ -278,8 +281,7 @@ agentCodec =
             <*> defaulted "bootstrap-prompt" multilineTextCodec agentBootstrapPrompt "Prompt run once against a fresh checkout so new chats start with project context. Empty disables it."
             <*> defaulted "title-prompt" multilineTextCodec agentTitlePrompt "Prompt that names a chat after its first message."
   where
-    defaulted :: (Eq field) => Text -> JSONCodec field -> (AgentConfig -> field) -> Text -> ObjectCodec AgentConfig field
-    defaulted = defaultedFrom defaultAgentConfig
+    defaulted key = defaultedFrom defaultAgentConfig key
 
 providersCodec :: JSONCodec (Map Text ProviderConfig)
 providersCodec = dimapCodec (Map.fromList . map (\provider -> (providerName provider, provider))) Map.elems (listCodec providerCodec)
@@ -321,8 +323,7 @@ piModelCodec =
             <*> optionalFieldWith "cost" piCostCodec "Prices per million tokens." .= piCost
             <*> defaulted "compat" piCompatCodec piCompat "Compatibility flags for the provider's API."
   where
-    defaulted :: (Eq field) => Text -> JSONCodec field -> (PiModelConfig -> field) -> Text -> ObjectCodec PiModelConfig field
-    defaulted = defaultedFrom emptyPiModel
+    defaulted key = defaultedFrom emptyPiModel key
 
 piCostCodec :: JSONCodec PiCostConfig
 piCostCodec =
@@ -362,8 +363,7 @@ embeddingCodec =
             <*> defaulted "batch-size" intCodec embeddingBatchSize "Steps embedded per request."
             <*> defaulted "min-similarity" doubleCodec embeddingMinSimilarity "Lowest similarity a related step may have."
   where
-    defaulted :: (Eq field) => Text -> JSONCodec field -> (EmbeddingConfig -> field) -> Text -> ObjectCodec EmbeddingConfig field
-    defaulted = defaultedFrom emptyEmbeddingConfig
+    defaulted key = defaultedFrom emptyEmbeddingConfig key
 
 judgeCodec :: JSONCodec JudgeConfig
 judgeCodec =
@@ -421,6 +421,9 @@ configJson = toJSONVia configCodec
 renderConfig :: Config -> Text
 renderConfig = renderToml configFields . configJson
 
+renderUserRepo :: UserRepoConfig -> Text
+renderUserRepo repo = renderToml configFields (Object (KeyMap.singleton "user-repo" (toJSONVia userRepoCodec repo)))
+
 decodeConfig :: Text -> Either String Config
 decodeConfig contents = decodeToml contents >>= decodeConfigJson
 
@@ -455,23 +458,22 @@ defaultConfigPath = "/home/backend/config.toml"
 resolveConfigPath :: IO FilePath
 resolveConfigPath = fromMaybe defaultConfigPath <$> lookupEnv "POINTY_CONFIG_PATH"
 
-loadConfig :: FilePath -> IO Config
-loadConfig path = do
-    contents <- decodeUtf8With lenientDecode <$> BS.readFile path
-    case decodeConfig contents of
-        Left err -> error ("Failed to parse config: " ++ err)
-        Right config -> do
-            validateConfig config
-            pure config
+readConfigFile :: FilePath -> IO Text
+readConfigFile path = decodeUtf8With lenientDecode <$> BS.readFile path
 
-validateConfig :: Config -> IO ()
-validateConfig config = do
-    forM_ (providerReferences config) $ \(name, section) ->
-        when (Map.notMember name (configProviders config)) $
-            error $
-                "Failed to parse config: " ++ section ++ " names provider \"" ++ T.unpack name ++ "\", which is not in [providers]"
-    when (maybe False ((> 64) . searchJudgeCandidates) (configSearch config)) $
-        error "Failed to parse config: [search] judge-candidates must be at most 64"
+loadConfig :: FilePath -> IO Config
+loadConfig path = readConfigFile path >>= either (error . ("Failed to parse config: " ++)) pure . parseConfig
+
+parseConfig :: Text -> Either String Config
+parseConfig contents = decodeConfig contents >>= validateConfig
+
+validateConfig :: Config -> Either String Config
+validateConfig config
+    | (name, section) : _ <- missingProviders = Left (section ++ " names provider \"" ++ T.unpack name ++ "\", which is not in [providers]")
+    | maybe False ((> 64) . searchJudgeCandidates) (configSearch config) = Left "[search] judge-candidates must be at most 64"
+    | otherwise = Right config
+  where
+    missingProviders = filter ((`Map.notMember` configProviders config) . fst) (providerReferences config)
 
 warnMissingProviderKeys :: Config -> IO ()
 warnMissingProviderKeys config =

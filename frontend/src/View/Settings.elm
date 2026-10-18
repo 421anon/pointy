@@ -14,7 +14,7 @@ import Html.Extra as Html
 import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ConfigField, ConfigForm, ConfigKind(..), ConfigNode(..), ConfigValues, Model)
-import Model.Lenses exposing (settingsConfig, settingsEditAsToml, settingsRepoBranch, settingsRepoUrl, userRepoInfo)
+import Model.Lenses exposing (settingsConfig, settingsRepoBranch, settingsRepoUrl, userRepoInfo)
 import Settings
 import String.Extra as String
 import View.Icons exposing (icon)
@@ -116,7 +116,7 @@ viewModeToggle editAsToml =
     Html.button
         [ class "btn file-view-mode-toggle"
         , type_ "button"
-        , Events.onClick (Flow.setAll settingsEditAsToml (not editAsToml))
+        , Events.onClick (Settings.setEditAsToml (not editAsToml))
         ]
         (if editAsToml then
             [ icon True "tune", Html.text "Edit as form" ]
@@ -136,16 +136,7 @@ viewLoaded viewData =
 
 viewConfigEditor : String -> Html (Flow Model ())
 viewConfigEditor contents =
-    Html.textarea
-        [ class "form-input form-input-textarea settings-config"
-        , spellcheck False
-        , rows 1
-        , attribute "data-auto-resize" "true"
-        , value contents
-        , attribute "aria-label" "Configuration"
-        , Events.onInput (Success >> Flow.setAll settingsConfig)
-        ]
-        []
+    viewAutoResizeTextarea "settings-config" [ attribute "aria-label" "Configuration" ] contents (Success >> Flow.setAll settingsConfig)
 
 
 viewConfigForm : ConfigForm -> List (Html (Flow Model ()))
@@ -276,29 +267,36 @@ viewConfigInput providers field kind input set =
                 )
 
         IntegerKind ->
-            viewNumberInput [ type_ "number", step "1" ] field input set
+            viewTextInput [ type_ "number", step "1" ] field input set
 
         NumberKind ->
-            viewNumberInput [ attribute "inputmode" "decimal" ] field input set
+            viewTextInput [ attribute "inputmode" "decimal" ] field input set
 
         TextKind ->
-            Html.input [ class "form-input", spellcheck False, required field.required, value input, Events.onInput set ] []
+            viewTextInput [] field input set
 
         _ ->
-            Html.textarea
-                [ class "form-input form-input-textarea config-textarea"
-                , spellcheck False
-                , rows 1
-                , attribute "data-auto-resize" "true"
-                , value input
-                , Events.onInput set
-                ]
-                []
+            viewAutoResizeTextarea "config-textarea" [] input set
 
 
-viewNumberInput : List (Html.Attribute (Flow Model ())) -> ConfigField -> String -> (String -> Flow Model ()) -> Html (Flow Model ())
-viewNumberInput kindAttributes field input set =
+viewTextInput : List (Html.Attribute (Flow Model ())) -> ConfigField -> String -> (String -> Flow Model ()) -> Html (Flow Model ())
+viewTextInput kindAttributes field input set =
     Html.input (kindAttributes ++ [ class "form-input", spellcheck False, required field.required, value input, Events.onInput set ]) []
+
+
+viewAutoResizeTextarea : String -> List (Html.Attribute msg) -> String -> (String -> msg) -> Html msg
+viewAutoResizeTextarea extraClass attributes contents set =
+    Html.textarea
+        ([ class ("form-input form-input-textarea " ++ extraClass)
+         , spellcheck False
+         , rows 1
+         , attribute "data-auto-resize" "true"
+         , value contents
+         , Events.onInput set
+         ]
+            ++ attributes
+        )
+        []
 
 
 viewSelect : (String -> Flow Model ()) -> String -> List ( String, String ) -> Html (Flow Model ())

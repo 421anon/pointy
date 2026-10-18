@@ -7,6 +7,7 @@ module Settings exposing
     , saveConfigForm
     , saveInstanceConfig
     , saveUserRepo
+    , setEditAsToml
     , userRepoDialogId
     )
 
@@ -52,14 +53,41 @@ editUserRepo info =
 
 openInstanceConfig : Flow Model ()
 openInstanceConfig =
-    Flow.setAll settings { initSettingsState | config = Loading Nothing, form = Loading Nothing }
+    Flow.setAll settings { initSettingsState | form = Loading Nothing }
         |> Flow.seq (Actions.openDialog instanceConfigDialogId)
         |> Flow.seq Api.fetchConfigForm
         |> Flow.andThen
             (\result ->
                 Flow.setAll settingsForm (ApiData.fromResult result)
-                    |> Flow.seq (Flow.setAll settingsEditAsToml (Result.isErr result))
+                    |> Flow.seq (setEditAsToml (Result.isErr result))
             )
+
+
+setEditAsToml : Bool -> Flow Model ()
+setEditAsToml enabled =
+    Flow.setAll settingsEditAsToml enabled
+        |> Flow.seq (Flow.when enabled fetchInstanceConfig)
+
+
+fetchInstanceConfig : Flow Model ()
+fetchInstanceConfig =
+    Flow.forAll settingsConfig
+        (\config ->
+            case config of
+                NotAsked ->
+                    reloadInstanceConfig
+
+                Error _ ->
+                    reloadInstanceConfig
+
+                _ ->
+                    Flow.pure ()
+        )
+
+
+reloadInstanceConfig : Flow Model ()
+reloadInstanceConfig =
+    Flow.setAll settingsConfig (Loading Nothing)
         |> Flow.seq Api.fetchInstanceConfig
         |> Flow.andThen (ApiData.fromResult >> Flow.setAll settingsConfig)
 

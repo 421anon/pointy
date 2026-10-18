@@ -13,8 +13,8 @@ module Handlers.Settings (
     updateConfigFormHandler,
 ) where
 
-import Config (Config (..), UserRepoConfig (..), configFields, configJson, decodeConfig, decodeConfigJson, renderConfig)
-import ConfigSchema (ConfigField (..))
+import Config (Config (..), UserRepoConfig (..), configFields, configJson, decodeConfig, decodeConfigJson, renderConfig, renderUserRepo)
+import ConfigSchema (ConfigField (..), decodeToml)
 import ConfigWatch (readConfigText, replaceConfig)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
@@ -68,11 +68,14 @@ updateInstanceConfigHandler = applied . replaceConfig
 getConfigFormHandler :: AppM Value
 getConfigFormHandler = do
     config <- savedConfig "The configuration can't be shown as a form: "
-    pure $ object ["fields" .= filter ((/= "user-repo") . fieldKey) configFields, "values" .= configJson config]
+    pure $ object ["fields" .= filter ((/= "user-repo") . fieldKey) configFields, "values" .= withoutUserRepo (configJson config)]
+  where
+    withoutUserRepo (Object entries) = Object (KeyMap.delete "user-repo" entries)
+    withoutUserRepo other = other
 
 updateConfigFormHandler :: Value -> AppM NoContent
 updateConfigFormHandler values = do
-    current <- configJson <$> savedConfig savedConfigError
+    current <- liftIO readConfigText >>= either (badRequest . (savedConfigError ++)) pure . decodeToml
     config <- either badRequest pure (decodeConfigJson (withUserRepoOf current values))
     applied (replaceConfig (renderConfig config))
   where
@@ -98,15 +101,7 @@ badRequest :: String -> AppM a
 badRequest message = throwError err400{errBody = TLE.encodeUtf8 (TL.pack message)}
 
 withUserRepoTable :: UserRepoConfig -> Text -> Text
-withUserRepoTable repo contents = T.unlines (before ++ table ++ after)
+withUserRepoTable repo contents = T.unlines (before ++ T.lines (renderUserRepo repo) ++ after)
   where
     (before, rest) = break ((== "[user-repo]") . T.strip) (T.lines contents)
     after = dropWhile (not . T.isPrefixOf "[" . T.stripStart) (drop 1 rest)
-    table =
-        [ "[user-repo]"
-        , "url = " <> tomlString (userRepoUrl repo)
-        , "keyfile = " <> tomlString (T.pack (userRepoKeyfile repo))
-        , "branch = " <> tomlString (userRepoBranch repo)
-        , ""
-        ]
-    tomlString value = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" value) <> "\""

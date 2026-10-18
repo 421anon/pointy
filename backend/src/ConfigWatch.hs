@@ -1,8 +1,8 @@
 module ConfigWatch (watchConfig, replaceConfig, readConfigText) where
 
-import Config (Config, loadConfig, resolveConfigPath, warnMissingProviderKeys)
+import Config (Config, parseConfig, readConfigFile, resolveConfigPath, warnMissingProviderKeys)
 import Control.Concurrent.STM (TVar, atomically, check, modifyTVar', newTVarIO, orElse, readTVar, readTVarIO, registerDelay)
-import Control.Exception (ErrorCall (..), SomeException, displayException, fromException, try)
+import Control.Exception (IOException, displayException, try)
 import Control.Monad (void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -10,9 +10,8 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
-import Data.Text.Encoding.Error (lenientDecode)
-import System.Directory (removeFile, renameFile)
+import Data.Text.Encoding (encodeUtf8)
+import System.Directory (renameFile)
 import System.FilePath (takeDirectory, takeFileName)
 import System.INotify (Event (..), EventVariety (..), addWatch, initINotify)
 import System.IO.Unsafe (unsafePerformIO)
@@ -46,36 +45,32 @@ applyConfig :: FilePath -> IO ()
 applyConfig path = do
     putStrLn "Configuration changed, applying..."
     outcome <- runExceptT $ do
-        config <- ExceptT (loadConfigEither path)
+        config <- ExceptT (parseConfigFile path)
         liftIO (warnMissingProviderKeys config)
         ExceptT $ withUserRepoExclusiveIO (ExceptT (syncUserRepo config) >> fetchRepo)
     putStrLn $ either ("Warning: Failed to apply configuration: " ++) (const "Configuration applied.") outcome
     atomically $ modifyTVar' appliedVar (\(Applied count _) -> Applied (count + 1) outcome)
 
-loadConfigEither :: FilePath -> IO (Either String Config)
-loadConfigEither path = either (Left . describe) Right <$> try (loadConfig path)
+parseConfigFile :: FilePath -> IO (Either String Config)
+parseConfigFile path = either unreadable parseConfig <$> try (readConfigFile path)
   where
-    describe :: SomeException -> String
-    describe exception = case fromException exception of
-        Just (ErrorCall message) -> message
-        Nothing -> displayException exception
+    unreadable :: IOException -> Either String Config
+    unreadable = Left . displayException
 
 readConfigText :: IO Text
-readConfigText = decodeUtf8With lenientDecode <$> (resolveConfigPath >>= BS.readFile)
+readConfigText = resolveConfigPath >>= readConfigFile
 
 replaceConfig :: Text -> IO (Either String ())
-replaceConfig contents = do
-    path <- resolveConfigPath
-    let staged = path ++ ".staged"
-    BS.writeFile staged (encodeUtf8 contents)
-    setFileMode staged (unionFileModes ownerReadMode ownerWriteMode)
-    validated <- loadConfigEither staged
-    case validated of
-        Left err -> removeFile staged >> pure (Left err)
-        Right _ -> do
-            Applied before _ <- readTVarIO appliedVar
-            renameFile staged path
-            awaitApplied before
+replaceConfig contents = case parseConfig contents of
+    Left err -> pure (Left err)
+    Right _ -> do
+        path <- resolveConfigPath
+        let staged = path ++ ".staged"
+        BS.writeFile staged (encodeUtf8 contents)
+        setFileMode staged (unionFileModes ownerReadMode ownerWriteMode)
+        Applied before _ <- readTVarIO appliedVar
+        renameFile staged path
+        awaitApplied before
 
 awaitApplied :: Int -> IO (Either String ())
 awaitApplied before = do

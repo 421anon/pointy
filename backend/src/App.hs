@@ -137,20 +137,14 @@ corsPolicy req = case pathInfo req of
                 , corsMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
-    ["user-repo-info"] ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "PUT", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
-    ("instance-config" : _) ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type"]
-                , corsMethods = ["GET", "PUT", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
+    path
+        | path == ["user-repo-info"] || take 1 path == ["instance-config"] ->
+            Just $
+                simpleCorsResourcePolicy
+                    { corsRequestHeaders = ["Content-Type"]
+                    , corsMethods = ["GET", "PUT", "OPTIONS"]
+                    , corsOrigins = Nothing
+                    }
     ["src-files", "raw"] ->
         Just $
             simpleCorsResourcePolicy

@@ -99,9 +99,7 @@ kindOf codec = case codec of
     ReferenceCodec "provider" _ -> ProviderKind
     ReferenceCodec "multiline" _ -> MultilineKind
     ReferenceCodec _ inner -> kindOf inner
-    EqCodec{} -> maybe TextKind EnumKind (enumValues codec)
-    EitherCodec{} -> maybe TextKind EnumKind (enumValues codec)
-    _ -> TextKind
+    _ -> maybe TextKind EnumKind (enumValues codec)
 
 enumValues :: Codec context input output -> Maybe [Text]
 enumValues codec = case codec of
