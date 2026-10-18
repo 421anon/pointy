@@ -155,6 +155,13 @@ type SteerTurn =
         :> ReqBody '[JSON] TurnRequest
         :> PostNoContent
 
+type CompactSession =
+    "agent"
+        :> "compact"
+        :> Description "Summarises a session's conversation to free context and returns the session."
+        :> ReqBody '[JSON] SessionRequest
+        :> Post '[JSON] AgentSessionView
+
 type ApplyChanges =
     "agent"
         :> "apply"
@@ -520,6 +527,7 @@ type API =
         :<|> AgentTurnEndpoint
         :<|> StopTurn
         :<|> SteerTurn
+        :<|> CompactSession
         :<|> AgentTurnStream
         :<|> ApplyChanges
         :<|> SetAutoApply

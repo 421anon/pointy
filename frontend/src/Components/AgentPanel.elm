@@ -17,7 +17,7 @@ import Json.Decode as Decode
 import Keyboard
 import List.Extra as List
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (agentSessionBlank, agentSessionBlocked, agentSessionRunning, applying, liveTurnAt, sessionEntries, sessionHasRunner, sessionPendingQuestion, sessionPendingSteer)
+import Model.Lenses exposing (agentSessionBlank, agentSessionBlocked, agentSessionRunning, applying, liveTurnAt, sessionContextState, sessionEntries, sessionHasRunner, sessionPendingQuestion, sessionPendingSteer)
 import Model.Lib as Lib
 import Model.Shadow exposing (StepConfig)
 import Route
@@ -626,6 +626,7 @@ viewCreatingSession autoApply =
                         ]
                     ]
                 ]
+        , context = Html.nothing
         , error = Html.nothing
         , chat = viewEmptyChat EmptyCreating
         , composer = viewPrompt autoApply False ComposerIdle False True
@@ -636,6 +637,7 @@ viewChatBody :
     List (Html.Attribute (Flow Model ()))
     ->
         { title : Html (Flow Model ())
+        , context : Html (Flow Model ())
         , error : Html (Flow Model ())
         , chat : Html (Flow Model ())
         , composer : Html (Flow Model ())
@@ -643,7 +645,7 @@ viewChatBody :
     -> Html (Flow Model ())
 viewChatBody attrs parts =
     Html.div (class "agent-panel__body" :: attrs)
-        [ parts.title, parts.error, parts.chat, parts.composer ]
+        [ parts.title, parts.context, parts.error, parts.chat, parts.composer ]
 
 
 viewSession : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionSummary -> Model.AgentSessionView -> Html (Flow Model ())
@@ -672,6 +674,12 @@ viewSession now mentionsAwaited mentionSources agent summary sessionView =
     in
     viewChatBody []
         { title = viewSessionTitle agent summary
+        , context =
+            if closedChat then
+                Html.nothing
+
+            else
+                viewContextStrip sessionId agent (sessionContextState sessionView agent)
         , error = Html.viewIf (not runnerActive && not (changesetRefused changeset)) (viewError session)
         , chat =
             if mentionsAwaited then
@@ -715,6 +723,90 @@ viewSession now mentionsAwaited mentionSources agent summary sessionView =
                 in
                 viewPrompt agent.autoApply (runnerActive && applyingDiff == Nothing) busy stopping submitBlocked
         }
+
+
+viewContextStrip : String -> Model.AgentState -> Maybe Model.ContextState -> Html (Flow Model ())
+viewContextStrip sessionId agent contextState =
+    case contextState of
+        Just (Model.ContextKnown usage) ->
+            if Model.contextWarning (Model.ContextKnown usage) then
+                viewContextWarning sessionId agent usage
+
+            else
+                Html.nothing
+
+        Just Model.ContextCompacting ->
+            viewContextNotice "agent-panel__context--compacting"
+                "Compacting the conversation to free context."
+
+        Just (Model.ContextFailed message) ->
+            viewContextFailure sessionId agent message
+
+        Nothing ->
+            Html.nothing
+
+
+viewContextWarning : String -> Model.AgentState -> Model.ContextUsage -> Html (Flow Model ())
+viewContextWarning sessionId agent usage =
+    let
+        compacting =
+            agent.request == Just (Model.CompactingAgentSession sessionId)
+
+        percent =
+            if usage.capacity <= 0 then
+                0
+
+            else
+                usage.tokens * 100 // usage.capacity
+    in
+    Html.div [ class "agent-panel__context", attribute "role" "status" ]
+        [ View.Icons.icon False "warning"
+        , Html.span [ class "agent-panel__context-text" ]
+            [ Html.text
+                ("This chat is using "
+                    ++ String.fromInt percent
+                    ++ "% of the model's context ("
+                    ++ String.fromInt usage.tokens
+                    ++ " / "
+                    ++ String.fromInt usage.capacity
+                    ++ " tokens)."
+                )
+            ]
+        , Html.button
+            [ class "small-btn"
+            , disabled (agentSessionBlocked sessionId agent)
+            , Events.onClick (Actions.compactAgentSession sessionId)
+            ]
+            [ Html.text
+                (if compacting then
+                    "Compacting"
+
+                 else
+                    "Compact"
+                )
+            ]
+        ]
+
+
+viewContextFailure : String -> Model.AgentState -> String -> Html (Flow Model ())
+viewContextFailure sessionId agent message =
+    Html.div [ class "agent-panel__context agent-panel__context--failed", attribute "role" "alert" ]
+        [ View.Icons.icon False "error"
+        , Html.span [ class "agent-panel__context-text" ]
+            [ Html.text ("Context compaction failed: " ++ message) ]
+        , Html.button
+            [ class "small-btn"
+            , disabled (agentSessionBlocked sessionId agent)
+            , Events.onClick (Actions.compactAgentSession sessionId)
+            ]
+            [ Html.text "Try again" ]
+        ]
+
+
+viewContextNotice : String -> String -> Html (Flow Model ())
+viewContextNotice stateClass message =
+    Html.div [ class ("agent-panel__context " ++ stateClass), attribute "role" "status" ]
+        [ Html.span [ class "agent-panel__context-text agent-panel__pulse" ] [ Html.text message ] ]
 
 
 viewSessionTitle : Model.AgentState -> Model.AgentSessionSummary -> Html (Flow Model ())

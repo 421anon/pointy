@@ -9,6 +9,7 @@ module Agent.Runner (
     stopAgentTurn,
     steerAgentTurn,
     turnLogStreamHandler,
+    compactAgentSession,
     streamLoop,
     RunnerInput,
     SteerOutcome (..),
@@ -28,6 +29,7 @@ import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
     PreparedApply (..),
+    acquireSessionCompaction,
     applyConflictsPending,
     findTurn,
     listTurns,
@@ -35,8 +37,10 @@ import Agent.Session (
     loadTurn,
     newTurnId,
     normalizeSessionName,
+    releaseSessionCompaction,
     saveSession,
     saveTurn,
+    sessionCompacting,
     touchSession,
     turnIsUnfinished,
     turnLogFilePath,
@@ -51,7 +55,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait, withAsync)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
-import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, stateTVar, takeTMVar, tryPutTMVar)
+import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, stateTVar, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, catch, displayException, finally, fromException, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
@@ -464,8 +468,16 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedS
                 Right code -> return code
             finishTurn cfg session_ turn sentCurrentProject exitCode
 
-runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> [Int] -> IO ExitCode
-runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewedSteps = do
+startRunnerProcess ::
+    AgentConfig ->
+    AgentSession ->
+    FilePath ->
+    [String] ->
+    Text ->
+    Maybe FilePath ->
+    [Int] ->
+    IO (Handle, Handle, Maybe Handle, ProcessHandle)
+startRunnerProcess cfg session_ logPath sessionFlag outputMarker mWarmFile reviewedSteps = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
     chat <- prepareChatModel
@@ -474,12 +486,6 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
     let paths = sessionPaths session_
         runnerHome = sandboxHome paths
         expand = expandSandboxArg paths
-        outputMarker =
-            "__POINTY_AGENT_OUTPUT_BEGIN__" <> T.unpack (turnId turn) <> "__"
-        sessionFlag = case (isFirstTurn, mWarmFile) of
-            (True, Just warmFile) -> ["--fork", warmFile]
-            (True, Nothing) -> []
-            (False, _) -> ["-c"]
         runnerArgs =
             agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ chatModelArgs chat ++ runnerConfigArgs expand (agentRunnerArgs cfg)
         wrapperScript =
@@ -500,7 +506,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
             [ ("HOME", runnerHome)
             , ("POINTY_AGENT_WORKTREE", worktreePath session_)
             , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
-            , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
+            , ("POINTY_AGENT_OUTPUT_MARKER", T.unpack outputMarker)
             ]
     sandbox <- sandboxProcess cfg args
     let process =
@@ -514,8 +520,18 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
     createDirectoryIfMissing True runnerHome
     seedPiConfig runnerHome
     seedNixFetcherCache runnerHome
-    appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
+    appendLogLine cfg logPath "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
     (Just hin, Just hout, mErr, ph) <- createProcess process
+    return (hin, hout, mErr, ph)
+
+runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> [Int] -> IO ExitCode
+runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewedSteps = do
+    let outputMarker = "__POINTY_AGENT_OUTPUT_BEGIN__" <> turnId turn <> "__"
+        sessionFlag = case (isFirstTurn, mWarmFile) of
+            (True, Just warmFile) -> ["--fork", warmFile]
+            (True, Nothing) -> []
+            (False, _) -> ["-c"]
+    (hin, hout, mErr, ph) <- startRunnerProcess cfg session_ (turnLogPath turn) sessionFlag outputMarker mWarmFile reviewedSteps
     input <- newRunnerInput hin
     let cleanup = do
             atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
@@ -527,13 +543,84 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
                 writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
                 atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
                 takeWaitingSteers (sessionId session_) input
-            outReader <- async $ streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
-            errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) (T.pack outputMarker) "stderr" (const $ return ())) mErr
+            outReader <- async $ streamHandle cfg (turnLogPath turn) outputMarker "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
+            errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) outputMarker "stderr" (const $ return ())) mErr
             exitCode <- watchTurnBudget cfg turn input ph (agentTimeoutSeconds cfg * 1000000)
             modelFailed <- wait outReader
             _ <- wait errReader
             return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
     run `finally` cleanup
+
+compactAgentSession :: Text -> ExceptT String IO AgentSessionView
+compactAgentSession sid = do
+    session_ <- requireEditableSession sid
+    compacting <- liftIO $ sessionCompacting sid
+    when compacting $ Except.throwError "compaction_active"
+    hasRunner <- sessionHasActiveRunner session_
+    when hasRunner $ Except.throwError "runner_active"
+    acquired <- ExceptT $ withUserRepoExclusiveIO $ do
+        compactingNow <- liftIO $ sessionCompacting sid
+        when compactingNow $ Except.throwError "compaction_active"
+        hasRunnerNow <- sessionHasActiveRunner session_
+        when hasRunnerNow $ Except.throwError "runner_active"
+        liftIO $ acquireSessionCompaction sid
+    unless acquired $ Except.throwError "compaction_active"
+    ExceptT $ Except.runExceptT (compactSessionWithLease session_) `finally` releaseSessionCompaction sid
+    loadAgentSessionView sid
+  where
+    compactSessionWithLease :: AgentSession -> ExceptT String IO ()
+    compactSessionWithLease session_ = do
+        turns_ <- liftIO $ listTurns (sessionId session_)
+        logPath <- case reverse (sortOn turnStartedAt turns_) of
+            turn : _ -> return (turnLogPath turn)
+            [] -> Except.throwError "nothing_to_compact"
+        cfg <- liftIO $ resolveConfigPath >>= loadConfig
+        liftIO $ runCompactionProcess (configAgent cfg) session_ logPath
+
+runCompactionProcess :: AgentConfig -> AgentSession -> FilePath -> IO ()
+runCompactionProcess cfg session_ logPath = do
+    let outputMarker = "__POINTY_AGENT_COMPACT_BEGIN__" <> sessionId session_ <> "__"
+    ended <- newTVarIO False
+    (hin, hout, mErr, ph) <- startRunnerProcess cfg session_ logPath ["-c"] outputMarker Nothing []
+    input <- newRunnerInput hin
+    let cleanup = closeRunnerInput input
+        run = do
+            outReader <- async $ streamHandle cfg logPath outputMarker "stdout" (noteCompactionEvent input ended) hout
+            errReader <- maybe (async (return False)) (async . streamHandle cfg logPath outputMarker "stderr" (const $ return ())) mErr
+            writeRpc hin compactCommand
+            result <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
+            closeRunnerInput input
+            case result of
+                Nothing -> do
+                    void (try (terminateProcess ph) :: IO (Either SomeException ()))
+                    void (try (waitForProcess ph) :: IO (Either SomeException ExitCode))
+                Just _ -> return ()
+            _ <- wait outReader
+            _ <- wait errReader
+            completed <- atomically $ readTVar ended
+            case result of
+                Nothing -> noteCompactionFailure "Compaction timed out."
+                Just _ | completed -> return ()
+                Just exitCode -> noteCompactionFailure ("Compaction failed with exit code " <> T.pack (show (exitCodeNumber exitCode)) <> ".")
+    run `finally` cleanup
+  where
+    noteCompactionEvent input ended event = do
+        handleRpcEventSafely cfg logPath input event
+        case event ^? key "type" . _String of
+            Just "compaction_end" -> atomically $ writeTVar ended True
+            Just "response"
+                | event ^? key "command" . _String == Just "compact" -> closeRunnerInput input
+            _ -> return ()
+    noteCompactionFailure :: Text -> IO ()
+    noteCompactionFailure message =
+        appendLogLine cfg logPath "context" (jsonLine (Aeson.object ["state" Aeson..= ("failed" :: Text), "message" Aeson..= message]))
+
+compactCommand :: Aeson.Value
+compactCommand = Aeson.object ["type" Aeson..= ("compact" :: Text)]
+
+exitCodeNumber :: ExitCode -> Int
+exitCodeNumber ExitSuccess = 0
+exitCodeNumber (ExitFailure code) = code
 
 watchTurnBudget :: AgentConfig -> AgentTurn -> MVar (Maybe RunnerInput) -> ProcessHandle -> Int -> IO ExitCode
 watchTurnBudget cfg turn input ph budgetMicros =
@@ -830,7 +917,7 @@ handleRpcEventSafely cfg logPath input event =
 streamHandle :: AgentConfig -> FilePath -> Text -> Text -> (Aeson.Value -> IO ()) -> Handle -> IO Bool
 streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do
     hSetBuffering handle LineBuffering
-    let loop outputReady failed warned = do
+    let loop outputReady failed = do
             eof <- hIsEOF handle
             if eof
                 then return failed
@@ -839,18 +926,16 @@ streamHandle cfg logPath outputMarker visibleLabel onEvent handle = do
                     case lineResult of
                         Left _ -> return failed
                         Right textLine
-                            | textLine == outputMarker -> loop True failed warned
+                            | textLine == outputMarker -> loop True failed
                             | otherwise -> do
                                 let event = if outputReady && visibleLabel == "stdout" then Aeson.decodeStrict (TE.encodeUtf8 textLine) else Nothing
                                     (lines_, failure) = maybe (Just [textLine], Nothing) piEventLines event
-                                    usage = contextUsage =<< event
-                                    high = maybe warned contextHalfFull usage
                                     label = if outputReady && isJust lines_ then visibleLabel else "runner"
-                                unless (isJust usage && high && warned) $
-                                    mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
+                                forM_ (event >>= contextLogLine) $ appendLogLine cfg logPath "context" . jsonLine
+                                mapM_ (appendLogLine cfg logPath label) (fromMaybe [textLine] lines_)
                                 mapM_ onEvent event
-                                loop outputReady (fromMaybe failed failure) high
-    loop False False False
+                                loop outputReady (fromMaybe failed failure)
+    loop False False
 
 contextUsage :: Aeson.Value -> Maybe (Integer, Integer)
 contextUsage event = do
@@ -861,8 +946,29 @@ contextUsage event = do
   where
     usage name = event ^? key "data" . key "contextUsage" . key name . _Integer
 
-contextHalfFull :: (Integer, Integer) -> Bool
-contextHalfFull (tokens, capacity) = tokens * 2 >= capacity
+contextLogLine :: Aeson.Value -> Maybe Aeson.Value
+contextLogLine event =
+    case event ^? key "type" . _String of
+        Just "compaction_start" ->
+            Just (Aeson.object ["state" Aeson..= ("compacting" :: Text)])
+        Just "compaction_end"
+            | flag "aborted" == Just True ->
+                Just (contextFailure "Compaction was stopped.")
+            | not (T.null (text "errorMessage")) ->
+                Just (contextFailure (text "errorMessage"))
+            | otherwise ->
+                Just (Aeson.object ["state" Aeson..= ("compacted" :: Text)])
+        Just "response"
+            | event ^? key "command" . _String == Just "get_session_stats"
+            , Just (tokens, capacity) <- contextUsage event ->
+                Just (Aeson.object ["tokens" Aeson..= tokens, "capacity" Aeson..= capacity])
+        _ -> Nothing
+  where
+    text name = event ^. key name . _String
+    flag name = event ^? key name . _Bool
+    contextFailure :: Text -> Aeson.Value
+    contextFailure message =
+        Aeson.object ["state" Aeson..= ("failed" :: Text), "message" Aeson..= message]
 
 piEventLines :: Aeson.Value -> (Maybe [Text], Maybe Bool)
 piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . _String)
@@ -881,12 +987,10 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
                     lines_ = if T.null prose then [] else "" : T.splitOn "\n" prose ++ [""]
                  in (Just (lines_ ++ ["**Response error:**" <> code (messageText "errorMessage") | failed]), Just failed)
             | otherwise -> visible []
-        "compaction_start" -> visible ["*Summarising the conversation so far*"]
+        "compaction_start" -> visible []
         "compaction_end"
             | not (T.null (text "errorMessage")) ->
-                ( Just ["**Context summary failed:**" <> code (text "errorMessage")]
-                , if flag "willRetry" == Just True then Nothing else Just True
-                )
+                (Just [], if flag "willRetry" == Just True then Nothing else Just True)
             | otherwise -> visible []
         "auto_retry_start" -> visible ["*Retrying (" <> number "attempt" <> "/" <> number "maxAttempts" <> ")*"]
         "auto_retry_end"
@@ -894,10 +998,6 @@ piEventLines event = maybe (Nothing, Nothing) eventLines (event ^? key "type" . 
                 (Just ["**Retry stopped:**" <> code (text "finalError")], Just True)
             | otherwise -> visible []
         "response"
-            | text "command" == "get_session_stats"
-            , Just usage@(tokens, capacity) <- contextUsage event
-            , contextHalfFull usage ->
-                visible ["**Context warning:** This chat is using " <> T.pack (show (tokens * 100 `div` capacity)) <> "% of the model's context (" <> T.pack (show tokens) <> " / " <> T.pack (show capacity) <> " tokens)."]
             | text "command" == "prompt"
             , flag "success" == Just False
             , text "id" == "initial" ->

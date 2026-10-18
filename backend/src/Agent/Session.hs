@@ -12,6 +12,9 @@ module Agent.Session (
     latestUnfinishedTurn,
     inferTurnExitCode,
     turnLogHasFinalizationFailure,
+    sessionCompacting,
+    acquireSessionCompaction,
+    releaseSessionCompaction,
     agentSessionsRoot,
     sessionDir,
     sessionMetadataPath,
@@ -37,6 +40,7 @@ module Agent.Session (
 
 import Agent.TurnSignal (signalTurnLog)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
+import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar)
 import Control.Monad (filterM)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
@@ -45,6 +49,7 @@ import Data.Char (isAlphaNum, isAscii)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, listToMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -60,6 +65,28 @@ import System.Posix.Process (getProcessID)
 {-# NOINLINE turnIndex #-}
 turnIndex :: MVar (Map FilePath (Map Text AgentTurn))
 turnIndex = unsafePerformIO (newMVar Map.empty)
+
+{-# NOINLINE compactingSessions #-}
+compactingSessions :: TVar (Set.Set Text)
+compactingSessions = unsafePerformIO (newTVarIO Set.empty)
+
+sessionCompacting :: Text -> IO Bool
+sessionCompacting sid =
+    atomically $ Set.member sid <$> readTVar compactingSessions
+
+acquireSessionCompaction :: Text -> IO Bool
+acquireSessionCompaction sid =
+    atomically $ do
+        active <- readTVar compactingSessions
+        if Set.member sid active
+            then return False
+            else do
+                modifyTVar' compactingSessions (Set.insert sid)
+                return True
+
+releaseSessionCompaction :: Text -> IO ()
+releaseSessionCompaction sid =
+    atomically $ modifyTVar' compactingSessions (Set.delete sid)
 
 data PreparedApply = PreparedApply
     { targetHead :: Text

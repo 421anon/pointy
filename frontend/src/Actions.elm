@@ -3840,6 +3840,17 @@ discardAgentChanges sessionId =
         )
 
 
+compactAgentSession : String -> Flow Model ()
+compactAgentSession sessionId =
+    withAgentSessionRequest sessionId
+        (Model.CompactingAgentSession sessionId)
+        (AgentApi.compact sessionId
+            |> FlowError.foldResult
+                (applyAgentSessionView >> Flow.over agent)
+                (Http.errorMessage >> addToast False >> Flow.seq (refreshAgentSession sessionId))
+        )
+
+
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
     submitAgentPromptFrom readAgentPrompt

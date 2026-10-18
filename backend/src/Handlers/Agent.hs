@@ -15,6 +15,7 @@ module Handlers.Agent (
     stopTurnHandler,
     steerTurnHandler,
     turnLogStreamHandler,
+    compactSessionHandler,
     applyChangesHandler,
     autoApplyHandler,
     discardSessionHandler,
@@ -36,7 +37,7 @@ import Agent.Git (
     purgeAgentSession,
     renameAgentSession,
  )
-import Agent.Runner (applySessionChanges, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
+import Agent.Runner (applySessionChanges, compactAgentSession, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
 import Agent.Session (AgentSessionSummary, AgentTurn)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -138,6 +139,10 @@ steerTurnHandler :: TurnRequest -> Handler NoContent
 steerTurnHandler req =
     NoContent <$ runAgentAction (steerAgentTurn (turnRequestSessionId req) (turnRequestPrompt req))
 
+compactSessionHandler :: SessionRequest -> Handler AgentSessionView
+compactSessionHandler req =
+    runAgentAction (compactAgentSession (sessionRequestSessionId req))
+
 applyChangesHandler :: ApplyRequest -> Handler AgentSessionView
 applyChangesHandler req = do
     let sid = applyRequestSessionId req
@@ -195,6 +200,8 @@ throwAgentError err =
         , "runner_not_active"
         , "runner_stopping"
         , "steering_failed"
+        , "compaction_active"
+        , "nothing_to_compact"
         ]
 
 archiveSessionHandler :: SessionRequest -> Handler AgentSessionView

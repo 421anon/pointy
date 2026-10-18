@@ -490,6 +490,36 @@
   background: var(--bg-elevated);
 }
 
+.agent-panel__context {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  border-bottom: 1px solid var(--line-color);
+  background: var(--state-warning-outline);
+  padding: var(--spacing-2xs) var(--spacing-sm);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+
+  &--compacting {
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+
+  &--failed {
+    background: var(--state-danger-outline);
+  }
+}
+
+.agent-panel__context-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-panel__context .small-btn {
+  flex: 0 0 auto;
+}
+
 .agent-panel__session-title-row {
   display: flex;
   align-items: center;
