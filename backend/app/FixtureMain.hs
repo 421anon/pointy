@@ -54,20 +54,20 @@ run options = do
         home = workDir </> "home"
         origin = workDir </> "origin.git"
         configPath = workDir </> "config.toml"
-        keyfile = workDir </> "key"
-    createDirectoryIfMissing True home
+        sshDir = home </> ".ssh"
+    createDirectoryIfMissing True sshDir
     setEnv "HOME" home
     setEnv "XDG_CACHE_HOME" (workDir </> "cache")
     setEnv "GIT_CONFIG_GLOBAL" (workDir </> "gitconfig")
     writeFile (workDir </> "gitconfig") "[safe]\n\tdirectory = *\n"
-    writeFile keyfile ""
+    writeFile (sshDir </> "id_ed25519_deploy") ""
     document <- either (\err -> error ("fixture document: " ++ err)) pure =<< loadDocument (optionState options)
     removePath origin
     removePath (home </> "user-repo.git")
     removePath (home </> "user-repo.lock")
     removePath (home </> ".local" </> "state" </> "pointy")
     cloneRepo (optionRepoSource options) origin
-    writeConfig configPath origin keyfile (documentBranch document)
+    writeConfig configPath origin (documentBranch document)
     setEnv "POINTY_CONFIG_PATH" configPath
     config <- loadConfig configPath
     setCurrentDirectory workDir
@@ -80,6 +80,7 @@ run options = do
             cloneRepo (optionRepoSource options) origin
             removePath (home </> "user-repo.git")
             removePath (home </> "user-repo.lock")
+            writeConfig configPath origin (documentBranch document)
             ensureUserRepo config
     putStrLn ("Fixture server on port " ++ show (optionPort options))
     runServer
@@ -88,13 +89,12 @@ run options = do
         (optionPort options)
         (putStrLn "Fixture server listening.")
 
-writeConfig :: FilePath -> FilePath -> FilePath -> T.Text -> IO ()
-writeConfig configPath origin keyfile branch =
+writeConfig :: FilePath -> FilePath -> T.Text -> IO ()
+writeConfig configPath origin branch =
     TIO.writeFile configPath $
         T.unlines $
             [ "[user-repo]"
             , "url = \"file://" <> T.pack origin <> "\""
-            , "keyfile = \"" <> T.pack keyfile <> "\""
             , "branch = \"" <> branch <> "\""
             , "[[providers]]"
             , "name = \"fixture\""

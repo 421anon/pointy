@@ -9,7 +9,7 @@ module Agent.WarmSession (
 
 import Agent.Model (chatModelArgs, prepareChatModel)
 import Agent.Policy (renderEmbeddedBootstrapPrompt)
-import Agent.Sandbox (SandboxPaths (..), agentMemoryMax, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerEnvironment, sandboxProcess)
+import Agent.Sandbox (agentMemoryMax, bindPath, bindPathReadOnly, nixDaemonBindArgs, piAgentConfigDir, runnerCommand, runnerEnvironment, sandboxProcess)
 import Agent.Session (agentSessionsRoot)
 import Config (AgentConfig (..), ChatModelConfig, chatQualifier)
 import Control.Concurrent.Async (async, wait)
@@ -101,8 +101,8 @@ getOrBuildWarmSession cfg baseCommit onProcessStarted = do
                         valid <- isValidSessionFile (warmSessionFile meta)
                         if valid
                             then return $ Just $ Right meta
-                            else Just <$> buildWarmSession cfg baseCommit bootstrapPrompt chat onProcessStarted
-                _ -> Just <$> buildWarmSession cfg baseCommit bootstrapPrompt chat onProcessStarted
+                            else Just <$> buildWarmSession baseCommit bootstrapPrompt chat onProcessStarted
+                _ -> Just <$> buildWarmSession baseCommit bootstrapPrompt chat onProcessStarted
 
 isValidSessionFile :: FilePath -> IO Bool
 isValidSessionFile path = do
@@ -111,8 +111,8 @@ isValidSessionFile path = do
         then return False
         else (> 0) <$> getFileSize path
 
-buildWarmSession :: AgentConfig -> Text -> Text -> Maybe ChatModelConfig -> (ProcessHandle -> IO ()) -> IO (Either String WarmSessionMeta)
-buildWarmSession cfg baseCommit bootstrapPrompt chat onProcessStarted = do
+buildWarmSession :: Text -> Text -> Maybe ChatModelConfig -> (ProcessHandle -> IO ()) -> IO (Either String WarmSessionMeta)
+buildWarmSession baseCommit bootstrapPrompt chat onProcessStarted = do
     repoPath <- userRepoPath
     templateDir <- warmTemplateDir
     let worktreeDir = templateDir </> "worktree"
@@ -129,7 +129,7 @@ buildWarmSession cfg baseCommit bootstrapPrompt chat onProcessStarted = do
             case worktreeResult of
                 Left err -> return $ Left err
                 Right () -> do
-                    exitCode <- runBootstrapProcess cfg chat bootstrapPrompt worktreeDir home piSessionDir onProcessStarted
+                    exitCode <- runBootstrapProcess chat bootstrapPrompt worktreeDir home piSessionDir onProcessStarted
                     case exitCode of
                         ExitFailure code ->
                             return $ Left $ "Bootstrap runner exited with code " ++ show code
@@ -161,8 +161,8 @@ createBootstrapWorktree repoPath worktreeDir baseCommit = do
         ExitFailure code ->
             Left $ "git worktree add failed (" ++ show code ++ "): " ++ stderr
 
-runBootstrapProcess :: AgentConfig -> Maybe ChatModelConfig -> Text -> FilePath -> FilePath -> FilePath -> (ProcessHandle -> IO ()) -> IO ExitCode
-runBootstrapProcess cfg chat bootstrapPrompt worktreeDir home piSessionDir onProcessStarted = do
+runBootstrapProcess :: Maybe ChatModelConfig -> Text -> FilePath -> FilePath -> FilePath -> (ProcessHandle -> IO ()) -> IO ExitCode
+runBootstrapProcess chat bootstrapPrompt worktreeDir home piSessionDir onProcessStarted = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
     piConfigDir <- piAgentConfigDir
@@ -172,18 +172,15 @@ runBootstrapProcess cfg chat bootstrapPrompt worktreeDir home piSessionDir onPro
             , ("PI_CODING_AGENT_DIR", piConfigDir)
             , ("PI_CODING_AGENT_SESSION_DIR", piSessionDir)
             ]
-    let expand =
-            expandSandboxArg
-                SandboxPaths{sandboxWorktree = worktreeDir, sandboxHome = home, sandboxSessionId = ""}
-        runnerArgs = [agentRunnerCommand cfg] ++ chatModelArgs chat ++ ["--tools", "read,grep,find,ls", "-p", T.unpack bootstrapPrompt]
+    let runnerArgs = [runnerCommand] ++ chatModelArgs chat ++ ["--tools", "read,grep,find,ls", "-p", T.unpack bootstrapPrompt]
         args =
-            map expand (agentSboxArgs cfg)
+            bindPath home
                 ++ bindPathReadOnly piConfigDir
                 ++ bindPathReadOnly repoPath
                 ++ nixBind
                 ++ ["--"]
                 ++ runnerArgs
-    sandbox <- sandboxProcess cfg args
+    sandbox <- sandboxProcess args
     let process =
             sandbox
                 { cwd = Just worktreeDir

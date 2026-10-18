@@ -23,7 +23,7 @@ module Agent.Runner (
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
 import Agent.Model (chatModelArgs, prepareChatModel)
 import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
-import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
+import Agent.Sandbox (bindPath, bindPathReadOnly, nixDaemonBindArgs, piAgentConfigDir, runnerCommand, runnerEnvironment, sandboxCommand, sandboxProcess, sessionHome)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
@@ -471,9 +471,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
     chat <- prepareChatModel
     let conflictWorktrees = [candidateWorktree pending | Just pending <- [preparedApply session_], applyConflictsPending pending]
     readOnlySteps <- filterM doesPathExist [root </> path | root <- worktreePath session_ : conflictWorktrees, stepId <- reviewedSteps, path <- ["steps" </> show stepId ++ ".nix", "srcFiles" </> show stepId]]
-    let paths = sessionPaths session_
-        runnerHome = sandboxHome paths
-        expand = expandSandboxArg paths
+    let runnerHome = sessionHome session_
         outputMarker =
             "__POINTY_AGENT_OUTPUT_BEGIN__" <> T.unpack (turnId turn) <> "__"
         sessionFlag = case (isFirstTurn, mWarmFile) of
@@ -481,12 +479,12 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
             (True, Nothing) -> []
             (False, _) -> ["-c"]
         runnerArgs =
-            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ chatModelArgs chat ++ runnerConfigArgs expand (agentRunnerArgs cfg)
+            runnerCommand : ["--mode", "rpc"] ++ sessionFlag ++ chatModelArgs chat
         wrapperScript =
             "set -e; cd \"$POINTY_AGENT_WORKTREE\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
         warmBindArgs = maybe [] bindPathReadOnly mWarmFile
         args =
-            map expand (agentSboxArgs cfg)
+            bindPath runnerHome
                 ++ bindPath (worktreePath session_)
                 ++ warmBindArgs
                 ++ bindPathReadOnly repoPath
@@ -502,7 +500,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
             , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
             , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
             ]
-    sandbox <- sandboxProcess cfg args
+    sandbox <- sandboxProcess args
     let process =
             sandbox
                 { cwd = Just runnerHome
@@ -514,7 +512,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewed
     createDirectoryIfMissing True runnerHome
     seedPiConfig runnerHome
     seedNixFetcherCache runnerHome
-    appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
+    appendLogLine cfg (turnLogPath turn) "system" ("Running: " <> T.pack sandboxCommand <> " " <> T.pack (unwords args))
     (Just hin, Just hout, mErr, ph) <- createProcess process
     input <- newRunnerInput hin
     let cleanup = do

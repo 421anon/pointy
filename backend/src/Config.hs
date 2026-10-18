@@ -34,7 +34,7 @@ module Config (
     resolveConfigPath,
 ) where
 
-import Autodocodec (HasCodec (..), JSONCodec, ObjectCodec, boolCodec, dimapCodec, listCodec, object, optionalFieldWith, optionalFieldWith', optionalFieldWithOmittedDefaultWith, parseJSONVia, requiredFieldWith, scientificCodec, stringCodec, stringConstCodec, textCodec, toJSONVia, (.=))
+import Autodocodec (HasCodec (..), JSONCodec, ObjectCodec, boolCodec, dimapCodec, listCodec, object, optionalFieldWith, optionalFieldWith', optionalFieldWithOmittedDefaultWith, parseJSONVia, requiredFieldWith, scientificCodec, stringConstCodec, textCodec, toJSONVia, (.=))
 import ConfigSchema (ConfigField, codecFields, decodeToml, multilineTextCodec, providerNameCodec, renderToml)
 import Control.Monad (forM_, when)
 import Data.Aeson (Value (..))
@@ -55,7 +55,6 @@ import System.Environment (lookupEnv)
 
 data UserRepoConfig = UserRepoConfig
     { userRepoUrl :: Text
-    , userRepoKeyfile :: FilePath
     , userRepoBranch :: Text
     }
     deriving (Show)
@@ -70,11 +69,7 @@ data SlurmConfig = SlurmConfig
     deriving (Show, Eq)
 
 data AgentConfig = AgentConfig
-    { agentSboxCommand :: FilePath
-    , agentSboxArgs :: [Text]
-    , agentRunnerCommand :: FilePath
-    , agentRunnerArgs :: [Text]
-    , agentTimeoutSeconds :: Int
+    { agentTimeoutSeconds :: Int
     , agentOutputLimitBytes :: Int
     , agentSessionRetentionDays :: Int
     , agentBootstrapPrompt :: Text
@@ -249,7 +244,6 @@ userRepoCodec =
     object "UserRepo" $
         UserRepoConfig
             <$> requiredFieldWith "url" textCodec "SSH clone URL of the repository holding templates and data." .= userRepoUrl
-            <*> requiredFieldWith "keyfile" stringCodec "Private deploy key the backend reaches the repository with. Generated on startup when missing." .= userRepoKeyfile
             <*> requiredFieldWith "branch" textCodec "Branch the instance works on." .= userRepoBranch
 
 defaultSlurmConfig :: SlurmConfig
@@ -271,11 +265,7 @@ agentCodec :: JSONCodec AgentConfig
 agentCodec =
     object "Agent" $
         AgentConfig
-            <$> defaulted "sbox-command" stringCodec agentSboxCommand "Sandbox command each agent turn runs in, started from {home}."
-            <*> defaulted "sbox-args" textListCodec agentSboxArgs "Arguments to sbox-command. {worktree} expands to the session worktree, {home} to the session's home directory, {sessionRoot} to the worktree's parent and {sessionId} to the session id."
-            <*> defaulted "runner-command" stringCodec agentRunnerCommand "Agent runner started inside the sandbox."
-            <*> defaulted "runner-args" textListCodec agentRunnerArgs "Extra arguments to runner-command. The chat model is passed separately."
-            <*> defaulted "timeout-seconds" intCodec agentTimeoutSeconds "Longest an agent turn may run, in seconds."
+            <$> defaulted "timeout-seconds" intCodec agentTimeoutSeconds "Longest an agent turn may run, in seconds."
             <*> defaulted "output-limit-bytes" intCodec agentOutputLimitBytes "Most output kept from an agent turn, in bytes."
             <*> defaulted "session-retention-days" intCodec agentSessionRetentionDays "Days agent sessions are kept."
             <*> defaulted "bootstrap-prompt" multilineTextCodec agentBootstrapPrompt "Prompt run once against a fresh checkout so new chats start with project context. Empty disables it."
@@ -441,11 +431,7 @@ decodeConfigJson = first (T.unpack . readable . T.pack) . parseEither (parseJSON
 defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
     AgentConfig
-        { agentSboxCommand = "sbox"
-        , agentSboxArgs = ["--bind", "{home}", "{home}"]
-        , agentRunnerCommand = "pi"
-        , agentRunnerArgs = []
-        , agentTimeoutSeconds = 1800
+        { agentTimeoutSeconds = 1800
         , agentOutputLimitBytes = 1048576
         , agentSessionRetentionDays = 7
         , agentBootstrapPrompt = "Read AGENTS.md and skill://pointy-router. Do not modify any files. Reply READY when you understand the keyword skill map for non-technical user requests."

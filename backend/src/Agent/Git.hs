@@ -80,7 +80,7 @@ import Interpreters.Production (runProduction)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
-import UserRepo (ReadRepoContext (..), fetchRepoStrict, runGitIn, runGitWithSshKey, userRepoPath)
+import UserRepo (ReadRepoContext (..), fetchRepoStrict, runGitIn, runGitWithDeployKey, userRepoPath)
 
 data AgentGitState = AgentGitState
     { headCommit :: Text
@@ -482,9 +482,8 @@ pushCandidate repoPath session_ origin dropped candidate = do
     case verdict of
         Left failures -> rejectCandidate repoPath session_ candidate failures
         Right () -> do
-            cfg <- liftIO $ resolveConfigPath >>= loadConfig
             changesetDiff <- runGitChecked repoPath ["diff", changesetRange]
-            pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile (configUserRepo cfg)) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
+            pushResult <- liftIO $ runGitWithDeployKey (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
             case pushResult of
                 (ExitFailure code, stdout, stderr) ->
                     throwError $ "git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr

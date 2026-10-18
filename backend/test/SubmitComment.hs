@@ -21,7 +21,7 @@ import System.IO.Temp (withSystemTempDirectory)
 main :: IO ()
 main = withSystemTempDirectory "submit-comment" $ \dir -> do
     let configPath = dir </> "config.toml"
-    writeFile configPath "[user-repo]\nurl = \"git@example.invalid:repo\"\nkeyfile = \"/dev/null\"\nbranch = \"main\"\n"
+    writeFile configPath "[user-repo]\nurl = \"git@example.invalid:repo\"\nbranch = \"main\"\n"
     setEnv "POINTY_CONFIG_PATH" configPath
     requests <- newIORef []
     void $ recording requests $ submitJob requirements key [] (encodeJobComment comment) ["true"]

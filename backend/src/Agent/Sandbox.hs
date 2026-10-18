@@ -1,22 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Agent.Sandbox (
-    SandboxPaths (..),
-    sessionPaths,
-    expandSandboxArg,
+    sessionHome,
     bindPath,
     bindPathReadOnly,
     nixDaemonBindArgs,
     piAgentConfigDir,
+    runnerCommand,
     runnerEnvironment,
-    runnerConfigArgs,
     agentMemoryMax,
     prepareAgentCgroup,
+    sandboxCommand,
     sandboxProcess,
 ) where
 
 import Agent.Session (AgentSession (..))
-import Config (AgentConfig (..), ChatModelConfig (..), Config (..), ProviderConfig (..), loadConfig, resolveConfigPath)
+import Config (ChatModelConfig (..), Config (..), ProviderConfig (..), loadConfig, resolveConfigPath)
 import Data.List (stripPrefix)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -65,29 +64,14 @@ bindPathReadOnly path = ["--ro-bind", path, path]
 piAgentConfigDir :: IO FilePath
 piAgentConfigDir = (\home -> home </> ".pi" </> "agent") <$> getHomeDirectory
 
-data SandboxPaths = SandboxPaths
-    { sandboxWorktree :: FilePath
-    , sandboxHome :: FilePath
-    , sandboxSessionId :: Text
-    }
+sessionHome :: AgentSession -> FilePath
+sessionHome session_ = takeDirectory (worktreePath session_) </> "home"
 
-sessionPaths :: AgentSession -> SandboxPaths
-sessionPaths session_ =
-    SandboxPaths
-        { sandboxWorktree = worktreePath session_
-        , sandboxHome = takeDirectory (worktreePath session_) </> "home"
-        , sandboxSessionId = sessionId session_
-        }
+sandboxCommand :: FilePath
+sandboxCommand = "sbox"
 
-expandSandboxArg :: SandboxPaths -> Text -> String
-expandSandboxArg paths = T.unpack . flip (foldr (uncurry T.replace)) placeholders
-  where
-    placeholders =
-        [ ("{worktree}", T.pack (sandboxWorktree paths))
-        , ("{home}", T.pack (sandboxHome paths))
-        , ("{sessionRoot}", T.pack (takeDirectory (sandboxWorktree paths)))
-        , ("{sessionId}", sandboxSessionId paths)
-        ]
+runnerCommand :: String
+runnerCommand = "pi"
 
 runnerEnvironment :: [(String, String)] -> IO [(String, String)]
 runnerEnvironment ownVars = do
@@ -123,17 +107,6 @@ chatApiKeyEnv = do
             Nothing -> pure Nothing
             Just provider -> pure (Just (T.unpack (providerApiKeyEnv provider)))
 
-runnerConfigArgs :: (Text -> String) -> [Text] -> [String]
-runnerConfigArgs expand = strip
-  where
-    strip [] = []
-    strip (arg : rest)
-        | arg `elem` managedWithValue = strip (drop 1 rest)
-        | arg `elem` managedFlags = strip rest
-        | otherwise = expand arg : strip rest
-    managedWithValue = ["--mode", "--session", "--fork", "--model", "--thinking", "--provider"]
-    managedFlags = ["-c", "--continue", "--no-session", "-p", "--print", "{prompt}"]
-
 agentMemoryMax :: IO (Maybe Text)
 agentMemoryMax = fmap T.pack <$> lookupEnv "POINTY_AGENT_MEMORY_MAX"
 
@@ -153,11 +126,11 @@ prepareAgentCgroup = agentMemoryMax >>= mapM_ limitAgents
         createDirectoryIfMissing False cgroup
         writeFile (cgroup </> "memory.max") (T.unpack memoryMax)
 
-sandboxProcess :: AgentConfig -> [String] -> IO CreateProcess
-sandboxProcess cfg args = do
+sandboxProcess :: [String] -> IO CreateProcess
+sandboxProcess args = do
     memoryMax <- agentMemoryMax
     case memoryMax of
-        Nothing -> return (proc (agentSboxCommand cfg) args)
+        Nothing -> return (proc sandboxCommand args)
         Just _ -> do
             cgroup <- agentCgroup
-            return (proc "bash" (["-c", "echo $$ > \"$0/cgroup.procs\" && exec \"$@\"", cgroup, agentSboxCommand cfg] ++ args))
+            return (proc "bash" (["-c", "echo $$ > \"$0/cgroup.procs\" && exec \"$@\"", cgroup, sandboxCommand] ++ args))

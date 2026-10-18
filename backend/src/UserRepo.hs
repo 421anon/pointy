@@ -16,7 +16,7 @@ module UserRepo (
     runNixEvalImpureJsonExpr,
     runGit,
     runGitIn,
-    runGitWithSshKey,
+    runGitWithDeployKey,
     ReadRepoContext (..),
     WriteRepoContext (..),
     RepoContext,
@@ -105,6 +105,11 @@ userRepoPath = do
     homeDir <- getHomeDirectory
     return $ homeDir </> "user-repo.git"
 
+deployKeyPath :: IO FilePath
+deployKeyPath = do
+    homeDir <- getHomeDirectory
+    return $ homeDir </> ".ssh" </> "id_ed25519_deploy"
+
 userRepoLockPath :: IO FilePath
 userRepoLockPath = do
     homeDir <- getHomeDirectory
@@ -151,8 +156,9 @@ runGit args = do
 runGitIn :: FilePath -> [String] -> IO (ExitCode, String, String)
 runGitIn path args = readCreateProcessWithExitCode (proc "git" ("-C" : path : args)) ""
 
-runGitWithSshKey :: FilePath -> FilePath -> [String] -> IO (ExitCode, String, String)
-runGitWithSshKey keyfile path args = do
+runGitWithDeployKey :: FilePath -> [String] -> IO (ExitCode, String, String)
+runGitWithDeployKey path args = do
+    keyfile <- deployKeyPath
     controlPath <- sshControlPath
     let sshOptions =
             [ "IdentitiesOnly=yes"
@@ -199,7 +205,7 @@ ensureUserRepo cfg = do
 syncUserRepo :: Config -> IO (Either String ())
 syncUserRepo cfg = runExceptT $ do
     let userRepo = configUserRepo cfg
-    ExceptT $ ensureDeployKey (userRepoKeyfile userRepo)
+    ExceptT ensureDeployKey
     repoPath <- liftIO userRepoPath
     exists <- liftIO $ doesDirectoryExist repoPath
     mUrl <- liftIO $ if exists then getRemoteUrl else pure Nothing
@@ -211,8 +217,9 @@ syncUserRepo cfg = runExceptT $ do
             when exists $ liftIO $ moveAside repoPath
             ExceptT $ cloneRepoFresh userRepo
 
-ensureDeployKey :: FilePath -> IO (Either String ())
-ensureDeployKey keyfile = do
+ensureDeployKey :: IO (Either String ())
+ensureDeployKey = do
+    keyfile <- deployKeyPath
     exists <- doesFileExist keyfile
     if exists
         then pure (Right ())
@@ -224,16 +231,17 @@ ensureDeployKey keyfile = do
                 ExitSuccess -> Right ()
                 ExitFailure code -> Left $ "ssh-keygen failed (exit " ++ show code ++ "): " ++ stderr
 
-deployPublicKey :: FilePath -> IO (Maybe Text)
-deployPublicKey keyfile = do
+deployPublicKey :: IO (Maybe Text)
+deployPublicKey = do
+    keyfile <- deployKeyPath
     (exitCode, stdout, _) <- readCreateProcessWithExitCode (proc "ssh-keygen" ["-y", "-P", "", "-f", keyfile]) ""
     pure $ case exitCode of
         ExitSuccess -> Just (T.strip (T.pack stdout))
         ExitFailure _ -> Nothing
 
-checkRepoAccess :: FilePath -> Text -> Text -> IO (Either String ())
-checkRepoAccess keyfile url branch = do
-    (exitCode, _, stderr) <- runGitWithSshKey keyfile "." ["ls-remote", "--exit-code", T.unpack url, "refs/heads/" ++ T.unpack branch]
+checkRepoAccess :: Text -> Text -> IO (Either String ())
+checkRepoAccess url branch = do
+    (exitCode, _, stderr) <- runGitWithDeployKey "." ["ls-remote", "--exit-code", T.unpack url, "refs/heads/" ++ T.unpack branch]
     pure $ case exitCode of
         ExitSuccess -> Right ()
         ExitFailure 2 -> Left $ "Branch " ++ T.unpack branch ++ " does not exist in " ++ T.unpack url ++ "."
@@ -264,8 +272,7 @@ cloneRepoFresh cfg = do
     putStrLn $ "Cloning bare repo " ++ T.unpack (userRepoUrl cfg) ++ " branch " ++ T.unpack (userRepoBranch cfg)
     let action = do
             (exitCode, stdout, stderr) <-
-                runGitWithSshKey
-                    (userRepoKeyfile cfg)
+                runGitWithDeployKey
                     "."
                     ["clone", "--bare", "--branch", T.unpack (userRepoBranch cfg), T.unpack (userRepoUrl cfg), repoPath]
             case exitCode of
@@ -304,18 +311,17 @@ fetchRepo :: ExceptT String IO ()
 fetchRepo = ExceptT $ do
     cfg <- resolveConfigPath >>= loadConfig
     let userRepo = configUserRepo cfg
-        keyfile = userRepoKeyfile userRepo
         branch = T.unpack $ userRepoBranch userRepo
 
     repoPath <- userRepoPath
     let refspec = branch ++ ":" ++ branch
-        fetchFromRemote = runGitWithSshKey keyfile repoPath ["fetch", "origin", refspec]
+        fetchFromRemote = runGitWithDeployKey repoPath ["fetch", "origin", refspec]
         pushUnpushedLocalCommits = do
             putStrLn "Fetch rejected (non-fast-forward): pushing unpushed local commits..."
-            runGitWithSshKey keyfile repoPath ["push", "origin", refspec]
+            runGitWithDeployKey repoPath ["push", "origin", refspec]
         forceFetchFromRemote pushErr = do
             putStrLn $ "Push also failed (" ++ pushErr ++ "), force-fetching from remote..."
-            runGitWithSshKey keyfile repoPath ["fetch", "origin", "+" ++ refspec]
+            runGitWithDeployKey repoPath ["fetch", "origin", "+" ++ refspec]
         retryFetchAfterPush = do
             putStrLn "Push succeeded, retrying fetch..."
             fetchFromRemote
@@ -338,13 +344,12 @@ fetchRepoStrict :: ExceptT String IO ()
 fetchRepoStrict = ExceptT $ do
     cfg <- resolveConfigPath >>= loadConfig
     let userRepo = configUserRepo cfg
-        keyfile = userRepoKeyfile userRepo
         branch = T.unpack $ userRepoBranch userRepo
 
     repoPath <- userRepoPath
     let refspec = "+" ++ branch ++ ":" ++ branch
         action = do
-            (fetchCode, fetchOut, fetchErr) <- runGitWithSshKey keyfile repoPath ["fetch", "origin", refspec]
+            (fetchCode, fetchOut, fetchErr) <- runGitWithDeployKey repoPath ["fetch", "origin", refspec]
             case fetchCode of
                 ExitSuccess -> return $ Right ()
                 ExitFailure code -> return $ Left $ "git fetch failed with exit code " ++ show code ++ formatGitOutput fetchOut fetchErr
@@ -468,21 +473,19 @@ commitRepoChanges (WriteRepoContext worktreePath) message = ExceptT $ liftIO $ d
 pushRepoChanges :: (IOE :> es) => WriteRepoContext -> ExceptT String (Eff es) ()
 pushRepoChanges (WriteRepoContext worktreePath) = ExceptT $ liftIO $ do
     cfg <- resolveConfigPath >>= loadConfig
-    let keyfile = userRepoKeyfile (configUserRepo cfg)
-        branch = T.unpack $ userRepoBranch (configUserRepo cfg)
-    pushWithRetry worktreePath keyfile branch
+    pushWithRetry worktreePath (T.unpack $ userRepoBranch (configUserRepo cfg))
   where
-    pushWithRetry wp kf br = do
-        (exitCode, _, stderr) <- runGitWithSshKey kf wp ["push", "origin", "HEAD:" ++ br]
+    pushWithRetry wp br = do
+        (exitCode, _, stderr) <- runGitWithDeployKey wp ["push", "origin", "HEAD:" ++ br]
         case exitCode of
             ExitSuccess -> return $ Right ()
             ExitFailure _ | isRejectedPush stderr -> do
-                (pullCode, _, pullErr) <- runGitWithSshKey kf wp ["pull", "--rebase", "origin", br]
+                (pullCode, _, pullErr) <- runGitWithDeployKey wp ["pull", "--rebase", "origin", br]
                 case pullCode of
-                    ExitSuccess -> pushWithRetry wp kf br
+                    ExitSuccess -> pushWithRetry wp br
                     ExitFailure _
                         | hasConflict pullErr -> do
-                            _ <- runGitWithSshKey kf wp ["rebase", "--abort"]
+                            _ <- runGitWithDeployKey wp ["rebase", "--abort"]
                             return $ Left "Concurrent modification detected. The remote repository was updated by another process. Please retry your operation."
                         | otherwise -> return $ Left $ "git pull --rebase failed: " ++ pullErr
             ExitFailure code -> return $ Left $ "git push failed with exit code " ++ show code ++ ": " ++ stderr

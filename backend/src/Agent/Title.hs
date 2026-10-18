@@ -4,7 +4,7 @@
 module Agent.Title (generateSessionTitle) where
 
 import Agent.Model (chatModelArgs, prepareChatModel)
-import Agent.Sandbox (bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
+import Agent.Sandbox (bindPath, bindPathReadOnly, nixDaemonBindArgs, piAgentConfigDir, runnerCommand, runnerEnvironment, sandboxProcess, sessionHome)
 import Agent.Session (AgentSession (..))
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
@@ -37,19 +37,16 @@ generateSessionTitle cfg session_ request = do
     nixBind <- nixDaemonBindArgs
     piConfigDir <- piAgentConfigDir
     chat <- prepareChatModel
-    let paths = sessionPaths session_
-        runnerHome = sandboxHome paths
-        expand = expandSandboxArg paths
+    let runnerHome = sessionHome session_
         titlePrompt = agentTitlePrompt cfg <> "\n\nUser request:\n" <> request
         runnerArgs =
-            agentRunnerCommand cfg
+            runnerCommand
                 : ["--no-session", "--no-tools"]
                 ++ chatModelArgs chat
-                ++ runnerConfigArgs expand (agentRunnerArgs cfg)
                 ++ ["--system-prompt", T.unpack titleSystemPrompt]
                 ++ ["-p", T.unpack titlePrompt]
         args =
-            map expand (agentSboxArgs cfg)
+            bindPath runnerHome
                 ++ bindPathReadOnly piConfigDir
                 ++ nixBind
                 ++ ["--"]
@@ -60,7 +57,7 @@ generateSessionTitle cfg session_ request = do
             , ("PI_CODING_AGENT_DIR", piConfigDir)
             ]
     createDirectoryIfMissing True runnerHome
-    sandbox <- sandboxProcess cfg args
+    sandbox <- sandboxProcess args
     let process =
             sandbox
                 { cwd = Just runnerHome
