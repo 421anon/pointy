@@ -31,28 +31,14 @@ window
     }
   });
 
-function fitTextarea(textarea) {
-  textarea.style.height = "auto";
-  textarea.style.height =
-    textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight + "px";
-}
-
 function setupTextarea(textarea) {
-  fitTextarea(textarea);
-  textarea.oninput = () => fitTextarea(textarea);
+  textarea.style.height = "auto";
+  textarea.style.height = textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight + "px";
+  textarea.oninput = () => {
+    textarea.style.height = "auto";
+    textarea.style.height = textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight + "px";
+  };
 }
-
-document.addEventListener(
-  "toggle",
-  (event) => {
-    if (event.target.open) {
-      event.target
-        .querySelectorAll("textarea[data-auto-resize]")
-        .forEach(fitTextarea);
-    }
-  },
-  true,
-);
 
 setTimeout(
   () =>
