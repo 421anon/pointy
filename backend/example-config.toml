@@ -14,7 +14,7 @@ enforcement = "scheduler"
 
 [agent]
 # A turn runs in two sandboxes started through sbox-command. The tool sandbox runs
-# pi-sbox-server from {home}: it binds the session worktree read-write, mounts the files
+# pi-glovebox-server from {home}: it binds the session worktree read-write, mounts the files
 # of reviewed steps read-only, and executes every bash, read, write and edit call of the
 # agent. runner-command runs in a separate sandbox that holds Pi's config and session
 # history and sees an empty directory in place of the worktree; it reaches the tools only

@@ -494,7 +494,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn reviewedSteps = do
                 ++ bindPath socketDir
                 ++ bindPathReadOnly instructionsDir
                 ++ bindPathReadOnly piTmpDir
-                ++ ["--", "pi-sbox-server", socketPath]
+                ++ ["--", "pi-glovebox-server", socketPath]
         runnerArgs =
             agentRunnerCommand cfg
                 : ["--mode", "rpc"]
@@ -528,7 +528,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn reviewedSteps = do
             [ ("HOME", piHome)
             , ("POINTY_AGENT_WORKTREE", worktree)
             , ("POINTY_AGENT_OUTPUT_MARKER", outputMarker)
-            , ("PI_SBOX_SOCKET", socketPath)
+            , ("PI_GLOVEBOX_SOCKET", socketPath)
             , ("TMPDIR", piTmpDir)
             ]
     toolSandbox <- sandboxProcess cfg toolArgs

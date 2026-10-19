@@ -23,7 +23,7 @@ let
     chmod -R u=rwX,go= /home/backend/.pi
     mkdir -p -m u=rwx,go= /home/backend/.pi/agent/extensions
     ln -sfn ${rpivExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
-    ln -sfn ${pointy.packages.pi-sbox}/share/pi-sbox /home/backend/.pi/agent/extensions/pi-sbox
+    ln -sfn ${pointy.packages.pi-glovebox}/share/pi-glovebox /home/backend/.pi/agent/extensions/pi-glovebox
   '';
 
   jobEndedHook = pkgs.writeShellScript "pointy-job-ended" ''
@@ -245,7 +245,7 @@ in
         ++ [
           pointy.packages.sbox
           pointy.packages.pi
-          pointy.packages.pi-sbox
+          pointy.packages.pi-glovebox
           cfg.ingestPackage
         ];
       environment = {

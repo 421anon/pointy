@@ -205,20 +205,20 @@
         "type": "github"
       }
     },
-    "pi-sbox": {
+    "pi-glovebox": {
       "flake": false,
       "locked": {
-        "lastModified": 1792409073,
-        "narHash": "sha256-xkhj/YpXjuedMoV/41O7qpXn/FA6TSEO22TxGo/umBs=",
+        "lastModified": 1792409498,
+        "narHash": "sha256-EA7xEdpI/YnAJvbcGRkRK8B2PXtSJ584UHf5n8ndwFo=",
         "owner": "421anon",
-        "repo": "pi-sbox",
-        "rev": "01c4481430b1b06e893a049fcd500cb235456e16",
+        "repo": "pi-glovebox",
+        "rev": "4ba3dad5ade38950531014e0b6a4333b3bb7bd1f",
         "type": "github"
       },
       "original": {
         "owner": "421anon",
         "ref": "v0.1.0",
-        "repo": "pi-sbox",
+        "repo": "pi-glovebox",
         "type": "github"
       }
     },
@@ -274,7 +274,7 @@
         "llm-agents": "llm-agents",
         "nixos-shell": "nixos-shell",
         "nixpkgs": "nixpkgs_2",
-        "pi-sbox": "pi-sbox",
+        "pi-glovebox": "pi-glovebox",
         "sbox": "sbox"
       }
     },

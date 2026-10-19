@@ -16,14 +16,14 @@
     };
     sbox.url = "github:DavHau/sbox";
     llm-agents.url = "github:numtide/llm-agents.nix";
-    pi-sbox = {
-      url = "github:421anon/pi-sbox/v0.1.0";
+    pi-glovebox = {
+      url = "github:421anon/pi-glovebox/v0.1.0";
       flake = false;
     };
   };
 
   outputs =
-    { self, nixpkgs, flake-utils, dream2nix, nixos-shell, sbox, llm-agents, pi-sbox, ... }:
+    { self, nixpkgs, flake-utils, dream2nix, nixos-shell, sbox, llm-agents, pi-glovebox, ... }:
     let
       pointyBootstrap =
         { lib, pkgs, ... }:
@@ -49,7 +49,7 @@
               frontend = internalOption lib.types.package;
               pi = internalOption lib.types.package;
               sbox = internalOption lib.types.package;
-              pi-sbox = internalOption lib.types.package;
+              pi-glovebox = internalOption lib.types.package;
             };
           };
 
@@ -62,7 +62,7 @@
               frontend = self.packages.${targetSystem}.frontend;
               pi = llm-agents.packages.${targetSystem}.pi;
               sbox = sbox.packages.${targetSystem}.sbox;
-              pi-sbox = pkgs.callPackage pi-sbox { };
+              pi-glovebox = pkgs.callPackage pi-glovebox { };
             };
           };
         };
