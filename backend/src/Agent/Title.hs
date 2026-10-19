@@ -4,7 +4,7 @@
 module Agent.Title (generateSessionTitle) where
 
 import Agent.Model (chatModelArgs, prepareChatModel)
-import Agent.Sandbox (bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
+import Agent.Sandbox (bindPath, expandSandboxArg, piIsolationFlags, runnerConfigArgs, runnerEnvironment, sandboxPiHome, sandboxProcess, seedPiConfig, sessionPaths)
 import Agent.Session (AgentSession (..))
 import Config (AgentConfig (..))
 import Control.Concurrent.Async (async, wait)
@@ -14,7 +14,6 @@ import Data.Either (fromRight)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode (..))
 import System.IO (Handle)
 import System.Process (CreateProcess (..), StdStream (..), createProcess, terminateProcess, waitForProcess)
@@ -34,36 +33,26 @@ titleSystemPrompt = "You name chat sessions. Reply with the title only."
 
 generateSessionTitle :: AgentConfig -> AgentSession -> Text -> IO (Either String Text)
 generateSessionTitle cfg session_ request = do
-    nixBind <- nixDaemonBindArgs
-    piConfigDir <- piAgentConfigDir
     chat <- prepareChatModel
     let paths = sessionPaths session_
-        runnerHome = sandboxHome paths
+        piHome = sandboxPiHome paths
         expand = expandSandboxArg paths
         titlePrompt = agentTitlePrompt cfg <> "\n\nUser request:\n" <> request
         runnerArgs =
             agentRunnerCommand cfg
                 : ["--no-session", "--no-tools"]
+                ++ piIsolationFlags
                 ++ chatModelArgs chat
                 ++ runnerConfigArgs expand (agentRunnerArgs cfg)
                 ++ ["--system-prompt", T.unpack titleSystemPrompt]
                 ++ ["-p", T.unpack titlePrompt]
-        args =
-            map expand (agentSboxArgs cfg)
-                ++ bindPathReadOnly piConfigDir
-                ++ nixBind
-                ++ ["--"]
-                ++ runnerArgs
-    runnerEnv <-
-        runnerEnvironment
-            [ ("HOME", runnerHome)
-            , ("PI_CODING_AGENT_DIR", piConfigDir)
-            ]
-    createDirectoryIfMissing True runnerHome
+        args = bindPath piHome ++ ["--"] ++ runnerArgs
+    runnerEnv <- runnerEnvironment [("HOME", piHome)]
+    seedPiConfig piHome
     sandbox <- sandboxProcess cfg args
     let process =
             sandbox
-                { cwd = Just runnerHome
+                { cwd = Just piHome
                 , env = Just runnerEnv
                 , std_in = NoStream
                 , std_out = CreatePipe

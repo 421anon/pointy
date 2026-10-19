@@ -205,6 +205,23 @@
         "type": "github"
       }
     },
+    "pi-sbox": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792408176,
+        "narHash": "sha256-Jshx6EMw3skMOhpAc7ugaXfLZSl9EaqjwNHG1fTCL90=",
+        "owner": "421anon",
+        "repo": "pi-sbox",
+        "rev": "22bf3271673d3f15932118f07b770480db7125d1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "421anon",
+        "ref": "v0.1.0",
+        "repo": "pi-sbox",
+        "type": "github"
+      }
+    },
     "purescript-overlay": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -257,6 +274,7 @@
         "llm-agents": "llm-agents",
         "nixos-shell": "nixos-shell",
         "nixpkgs": "nixpkgs_2",
+        "pi-sbox": "pi-sbox",
         "sbox": "sbox"
       }
     },

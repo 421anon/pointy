@@ -23,6 +23,7 @@ let
     chmod -R u=rwX,go= /home/backend/.pi
     mkdir -p -m u=rwx,go= /home/backend/.pi/agent/extensions
     ln -sfn ${rpivExtension} /home/backend/.pi/agent/extensions/rpiv-ask-user-question
+    ln -sfn ${pointy.packages.pi-sbox}/share/pi-sbox /home/backend/.pi/agent/extensions/pi-sbox
   '';
 
   jobEndedHook = pkgs.writeShellScript "pointy-job-ended" ''
@@ -236,6 +237,7 @@ in
           (diffoscope.override { enableBloat = false; })
           nix
           gitMinimal
+          gnutar
           openssh
           systemd
           config.services.slurm.package
@@ -243,6 +245,7 @@ in
         ++ [
           pointy.packages.sbox
           pointy.packages.pi
+          pointy.packages.pi-sbox
           cfg.ingestPackage
         ];
       environment = {
