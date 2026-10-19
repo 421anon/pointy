@@ -208,11 +208,11 @@
     "pi-sbox": {
       "flake": false,
       "locked": {
-        "lastModified": 1792408176,
-        "narHash": "sha256-Jshx6EMw3skMOhpAc7ugaXfLZSl9EaqjwNHG1fTCL90=",
+        "lastModified": 1792408253,
+        "narHash": "sha256-sAwEAL0X13Wr6WX5lp9pg+SIsh9y6b07bUIkPePqAqM=",
         "owner": "421anon",
         "repo": "pi-sbox",
-        "rev": "22bf3271673d3f15932118f07b770480db7125d1",
+        "rev": "4047a7f13b996fc527f7650d2eb52fe590a98657",
         "type": "github"
       },
       "original": {
