@@ -16,6 +16,7 @@ module Handlers.Agent (
     steerTurnHandler,
     turnLogStreamHandler,
     compactSessionHandler,
+    turnImageHandler,
     applyChangesHandler,
     autoApplyHandler,
     discardSessionHandler,
@@ -38,22 +39,27 @@ import Agent.Git (
     renameAgentSession,
  )
 import Agent.Runner (applySessionChanges, compactAgentSession, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
-import Agent.Session (AgentSessionSummary, AgentTurn)
+import Agent.Session (AgentSessionSummary, AgentTurn (..), TurnImage, findTurn, turnImageFilePath)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Effects (AppM)
 import GHC.Generics (Generic)
 import Interpreters.Production (runProduction)
-import Servant (Handler, NoContent (..), err400, err404, err409, err500, errBody, throwError)
+import Network.HTTP.Types (hContentType, status200, status404)
+import Network.Wai (Application, responseFile, responseLBS)
+import Servant (Handler, NoContent (..), Tagged (..), err400, err404, err409, err500, errBody, throwError)
 import UserRepo (withUserRepoExclusiveIO, withUserRepoSharedIO)
 
 data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
     , turnRequestPrompt :: Text
+    , turnRequestImages :: [TurnImage]
     , turnRequestCurrentProjectId :: Maybe Int
     , turnRequestAutoApply :: Bool
     , turnRequestClientId :: Maybe Text
@@ -65,6 +71,7 @@ instance FromJSON TurnRequest where
         TurnRequest
             <$> obj .: "sessionId"
             <*> obj .: "prompt"
+            <*> obj .:? "images" .!= []
             <*> obj .:? "currentProjectId"
             <*> obj .:? "autoApply" .!= True
             <*> obj .:? "clientId"
@@ -129,7 +136,16 @@ getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req =
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+
+turnImageHandler :: Text -> Int -> Tagged AppM Application
+turnImageHandler tid index = Tagged $ \_ respond -> do
+    mTurn <- findTurn tid
+    case mTurn >>= \turn -> (,) (turnSessionId turn) <$> lookup index (zip [0 ..] (turnImages turn)) of
+        Nothing -> respond (responseLBS status404 [] "image not found")
+        Just (sid, mimeType) -> do
+            path <- turnImageFilePath sid tid index
+            respond (responseFile status200 [(hContentType, TE.encodeUtf8 mimeType)] path Nothing)
 
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =

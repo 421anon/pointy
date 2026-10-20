@@ -6,7 +6,7 @@ module Agent.Policy (
     isAgentOutputPath,
     appliedProjectId,
     appliedStepId,
-    renderEmbeddedBootstrapPrompt,
+    renderEmbeddedRules,
     renderCurrentProject,
     promptWithEvaluationFailure,
     promptWithApplyConflict,
@@ -33,8 +33,8 @@ isAgentOutputPath :: Text -> Bool
 isAgentOutputPath path =
     isJust (appliedProjectId path) || isJust (appliedStepId path)
 
-renderEmbeddedBootstrapPrompt :: Maybe Text -> Text -> Text
-renderEmbeddedBootstrapPrompt memoryMax configuredPrompt =
+renderEmbeddedRules :: Maybe Text -> Text
+renderEmbeddedRules memoryMax =
     T.unlines
         ( [ embeddedAgentModeMarker
           , "The backend applies changes only to these path patterns:"
@@ -56,8 +56,6 @@ renderEmbeddedBootstrapPrompt memoryMax configuredPrompt =
                , "- Step: step <id>. This is the entire step reference; never include the step name."
                , "- Project: @[project:<id>] <name>. Quote the name when it contains spaces."
                , "Keep entity references as ordinary plain text: no inline code, no Markdown links, and no parentheses around an id."
-               , ""
-               , configuredPrompt
                ]
         )
   where

@@ -205,6 +205,23 @@
         "type": "github"
       }
     },
+    "pi-glovebox": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792493291,
+        "narHash": "sha256-101H7X11P/Bc+5yXSobNfVgCsxa/IqSeqRKTKIj2l/8=",
+        "owner": "421anon",
+        "repo": "pi-glovebox",
+        "rev": "29f71e5f66ef90f8caee2b27adb4af633b7b6f22",
+        "type": "github"
+      },
+      "original": {
+        "owner": "421anon",
+        "ref": "v0.3.0",
+        "repo": "pi-glovebox",
+        "type": "github"
+      }
+    },
     "purescript-overlay": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -257,6 +274,7 @@
         "llm-agents": "llm-agents",
         "nixos-shell": "nixos-shell",
         "nixpkgs": "nixpkgs_2",
+        "pi-glovebox": "pi-glovebox",
         "sbox": "sbox"
       }
     },

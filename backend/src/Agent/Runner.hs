@@ -23,12 +23,13 @@ module Agent.Runner (
 
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
 import Agent.Model (chatModelArgs, prepareChatModel)
-import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, userMessage)
-import Agent.Sandbox (bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxProcess, sessionPaths)
+import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, renderEmbeddedRules, userMessage)
+import Agent.Sandbox (agentMemoryMax, bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, piIsolationFlags, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxPiHome, sandboxProcess, seedPiConfig, sessionPaths, toolEnvironment)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
     PreparedApply (..),
+    TurnImage (..),
     acquireSessionCompaction,
     applyConflictsPending,
     findTurn,
@@ -44,19 +45,19 @@ import Agent.Session (
     touchSession,
     turnIsUnfinished,
     turnLogFilePath,
+    turnImageFilePath,
     turnLogHasFinalizationFailure,
     turnMetadataPath,
  )
 import Agent.Title (generateSessionTitle)
 import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
-import Agent.WarmSession (WarmSessionMeta (..), getOrBuildWarmSession)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait, withAsync)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
 import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, stateTVar, takeTMVar, tryPutTMVar, writeTVar)
-import Control.Exception (IOException, SomeException, catch, displayException, finally, fromException, try)
+import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, fromException, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
 import Control.Monad.Except (ExceptT (..))
@@ -67,7 +68,7 @@ import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
-import Data.List (sortOn)
+import Data.List (sort, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -83,16 +84,16 @@ import Interpreters.Production (runProduction)
 import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
-import System.Directory (copyFile, createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist, doesFileExist, doesPathExist, getFileSize, getHomeDirectory, getModificationTime, getSymbolicLinkTarget, listDirectory, pathIsSymbolicLink, removePathForcibly, renameFile)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, getFileSize, getHomeDirectory, getModificationTime, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (sigKILL, signalProcess)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getPid, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), callProcess, createPipe, createProcess, getPid, getProcessExitCode, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
-import UserRepo (userRepoPath, withUserRepoExclusiveIO)
+import UserRepo (runGitIn, userRepoPath, withUserRepoExclusiveIO)
 
 {-# NOINLINE activeRunners #-}
 activeRunners :: TVar (Map.Map Text (Text, Maybe ProcessHandle))
@@ -253,17 +254,17 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
-startAgentTurn sid prompt mCurrentProjectId enabled client = do
+startAgentTurn :: Text -> Text -> [TurnImage] -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
+startAgentTurn sid prompt images mCurrentProjectId enabled client = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
-    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId UserTurn
+    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId (UserTurn images)
 
-data TurnOrigin = UserTurn | AutomaticFix (Maybe Text)
+data TurnOrigin = UserTurn [TurnImage] | AutomaticFix (Maybe Text)
 
 beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
 beginAgentTurn session_ prompt mCurrentProjectId origin = do
@@ -281,6 +282,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
                 { turnId = tid
                 , turnSessionId = sid
                 , turnPrompt = prompt
+                , turnImages = map turnImageMimeType images
                 , turnAutomatic = automatic
                 , turnStatus = "running"
                 , turnExitCode = Nothing
@@ -292,6 +294,8 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
     liftIO $ do
         createDirectoryIfMissing True (takeDirectory logPath)
         TIO.writeFile logPath ""
+        forM_ (zip [0 ..] images) $ \(index, image) ->
+            turnImageFilePath sid tid index >>= \path -> BS.writeFile path (turnImageBytes image)
         mapM_ (appendLogLine (configAgent cfg) logPath "system") syncNotes
         noteDiscardedConflict (configAgent cfg) logPath refreshedSession freshSession
         existingTurns <- listTurns sid
@@ -337,16 +341,16 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             when stopInherited $ modifyTVar' stopRequestedTurns (Set.insert tid)
         let unnamed = isNothing (sessionName freshSession >>= normalizeSessionName)
             titling = not (T.null (T.strip (agentTitlePrompt (configAgent cfg))))
-        when (unnamed && titling && not automatic) $
+        when (unnamed && titling && not automatic && not (T.null (T.strip prompt))) $
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
     return turn
   where
-    (automatic, inheritedStop) = case origin of
-        UserTurn -> (False, Nothing)
-        AutomaticFix fixedTurnId -> (True, fixedTurnId)
+    (automatic, inheritedStop, images) = case origin of
+        UserTurn sent -> (False, Nothing, sent)
+        AutomaticFix fixedTurnId -> (True, fixedTurnId, [])
 
 setRunningAutoApply :: Text -> Bool -> ExceptT String IO ()
 setRunningAutoApply client enabled = do
@@ -434,8 +438,8 @@ nameChat cfg session_ logPath prompt =
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Bool -> [Int] -> IO ()
-runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedSteps =
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> Bool -> [Int] -> IO ()
+runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject reviewedSteps =
     continueUnlessStopped run
         `finally` atomically (retireTurn sid tid)
   where
@@ -448,108 +452,132 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedS
             else action
     run = do
         appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> tid)
-        mWarmResult <-
-            if isFirstTurn
-                then getOrBuildWarmSession cfg (baseCommit session_) (void . attachRunnerProcess sid tid)
-                else return Nothing
-        case mWarmResult of
-            Just (Left err) ->
-                appendLogLine cfg (turnLogPath turn) "system" ("Warm session unavailable, starting cold: " <> T.pack err)
-            _ -> return ()
-        continueUnlessStopped $ do
-            let mWarmFile = case mWarmResult of
-                    Just (Right meta) -> Just (warmSessionFile meta)
-                    _ -> Nothing
-            result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn mWarmFile reviewedSteps) :: IO (Either SomeException ExitCode)
-            exitCode <- case result of
-                Left err -> do
-                    appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
-                    return $ ExitFailure 1
-                Right code -> return code
-            finishTurn cfg session_ turn sentCurrentProject exitCode
+        result <- try (runConfiguredProcess cfg session_ turn prompt images isFirstTurn reviewedSteps) :: IO (Either SomeException ExitCode)
+        exitCode <- case result of
+            Left err -> do
+                appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
+                return $ ExitFailure 1
+            Right code -> return code
+        finishTurn cfg session_ turn sentCurrentProject exitCode
 
-startRunnerProcess ::
-    AgentConfig ->
-    AgentSession ->
-    FilePath ->
-    [String] ->
-    Text ->
-    Maybe FilePath ->
-    [Int] ->
-    IO (Handle, Handle, Maybe Handle, ProcessHandle)
-startRunnerProcess cfg session_ logPath sessionFlag outputMarker mWarmFile reviewedSteps = do
+withConfiguredRunner :: AgentConfig -> AgentSession -> FilePath -> [String] -> Text -> [Int] -> (Handle -> Handle -> Maybe Handle -> ProcessHandle -> IO a) -> IO a
+withConfiguredRunner cfg session_ logPath sessionFlag outputMarker reviewedSteps action = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
     chat <- prepareChatModel
+    memoryMax <- agentMemoryMax
+    extensionsDir <- (</> "extensions") <$> piAgentConfigDir
+    extensions <- sort <$> listDirectoryIfExists extensionsDir
     let conflictWorktrees = [candidateWorktree pending | Just pending <- [preparedApply session_], applyConflictsPending pending]
     readOnlySteps <- filterM doesPathExist [root </> path | root <- worktreePath session_ : conflictWorktrees, stepId <- reviewedSteps, path <- ["steps" </> show stepId ++ ".nix", "srcFiles" </> show stepId]]
     let paths = sessionPaths session_
-        runnerHome = sandboxHome paths
+        worktree = worktreePath session_
+        toolHome = sandboxHome paths
+        piHome = sandboxPiHome paths
+        sessionRoot = takeDirectory worktree
+        socketDir = sessionRoot </> "tool-socket"
+        socketPath = socketDir </> "socket"
+        instructionsDir = sessionRoot </> "instructions"
+        piTmpDir = sessionRoot </> "pi-tmp"
+        skillsDir = instructionsDir </> ".pi" </> "skills"
+        worktreeMask = piHome </> "worktree-mask"
+        systemPromptFile = piHome </> "system-prompt.md"
         expand = expandSandboxArg paths
-        runnerArgs =
-            agentRunnerCommand cfg : ["--mode", "rpc"] ++ sessionFlag ++ chatModelArgs chat ++ runnerConfigArgs expand (agentRunnerArgs cfg)
-        wrapperScript =
-            "set -e; cd \"$POINTY_AGENT_WORKTREE\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
-        warmBindArgs = maybe [] bindPathReadOnly mWarmFile
-        args =
+    agentsMd <- snapshotInstructions repoPath (baseCommit session_) instructionsDir
+    skills <- map (skillsDir </>) . sort <$> listDirectoryIfExists skillsDir
+    seedPiConfig piHome
+    movePiSessions toolHome piHome
+    createDirectoryIfMissing True worktreeMask
+    TIO.writeFile systemPromptFile (renderEmbeddedRules memoryMax <> maybe "" ("\n# AGENTS.md\n\n" <>) agentsMd)
+    createDirectoryIfMissing True toolHome
+    seedNixFetcherCache toolHome
+    forM_ [socketDir, piTmpDir] $ \dir -> removePathForcibly dir >> createDirectoryIfMissing True dir
+    let toolArgs =
             map expand (agentSboxArgs cfg)
-                ++ bindPath (worktreePath session_)
-                ++ warmBindArgs
+                ++ bindPath worktree
                 ++ bindPathReadOnly repoPath
                 ++ concatMap bindPath conflictWorktrees
                 ++ concatMap bindPathReadOnly readOnlySteps
                 ++ nixBind
+                ++ bindPath socketDir
+                ++ bindPathReadOnly instructionsDir
+                ++ bindPathReadOnly piTmpDir
+                ++ ["--", "pi-glovebox-server", socketPath]
+        runnerArgs =
+            agentRunnerCommand cfg
+                : ["--mode", "rpc"]
+                ++ sessionFlag
+                ++ chatModelArgs chat
+                ++ piIsolationFlags
+                ++ ["--no-builtin-tools"]
+                ++ concatMap (\name -> ["-e", extensionsDir </> name]) extensions
+                ++ concatMap (\skill -> ["--skill", skill]) skills
+                ++ ["--append-system-prompt", systemPromptFile]
+                ++ runnerConfigArgs expand (agentRunnerArgs cfg)
+        wrapperScript =
+            "set -e; cd \"$POINTY_AGENT_WORKTREE\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\"; printf '%s\\n' \"$POINTY_AGENT_OUTPUT_MARKER\" >&2; exec \"$@\""
+        args =
+            bindPath piHome
+                ++ ["--ro-bind", worktreeMask, worktree]
+                ++ bindPath socketDir
+                ++ bindPathReadOnly instructionsDir
+                ++ bindPath piTmpDir
+                ++ bindPathReadOnly extensionsDir
                 ++ ["--", "bash", "-lc", wrapperScript, "pointy-agent-runner"]
                 ++ runnerArgs
+    toolEnv <-
+        toolEnvironment
+            [ ("HOME", toolHome)
+            , ("POINTY_AGENT_WORKTREE", worktree)
+            , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
+            ]
     runnerEnv <-
         runnerEnvironment
-            [ ("HOME", runnerHome)
-            , ("POINTY_AGENT_WORKTREE", worktreePath session_)
-            , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
+            [ ("HOME", piHome)
+            , ("POINTY_AGENT_WORKTREE", worktree)
             , ("POINTY_AGENT_OUTPUT_MARKER", T.unpack outputMarker)
+            , ("PI_GLOVEBOX_SOCKET", socketPath)
+            , ("TMPDIR", piTmpDir)
             ]
+    toolSandbox <- sandboxProcess cfg toolArgs
     sandbox <- sandboxProcess cfg args
     let process =
             sandbox
-                { cwd = Just runnerHome
+                { cwd = Just piHome
                 , env = Just runnerEnv
                 , std_in = CreatePipe
                 , std_out = CreatePipe
                 , std_err = CreatePipe
                 }
-    createDirectoryIfMissing True runnerHome
-    seedPiConfig runnerHome
-    seedNixFetcherCache runnerHome
-    appendLogLine cfg logPath "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
-    (Just hin, Just hout, mErr, ph) <- createProcess process
-    return (hin, hout, mErr, ph)
+    appendLogLine cfg logPath "system" ("Running tools: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords toolArgs))
+    withToolSandbox toolSandbox{cwd = Just toolHome, env = Just toolEnv} socketPath $ do
+        appendLogLine cfg logPath "system" ("Running: " <> T.pack (agentSboxCommand cfg) <> " " <> T.pack (unwords args))
+        (Just hin, Just hout, mErr, ph) <- createProcess process
+        action hin hout mErr ph
 
-runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Maybe FilePath -> [Int] -> IO ExitCode
-runConfiguredProcess cfg session_ turn promptText isFirstTurn mWarmFile reviewedSteps = do
+runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> [Int] -> IO ExitCode
+runConfiguredProcess cfg session_ turn promptText images isFirstTurn reviewedSteps = do
     let outputMarker = "__POINTY_AGENT_OUTPUT_BEGIN__" <> turnId turn <> "__"
-        sessionFlag = case (isFirstTurn, mWarmFile) of
-            (True, Just warmFile) -> ["--fork", warmFile]
-            (True, Nothing) -> []
-            (False, _) -> ["-c"]
-    (hin, hout, mErr, ph) <- startRunnerProcess cfg session_ (turnLogPath turn) sessionFlag outputMarker mWarmFile reviewedSteps
-    input <- newRunnerInput hin
-    let cleanup = do
-            atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
-            closeRunnerInput input
-        run = do
-            stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
-            unless stopped $ do
-                writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText]
-                writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
-                atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
-                takeWaitingSteers (sessionId session_) input
-            outReader <- async $ streamHandle cfg (turnLogPath turn) outputMarker "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
-            errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) outputMarker "stderr" (const $ return ())) mErr
-            exitCode <- watchTurnBudget cfg turn input ph (agentTimeoutSeconds cfg * 1000000)
-            modelFailed <- wait outReader
-            _ <- wait errReader
-            return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
-    run `finally` cleanup
+        sessionFlag = if isFirstTurn then [] else ["-c"]
+    withConfiguredRunner cfg session_ (turnLogPath turn) sessionFlag outputMarker reviewedSteps $ \hin hout mErr ph -> do
+        input <- newRunnerInput hin
+        let cleanup = do
+                atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
+                closeRunnerInput input
+            run = do
+                stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
+                unless stopped $ do
+                    writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText, "images" Aeson..= map piImageContent images]
+                    writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
+                    atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
+                    takeWaitingSteers (sessionId session_) input
+                outReader <- async $ streamHandle cfg (turnLogPath turn) outputMarker "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
+                errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) outputMarker "stderr" (const $ return ())) mErr
+                exitCode <- watchTurnBudget cfg turn input ph (agentTimeoutSeconds cfg * 1000000)
+                modelFailed <- wait outReader
+                _ <- wait errReader
+                return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
+        run `finally` cleanup
 
 compactAgentSession :: Text -> ExceptT String IO AgentSessionView
 compactAgentSession sid = do
@@ -581,28 +609,28 @@ runCompactionProcess :: AgentConfig -> AgentSession -> FilePath -> IO ()
 runCompactionProcess cfg session_ logPath = do
     let outputMarker = "__POINTY_AGENT_COMPACT_BEGIN__" <> sessionId session_ <> "__"
     ended <- newTVarIO False
-    (hin, hout, mErr, ph) <- startRunnerProcess cfg session_ logPath ["-c"] outputMarker Nothing []
-    input <- newRunnerInput hin
-    let cleanup = closeRunnerInput input
-        run = do
-            outReader <- async $ streamHandle cfg logPath outputMarker "stdout" (noteCompactionEvent input ended) hout
-            errReader <- maybe (async (return False)) (async . streamHandle cfg logPath outputMarker "stderr" (const $ return ())) mErr
-            writeRpc hin compactCommand
-            result <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
-            closeRunnerInput input
-            case result of
-                Nothing -> do
-                    void (try (terminateProcess ph) :: IO (Either SomeException ()))
-                    void (try (waitForProcess ph) :: IO (Either SomeException ExitCode))
-                Just _ -> return ()
-            _ <- wait outReader
-            _ <- wait errReader
-            completed <- atomically $ readTVar ended
-            case result of
-                Nothing -> noteCompactionFailure "Compaction timed out."
-                Just _ | completed -> return ()
-                Just exitCode -> noteCompactionFailure ("Compaction failed with exit code " <> T.pack (show (exitCodeNumber exitCode)) <> ".")
-    run `finally` cleanup
+    withConfiguredRunner cfg session_ logPath ["-c"] outputMarker [] $ \hin hout mErr ph -> do
+        input <- newRunnerInput hin
+        let cleanup = closeRunnerInput input
+            run = do
+                outReader <- async $ streamHandle cfg logPath outputMarker "stdout" (noteCompactionEvent input ended) hout
+                errReader <- maybe (async (return False)) (async . streamHandle cfg logPath outputMarker "stderr" (const $ return ())) mErr
+                writeRpc hin compactCommand
+                result <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
+                closeRunnerInput input
+                case result of
+                    Nothing -> do
+                        void (try (terminateProcess ph) :: IO (Either SomeException ()))
+                        void (try (waitForProcess ph) :: IO (Either SomeException ExitCode))
+                    Just _ -> return ()
+                _ <- wait outReader
+                _ <- wait errReader
+                completed <- atomically $ readTVar ended
+                case result of
+                    Nothing -> noteCompactionFailure "Compaction timed out."
+                    Just _ | completed -> return ()
+                    Just exitCode -> noteCompactionFailure ("Compaction failed with exit code " <> T.pack (show (exitCodeNumber exitCode)) <> ".")
+        run `finally` cleanup
   where
     noteCompactionEvent input ended event = do
         handleRpcEventSafely cfg logPath input event
@@ -621,6 +649,59 @@ compactCommand = Aeson.object ["type" Aeson..= ("compact" :: Text)]
 exitCodeNumber :: ExitCode -> Int
 exitCodeNumber ExitSuccess = 0
 exitCodeNumber (ExitFailure code) = code
+
+piImageContent :: TurnImage -> Aeson.Value
+piImageContent image =
+    Aeson.object ["type" Aeson..= ("image" :: Text), "mimeType" Aeson..= turnImageMimeType image, "data" Aeson..= turnImageBase64 image]
+
+withToolSandbox :: CreateProcess -> FilePath -> IO a -> IO a
+withToolSandbox process socketPath action =
+    bracket createPipe (\(readEnd, writeEnd) -> hClose writeEnd >> hClose readEnd) $ \(readEnd, writeEnd) ->
+        bracket (createProcess process{std_in = NoStream, std_out = UseHandle writeEnd, std_err = UseHandle writeEnd}) stop $ \(_, _, _, ph) ->
+            withAsync (BS.hGetContents readEnd) $ \output -> awaitSocket ph output (600 :: Int) >> action
+  where
+    stop (_, _, _, ph) = terminateProcess ph >> void (waitForProcess ph)
+    awaitSocket ph output attempts = do
+        ready <- doesPathExist socketPath
+        unless ready $ do
+            exited <- getProcessExitCode ph
+            case exited of
+                Just code -> do
+                    bytes <- timeout 1000000 (wait output)
+                    ioError (userError (runnerFailure ("tool sandbox exited with " ++ show code) (maybe "" TE.decodeUtf8Lenient bytes)))
+                Nothing
+                    | attempts <= 0 -> ioError (userError "tool sandbox did not open its socket")
+                    | otherwise -> threadDelay 50000 >> awaitSocket ph output (attempts - 1)
+
+runnerFailure :: String -> Text -> String
+runnerFailure headline output = case reverse (take 3 (reverse (filter (not . T.null) (map T.strip (T.lines output))))) of
+    [] -> headline
+    lines_ -> headline ++ ": " ++ T.unpack (T.intercalate " | " lines_)
+
+snapshotInstructions :: FilePath -> Text -> FilePath -> IO (Maybe Text)
+snapshotInstructions repoPath commit dir = do
+    removePathForcibly dir
+    createDirectoryIfMissing True dir
+    (exitCode, listed, stderr) <- runGitIn repoPath ["ls-tree", "--name-only", T.unpack commit, "--", "AGENTS.md", ".pi/skills"]
+    unless (exitCode == ExitSuccess) $ ioError (userError ("git ls-tree failed: " ++ stderr))
+    let present = lines listed
+    unless (null present) $
+        callProcess "bash" (["-c", "set -o pipefail; git -C \"$0\" archive \"$1\" -- \"${@:3}\" | tar -x -C \"$2\"", repoPath, T.unpack commit, dir] ++ present)
+    let agentsFile = dir </> "AGENTS.md"
+    exists <- doesFileExist agentsFile
+    if exists then Just <$> TIO.readFile agentsFile else return Nothing
+
+movePiSessions :: FilePath -> FilePath -> IO ()
+movePiSessions toolHome piHome = do
+    let legacy = toolHome </> ".pi" </> "agent" </> "sessions"
+        current = piHome </> ".pi" </> "agent" </> "sessions"
+    pending <- (&&) <$> doesDirectoryExist legacy <*> (not <$> doesPathExist current)
+    when pending $ renameDirectory legacy current
+
+listDirectoryIfExists :: FilePath -> IO [FilePath]
+listDirectoryIfExists dir = do
+    exists <- doesDirectoryExist dir
+    if exists then listDirectory dir else return []
 
 watchTurnBudget :: AgentConfig -> AgentTurn -> MVar (Maybe RunnerInput) -> ProcessHandle -> Int -> IO ExitCode
 watchTurnBudget cfg turn input ph budgetMicros =
@@ -647,16 +728,6 @@ noteDiscardedConflict :: AgentConfig -> FilePath -> AgentSession -> AgentSession
 noteDiscardedConflict cfg logPath before after =
     when (maybe False applyConflictsPending (preparedApply before) && isNothing (preparedApply after)) $
         appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; the next apply merges the changeset again."
-
-seedPiConfig :: FilePath -> IO ()
-seedPiConfig runnerHome = do
-    srcDir <- piAgentConfigDir
-    let dstDir = runnerHome </> ".pi" </> "agent"
-    present <- filterM (doesFileExist . (srcDir </>)) ["models.json", "settings.json"]
-    forM_ present $ \name -> do
-        createDirectoryIfMissing True dstDir
-        copyFile (srcDir </> name) (dstDir </> name)
-    seedExtensions (srcDir </> "extensions") (dstDir </> "extensions")
 
 nixFetcherCacheFile :: FilePath
 nixFetcherCacheFile = ".cache" </> "nix" </> "fetcher-cache-v3.sqlite"
@@ -690,16 +761,6 @@ seedNixFetcherCache runnerHome = do
 
 sqliteSidecars :: [String]
 sqliteSidecars = ["-journal", "-wal", "-shm"]
-
-seedExtensions :: FilePath -> FilePath -> IO ()
-seedExtensions src dst = do
-    hasExtensions <- doesDirectoryExist src
-    when hasExtensions $ do
-        removePathForcibly dst
-        createDirectoryIfMissing True dst
-        linked <- filterM (pathIsSymbolicLink . (src </>)) =<< listDirectory src
-        forM_ linked $ \name ->
-            getSymbolicLinkTarget (src </> name) >>= flip createDirectoryLink (dst </> name)
 
 data PendingQuestion = PendingQuestion
     { questionDialogId :: Text

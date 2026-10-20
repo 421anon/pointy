@@ -994,6 +994,16 @@ autoApply =
     lens ".autoApply" .autoApply (\t autoApply_ -> { t | autoApply = autoApply_ })
 
 
+composerImages : Lens ls AgentState (List Model.ComposerImage) x y
+composerImages =
+    lens ".composerImages" .composerImages (\s images -> { s | composerImages = images })
+
+
+lightbox : Lens ls AgentState (Maybe Model.Lightbox) x y
+lightbox =
+    lens ".lightbox" .lightbox (\s lightbox_ -> { s | lightbox = lightbox_ })
+
+
 sessionAt : String -> Traversal AgentState AgentSessionSummary x y
 sessionAt sessionId =
     sessions << orElseT success ApiData.reloading << by (.session >> .sessionId) sessionId

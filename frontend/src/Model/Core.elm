@@ -758,6 +758,7 @@ type alias AgentTurn =
     { turnId : String
     , turnSessionId : String
     , turnPrompt : String
+    , turnImages : List String
     , turnAutomatic : Bool
     , turnStatus : String
     , turnExitCode : Maybe Int
@@ -838,6 +839,7 @@ type ChatTurnStatus
 type alias ChatTurn =
     { turnId : String
     , prompt : Maybe String
+    , images : List String
     , assistant : String
     , status : ChatTurnStatus
     }
@@ -923,6 +925,18 @@ keepPicksForSameQuestion previous next =
             next
 
 
+type alias ComposerImage =
+    { mimeType : String
+    , url : String
+    }
+
+
+type alias Lightbox =
+    { images : List String
+    , index : Int
+    }
+
+
 type alias AgentToolCall =
     { id : String
     , name : String
@@ -982,6 +996,8 @@ type alias AgentState =
     , isRestoringChat : Bool
     , autoApply : Bool
     , clientId : String
+    , composerImages : List ComposerImage
+    , lightbox : Maybe Lightbox
     }
 
 
@@ -1003,6 +1019,8 @@ initAgentState =
     , isRestoringChat = False
     , autoApply = True
     , clientId = ""
+    , composerImages = []
+    , lightbox = Nothing
     }
 
 
@@ -1106,14 +1124,14 @@ appendPersistedTurn turn entries =
                 if turn.turnAutomatic then
                     Nothing
 
-                else if String.isEmpty (String.trim turn.turnPrompt) then
+                else if String.isEmpty (String.trim turn.turnPrompt) && List.isEmpty turn.turnImages then
                     Just "Prompt unavailable"
 
                 else
                     Just turn.turnPrompt
 
             seeded =
-                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, images = turn.turnImages, assistant = "", status = chatStatusFromTurn turn } ]
 
             logLines =
                 turnLogLines turn
@@ -1262,7 +1280,7 @@ appendChatLine rawLine entries =
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
                     mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, assistant = "", status = ChatPending } ]
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, images = [], assistant = "", status = ChatPending } ]
 
                 Err _ ->
                     entries

@@ -18,7 +18,6 @@ library
     Agent.Session
     Agent.Title
     Agent.TurnSignal
-    Agent.WarmSession
     Api
     ApiTypes
     App

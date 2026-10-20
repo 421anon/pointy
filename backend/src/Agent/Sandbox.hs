@@ -8,7 +8,10 @@ module Agent.Sandbox (
     bindPathReadOnly,
     nixDaemonBindArgs,
     piAgentConfigDir,
+    piIsolationFlags,
+    seedPiConfig,
     runnerEnvironment,
+    toolEnvironment,
     runnerConfigArgs,
     agentMemoryMax,
     prepareAgentCgroup,
@@ -17,6 +20,7 @@ module Agent.Sandbox (
 
 import Agent.Session (AgentSession (..))
 import Config (AgentConfig (..), ChatModelConfig (..), Config (..), ProviderConfig (..), loadConfig, resolveConfigPath)
+import Control.Monad (filterM, forM_)
 import Data.List (stripPrefix)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -24,7 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import NixStore (NixStore (..), nixStore)
 import Storage (scratchDirectory)
-import System.Directory (createDirectoryIfMissing, doesFileExist, doesPathExist, getHomeDirectory)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, doesPathExist, getHomeDirectory)
 import System.Environment (getEnvironment, lookupEnv)
 import System.FilePath (takeDirectory, (</>))
 import System.Process (CreateProcess, proc)
@@ -65,9 +69,21 @@ bindPathReadOnly path = ["--ro-bind", path, path]
 piAgentConfigDir :: IO FilePath
 piAgentConfigDir = (\home -> home </> ".pi" </> "agent") <$> getHomeDirectory
 
+piIsolationFlags :: [String]
+piIsolationFlags = ["--no-context-files", "--no-skills", "--no-extensions", "--no-prompt-templates", "--no-themes", "--no-mcp", "--no-approve"]
+
+seedPiConfig :: FilePath -> IO ()
+seedPiConfig piHome = do
+    srcDir <- piAgentConfigDir
+    let dstDir = piHome </> ".pi" </> "agent"
+    createDirectoryIfMissing True dstDir
+    present <- filterM (doesFileExist . (srcDir </>)) ["models.json", "settings.json"]
+    forM_ present $ \name -> copyFile (srcDir </> name) (dstDir </> name)
+
 data SandboxPaths = SandboxPaths
     { sandboxWorktree :: FilePath
     , sandboxHome :: FilePath
+    , sandboxPiHome :: FilePath
     , sandboxSessionId :: Text
     }
 
@@ -75,9 +91,12 @@ sessionPaths :: AgentSession -> SandboxPaths
 sessionPaths session_ =
     SandboxPaths
         { sandboxWorktree = worktreePath session_
-        , sandboxHome = takeDirectory (worktreePath session_) </> "home"
+        , sandboxHome = sessionRoot </> "home"
+        , sandboxPiHome = sessionRoot </> "pi"
         , sandboxSessionId = sessionId session_
         }
+  where
+    sessionRoot = takeDirectory (worktreePath session_)
 
 expandSandboxArg :: SandboxPaths -> Text -> String
 expandSandboxArg paths = T.unpack . flip (foldr (uncurry T.replace)) placeholders
@@ -90,9 +109,14 @@ expandSandboxArg paths = T.unpack . flip (foldr (uncurry T.replace)) placeholder
         ]
 
 runnerEnvironment :: [(String, String)] -> IO [(String, String)]
-runnerEnvironment ownVars = do
+runnerEnvironment ownVars = chatApiKeyEnv >>= sandboxEnvironment ownVars
+
+toolEnvironment :: [(String, String)] -> IO [(String, String)]
+toolEnvironment ownVars = sandboxEnvironment ownVars Nothing
+
+sandboxEnvironment :: [(String, String)] -> Maybe String -> IO [(String, String)]
+sandboxEnvironment ownVars chatKeyEnv = do
     baseEnv <- getEnvironment
-    chatKeyEnv <- chatApiKeyEnv
     return $
         ("PATH", fromMaybe fallbackPath (lookup "PATH" baseEnv))
             : ownVars
