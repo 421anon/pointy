@@ -897,7 +897,13 @@ viewPrompt images autoApply runnerActive busy stopping submitBlocked =
     Html.div [ class "agent-panel__composer" ]
         [ Html.viewIf (not (List.isEmpty images)) (viewComposerImages (List.map .url images))
         , Html.div [ class "agent-panel__composer-row" ]
-            [ Html.textarea
+            [ viewIconButton "Attach images"
+                "add_photo_alternate"
+                [ type_ "button"
+                , class "icon-btn agent-panel__attach-button"
+                , Events.onClick Actions.pickAgentImages
+                ]
+            , Html.textarea
                 [ class "agent-panel__prompt"
                 , id "agent-prompt"
                 , rows 1
@@ -964,6 +970,40 @@ viewImageButton urls index url =
         , Events.onClick (Actions.openLightbox urls index)
         ]
         [ Html.img [ src url, alt "", attribute "loading" "lazy" ] [] ]
+
+
+viewSentImages : List String -> Html (Flow Model ())
+viewSentImages urls =
+    let
+        count =
+            List.length urls
+
+        hiddenCount =
+            count - sentImageTiles + 1
+
+        viewTile index url =
+            if index == sentImageTiles - 1 && hiddenCount > 1 then
+                Html.div [ class "agent-panel__image-tile" ]
+                    [ viewImageButton urls index url
+                    , Html.span [ class "agent-panel__image-more", attribute "aria-hidden" "true" ] [ Html.text ("+" ++ String.fromInt hiddenCount) ]
+                    ]
+
+            else
+                viewImageButton urls index url
+    in
+    Html.div
+        [ classList
+            [ ( "agent-panel__images", True )
+            , ( "agent-panel__images--group", count > 1 )
+            , ( "agent-panel__images--trio", count == 3 )
+            ]
+        ]
+        (List.indexedMap viewTile (List.take sentImageTiles urls))
+
+
+sentImageTiles : Int
+sentImageTiles =
+    4
 
 
 imageLabel : List String -> Int -> String
@@ -1226,7 +1266,7 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
                                 [ Html.text "You" ]
                         ]
                     , Html.viewIf (not (List.isEmpty turn.images))
-                        (Html.div [ class "agent-panel__images" ] (List.indexedMap (viewImageButton turn.images) turn.images))
+                        (viewSentImages turn.images)
                     , Html.viewIf (not (String.isEmpty prompt))
                         (Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ] [ Html.text prompt ])
                     ]

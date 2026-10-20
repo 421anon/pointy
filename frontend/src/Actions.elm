@@ -20,6 +20,7 @@ import Extra.FlowError as FlowError exposing (FlowError)
 import Extra.Http as Http
 import Extra.List as List
 import File exposing (File)
+import File.Select
 import Flow exposing (Flow)
 import Fuzzy
 import Grid
@@ -3730,6 +3731,12 @@ readComposerImage : File -> Flow Model Model.ComposerImage
 readComposerImage file =
     Flow.performTask (File.toUrl file)
         |> Flow.map (Model.ComposerImage (File.mime file))
+
+
+pickAgentImages : Flow Model ()
+pickAgentImages =
+    Flow.lift (File.Select.files AgentApi.imageMimeTypes (\file files -> attachAgentImages (file :: files)))
+        |> Flow.join
 
 
 removeComposerImage : Int -> Flow Model ()
