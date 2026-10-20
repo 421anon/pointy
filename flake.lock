@@ -208,16 +208,16 @@
     "pi-glovebox": {
       "flake": false,
       "locked": {
-        "lastModified": 1792414791,
-        "narHash": "sha256-qz/iw+kzdHmEg6Bhc8XDoBBZEBoTpp27UQEUsdpuPQw=",
+        "lastModified": 1792493291,
+        "narHash": "sha256-101H7X11P/Bc+5yXSobNfVgCsxa/IqSeqRKTKIj2l/8=",
         "owner": "421anon",
         "repo": "pi-glovebox",
-        "rev": "fab1e8a1e7206e61e7bfa327ae935b75db784bfa",
+        "rev": "29f71e5f66ef90f8caee2b27adb4af633b7b6f22",
         "type": "github"
       },
       "original": {
         "owner": "421anon",
-        "ref": "v0.1.0",
+        "ref": "v0.3.0",
         "repo": "pi-glovebox",
         "type": "github"
       }

@@ -17,7 +17,7 @@
     sbox.url = "github:DavHau/sbox";
     llm-agents.url = "github:numtide/llm-agents.nix";
     pi-glovebox = {
-      url = "github:421anon/pi-glovebox/v0.1.0";
+      url = "github:421anon/pi-glovebox/v0.3.0";
       flake = false;
     };
   };
