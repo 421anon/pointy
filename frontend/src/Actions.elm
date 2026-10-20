@@ -3682,6 +3682,11 @@ clearAgentPrompt =
     callJs "agentPrompt" Encode.string (Decode.succeed ()) "clear"
 
 
+restoreAgentPrompt : String -> Flow Model ()
+restoreAgentPrompt =
+    callJs "restoreAgentPrompt" Encode.string (Decode.succeed ())
+
+
 attachAgentImages : List File -> Flow Model ()
 attachAgentImages files =
     let
@@ -3689,22 +3694,21 @@ attachAgentImages files =
             List.partition (\file -> List.member (File.mime file) AgentApi.imageMimeTypes) files
     in
     Flow.when (not (List.isEmpty rejected)) (addToast False "Only PNG, JPEG, GIF and WebP images can be attached.")
-        |> Flow.seq (Flow.traverse readComposerImage images)
-        |> Flow.andThen
-            (\read ->
-                Flow.getAll (agent << composerImages)
-                    (\attached ->
-                        if encodedImagesLength (List.concat attached ++ read) > agentImagesBudget then
-                            addToast False "These images are too large to send together. Attach smaller or fewer images."
+        |> Flow.seq
+            (Flow.getAll (agent << composerImages)
+                (\attached ->
+                    if encodedImagesLength (List.concat attached) + List.sum (List.map encodedFileLength images) > agentImagesBudget then
+                        addToast False "These images are too large to send together. Attach smaller or fewer images."
 
-                        else
-                            Flow.over (agent << composerImages) (\current -> current ++ read)
-                    )
+                    else
+                        Flow.traverse readComposerImage images
+                            |> Flow.andThen (\read -> Flow.over (agent << composerImages) (\current -> current ++ read))
+                )
             )
 
 
 {-| NixOS nginx caps request bodies at 10 MiB by default
-(<https://nginx.org/en/docs/http/ngx_http_core_module.html#client_max_body_size>);
+(<https://search.nixos.org/options?show=services.nginx.clientMaxBodySize>);
 the rest of the budget is left for the prompt text.
 -}
 agentImagesBudget : Int
@@ -3715,6 +3719,11 @@ agentImagesBudget =
 encodedImagesLength : List Model.ComposerImage -> Int
 encodedImagesLength =
     List.sum << List.map (String.length << .url)
+
+
+encodedFileLength : File -> Int
+encodedFileLength file =
+    4 * ((File.size file + 2) // 3)
 
 
 readComposerImage : File -> Flow Model Model.ComposerImage
@@ -3980,6 +3989,8 @@ sendAgentTurn view images promptSource =
                             Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
                                 |> Flow.seq (Flow.over (agent << liveTurnAt sessionId << just << entries) (Model.failLatestPendingChatTurn message))
                                 |> Flow.seq (addToast False message)
+                                |> Flow.seq (restoreAgentPrompt prompt)
+                                |> Flow.seq (Flow.over (agent << composerImages) (\current -> images ++ current))
                         )
             )
         )
