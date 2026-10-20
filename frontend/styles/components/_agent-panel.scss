@@ -238,7 +238,7 @@
 
 .agent-panel__composer-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--spacing-xs);
   align-items: end;
 }
@@ -249,7 +249,16 @@
   align-items: end;
 }
 
+.agent-panel__prompt-field {
+  position: relative;
+
+  &:has(.agent-panel__attach-button) .agent-panel__prompt {
+    padding-right: 34px;
+  }
+}
+
 .agent-panel__prompt {
+  display: block;
   width: 100%;
   border: 1px solid var(--line-color);
   border-radius: var(--radius-sm);
@@ -275,8 +284,15 @@
 }
 
 .agent-panel .agent-panel__attach-button {
-  min-width: 36px;
-  min-height: 36px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 28px;
+  min-height: 28px;
+
+  .material-symbols-outlined {
+    font-size: 18px;
+  }
 }
 
 .agent-panel .agent-panel__composer-image-remove {
@@ -1434,6 +1450,15 @@
   .agent-panel .small-btn,
   .agent-panel__auto-apply {
     min-height: 44px;
+  }
+
+  .agent-panel .agent-panel__attach-button {
+    top: 0;
+    right: 0;
+  }
+
+  .agent-panel__prompt-field:has(.agent-panel__attach-button) .agent-panel__prompt {
+    padding-right: 44px;
   }
 
   @container (max-width: 355px) {

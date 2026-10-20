@@ -897,23 +897,27 @@ viewPrompt images autoApply runnerActive busy stopping submitBlocked =
     Html.div [ class "agent-panel__composer" ]
         [ Html.viewIf (not (List.isEmpty images)) (viewComposerImages (List.map .url images))
         , Html.div [ class "agent-panel__composer-row" ]
-            [ viewIconButton "Attach images"
-                "add_photo_alternate"
-                [ type_ "button"
-                , class "icon-btn agent-panel__attach-button"
-                , Events.onClick Actions.pickAgentImages
+            [ Html.div [ class "agent-panel__prompt-field" ]
+                [ Html.textarea
+                    [ class "agent-panel__prompt"
+                    , id "agent-prompt"
+                    , rows 1
+                    , placeholder "Ask for a change..."
+                    , attribute "aria-label" "Agent prompt"
+                    , attribute "aria-describedby" autoApplyStateId
+                    , submitShortcut submitBlocked
+                    , Events.preventDefaultOn "paste" (attachedImages "clipboardData")
+                    ]
+                    []
+                , Html.viewIf (not steering)
+                    (viewIconButton "Attach images"
+                        "add_photo_alternate"
+                        [ type_ "button"
+                        , class "icon-btn agent-panel__attach-button"
+                        , Events.onClick Actions.pickAgentImages
+                        ]
+                    )
                 ]
-            , Html.textarea
-                [ class "agent-panel__prompt"
-                , id "agent-prompt"
-                , rows 1
-                , placeholder "Ask for a change..."
-                , attribute "aria-label" "Agent prompt"
-                , attribute "aria-describedby" autoApplyStateId
-                , submitShortcut submitBlocked
-                , Events.preventDefaultOn "paste" (attachedImages "clipboardData")
-                ]
-                []
             , Html.div [ class "agent-panel__composer-actions" ]
                 [ viewSubmitButton autoApplyState steering busy submitBlocked
                 , Html.viewIf steering (viewStopButton stopping)
