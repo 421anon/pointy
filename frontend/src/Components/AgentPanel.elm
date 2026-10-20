@@ -1227,8 +1227,8 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
                         ]
                     , Html.viewIf (not (List.isEmpty turn.images))
                         (Html.div [ class "agent-panel__images" ] (List.indexedMap (viewImageButton turn.images) turn.images))
-                    , Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ]
-                        [ Html.text prompt ]
+                    , Html.viewIf (not (String.isEmpty prompt))
+                        (Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ] [ Html.text prompt ])
                     ]
             )
             turn.prompt

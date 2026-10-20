@@ -1103,7 +1103,7 @@ appendPersistedTurn turn entries =
                 if turn.turnAutomatic then
                     Nothing
 
-                else if String.isEmpty (String.trim turn.turnPrompt) then
+                else if String.isEmpty (String.trim turn.turnPrompt) && List.isEmpty turn.turnImages then
                     Just "Prompt unavailable"
 
                 else

@@ -3940,14 +3940,18 @@ submitAgentPromptFrom images promptSource =
         )
 
 
-withAgentPrompt : Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
-withAgentPrompt promptSource send =
+withAgentPrompt : List Model.ComposerImage -> Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
+withAgentPrompt images promptSource send =
     promptSource
         |> Flow.andThen
             (\rawPrompt ->
                 case String.trim rawPrompt of
                     "" ->
-                        addToast False "Enter an agent prompt first."
+                        if List.isEmpty images then
+                            addToast False "Enter an agent prompt first."
+
+                        else
+                            send ""
 
                     prompt ->
                         send prompt
@@ -3961,7 +3965,8 @@ sendAgentTurn view images promptSource =
             view.session.sessionId
     in
     withAgentRequest (Model.SendingAgentPrompt sessionId)
-        (withAgentPrompt promptSource
+        (withAgentPrompt images
+            promptSource
             (\prompt ->
                 Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view))
                     |> Flow.seq
@@ -4003,7 +4008,8 @@ steerAgentTurn view promptSource =
             view.session.sessionId
     in
     withAgentRequest (Model.SteeringAgentTurn sessionId)
-        (withAgentPrompt promptSource
+        (withAgentPrompt []
+            promptSource
             (\prompt ->
                 clearAgentPrompt
                     |> Flow.seq (sendSteer sessionId { wire = prompt, shown = prompt } (restoreAgentPrompt prompt))

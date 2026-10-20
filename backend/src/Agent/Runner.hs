@@ -337,7 +337,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             when stopInherited $ modifyTVar' stopRequestedTurns (Set.insert tid)
         let unnamed = isNothing (sessionName freshSession >>= normalizeSessionName)
             titling = not (T.null (T.strip (agentTitlePrompt (configAgent cfg))))
-        when (unnamed && titling && not automatic) $
+        when (unnamed && titling && not automatic && not (T.null (T.strip prompt))) $
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
