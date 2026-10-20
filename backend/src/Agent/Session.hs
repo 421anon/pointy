@@ -8,6 +8,7 @@ module Agent.Session (
     PreparedApply (..),
     applyConflictsPending,
     AgentTurn (..),
+    TurnImage (..),
     turnIsUnfinished,
     latestUnfinishedTurn,
     inferTurnExitCode,
@@ -18,6 +19,7 @@ module Agent.Session (
     turnsDir,
     turnMetadataPath,
     turnLogFilePath,
+    turnImageFilePath,
     newTurnId,
     newSessionId,
     normalizeSessionName,
@@ -37,8 +39,9 @@ module Agent.Session (
 
 import Agent.TurnSignal (signalTurnLog)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
-import Control.Monad (filterM)
+import Control.Monad (filterM, unless)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.!=), (.:), (.:?), (.=))
+import Data.ByteArray.Encoding (Base (..), convertFromBase)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isAlphaNum, isAscii)
@@ -47,6 +50,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -122,6 +126,7 @@ data AgentTurn = AgentTurn
     { turnId :: Text
     , turnSessionId :: Text
     , turnPrompt :: Text
+    , turnImages :: [Text]
     , turnAutomatic :: Bool
     , turnStatus :: Text
     , turnExitCode :: Maybe Int
@@ -138,6 +143,7 @@ instance ToJSON AgentTurn where
             [ "turnId" .= turnId turn
             , "turnSessionId" .= turnSessionId turn
             , "turnPrompt" .= turnPrompt turn
+            , "turnImages" .= turnImages turn
             , "turnAutomatic" .= turnAutomatic turn
             , "turnStatus" .= turnStatus turn
             , "turnExitCode" .= turnExitCode turn
@@ -153,6 +159,7 @@ instance FromJSON AgentTurn where
             <$> obj .: "turnId"
             <*> obj .: "turnSessionId"
             <*> obj .:? "turnPrompt" .!= ""
+            <*> obj .:? "turnImages" .!= []
             <*> obj .:? "turnAutomatic" .!= False
             <*> obj .: "turnStatus"
             <*> obj .:? "turnExitCode"
@@ -160,6 +167,24 @@ instance FromJSON AgentTurn where
             <*> obj .:? "turnFinishedAt"
             <*> obj .: "turnLogPath"
             <*> obj .:? "turnLog" .!= ""
+
+data TurnImage = TurnImage
+    { turnImageMimeType :: Text
+    , turnImageBase64 :: Text
+    , turnImageBytes :: BS.ByteString
+    }
+    deriving (Show, Eq)
+
+instance FromJSON TurnImage where
+    parseJSON = withObject "TurnImage" $ \obj -> do
+        mimeType <- obj .: "mimeType"
+        unless (mimeType `elem` turnImageMimeTypes) $
+            fail ("unsupported image type " <> T.unpack mimeType)
+        encoded <- obj .: "data"
+        either fail (pure . TurnImage mimeType encoded) (convertFromBase Base64 (TE.encodeUtf8 encoded))
+
+turnImageMimeTypes :: [Text]
+turnImageMimeTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 
 turnIsUnfinished :: AgentTurn -> Bool
 turnIsUnfinished turn =
@@ -218,6 +243,11 @@ turnLogFilePath :: Text -> Text -> IO FilePath
 turnLogFilePath sid tid = do
     dir <- turnsDir sid
     return $ dir </> (T.unpack tid ++ ".log")
+
+turnImageFilePath :: Text -> Text -> Int -> IO FilePath
+turnImageFilePath sid tid index = do
+    dir <- turnsDir sid
+    return $ dir </> (T.unpack tid ++ "-image-" ++ show index)
 
 newSessionId :: IO Text
 newSessionId = do

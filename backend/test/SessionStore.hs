@@ -102,6 +102,7 @@ turnFor now sid n =
         { turnId = "turn-" <> sid <> "-" <> T.pack (show n)
         , turnSessionId = sid
         , turnPrompt = "prompt"
+        , turnImages = []
         , turnAutomatic = False
         , turnStatus = "running"
         , turnExitCode = Nothing
