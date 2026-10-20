@@ -42,7 +42,7 @@ viewHtmlFrame frame =
         ]
         [ Html.node "iframe"
             [ src frame.src
-            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
+            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
             , class "file-html-viewer"
             , id frame.id
             ]
