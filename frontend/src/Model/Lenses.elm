@@ -969,6 +969,11 @@ pendingQuestion =
     lens ".pendingQuestion" .pendingQuestion (\t question -> { t | pendingQuestion = question })
 
 
+contextState : Lens ls { a | contextState : b } b x y
+contextState =
+    lens ".contextState" .contextState (\t state -> { t | contextState = state })
+
+
 streamError : Lens ls { a | streamError : b } b x y
 streamError =
     lens ".streamError" .streamError (\t error -> { t | streamError = error })
@@ -1044,6 +1049,12 @@ sessionPendingQuestion : AgentSessionView -> AgentState -> Maybe PendingQuestion
 sessionPendingQuestion view agentState =
     try (liveTurnAt view.session.sessionId << just << pendingQuestion) agentState
         |> Maybe.withDefault (Model.persistedQuestion view)
+
+
+sessionContextState : AgentSessionView -> AgentState -> Maybe Model.ContextState
+sessionContextState view agentState =
+    try (liveTurnAt view.session.sessionId << just << contextState) agentState
+        |> Maybe.withDefault (Model.persistedContextState view)
 
 
 sessionPendingSteer : AgentSessionView -> AgentState -> Maybe String

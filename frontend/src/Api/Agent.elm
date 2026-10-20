@@ -1,6 +1,7 @@
 module Api.Agent exposing
     ( applyChanges
     , archive
+    , compact
     , createSession
     , delete_
     , discardSession
@@ -298,6 +299,11 @@ turnEvent =
 archive : String -> Flow s (Result Http.Error Model.AgentSessionView)
 archive sessionId =
     postSessionView "/archive" (sessionIdBody sessionId)
+
+
+compact : String -> Flow s (Result Http.Error Model.AgentSessionView)
+compact sessionId =
+    postSessionView "/compact" (sessionIdBody sessionId)
 
 
 stop : String -> Flow s (Result Http.Error Model.AgentSessionView)

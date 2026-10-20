@@ -866,6 +866,18 @@ type ChatEntry
     | ChatChangesetEntry ChatChangeset
 
 
+type alias ContextUsage =
+    { tokens : Int
+    , capacity : Int
+    }
+
+
+type ContextState
+    = ContextKnown ContextUsage
+    | ContextCompacting
+    | ContextFailed String
+
+
 type alias AgentSessionNameEdit =
     { sessionId : String
     , value : String
@@ -882,6 +894,7 @@ type AgentRequest
     | StoppingAgentTurn String
     | ApplyingAgentChanges String
     | DiscardingAgentChanges String
+    | CompactingAgentSession String
 
 
 type alias PendingQuestion =
@@ -938,6 +951,7 @@ type alias AgentLiveTurn =
     , entries : List ChatEntry
     , chunkBuffer : String
     , pendingQuestion : Maybe PendingQuestion
+    , contextState : Maybe ContextState
     , streamError : Maybe String
     , pendingSteer : Maybe String
     , runningCalls : List AgentToolCall
@@ -952,6 +966,7 @@ liveTurnFor turnId view =
     , entries = persistedTranscript view
     , chunkBuffer = ""
     , pendingQuestion = persistedQuestion view
+    , contextState = persistedContextState view
     , streamError = Nothing
     , pendingSteer = Nothing
     , runningCalls = []
@@ -1046,6 +1061,7 @@ ingestLiveChunk chunk live =
         | chunkBuffer = remainder
         , entries = List.foldl appendChatLine live.entries keptLines
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
+        , contextState = List.foldl contextStateAfterLine live.contextState keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
         , runningCalls = List.foldl runningCallsAfterLine live.runningCalls keptLines
         , applying = List.foldl applyingDiffAfterLine live.applying keptLines
@@ -1061,6 +1077,11 @@ persistedTranscript view =
 persistedQuestion : AgentSessionView -> Maybe PendingQuestion
 persistedQuestion =
     List.foldl pendingQuestionAfterLine Nothing << replayedTurnLogLines
+
+
+persistedContextState : AgentSessionView -> Maybe ContextState
+persistedContextState view =
+    List.foldl contextStateAfterLine Nothing (List.concatMap turnLogLines view.turns)
 
 
 replayedTurnLogLines : AgentSessionView -> List String
@@ -1288,6 +1309,9 @@ splitLogPrefix line =
     else if String.startsWith "[question] " line then
         ( "question", String.dropLeft 11 line )
 
+    else if String.startsWith "[context] " line then
+        ( "context", String.dropLeft 10 line )
+
     else if String.startsWith "[activity] " line then
         ( "activity", String.dropLeft 11 line )
 
@@ -1315,11 +1339,17 @@ appendToCurrentAssistant body =
 
 appendAssistantLine : String -> List ChatEntry -> List ChatEntry
 appendAssistantLine body entries =
-    if List.member (String.trim body) retiredNarrationMarkers then
+    if isRetiredAssistantLine body then
         entries
 
     else
         appendToCurrentAssistant body entries
+
+
+isRetiredAssistantLine : String -> Bool
+isRetiredAssistantLine body =
+    List.member (String.trim body) retiredNarrationMarkers
+        || String.startsWith "**Context warning:**" (String.trim body)
 
 
 retiredNarrationMarkers : List String
@@ -1349,6 +1379,58 @@ pendingQuestionAfterLine rawLine pending =
 
         _ ->
             pending
+
+
+contextStateAfterLine : String -> Maybe ContextState -> Maybe ContextState
+contextStateAfterLine rawLine current =
+    case splitLogPrefix rawLine of
+        ( "context", body ) ->
+            case Decode.decodeString contextLogDecoder (String.trim body) of
+                Ok next ->
+                    next
+
+                Err _ ->
+                    current
+
+        _ ->
+            current
+
+
+contextLogDecoder : Decode.Decoder (Maybe ContextState)
+contextLogDecoder =
+    Decode.oneOf
+        [ Decode.map2
+            (\tokens capacity -> Just (ContextKnown { tokens = tokens, capacity = capacity }))
+            (Decode.field "tokens" Decode.int)
+            (Decode.field "capacity" Decode.int)
+        , Decode.field "state" Decode.string
+            |> Decode.andThen
+                (\state ->
+                    case state of
+                        "compacting" ->
+                            Decode.succeed (Just ContextCompacting)
+
+                        "compacted" ->
+                            Decode.succeed Nothing
+
+                        "failed" ->
+                            Decode.map (\message -> Just (ContextFailed message))
+                                (Decode.field "message" Decode.string)
+
+                        _ ->
+                            Decode.fail ("unknown context state " ++ state)
+                )
+        ]
+
+
+contextWarning : ContextState -> Bool
+contextWarning state =
+    case state of
+        ContextKnown usage ->
+            usage.tokens * 2 >= usage.capacity
+
+        _ ->
+            False
 
 
 pendingSteerAfterLine : String -> Maybe String -> Maybe String

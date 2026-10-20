@@ -48,6 +48,7 @@ import Agent.Session (
     normalizeSessionName,
     saveSession,
     saveTurn,
+    sessionCompacting,
     sessionDir,
     touchSession,
     turnIsUnfinished,
@@ -710,7 +711,8 @@ broadcastAppliedStatuses commit projectIds stepIds = do
 sessionHasActiveRunner :: AgentSession -> ExceptT String IO Bool
 sessionHasActiveRunner session_ = do
     turns_ <- liftIO $ loadRepairedSessionTurns session_
-    return $ isJust (latestUnfinishedTurn turns_)
+    compacting <- liftIO $ sessionCompacting (sessionId session_)
+    return $ compacting || isJust (latestUnfinishedTurn turns_)
 
 requireEditableSession :: Text -> ExceptT String IO AgentSession
 requireEditableSession sid = do
