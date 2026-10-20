@@ -4005,14 +4005,14 @@ steerAgentTurn view promptSource =
     withAgentRequest (Model.SteeringAgentTurn sessionId)
         (withAgentPrompt promptSource
             (\prompt ->
-                sendSteer sessionId { wire = prompt, shown = prompt }
-                    |> Flow.seq clearAgentPrompt
+                clearAgentPrompt
+                    |> Flow.seq (sendSteer sessionId { wire = prompt, shown = prompt } (restoreAgentPrompt prompt))
             )
         )
 
 
-sendSteer : String -> { wire : String, shown : String } -> Flow Model ()
-sendSteer sessionId { wire, shown } =
+sendSteer : String -> { wire : String, shown : String } -> Flow Model () -> Flow Model ()
+sendSteer sessionId { wire, shown } onFailed =
     setPendingSteer sessionId (Just shown)
         |> Flow.seq scrollAgentChatToBottom
         |> Flow.seq (AgentApi.steer sessionId wire)
@@ -4022,6 +4022,7 @@ sendSteer sessionId { wire, shown } =
                 setPendingSteer sessionId Nothing
                     |> Flow.seq (clearRequestIfMatches (Model.SteeringAgentTurn sessionId))
                     |> Flow.seq (addToast False (Http.errorMessage err))
+                    |> Flow.seq onFailed
                     |> Flow.seq (refreshAgentSession sessionId)
             )
 
@@ -4030,7 +4031,7 @@ answerAgentQuestion : String -> String -> String -> Flow Model ()
 answerAgentQuestion sessionId wire shown =
     Flow.when (not (String.isEmpty wire))
         (withAgentRequest (Model.SteeringAgentTurn sessionId)
-            (sendSteer sessionId { wire = wire, shown = shown })
+            (sendSteer sessionId { wire = wire, shown = shown } (Flow.pure ()))
         )
 
 
