@@ -924,10 +924,12 @@ autoApplyStateId =
 
 attachedImages : String -> Decode.Decoder ( Flow Model (), Bool )
 attachedImages transfer =
-    Decode.at [ transfer, "files" ] (Decode.list File.decoder)
+    Decode.map2 Tuple.pair
+        (Decode.at [ transfer, "types" ] (Decode.list Decode.string))
+        (Decode.at [ transfer, "files" ] (Decode.list File.decoder))
         |> Decode.andThen
-            (\files ->
-                if List.isEmpty files then
+            (\( types, files ) ->
+                if List.isEmpty files || List.member "text/plain" types then
                     Decode.fail "nothing to attach"
 
                 else
