@@ -816,6 +816,7 @@ loadProjectReviews =
                                     (\model ->
                                         if reviewTarget model == Just target then
                                             Flow.modify (over (projectSteps projectId_) (mergeReviewReport result))
+                                                |> Flow.seq runBuiltStepStatusHooks
                                                 |> Flow.seq (refreshViewedStepStatuses (projectSteps projectId_ << where_ (lostReviewSince model)))
 
                                         else
@@ -2688,13 +2689,6 @@ registerStepStatusHook stepId hook =
         (Just << Flow.seq hook << Maybe.withDefault (Flow.pure ()))
 
 
-readyStepStatusHooks : Model -> Dict Int (Flow Model ())
-readyStepStatusHooks model =
-    Dict.filter
-        (\stepId _ -> has (stepRecordById stepId << runState << success << status << success << where_ Model.hasBuiltOutput) model)
-        (get stepStatusHooks model)
-
-
 runBuiltStepStatusHooks : Flow Model ()
 runBuiltStepStatusHooks =
     Flow.get
@@ -2702,7 +2696,9 @@ runBuiltStepStatusHooks =
             (\model ->
                 let
                     ready =
-                        readyStepStatusHooks model
+                        Dict.filter
+                            (\stepId _ -> has (stepRecordById stepId << runState << success << status << success << where_ Model.hasBuiltOutput) model)
+                            (get stepStatusHooks model)
                 in
                 Flow.over stepStatusHooks (\hooks -> Dict.diff hooks ready)
                     |> Flow.seq (Dict.foldl (\_ hook -> Flow.seq (Flow.async hook)) (Flow.pure ()) ready)
@@ -4278,6 +4274,7 @@ applyListedStatuses statuses model =
                 |> List.map (always (Flow.async loadProjectReviews))
     in
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
+        |> Flow.seq runBuiltStepStatusHooks
         |> Flow.seq (Flow.batchM (settles ++ reviewReloads))
         |> Flow.seq settlePendingStops
 

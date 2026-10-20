@@ -212,7 +212,6 @@ subscriptions model =
     Sub.batch
         [ uploadProgressSubscription model
         , gutterDragSubscription model
-        , stepStatusHookSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
         , agentActivitySubscription model
         , statusBarClockSubscription model
@@ -228,15 +227,6 @@ subscriptions model =
                     Flow.pure ()
             )
         ]
-
-
-stepStatusHookSubscription : Model -> Sub (Flow Model ())
-stepStatusHookSubscription model =
-    if Dict.isEmpty (Actions.readyStepStatusHooks model) then
-        Sub.none
-
-    else
-        Browser.Events.onAnimationFrame (\_ -> Actions.runBuiltStepStatusHooks)
 
 
 agentActivitySubscription : Model -> Sub (Flow Model ())
