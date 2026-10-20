@@ -3708,10 +3708,6 @@ attachAgentImages files =
             )
 
 
-{-| NixOS nginx caps request bodies at 10 MiB by default
-(<https://search.nixos.org/options?show=services.nginx.clientMaxBodySize>);
-the rest of the budget is left for the prompt text.
--}
 agentImagesBudget : Int
 agentImagesBudget =
     8 * 1024 * 1024
