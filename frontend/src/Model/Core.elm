@@ -1696,7 +1696,7 @@ type Model
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
-        , stepStatusBuffer : Dict Int StatusReport
+        , stepStatusBuffer : Dict String (Dict Int StatusReport)
         , pendingBuilds : Dict Int String
         , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
@@ -2021,7 +2021,7 @@ getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
 
-getStepStatusBuffer : Model -> Dict Int StatusReport
+getStepStatusBuffer : Model -> Dict String (Dict Int StatusReport)
 getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
 

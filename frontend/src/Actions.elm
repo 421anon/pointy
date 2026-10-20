@@ -528,12 +528,8 @@ reapplyOrganizeQueue =
 
 replayStepStatusBuffer : Flow Model ()
 replayStepStatusBuffer =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                applyStepStatuses (get stepStatusBuffer model)
-                    |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
-            )
+    Flow.getAll (stepStatusBuffer << values)
+        ((|>) (Flow.setAll stepStatusBuffer Dict.empty) << Flow.seq << Flow.batchM << List.map applyStepStatuses)
 
 
 applyStepStatus : String -> Maybe String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
@@ -816,6 +812,7 @@ loadProjectReviews =
                                     (\model ->
                                         if reviewTarget model == Just target then
                                             Flow.modify (over (projectSteps projectId_) (mergeReviewReport result))
+                                                |> Flow.seq runBuiltStepStatusHooks
                                                 |> Flow.seq (refreshViewedStepStatuses (projectSteps projectId_ << where_ (lostReviewSince model)))
 
                                         else
@@ -2688,6 +2685,16 @@ registerStepStatusHook stepId hook =
         (Just << Flow.seq hook << Maybe.withDefault (Flow.pure ()))
 
 
+runBuiltStepStatusHooks : Flow Model ()
+runBuiltStepStatusHooks =
+    Flow.forAll stepStatusHooks (Dict.keys >> List.foldl (Flow.seq << runStepStatusHookIfBuilt) (Flow.pure ()))
+
+
+runStepStatusHookIfBuilt : Int -> Flow Model ()
+runStepStatusHookIfBuilt stepId =
+    Flow.whenHas (builtStepStatus stepId) (always (Flow.async (runAndClearStepStatusHook stepId)))
+
+
 runAndClearStepStatusHook : Int -> Flow Model ()
 runAndClearStepStatusHook stepId =
     Flow.forAll (stepStatusHooks << keyI stepId << just)
@@ -2706,22 +2713,16 @@ openHighlightedEntry highlight =
 
 deepOpenOutputEntryOrDefer : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenOutputEntryOrDefer id path mRange =
-    Flow.try
-        (stepRecordById id << runState << success << status << success << where_ Model.hasBuiltOutput)
-        (\mStatus ->
-            case mStatus of
-                Just _ ->
-                    deepOpenOutputEntry id path mRange
-
-                Nothing ->
-                    registerStepStatusHook id (deepOpenOutputEntry id path mRange)
-                        |> Flow.seq (Flow.attemptTask (Scroll.scrollY (Model.rowDomId StepChild id) 0 0))
+    Flow.ifHas (builtStepStatus id)
+        (always (deepOpenOutputEntry id path mRange))
+        (registerStepStatusHook id (Flow.whenHas (route << Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches Route.Output id path)) (always (deepOpenOutputEntry id path mRange)))
+            |> Flow.seq (Flow.attemptTask (Scroll.scrollY (Model.rowDomId StepChild id) 0 0))
         )
 
 
 deepOpenOutputEntry : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenOutputEntry stepId path mRange =
-    Flow.forAll (stepRecordById stepId << runState << success << status << success << where_ Model.hasBuiltOutput)
+    Flow.forAll (builtStepStatus stepId)
         (\_ ->
             deepOpenEntryWith Route.Output toggleOutputEntry stepId path mRange
         )
@@ -4186,6 +4187,7 @@ onStepStatusIn value =
                 |> Flow.andThen
                     (\model ->
                         Flow.when (headMovedRemotely model commit) (Flow.async (resyncWorkspace commit))
+                            |> Flow.seq (bufferUnlistedStatuses model commit statuses)
                             |> Flow.seq (applyStepStatuses statuses)
                             |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async refreshProjectRollup))
                     )
@@ -4247,36 +4249,36 @@ applyStepStatuses statuses =
     Flow.get |> Flow.andThen (applyListedStatuses statuses)
 
 
+bufferUnlistedStatuses : Model -> String -> Dict Int Model.StatusReport -> Flow Model ()
+bufferUnlistedStatuses model commit statuses =
+    let
+        unlisted =
+            Dict.filter (always << not << flip has model << stepRecordById) statuses
+
+        isIncomingOrViewed slotCommit =
+            slotCommit == commit || Maybe.unwrap True ((==) slotCommit) (Model.viewedRevision model)
+    in
+    Flow.when (not (Dict.isEmpty unlisted))
+        (Flow.over stepStatusBuffer (Dict.filter (always << isIncomingOrViewed))
+            |> Flow.seq (Flow.over (stepStatusBuffer << Dict.Accessors.at commit) (Just << Dict.union unlisted << Maybe.withDefault Dict.empty))
+        )
+
+
 applyListedStatuses : Dict Int Model.StatusReport -> Model -> Flow Model ()
 applyListedStatuses statuses model =
     let
-        listed =
-            all (stepRecordsListed statuses) model
-
-        listedIds =
-            Set.fromList (List.filterMap (get recordId) listed)
-
-        unlisted =
-            Dict.filter (\stepId _ -> not (Set.member stepId listedIds))
-
-        hooks =
-            statuses
-                |> Dict.filter (\_ -> Model.hasBuiltOutput << .status)
-                |> Dict.keys
-                |> List.map runAndClearStepStatusHook
-
         settles =
             Dict.toList statuses
                 |> List.map (\( stepId, report ) -> settlePendingBuild report.commit stepId report.status)
 
         reviewReloads =
-            listed
+            all (stepRecordsListed statuses) model
                 |> List.filter (renewsReview statuses)
                 |> List.map (always (Flow.async loadProjectReviews))
     in
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
-        |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (unlisted buffer) (unlisted statuses)))
-        |> Flow.seq (Flow.batchM (hooks ++ settles ++ reviewReloads))
+        |> Flow.seq runBuiltStepStatusHooks
+        |> Flow.seq (Flow.batchM (settles ++ reviewReloads))
         |> Flow.seq settlePendingStops
 
 
