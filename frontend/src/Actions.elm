@@ -3690,7 +3690,31 @@ attachAgentImages files =
     in
     Flow.when (not (List.isEmpty rejected)) (addToast False "Only PNG, JPEG, GIF and WebP images can be attached.")
         |> Flow.seq (Flow.traverse readComposerImage images)
-        |> Flow.andThen (\read -> Flow.over (agent << composerImages) (\attached -> attached ++ read))
+        |> Flow.andThen
+            (\read ->
+                Flow.getAll (agent << composerImages)
+                    (\attached ->
+                        if encodedImagesLength (List.concat attached ++ read) > agentImagesBudget then
+                            addToast False "These images are too large to send together. Attach smaller or fewer images."
+
+                        else
+                            Flow.over (agent << composerImages) (\current -> current ++ read)
+                    )
+            )
+
+
+{-| NixOS nginx caps request bodies at 10 MiB by default
+(<https://nginx.org/en/docs/http/ngx_http_core_module.html#client_max_body_size>);
+the rest of the budget is left for the prompt text.
+-}
+agentImagesBudget : Int
+agentImagesBudget =
+    8 * 1024 * 1024
+
+
+encodedImagesLength : List Model.ComposerImage -> Int
+encodedImagesLength =
+    List.sum << List.map (String.length << .url)
 
 
 readComposerImage : File -> Flow Model Model.ComposerImage
