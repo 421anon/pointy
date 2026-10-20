@@ -801,7 +801,7 @@ stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
 
 
-stepStatusBuffer : Lens ls Model (Dict Int Model.StatusReport) x y
+stepStatusBuffer : Lens ls Model (Dict String (Dict Int Model.StatusReport)) x y
 stepStatusBuffer =
     lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
 
