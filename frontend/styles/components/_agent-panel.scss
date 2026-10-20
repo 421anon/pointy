@@ -685,6 +685,8 @@
   background: var(--bg-secondary);
   &.is-pending {
     border-style: dashed;
+    border-color: var(--state-info);
+    background: var(--state-info-outline);
   }
 
   &.is-applying {
