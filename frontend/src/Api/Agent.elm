@@ -5,6 +5,7 @@ module Api.Agent exposing
     , delete_
     , discardSession
     , fetchSession
+    , imageMimeTypes
     , listSessions
     , renameSession
     , sendTurn
@@ -18,7 +19,7 @@ import Flow exposing (Flow)
 import Http
 import Iso8601
 import Json.Decode as Decode exposing (Decoder)
-import Json.Decode.Pipeline exposing (optional, required)
+import Json.Decode.Pipeline exposing (custom, optional, required)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
 import Model.Core as Model
@@ -77,8 +78,8 @@ autoApplyFields setting =
     ]
 
 
-sendTurn : String -> String -> AutoApplySetting a -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt setting mCurrentProjectId =
+sendTurn : String -> String -> List Model.ComposerImage -> AutoApplySetting a -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt images setting mCurrentProjectId =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
@@ -87,12 +88,26 @@ sendTurn sessionId prompt setting mCurrentProjectId =
                     Encode.object
                         ([ ( "sessionId", Encode.string sessionId )
                          , ( "prompt", Encode.string prompt )
+                         , ( "images", Encode.list encodeImage images )
                          , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
                          ]
                             ++ autoApplyFields setting
                         )
             , expect = Http.expectJson identity turnDecoder
             }
+
+
+encodeImage : Model.ComposerImage -> Encode.Value
+encodeImage image =
+    Encode.object
+        [ ( "mimeType", Encode.string image.mimeType )
+        , ( "data", Encode.string (String.dropLeft (String.length ("data:" ++ image.mimeType ++ ";base64,")) image.url) )
+        ]
+
+
+imageMimeTypes : List String
+imageMimeTypes =
+    [ "image/png", "image/jpeg", "image/gif", "image/webp" ]
 
 
 steer : String -> String -> Flow s (Result Http.Error ())
@@ -228,11 +243,24 @@ turnDecoder =
         |> required "turnId" Decode.string
         |> required "turnSessionId" Decode.string
         |> optional "turnPrompt" Decode.string ""
+        |> custom turnImagesDecoder
         |> optional "turnAutomatic" Decode.bool False
         |> required "turnStatus" Decode.string
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
         |> required "turnLogPath" Decode.string
         |> optional "turnLog" Decode.string ""
+
+
+turnImagesDecoder : Decoder (List String)
+turnImagesDecoder =
+    Decode.map2 (\turnId -> List.indexedMap (\index _ -> turnImageUrl turnId index))
+        (Decode.field "turnId" Decode.string)
+        (Decode.field "turnImages" (Decode.list Decode.string))
+
+
+turnImageUrl : String -> Int -> String
+turnImageUrl turnId index =
+    baseUrl ++ "/turn/" ++ turnId ++ "/image/" ++ String.fromInt index
 
 
 turnEvent : Decoder Model.AgentTurnEvent

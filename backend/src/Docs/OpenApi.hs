@@ -170,6 +170,7 @@ instance ToSchema TurnRequest where
                 "TurnRequest"
                 [ ("sessionId", stringField)
                 , ("prompt", stringField)
+                , ("images", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & required .~ ["mimeType", "data"] & properties .~ fromList [("mimeType", stringField), ("data", stringField)])))
                 , ("currentProjectId", nullableField OpenApiInteger)
                 , ("autoApply", boolField)
                 , ("clientId", stringField)

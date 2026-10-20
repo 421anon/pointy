@@ -1,4 +1,4 @@
-module Components.AgentPanel exposing (view)
+module Components.AgentPanel exposing (view, viewLightbox)
 
 import Accessors exposing (get, just, try)
 import Actions
@@ -6,9 +6,10 @@ import Api.ApiData as ApiData exposing (ApiData(..))
 import Components.AgentMentions as AgentMentions
 import Dict
 import Extra.Http as Http
+import File
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, rows, title, type_, value)
+import Html.Attributes exposing (alt, attribute, class, classList, disabled, id, placeholder, rows, src, title, type_, value)
 import Html.Events as Events
 import Html.Extra as Html
 import Html.Lazy
@@ -541,7 +542,7 @@ viewSessionDetail : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentSt
 viewSessionDetail now mentionsAwaited mentionSources agent listed =
     case ( isCreatingAgentSession agent, Model.selectedSessionSummary agent ) of
         ( True, _ ) ->
-            viewCreatingSession agent.autoApply
+            viewCreatingSession agent
 
         ( False, Just summary ) ->
             Model.selectedSessionView agent
@@ -608,8 +609,8 @@ viewNoChat agent listed =
         ]
 
 
-viewCreatingSession : Bool -> Html (Flow Model ())
-viewCreatingSession autoApply =
+viewCreatingSession : Model.AgentState -> Html (Flow Model ())
+viewCreatingSession agent =
     viewChatBody [ attribute "aria-busy" "true" ]
         { title =
             Html.div [ class "agent-panel__session-title-card" ]
@@ -628,7 +629,7 @@ viewCreatingSession autoApply =
                 ]
         , error = Html.nothing
         , chat = viewEmptyChat EmptyCreating
-        , composer = viewPrompt autoApply False ComposerIdle False True
+        , composer = viewPrompt agent.composerImages agent.autoApply False ComposerIdle False True
         }
 
 
@@ -670,7 +671,13 @@ viewSession now mentionsAwaited mentionSources agent summary sessionView =
         changeset =
             pendingChangeset agent runnerActive applyingDiff sessionView
     in
-    viewChatBody []
+    viewChatBody
+        (if closedChat then
+            []
+
+         else
+            [ attribute "data-drop-files" "", Events.preventDefaultOn "drop" (attachedImages "dataTransfer") ]
+        )
         { title = viewSessionTitle agent summary
         , error = Html.viewIf (not runnerActive && not (changesetRefused changeset)) (viewError session)
         , chat =
@@ -713,7 +720,7 @@ viewSession now mentionsAwaited mentionSources agent summary sessionView =
                         else
                             ComposerIdle
                 in
-                viewPrompt agent.autoApply (runnerActive && applyingDiff == Nothing) busy stopping submitBlocked
+                viewPrompt agent.composerImages agent.autoApply (runnerActive && applyingDiff == Nothing) busy stopping submitBlocked
         }
 
 
@@ -874,8 +881,8 @@ type ComposerBusy
     | ComposerSteering
 
 
-viewPrompt : Bool -> Bool -> ComposerBusy -> Bool -> Bool -> Html (Flow Model ())
-viewPrompt autoApply runnerActive busy stopping submitBlocked =
+viewPrompt : List Model.ComposerImage -> Bool -> Bool -> ComposerBusy -> Bool -> Bool -> Html (Flow Model ())
+viewPrompt images autoApply runnerActive busy stopping submitBlocked =
     let
         steering =
             runnerActive || stopping
@@ -888,7 +895,8 @@ viewPrompt autoApply runnerActive busy stopping submitBlocked =
                 "Auto-apply is off."
     in
     Html.div [ class "agent-panel__composer" ]
-        [ Html.div [ class "agent-panel__composer-row" ]
+        [ Html.viewIf (not (List.isEmpty images)) (viewComposerImages (List.map .url images))
+        , Html.div [ class "agent-panel__composer-row" ]
             [ Html.textarea
                 [ class "agent-panel__prompt"
                 , id "agent-prompt"
@@ -897,6 +905,7 @@ viewPrompt autoApply runnerActive busy stopping submitBlocked =
                 , attribute "aria-label" "Agent prompt"
                 , attribute "aria-describedby" autoApplyStateId
                 , submitShortcut submitBlocked
+                , Events.preventDefaultOn "paste" (attachedImages "clipboardData")
                 ]
                 []
             , Html.div [ class "agent-panel__composer-actions" ]
@@ -911,6 +920,109 @@ viewPrompt autoApply runnerActive busy stopping submitBlocked =
 autoApplyStateId : String
 autoApplyStateId =
     "agent-auto-apply-state"
+
+
+attachedImages : String -> Decode.Decoder ( Flow Model (), Bool )
+attachedImages transfer =
+    Decode.at [ transfer, "files" ] (Decode.list File.decoder)
+        |> Decode.andThen
+            (\files ->
+                if List.isEmpty files then
+                    Decode.fail "nothing to attach"
+
+                else
+                    Decode.succeed ( Actions.attachAgentImages files, True )
+            )
+
+
+viewComposerImages : List String -> Html (Flow Model ())
+viewComposerImages urls =
+    Html.div [ class "agent-panel__images agent-panel__images--composer" ]
+        (List.indexedMap
+            (\index url ->
+                Html.div [ class "agent-panel__composer-image" ]
+                    [ viewImageButton urls index url
+                    , viewIconButton ("Remove image " ++ String.fromInt (index + 1))
+                        "close"
+                        [ class "icon-btn agent-panel__composer-image-remove"
+                        , Events.onClick (Actions.removeComposerImage index)
+                        ]
+                    ]
+            )
+            urls
+        )
+
+
+viewImageButton : List String -> Int -> String -> Html (Flow Model ())
+viewImageButton urls index url =
+    Html.button
+        [ type_ "button"
+        , class "agent-panel__image"
+        , attribute "aria-label" (imageLabel urls index)
+        , Events.onClick (Actions.openLightbox urls index)
+        ]
+        [ Html.img [ src url, alt "", attribute "loading" "lazy" ] [] ]
+
+
+imageLabel : List String -> Int -> String
+imageLabel urls index =
+    "Image " ++ String.fromInt (index + 1) ++ " of " ++ String.fromInt (List.length urls)
+
+
+viewLightbox : Model -> Html (Flow Model ())
+viewLightbox model =
+    Html.node "dialog"
+        [ id Actions.agentLightboxId
+        , class "agent-lightbox"
+        , attribute "aria-label" "Image viewer"
+        , Events.on "close" (Decode.succeed Actions.clearLightbox)
+        , Events.onClick (Actions.closeDialog Actions.agentLightboxId)
+        , Events.on "keydown" <|
+            Keyboard.decodeCombinations
+                [ ( Keyboard.arrowLeft, Decode.succeed (Actions.stepLightbox -1) )
+                , ( Keyboard.arrowRight, Decode.succeed (Actions.stepLightbox 1) )
+                ]
+        ]
+        [ Html.viewMaybe viewLightboxContent (Model.getAgent model).lightbox ]
+
+
+viewLightboxContent : Model.Lightbox -> Html (Flow Model ())
+viewLightboxContent shown =
+    let
+        count =
+            List.length shown.images
+
+        stepButton label iconName role step =
+            Html.viewIf (count > 1)
+                (viewIconButton label
+                    iconName
+                    [ class ("icon-btn agent-lightbox__button agent-lightbox__" ++ role)
+                    , Events.stopPropagationOn "click" (Decode.succeed ( Actions.stepLightbox step, True ))
+                    ]
+                )
+    in
+    Html.div [ class "agent-lightbox__content" ]
+        [ viewIconButton "Close"
+            "close"
+            [ class "icon-btn agent-lightbox__button agent-lightbox__close"
+            , Events.onClick (Actions.closeDialog Actions.agentLightboxId)
+            ]
+        , stepButton "Previous image" "chevron_left" "previous" -1
+        , Html.viewMaybe
+            (\url ->
+                Html.img
+                    [ class "agent-lightbox__image"
+                    , src url
+                    , alt (imageLabel shown.images shown.index)
+                    , Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+                    ]
+                    []
+            )
+            (List.getAt shown.index shown.images)
+        , stepButton "Next image" "chevron_right" "next" 1
+        , Html.viewIf (count > 1)
+            (Html.span [ class "agent-lightbox__counter" ] [ Html.text (String.fromInt (shown.index + 1) ++ " / " ++ String.fromInt count) ])
+        ]
 
 
 viewSubmitButton : String -> Bool -> ComposerBusy -> Bool -> Html (Flow Model ())
@@ -1111,6 +1223,8 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
                                 ]
                                 [ Html.text "You" ]
                         ]
+                    , Html.viewIf (not (List.isEmpty turn.images))
+                        (Html.div [ class "agent-panel__images" ] (List.indexedMap (viewImageButton turn.images) turn.images))
                     , Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ]
                         [ Html.text prompt ]
                     ]

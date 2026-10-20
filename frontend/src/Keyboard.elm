@@ -4,6 +4,8 @@ module Keyboard exposing
     , Key(..)
     , Modifier(..)
     , arrowDown
+    , arrowLeft
+    , arrowRight
     , arrowUp
     , backspace
     , decodeCombinations
@@ -45,6 +47,8 @@ type Key
     | Space
     | ArrowUp
     | ArrowDown
+    | ArrowLeft
+    | ArrowRight
     | Tab
     | Backspace
     | Delete
@@ -100,6 +104,16 @@ arrowDown =
     Combination [] ArrowDown
 
 
+arrowLeft : Combination
+arrowLeft =
+    Combination [] ArrowLeft
+
+
+arrowRight : Combination
+arrowRight =
+    Combination [] ArrowRight
+
+
 enter : Combination
 enter =
     Combination [] Enter
@@ -137,6 +151,12 @@ toCode key =
 
         ArrowDown ->
             40
+
+        ArrowLeft ->
+            37
+
+        ArrowRight ->
+            39
 
         Tab ->
             9
@@ -189,6 +209,12 @@ keyName key =
 
         ArrowDown ->
             "Down"
+
+        ArrowLeft ->
+            "Left"
+
+        ArrowRight ->
+            "Right"
 
         Tab ->
             "Tab"

@@ -121,7 +121,21 @@ function onDragStart(app, event) {
   }
 }
 
+function acceptsFileDrop(event) {
+  return (
+    event.target instanceof Element &&
+    !!event.target.closest("[data-drop-files]") &&
+    !!event.dataTransfer?.types.includes("Files")
+  );
+}
+
 function onDragOver(event) {
+  if (acceptsFileDrop(event)) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    clearIndicator();
+    return;
+  }
   const hit = hitTest(event);
   if (!hit) {
     if (event.dataTransfer) event.dataTransfer.dropEffect = "none";

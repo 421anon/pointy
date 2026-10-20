@@ -28,6 +28,7 @@ import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
     PreparedApply (..),
+    TurnImage (..),
     applyConflictsPending,
     findTurn,
     listTurns,
@@ -40,6 +41,7 @@ import Agent.Session (
     touchSession,
     turnIsUnfinished,
     turnLogFilePath,
+    turnImageFilePath,
     turnLogHasFinalizationFailure,
     turnMetadataPath,
  )
@@ -248,17 +250,17 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
-startAgentTurn sid prompt mCurrentProjectId enabled client = do
+startAgentTurn :: Text -> Text -> [TurnImage] -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
+startAgentTurn sid prompt images mCurrentProjectId enabled client = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
-    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId UserTurn
+    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId (UserTurn images)
 
-data TurnOrigin = UserTurn | AutomaticFix (Maybe Text)
+data TurnOrigin = UserTurn [TurnImage] | AutomaticFix (Maybe Text)
 
 beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
 beginAgentTurn session_ prompt mCurrentProjectId origin = do
@@ -276,6 +278,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
                 { turnId = tid
                 , turnSessionId = sid
                 , turnPrompt = prompt
+                , turnImages = map turnImageMimeType images
                 , turnAutomatic = automatic
                 , turnStatus = "running"
                 , turnExitCode = Nothing
@@ -287,6 +290,8 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
     liftIO $ do
         createDirectoryIfMissing True (takeDirectory logPath)
         TIO.writeFile logPath ""
+        forM_ (zip [0 ..] images) $ \(index, image) ->
+            turnImageFilePath sid tid index >>= \path -> BS.writeFile path (turnImageBytes image)
         mapM_ (appendLogLine (configAgent cfg) logPath "system") syncNotes
         noteDiscardedConflict (configAgent cfg) logPath refreshedSession freshSession
         existingTurns <- listTurns sid
@@ -336,12 +341,12 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
     return turn
   where
-    (automatic, inheritedStop) = case origin of
-        UserTurn -> (False, Nothing)
-        AutomaticFix fixedTurnId -> (True, fixedTurnId)
+    (automatic, inheritedStop, images) = case origin of
+        UserTurn sent -> (False, Nothing, sent)
+        AutomaticFix fixedTurnId -> (True, fixedTurnId, [])
 
 setRunningAutoApply :: Text -> Bool -> ExceptT String IO ()
 setRunningAutoApply client enabled = do
@@ -429,8 +434,8 @@ nameChat cfg session_ logPath prompt =
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> Bool -> [Int] -> IO ()
-runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedSteps =
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> Bool -> [Int] -> IO ()
+runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject reviewedSteps =
     continueUnlessStopped run
         `finally` atomically (retireTurn sid tid)
   where
@@ -443,7 +448,7 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedS
             else action
     run = do
         appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> tid)
-        result <- try (runConfiguredProcess cfg session_ turn prompt isFirstTurn reviewedSteps) :: IO (Either SomeException ExitCode)
+        result <- try (runConfiguredProcess cfg session_ turn prompt images isFirstTurn reviewedSteps) :: IO (Either SomeException ExitCode)
         exitCode <- case result of
             Left err -> do
                 appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
@@ -451,8 +456,8 @@ runTurnProcess cfg session_ turn prompt isFirstTurn sentCurrentProject reviewedS
             Right code -> return code
         finishTurn cfg session_ turn sentCurrentProject exitCode
 
-runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> Bool -> [Int] -> IO ExitCode
-runConfiguredProcess cfg session_ turn promptText isFirstTurn reviewedSteps = do
+runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> [Int] -> IO ExitCode
+runConfiguredProcess cfg session_ turn promptText images isFirstTurn reviewedSteps = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
     chat <- prepareChatModel
@@ -555,7 +560,7 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn reviewedSteps = do
             run = do
                 stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
                 unless stopped $ do
-                    writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText]
+                    writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText, "images" Aeson..= map piImageContent images]
                     writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
                     atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
                     takeWaitingSteers (sessionId session_) input
@@ -567,6 +572,10 @@ runConfiguredProcess cfg session_ turn promptText isFirstTurn reviewedSteps = do
                 return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
         run `finally` cleanup
     outputMarker = "__POINTY_AGENT_OUTPUT_BEGIN__" <> T.unpack (turnId turn) <> "__"
+
+piImageContent :: TurnImage -> Aeson.Value
+piImageContent image =
+    Aeson.object ["type" Aeson..= ("image" :: Text), "mimeType" Aeson..= turnImageMimeType image, "data" Aeson..= turnImageBase64 image]
 
 withToolSandbox :: CreateProcess -> FilePath -> IO a -> IO a
 withToolSandbox process socketPath action =
