@@ -17,6 +17,7 @@ library
     Agent.Sandbox
     Agent.Session
     Agent.Title
+    Agent.TurnLog
     Agent.TurnSignal
     Api
     ApiTypes
@@ -252,6 +253,23 @@ test-suite turn-stream
     , temporary
     , text
     , time
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite turn-log
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          TurnLog.hs
+  ghc-options:      -threaded
+  build-depends:
+    , async
+    , backend
+    , base
+    , filepath
+    , stm
+    , temporary
+    , text
 
   hs-source-dirs:   test
   default-language: Haskell2010
