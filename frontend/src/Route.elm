@@ -639,7 +639,11 @@ projectUrlParts { projectPath, mHighlight, mCommit, mCompare } =
 artifactUrlParts : ArtifactParams -> ( String, List String )
 artifactUrlParts { projectPath, stepId, commit, path } =
     ( "/artifact/" ++ String.join "/" (List.map String.fromInt (projectPath ++ [ stepId ]) ++ [ commit ])
-    , [ "path=" ++ Url.percentEncode (String.join "/" path) ]
+    , if List.isEmpty path then
+        []
+
+      else
+        [ "path=" ++ Url.percentEncode (String.join "/" path) ]
     )
 
 
