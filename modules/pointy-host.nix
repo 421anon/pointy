@@ -42,6 +42,13 @@ in
       description = "Admit only requests carrying an unexpired EdDSA-signed JWT session token for the audience. The backend verifies the token on every request; nginx redirects unauthenticated navigations to the login page and answers unauthenticated background requests with 401. The status bar shows the signed-in user with a log out action, which clears the session cookie and returns to the login page. When null, the instance is open.";
     };
 
+    linkedDataBase = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Origin that names this instance's linked data. Artifact Turtle starts with `@base <origin/>`, so its permalink IRIs resolve to this origin whichever host served them. When null, IRIs stay relative to the requesting URL.";
+      example = "https://pointy.example.com";
+    };
+
     frontendPackage = lib.mkOption {
       type = lib.types.package;
       description = "Built frontend package served as the site root.";
@@ -55,10 +62,15 @@ in
   };
 
   config = {
-    systemd.services.backend.environment = lib.mkIf (cfg.tokenAuth != null) {
-      POINTY_TOKEN_AUDIENCE = cfg.tokenAuth.audience;
-      POINTY_TOKEN_PUBLIC_KEY = "${cfg.tokenAuth.publicKeyFile}";
-    };
+    systemd.services.backend.environment = lib.mkMerge [
+      (lib.mkIf (cfg.tokenAuth != null) {
+        POINTY_TOKEN_AUDIENCE = cfg.tokenAuth.audience;
+        POINTY_TOKEN_PUBLIC_KEY = "${cfg.tokenAuth.publicKeyFile}";
+      })
+      (lib.mkIf (cfg.linkedDataBase != null) {
+        POINTY_LINKED_DATA_BASE = cfg.linkedDataBase;
+      })
+    ];
 
     services.nginx.virtualHosts.${cfg.hostname} = lib.mkMerge [
       (lib.mkIf (cfg.tokenAuth != null) (import ./token-auth-vhost.nix {
@@ -85,6 +97,16 @@ in
         locations."/" = {
           root = "${cfg.frontendPackage}";
           tryFiles = "$uri $uri/ /index.html";
+        };
+        locations."/artifact/" = {
+          root = "${cfg.frontendPackage}";
+          tryFiles = "/index.html =404";
+          extraConfig = ''
+            add_header Vary Accept;
+            if ($http_accept ~* "text/turtle") {
+              rewrite ^/artifact/(.*)$ /backend/rdf/artifact/$1 last;
+            }
+          '';
         };
         locations."/docs/" = lib.mkIf (cfg.docsPackage != null) {
           alias = "${cfg.docsPackage}/";

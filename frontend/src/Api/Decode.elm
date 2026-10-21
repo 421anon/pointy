@@ -7,7 +7,7 @@ import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (custom, optional, required)
 import Model.Core as Model exposing (DirectoryItem(..), FileView, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), blankProject, blankStep)
-import Model.Shadow exposing (Artifact, Field, Preset, Presets, StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), WithSrcFiles(..))
+import Model.Shadow exposing (Artifact, Field, Preset, Presets, StepArgValue(..), StepConfig, StepConfigEntry, StepRef, StepType(..), Widget(..), WithSrcFiles(..))
 
 
 stepStatusEvent : Decoder StepStatusEvent
@@ -166,7 +166,7 @@ stepValueOnlyFromConfig stepConfig_ =
 stepValueOnly : StepType -> Decoder StepRecord
 stepValueOnly stepType_ =
     Decode.succeed
-        (\id name type_ note args reviewedRevision reviewedBy comments lastModifiedAt createdAt ->
+        (\id name type_ note about args reviewedRevision reviewedBy comments lastModifiedAt createdAt ->
             let
                 base =
                     blankStep type_
@@ -175,6 +175,7 @@ stepValueOnly stepType_ =
                 | id = Just id
                 , name = name
                 , note = note
+                , about = about
                 , review = Maybe.map (\revision -> { revision = revision, reviewedBy = reviewedBy, comments = comments, comparison = NotAsked }) reviewedRevision
                 , args = args
                 , lastModifiedAt = lastModifiedAt
@@ -185,6 +186,7 @@ stepValueOnly stepType_ =
         |> required "name" Decode.string
         |> required "type" Decode.string
         |> optional "note" Decode.string ""
+        |> optional "about" (Decode.list Decode.string) []
         |> required "args" (stepArgs stepType_)
         |> optional "reviewedRevision" (maybe Decode.string) Nothing
         |> optional "reviewedBy" Decode.string ""
@@ -647,6 +649,13 @@ uploadHash =
     Decode.map TUploadHashValue (Decode.field "hash" Decode.string)
 
 
+stepRef : Decoder StepRef
+stepRef =
+    Decode.succeed StepRef
+        |> optional "path" (Decode.list Decode.int) []
+        |> required "step" Decode.int
+
+
 stepArgValue : Widget -> Decoder StepArgValue
 stepArgValue widget_ =
     case widget_ of
@@ -667,10 +676,10 @@ stepArgValue widget_ =
                 |> Decode.map TListValue
 
         WStep _ ->
-            Decode.map TStepValue (Decode.field "step" Decode.int)
+            Decode.map TStepValue stepRef
 
         WSteps _ ->
-            Decode.map (TListValue << List.map TStepValue) (Decode.list (Decode.field "step" Decode.int))
+            Decode.map (TListValue << List.map TStepValue) (Decode.list stepRef)
 
         WRecord fields ->
             let

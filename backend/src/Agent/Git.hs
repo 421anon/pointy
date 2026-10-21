@@ -60,10 +60,10 @@ import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
-import Control.Monad (filterM, mfilter, unless, void, when, (<=<))
+import Control.Monad (filterM, forM_, mfilter, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (ToJSON)
+import Data.Aeson (ToJSON, Value)
 import Data.Char (isControl)
 import Data.List (intercalate, nub, sortOn)
 import qualified Data.Map.Strict as Map
@@ -72,16 +72,19 @@ import Data.Ord (Down (..))
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
+import DependencyRefs (decodeStepDefinitions, flakeStepDefinitionsExpression, rewriteDependencyRefs, stepRelocations, stripReferencePaths)
 import GHC.Generics (Generic)
-import Certificates (checkRevision)
+import Certificates (checkRevision, evalProjectDefinitions)
 import Handlers.StepReview (readableStepReviews)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
 import Interpreters.Production (runProduction)
+import ProjectFiles (stepDefinitionNix, stepFilePath)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
-import UserRepo (ReadRepoContext (..), fetchRepoStrict, runGitIn, runGitWithSshKey, userRepoPath)
+import UserRepo (ReadRepoContext (..), fetchRepoStrict, runGitIn, runGitWithSshKey, runNixEvalJsonApplyInRepo, userRepoPath)
 
 data AgentGitState = AgentGitState
     { headCommit :: Text
@@ -473,43 +476,105 @@ fileHasConflictMarkers worktree path = do
 
 pushCandidate :: FilePath -> AgentSession -> ApplyOrigin -> [Int] -> PreparedApply -> ExceptT String IO ()
 pushCandidate repoPath session_ origin dropped candidate = do
+    rewritten <- rewriteRelocatedReviewedSteps repoPath candidate
+    let changesetRange = T.unpack (targetHead candidate) ++ ".." ++ T.unpack (candidateHead rewritten)
+        candidateSha = T.unpack (candidateHead rewritten)
+        branchName = T.unpack (targetBranch session_)
     changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", "--no-renames", changesetRange]
     let stepIds = nub (mapMaybe appliedStepId changedPaths)
-    reviewed <- reviewedSteps repoPath (targetHead candidate) stepIds
+    reviewed <- reviewedSteps repoPath (targetHead rewritten) stepIds
+    tolerated <- pathOnlyReviewedChanges repoPath rewritten reviewed
     verdict <-
-        if null reviewed
-            then liftIO $ verifyCandidate repoPath candidate stepIds
+        if tolerated
+            then liftIO $ verifyCandidate repoPath rewritten stepIds
             else return (Left (reviewedStepsError reviewed))
     case verdict of
-        Left failures -> rejectCandidate repoPath session_ candidate failures
+        Left failures -> rejectCandidate repoPath session_ rewritten failures
         Right () -> do
             cfg <- liftIO $ resolveConfigPath >>= loadConfig
             changesetDiff <- runGitChecked repoPath ["diff", changesetRange]
-            pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile (configUserRepo cfg)) (candidateWorktree candidate) ["push", "origin", candidateSha ++ ":" ++ branchName]
+            pushResult <- liftIO $ runGitWithSshKey (userRepoKeyfile (configUserRepo cfg)) (candidateWorktree rewritten) ["push", "origin", candidateSha ++ ":" ++ branchName]
             case pushResult of
                 (ExitFailure code, stdout, stderr) ->
                     throwError $ "git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
                 (ExitSuccess, _, _) -> do
                     _ <- runGitChecked repoPath ["update-ref", "refs/heads/" ++ branchName, candidateSha]
-                    resetWorktree (worktreePath session_) (candidateHead candidate)
-                    liftIO $ removeWorktreeIfExists repoPath (candidateWorktree candidate)
-                    liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead candidate) (nub (mapMaybe appliedProjectId changedPaths)) stepIds
+                    resetWorktree (worktreePath session_) (candidateHead rewritten)
+                    liftIO $ removeWorktreeIfExists repoPath (candidateWorktree rewritten)
+                    liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead rewritten) (nub (mapMaybe appliedProjectId changedPaths)) stepIds
                     appendLifecycleTurn
                         (sessionId session_)
                         "Apply proposed changeset"
-                        (T.unwords ((appliedVerb origin <> " to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead candidate) <> ".") : [droppedStepsNote dropped | not (null dropped)]))
+                        (T.unwords ((appliedVerb origin <> " to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead rewritten) <> ".") : [droppedStepsNote dropped | not (null dropped)]))
                         changesetDiff
                     saveSessionUpdate
                         session_
                             { status = "open"
-                            , baseCommit = candidateHead candidate
+                            , baseCommit = candidateHead rewritten
                             , preparedApply = Nothing
                             , lastError = remainingError origin
                             }
+
+rewriteRelocatedReviewedSteps :: FilePath -> PreparedApply -> ExceptT String IO PreparedApply
+rewriteRelocatedReviewedSteps repoPath candidate = do
+    changedPaths <- T.lines <$> runGitChecked repoPath ["diff", "--name-only", "--no-renames", range]
+    if not (any isProjectFile changedPaths)
+        then return candidate
+        else do
+            before <- projectTreeAt (targetHead candidate)
+            after <- projectTreeAt (candidateHead candidate)
+            let relocations = stepRelocations before after
+            if Map.null relocations
+                then return candidate
+                else do
+                    reviewed <- allReviewedSteps repoPath (targetHead candidate)
+                    if null reviewed
+                        then return candidate
+                        else do
+                            definitions <- evaluatedStepDefinitions (ReadRepoContext repoPath (T.unpack (candidateHead candidate))) reviewed
+                            let rewritten =
+                                    [ (stepId, rewrittenDefinition)
+                                    | (stepId, Just definition) <- Map.toList definitions
+                                    , (True, rewrittenDefinition) <- [rewriteDependencyRefs relocations definition]
+                                    ]
+                            if null rewritten
+                                then return candidate
+                                else do
+                                    forM_ rewritten $ \(stepId, definition) -> do
+                                        nixText <- either throwError pure (stepDefinitionNix definition)
+                                        liftIO $ TIO.writeFile (stepFilePath (candidateWorktree candidate) stepId) (nixText <> "\n")
+                                    _ <- runGitChecked (candidateWorktree candidate) (["add", "--"] ++ [T.unpack ("steps/" <> T.pack (show stepId) <> ".nix") | (stepId, _) <- rewritten])
+                                    _ <- runGitChecked (candidateWorktree candidate) ["commit", "--amend", "--no-edit"]
+                                    amendedHead <- stripOutput <$> runGitChecked (candidateWorktree candidate) ["rev-parse", "HEAD"]
+                                    return candidate{candidateHead = amendedHead}
   where
-    branchName = T.unpack (targetBranch session_)
-    candidateSha = T.unpack (candidateHead candidate)
-    changesetRange = T.unpack (targetHead candidate) ++ ".." ++ candidateSha
+    range = T.unpack (targetHead candidate) ++ ".." ++ T.unpack (candidateHead candidate)
+    isProjectFile path = "projects/" `T.isPrefixOf` path && ".nix" `T.isSuffixOf` path
+
+projectTreeAt :: Text -> ExceptT String IO Value
+projectTreeAt commit = do
+    repoPath <- liftIO userRepoPath
+    evaluation <- ExceptT (runProduction (runExceptT (evalProjectDefinitions (ReadRepoContext repoPath (T.unpack commit)))))
+    return evaluation
+
+evaluatedStepDefinitions :: ReadRepoContext -> [Int] -> ExceptT String IO (Map.Map Int (Maybe Value))
+evaluatedStepDefinitions ctx stepIds = do
+    output <- ExceptT (runProduction (runExceptT (runNixEvalJsonApplyInRepo ctx (flakeStepDefinitionsExpression stepIds) "")))
+    either throwError return (decodeStepDefinitions output)
+
+allReviewedSteps :: FilePath -> Text -> ExceptT String IO [Int]
+allReviewedSteps repoPath target = do
+    (_, matches, _) <- liftIO $ runGitIn repoPath ["grep", "-l", "-F", "reviewedRevision", T.unpack target, "--", "steps"]
+    reviewedSteps repoPath target (mapMaybe (appliedStepId <=< T.stripPrefix (target <> ":")) (T.lines (T.pack matches)))
+
+pathOnlyReviewedChanges :: FilePath -> PreparedApply -> [Int] -> ExceptT String IO Bool
+pathOnlyReviewedChanges _ _ [] = return True
+pathOnlyReviewedChanges repoPath candidate reviewed = do
+    targetDefinitions <- evaluatedStepDefinitions (ReadRepoContext repoPath (T.unpack (targetHead candidate))) reviewed
+    candidateDefinitions <- evaluatedStepDefinitions (ReadRepoContext repoPath (T.unpack (candidateHead candidate))) reviewed
+    let unchanged stepId = normalize (Map.lookup stepId targetDefinitions) == normalize (Map.lookup stepId candidateDefinitions)
+        normalize = fmap (fmap stripReferencePaths)
+    return (all unchanged reviewed)
 
 reviewedStepsError :: [Int] -> String
 reviewedStepsError stepIds = "Reviewed steps cannot be changed: " ++ stepList stepIds ++ "."

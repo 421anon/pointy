@@ -13,6 +13,7 @@ import Effects (AppEffects, AppM, toHandler)
 import qualified EffectRunner
 import EffectRunner (installRunner)
 import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, compactSessionHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnImageHandler, turnLogStreamHandler, usageHandler)
+import Handlers.ArtifactRdf (artifactRdfHandler)
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
 import Handlers.TokenAuth (tokenAuthHandler, tokenLoginHandler, tokenLogoutHandler, tokenSessionHandler)
@@ -107,8 +108,8 @@ server =
         :<|> (\cookies -> liftHandler (tokenSessionHandler cookies))
         :<|> (\form -> liftHandler (tokenLoginHandler form))
         :<|> liftHandler tokenLogoutHandler
-        :<|> stepSearchInfoHandler
-        :<|> (\commit request -> stepSearchHandler commit request)
+        :<|> (stepSearchInfoHandler :<|> (\commit request -> stepSearchHandler commit request))
+        :<|> artifactRdfHandler
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy
 corsPolicy req = case pathInfo req of

@@ -919,6 +919,12 @@ viewStepRecordActions model projects_ parentId link name entry stepConfig presen
         isReadOnly =
             isReadOnlyRoute model
 
+        currentFolderPath =
+            try Lenses.currentProjectPath model |> Maybe.withDefault []
+
+        stepRefValue stepId =
+            TStepValue { path = currentFolderPath, step = stepId }
+
         prefill widget_ =
             let
                 wire proven toValue =
@@ -931,14 +937,14 @@ viewStepRecordActions model projects_ parentId link name entry stepConfig presen
             case widget_ of
                 WStep artifact ->
                     if artifact.create then
-                        wire artifact.proven TStepValue
+                        wire artifact.proven stepRefValue
 
                     else
                         Nothing
 
                 WSteps artifact ->
                     if artifact.create then
-                        wire artifact.proven (TListValue << List.singleton << TStepValue)
+                        wire artifact.proven (TListValue << List.singleton << stepRefValue)
 
                     else
                         Nothing
@@ -1479,6 +1485,12 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 |> Maybe.withDefault []
                 |> List.filter (\notice -> notice.field == Just paramName && notice.severity == Model.Info)
 
+        currentFolderPath =
+            try Lenses.currentProjectPath model |> Maybe.withDefault []
+
+        stepRefValue stepId =
+            TStepValue { path = currentFolderPath, step = stepId }
+
         buildStepSelect cfg { selectedStepIds, onSelectStep, onRemoveStep, activeAfterSelect, mAllowedStepTypes } =
             let
                 stateLens =
@@ -1910,7 +1922,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                     buildStepSelect cfg
                         { selectedStepIds = Maybe.toList (Maybe.andThen (try tStepId) get)
                         , onRemoveStep = always (rawSet Nothing)
-                        , onSelectStep = rawSet << Just << TStepValue
+                        , onSelectStep = rawSet << Just << stepRefValue
                         , activeAfterSelect = False
                         , mAllowedStepTypes = artifact_.accepts
                         }
@@ -1919,7 +1931,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                     buildStepSelect cfg
                         { selectedStepIds = List.filterMap (try tStepId) items
                         , onRemoveStep = \stepId -> setItems (List.filter (\stepValue -> try tStepId stepValue /= Just stepId) items)
-                        , onSelectStep = \stepId -> setItems (items ++ [ TStepValue stepId ])
+                        , onSelectStep = \stepId -> setItems (items ++ [ stepRefValue stepId ])
                         , activeAfterSelect = True
                         , mAllowedStepTypes = artifact_.accepts
                         }
@@ -2606,8 +2618,8 @@ stepArgValueKey value =
                     "false"
                 )
 
-        TStepValue stepId ->
-            keyPart "step" (String.fromInt stepId)
+        TStepValue ref ->
+            keyPart "step" (String.join "/" (List.map String.fromInt (ref.path ++ [ ref.step ])))
 
         TUploadHashValue hash ->
             keyPart "upload" hash

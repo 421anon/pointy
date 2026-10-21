@@ -17,6 +17,8 @@ module ProjectTree (
     stepEntries,
     projectStepEntries,
     projectChildRefs,
+    projectIds,
+    projectObject,
     applyTreeOps,
 ) where
 
@@ -199,6 +201,19 @@ projectChildRefs :: Object -> [ChildRef]
 projectChildRefs project = case KeyMap.lookup "children" project of
     Just (Array items) -> map entryRef (effectiveOrder (mapMaybe (either (const Nothing) Just . parseEntry) (V.toList items)))
     _ -> []
+
+projectIds :: Value -> [Int]
+projectIds (Object projects) =
+    mapMaybe projectIdOf (KeyMap.toList projects)
+  where
+    projectIdOf (key, _) = readMaybe (T.unpack (Key.toText key))
+projectIds _ = []
+
+projectObject :: Value -> Int -> Maybe Object
+projectObject (Object projects) projectId = case KeyMap.lookup (Key.fromText (T.pack (show projectId))) projects of
+    Just (Object project) -> Just project
+    _ -> Nothing
+projectObject _ _ = Nothing
 
 renumberEntries :: [Entry] -> [Entry]
 renumberEntries = zipWith number [0 :: Int ..]

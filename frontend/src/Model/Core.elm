@@ -437,6 +437,7 @@ type alias StepRecord =
     BaseRecord
         { type_ : String
         , note : String
+        , about : List String
         , runState : ApiData StepRunState
         , review : Maybe Review
         , args : Dict String StepArgValue
@@ -473,6 +474,7 @@ blankStep type_ =
     , clientId = Nothing
     , name = type_
     , note = ""
+    , about = []
     , type_ = type_
     , args = Dict.empty
     , runState = NotAsked

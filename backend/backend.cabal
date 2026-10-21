@@ -22,17 +22,20 @@ library
     Api
     ApiTypes
     App
+    ArtifactRdf
     BuildLog
     BuildRunner
     Bus
     ClusterBus
     Config
+    DependencyRefs
     Docs.OpenApi
     EffectRunner
     Effects
     Fixture.Document
     Fixture.Server
     Handlers.Agent
+    Handlers.ArtifactRdf
     Handlers.Autocomplete
     Handlers.TokenAuth
     Handlers.CommitHash
@@ -420,6 +423,18 @@ test-suite turn-watchdog
     , text
     , time
     , unix
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite artifact-rdf
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          ArtifactRdfTest.hs
+  build-depends:
+    , backend
+    , base
+    , text
 
   hs-source-dirs:   test
   default-language: Haskell2010

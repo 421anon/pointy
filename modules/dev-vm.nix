@@ -112,6 +112,12 @@ in
           add_header X-Accel-Buffering "no" always;
         '';
       };
+      locations."/artifact/".extraConfig = ''
+        add_header Vary Accept;
+        if ($http_accept ~* "text/turtle") {
+          rewrite ^/artifact/(.*)$ /backend/rdf/artifact/$1 last;
+        }
+      '';
     };
   };
 

@@ -36,13 +36,13 @@ import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Object, Result (..), Value (..), eitherDecodeStrict, fromJSON, object, toJSON, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), Object, Result (..), Value (..), eitherDecodeStrict, fromJSON, object, toJSON, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Bool (bool)
 import Data.ByteString (ByteString)
 import Data.Either (isRight)
-import Data.List (dropWhileEnd, find, intercalate, isPrefixOf, stripPrefix, tails)
+import Data.List (dropWhileEnd, find, intercalate, isPrefixOf, sortOn, stripPrefix, tails)
 import Data.Map (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isNothing)
@@ -447,11 +447,72 @@ checkRevision target candidate stepIds = do
 failureIdentity :: EvaluationFailure -> (FailureSubject, String)
 failureIdentity failure = (failureSubject failure, failureCause failure)
 
+data StaleDependency = StaleDependency
+    { staleDependentStep :: Int
+    , staleReferenceStep :: Int
+    , staleReferencePath :: [Int]
+    }
+
+instance FromJSON StaleDependency where
+    parseJSON = withObject "stale dependency" $ \fields -> do
+        dependent <- fields .: "step"
+        reference <- fields .: "dependency"
+        case reference of
+            Object referenceFields -> do
+                dependencyStep <- referenceFields .: "step"
+                path <- referenceFields .:? "path" .!= []
+                pure (StaleDependency dependent dependencyStep path)
+            _ -> fail "the dependency is not a step reference"
+
+staleDependencyFailures :: (Eval :> es) => ReadRepoContext -> Eff es [EvaluationFailure]
+staleDependencyFailures ctx =
+    runExceptT (runNixEvalJsonApplyInRepo ctx "pointy: pointy.staleDependencies or [ ]" "#pointy") >>= \case
+        Left _ -> pure []
+        Right output -> case eitherDecodeStrict (TE.encodeUtf8 (pack output)) of
+            Left _ -> pure []
+            Right stale -> pure (map staleFailure (sortOn staleDependentStep stale))
+  where
+    staleFailure stale =
+        EvaluationFailure
+            (StepSubject (staleDependentStep stale))
+            (staleCause stale)
+            (staleMessage stale)
+
+staleCause :: StaleDependency -> String
+staleCause stale =
+    "steps/" ++ show (staleDependentStep stale) ++ ".nix points at step " ++ show (staleReferenceStep stale) ++ " in " ++ staleFolder (staleReferencePath stale)
+
+staleMessage :: StaleDependency -> String
+staleMessage stale =
+    "Step "
+        ++ show dependent
+        ++ " (steps/"
+        ++ show dependent
+        ++ ".nix) points at step "
+        ++ show reference
+        ++ " in "
+        ++ staleFolder (staleReferencePath stale)
+        ++ ", but step "
+        ++ show reference
+        ++ " is not there. Point it at the folder step "
+        ++ show reference
+        ++ " is in now, or write { step = "
+        ++ show reference
+        ++ "; } if it was removed."
+  where
+    dependent = staleDependentStep stale
+    reference = staleReferenceStep stale
+
+staleFolder :: [Int] -> String
+staleFolder [] = "the root"
+staleFolder path = "folder " ++ intercalate " › " (map show path)
+
 revisionFailures :: (Eval :> es) => ReadRepoContext -> [Int] -> Eff es [EvaluationFailure]
 revisionFailures ctx stepIds = do
     projects <- runExceptT (evaluateProjectDefinitions ctx)
     stepFailures <- catMaybes <$> mapM (stepDefinitionFailure ctx) stepIds
-    pure (either unevaluatedProjects projectsFailures projects ++ stepFailures)
+    staleFailures <- staleDependencyFailures ctx
+    pure (either unevaluatedProjects projectsFailures projects ++ stepFailures ++ staleFailures)
   where
     unevaluatedProjects err = [EvaluationFailure RevisionProjects err ("Projects do not evaluate: " ++ err)]
 

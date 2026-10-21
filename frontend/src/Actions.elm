@@ -416,6 +416,7 @@ sendOrganizeResult result =
                 Ok () ->
                     Flow.async refreshProjectRollup
                         |> Flow.seq refetchCommitHash
+                        |> Flow.seq (Flow.async loadProjects)
 
                 Err err ->
                     Flow.over organizeQueue (\queue -> { queue | undo = [] })

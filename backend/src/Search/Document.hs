@@ -16,7 +16,7 @@ import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Lazy as BL
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Scientific (FPFormat (Fixed), floatingOrInteger, formatScientific, toBoundedInteger)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -25,8 +25,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (Eval)
-import ProjectTree (ChildRef (..), projectChildRefs)
-import Text.Read (readMaybe)
+import ProjectTree (ChildRef (..), projectChildRefs, projectIds, projectObject)
 import UserRepo (ReadRepoContext, runNixEvalJsonInRepo)
 
 data StepDocument = StepDocument
@@ -70,13 +69,6 @@ decodeJson = eitherDecode . BL.fromStrict . TE.encodeUtf8 . T.pack
 hexDigest :: Digest a -> Text
 hexDigest = TE.decodeUtf8 . Base16.encode . convert
 
-projectIds :: Value -> [Int]
-projectIds (Object projects) =
-    mapMaybe projectIdOf (KeyMap.toList projects)
-  where
-    projectIdOf (key, _) = readMaybe (T.unpack (Key.toText key))
-projectIds _ = []
-
 folderPaths :: Value -> Map Int Text
 folderPaths projects = Map.fromListWith (\_ first -> first) (concatMap (walk Set.empty []) roots)
   where
@@ -91,12 +83,6 @@ folderPaths projects = Map.fromListWith (\_ first -> first) (concatMap (walk Set
             here = [(stepId, label) | StepChild stepId <- children]
             nested = [walk visited' path childId | ProjectChild childId <- children, Set.notMember childId visited']
          in here ++ concat nested
-
-projectObject :: Value -> Int -> Maybe Object
-projectObject (Object projects) projectId = case KeyMap.lookup (Key.fromText (T.pack (show projectId))) projects of
-    Just (Object project) -> Just project
-    _ -> Nothing
-projectObject _ _ = Nothing
 
 projectName :: Value -> Int -> Text
 projectName projects projectId = case projectObject projects projectId of

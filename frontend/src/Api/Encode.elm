@@ -4,7 +4,7 @@ import Dict exposing (Dict)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ChildRef, ProjectRecord, ReviewDraft, StepRecord, TemplateSource(..), TreeOp(..))
-import Model.Shadow exposing (Field, StepType(..), StepArgValue(..), Widget(..))
+import Model.Shadow exposing (Field, StepArgValue(..), StepRef, StepType(..), Widget(..))
 
 
 stepArgValue : Widget -> StepArgValue -> Maybe Encode.Value
@@ -42,11 +42,24 @@ stepArgValue widget_ value =
         ( _, TEnumValue str ) ->
             Just (Encode.string str)
 
-        ( _, TStepValue stepId ) ->
-            Just (Encode.object [ ( "step", Encode.int stepId ) ])
+        ( _, TStepValue ref ) ->
+            Just (stepRefValue ref)
 
         _ ->
             Nothing
+
+
+stepRefValue : StepRef -> Encode.Value
+stepRefValue ref =
+    Encode.object
+        ((if List.isEmpty ref.path then
+            []
+
+          else
+            [ ( "path", Encode.list Encode.int ref.path ) ]
+         )
+            ++ [ ( "step", Encode.int ref.step ) ]
+        )
 
 
 encodeList : (StepArgValue -> Maybe Encode.Value) -> List StepArgValue -> Maybe Encode.Value
@@ -102,11 +115,18 @@ uploadHashValue value =
 stepValue : StepType -> StepRecord -> Encode.Value
 stepValue stepType record =
     Encode.object
-        [ ( "name", Encode.string record.name )
-        , ( "note", Encode.string record.note )
-        , ( "type", Encode.string record.type_ )
-        , ( "args", stepArgsValue stepType record.args )
-        ]
+        ([ ( "name", Encode.string record.name )
+         , ( "note", Encode.string record.note )
+         , ( "type", Encode.string record.type_ )
+         , ( "args", stepArgsValue stepType record.args )
+         ]
+            ++ (if List.isEmpty record.about then
+                    []
+
+                else
+                    [ ( "about", Encode.list Encode.string record.about ) ]
+               )
+        )
 
 
 childRef : ChildRef -> Encode.Value

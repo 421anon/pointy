@@ -38,11 +38,17 @@ type alias Field =
     }
 
 
+type alias StepRef =
+    { path : List Int
+    , step : Int
+    }
+
+
 type StepArgValue
     = TStringValue String
     | TIntValue Int
     | TBoolValue Bool
-    | TStepValue Int
+    | TStepValue StepRef
     | TUploadHashValue String
     | TListValue (List StepArgValue)
     | TRecordValue (Dict String StepArgValue)
@@ -66,11 +72,11 @@ tStringValue =
 tStepId : Prism ls StepArgValue Int x y
 tStepId =
     prism ">TStepId"
-        TStepValue
+        (\stepId -> TStepValue { path = [], step = stepId })
         (\stepArgVal ->
             case stepArgVal of
-                TStepValue val ->
-                    Ok val
+                TStepValue ref ->
+                    Ok ref.step
 
                 _ ->
                     Err stepArgVal
@@ -80,8 +86,8 @@ tStepId =
 stepArgStepIds : StepArgValue -> List Int
 stepArgStepIds value =
     case value of
-        TStepValue stepId ->
-            [ stepId ]
+        TStepValue ref ->
+            [ ref.step ]
 
         TListValue items ->
             List.concatMap stepArgStepIds items

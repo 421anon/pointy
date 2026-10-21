@@ -5,7 +5,7 @@ module Api (API) where
 
 import Agent.Git (AgentSessionView, AgentUsage)
 import Agent.Session (AgentSessionSummary, AgentTurn)
-import ApiTypes (DynamicJson, RawJSON)
+import ApiTypes (DynamicJson, RawJSON, Turtle)
 import qualified Data.ByteString as BS
 import Data.Map (Map)
 import Data.Text (Text)
@@ -464,6 +464,14 @@ type StepSearchEndpoint =
 
 type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 
+type ArtifactRdf =
+    "rdf"
+        :> "artifact"
+        :> Description "Describes an artifact at a commit and every artifact upstream of it as Turtle. Segments are the artifact permalink's project path, step id and full 40-digit commit hash; the optional path names one file in the step's output, as the permalink's ?path= does. nginx routes /artifact/ requests accepting text/turtle here."
+        :> CaptureAll "segments" Text
+        :> QueryParam "path" Text
+        :> Get '[Turtle] (Headers '[Header "Cache-Control" Text, Header "Vary" Text] Text)
+
 type TokenAuth =
     "token-auth"
         :> Description "Answers nginx whether the request carries a valid session token for this instance's audience."
@@ -551,3 +559,4 @@ type API =
         :<|> TokenLogin
         :<|> TokenLogout
         :<|> StepSearch
+        :<|> ArtifactRdf
