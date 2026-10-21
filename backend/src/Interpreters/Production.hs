@@ -10,18 +10,27 @@ module Interpreters.Production (runProduction, submitArgs) where
 
 import BuildRunner (shellCommand)
 import Config (Config (..), EmbeddingConfig (..), JudgeConfig (..), ProviderConfig (..), SearchConfig (..), loadConfig, resolveConfigPath)
+import Control.Exception (IOException, try)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BC
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (AppEffects, Eval (..), Inference (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
+import Effects (AppEffects, Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Ingest (runIngest)
-import Processes (cli)
+import Network.HTTP.Types.URI (Query, parseQuery)
+import Processes (cli, cliBytes)
 import NixEvaluator (defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression)
 import Search.Http (embedRequest, judgeRequest)
+import System.Directory (doesFileExist, getFileSize, getModificationTime)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
+import System.FilePath (takeFileName, (</>))
+import System.IO.Unsafe (unsafePerformIO)
 
 
 runProduction :: Eff AppEffects a -> IO a
@@ -70,8 +79,8 @@ runEvalProduction = interpret $ \_ -> \case
 
 runNixProduction :: (IOE :> es) => Eff (Nix : es) a -> Eff es a
 runNixProduction = interpret $ \_ -> \case
-    RunNixCli args -> liftIO $ cli "nix" args
-    RunNixStoreCli args -> liftIO $ cli "nix-store" args
+    RunNixCli args -> liftIO $ cliBytes "nix" args
+    RunNixStoreCli args -> liftIO $ cliBytes "nix-store" args
     PathValid path -> do
         (code, _, _) <- liftIO $ cli "nix" ["--offline", "path-info", path]
         pure (code == ExitSuccess)
@@ -84,6 +93,54 @@ runNixProduction = interpret $ \_ -> \case
         pure $ case code of
             ExitSuccess -> Just (T.strip (T.pack stdout))
             ExitFailure _ -> Nothing
+    LocalLogStamp drv -> liftIO $ productionLogStamp drv
+
+productionLogStamp :: FilePath -> IO (Maybe LogStamp)
+productionLogStamp drv = do
+    let base = takeFileName drv
+        (prefix, rest) = splitAt 2 base
+        plain = productionLogDir </> "drvs" </> prefix </> rest
+    compressed <- stampOf (plain <> ".bz2")
+    case compressed of
+        Just stamp -> return (Just stamp)
+        Nothing -> stampOf plain
+
+stampOf :: FilePath -> IO (Maybe LogStamp)
+stampOf path = do
+    outcome <- try @IOException $ do
+        exists <- doesFileExist path
+        if exists
+            then do
+                modified <- getModificationTime path
+                size <- getFileSize path
+                return (Just (LogStamp modified size))
+            else return Nothing
+    return $ either (const Nothing) id outcome
+
+{-# NOINLINE productionLogDir #-}
+productionLogDir :: FilePath
+productionLogDir = unsafePerformIO resolveProductionLogDir
+
+resolveProductionLogDir :: IO FilePath
+resolveProductionLogDir = do
+    remote <- lookupEnv "NIX_REMOTE"
+    case remote >>= remoteLogDir of
+        Just directory -> return directory
+        Nothing -> fromMaybe "/nix/var/log/nix" <$> lookupEnv "NIX_LOG_DIR"
+
+remoteLogDir :: String -> Maybe FilePath
+remoteLogDir remote = case break (== '?') remote of
+    (_, '?' : query) -> do
+        let params = parseQuery (BC.pack query)
+        case queryParam "log" params of
+            Just directory -> Just directory
+            Nothing -> fmap (\root -> root </> "nix" </> "var" </> "log" </> "nix") (queryParam "root" params)
+    _ -> Nothing
+
+queryParam :: BS.ByteString -> Query -> Maybe String
+queryParam key params = case lookup key params of
+    Just (Just value) | not (BS.null value) -> Just (BC.unpack value)
+    _ -> Nothing
 
 runSlurmProduction :: (IOE :> es) => Eff (Slurm : es) a -> Eff es a
 runSlurmProduction = interpret $ \_ -> \case

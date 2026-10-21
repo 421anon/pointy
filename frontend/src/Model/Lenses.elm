@@ -168,16 +168,27 @@ projects =
     lens ".projects" Model.getProjects (\(Model m) projects_ -> Model { m | projects = projects_ })
 
 
-store : Lens ls Model ( Dict Int ProjectRecord, Dict Int StepRecord ) x y
+loadedProjects : Traversal Model (Dict Int ProjectRecord) x y
+loadedProjects =
+    projects << ApiData.available
+
+
+store : Traversal Model ( Dict Int ProjectRecord, Dict Int StepRecord ) x y
 store =
-    lens ".store"
-        (\model -> ( projectsDict model, get steps model ))
-        (\model ( projects_, steps_ ) -> set steps steps_ (set projects (ApiData.Success projects_) model))
+    traversal ".store"
+        (\model -> all loadedProjects model |> List.map (\projects_ -> ( projects_, get steps model )))
+        (\fn model ->
+            case try loadedProjects model of
+                Just projects_ ->
+                    let
+                        ( updatedProjects, updatedSteps ) =
+                            fn ( projects_, get steps model )
+                    in
+                    model |> set loadedProjects updatedProjects |> set steps updatedSteps
 
-
-projectsDict : Model -> Dict Int ProjectRecord
-projectsDict =
-    get projects >> ApiData.withDefault Dict.empty
+                Nothing ->
+                    model
+        )
 
 
 projectSteps : Int -> Traversal Model StepRecord x y
@@ -194,7 +205,7 @@ projectSteps projectId =
 
 projectRecordById : Int -> Traversal Model ProjectRecord x y
 projectRecordById projectId =
-    projects << success << Dict.Accessors.id projectId << just
+    loadedProjects << Dict.Accessors.id projectId << just
 
 
 steps : Lens ls Model (Dict Int StepRecord) x y
@@ -267,6 +278,11 @@ stepShownRevision stepId =
 stepOutputsRevision : Int -> Traversal Model String x y
 stepOutputsRevision stepId =
     orElseT (stepRecordById stepId << runState << success << outputsCommit) (stepShownRevision stepId)
+
+
+builtStepStatus : Int -> Traversal Model Model.Status x y
+builtStepStatus stepId =
+    stepRecordById stepId << runState << success << status << success << where_ Model.hasBuiltOutput
 
 
 selectExistingSteps : Lens ls { a | selectExistingSteps : b } b x y
@@ -790,7 +806,7 @@ stepStatusHooks =
     lens ".stepStatusHooks" Model.getStepStatusHooks (\(Model m) hooks -> Model { m | stepStatusHooks = hooks })
 
 
-stepStatusBuffer : Lens ls Model (Dict Int Model.StatusReport) x y
+stepStatusBuffer : Lens ls Model (Dict String (Dict Int Model.StatusReport)) x y
 stepStatusBuffer =
     lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
 
@@ -958,6 +974,11 @@ pendingQuestion =
     lens ".pendingQuestion" .pendingQuestion (\t question -> { t | pendingQuestion = question })
 
 
+contextState : Lens ls { a | contextState : b } b x y
+contextState =
+    lens ".contextState" .contextState (\t state -> { t | contextState = state })
+
+
 streamError : Lens ls { a | streamError : b } b x y
 streamError =
     lens ".streamError" .streamError (\t error -> { t | streamError = error })
@@ -976,6 +997,16 @@ applying =
 autoApply : Lens ls { a | autoApply : b } b x y
 autoApply =
     lens ".autoApply" .autoApply (\t autoApply_ -> { t | autoApply = autoApply_ })
+
+
+composerImages : Lens ls AgentState (List Model.ComposerImage) x y
+composerImages =
+    lens ".composerImages" .composerImages (\s images -> { s | composerImages = images })
+
+
+lightbox : Lens ls AgentState (Maybe Model.Lightbox) x y
+lightbox =
+    lens ".lightbox" .lightbox (\s lightbox_ -> { s | lightbox = lightbox_ })
 
 
 sessionAt : String -> Traversal AgentState AgentSessionSummary x y
@@ -1023,6 +1054,12 @@ sessionPendingQuestion : AgentSessionView -> AgentState -> Maybe PendingQuestion
 sessionPendingQuestion view agentState =
     try (liveTurnAt view.session.sessionId << just << pendingQuestion) agentState
         |> Maybe.withDefault (Model.persistedQuestion view)
+
+
+sessionContextState : AgentSessionView -> AgentState -> Maybe Model.ContextState
+sessionContextState view agentState =
+    try (liveTurnAt view.session.sessionId << just << contextState) agentState
+        |> Maybe.withDefault (Model.persistedContextState view)
 
 
 sessionPendingSteer : AgentSessionView -> AgentState -> Maybe String
@@ -1104,6 +1141,16 @@ projectsRequest =
 rollupRequests : Lens ls Model (Dict Int Int) x y
 rollupRequests =
     lens ".rollupRequests" Model.getRollupRequests (\(Model m) requests -> Model { m | rollupRequests = requests })
+
+
+rollupInFlight : Lens ls Model (Dict Int Bool) x y
+rollupInFlight =
+    lens ".rollupInFlight" Model.getRollupInFlight (\(Model m) inFlight -> Model { m | rollupInFlight = inFlight })
+
+
+tokenSession : Lens ls Model (Maybe Model.TokenSession) x y
+tokenSession =
+    lens ".tokenSession" Model.getTokenSession (\(Model m) value -> Model { m | tokenSession = value })
 
 
 toasts : Lens ls Model (List (Toast (Flow Model ()))) x y

@@ -39,8 +39,8 @@ import Accessors exposing (get, has, set, try)
 import Dict exposing (Dict)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, ListingScope, ListingSelection, Model, OrganizeAction(..), OrganizeDialogMode(..), OrganizeDrag, OrganizeDropAction(..))
-import Model.Lenses exposing (currentProjectPath, isReadOnlyRoute, listingPreferences, listingSelection, listingSort, organizeClipboard, organizeDrag, projectsDict, route, steps)
+import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, ListingScope, ListingSelection, Model, OrganizeAction(..), OrganizeDialogMode(..), OrganizeDrag, OrganizeDropAction(..), ProjectRecord)
+import Model.Lenses exposing (currentProjectPath, isReadOnlyRoute, listingPreferences, listingSelection, listingSort, loadedProjects, organizeClipboard, organizeDrag, route, steps)
 import Model.Lib as Lib
 import Route
 
@@ -55,14 +55,14 @@ listingEditable model =
     not (isReadOnlyRoute model) && onListingRoute model
 
 
-folderLinks : Model -> ListingScope -> List ChildLink
-folderLinks model parentId =
-    Dict.get parentId (projectsDict model) |> Maybe.map .children |> Maybe.withDefault []
+folderLinks : Dict Int ProjectRecord -> ListingScope -> List ChildLink
+folderLinks projects_ parentId =
+    Dict.get parentId projects_ |> Maybe.map .children |> Maybe.withDefault []
 
 
-childLinkIn : Model -> ListingScope -> ChildRef -> Maybe ChildLink
-childLinkIn model scope ref =
-    List.find (Model.sameEntity ref) (folderLinks model scope)
+childLinkIn : Dict Int ProjectRecord -> ListingScope -> ChildRef -> Maybe ChildLink
+childLinkIn projects_ scope ref =
+    List.find (Model.sameEntity ref) (folderLinks projects_ scope)
 
 
 isSelected : Maybe ListingSelection -> ListingScope -> ChildRef -> Bool
@@ -201,14 +201,11 @@ keepReanchored keep selection =
 
 pruneSelection : Model -> Model
 pruneSelection model =
-    case get listingSelection model of
-        Nothing ->
-            model
-
-        Just selection ->
+    case ( get listingSelection model, try loadedProjects model ) of
+        ( Just selection, Just projects_ ) ->
             let
                 visible =
-                    visibleRefs model selection.scope
+                    visibleRefs model projects_ selection.scope
             in
             case keepReanchored (\ref -> List.any (Model.sameEntity ref) visible) selection of
                 Just kept ->
@@ -217,14 +214,17 @@ pruneSelection model =
                 Nothing ->
                     clear model
 
+        _ ->
+            model
 
-visibleRefs : Model -> ListingScope -> List ChildRef
-visibleRefs model scope =
+
+visibleRefs : Model -> Dict Int ProjectRecord -> ListingScope -> List ChildRef
+visibleRefs model projects_ scope =
     let
         prefs =
             get listingPreferences model
     in
-    folderLinks model scope
+    folderLinks projects_ scope
         |> List.filter (\link -> prefs.showHidden || not link.hidden)
         |> List.map Model.childRefOf
 
@@ -300,25 +300,25 @@ within gap ( first, last ) =
     first <= gap && gap <= last
 
 
-moveValid : Model -> ListingScope -> Int -> ChildRef -> Bool
-moveValid model sourceScope targetId ref =
+moveValid : Dict Int ProjectRecord -> ListingScope -> Int -> ChildRef -> Bool
+moveValid projects_ sourceScope targetId ref =
     sourceScope
         /= targetId
-        && not (Lib.linkCreatesCycle (projectsDict model) targetId ref)
+        && not (Lib.linkCreatesCycle projects_ targetId ref)
 
 
-resolveInto : Model -> OrganizeDrag -> Int -> List OrganizeDropAction
-resolveInto model drag targetId =
-    if not (listingEditable model) || List.any (Lib.linkCreatesCycle (projectsDict model) targetId) drag.refs then
+resolveInto : Model -> Dict Int ProjectRecord -> OrganizeDrag -> Int -> List OrganizeDropAction
+resolveInto model projects_ drag targetId =
+    if not (listingEditable model) || List.any (Lib.linkCreatesCycle projects_ targetId) drag.refs then
         []
 
     else
         let
             movePossible =
-                List.any (moveValid model drag.sourceScope targetId) drag.refs
+                List.any (moveValid projects_ drag.sourceScope targetId) drag.refs
 
             linkPossible =
-                List.any (Lib.linkValid model targetId) drag.refs
+                List.any (Lib.linkValid projects_ targetId) drag.refs
         in
         List.filter Tuple.first
             [ ( movePossible, OrganizeDropMove )
@@ -350,14 +350,14 @@ dropActionToken action =
             "link"
 
 
-dropAllowed : Model -> Int -> List OrganizeDropAction
-dropAllowed model folderId =
+dropAllowed : Model -> Dict Int ProjectRecord -> Int -> List OrganizeDropAction
+dropAllowed model projects_ folderId =
     case get organizeDrag model of
         Nothing ->
             []
 
         Just drag ->
-            resolveInto model drag folderId
+            resolveInto model projects_ drag folderId
 
 
 displayOrder : Model.ListingPreferences -> List ChildRef -> List ChildRef
@@ -413,27 +413,24 @@ reorderForEdgeDrop visual ref before payload =
         |> Maybe.map (insertAt >> (\at -> List.take at withoutPayload ++ present ++ List.drop at withoutPayload))
 
 
-organizeTargets : Model -> OrganizeDialogMode -> ListingScope -> List ChildRef -> List ( Int, String )
-organizeTargets model mode sourceScope refs =
+organizeTargets : Model -> Dict Int ProjectRecord -> OrganizeDialogMode -> ListingScope -> List ChildRef -> List ( Int, String )
+organizeTargets model projects_ mode sourceScope refs =
     let
-        projects_ =
-            projectsDict model
-
         excluded id =
             (mode == OrganizeMove && sourceScope == id)
                 || List.any (Lib.linkCreatesCycle projects_ id) refs
     in
     Dict.toList projects_
         |> List.filter (\( id, _ ) -> not (excluded id))
-        |> List.map (\( id, _ ) -> ( id, Lib.canonicalNamePath model id ))
+        |> List.map (\( id, _ ) -> ( id, Lib.canonicalNamePath model projects_ id ))
         |> List.sortBy Tuple.second
 
 
-shouldHide : Model -> ListingScope -> List ChildRef -> Bool
-shouldHide model scope refs =
+shouldHide : Dict Int ProjectRecord -> ListingScope -> List ChildRef -> Bool
+shouldHide projects_ scope refs =
     let
         isHidden ref =
-            childLinkIn model scope ref |> Maybe.map .hidden |> Maybe.withDefault False
+            childLinkIn projects_ scope ref |> Maybe.map .hidden |> Maybe.withDefault False
     in
     List.any (not << isHidden) refs
 
@@ -463,23 +460,23 @@ actionTarget model =
             Maybe.map (\scope -> ( scope, [] )) (currentListingScope model)
 
 
-selectionActions : Model -> List ( OrganizeAction, ActionSpec )
-selectionActions model =
+selectionActions : Model -> Dict Int ProjectRecord -> List ( OrganizeAction, ActionSpec )
+selectionActions model projects_ =
     actionTarget model
-        |> Maybe.unwrap [] (\( scope, refs ) -> availableActions model scope refs)
+        |> Maybe.unwrap [] (\( scope, refs ) -> availableActions model projects_ scope refs)
 
 
-rowActions : Model -> ListingScope -> ChildRef -> List ( OrganizeAction, ActionSpec )
-rowActions model scope ref =
-    availableActions model scope [ ref ]
+rowActions : Model -> Dict Int ProjectRecord -> ListingScope -> ChildRef -> List ( OrganizeAction, ActionSpec )
+rowActions model projects_ scope ref =
+    availableActions model projects_ scope [ ref ]
         |> List.filter (Tuple.second >> .inRow)
 
 
-availableActions : Model -> ListingScope -> List ChildRef -> List ( OrganizeAction, ActionSpec )
-availableActions model scope refs =
+availableActions : Model -> Dict Int ProjectRecord -> ListingScope -> List ChildRef -> List ( OrganizeAction, ActionSpec )
+availableActions model projects_ scope refs =
     actionDefinitions
         |> List.filter (actionVisible model refs)
-        |> List.map (\action -> ( action, actionSpec model scope refs action ))
+        |> List.map (\action -> ( action, actionSpec projects_ scope refs action ))
 
 
 actionDefinitions : List OrganizeAction
@@ -508,8 +505,8 @@ type alias ActionSpec =
     }
 
 
-actionSpec : Model -> ListingScope -> List ChildRef -> OrganizeAction -> ActionSpec
-actionSpec model scope refs action =
+actionSpec : Dict Int ProjectRecord -> ListingScope -> List ChildRef -> OrganizeAction -> ActionSpec
+actionSpec projects_ scope refs action =
     case action of
         OrganizeMoveAction ->
             { label = "Move to...", icon = "drive_file_move", inBar = True, inRow = False }
@@ -527,7 +524,7 @@ actionSpec model scope refs action =
             { label = "Copy", icon = "content_copy", inBar = True, inRow = False }
 
         OrganizeHideAction ->
-            if shouldHide model scope refs then
+            if shouldHide projects_ scope refs then
                 { label = "Hide", icon = "visibility_off", inBar = True, inRow = True }
 
             else

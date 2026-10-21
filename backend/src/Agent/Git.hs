@@ -48,12 +48,14 @@ import Agent.Session (
     normalizeSessionName,
     saveSession,
     saveTurn,
+    sessionCompacting,
     sessionDir,
     touchSession,
     turnIsUnfinished,
     turnLogFilePath,
     turnLogHasFinalizationFailure,
  )
+import Agent.TurnLog (createTurnLog)
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
@@ -70,7 +72,6 @@ import Data.Ord (Down (..))
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
 import Certificates (checkRevision)
@@ -577,6 +578,7 @@ appendLifecycleTurn sid prompt body changesetDiff = do
                 { turnId = tid
                 , turnSessionId = sid
                 , turnPrompt = prompt
+                , turnImages = []
                 , turnAutomatic = False
                 , turnStatus = "succeeded"
                 , turnExitCode = Just 0
@@ -586,7 +588,7 @@ appendLifecycleTurn sid prompt body changesetDiff = do
                 , turnLog = ""
                 }
     liftIO $ createDirectoryIfMissing True (takeDirectory logPath)
-    liftIO $ TIO.writeFile logPath (renderLifecycleLog body changesetDiff)
+    liftIO $ createTurnLog logPath (renderLifecycleLog body changesetDiff)
     liftIO $ saveTurn turn
 
 renderLifecycleLog :: Text -> Text -> Text
@@ -709,7 +711,8 @@ broadcastAppliedStatuses commit projectIds stepIds = do
 sessionHasActiveRunner :: AgentSession -> ExceptT String IO Bool
 sessionHasActiveRunner session_ = do
     turns_ <- liftIO $ loadRepairedSessionTurns session_
-    return $ isJust (latestUnfinishedTurn turns_)
+    compacting <- liftIO $ sessionCompacting (sessionId session_)
+    return $ compacting || isJust (latestUnfinishedTurn turns_)
 
 requireEditableSession :: Text -> ExceptT String IO AgentSession
 requireEditableSession sid = do

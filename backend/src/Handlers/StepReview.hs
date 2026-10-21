@@ -14,6 +14,10 @@ module Handlers.StepReview (
     requireStepUnreviewed,
     reviewDiffHandler,
     reviewStepHandler,
+    reviewedPaths,
+    reviewedStatuses,
+    stepCertificatesOrLegacyOutPaths,
+    stepOutPaths,
     stepReviews,
     readableStepReviews,
 ) where
@@ -22,7 +26,8 @@ import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), catchError, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, object, withObject, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, object, withObject, (.!=), (.:), (.:?), (.=))
+import Data.ByteString (ByteString)
 import Data.Either (rights)
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -30,12 +35,13 @@ import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
-import Effects (AppEffects, AppM, Eval, Nix)
+import Effects (AppEffects, AppM, Eval, Nix, Slurm)
 import GHC.Generics (Generic)
 import ProjectFiles (rewriteNixFile, stepFilePath)
 import BuildStatus (StepPaths (..), checkStatus, resolveStatuses)
@@ -116,8 +122,7 @@ getProjectReviewHandler projectId commit = do
         reviewedOutputs <- reviewedPaths (readRepoPath context) stepOutPaths reviews
         comparisons <- stepComparisons viewed reviews reviewedOutputs
         reviewedCertificates <- reviewedPaths (readRepoPath context) stepCertificatesOrLegacyOutPaths reviews
-        let reviewedStepPaths = Map.mapMaybe (either (const Nothing) Just) (Map.intersectionWith (liftA2 StepPaths) reviewedCertificates reviewedOutputs)
-        statuses <- lift . resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) (lift . checkStatus)) reviewedCertificates
+        statuses <- lift $ reviewedStatuses reviewedCertificates reviewedOutputs
         let stepReport stepId review = StepReviewReport review (either (const Nothing) Just =<< Map.lookup stepId reviewedCertificates) (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
     orFail err500 result
@@ -481,7 +486,7 @@ projectStepIds :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff 
 projectStepIds context projectId =
     declared `catchError` \err -> evaluatedProjectStepIds context projectId `catchError` const (throwError err)
   where
-    declared = decodeNix "Failed to decode project step IDs" =<< runNixEvalJsonApplyInRepo context expression "#pointy.projects"
+    declared = decodeNixText "Failed to decode project step IDs" =<< runNixEvalJsonApplyInRepo context expression "#pointy.projects"
     expression = "projects: map (step: step.def.id) " ++ projectStepEntries "projects" projectId
 
 stepReview :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) (Maybe Review)
@@ -490,7 +495,7 @@ stepReview ctx stepId = stepReviews ctx [stepId] >>= maybe (throwError ("Step " 
 stepReviews :: (RepoContext ctx, Eval :> es) => ctx -> [Int] -> ExceptT String (Eff es) StepReviews
 stepReviews _ [] = pure Map.empty
 stepReviews ctx stepIds = do
-    looked <- decodeNix "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames "steps" reviewOfExistingStep stepIds) "#pointy.steps"
+    looked <- decodeNixText "Failed to decode step reviews" =<< runNixEvalJsonApplyInRepo ctx (mapStepNames "steps" reviewOfExistingStep stepIds) "#pointy.steps"
     pure $ Map.mapMaybe listToMaybe $ Map.fromList $ zip stepIds (looked :: [[Maybe Review]])
   where
     reviewOfExistingStep =
@@ -501,6 +506,12 @@ readableStepReviews ctx stepIds =
     stepReviews ctx stepIds `catchError` const (Map.unions <$> mapM readable stepIds)
   where
     readable stepId = stepReviews ctx [stepId] `catchError` const (pure Map.empty)
+
+reviewedStatuses :: (IOE :> es, Nix :> es, Slurm :> es) => StepOutPaths -> StepOutPaths -> Eff es (Map Int (Text, Maybe Text))
+reviewedStatuses reviewedCertificates reviewedOutputs =
+    resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) checkStatus) reviewedCertificates
+  where
+    reviewedStepPaths = Map.mapMaybe (either (const Nothing) Just) (Map.intersectionWith (liftA2 StepPaths) reviewedCertificates reviewedOutputs)
 
 reviewedPaths :: (IOE :> es, Eval :> es) => FilePath -> (ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths) -> StepReviews -> ExceptT String (Eff es) StepOutPaths
 reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.toList grouped)
@@ -515,7 +526,7 @@ reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.
 
 stepCertificatesOrLegacyOutPaths :: (Eval :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths
 stepCertificatesOrLegacyOutPaths context stepIds = do
-    resolved <- decodeNix "Failed to decode step certificates" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" certificateExpression stepIds) "#pointy.steps"
+    resolved <- decodeNixText "Failed to decode step certificates" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" certificateExpression stepIds) "#pointy.steps"
     pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
   where
     certificateExpression = "let path = builtins.tryEval (toString (steps.${name}.certificate or steps.${name}).outPath); in if path.success then path.value else null"
@@ -529,7 +540,7 @@ lookupOutPath stepId = Map.findWithDefault (Left ("Step " ++ show stepId ++ " ha
 
 stepOutPaths :: (Eval :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths
 stepOutPaths context stepIds = do
-    resolved <- decodeNix "Failed to decode step output paths" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" outPathExpression stepIds) "#pointy.steps"
+    resolved <- decodeNixText "Failed to decode step output paths" =<< runNixEvalJsonApplyInRepo context (mapStepNames "steps" outPathExpression stepIds) "#pointy.steps"
     pure $ Map.fromList $ zip stepIds $ map entry (resolved :: [Maybe Text])
   where
     outPathExpression = "let path = builtins.tryEval (toString steps.${name}.outPath); in if path.success then path.value else null"
@@ -557,8 +568,11 @@ nixString text = "\"" <> T.concatMap escape text <> "\""
     escape character = Map.findWithDefault (T.singleton character) character escapes
     escapes = Map.fromList [('\\', "\\\\"), ('"', "\\\""), ('$', "\\$"), ('\n', "\\n"), ('\r', "\\r"), ('\t', "\\t")]
 
-decodeNix :: (FromJSON a) => String -> String -> ExceptT String (Eff es) a
-decodeNix label output = liftEither $ either (Left . ((label ++ ": ") ++)) Right $ eitherDecode (TLE.encodeUtf8 (TL.pack output))
+decodeNix :: (FromJSON a) => String -> ByteString -> ExceptT String (Eff es) a
+decodeNix label output = liftEither $ either (Left . ((label ++ ": ") ++)) Right $ eitherDecodeStrict output
+
+decodeNixText :: (FromJSON a) => String -> String -> ExceptT String (Eff es) a
+decodeNixText label = decodeNix label . TE.encodeUtf8 . T.pack
 
 commitContextEff :: (IOE :> es) => FilePath -> Text -> ExceptT String (Eff es) ReadRepoContext
 commitContextEff repoPath commit = ExceptT $ liftIO $ runExceptT $ commitContext repoPath commit

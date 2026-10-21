@@ -8,7 +8,7 @@ import Browser.Dom as Dom
 import Components.Combobox as Combobox
 import Components.Markdown as Markdown
 import Components.Select as Select
-import Dict
+import Dict exposing (Dict)
 import Extra.Accessors exposing (A_Traversal, by, remkT, where_)
 import Extra.Decode as Decode
 import Extra.Http as Http
@@ -86,7 +86,8 @@ type alias InlineRename =
 
 
 type alias ListingRowContext =
-    { scope : Model.ListingScope
+    { projects : Dict Int ProjectRecord
+    , scope : Model.ListingScope
     , editable : Bool
     , selected : Set.Set ( String, Int )
     }
@@ -206,13 +207,14 @@ visibleRows =
 
 viewListing :
     { model : Model
+    , projects : Dict Int ProjectRecord
     , scope : Model.ListingScope
     , stepConfig : StepConfig
     , rows : List ListingRow
     , header : List (Html (Flow Model ()))
     }
     -> Html (Flow Model ())
-viewListing { model, scope, stepConfig, rows, header } =
+viewListing { model, projects, scope, stepConfig, rows, header } =
     let
         prefs =
             Model.getListingPreferences model
@@ -237,7 +239,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                 Set.empty
 
         rowContext =
-            { scope = scope, editable = editable, selected = selected }
+            { projects = projects, scope = scope, editable = editable, selected = selected }
 
         hiddenCount =
             List.length (List.filter (.link >> .hidden) rows)
@@ -258,7 +260,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                     []
                )
         )
-        [ Html.viewIf editable (View.Organize.viewActionBar model)
+        [ Html.viewIf editable (View.Organize.viewActionBar model projects)
         , Html.div [ class "listing-header" ]
             [ Html.div [ class "listing-header-title" ]
                 [ iconCustom True "folder_open" [ class "listing-header-icon" ]
@@ -280,7 +282,7 @@ viewListing { model, scope, stepConfig, rows, header } =
                     :: viewListingToggle "visibility" "Show hidden" prefs.showHidden Actions.toggleListingShowHidden
                     :: viewListingToggle "widgets" "Group by type" prefs.groupByType Actions.toggleListingGroupByType
                     :: header
-                    ++ viewClipboardButtons model
+                    ++ viewClipboardButtons model projects
                 )
             ]
         , Html.Keyed.node "div"
@@ -302,9 +304,9 @@ viewListing { model, scope, stepConfig, rows, header } =
         ]
 
 
-viewClipboardButtons : Model -> List (Html (Flow Model ()))
-viewClipboardButtons model =
-    Model.Selection.selectionActions model
+viewClipboardButtons : Model -> Dict Int ProjectRecord -> List (Html (Flow Model ()))
+viewClipboardButtons model projects_ =
+    Model.Selection.selectionActions model projects_
         |> List.filter (\( action, _ ) -> List.member action [ Model.OrganizePasteAction, Model.OrganizeClearClipboardAction ])
         |> List.map (\( action, actionSpec ) -> viewIconButtonWithTooltip actionSpec.icon True actionSpec.label (Organize.runAction action))
 
@@ -461,7 +463,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
 
                 Nothing ->
                     Html.span [ class "record-name-container" ]
-                        [ Html.text row.name
+                        [ Html.text (row.name ++ "\u{2060}")
                         , Html.span [ class "listing-row-id", title ("id: " ++ String.fromInt row.link.id) ]
                             [ Html.text (String.fromInt row.link.id) ]
                         , Html.viewIf row.link.hidden
@@ -501,7 +503,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
                 View.Organize.rowDragAttrs scope row.link
                     ++ edgeAttrs
                     ++ (if isFolder then
-                            View.Organize.dropTargetAttrs model row.link.id
+                            View.Organize.dropTargetAttrs model rowContext.projects row.link.id
 
                         else
                             []
@@ -554,7 +556,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
                     (\typeIcon -> iconCustom False typeIcon [ class "listing-row-type-icon", title row.displayName ])
                     row.typeIcon
                 , nameView
-                , Html.span [] row.alwaysVisibleActions
+                , Html.viewIf (not (List.isEmpty row.alwaysVisibleActions)) (Html.span [] row.alwaysVisibleActions)
                 , Html.viewIf isFolder row.statusPill
                 , Html.Lazy.lazy2 viewMtimeBadge row.mTime (Model.getNow model)
                 , Html.viewIf row.isUpdating <|
@@ -786,8 +788,8 @@ viewRecordActionsPopover popoverId actions =
         actions
 
 
-viewRowActions : Model -> Int -> ChildLink -> TableSpec (BaseRecord a) -> BaseRecord a -> List (Html (Flow Model ()))
-viewRowActions model parentId link spec record =
+viewRowActions : Model -> Dict Int ProjectRecord -> Int -> ChildLink -> TableSpec (BaseRecord a) -> BaseRecord a -> List (Html (Flow Model ()))
+viewRowActions model projects_ parentId link spec record =
     let
         isReadOnly =
             isReadOnlyRoute model
@@ -854,7 +856,7 @@ viewRowActions model parentId link spec record =
             Model.childRefOf link
 
         organizeActions =
-            Model.Selection.rowActions model parentId ref
+            Model.Selection.rowActions model projects_ parentId ref
                 |> List.map
                     (\( action, actionSpec ) ->
                         viewIconButtonWithTooltip actionSpec.icon False actionSpec.label (Organize.runActionOn parentId [ ref ] action)
@@ -908,8 +910,8 @@ viewRunStop spec stopping record =
             []
 
 
-viewStepRecordActions : Model -> Int -> ChildLink -> String -> StepConfigEntry -> StepConfig -> List String -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
-viewStepRecordActions model parentId link name entry stepConfig presentTypes record flags =
+viewStepRecordActions : Model -> Dict Int ProjectRecord -> Int -> ChildLink -> String -> StepConfigEntry -> StepConfig -> List String -> StepRecord -> { uploading : Bool, scratchAvailable : Bool, stopping : Bool } -> Html (Flow Model ())
+viewStepRecordActions model projects_ parentId link name entry stepConfig presentTypes record flags =
     let
         spec =
             Specs.steps name entry
@@ -1026,11 +1028,11 @@ viewStepRecordActions model parentId link name entry stepConfig presentTypes rec
     in
     viewRecordActionsPopover
         (actionsPopoverId link)
-        (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions model parentId link spec record)
+        (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions model projects_ parentId link spec record)
 
 
-viewAddOrEditRecordForm : Model -> Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
-viewAddOrEditRecordForm model parentId spec table fields extraSection record =
+viewAddOrEditRecordForm : Model -> Dict Int ProjectRecord -> Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
+viewAddOrEditRecordForm model projects_ parentId spec table fields extraSection record =
     let
         readOnly =
             stepFormReadOnly model spec record
@@ -1092,7 +1094,7 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
         viewSelectExisting state =
             let
                 availableItems =
-                    Model.Lib.linkCandidates model parentId
+                    Model.Lib.linkCandidates model projects_ parentId
                         |> List.map
                             (\( ref, label ) ->
                                 { id = Just ref.id, name = label, mProjectId = Nothing, ref = Just ref }
@@ -1103,8 +1105,8 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                     item.ref
                         |> Maybe.unwrap []
                             (\ref ->
-                                Model.Lib.entityOtherParents model ref.kind ref.id Nothing
-                                    |> List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model linkedParentId)
+                                Model.Lib.entityOtherParents projects_ ref.kind ref.id Nothing
+                                    |> List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model projects_ linkedParentId)
                             )
             in
             Select.view

@@ -11,6 +11,7 @@ import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
+import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
@@ -153,6 +154,13 @@ type SteerTurn =
         :> Description "Sends steering input to the agent turn running in a session."
         :> ReqBody '[JSON] TurnRequest
         :> PostNoContent
+
+type CompactSession =
+    "agent"
+        :> "compact"
+        :> Description "Summarises a session's conversation to free context and returns the session."
+        :> ReqBody '[JSON] SessionRequest
+        :> Post '[JSON] AgentSessionView
 
 type ApplyChanges =
     "agent"
@@ -432,6 +440,15 @@ type AgentTurnStream =
         :> Description "Streams output of an agent turn as server-sent events."
         :> SseStream
 
+type AgentTurnImage =
+    "agent"
+        :> "turn"
+        :> Capture "id" Text
+        :> "image"
+        :> Capture "index" Int
+        :> Description "Serves an image the user sent with an agent turn."
+        :> Raw
+
 type StepSearchInfoEndpoint =
     "step-search"
         :> "info"
@@ -453,6 +470,29 @@ type ArtifactRdf =
         :> Description "Describes a step at a commit and every step upstream of it as Turtle. Segments are the artifact permalink's project path, step id and commit; nginx routes /artifact/ requests accepting text/turtle here."
         :> CaptureAll "segments" Text
         :> Get '[Turtle] (Headers '[Header "Cache-Control" Text, Header "Vary" Text] Text)
+
+type TokenAuth =
+    "token-auth"
+        :> Description "Answers nginx whether the request carries a valid session token for this instance's audience."
+        :> Header "Cookie" Text
+        :> GetNoContent
+
+type TokenSessionEndpoint =
+    "token-session"
+        :> Description "Returns the account and user of the session token in this request's cookie. 404 when the instance is not behind token auth."
+        :> Header "Cookie" Text
+        :> Get '[JSON] TokenSession
+
+type TokenLogin =
+    "token-login"
+        :> Description "Accepts a session token posted by an external login page and stores it in a cookie scoped to this instance's host."
+        :> ReqBody '[FormUrlEncoded] TokenLoginForm
+        :> Verb 'POST 303 '[PlainText] SessionRedirect
+
+type TokenLogout =
+    "token-logout"
+        :> Description "Clears the session cookie on this instance's host and redirects to the root, so the next request goes through the login page again."
+        :> Verb 'POST 303 '[PlainText] SessionRedirect
 
 type API =
     GetCommitHash
@@ -503,7 +543,9 @@ type API =
         :<|> AgentTurnEndpoint
         :<|> StopTurn
         :<|> SteerTurn
+        :<|> CompactSession
         :<|> AgentTurnStream
+        :<|> AgentTurnImage
         :<|> ApplyChanges
         :<|> SetAutoApply
         :<|> DiscardSession
@@ -511,5 +553,9 @@ type API =
         :<|> RenameSession
         :<|> DeleteSession
         :<|> AgentUsageEndpoint
+        :<|> TokenAuth
+        :<|> TokenSessionEndpoint
+        :<|> TokenLogin
+        :<|> TokenLogout
         :<|> StepSearch
         :<|> ArtifactRdf

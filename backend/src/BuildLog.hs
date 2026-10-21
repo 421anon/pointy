@@ -18,23 +18,28 @@ module BuildLog (
 ) where
 
 import Control.Concurrent.Async (mapConcurrently)
+import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Monad (forM_, guard, unless)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), Value (Null), eitherDecode, withObject, (.:), (.:?), (.!=))
+import Data.Aeson (FromJSON (..), Value (Null), eitherDecodeStrict, withObject, (.:), (.:?), (.!=))
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BC
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (isPrefixOf, isSuffixOf, sort)
+import Data.List (isPrefixOf, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+import qualified Data.Text.Encoding as TE
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
-import Effects (Nix, pathValid, runNixStoreCli)
+import Effectful.Exception (bracket_)
+import Effects (LogStamp (..), Nix, localLogStamp, pathValid, runNixStoreCli)
 import System.Exit (ExitCode (..))
+import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (runNix)
 
 data LogSource
@@ -49,7 +54,7 @@ data LogAccess
 
 data ResolvedLog = ResolvedLog
     { resolvedDrv :: FilePath
-    , resolvedLog :: String
+    , resolvedLog :: ByteString
     , resolvedSource :: LogSource
     }
     deriving (Eq, Show)
@@ -107,11 +112,22 @@ dedupe excluded ((drv, depth) : rest)
     | drv `Set.member` excluded = dedupe excluded rest
     | otherwise = (drv, depth) : dedupe (Set.insert drv excluded) rest
 
-lastMeaningfulLine :: String -> Maybe Text
-lastMeaningfulLine output =
-    case filter (not . null) (lines output) of
-        [] -> Nothing
-        ls -> Just (pack (last ls))
+lastMeaningfulLine :: ByteString -> Maybe Text
+lastMeaningfulLine = fmap TE.decodeUtf8Lenient . lastNonEmptyLine
+
+lastNonEmptyLine :: ByteString -> Maybe ByteString
+lastNonEmptyLine output = findLine (stripTrailingNewline output)
+  where
+    stripTrailingNewline s = case BS.unsnoc s of
+        Just (rest, 10) -> rest
+        _ -> s
+    findLine s
+        | BS.null s = Nothing
+        | otherwise = case BS.elemIndexEnd 10 s of
+            Nothing -> Just s
+            Just index ->
+                let line = BS.drop (index + 1) s
+                 in if BS.null line then findLine (BS.take index s) else Just line
 
 maxBfsDepth :: Int
 maxBfsDepth = 6
@@ -121,8 +137,8 @@ lookupDeriver target = do
     result <- runExceptT $ runNix ["path-info", "--derivation", target]
     return $ case result of
         Right out ->
-            case filter (not . null) (lines out) of
-                (drv : _) -> Just drv
+            case filter (not . BC.null) (BC.lines out) of
+                (drv : _) -> Just (BC.unpack drv)
                 _ -> Nothing
         Left _ -> Nothing
 
@@ -130,19 +146,52 @@ logArgs :: LogAccess -> [String] -> [String]
 logArgs LocalLogs args = ["--option", "substituters", ""] ++ args
 logArgs RemoteLogs args = args
 
-fetchStepLog :: (Nix :> es) => LogAccess -> FilePath -> Eff es (Maybe String)
-fetchStepLog access drv = do
-    result <- runExceptT $ runNix (logArgs access ["log", drv])
-    return $ case result of
-        Right output | not (null output) -> Just output
-        _ -> Nothing
+{-# NOINLINE logSemaphore #-}
+logSemaphore :: QSem
+logSemaphore = unsafePerformIO (newQSem 16)
 
-fetchInputLog :: (Nix :> es) => LogAccess -> FilePath -> Eff es (Maybe String)
+runLog :: (Nix :> es, IOE :> es) => LogAccess -> [String] -> Eff es (Either String ByteString)
+runLog access args = bracket_ (liftIO (waitQSem logSemaphore)) (liftIO (signalQSem logSemaphore)) (runExceptT (runNix (logArgs access args)))
+
+nonEmptyLog :: Either String ByteString -> Maybe ByteString
+nonEmptyLog (Right output) | not (BS.null output) = Just output
+nonEmptyLog _ = Nothing
+
+logAvailable :: (Nix :> es) => LogAccess -> FilePath -> Eff es Bool
+logAvailable LocalLogs drv = isJust <$> localLogStamp drv
+logAvailable RemoteLogs _ = return True
+
+fetchStepLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> Eff es (Maybe ByteString)
+fetchStepLog access drv = do
+    available <- logAvailable access drv
+    if available then nonEmptyLog <$> runLog access ["log", drv] else return Nothing
+
+fetchInputLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> Eff es (Maybe ByteString)
 fetchInputLog access drv = do
-    result <- runExceptT $ runNix (logArgs access ["--offline", "log", drv])
-    return $ case result of
-        Right output | not (null output) -> Just output
-        _ -> Nothing
+    available <- logAvailable access drv
+    if available then nonEmptyLog <$> runLog access ["--offline", "log", drv] else return Nothing
+
+{-# NOINLINE localLogLineCache #-}
+localLogLineCache :: IORef (Map FilePath (LogStamp, Maybe (Maybe Text)))
+localLogLineCache = unsafePerformIO (newIORef Map.empty)
+
+localLogLine :: (Nix :> es, IOE :> es) => FilePath -> Eff es (Maybe (Maybe Text))
+localLogLine drv = do
+    mStamp <- localLogStamp drv
+    case mStamp of
+        Nothing -> return Nothing
+        Just stamp -> do
+            cached <- Map.lookup drv <$> liftIO (readIORef localLogLineCache)
+            case cached of
+                Just (cachedStamp, value) | cachedStamp == stamp -> return value
+                _ -> do
+                    result <- runLog LocalLogs ["--offline", "log", drv]
+                    case result of
+                        Right logBytes -> do
+                            let value = lastMeaningfulLine <$> nonEmptyLog (Right logBytes)
+                            liftIO $ atomicModifyIORef' localLogLineCache (\entries -> (Map.insert drv (stamp, value) entries, ()))
+                            return value
+                        Left _ -> return Nothing
 
 data DrvNode = DrvNode
     { dnOutputs :: [FilePath]
@@ -192,8 +241,8 @@ validPaths paths = do
         guard (Set.fromList (map pack paths) `Set.isSubsetOf` Map.keysSet validity)
         return $ Set.fromList (map unpack (Map.keys (Map.filter (/= Null) validity)))
 
-decodeValidity :: String -> Maybe (Map Text Value)
-decodeValidity = either (const Nothing) Just . eitherDecode . TLE.encodeUtf8 . TL.pack
+decodeValidity :: ByteString -> Maybe (Map Text Value)
+decodeValidity = either (const Nothing) Just . eitherDecodeStrict
 
 buildStepStore :: (Nix :> es, IOE :> es) => Map Int Text -> Eff es StepStore
 buildStepStore certificates = do
@@ -250,7 +299,6 @@ rawStatusesBatched store isRunning certificates = do
 
 resolveStatusesBatched :: (Nix :> es, IOE :> es) => StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesBatched store statuses = do
-    logCache <- liftIO $ newIORef Map.empty
     let seeds =
             [ (sid, drv)
             | (sid, (state, _)) <- Map.toList statuses
@@ -259,7 +307,7 @@ resolveStatusesBatched store statuses = do
             ]
     ownLogs <-
         withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
-            mapConcurrently (unlift . seedFailureLog logCache) seeds
+            mapConcurrently (unlift . seedFailureLog) seeds
     resolved <- liftIO $ newIORef (Map.fromList (catMaybes ownLogs))
     seedNodes <- fetchNodes (ssCache store) (map snd seeds)
     visited <- liftIO $ newIORef (Map.fromList [(sid, Set.singleton drv) | (sid, drv) <- seeds])
@@ -282,18 +330,18 @@ resolveStatusesBatched store statuses = do
                     withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
                         mapConcurrently
                             ( \(sid, queue) ->
-                                fmap ((,) sid) (unlift (walkQueue store logCache level (Map.findWithDefault Set.empty sid seen) queue))
+                                fmap ((,) sid) (unlift (walkQueue store level (Map.findWithDefault Set.empty sid seen) queue))
                             )
                             [ (sid, queue)
                             | (sid, queue) <- Map.toList frontier
                             , not (Map.member sid done)
                             ]
                 nextFrontier <- liftIO $ newIORef Map.empty
-                forM_ walked $ \(sid, (mLog, seen', expanded)) -> do
+                forM_ walked $ \(sid, (mLine, seen', expanded)) -> do
                     liftIO $ modifyIORef' visited (Map.insert sid seen')
-                    case mLog of
-                        Just logText ->
-                            liftIO $ modifyIORef' resolved (Map.insert sid ("failure", lastMeaningfulLine logText))
+                    case mLine of
+                        Just line ->
+                            liftIO $ modifyIORef' resolved (Map.insert sid ("failure", line))
                         Nothing ->
                             unless (null expanded) $
                                 liftIO $ modifyIORef' nextFrontier (Map.insert sid expanded)
@@ -303,12 +351,12 @@ resolveStatusesBatched store statuses = do
     resolvedMap <- liftIO $ readIORef resolved
     return $ Map.union resolvedMap statuses
   where
-    seedFailureLog logCache (sid, drv) = do
-        mLog <- cachedLog (fetchInputLog LocalLogs) logCache drv
-        return $ fmap (\logText -> (sid, ("failure", lastMeaningfulLine logText))) mLog
+    seedFailureLog (sid, drv) = do
+        mLine <- localLogLine drv
+        return $ fmap (\line -> (sid, ("failure", line))) mLine
 
-walkQueue :: (Nix :> es, IOE :> es) => StepStore -> IORef (Map FilePath (Maybe String)) -> Map FilePath DrvNode -> Set FilePath -> [(FilePath, Int)] -> Eff es (Maybe String, Set FilePath, [(FilePath, Int)])
-walkQueue store logCache level seen queue = go seen [] queue
+walkQueue :: (Nix :> es, IOE :> es) => StepStore -> Map FilePath DrvNode -> Set FilePath -> [(FilePath, Int)] -> Eff es (Maybe (Maybe Text), Set FilePath, [(FilePath, Int)])
+walkQueue store level seen queue = go seen [] queue
   where
     go visited expanded [] = return (Nothing, visited, expanded)
     go visited expanded ((drv, depth) : rest)
@@ -319,12 +367,12 @@ walkQueue store logCache level seen queue = go seen [] queue
         | otherwise = case Map.lookup drv level of
             Nothing -> go (Set.insert drv visited) expanded rest
             Just node -> do
-                mLog <- cachedLog (fetchInputLog LocalLogs) logCache drv
-                case mLog of
-                    Just logText -> do
+                mLine <- localLogLine drv
+                case mLine of
+                    Just line -> do
                         allInvalid <- outputsAllInvalid node
                         if allInvalid
-                            then return (Just logText, Set.insert drv visited, expanded)
+                            then return (Just line, Set.insert drv visited, expanded)
                             else go (Set.insert drv visited) expanded rest
                     Nothing ->
                         go
@@ -344,7 +392,7 @@ outputsAllInvalid node = case dnOutputs node of
     [_] -> return True
     outputs -> and <$> mapM (fmap not . pathValid) outputs
 
-cachedLog :: (Nix :> es, IOE :> es) => (FilePath -> Eff es (Maybe String)) -> IORef (Map FilePath (Maybe String)) -> FilePath -> Eff es (Maybe String)
+cachedLog :: (Nix :> es, IOE :> es) => (FilePath -> Eff es (Maybe ByteString)) -> IORef (Map FilePath (Maybe ByteString)) -> FilePath -> Eff es (Maybe ByteString)
 cachedLog fetch cacheRef drv = do
     cached <- Map.lookup drv <$> liftIO (readIORef cacheRef)
     case cached of
@@ -383,20 +431,20 @@ queryDerivations paths = do
             let (left, right) = splitAt (length paths `div` 2) paths
             Map.union <$> queryDerivations left <*> queryDerivations right
 
-decodeDrvNodes :: String -> Maybe (Map FilePath DrvNode)
-decodeDrvNodes = either (const Nothing) Just . eitherDecode . TLE.encodeUtf8 . TL.pack
+decodeDrvNodes :: ByteString -> Maybe (Map FilePath DrvNode)
+decodeDrvNodes = either (const Nothing) Just . eitherDecodeStrict
 
 queryStorePlan :: (Nix :> es) => [FilePath] -> Eff es StorePlan
 queryStorePlan [] = return (StorePlan Set.empty Set.empty)
 queryStorePlan [path] = do
     (code, out, err) <- runNixStoreCli ["--realise", "--dry-run", path]
     return $ case code of
-        ExitSuccess -> parseStorePlan (out ++ err)
+        ExitSuccess -> parseStorePlan (out <> err)
         ExitFailure _ -> StorePlan (Set.singleton path) Set.empty
 queryStorePlan paths = do
     (code, out, err) <- runNixStoreCli (["--realise", "--dry-run"] ++ paths)
     case code of
-        ExitSuccess -> return (parseStorePlan (out ++ err))
+        ExitSuccess -> return (parseStorePlan (out <> err))
         ExitFailure _ -> do
             let (left, right) = splitAt (length paths `div` 2) paths
             leftPlan <- queryStorePlan left
@@ -407,12 +455,12 @@ queryStorePlan paths = do
                     , spFetch = spFetch leftPlan <> spFetch rightPlan
                     }
 
-parseStorePlan :: String -> StorePlan
-parseStorePlan = go False (StorePlan Set.empty Set.empty) . lines
+parseStorePlan :: ByteString -> StorePlan
+parseStorePlan = go False (StorePlan Set.empty Set.empty) . BC.lines
   where
     go _ plan [] = plan
     go building plan (line : rest)
-        | isSuffixOf ":" line = go ("will be built:" `isSuffixOf` line) plan rest
+        | BC.isSuffixOf ":" line = go ("will be built:" `BC.isSuffixOf` line) plan rest
         | Just path <- entryOf line =
             go
                 building
@@ -423,7 +471,7 @@ parseStorePlan = go False (StorePlan Set.empty Set.empty) . lines
                 rest
         | otherwise = go building plan rest
 
-    entryOf line = case words line of
-        [path] | "/nix/store/" `isPrefixOf` path -> Just path
+    entryOf line = case BC.words line of
+        [path] | "/nix/store/" `BC.isPrefixOf` path -> Just (BC.unpack path)
         _ -> Nothing
 

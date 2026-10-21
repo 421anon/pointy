@@ -4,12 +4,14 @@ module Main (main) where
 
 import Agent.Runner (RunnerInput, handleDialog, newRunnerInput, planSteer, watchTurnBudget)
 import Agent.Session (AgentTurn (..))
+import Agent.TurnLog (readTurnLogFile)
 import Config (defaultAgentConfig)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, modifyMVar_, newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (newEmptyTMVarIO)
 import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -53,7 +55,7 @@ watchSleeper logPath input = do
     return (abortedAfter, ph)
   where
     awaitTimeoutLine started aborted = do
-        logged <- TIO.readFile logPath
+        logged <- fromMaybe "" <$> readTurnLogFile logPath
         if "Runner timed out" `T.isInfixOf` logged
             then getCurrentTime >>= putMVar aborted . realToFrac . (`diffUTCTime` started)
             else threadDelay 50000 >> awaitTimeoutLine started aborted
@@ -62,6 +64,7 @@ watchSleeper logPath input = do
             { turnId = "watchdog-turn"
             , turnSessionId = "watchdog-session"
             , turnPrompt = "watchdog"
+            , turnImages = []
             , turnAutomatic = False
             , turnStatus = "running"
             , turnExitCode = Nothing

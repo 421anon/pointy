@@ -15,6 +15,7 @@ const app = Elm.Main.init({
     autoApply: storedAutoApply(),
     clientId: agentClientId(),
     isNarrow: window.matchMedia("(max-width: 1000px)").matches,
+    now: Date.now(),
   },
 });
 

@@ -100,9 +100,7 @@ broadcastProjectStatus pid targetCommit mStatusOverride = do
                 liftIO $
                     forkReporting ("Pending status resolution for project " ++ show pid) $ do
                         resolved <- markBuiltOutputs certificates =<< resolveStatusesFor certified store pending
-                        liftIO $
-                            forM_ (Map.toList resolved) $ \(sid, status_) ->
-                                broadcastSnapshot pid targetCommit certified (Map.singleton sid status_)
+                        liftIO $ broadcastSnapshot pid targetCommit certified resolved
 
 withStepProjects :: App es => Int -> Text -> (Int -> Eff es ()) -> Eff es ()
 withStepProjects sid targetCommit action = do

@@ -30,7 +30,7 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 
 ## Activity tray
 
-- The bottom tray counts running, queued and starting builds and uploads. Cluster health has its own label; hover it for the reported detail.
+- The bottom tray counts running, queued and starting builds and uploads, and says Idle when there are none. Cluster health has its own label; hover it for the reported detail. Until the first cluster status arrives, the health label shows a spinner beside Connecting and the tray does not say Idle.
 - A build is starting from the moment the backend accepts it, while it resolves dependencies and submits Slurm jobs, until Slurm lists a queued or running job for it.
 - Opening the tray groups steps by state, and each group collapses.
 - Each row shows the step's folder path under its name, starting below Home.

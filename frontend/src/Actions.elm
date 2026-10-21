@@ -19,6 +19,8 @@ import Extra.Accessors exposing (A_Traversal, by, orElseT, remkT, where_)
 import Extra.FlowError as FlowError exposing (FlowError)
 import Extra.Http as Http
 import Extra.List as List
+import File exposing (File)
+import File.Select
 import Flow exposing (Flow)
 import Fuzzy
 import Grid
@@ -261,7 +263,7 @@ organize label ops =
             (\model ->
                 let
                     inverse =
-                        Model.invertTreeOps (get store model) ops
+                        try store model |> Maybe.unwrap [] (\store_ -> Model.invertTreeOps store_ ops)
 
                     undoId =
                         (Model.getOrganizeQueue model).nextUndoId
@@ -412,7 +414,7 @@ sendOrganizeResult result =
         |> Flow.seq
             (case result of
                 Ok () ->
-                    Flow.async loadProjectRollup
+                    Flow.async refreshProjectRollup
                         |> Flow.seq refetchCommitHash
 
                 Err err ->
@@ -444,7 +446,7 @@ loadProjects =
                                 Model.getProjectsRequest model + 1
                         in
                         Flow.setAll projectsRequest request
-                            |> Flow.seq (Flow.when (not (has (projects << success) model)) (Flow.setAll projects (Loading Nothing)))
+                            |> Flow.seq (Flow.when (not (has loadedProjects model)) (Flow.setAll projects (Loading Nothing)))
                             |> Flow.seq
                                 (Api.fetchProjects target stepConfig_
                                     |> Flow.andThen
@@ -484,7 +486,7 @@ applyLoadedProjects target result =
                                 Model.mergeSteps fetchedSteps (get steps model)
 
                             mergedProjects =
-                                Model.mergeProjects fetchedProjects (ApiData.withDefault Dict.empty (get projects model))
+                                try loadedProjects model |> Maybe.unwrap fetchedProjects (Model.mergeProjects fetchedProjects)
                         in
                         Flow.modify
                             (set projects (ApiData.Success mergedProjects)
@@ -498,7 +500,7 @@ applyLoadedProjects target result =
                             |> Flow.seq (Flow.modify Selection.pruneSelection)
                             |> Flow.seq (Flow.async (Flow.yield () |> Flow.seq (Flow.modify Model.Lib.warmStepSearch)))
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
-                            |> Flow.seq (Flow.async loadProjectRollup)
+                            |> Flow.seq (Flow.async refreshProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
                     )
 
@@ -526,12 +528,8 @@ reapplyOrganizeQueue =
 
 replayStepStatusBuffer : Flow Model ()
 replayStepStatusBuffer =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                applyStepStatuses (get stepStatusBuffer model)
-                    |> Flow.seq (Flow.setAll stepStatusBuffer Dict.empty)
-            )
+    Flow.getAll (stepStatusBuffer << values)
+        ((|>) (Flow.setAll stepStatusBuffer Dict.empty) << Flow.seq << Flow.batchM << List.map applyStepStatuses)
 
 
 applyStepStatus : String -> Maybe String -> ApiData Status -> ApiData Model.StepRunState -> ApiData Model.StepRunState
@@ -595,6 +593,11 @@ setLocalStepStatus stepId status_ =
 loadUserRepoInfo : Flow Model ()
 loadUserRepoInfo =
     callApi userRepoInfo Api.fetchUserRepoInfo |> Flow.return ()
+
+
+loadTokenSession : Flow Model ()
+loadTokenSession =
+    Api.fetchTokenSession |> Flow.andThen (Flow.setAll tokenSession)
 
 
 loadStepConfig : Flow Model ()
@@ -704,6 +707,7 @@ loadProjectRollup =
                                             |> (+) 1
                                 in
                                 Flow.over rollupRequests (Dict.insert projectId request)
+                                    |> Flow.seq (Flow.over rollupInFlight (Dict.insert projectId False))
                                     |> Flow.seq
                                         (Flow.over projectRollups
                                             (Dict.update projectId (Maybe.withDefault ApiData.NotAsked >> ApiData.toLoading >> Just))
@@ -714,23 +718,53 @@ loadProjectRollup =
         )
 
 
+refreshProjectRollup : Flow Model ()
+refreshProjectRollup =
+    Flow.forAll currentProjectPath
+        (\projectPath ->
+            let
+                projectId =
+                    Route.pathProjectId projectPath
+            in
+            Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        if Dict.member projectId (Model.getRollupInFlight model) then
+                            Flow.over rollupInFlight (Dict.insert projectId True)
+
+                        else
+                            loadProjectRollup
+                    )
+        )
+
+
 settleProjectRollup : Int -> Maybe String -> Int -> Result Http.Error Model.ProjectRollup -> Flow Model ()
 settleProjectRollup projectId mCommit request result =
     Flow.get
         |> Flow.andThen
             (\model ->
-                if
-                    (Dict.get projectId (Model.getRollupRequests model) /= Just request)
-                        || (rollupTarget model /= Just ( projectId, mCommit ))
-                then
+                if Dict.get projectId (Model.getRollupRequests model) /= Just request then
                     Flow.pure ()
 
                 else
-                    Flow.over projectRollups (Dict.insert projectId (settledRollup (Model.getOrganizeQueue model) result))
+                    let
+                        stale =
+                            Dict.get projectId (Model.getRollupInFlight model) == Just True
+
+                        current =
+                            rollupTarget model == Just ( projectId, mCommit )
+                    in
+                    Flow.over rollupInFlight (Dict.remove projectId)
                         |> Flow.seq
-                            (Flow.pure result
-                                |> FlowError.foldResult (\_ -> Flow.pure ()) (\err -> addToast False (Http.errorMessage err))
+                            (Flow.when current
+                                (Flow.over projectRollups (Dict.insert projectId (settledRollup (Model.getOrganizeQueue model) result))
+                                    |> Flow.seq
+                                        (Flow.pure result
+                                            |> FlowError.foldResult (\_ -> Flow.pure ()) (\err -> addToast False (Http.errorMessage err))
+                                        )
+                                )
                             )
+                        |> Flow.seq (Flow.when stale (Flow.async loadProjectRollup))
             )
 
 
@@ -778,6 +812,7 @@ loadProjectReviews =
                                     (\model ->
                                         if reviewTarget model == Just target then
                                             Flow.modify (over (projectSteps projectId_) (mergeReviewReport result))
+                                                |> Flow.seq runBuiltStepStatusHooks
                                                 |> Flow.seq (refreshViewedStepStatuses (projectSteps projectId_ << where_ (lostReviewSince model)))
 
                                         else
@@ -1029,24 +1064,28 @@ recheckStepStatuses saved stepId downstream =
     Flow.get
         |> Flow.andThen
             (\model ->
-                let
-                    parentsOf id =
-                        List.map Tuple.first (Model.Lib.entityParents model StepChild id)
+                try loadedProjects model
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\projects_ ->
+                            let
+                                parentsOf id =
+                                    List.map Tuple.first (Model.childLinksTo StepChild id projects_)
 
-                    ( rechecked, broadcastByServer ) =
-                        if saved then
-                            ( downstream, Set.fromList (parentsOf stepId) )
+                                ( rechecked, broadcastByServer ) =
+                                    if saved then
+                                        ( downstream, Set.fromList (parentsOf stepId) )
 
-                        else
-                            ( Set.insert stepId downstream, Set.empty )
+                                    else
+                                        ( Set.insert stepId downstream, Set.empty )
 
-                    projectIds =
-                        Set.diff (Set.fromList (List.concatMap parentsOf (Set.toList rechecked))) broadcastByServer
-                in
-                Set.foldl
-                    (\projectId acc -> acc |> Flow.seq (Flow.async (requestProjectStatus projectId Nothing)))
-                    (Flow.pure ())
-                    projectIds
+                                projectIds =
+                                    Set.diff (Set.fromList (List.concatMap parentsOf (Set.toList rechecked))) broadcastByServer
+                            in
+                            Set.foldl
+                                (\projectId acc -> acc |> Flow.seq (Flow.async (requestProjectStatus projectId Nothing)))
+                                (Flow.pure ())
+                                projectIds
+                        )
             )
 
 
@@ -2646,6 +2685,16 @@ registerStepStatusHook stepId hook =
         (Just << Flow.seq hook << Maybe.withDefault (Flow.pure ()))
 
 
+runBuiltStepStatusHooks : Flow Model ()
+runBuiltStepStatusHooks =
+    Flow.forAll stepStatusHooks (Dict.keys >> List.foldl (Flow.seq << runStepStatusHookIfBuilt) (Flow.pure ()))
+
+
+runStepStatusHookIfBuilt : Int -> Flow Model ()
+runStepStatusHookIfBuilt stepId =
+    Flow.whenHas (builtStepStatus stepId) (always (Flow.async (runAndClearStepStatusHook stepId)))
+
+
 runAndClearStepStatusHook : Int -> Flow Model ()
 runAndClearStepStatusHook stepId =
     Flow.forAll (stepStatusHooks << keyI stepId << just)
@@ -2664,22 +2713,16 @@ openHighlightedEntry highlight =
 
 deepOpenOutputEntryOrDefer : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenOutputEntryOrDefer id path mRange =
-    Flow.try
-        (stepRecordById id << runState << success << status << success << where_ Model.hasBuiltOutput)
-        (\mStatus ->
-            case mStatus of
-                Just _ ->
-                    deepOpenOutputEntry id path mRange
-
-                Nothing ->
-                    registerStepStatusHook id (deepOpenOutputEntry id path mRange)
-                        |> Flow.seq (Flow.attemptTask (Scroll.scrollY (Model.rowDomId StepChild id) 0 0))
+    Flow.ifHas (builtStepStatus id)
+        (always (deepOpenOutputEntry id path mRange))
+        (registerStepStatusHook id (Flow.whenHas (route << Route.page << Route.project << mHighlight << just << where_ (Route.highlightMatches Route.Output id path)) (always (deepOpenOutputEntry id path mRange)))
+            |> Flow.seq (Flow.attemptTask (Scroll.scrollY (Model.rowDomId StepChild id) 0 0))
         )
 
 
 deepOpenOutputEntry : Int -> List String -> Maybe Route.LineRange -> Flow Model ()
 deepOpenOutputEntry stepId path mRange =
-    Flow.forAll (stepRecordById stepId << runState << success << status << success << where_ Model.hasBuiltOutput)
+    Flow.forAll (builtStepStatus stepId)
         (\_ ->
             deepOpenEntryWith Route.Output toggleOutputEntry stepId path mRange
         )
@@ -2841,16 +2884,20 @@ onSelectSearch projectId stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                goToRoute
-                    (Route.fromPage
-                        (Route.Project
-                            { projectPath = canonicalPathTo model projectId
-                            , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                            , mCommit = try (route << Route.page << Route.viewedCommitT) model
-                            , mCompare = Nothing
-                            }
+                try loadedProjects model
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\projects_ ->
+                            goToRoute
+                                (Route.fromPage
+                                    (Route.Project
+                                        { projectPath = canonicalPathTo model projects_ projectId
+                                        , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
+                                        , mCommit = try (route << Route.page << Route.viewedCommitT) model
+                                        , mCompare = Nothing
+                                        }
+                                    )
+                                )
                         )
-                    )
             )
 
 
@@ -3637,6 +3684,84 @@ clearAgentPrompt =
     callJs "agentPrompt" Encode.string (Decode.succeed ()) "clear"
 
 
+restoreAgentPrompt : String -> Flow Model ()
+restoreAgentPrompt =
+    callJs "restoreAgentPrompt" Encode.string (Decode.succeed ())
+
+
+attachAgentImages : List File -> Flow Model ()
+attachAgentImages files =
+    let
+        ( images, rejected ) =
+            List.partition (\file -> List.member (File.mime file) AgentApi.imageMimeTypes) files
+    in
+    Flow.when (not (List.isEmpty rejected)) (addToast False "Only PNG, JPEG, GIF and WebP images can be attached.")
+        |> Flow.seq
+            (Flow.getAll (agent << composerImages)
+                (\attached ->
+                    if encodedImagesLength (List.concat attached) + List.sum (List.map encodedFileLength images) > agentImagesBudget then
+                        addToast False "These images are too large to send together. Attach smaller or fewer images."
+
+                    else
+                        Flow.traverse readComposerImage images
+                            |> Flow.andThen (\read -> Flow.over (agent << composerImages) (\current -> current ++ read))
+                )
+            )
+
+
+agentImagesBudget : Int
+agentImagesBudget =
+    8 * 1024 * 1024
+
+
+encodedImagesLength : List Model.ComposerImage -> Int
+encodedImagesLength =
+    List.sum << List.map (String.length << .url)
+
+
+encodedFileLength : File -> Int
+encodedFileLength file =
+    4 * ((File.size file + 2) // 3)
+
+
+readComposerImage : File -> Flow Model Model.ComposerImage
+readComposerImage file =
+    Flow.performTask (File.toUrl file)
+        |> Flow.map (Model.ComposerImage (File.mime file))
+
+
+pickAgentImages : Flow Model ()
+pickAgentImages =
+    Flow.lift (File.Select.files AgentApi.imageMimeTypes (\file files -> attachAgentImages (file :: files)))
+        |> Flow.join
+
+
+removeComposerImage : Int -> Flow Model ()
+removeComposerImage index =
+    Flow.over (agent << composerImages) (List.removeAt index)
+
+
+agentLightboxId : String
+agentLightboxId =
+    "agent-lightbox"
+
+
+openLightbox : List String -> Int -> Flow Model ()
+openLightbox images index =
+    Flow.setAll (agent << lightbox) (Just { images = images, index = index })
+        |> Flow.seq (openDialog agentLightboxId)
+
+
+stepLightbox : Int -> Flow Model ()
+stepLightbox step =
+    Flow.over (agent << lightbox << just) (\shown -> { shown | index = modBy (List.length shown.images) (shown.index + step) })
+
+
+clearLightbox : Flow Model ()
+clearLightbox =
+    Flow.setAll (agent << lightbox) Nothing
+
+
 setPendingSteer : String -> Maybe String -> Flow Model ()
 setPendingSteer sessionId prompt =
     Flow.setAll (agent << liveTurnAt sessionId << just << pendingSteer) prompt
@@ -3796,60 +3921,80 @@ discardAgentChanges sessionId =
         )
 
 
+compactAgentSession : String -> Flow Model ()
+compactAgentSession sessionId =
+    withAgentSessionRequest sessionId
+        (Model.CompactingAgentSession sessionId)
+        (AgentApi.compact sessionId
+            |> FlowError.foldResult
+                (applyAgentSessionView >> Flow.over agent)
+                (Http.errorMessage >> addToast False >> Flow.seq (refreshAgentSession sessionId))
+        )
+
+
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
-    submitAgentPromptFrom readAgentPrompt
+    Flow.forAll (agent << composerImages) (\images -> submitAgentPromptFrom images readAgentPrompt)
 
 
-submitAgentPromptFrom : Flow Model String -> Flow Model ()
-submitAgentPromptFrom promptSource =
+submitAgentPromptFrom : List Model.ComposerImage -> Flow Model String -> Flow Model ()
+submitAgentPromptFrom images promptSource =
     withSelectedAgentSession
         (\view ->
             Flow.forAll agent
                 (\agentState ->
-                    if agentSessionRunning view.session.sessionId agentState then
+                    if not (agentSessionRunning view.session.sessionId agentState) then
+                        sendAgentTurn view images promptSource
+
+                    else if List.isEmpty images then
                         steerAgentTurn view promptSource
 
                     else
-                        sendAgentTurn view promptSource
+                        addToast False "Images can be sent once the agent finishes."
                 )
         )
 
 
-withAgentPrompt : Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
-withAgentPrompt promptSource send =
+withAgentPrompt : List Model.ComposerImage -> Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
+withAgentPrompt images promptSource send =
     promptSource
         |> Flow.andThen
             (\rawPrompt ->
                 case String.trim rawPrompt of
                     "" ->
-                        addToast False "Enter an agent prompt first."
+                        if List.isEmpty images then
+                            addToast False "Enter an agent prompt first."
+
+                        else
+                            send ""
 
                     prompt ->
                         send prompt
             )
 
 
-sendAgentTurn : Model.AgentSessionView -> Flow Model String -> Flow Model ()
-sendAgentTurn view promptSource =
+sendAgentTurn : Model.AgentSessionView -> List Model.ComposerImage -> Flow Model String -> Flow Model ()
+sendAgentTurn view images promptSource =
     let
         sessionId =
             view.session.sessionId
     in
     withAgentRequest (Model.SendingAgentPrompt sessionId)
-        (withAgentPrompt promptSource
+        (withAgentPrompt images
+            promptSource
             (\prompt ->
                 Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view))
                     |> Flow.seq
                         (Flow.over (agent << liveTurnAt sessionId << just << entries)
                             (\entriesBefore ->
                                 entriesBefore
-                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, assistant = "", status = Model.ChatPending } ]
+                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, images = List.map .url images, assistant = "", status = Model.ChatPending } ]
                             )
                         )
                     |> Flow.seq clearAgentPrompt
+                    |> Flow.seq (Flow.setAll (agent << composerImages) [])
                     |> Flow.seq scrollAgentChatToBottom
-                    |> Flow.seq (Flow.forAll agent (AgentApi.sendTurn sessionId prompt >> Flow.try currentProjectId))
+                    |> Flow.seq (Flow.forAll agent (AgentApi.sendTurn sessionId prompt images >> Flow.try currentProjectId))
                     |> FlowError.foldResult
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
@@ -3864,6 +4009,8 @@ sendAgentTurn view promptSource =
                             Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
                                 |> Flow.seq (Flow.over (agent << liveTurnAt sessionId << just << entries) (Model.failLatestPendingChatTurn message))
                                 |> Flow.seq (addToast False message)
+                                |> Flow.seq (restoreAgentPrompt prompt)
+                                |> Flow.seq (Flow.over (agent << composerImages) (\current -> images ++ current))
                         )
             )
         )
@@ -3876,16 +4023,17 @@ steerAgentTurn view promptSource =
             view.session.sessionId
     in
     withAgentRequest (Model.SteeringAgentTurn sessionId)
-        (withAgentPrompt promptSource
+        (withAgentPrompt []
+            promptSource
             (\prompt ->
-                sendSteer sessionId { wire = prompt, shown = prompt }
-                    |> Flow.seq clearAgentPrompt
+                clearAgentPrompt
+                    |> Flow.seq (sendSteer sessionId { wire = prompt, shown = prompt } (restoreAgentPrompt prompt))
             )
         )
 
 
-sendSteer : String -> { wire : String, shown : String } -> Flow Model ()
-sendSteer sessionId { wire, shown } =
+sendSteer : String -> { wire : String, shown : String } -> Flow Model () -> Flow Model ()
+sendSteer sessionId { wire, shown } onFailed =
     setPendingSteer sessionId (Just shown)
         |> Flow.seq scrollAgentChatToBottom
         |> Flow.seq (AgentApi.steer sessionId wire)
@@ -3895,6 +4043,7 @@ sendSteer sessionId { wire, shown } =
                 setPendingSteer sessionId Nothing
                     |> Flow.seq (clearRequestIfMatches (Model.SteeringAgentTurn sessionId))
                     |> Flow.seq (addToast False (Http.errorMessage err))
+                    |> Flow.seq onFailed
                     |> Flow.seq (refreshAgentSession sessionId)
             )
 
@@ -3903,7 +4052,7 @@ answerAgentQuestion : String -> String -> String -> Flow Model ()
 answerAgentQuestion sessionId wire shown =
     Flow.when (not (String.isEmpty wire))
         (withAgentRequest (Model.SteeringAgentTurn sessionId)
-            (sendSteer sessionId { wire = wire, shown = shown })
+            (sendSteer sessionId { wire = wire, shown = shown } (Flow.pure ()))
         )
 
 
@@ -3958,7 +4107,7 @@ investigateStepWithAgent stepId log =
                                 |> Flow.seq (openAgentChat view.session.sessionId)
                                 |> Flow.seq (applyAgentChatFromUrl True)
                                 |> Flow.seq (clearRequestIfMatches Model.CreatingAgentSession)
-                                |> Flow.seq (submitAgentPromptFrom (Flow.pure (investigateStepPrompt stepId log)))
+                                |> Flow.seq (submitAgentPromptFrom [] (Flow.pure (investigateStepPrompt stepId log)))
                         )
                         (\err -> addToast False (Http.errorMessage err))
                 )
@@ -4038,8 +4187,9 @@ onStepStatusIn value =
                 |> Flow.andThen
                     (\model ->
                         Flow.when (headMovedRemotely model commit) (Flow.async (resyncWorkspace commit))
+                            |> Flow.seq (bufferUnlistedStatuses model commit statuses)
                             |> Flow.seq (applyStepStatuses statuses)
-                            |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async loadProjectRollup))
+                            |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async refreshProjectRollup))
                     )
 
         Ok SSEHeartbeat ->
@@ -4060,14 +4210,11 @@ headMovedRemotely model snapshotCommit =
 
 rollupAffectedFor : Model -> Dict Int Model.StatusReport -> Bool
 rollupAffectedFor model statuses =
-    case try currentProjectId model of
-        Nothing ->
-            False
-
-        Just projectId ->
+    case ( try currentProjectId model, try loadedProjects model ) of
+        ( Just projectId, Just projects_ ) ->
             let
                 reachable =
-                    stepsBelow (projectsDict model) projectId
+                    stepsBelow projects_ projectId
             in
             Dict.foldl
                 (\stepId report acc ->
@@ -4078,6 +4225,9 @@ rollupAffectedFor model statuses =
                 )
                 False
                 statuses
+
+        _ ->
+            False
 
 
 stepsBelow : Dict Int ProjectRecord -> Int -> Set Int
@@ -4099,36 +4249,36 @@ applyStepStatuses statuses =
     Flow.get |> Flow.andThen (applyListedStatuses statuses)
 
 
+bufferUnlistedStatuses : Model -> String -> Dict Int Model.StatusReport -> Flow Model ()
+bufferUnlistedStatuses model commit statuses =
+    let
+        unlisted =
+            Dict.filter (always << not << flip has model << stepRecordById) statuses
+
+        isIncomingOrViewed slotCommit =
+            slotCommit == commit || Maybe.unwrap True ((==) slotCommit) (Model.viewedRevision model)
+    in
+    Flow.when (not (Dict.isEmpty unlisted))
+        (Flow.over stepStatusBuffer (Dict.filter (always << isIncomingOrViewed))
+            |> Flow.seq (Flow.over (stepStatusBuffer << Dict.Accessors.at commit) (Just << Dict.union unlisted << Maybe.withDefault Dict.empty))
+        )
+
+
 applyListedStatuses : Dict Int Model.StatusReport -> Model -> Flow Model ()
 applyListedStatuses statuses model =
     let
-        listed =
-            all (stepRecordsListed statuses) model
-
-        listedIds =
-            Set.fromList (List.filterMap (get recordId) listed)
-
-        unlisted =
-            Dict.filter (\stepId _ -> not (Set.member stepId listedIds))
-
-        hooks =
-            statuses
-                |> Dict.filter (\_ -> Model.hasBuiltOutput << .status)
-                |> Dict.keys
-                |> List.map runAndClearStepStatusHook
-
         settles =
             Dict.toList statuses
                 |> List.map (\( stepId, report ) -> settlePendingBuild report.commit stepId report.status)
 
         reviewReloads =
-            listed
+            all (stepRecordsListed statuses) model
                 |> List.filter (renewsReview statuses)
                 |> List.map (always (Flow.async loadProjectReviews))
     in
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
-        |> Flow.seq (Flow.over stepStatusBuffer (\buffer -> Dict.union (unlisted buffer) (unlisted statuses)))
-        |> Flow.seq (Flow.batchM (hooks ++ settles ++ reviewReloads))
+        |> Flow.seq runBuiltStepStatusHooks
+        |> Flow.seq (Flow.batchM (settles ++ reviewReloads))
         |> Flow.seq settlePendingStops
 
 
@@ -4343,10 +4493,15 @@ openRunningStep stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                stepOutputLocation (try currentProjectId model) (stepLocations ((==) stepId) (projectsDict model) (Model.getSteps model)) stepId
-                    |> Maybe.unwrap (Flow.pure ())
-                        (\location ->
-                            Flow.setAll statusBarOpen False
-                                |> Flow.seq (goToRoute (stepOutputRoute (canonicalPathTo model location.projectId) stepId))
-                        )
+                case try loadedProjects model of
+                    Just projects_ ->
+                        stepOutputLocation (try currentProjectId model) (stepLocations ((==) stepId) projects_ (Model.getSteps model)) stepId
+                            |> Maybe.unwrap (Flow.pure ())
+                                (\location ->
+                                    Flow.setAll statusBarOpen False
+                                        |> Flow.seq (goToRoute (stepOutputRoute (canonicalPathTo model projects_ location.projectId) stepId))
+                                )
+
+                    Nothing ->
+                        Flow.pure ()
             )

@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Handlers.Projects (getProjectsHandler, readJsonAtCommit, patchProjectHandler, batchProjectOpsHandler, postProjectHandler) where
+module Handlers.Projects (getProjectsHandler, readJsonAtCommit, readJsonAtCommitWithHead, patchProjectHandler, batchProjectOpsHandler, postProjectHandler) where
 
 import ApiTypes (DynamicJson (..))
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
@@ -46,10 +46,13 @@ getProjectsHandler commit =
         pure (annotateRecordMtimes times projects)
 
 readJsonAtCommit :: (IOE :> es, ToJSON a) => Maybe T.Text -> (ReadRepoContext -> ExceptT String (Eff es) a) -> ExceptT ServerError (Eff es) DynamicJson
-readJsonAtCommit commit action = do
-    result <- lift $ withReadRepoTransaction $ \ctx -> do
-        let targetCommit = maybe (readCommitHash ctx) T.unpack commit
-        action (ReadRepoContext (readRepoPath ctx) targetCommit)
+readJsonAtCommit commit action = readJsonAtCommitWithHead commit (\_ -> action)
+
+readJsonAtCommitWithHead :: (IOE :> es, ToJSON a) => Maybe T.Text -> (ReadRepoContext -> ReadRepoContext -> ExceptT String (Eff es) a) -> ExceptT ServerError (Eff es) DynamicJson
+readJsonAtCommitWithHead commit action = do
+    result <- lift $ withReadRepoTransaction $ \headContext -> do
+        let targetCommit = maybe (readCommitHash headContext) T.unpack commit
+        action headContext (ReadRepoContext (readRepoPath headContext) targetCommit)
     case result of
         Right output -> return (DynamicJson (encode output))
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}

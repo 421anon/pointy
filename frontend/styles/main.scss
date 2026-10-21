@@ -1867,9 +1867,8 @@ $delimited-grid-row-height: 28px;
 }
 
 .icon-btn-inline {
-  min-width: 20px;
+  min-width: 0;
   min-height: 20px;
-  margin-left: var(--spacing-2xs);
   color: var(--text-secondary);
 
   > .material-symbols-outlined {
@@ -2985,10 +2984,11 @@ body:has(dialog[open]) {
 .tag {
   background: var(--color-accent, teal);
   border-radius: 3px;
-  padding: 0 6px;
+  padding: 2px 6px;
   align-items: center;
-  height: 24px;
-  line-height: 24px;
+  min-height: 24px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
 }
 
 .tag.tag-invalid {
@@ -2996,10 +2996,14 @@ body:has(dialog[open]) {
 }
 
 .tag:has(.remove-selected-icon) {
-  padding: 0 2px 0 6px;
+  padding: 2px 2px 2px 6px;
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.tag .remove-selected-icon {
+  flex-shrink: 0;
 }
 
 [data-theme="light"] .tag[style*="background-color"] {
@@ -3331,7 +3335,12 @@ body:has(dialog[open]) {
   color: var(--text-muted);
 
   .status-bar__state-indicator {
-    animation: pulse-running 1.5s ease-in-out infinite;
+    width: 1em;
+    height: 1em;
+    background: transparent;
+    border: 2px solid currentColor;
+    border-block-start-color: transparent;
+    animation: spin 1s linear infinite;
   }
 }
 
@@ -3482,6 +3491,44 @@ body:has(dialog[open]) {
   padding: 0;
 }
 
+.status-bar__user {
+  display: flex;
+
+  > .status-bar__control {
+    max-width: 12rem;
+  }
+
+  form {
+    display: contents;
+  }
+
+  .listing-popover:popover-open {
+    position: fixed;
+    position-area: top span-left;
+    margin-block: 0 var(--spacing-xs);
+  }
+}
+
+.status-bar__user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar__user-identity {
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+  border-bottom: 1px solid var(--line-color);
+  color: var(--text-primary);
+
+  > span {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+  }
+}
+
 .status-bar__icon-dark {
   display: block;
 }
@@ -3592,6 +3639,10 @@ body:has(dialog[open]) {
   gap: var(--spacing-sm);
 }
 
+.status-bar__step-line .step-review-revision {
+  min-height: 0;
+}
+
 .status-bar__step-id {
   flex: 0 0 auto;
   color: var(--text-muted);
@@ -3656,7 +3707,8 @@ body:has(dialog[open]) {
   }
 
   .status-bar__count--starting .status-bar__marker,
-  .status-bar__marker--starting {
+  .status-bar__marker--starting,
+  .status-bar__state--loading .status-bar__state-indicator {
     animation: none;
   }
 }
@@ -3693,7 +3745,8 @@ body:has(dialog[open]) {
 
 
   .status-bar__agent span:not(.material-symbols-outlined),
-  .status-bar__help span:not(.material-symbols-outlined) {
+  .status-bar__help span:not(.material-symbols-outlined),
+  .status-bar__user-name {
     display: none;
   }
 

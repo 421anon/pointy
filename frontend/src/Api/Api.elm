@@ -25,6 +25,7 @@ module Api.Api exposing
     , fetchSrcFileSeek
     , fetchStepConfig
     , fetchStepLog
+    , fetchTokenSession
     , fetchUserRepoInfo
     , postTreeOps
     , refreshProjectStatus
@@ -157,7 +158,7 @@ stringResponse onSuccess response =
             Err Http.NetworkError
 
         Http.BadStatus_ metadata body ->
-            if String.isEmpty (String.trim body) then
+            if metadata.statusCode == 401 || String.isEmpty (String.trim body) then
                 Err (Http.BadStatus metadata.statusCode)
 
             else
@@ -497,6 +498,15 @@ fetchSrcFileSeek recordId commit filePath anchor bytes_ =
                         ++ seekQueryParams anchor bytes_
                     )
             , expect = Http.expectJson identity Decode.fileChunk
+            }
+
+
+fetchTokenSession : Flow s (Maybe Model.Core.TokenSession)
+fetchTokenSession =
+    Flow.lift <|
+        Http.get
+            { url = "/backend/token-session"
+            , expect = Http.expectJson Result.toMaybe Decode.tokenSession
             }
 
 

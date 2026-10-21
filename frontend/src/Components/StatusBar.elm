@@ -5,17 +5,18 @@ import Actions
 import Api.ApiData as ApiData exposing (ApiData)
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (attribute, class, classList, disabled, href, id, rel, target, title, type_)
+import Html.Attributes exposing (action, attribute, class, classList, disabled, href, id, method, rel, target, title, type_)
 import Html.Events as Events
 import Html.Extra as Html
 import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
-import Model.Lenses exposing (route)
+import Model.Lenses exposing (loadedProjects, route)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
 import Set exposing (Set)
 import Time
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
+import View.Organize as Organize
 import View.Table as Table
 
 
@@ -46,6 +47,9 @@ view model =
         groups =
             groupSteps steps
 
+        summary =
+            summarize (Model.getClusterStatus model) groups
+
         isOpen =
             Model.getStatusBarOpen model && not (List.isEmpty steps)
     in
@@ -64,7 +68,7 @@ view model =
              )
                 ++ [ Html.div [ class "status-bar__surface" ]
                         [ viewHealth model
-                        , viewSummary groups (not (List.isEmpty steps)) isOpen
+                        , viewSummary summary (not (List.isEmpty steps)) isOpen
                         , viewRepoContext model
                         , viewIndependentControls model
                         ]
@@ -181,18 +185,11 @@ viewHealth model =
         ]
 
 
-viewSummary : List Group -> Bool -> Bool -> Html (Flow Model ())
-viewSummary groups expandable isOpen =
+viewSummary : Summary -> Bool -> Bool -> Html (Flow Model ())
+viewSummary summary expandable isOpen =
     let
-        counts =
-            List.map summaryCount groups
-
         spoken =
-            if List.isEmpty counts then
-                "Idle"
-
-            else
-                String.join ", " (List.map (\count -> String.fromInt count.count ++ " " ++ count.label) counts)
+            spokenSummary summary
     in
     Html.button
         ([ class "status-bar__main"
@@ -220,11 +217,15 @@ viewSummary groups expandable isOpen =
             [ class "status-bar__counts"
             , attribute "aria-live" "polite"
             ]
-            (if List.isEmpty counts then
-                [ Html.span [ class "status-bar__count status-bar__count--idle" ] [ Html.text "Idle" ] ]
+            (case summary of
+                SummaryLoading ->
+                    []
 
-             else
-                List.map viewCount counts
+                SummaryIdle ->
+                    [ Html.span [ class "status-bar__count status-bar__count--idle" ] [ Html.text "Idle" ] ]
+
+                SummaryActive counts ->
+                    List.map viewCount counts
             )
         , if expandable then
             iconCustom False
@@ -268,6 +269,39 @@ summaryCount group =
 
         TransferGroup ->
             { kind = "transferring", count = count, label = "uploading" }
+
+
+type Summary
+    = SummaryLoading
+    | SummaryIdle
+    | SummaryActive (List SummaryCount)
+
+
+summarize : ApiData ClusterStatus -> List Group -> Summary
+summarize clusterStatus groups =
+    case List.map summaryCount groups of
+        [] ->
+            if ApiData.settled clusterStatus then
+                SummaryIdle
+
+            else
+                SummaryLoading
+
+        counts ->
+            SummaryActive counts
+
+
+spokenSummary : Summary -> String
+spokenSummary summary =
+    case summary of
+        SummaryLoading ->
+            "Loading activity"
+
+        SummaryIdle ->
+            "Idle"
+
+        SummaryActive counts ->
+            String.join ", " (List.map (\count -> String.fromInt count.count ++ " " ++ count.label) counts)
 
 
 viewCount : SummaryCount -> Html msg
@@ -387,7 +421,49 @@ viewIndependentControls model =
                 , attribute "aria-hidden" "true"
                 ]
             ]
+        , viewUserMenu model
         ]
+
+
+viewUserMenu : Model -> Html (Flow Model ())
+viewUserMenu model =
+    Html.viewMaybe
+        (\session ->
+            let
+                user =
+                    Maybe.withDefault session.account session.user
+
+                label =
+                    "Signed in as " ++ user ++ " · " ++ session.account
+            in
+            Organize.viewMenuPopover
+                { popoverId = "status-bar-user-menu"
+                , wrapperClass = "status-bar__user"
+                , triggerAttrs =
+                    [ class "status-bar__control"
+                    , type_ "button"
+                    , title label
+                    , attribute "aria-label" label
+                    ]
+                , triggerContent =
+                    [ iconCustom False "account_circle" [ attribute "aria-hidden" "true" ]
+                    , Html.span [ class "status-bar__user-name" ] [ Html.text user ]
+                    ]
+                , content =
+                    [ Html.div [ class "status-bar__user-identity" ]
+                        [ Html.strong [] [ Html.text user ]
+                        , Html.span [] [ Html.text session.account ]
+                        ]
+                    , Html.form [ method "post", action "/token-logout" ]
+                        [ Html.button [ class "listing-menu-item", type_ "submit" ]
+                            [ iconCustom False "logout" [ attribute "aria-hidden" "true" ]
+                            , Html.text "Log out"
+                            ]
+                        ]
+                    ]
+                }
+        )
+        (Model.getTokenSession model)
 
 
 viewPanel : Model -> List Group -> Html (Flow Model ())
@@ -451,20 +527,23 @@ viewStep model step =
         now =
             Model.getNow model
 
-        folderPath =
-            Maybe.map (canonicalNamePath model) step.projectId
+        mFolder =
+            Maybe.map2 Tuple.pair (try loadedProjects model) step.projectId
 
-        folderLine projectId =
+        folderPath =
+            Maybe.map (\( projects_, projectId ) -> canonicalNamePath model projects_ projectId) mFolder
+
+        folderLine ( projects_, projectId ) =
             let
                 trail =
-                    case canonicalPathNames model projectId of
+                    case canonicalPathNames model projects_ projectId of
                         [] ->
-                            rootProjectName model
+                            rootProjectName projects_
 
                         names ->
                             String.join " / " names
             in
-            Html.span [ class "status-bar__step-path", title (canonicalNamePath model projectId) ] [ Html.text trail ]
+            Html.span [ class "status-bar__step-path", title (canonicalNamePath model projects_ projectId) ] [ Html.text trail ]
 
         meta =
             stateMeta now step.state
@@ -531,7 +610,7 @@ viewStep model step =
                         Nothing ->
                             Html.nothing
                     ]
-                , Maybe.map folderLine step.projectId |> Maybe.withDefault Html.nothing
+                , Maybe.map folderLine mFolder |> Maybe.withDefault Html.nothing
                 ]
             , Html.span [ class ("status-bar__step-meta status-bar__step-meta--" ++ meta.tone) ]
                 [ Html.text meta.short ]

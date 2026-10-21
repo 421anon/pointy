@@ -108,12 +108,17 @@ checkReaderSurvivesFailure dir = withInput $ \input -> do
     writeLine writer (selectEvent "d1")
     writeLine writer (selectEvent "d1")
     writeLine writer (object ["type" .= ("compaction_start" :: Text)])
+    writeLine writer (contextStatsEvent 6000 10000)
     hClose writer
     finished <- timeout 5000000 (wait reader)
     assertBool "reader: the loop ends when pi's stream does" (isJust finished)
     logged <- TIO.readFile logPath
     assertContains "reader: the handler failure is noted" "[system] Could not handle the runner's extension_ui_request event" logged
-    assertContains "reader: the loop keeps reading after a handler failure" "[stdout] *Summarising the conversation so far*" logged
+    assertContains "reader: compaction starts a context state line" "[context] " logged
+    assertContains "reader: compaction start is a compacting state" "\"state\":\"compacting\"" logged
+    assertContains "reader: session stats become a context usage line" "\"tokens\":6000" logged
+    assertContains "reader: context usage keeps its window" "\"capacity\":10000" logged
+    assertBool "reader: context state stays out of the transcript" (not ("*Summarising the conversation so far*" `T.isInfixOf` logged))
     control <- latchedQuestion input
     reply <- newEmptyTMVarIO
     case planSteer "hello" "steer-6" reply control of
@@ -195,6 +200,22 @@ dialogValue dialogId value =
 steer :: Text -> Text -> Value
 steer requestId prompt =
     object ["id" .= requestId, "type" .= ("prompt" :: Text), "message" .= prompt, "streamingBehavior" .= ("steer" :: Text)]
+
+contextStatsEvent :: Int -> Int -> Value
+contextStatsEvent tokens capacity =
+    object
+        [ "type" .= ("response" :: Text)
+        , "command" .= ("get_session_stats" :: Text)
+        , "success" .= True
+        , "data"
+            .= object
+                [ "contextUsage"
+                    .= object
+                        [ "tokens" .= tokens
+                        , "contextWindow" .= capacity
+                        ]
+                ]
+        ]
 
 questionIn :: Text -> Maybe (Bool, [Text])
 questionIn = listToMaybe . mapMaybe question . T.lines

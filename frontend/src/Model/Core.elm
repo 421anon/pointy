@@ -711,6 +711,12 @@ type alias UserRepoInfo =
     }
 
 
+type alias TokenSession =
+    { account : String
+    , user : Maybe String
+    }
+
+
 type alias SessionTimestamp =
     { posix : Time.Posix
     , nanos : Int
@@ -752,6 +758,7 @@ type alias AgentTurn =
     { turnId : String
     , turnSessionId : String
     , turnPrompt : String
+    , turnImages : List String
     , turnAutomatic : Bool
     , turnStatus : String
     , turnExitCode : Maybe Int
@@ -832,6 +839,7 @@ type ChatTurnStatus
 type alias ChatTurn =
     { turnId : String
     , prompt : Maybe String
+    , images : List String
     , assistant : String
     , status : ChatTurnStatus
     }
@@ -858,6 +866,18 @@ type ChatEntry
     | ChatChangesetEntry ChatChangeset
 
 
+type alias ContextUsage =
+    { tokens : Int
+    , capacity : Int
+    }
+
+
+type ContextState
+    = ContextKnown ContextUsage
+    | ContextCompacting
+    | ContextFailed String
+
+
 type alias AgentSessionNameEdit =
     { sessionId : String
     , value : String
@@ -874,6 +894,7 @@ type AgentRequest
     | StoppingAgentTurn String
     | ApplyingAgentChanges String
     | DiscardingAgentChanges String
+    | CompactingAgentSession String
 
 
 type alias PendingQuestion =
@@ -904,6 +925,18 @@ keepPicksForSameQuestion previous next =
             next
 
 
+type alias ComposerImage =
+    { mimeType : String
+    , url : String
+    }
+
+
+type alias Lightbox =
+    { images : List String
+    , index : Int
+    }
+
+
 type alias AgentToolCall =
     { id : String
     , name : String
@@ -918,6 +951,7 @@ type alias AgentLiveTurn =
     , entries : List ChatEntry
     , chunkBuffer : String
     , pendingQuestion : Maybe PendingQuestion
+    , contextState : Maybe ContextState
     , streamError : Maybe String
     , pendingSteer : Maybe String
     , runningCalls : List AgentToolCall
@@ -932,6 +966,7 @@ liveTurnFor turnId view =
     , entries = persistedTranscript view
     , chunkBuffer = ""
     , pendingQuestion = persistedQuestion view
+    , contextState = persistedContextState view
     , streamError = Nothing
     , pendingSteer = Nothing
     , runningCalls = []
@@ -961,6 +996,8 @@ type alias AgentState =
     , isRestoringChat : Bool
     , autoApply : Bool
     , clientId : String
+    , composerImages : List ComposerImage
+    , lightbox : Maybe Lightbox
     }
 
 
@@ -982,6 +1019,8 @@ initAgentState =
     , isRestoringChat = False
     , autoApply = True
     , clientId = ""
+    , composerImages = []
+    , lightbox = Nothing
     }
 
 
@@ -1022,6 +1061,7 @@ ingestLiveChunk chunk live =
         | chunkBuffer = remainder
         , entries = List.foldl appendChatLine live.entries keptLines
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
+        , contextState = List.foldl contextStateAfterLine live.contextState keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
         , runningCalls = List.foldl runningCallsAfterLine live.runningCalls keptLines
         , applying = List.foldl applyingDiffAfterLine live.applying keptLines
@@ -1037,6 +1077,11 @@ persistedTranscript view =
 persistedQuestion : AgentSessionView -> Maybe PendingQuestion
 persistedQuestion =
     List.foldl pendingQuestionAfterLine Nothing << replayedTurnLogLines
+
+
+persistedContextState : AgentSessionView -> Maybe ContextState
+persistedContextState view =
+    List.foldl contextStateAfterLine Nothing (List.concatMap turnLogLines view.turns)
 
 
 replayedTurnLogLines : AgentSessionView -> List String
@@ -1079,14 +1124,14 @@ appendPersistedTurn turn entries =
                 if turn.turnAutomatic then
                     Nothing
 
-                else if String.isEmpty (String.trim turn.turnPrompt) then
+                else if String.isEmpty (String.trim turn.turnPrompt) && List.isEmpty turn.turnImages then
                     Just "Prompt unavailable"
 
                 else
                     Just turn.turnPrompt
 
             seeded =
-                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, assistant = "", status = chatStatusFromTurn turn } ]
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, images = turn.turnImages, assistant = "", status = chatStatusFromTurn turn } ]
 
             logLines =
                 turnLogLines turn
@@ -1235,7 +1280,7 @@ appendChatLine rawLine entries =
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
                     mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, assistant = "", status = ChatPending } ]
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, images = [], assistant = "", status = ChatPending } ]
 
                 Err _ ->
                     entries
@@ -1264,6 +1309,9 @@ splitLogPrefix line =
     else if String.startsWith "[question] " line then
         ( "question", String.dropLeft 11 line )
 
+    else if String.startsWith "[context] " line then
+        ( "context", String.dropLeft 10 line )
+
     else if String.startsWith "[activity] " line then
         ( "activity", String.dropLeft 11 line )
 
@@ -1291,11 +1339,17 @@ appendToCurrentAssistant body =
 
 appendAssistantLine : String -> List ChatEntry -> List ChatEntry
 appendAssistantLine body entries =
-    if List.member (String.trim body) retiredNarrationMarkers then
+    if isRetiredAssistantLine body then
         entries
 
     else
         appendToCurrentAssistant body entries
+
+
+isRetiredAssistantLine : String -> Bool
+isRetiredAssistantLine body =
+    List.member (String.trim body) retiredNarrationMarkers
+        || String.startsWith "**Context warning:**" (String.trim body)
 
 
 retiredNarrationMarkers : List String
@@ -1325,6 +1379,58 @@ pendingQuestionAfterLine rawLine pending =
 
         _ ->
             pending
+
+
+contextStateAfterLine : String -> Maybe ContextState -> Maybe ContextState
+contextStateAfterLine rawLine current =
+    case splitLogPrefix rawLine of
+        ( "context", body ) ->
+            case Decode.decodeString contextLogDecoder (String.trim body) of
+                Ok next ->
+                    next
+
+                Err _ ->
+                    current
+
+        _ ->
+            current
+
+
+contextLogDecoder : Decode.Decoder (Maybe ContextState)
+contextLogDecoder =
+    Decode.oneOf
+        [ Decode.map2
+            (\tokens capacity -> Just (ContextKnown { tokens = tokens, capacity = capacity }))
+            (Decode.field "tokens" Decode.int)
+            (Decode.field "capacity" Decode.int)
+        , Decode.field "state" Decode.string
+            |> Decode.andThen
+                (\state ->
+                    case state of
+                        "compacting" ->
+                            Decode.succeed (Just ContextCompacting)
+
+                        "compacted" ->
+                            Decode.succeed Nothing
+
+                        "failed" ->
+                            Decode.map (\message -> Just (ContextFailed message))
+                                (Decode.field "message" Decode.string)
+
+                        _ ->
+                            Decode.fail ("unknown context state " ++ state)
+                )
+        ]
+
+
+contextWarning : ContextState -> Bool
+contextWarning state =
+    case state of
+        ContextKnown usage ->
+            usage.tokens * 2 >= usage.capacity
+
+        _ ->
+            False
 
 
 pendingSteerAfterLine : String -> Maybe String -> Maybe String
@@ -1590,7 +1696,7 @@ type Model
         , stepLogs : Dict String (ApiData String)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
-        , stepStatusBuffer : Dict Int StatusReport
+        , stepStatusBuffer : Dict String (Dict Int StatusReport)
         , pendingBuilds : Dict Int String
         , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
@@ -1618,6 +1724,8 @@ type Model
         , projectRollups : Dict Int (ApiData ProjectRollup)
         , projectsRequest : Int
         , rollupRequests : Dict Int Int
+        , rollupInFlight : Dict Int Bool
+        , tokenSession : Maybe TokenSession
         }
 
 
@@ -1782,6 +1890,16 @@ getRollupRequests (Model model) =
     model.rollupRequests
 
 
+getRollupInFlight : Model -> Dict Int Bool
+getRollupInFlight (Model model) =
+    model.rollupInFlight
+
+
+getTokenSession : Model -> Maybe TokenSession
+getTokenSession (Model model) =
+    model.tokenSession
+
+
 getOrigin : Model -> String
 getOrigin (Model model) =
     model.origin
@@ -1903,7 +2021,7 @@ getStepStatusHooks (Model model) =
     model.stepStatusHooks
 
 
-getStepStatusBuffer : Model -> Dict Int StatusReport
+getStepStatusBuffer : Model -> Dict String (Dict Int StatusReport)
 getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
 
@@ -2021,6 +2139,7 @@ type alias Flags =
     , autoApply : Bool
     , clientId : String
     , isNarrow : Bool
+    , now : Int
     }
 
 
@@ -2084,7 +2203,7 @@ initialModel key route flags =
         , organizeDrag = Nothing
         , gutterDrag = Nothing
         , compareState = CompareIdle
-        , now = Time.millisToPosix 0
+        , now = Time.millisToPosix flags.now
         , agent = { initAgentState | lastChat = flags.lastChat, autoApply = flags.autoApply, clientId = flags.clientId }
         , clusterStatus = ApiData.Loading Nothing
         , clusterDetail = Nothing
@@ -2097,6 +2216,8 @@ initialModel key route flags =
         , projectRollups = Dict.empty
         , projectsRequest = 0
         , rollupRequests = Dict.empty
+        , rollupInFlight = Dict.empty
+        , tokenSession = Nothing
         }
 
 

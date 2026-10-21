@@ -242,6 +242,14 @@ function agentPrompt(action) {
   return null;
 }
 
+function restoreAgentPrompt(text) {
+  const prompt = document.getElementById("agent-prompt");
+  if (!prompt || prompt.value.trim() !== "") return null;
+  prompt.value = text;
+  prompt.dispatchEvent(new Event("input", { bubbles: true }));
+  return null;
+}
+
 function installGutterDragListeners(app) {
   const emitEnd = () => {
     if (app.ports && app.ports.gutterDragEnd) {
@@ -325,6 +333,7 @@ export function connectPorts(app) {
     zoomIframe,
     toggleTheme,
     agentPrompt,
+    restoreAgentPrompt,
     storeLastChat,
     storeAutoApply,
     setUnsentTreeOps,

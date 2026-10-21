@@ -36,10 +36,11 @@ import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Object, Result (..), Value (..), decode, fromJSON, object, toJSON, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), Object, Result (..), Value (..), eitherDecodeStrict, fromJSON, object, toJSON, withObject, (.:), (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Bool (bool)
+import Data.ByteString (ByteString)
 import Data.Either (isRight)
 import Data.List (dropWhileEnd, find, intercalate, isPrefixOf, stripPrefix, tails)
 import Data.Map (Map)
@@ -47,12 +48,12 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+import qualified Data.Text.Encoding as TE
 import EffectRunner (runAppEffects)
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), withEffToIO, (:>))
 import Effects (App, Eval, Nix, Slurm, runNixCli)
 import ProjectTree (ChildRef (..), normalizeProject, normalizeProjects, projectStepEntries, stepEntries)
+import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
 import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), RepoContext, WriteRepoContext, ensureRepoCommit, runNixEvalJsonApplyInRepo, userRepoPath, withReadRepoTransactionIO, withWriteRepoTransactionRaw)
@@ -120,7 +121,7 @@ resolveKeys _ [] = pure Map.empty
 resolveKeys ctx ids = do
     outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepKeysExpression ids) "#pointy"
     case outcome of
-        Right output -> case decodeJson output of
+        Right output -> case decodeJsonText output of
             Just keys
                 | Map.size (versionedValue keys) == Set.size (Set.fromList ids) -> pure (versionedValue keys)
             _ -> splitOrReportKeys ctx "the evaluation returned the wrong number of keys" ids
@@ -186,7 +187,7 @@ resolveCertificatePaths _ [] = pure []
 resolveCertificatePaths ctx ids = do
     outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepCertificatesExpression ids) "#pointy.steps"
     case outcome of
-        Right output -> case decodeJson output of
+        Right output -> case decodeJsonText output of
             Just paths
                 | length paths == length ids -> pure $ zip ids paths
             _ -> throwError "Failed to parse the certificate evaluation"
@@ -239,7 +240,7 @@ prepareCommit targetCommit = do
 runJson :: (RepoContext ctx, Eval :> es, FromJSON a) => ctx -> String -> String -> ExceptT String (Eff es) a
 runJson ctx attr applyExpr = do
     output <- withExceptT errorSummary (runNixEvalJsonApplyInRepo ctx applyExpr attr)
-    maybe (throwError $ "Failed to parse the evaluation of " ++ attr) pure (decodeJson output)
+    maybe (throwError $ "Failed to parse the evaluation of " ++ attr) pure (decodeJsonText output)
 
 data ProjectsEvaluation = ProjectsEvaluation
     { projectsValue :: Value
@@ -273,12 +274,31 @@ data EntryList
     | LegacyStepEntries
 
 evalProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) Value
-evalProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
+evalProjectDefinitions ctx = projectsEntryValue <$> projectsEntry ctx
+
+data ProjectsEntry = ProjectsEntry
+    { projectsEntryValue :: Value
+    , projectsEntryDefinitions :: Either String (Map String ProjectDef)
+    }
+
+projectsEntry :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) ProjectsEntry
+projectsEntry ctx@(ReadRepoContext repoPath commit) =
+    ExceptT $
+        withEffToIO SeqUnlift $ \unlift ->
+            cachedSuccess projectsCache (repoPath, commit) (unlift (runExceptT (evaluateProjectsEntry ctx)))
+
+evaluateProjectsEntry :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) ProjectsEntry
+evaluateProjectsEntry ctx@(ReadRepoContext repoPath commit) = do
     evaluation <- evaluateProjectDefinitions ctx
     unless (null (projectsFailures evaluation)) $
         liftIO $
             reportDegradedProjects repoPath commit (map failureMessage (projectsFailures evaluation))
-    pure (projectsValue evaluation)
+    let value = projectsValue evaluation
+    pure (ProjectsEntry value (decodeProjectDefinitions value))
+
+{-# NOINLINE projectsCache #-}
+projectsCache :: SingleFlightCache (FilePath, String) ProjectsEntry
+projectsCache = unsafePerformIO (newSingleFlightCache 4)
 
 reportDegradedProjects :: FilePath -> String -> [String] -> IO ()
 reportDegradedProjects repoPath commit failures = do
@@ -447,32 +467,7 @@ stepDefinitionExpression sid =
     "pointy: if pointy.steps ? " ++ show (show sid) ++ " then pointy.steps." ++ show (show sid) ++ ".def else null"
 
 cachedProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map String ProjectDef)
-cachedProjectDefinitions ctx@(ReadRepoContext repoPath commit) = do
-    cached <- liftIO $ lookupCachedProjectDefinitions repoPath commit
-    case cached of
-        Just definitions -> return definitions
-        Nothing -> do
-            projects <- evalProjectDefinitions ctx
-            definitions <- either throwError return (decodeProjectDefinitions projects)
-            liftIO $ insertCachedProjectDefinitions repoPath commit definitions
-            return definitions
-
-{-# NOINLINE projectDefinitionsCacheRef #-}
-projectDefinitionsCacheRef :: MVar [((FilePath, String), Map String ProjectDef)]
-projectDefinitionsCacheRef = unsafePerformIO (newMVar [])
-
-projectDefinitionsCacheLimit :: Int
-projectDefinitionsCacheLimit = 4
-
-lookupCachedProjectDefinitions :: FilePath -> String -> IO (Maybe (Map String ProjectDef))
-lookupCachedProjectDefinitions repoPath commit = do
-    cache <- readMVar projectDefinitionsCacheRef
-    return $ lookup (repoPath, commit) cache
-
-insertCachedProjectDefinitions :: FilePath -> String -> Map String ProjectDef -> IO ()
-insertCachedProjectDefinitions repoPath commit definitions = do
-    modifyMVar_ projectDefinitionsCacheRef $ \entries ->
-        return $ take projectDefinitionsCacheLimit $ ((repoPath, commit), definitions) : filter ((/= (repoPath, commit)) . fst) entries
+cachedProjectDefinitions ctx = projectsEntry ctx >>= either throwError pure . projectsEntryDefinitions
 
 evalProjectDefinition :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) String
 evalProjectDefinition ctx pid = runNixEvalJsonApplyInRepo ctx projectDefinition (projectAttr pid)
@@ -755,7 +750,7 @@ nixEvalJson commit attr applyExpr = do
     (code, stdout, stderr) <- runNixCli (nixEvalArgs installable attr applyExpr)
     pure $ case code of
         ExitSuccess -> maybe (Left "Failed to parse the evaluation output") Right (decodeJson stdout)
-        ExitFailure _ -> Left (errorSummary stderr)
+        ExitFailure _ -> Left (errorSummary (unpack (TE.decodeUtf8Lenient stderr)))
 
 installableAt :: FilePath -> Text -> String
 installableAt repoPath commit = "git+file://" ++ repoPath ++ "?rev=" ++ unpack commit ++ "&allRefs=true"
@@ -788,5 +783,8 @@ scheduleHeadRefresh =
         Left err -> putStrLn $ "Certificate refresh skipped: " ++ err
         Right commit -> scheduleCertificateRefresh commit
 
-decodeJson :: (FromJSON a) => String -> Maybe a
-decodeJson = decode . TLE.encodeUtf8 . TL.pack
+decodeJson :: (FromJSON a) => ByteString -> Maybe a
+decodeJson = either (const Nothing) Just . eitherDecodeStrict
+
+decodeJsonText :: (FromJSON a) => String -> Maybe a
+decodeJsonText = decodeJson . TE.encodeUtf8 . pack

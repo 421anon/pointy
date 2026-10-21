@@ -12,10 +12,11 @@ import Effectful (Eff)
 import Effects (AppEffects, AppM, toHandler)
 import qualified EffectRunner
 import EffectRunner (installRunner)
-import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnLogStreamHandler, usageHandler)
+import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, compactSessionHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnImageHandler, turnLogStreamHandler, usageHandler)
 import Handlers.ArtifactRdf (artifactRdfHandler)
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
+import Handlers.TokenAuth (tokenAuthHandler, tokenLoginHandler, tokenLogoutHandler, tokenSessionHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
 import Handlers.Presets (getPresetsHandler)
@@ -93,7 +94,9 @@ server =
         :<|> (\request -> liftHandler (postTurnHandler request))
         :<|> (\request -> liftHandler (stopTurnHandler request))
         :<|> (\request -> liftHandler (steerTurnHandler request))
+        :<|> (\request -> liftHandler (compactSessionHandler request))
         :<|> (\turnId -> liftHandler (turnLogStreamHandler turnId))
+        :<|> turnImageHandler
         :<|> (\request -> liftHandler (applyChangesHandler request))
         :<|> (\request -> liftHandler (autoApplyHandler request))
         :<|> (\request -> liftHandler (discardSessionHandler request))
@@ -101,6 +104,10 @@ server =
         :<|> (\request -> liftHandler (renameSessionHandler request))
         :<|> (\request -> liftHandler (purgeSessionHandler request))
         :<|> liftHandler usageHandler
+        :<|> (\cookies -> liftHandler (tokenAuthHandler cookies))
+        :<|> (\cookies -> liftHandler (tokenSessionHandler cookies))
+        :<|> (\form -> liftHandler (tokenLoginHandler form))
+        :<|> liftHandler tokenLogoutHandler
         :<|> (stepSearchInfoHandler :<|> (\commit request -> stepSearchHandler commit request))
         :<|> artifactRdfHandler
 

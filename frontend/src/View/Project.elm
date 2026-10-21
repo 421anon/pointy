@@ -6,8 +6,8 @@ import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
-import Model.Core exposing (Model)
-import Model.Lenses exposing (currentProject, currentProjectPath, projects, stepConfig)
+import Model.Core exposing (Model, ProjectRecord)
+import Model.Lenses exposing (currentProject, currentProjectPath, loadedProjects, projects, stepConfig)
 import Route
 import View.Shadow exposing (viewProject)
 
@@ -16,7 +16,7 @@ viewCurrentProject : Model -> Html (Flow Model ())
 viewCurrentProject model =
     case get currentProject model of
         Success proj ->
-            viewProject model proj
+            viewLoadedProject model proj
 
         NotAsked ->
             case ApiData.toMaybe (get stepConfig model) of
@@ -28,7 +28,7 @@ viewCurrentProject model =
 
         Loading mProject ->
             mProject
-                |> Maybe.map (viewProject model)
+                |> Maybe.map (viewLoadedProject model)
                 |> Maybe.withDefault viewLoadingProject
 
         Error _ ->
@@ -37,6 +37,16 @@ viewCurrentProject model =
 
             else
                 viewProjectNotFound
+
+
+viewLoadedProject : Model -> ProjectRecord -> Html (Flow Model ())
+viewLoadedProject model proj =
+    case try loadedProjects model of
+        Just projects_ ->
+            viewProject model projects_ proj
+
+        Nothing ->
+            viewLoadingProject
 
 
 viewLoadingProject : Html msg

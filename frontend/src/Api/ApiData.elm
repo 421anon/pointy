@@ -1,6 +1,6 @@
 module Api.ApiData exposing (..)
 
-import Accessors exposing (Prism, prism)
+import Accessors exposing (Prism, Traversal, prism, traversal)
 import Http
 
 
@@ -273,3 +273,8 @@ foldVisible onNotAsked onLoading onSuccess onError apiData =
 success : Prism pr (ApiData a) a x y
 success =
     prism ">Success" Success toResult
+
+
+available : Traversal (ApiData a) a x y
+available =
+    traversal ">available" (toMaybe >> Maybe.map List.singleton >> Maybe.withDefault []) map

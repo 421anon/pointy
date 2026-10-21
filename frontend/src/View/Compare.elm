@@ -361,7 +361,7 @@ viewPaneBody sel content gridFlow =
         CompareHtml ->
             Html.node "iframe"
                 [ src (rawUrl sel)
-                , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
+                , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
                 , class "compare-iframe"
                 ]
                 []

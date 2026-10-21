@@ -65,6 +65,7 @@ view model =
                 , View.Organize.viewOrganizeDialog model
                 , View.Organize.viewContextMenu model
                 , Compare.viewCompareDialog model
+                , AgentPanel.viewLightbox model
                 , viewScratchPicker model
                 , StatusBar.view model
                 ]
@@ -87,7 +88,7 @@ viewArtifact artifact =
     Html.div [ Html.Attributes.class "artifact-viewer" ]
         [ Html.node "iframe"
             [ Html.Attributes.src (Api.stepFileBundleUrl artifact.stepId artifact.commit artifact.path)
-            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts"
+            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
             , Html.Attributes.class "artifact-viewer-frame"
             ]
             []

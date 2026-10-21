@@ -23,6 +23,7 @@ import Data.Typeable (Typeable)
 import GHC.Exts (fromList, toList)
 import GHC.TypeLits (KnownSymbol)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
+import Handlers.TokenAuth (TokenLoginForm, TokenSession)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -169,6 +170,7 @@ instance ToSchema TurnRequest where
                 "TurnRequest"
                 [ ("sessionId", stringField)
                 , ("prompt", stringField)
+                , ("images", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & required .~ ["mimeType", "data"] & properties .~ fromList [("mimeType", stringField), ("data", stringField)])))
                 , ("currentProjectId", nullableField OpenApiInteger)
                 , ("autoApply", boolField)
                 , ("clientId", stringField)
@@ -182,6 +184,16 @@ instance ToSchema SessionRequest where
 instance ToSchema RenameSessionRequest where
     declareNamedSchema _ =
         pure $ objectSchema "RenameSessionRequest" [("sessionId", stringField), ("name", stringField)]
+
+instance ToSchema TokenLoginForm where
+    declareNamedSchema _ =
+        pure $ objectSchema "TokenLoginForm" [("token", stringField)]
+
+instance ToSchema TokenSession where
+    declareNamedSchema _ =
+        pure $
+            objectSchema "TokenSession" [("account", stringField), ("user", nullableField OpenApiString)]
+                & schema . required .~ ["account", "user"]
 
 instance ToSchema ApplyRequest where
     declareNamedSchema _ =
