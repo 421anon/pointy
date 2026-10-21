@@ -274,8 +274,8 @@ viewArgValue model widget_ mValue =
                     "false"
                 )
 
-        ( WStep _, Just (TStepValue stepId) ) ->
-            Html.text (stepNameOf model stepId)
+        ( WStep _, Just (TStepValue ref) ) ->
+            Html.text (stepNameOf model ref.step)
 
         ( WSelect options, Just (TEnumValue v) ) ->
             Html.text (Maybe.withDefault v (Dict.get v (Dict.fromList options)))

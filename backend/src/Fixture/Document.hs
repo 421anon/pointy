@@ -77,6 +77,8 @@ rawAnswer document attr =
 
 appliedAnswer :: FixtureDocument -> String -> String -> Either String String
 appliedAnswer document applyExpr attr
+    | "pointy.root or null" `isInfixOf` applyExpr = Right (encodeValue (object ["missing" .= ("linked-data" :: Text)]))
+    | "flake.outPath + \"/steps\"" `isInfixOf` applyExpr = Right (encodeValue (object []))
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))

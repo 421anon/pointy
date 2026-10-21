@@ -28,6 +28,7 @@ library
     Bus
     ClusterBus
     Config
+    DependencyRefs
     Docs.OpenApi
     EffectRunner
     Effects
@@ -431,7 +432,6 @@ test-suite artifact-rdf
   type:             exitcode-stdio-1.0
   main-is:          ArtifactRdfTest.hs
   build-depends:
-    , aeson
     , backend
     , base
     , text

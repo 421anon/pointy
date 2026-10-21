@@ -467,7 +467,7 @@ type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 type ArtifactRdf =
     "rdf"
         :> "artifact"
-        :> Description "Describes a step at a commit and every step upstream of it as Turtle. Segments are the artifact permalink's project path, step id and commit; nginx routes /artifact/ requests accepting text/turtle here."
+        :> Description "Describes a step at a commit and every step upstream of it as Turtle. Segments are the artifact permalink's project path, step id and full 40-digit commit hash; nginx routes /artifact/ requests accepting text/turtle here."
         :> CaptureAll "segments" Text
         :> Get '[Turtle] (Headers '[Header "Cache-Control" Text, Header "Vary" Text] Text)
 

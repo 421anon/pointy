@@ -18,13 +18,14 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Scientific (FPFormat (Fixed), floatingOrInteger, formatScientific, toBoundedInteger)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (Eval)
-import ProjectTree (projectIds, projectObject, stepFolderPaths)
+import ProjectTree (ChildRef (..), projectChildRefs, projectIds, projectObject)
 import UserRepo (ReadRepoContext, runNixEvalJsonInRepo)
 
 data StepDocument = StepDocument
@@ -69,7 +70,19 @@ hexDigest :: Digest a -> Text
 hexDigest = TE.decodeUtf8 . Base16.encode . convert
 
 folderPaths :: Value -> Map Int Text
-folderPaths projects = Map.map (T.intercalate " / " . map (projectName projects)) (stepFolderPaths projects)
+folderPaths projects = Map.fromListWith (\_ first -> first) (concatMap (walk Set.empty []) roots)
+  where
+    ids = projectIds projects
+    nestedIds = Set.fromList [childId | projectId <- ids, ProjectChild childId <- projectChildRefsOf projects projectId]
+    roots = filter (`Set.notMember` nestedIds) ids
+    walk visited ancestors projectId =
+        let path = if projectId == 0 then [] else ancestors ++ [projectName projects projectId]
+            label = T.intercalate " / " path
+            children = projectChildRefsOf projects projectId
+            visited' = Set.insert projectId visited
+            here = [(stepId, label) | StepChild stepId <- children]
+            nested = [walk visited' path childId | ProjectChild childId <- children, Set.notMember childId visited']
+         in here ++ concat nested
 
 projectName :: Value -> Int -> Text
 projectName projects projectId = case projectObject projects projectId of
@@ -77,6 +90,9 @@ projectName projects projectId = case projectObject projects projectId of
         Just (String name) -> name
         _ -> T.pack (show projectId)
     Nothing -> T.pack (show projectId)
+
+projectChildRefsOf :: Value -> Int -> [ChildRef]
+projectChildRefsOf projects projectId = maybe [] projectChildRefs (projectObject projects projectId)
 
 stepEntriesOf :: Value -> [StepEntry]
 stepEntriesOf projects =

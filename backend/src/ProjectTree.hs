@@ -19,7 +19,6 @@ module ProjectTree (
     projectChildRefs,
     projectIds,
     projectObject,
-    stepFolderPaths,
     applyTreeOps,
 ) where
 
@@ -215,21 +214,6 @@ projectObject (Object projects) projectId = case KeyMap.lookup (Key.fromText (T.
     Just (Object project) -> Just project
     _ -> Nothing
 projectObject _ _ = Nothing
-
-stepFolderPaths :: Value -> Map Int [Int]
-stepFolderPaths projects = Map.fromListWith (\_ first -> first) (concatMap (walk Set.empty []) roots)
-  where
-    ids = projectIds projects
-    childRefsOf projectId = maybe [] projectChildRefs (projectObject projects projectId)
-    nestedIds = Set.fromList [nested | projectId <- ids, ProjectChild nested <- childRefsOf projectId]
-    roots = filter (`Set.notMember` nestedIds) ids
-    walk visited ancestors projectId =
-        let path = if projectId == 0 then [] else ancestors ++ [projectId]
-            children = childRefsOf projectId
-            visited' = Set.insert projectId visited
-            here = [(stepId, path) | StepChild stepId <- children]
-            nested = [walk visited' path child | ProjectChild child <- children, Set.notMember child visited']
-         in here ++ concat nested
 
 renumberEntries :: [Entry] -> [Entry]
 renumberEntries = zipWith number [0 :: Int ..]

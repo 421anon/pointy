@@ -427,8 +427,8 @@ flattenArgValue steps_ value =
         TEnumValue text ->
             [ text ]
 
-        TStepValue stepId ->
-            Dict.get stepId steps_ |> Maybe.map .name |> Maybe.toList
+        TStepValue ref ->
+            Dict.get ref.step steps_ |> Maybe.map .name |> Maybe.toList
 
         TListValue items ->
             List.concatMap (flattenArgValue steps_) items

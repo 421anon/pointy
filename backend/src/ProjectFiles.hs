@@ -3,6 +3,7 @@
 module ProjectFiles (
     jsonToNix,
     valueToNix,
+    stepDefinitionNix,
     rewriteNixFile,
     projectFilePath,
     stepFilePath,
@@ -18,17 +19,19 @@ module ProjectFiles (
     applyTreeOpsInWith,
 ) where
 
-import Control.Monad (forM_, when)
+import Control.Exception (IOException, try)
+import Control.Monad (forM, forM_, unless, when)
 import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Value (..), eitherDecode, eitherDecodeStrict', withObject, (.:))
+import Data.Aeson (FromJSON (..), Object, Value (..), eitherDecode, eitherDecodeStrict', encode, withObject, (.:))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString.Lazy as LB
+import Data.Char (isDigit)
 import Data.Fix (foldFix)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (catMaybes, mapMaybe)
 import Data.Scientific (floatingOrInteger)
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -37,6 +40,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as V
+import DependencyRefs (decodeStepDefinition, rewriteDependencyRefs, stepRelocations)
 import Effectful (Eff, IOE, (:>))
 import Effects (Eval)
 import Nix.Expr.Shorthands (attrsE, mkBool, mkFloat, mkIndentedStr, mkInt, mkList, mkNull, mkStr)
@@ -55,6 +59,12 @@ jsonToNix bs = valueToNix <$> eitherDecode bs
 
 valueToNix :: Value -> T.Text
 valueToNix = renderMultilineNix . jsonValueToNixExpr
+
+stepDefinitionNix :: Value -> Either String T.Text
+stepDefinitionNix definition = jsonToNix (encode (withoutEvaluatorId definition))
+  where
+    withoutEvaluatorId (Object fields) = Object (KeyMap.delete "id" fields)
+    withoutEvaluatorId value = value
 
 rewriteNixFile :: (Eval :> es, IOE :> es) => FilePath -> T.Text -> ExceptT String (Eff es) ()
 rewriteNixFile path transformation = do
@@ -206,7 +216,62 @@ applyTreeOpsInWith worktreePath validate ops = do
     plan <- either (throwError . renderTreeOpError) pure (applyTreeOps state ops)
     validate state plan
     liftIO $ writeTreePlan worktreePath plan
+    rewriteRelocatedDependencies worktreePath state plan
     pure (state, plan)
+
+rewriteRelocatedDependencies :: (Eval :> es, IOE :> es) => FilePath -> TreeState -> TreePlan -> ExceptT String (Eff es) ()
+rewriteRelocatedDependencies worktreePath state plan =
+    unless (Map.null relocations) $ do
+        dependentIds <- liftIO (stepIdsMentioning worktreePath (Map.keysSet relocations))
+        forM_ dependentIds $ \stepId ->
+            when (stepId `notElem` planDeletedSteps plan) $ do
+                imported <- lift $ runExceptT $ runNixEvalImpureJsonExpr ("import " ++ show (stepFilePath worktreePath stepId))
+                case imported >>= decodeStepDefinition of
+                    Right (Just definition)
+                        | (True, rewritten) <- rewriteDependencyRefs relocations definition ->
+                            writeStepDefinition worktreePath stepId rewritten
+                    _ -> pure ()
+  where
+    relocations = stepRelocations (treeStateProjects state) (treePlanProjects state plan)
+
+stepIdsMentioning :: FilePath -> Set.Set Int -> IO [Int]
+stepIdsMentioning worktreePath stepIds = do
+    present <- stepFileIds worktreePath
+    fmap catMaybes $ forM present $ \stepId -> do
+        contents <- try (TIO.readFile (stepFilePath worktreePath stepId)) :: IO (Either IOException T.Text)
+        pure $ case contents of
+            Right text | mentionsAny stepIds text -> Just stepId
+            _ -> Nothing
+
+mentionsAny :: Set.Set Int -> T.Text -> Bool
+mentionsAny stepIds text =
+    not (Set.null (Set.intersection stepIds (Set.fromList (digitRuns text))))
+
+digitRuns :: T.Text -> [Int]
+digitRuns text =
+    mapMaybe (readMaybe . T.unpack) (filter (T.all isDigit) (T.groupBy (\first second -> isDigit first == isDigit second) text))
+
+treeStateProjects :: TreeState -> Value
+treeStateProjects state = Object (projectsObject (Map.mapMaybe readableProject (treeProjects state)))
+
+treePlanProjects :: TreeState -> TreePlan -> Value
+treePlanProjects state plan = Object (projectsObject after)
+  where
+    before = Map.mapMaybe readableProject (treeProjects state)
+    after = foldr Map.delete (Map.union (planWrites plan) before) (planDeletedProjects plan)
+
+readableProject :: ProjectSource -> Maybe Object
+readableProject (ProjectReadable fields) = Just fields
+readableProject (ProjectUnreadable _) = Nothing
+
+projectsObject :: Map.Map Int Object -> Object
+projectsObject projects =
+    KeyMap.fromList [(Key.fromString (show projectId), Object fields) | (projectId, fields) <- Map.toList projects]
+
+writeStepDefinition :: (IOE :> es) => FilePath -> Int -> Value -> ExceptT String (Eff es) ()
+writeStepDefinition worktreePath stepId definition = do
+    nixText <- liftEither (stepDefinitionNix definition)
+    liftIO $ TIO.writeFile (stepFilePath worktreePath stepId) (nixText <> "\n")
 
 rawProjectsExpression :: FilePath -> [Int] -> String
 rawProjectsExpression projectsDir projectIds =
