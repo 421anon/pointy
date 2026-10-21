@@ -40,6 +40,7 @@ module Agent.Session (
     touchSession,
 ) where
 
+import Agent.TurnLog (readTurnLogFile)
 import Agent.TurnSignal (signalTurnLog)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar)
@@ -51,12 +52,11 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isAlphaNum, isAscii)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Generics (Generic)
@@ -375,11 +375,7 @@ hydrateTurnLog turn = do
     return turn{turnLog = logText}
 
 readTurnLog :: AgentTurn -> IO Text
-readTurnLog turn = do
-    exists <- doesFileExist (turnLogPath turn)
-    if exists
-        then TIO.readFile (turnLogPath turn)
-        else return (turnLog turn)
+readTurnLog turn = fromMaybe (turnLog turn) <$> readTurnLogFile (turnLogPath turn)
 
 listTurns :: Text -> IO [AgentTurn]
 listTurns sid = do

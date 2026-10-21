@@ -50,7 +50,8 @@ import Agent.Session (
     turnMetadataPath,
  )
 import Agent.Title (generateSessionTitle)
-import Agent.TurnSignal (registerTurnSignal, signalTurnLog, unregisterTurnSignal)
+import Agent.TurnLog (appendLogLine, createTurnLog, readTurnLogFile)
+import Agent.TurnSignal (registerTurnSignal, unregisterTurnSignal)
 import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
@@ -293,7 +294,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
                 }
     liftIO $ do
         createDirectoryIfMissing True (takeDirectory logPath)
-        TIO.writeFile logPath ""
+        createTurnLog logPath ""
         forM_ (zip [0 ..] images) $ \(index, image) ->
             turnImageFilePath sid tid index >>= \path -> BS.writeFile path (turnImageBytes image)
         mapM_ (appendLogLine (configAgent cfg) logPath "system") syncNotes
@@ -1242,21 +1243,6 @@ summarizePaths paths =
                 else ""
      in T.intercalate ", " shown <> suffix
 
-appendLogLine :: AgentConfig -> FilePath -> Text -> Text -> IO ()
-appendLogLine cfg path label line = do
-    size <- safeFileSize path
-    when (size < fromIntegral (agentOutputLimitBytes cfg)) $ do
-        let rendered = "[" <> label <> "] " <> line <> "\n"
-        TIO.appendFile path rendered
-        signalTurnLog path
-
-safeFileSize :: FilePath -> IO Integer
-safeFileSize path = do
-    result <- try (getFileSize path) :: IO (Either IOException Integer)
-    case result of
-        Left _ -> return 0
-        Right size -> return size
-
 heartbeatDelayMicros :: Int
 heartbeatDelayMicros = 5 * 1000000
 
@@ -1273,8 +1259,7 @@ streamLoop turn offset signal = return $ S.Effect $ do
         atomically $
             (Just <$> readTChan signal)
                 `orElse` (readTVar heartbeatDue >>= \b -> if b then pure Nothing else retry)
-    exists <- doesFileExist (turnLogPath turn)
-    content <- if exists then TIO.readFile (turnLogPath turn) else return ""
+    content <- fromMaybe "" <$> readTurnLogFile (turnLogPath turn)
     let contentLength = T.length content
         chunk = T.drop offset content
         newOffset = contentLength
