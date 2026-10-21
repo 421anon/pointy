@@ -46,7 +46,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = "Origin that names this instance's linked data. Artifact Turtle starts with `@base <origin/>`, so its permalink IRIs resolve to this origin whichever host served them. When null, IRIs stay relative to the requesting URL.";
-      example = "https://welker.pointy.cloud";
+      example = "https://pointy.example.com";
     };
 
     frontendPackage = lib.mkOption {
