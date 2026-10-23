@@ -16,6 +16,7 @@ module Certificates (
     cachedProjectDefinitions,
     decodeProjectDefinitions,
     checkRevision,
+    errorSummary,
     withWriteRepoTransaction,
     rawStatusesFor,
     runningBuildKeys,

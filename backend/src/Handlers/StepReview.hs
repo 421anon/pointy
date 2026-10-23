@@ -49,7 +49,7 @@ import Handlers.Statuses (forkBroadcastStatusForStepProjectsAtHead)
 import Network.HTTP.Types (status200, status500)
 import Network.Wai (Application, responseLBS)
 import NixStore (resolveStorePath)
-import Certificates (evaluatedProjectStepIds, withWriteRepoTransaction)
+import Certificates (errorSummary, evaluatedProjectStepIds, withWriteRepoTransaction)
 import ProjectTree (projectStepEntries)
 import Servant (NoContent (..), ServerError (..), Tagged (..), err400, err409, err500)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
@@ -460,15 +460,14 @@ stepComparisons viewed revisions reviewedOutputs
     comparisonFor viewedOutputs hashes stepId = \case
         Nothing -> NoReview
         Just _ -> case (lookupOutPath stepId viewedOutputs, lookupOutPath stepId reviewedOutputs) of
-            (Left err, _) -> Unresolvable (oneLine err)
-            (_, Left err) -> Unresolvable (oneLine err)
+            (Left err, _) -> Unresolvable (T.pack (errorSummary err))
+            (_, Left err) -> Unresolvable (T.pack (errorSummary err))
             (Right viewedPath, Right reviewedPath)
                 | Map.notMember reviewedPath hashes -> ReviewedOutputUnbuilt (reviewedOutputUnbuiltDetail stepId reviewedPath)
                 | viewedPath == reviewedPath -> SameOutPath
                 | Map.notMember viewedPath hashes -> ViewedOutputUnbuilt
                 | Map.lookup viewedPath hashes == Map.lookup reviewedPath hashes -> SameContent
                 | otherwise -> DifferentContent
-    oneLine = T.take 500 . T.unwords . T.words . T.pack
 
 reviewedOutputUnbuiltDetail :: Int -> FilePath -> Text
 reviewedOutputUnbuiltDetail stepId outPath =
