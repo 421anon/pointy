@@ -2962,10 +2962,35 @@ getTraySteps (Model model) =
                 _ ->
                     []
 
+        entries =
+            (transfers ++ building ++ requestedRuns)
+                |> List.uniqueBy (\( stepId, _, _ ) -> stepId)
+
+        entryStepIds =
+            Set.fromList (List.map (\( stepId, _, _ ) -> stepId) entries)
+
+        parentIdsByStep =
+            Dict.foldl
+                (\parentId project parents ->
+                    List.foldl
+                        (\link parents_ ->
+                            if link.kind == StepChild && Set.member link.id entryStepIds then
+                                Dict.update link.id (\parentIds -> Just (parentId :: Maybe.withDefault [] parentIds)) parents_
+
+                            else
+                                parents_
+                        )
+                        parents
+                        project.children
+                )
+                Dict.empty
+                projects
+
         containingProject stepId =
-            childLinksTo StepChild stepId projects
+            Dict.get stepId parentIdsByStep
+                |> Maybe.withDefault []
                 |> List.sortBy
-                    (\( parentId, _ ) ->
+                    (\parentId ->
                         if List.member parentId routeProjectIds then
                             0
 
@@ -2973,7 +2998,7 @@ getTraySteps (Model model) =
                             1
                     )
                 |> List.head
-                |> Maybe.andThen (\( parentId, _ ) -> Dict.get parentId projects)
+                |> Maybe.andThen (\parentId -> Dict.get parentId projects)
 
         trayStep ( stepId, state, commits ) =
             Dict.get stepId model.steps
@@ -2991,9 +3016,7 @@ getTraySteps (Model model) =
                         }
                     )
     in
-    (transfers ++ building ++ requestedRuns)
-        |> List.uniqueBy (\( stepId, _, _ ) -> stepId)
-        |> List.filterMap trayStep
+    List.filterMap trayStep entries
 
 
 getModalConfirm : Model -> ModalConfirmConfig
