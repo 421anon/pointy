@@ -5,9 +5,13 @@ import Actions
 import Api.ApiData as ApiData exposing (ApiData)
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (action, attribute, class, classList, disabled, href, id, method, rel, target, title, type_)
+import Html.Attributes exposing (action, attribute, class, classList, disabled, href, id, method, rel, style, target, title, type_)
 import Html.Events as Events
 import Html.Extra as Html
+import Html.Keyed
+import Html.Lazy
+import Json.Decode as Decode
+import List.Extra as List
 import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
 import Model.Lenses exposing (loadedProjects, route)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
@@ -466,23 +470,98 @@ viewUserMenu model =
         (Model.getTokenSession model)
 
 
+stepRowHeight : Int
+stepRowHeight =
+    36
+
+
+groupHeaderHeight : Int
+groupHeaderHeight =
+    26
+
+
+groupBorderWidth : Int
+groupBorderWidth =
+    1
+
+
+panelMaxHeight : Int
+panelMaxHeight =
+    10 * stepRowHeight
+
+
+rowOverscan : Int
+rowOverscan =
+    panelMaxHeight
+
+
+type alias RowWindow =
+    { first : Int
+    , last : Int
+    }
+
+
+rowWindow : Int -> Int -> Int -> RowWindow
+rowWindow top bottom count =
+    let
+        first =
+            clamp 0 count (top // stepRowHeight)
+    in
+    { first = first
+    , last = clamp first count ((bottom + stepRowHeight - 1) // stepRowHeight)
+    }
+
+
 viewPanel : Model -> List Group -> Html (Flow Model ())
 viewPanel model groups =
     let
         collapsed =
             Model.getStatusBarCollapsed model
+
+        listHeight group =
+            if Set.member (groupKey group.kind) collapsed then
+                0
+
+            else
+                List.length group.steps * stepRowHeight
+
+        contentHeight =
+            List.sum (List.map (\group -> groupHeaderHeight + listHeight group) groups)
+                + groupBorderWidth
+                * (List.length groups - 1)
+
+        scrollTop =
+            clamp 0 (max 0 (contentHeight - panelMaxHeight)) (round (Model.getStatusBarScrollTop model))
+
+        viewPlacedGroup groupTop group =
+            let
+                listTop =
+                    groupTop + groupHeaderHeight
+
+                window =
+                    rowWindow
+                        (scrollTop - rowOverscan - listTop)
+                        (scrollTop + panelMaxHeight + rowOverscan - listTop)
+                        (List.length group.steps)
+            in
+            ( listTop + listHeight group + groupBorderWidth
+            , ( groupKey group.kind, viewGroup model collapsed window group )
+            )
     in
     Html.section
         [ class "status-bar__panel"
         , id "status-bar-panel"
         ]
-        [ Html.div [ class "status-bar__groups" ]
-            (List.map (viewGroup model collapsed) groups)
+        [ Html.Keyed.node "div"
+            [ class "status-bar__groups"
+            , Events.on "scroll" (Decode.map Actions.setStatusBarScrollTop (Decode.at [ "target", "scrollTop" ] Decode.float))
+            ]
+            (Tuple.second (List.mapAccuml viewPlacedGroup 0 groups))
         ]
 
 
-viewGroup : Model -> Set String -> Group -> Html (Flow Model ())
-viewGroup model collapsed group =
+viewGroup : Model -> Set String -> RowWindow -> Group -> Html (Flow Model ())
+viewGroup model collapsed window group =
     let
         key =
             groupKey group.kind
@@ -516,141 +595,141 @@ viewGroup model collapsed group =
             Html.nothing
 
           else
-            Html.ul [ class "status-bar__list", id listId ]
-                (List.map (viewStep model) group.steps)
+            Html.Keyed.ul
+                [ class "status-bar__list"
+                , id listId
+                , style "height" (String.fromInt (List.length group.steps * stepRowHeight) ++ "px")
+                , style "padding-top" (String.fromInt (window.first * stepRowHeight) ++ "px")
+                ]
+                (group.steps
+                    |> List.drop window.first
+                    |> List.take (window.last - window.first)
+                    |> List.map (\step -> ( String.fromInt step.stepId, viewStep model group.kind step ))
+                )
         ]
 
 
-viewStep : Model -> TrayStep -> Html (Flow Model ())
-viewStep model step =
+viewStep : Model -> GroupKind -> TrayStep -> Html (Flow Model ())
+viewStep model kind step =
     let
-        now =
-            Model.getNow model
+        meta =
+            stateMeta (Model.getNow model) step.state
 
-        mFolder =
-            Maybe.map2 Tuple.pair (try loadedProjects model) step.projectId
-
-        folderPath =
-            Maybe.map (\( projects_, projectId ) -> canonicalNamePath model projects_ projectId) mFolder
-
-        folderLine ( projects_, projectId ) =
-            let
-                trail =
-                    case canonicalPathNames model projects_ projectId of
+        ( folderTrail, folderPath ) =
+            case ( try loadedProjects model, step.projectId ) of
+                ( Just projects_, Just projectId ) ->
+                    ( case canonicalPathNames model projects_ projectId of
                         [] ->
                             rootProjectName projects_
 
                         names ->
                             String.join " / " names
-            in
-            Html.span [ class "status-bar__step-path", title (canonicalNamePath model projects_ projectId) ] [ Html.text trail ]
+                    , canonicalNamePath model projects_ projectId
+                    )
 
-        meta =
-            stateMeta now step.state
+                _ ->
+                    ( "", "" )
 
-        offHead =
+        offHeadRevision =
             case ( Model.getCommitHash model |> ApiData.toMaybe, step.commits ) of
                 ( Just head, commit :: _ ) ->
                     if List.member head step.commits then
-                        Nothing
+                        ""
 
                     else
-                        Just commit
+                        String.left 7 commit
 
                 _ ->
-                    Nothing
-
-        stoppable =
-            case step.state of
-                TrayRunning _ ->
-                    True
-
-                TrayQueued _ _ ->
-                    True
-
-                TrayStarting _ ->
-                    True
-
-                _ ->
-                    False
+                    ""
     in
     Html.li [ class "status-bar__item" ]
-        [ Html.button
-            [ class "status-bar__step"
-            , type_ "button"
-            , Events.onClick (Actions.openRunningStep step.stepId)
-            , title (step.stepName ++ " — " ++ meta.description)
-            , attribute "aria-label"
-                ("Open step ["
-                    ++ String.fromInt step.stepId
-                    ++ "] "
-                    ++ step.stepName
-                    ++ Maybe.withDefault "" (Maybe.map (\path -> " in " ++ path) folderPath)
-                    ++ ". "
-                    ++ meta.description
-                )
-            ]
-            [ Html.span
-                [ class ("status-bar__step-marker " ++ markerClass step.state)
-                , attribute "aria-hidden" "true"
-                ]
-                []
-            , Html.span [ class "status-bar__step-details" ]
-                [ Html.span [ class "status-bar__step-line" ]
-                    [ Html.span [ class "status-bar__step-id" ] [ Html.text (String.fromInt step.stepId) ]
-                    , Html.span [ class "status-bar__step-name" ] [ Html.text step.stepName ]
-                    , case offHead of
-                        Just commit ->
-                            Html.span
-                                [ class "step-review-revision"
-                                , title ("Building commit " ++ String.left 7 commit ++ ", not the current version")
-                                ]
-                                [ Html.span [ class "step-review-revision-hash" ] [ Html.text (String.left 7 commit) ] ]
-
-                        Nothing ->
-                            Html.nothing
-                    ]
-                , Maybe.map folderLine mFolder |> Maybe.withDefault Html.nothing
-                ]
-            , Html.span [ class ("status-bar__step-meta status-bar__step-meta--" ++ meta.tone) ]
-                [ Html.text meta.short ]
-            , iconCustom False
-                "chevron_right"
-                [ class "status-bar__chevron"
-                , attribute "aria-hidden" "true"
-                ]
-            ]
-        , if not stoppable then
-            Html.nothing
-
-          else if Set.member step.stepId (Model.getPendingStops model) then
-            Table.viewStoppingIndicator
-
-          else
-            Table.viewStopButton "Stop" (Actions.stopStepAt step.stepId (List.head step.commits))
+        [ Html.Lazy.lazy8 viewStepButton kind step.stepId step.stepName folderTrail folderPath offHeadRevision meta.short meta.description
+        , Html.Lazy.lazy4 viewStopControl (kind /= TransferGroup) (Set.member step.stepId (Model.getPendingStops model)) step.stepId step.commits
         ]
 
 
-markerClass : TrayState -> String
-markerClass state =
-    case state of
-        TrayRunning _ ->
+viewStepButton : GroupKind -> Int -> String -> String -> String -> String -> String -> String -> Html (Flow Model ())
+viewStepButton kind stepId stepName folderTrail folderPath offHeadRevision metaShort metaDescription =
+    Html.button
+        [ class "status-bar__step"
+        , type_ "button"
+        , Events.onClick (Actions.openRunningStep stepId)
+        , title (stepName ++ " — " ++ metaDescription)
+        , attribute "aria-label"
+            ("Open step ["
+                ++ String.fromInt stepId
+                ++ "] "
+                ++ stepName
+                ++ (if String.isEmpty folderPath then
+                        ""
+
+                    else
+                        " in " ++ folderPath
+                   )
+                ++ ". "
+                ++ metaDescription
+            )
+        ]
+        [ Html.span
+            [ class ("status-bar__step-marker " ++ markerClass kind)
+            , attribute "aria-hidden" "true"
+            ]
+            []
+        , Html.span [ class "status-bar__step-details" ]
+            [ Html.span [ class "status-bar__step-line" ]
+                [ Html.span [ class "status-bar__step-id" ] [ Html.text (String.fromInt stepId) ]
+                , Html.span [ class "status-bar__step-name" ] [ Html.text stepName ]
+                , Html.viewIf (not (String.isEmpty offHeadRevision)) <|
+                    Html.span
+                        [ class "step-review-revision"
+                        , title ("Building commit " ++ offHeadRevision ++ ", not the current version")
+                        ]
+                        [ Html.span [ class "step-review-revision-hash" ] [ Html.text offHeadRevision ] ]
+                ]
+            , Html.viewIf (not (String.isEmpty folderTrail)) <|
+                Html.span [ class "status-bar__step-path", title folderPath ] [ Html.text folderTrail ]
+            ]
+        , Html.span [ class ("status-bar__step-meta status-bar__step-meta--" ++ groupKey kind) ]
+            [ Html.text metaShort ]
+        , iconCustom False
+            "chevron_right"
+            [ class "status-bar__chevron"
+            , attribute "aria-hidden" "true"
+            ]
+        ]
+
+
+viewStopControl : Bool -> Bool -> Int -> List String -> Html (Flow Model ())
+viewStopControl stoppable stopping stepId commits =
+    if not stoppable then
+        Html.nothing
+
+    else if stopping then
+        Table.viewStoppingIndicator
+
+    else
+        Table.viewStopButton "Stop" (Actions.stopStepAt stepId (List.head commits))
+
+
+markerClass : GroupKind -> String
+markerClass kind =
+    case kind of
+        RunningGroup ->
             "status-indicator status-running"
 
-        TrayQueued _ _ ->
+        QueuedGroup ->
             "status-bar__marker status-bar__marker--queued"
 
-        TrayStarting _ ->
+        StartingGroup ->
             "status-bar__marker status-bar__marker--starting"
 
-        TrayTransferring _ ->
+        TransferGroup ->
             "status-bar__marker status-bar__marker--transferring"
 
 
 type alias Meta =
     { short : String
     , description : String
-    , tone : String
     }
 
 
@@ -664,7 +743,6 @@ stateMeta now state =
         TrayRunning started ->
             { short = durationText (since started)
             , description = "Running for " ++ durationWords (since started)
-            , tone = "running"
             }
 
         TrayQueued queued reason ->
@@ -689,31 +767,26 @@ stateMeta now state =
                             Nothing ->
                                 ""
                        )
-            , tone = "queued"
             }
 
         TrayStarting (Just started) ->
             { short = durationText (since started)
             , description = "Preparing the build for " ++ durationWords (since started)
-            , tone = "starting"
             }
 
         TrayStarting Nothing ->
             { short = "Starting"
             , description = "Starting"
-            , tone = "starting"
             }
 
         TrayTransferring (Just progress) ->
             { short = String.fromInt (round (progress * 100)) ++ "%"
             , description = "Uploading, " ++ String.fromInt (round (progress * 100)) ++ "% done"
-            , tone = "transferring"
             }
 
         TrayTransferring Nothing ->
             { short = "Uploading"
             , description = "Uploading"
-            , tone = "transferring"
             }
 
 

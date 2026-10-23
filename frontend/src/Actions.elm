@@ -4420,6 +4420,12 @@ onClusterStatusIn value =
 toggleStatusBar : Flow Model ()
 toggleStatusBar =
     Flow.over statusBarOpen not
+        |> Flow.seq (Flow.setAll statusBarScrollTop 0)
+
+
+setStatusBarScrollTop : Float -> Flow Model ()
+setStatusBarScrollTop =
+    Flow.setAll statusBarScrollTop
 
 
 toggleStatusBarGroup : String -> Flow Model ()

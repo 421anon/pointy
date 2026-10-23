@@ -1113,6 +1113,11 @@ statusBarOpen =
     lens ".statusBarOpen" Model.getStatusBarOpen (\(Model m) open -> Model { m | statusBarOpen = open })
 
 
+statusBarScrollTop : Lens ls Model Float x y
+statusBarScrollTop =
+    lens ".statusBarScrollTop" Model.getStatusBarScrollTop (\(Model m) scrollTop -> Model { m | statusBarScrollTop = scrollTop })
+
+
 sidebarOpen : Lens ls Model Bool x y
 sidebarOpen =
     lens ".sidebarOpen" Model.getSidebarOpen (\(Model m) open -> Model { m | sidebarOpen = open })

@@ -1720,6 +1720,7 @@ type Model
         , activeSteps : List StepActivity
         , statusBarCollapsed : Set String
         , statusBarOpen : Bool
+        , statusBarScrollTop : Float
         , sidebarOpen : Bool
         , sidebarScroll : SidebarScroll
         , sidebarExpanded : Set Int
@@ -1860,6 +1861,11 @@ getStatusBarCollapsed (Model model) =
 getStatusBarOpen : Model -> Bool
 getStatusBarOpen (Model model) =
     model.statusBarOpen
+
+
+getStatusBarScrollTop : Model -> Float
+getStatusBarScrollTop (Model model) =
+    model.statusBarScrollTop
 
 
 getSidebarOpen : Model -> Bool
@@ -2212,6 +2218,7 @@ initialModel key route flags =
         , activeSteps = []
         , statusBarCollapsed = Set.empty
         , statusBarOpen = False
+        , statusBarScrollTop = 0
         , sidebarOpen = not flags.isNarrow
         , sidebarScroll = { top = False, left = False, right = False }
         , sidebarExpanded = Set.empty
