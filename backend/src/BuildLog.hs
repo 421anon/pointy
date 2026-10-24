@@ -19,10 +19,11 @@ module BuildLog (
 
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
-import Control.Monad (forM_, guard, unless)
+import Control.Monad (forM_, guard, join, unless, (>=>))
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), Value (Null), eitherDecodeStrict, withObject, (.:), (.:?), (.!=))
+import Data.Aeson (FromJSON (..), Object, Value (Null, Object), eitherDecodeStrict, withObject, (.:), (.:?), (.!=))
+import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
@@ -198,15 +199,28 @@ data DrvNode = DrvNode
     , dnInputs :: [FilePath]
     }
 
-instance FromJSON DrvNode where
-    parseJSON = withObject "derivation" $ \obj -> do
-        outputs <- obj .:? "outputs" .!= (Map.empty :: Map Text (Maybe OutputInfo))
-        inputs <- obj .:? "inputDrvs" .!= (Map.empty :: Map FilePath Value)
-        return
-            DrvNode
-                { dnOutputs = [path | Just (OutputInfo path) <- Map.elems outputs]
-                , dnInputs = sort (Map.keys inputs)
-                }
+parseDerivationShow :: Value -> Parser (Map FilePath DrvNode)
+parseDerivationShow = withObject "nix derivation show" $ \obj -> do
+    version <- obj .:? "version"
+    case version :: Maybe Int of
+        Just 4 -> do
+            derivations <- obj .: "derivations"
+            Map.mapKeys inStore <$> traverse (parseDrvNode inStore inputDrvsV4) (derivations :: Map FilePath Value)
+        _ -> traverse (parseDrvNode id (.:? "inputDrvs")) =<< parseJSON (Object obj)
+  where
+    -- Nix 2.33 nests derivations under "derivations", moves inputDrvs to inputs.drvs and names paths by base name: https://releases.nixos.org/nix/nix-2.33.0/manual/release-notes/rl-2.33.html
+    inStore name = "/nix/store/" ++ name
+    inputDrvsV4 obj = fmap join . traverse (.:? "drvs") =<< obj .:? "inputs"
+
+parseDrvNode :: (FilePath -> FilePath) -> (Object -> Parser (Maybe (Map FilePath Value))) -> Value -> Parser DrvNode
+parseDrvNode toStorePath inputDrvsOf = withObject "derivation" $ \obj -> do
+    outputs <- obj .:? "outputs" .!= (Map.empty :: Map Text (Maybe OutputInfo))
+    inputs <- inputDrvsOf obj .!= Map.empty
+    return
+        DrvNode
+            { dnOutputs = [toStorePath path | Just (OutputInfo path) <- Map.elems outputs]
+            , dnInputs = sort (map toStorePath (Map.keys inputs))
+            }
 
 newtype OutputInfo = OutputInfo FilePath
 
@@ -432,7 +446,7 @@ queryDerivations paths = do
             Map.union <$> queryDerivations left <*> queryDerivations right
 
 decodeDrvNodes :: ByteString -> Maybe (Map FilePath DrvNode)
-decodeDrvNodes = either (const Nothing) Just . eitherDecodeStrict
+decodeDrvNodes = either (const Nothing) Just . (eitherDecodeStrict >=> parseEither parseDerivationShow)
 
 queryStorePlan :: (Nix :> es) => [FilePath] -> Eff es StorePlan
 queryStorePlan [] = return (StorePlan Set.empty Set.empty)

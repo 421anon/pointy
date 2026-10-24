@@ -40,6 +40,7 @@ import Processes (cli)
 
 import System.Directory (doesPathExist)
 import System.Exit (ExitCode (..))
+import System.FilePath (takeFileName)
 
 data FixtureState = FixtureState
     { fixtureDocument :: FixtureDocument
@@ -197,14 +198,18 @@ derivationShowJson :: FixtureDocument -> [FilePath] -> String
 derivationShowJson document paths =
     T.unpack . TE.decodeUtf8 . LBS.toStrict . A.encode $
         object
-            [ Key.fromText (T.pack drv) .= object ["outputs" .= outputsOf drv, "inputDrvs" .= object []]
-            | drv <- mapMaybe deriverOf paths
+            [ "version" .= (4 :: Int)
+            , "derivations"
+                .= object
+                    [ Key.fromText (T.pack (takeFileName drv)) .= object ["outputs" .= outputsOf drv, "inputs" .= object ["drvs" .= object [], "srcs" .= ([] :: [FilePath])]]
+                    | drv <- mapMaybe deriverOf paths
+                    ]
             ]
   where
     deriverOf path
         | path `elem` Map.elems (documentDerivations document) = Just path
         | otherwise = derivationAnswer document path
-    outputsOf drv = object [Key.fromText name .= object ["path" .= output] | (name, output) <- zip outputNames (derivationOutputs document drv)]
+    outputsOf drv = object [Key.fromText name .= object ["path" .= takeFileName output] | (name, output) <- zip outputNames (derivationOutputs document drv)]
     outputNames = "out" : ["out" <> T.pack (show n) | n <- [2 :: Int ..]]
 
 pathInfoJson :: FixtureDocument -> [FilePath] -> String
