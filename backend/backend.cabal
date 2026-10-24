@@ -72,7 +72,6 @@ library
     Processes
     ProjectFiles
     ProjectTree
-    RollupCache
     SingleFlightCache
     Search.Document
     Search.Http

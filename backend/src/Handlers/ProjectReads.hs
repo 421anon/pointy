@@ -8,8 +8,7 @@ import ApiTypes (DynamicJson (..))
 import BuildLog (resolveStatusesBatched)
 import BuildStatus (StepPaths (..), markBuiltOutputs, stepStatusNames)
 import Certificates (evalProjectDefinitions, getProjectCertificates, getStepCertificates, projectSchemaVersion, rawStatusesFor, schemaVersionWithKeys)
-import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (Object, Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
@@ -20,12 +19,11 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift, SeqUnlift), (:>), withEffToIO)
+import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), (:>), withEffToIO)
 import Effects (App, AppM, Eval)
 import Handlers.Projects (readJsonAtCommitWithHead)
 import Handlers.StepReview (reviewedPaths, reviewedStatuses, stepCertificatesOrLegacyOutPaths, stepOutPaths, stepReviews)
 import ProjectTree (ChildRef (..), projectChildRefs)
-import RollupCache (lookupRollupCache, withRollupCache)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
@@ -33,17 +31,7 @@ import UserRepo (ReadRepoContext (..))
 
 projectRollupHandler :: Int -> Maybe T.Text -> AppM DynamicJson
 projectRollupHandler projectId commit =
-    readJsonAtCommitWithHead commit $ \headContext ctx -> do
-        let key = (readCommitHash ctx, readCommitHash headContext, projectId)
-        cached <- liftIO $ lookupRollupCache key
-        case cached of
-            Just value -> pure value
-            Nothing -> do
-                result <-
-                    lift $
-                        withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
-                            withRollupCache key (unlift (runExceptT (projectRollup headContext ctx projectId)))
-                either throwError pure result
+    readJsonAtCommitWithHead commit $ \headContext ctx -> projectRollup headContext ctx projectId
 
 projectRollup :: App es => ReadRepoContext -> ReadRepoContext -> Int -> ExceptT String (Eff es) Value
 projectRollup headContext ctx projectId = do
