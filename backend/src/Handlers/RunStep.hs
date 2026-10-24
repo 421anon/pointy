@@ -13,7 +13,7 @@ module Handlers.RunStep (
     stopStepHandler,
 ) where
 
-import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog)
+import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog, validPaths)
 import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
 import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
@@ -130,8 +130,22 @@ resolveStepTarget ctx eid = do
     output <- runNixEvalJsonApplyInRepo ctx certificateOrLegacyStep ('#' : stepAttr eid)
     either (throwError . (("Failed to decode the build target of step " ++ show eid ++ ": ") ++)) pure $
         eitherDecode (TLE.encodeUtf8 (TL.pack output))
+
+resolveStepTargets :: (Eval :> es) => ReadRepoContext -> [Int] -> Eff es (Map.Map Int (Either String StepTarget))
+resolveStepTargets _ [] = return Map.empty
+resolveStepTargets ctx [single] = Map.singleton single <$> runExceptT (resolveStepTarget ctx single)
+resolveStepTargets ctx ids = do
+    outcome <- runExceptT $ runNixEvalJsonApplyInRepo ctx certificatesOrLegacySteps "#pointy.steps"
+    case eitherDecode . TLE.encodeUtf8 . TL.pack <$> outcome of
+        Right (Right targets) | length targets == length ids -> return $ Map.fromList (zip ids (map Right targets))
+        _ -> do
+            let (left, right) = splitAt (length ids `div` 2) ids
+            Map.union <$> resolveStepTargets ctx left <*> resolveStepTargets ctx right
   where
-    certificateOrLegacyStep = "step: { certified = step ? certificate; path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; }"
+    certificatesOrLegacySteps = "steps: map (id: (" ++ certificateOrLegacyStep ++ ") steps.${id}) [ " ++ unwords (map (show . show) ids) ++ " ]"
+
+certificateOrLegacyStep :: String
+certificateOrLegacyStep = "step: { certified = step ? certificate; path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; }"
 
 stepTargetInstallable :: ReadRepoContext -> Int -> StepTarget -> String
 stepTargetInstallable ctx eid target =
@@ -146,25 +160,28 @@ data SubmitOutcome
     | NotSubmitted String
 
 submitGraph :: App es => IO Bool -> ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
-submitGraph halted ctx graph = foldM submitOne Map.empty
-  where
-    submitOne outcomes sid = do
-        stop <- liftIO halted
-        if stop
-            then return outcomes
-            else do
-                outcome <- submitStep ctx outcomes (Map.findWithDefault [] sid graph) sid
-                return $ Map.insert sid outcome outcomes
+submitGraph halted ctx graph stepIds = do
+    targets <- resolveStepTargets ctx stepIds
+    built <- validPaths (Set.toList (Set.fromList [stepTargetPath target | Right target <- Map.elems targets]))
+    let isCertified certificate = maybe (isBuilt certificate) (return . Set.member certificate) built
+        submitOne outcomes (sid, target) = do
+            stop <- liftIO halted
+            if stop
+                then return outcomes
+                else do
+                    outcome <- submitStep ctx isCertified outcomes (Map.findWithDefault [] sid graph) sid target
+                    return $ Map.insert sid outcome outcomes
+    foldM submitOne Map.empty [(sid, target) | sid <- stepIds, Just target <- [Map.lookup sid targets]]
 
-submitStep :: App es => ReadRepoContext -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Eff es SubmitOutcome
-submitStep ctx outcomes deps sid
+submitStep :: App es => ReadRepoContext -> (FilePath -> Eff es Bool) -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Either String StepTarget -> Eff es SubmitOutcome
+submitStep ctx isCertified outcomes deps sid resolvedTarget
     | not (null blockedOn) =
         return $ NotSubmitted $ "dependency step(s) " ++ show blockedOn ++ " could not be scheduled"
     | otherwise = do
         result <- runExceptT $ do
-            target <- resolveStepTarget ctx sid
+            target <- liftEither resolvedTarget
             let certificate = stepTargetPath target
-            certified <- lift $ isBuilt certificate
+            certified <- lift $ isCertified certificate
             let buildKey = buildKeyForOutPath certificate
             if certified
                 then return $ AlreadyCertified certificate
