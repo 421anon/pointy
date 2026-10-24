@@ -69,7 +69,7 @@ import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
-import Data.List (sort, sortOn)
+import Data.List (sort, sortOn, stripPrefix)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -730,16 +730,34 @@ noteDiscardedConflict cfg logPath before after =
     when (maybe False applyConflictsPending (preparedApply before) && isNothing (preparedApply after)) $
         appendLogLine cfg logPath "system" "The agent branch changed after the apply conflict, so the conflicted apply candidate and its resolution were discarded; the next apply merges the changeset again."
 
-nixFetcherCacheFile :: FilePath
-nixFetcherCacheFile = ".cache" </> "nix" </> "fetcher-cache-v3.sqlite"
+nixCacheDir :: FilePath
+nixCacheDir = ".cache" </> "nix"
+
+currentFetcherCache :: [FilePath] -> Maybe FilePath
+currentFetcherCache names =
+    case sortOn (Down . fst) [(version, name) | name <- names, Just version <- [fetcherCacheVersion name]] of
+        (_, name) : _ -> Just name
+        [] -> Nothing
+  where
+    fetcherCacheVersion :: FilePath -> Maybe Int
+    fetcherCacheVersion name = do
+        rest <- stripPrefix "fetcher-cache-v" name
+        let (digits, suffix) = span isDigit rest
+        guard (not (null digits) && suffix == ".sqlite")
+        return (read digits)
 
 seedNixFetcherCache :: FilePath -> IO ()
 seedNixFetcherCache runnerHome = do
-    source <- (</> nixFetcherCacheFile) <$> getHomeDirectory
-    let target = runnerHome </> nixFetcherCacheFile
-        staging = target <> ".seed"
+    cacheDir <- (</> nixCacheDir) <$> getHomeDirectory
+    cached <- listDirectoryIfExists cacheDir
+    forM_ (currentFetcherCache cached) $ \name ->
+        seedSqliteFile (cacheDir </> name) (runnerHome </> nixCacheDir </> name)
+
+seedSqliteFile :: FilePath -> FilePath -> IO ()
+seedSqliteFile source target = do
+    let staging = target <> ".seed"
     result <- try $ do
-        snapshot <- stableSnapshot source (3 :: Int)
+        snapshot <- stableSnapshot (3 :: Int)
         forM_ snapshot $ \bytes -> do
             createDirectoryIfMissing True (takeDirectory target)
             BS.writeFile staging bytes
@@ -747,15 +765,15 @@ seedNixFetcherCache runnerHome = do
             renameFile staging target
     either (\(_ :: SomeException) -> removePathForcibly staging) return result
   where
-    stableSnapshot _ 0 = return Nothing
-    stableSnapshot source attempts = do
-        before <- (,) <$> sidecarsIdle source <*> getModificationTime source
+    stableSnapshot 0 = return Nothing
+    stableSnapshot attempts = do
+        before <- (,) <$> sidecarsIdle <*> getModificationTime source
         bytes <- BS.readFile source
-        after <- (,) <$> sidecarsIdle source <*> getModificationTime source
+        after <- (,) <$> sidecarsIdle <*> getModificationTime source
         if fst before && before == after
             then return (Just bytes)
-            else threadDelay 100000 >> stableSnapshot source (attempts - 1)
-    sidecarsIdle source = and <$> mapM (idle . (source <>)) sqliteSidecars
+            else threadDelay 100000 >> stableSnapshot (attempts - 1)
+    sidecarsIdle = and <$> mapM (idle . (source <>)) sqliteSidecars
     idle path = do
         exists <- doesFileExist path
         if exists then (== 0) <$> getFileSize path else return True

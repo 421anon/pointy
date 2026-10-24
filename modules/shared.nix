@@ -38,7 +38,7 @@ let
   nixCopyIngest = pkgs.writeShellApplication {
     name = "pointy-ingest";
     runtimeInputs = [
-      pkgs.nix
+      config.nix.package
       pkgs.jq
     ];
     text = ''
@@ -235,7 +235,6 @@ in
           bashInteractive
           file
           (diffoscope.override { enableBloat = false; })
-          nix
           gitMinimal
           gnutar
           openssh
@@ -243,6 +242,7 @@ in
           config.services.slurm.package
         ])
         ++ [
+          config.nix.package
           pointy.packages.sbox
           pointy.packages.pi
           pointy.packages.pi-glovebox
