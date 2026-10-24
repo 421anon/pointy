@@ -235,7 +235,7 @@ data StorePlan = StorePlan
 
 data StepStore = StepStore
     { ssDrvOf :: Map Int FilePath
-    , ssPlan :: StorePlan
+    , ssBuilt :: Maybe (Set FilePath)
     , ssCache :: IORef (Map FilePath DrvNode)
     }
 
@@ -260,30 +260,25 @@ decodeValidity = either (const Nothing) Just . eitherDecodeStrict
 
 buildStepStore :: (Nix :> es, IOE :> es) => Map Int Text -> Eff es StepStore
 buildStepStore certificates = do
-    nodes <- queryDerivations (filter isStorePath (map unpack (Map.elems certificates)))
+    let storeCertificates = Map.filter isStorePath (Map.map unpack certificates)
+    built <- validPaths (Set.toList (Set.fromList (Map.elems storeCertificates)))
+    let unbuilt = maybe storeCertificates (\valid -> Map.filter (`Set.notMember` valid) storeCertificates) built
+    nodes <- queryDerivations (Set.toList (Set.fromList (Map.elems unbuilt)))
     let byOutput =
             Map.fromList
                 [ (output, drv)
                 | (drv, node) <- Map.toList nodes
                 , output <- dnOutputs node
                 ]
-        drvOf = Map.mapMaybe (\certificate -> Map.lookup (unpack certificate) byOutput) certificates
+        drvOf = Map.mapMaybe (`Map.lookup` byOutput) unbuilt
     cache <- liftIO $ newIORef nodes
-    plan <- queryStorePlan (Set.toList (Set.fromList (Map.elems drvOf)))
-    return StepStore{ssDrvOf = drvOf, ssPlan = plan, ssCache = cache}
+    return StepStore{ssDrvOf = drvOf, ssBuilt = built, ssCache = cache}
 
-rawStatusesBatched :: (Nix :> es, IOE :> es) => StepStore -> (Text -> Bool) -> Map Int Text -> Eff es (Map Int (Text, Maybe Text))
-rawStatusesBatched store isRunning certificates = do
-    nodes <- liftIO $ readIORef (ssCache store)
-    let probed = Map.filterWithKey (\sid certificate -> needsProbe nodes sid (unpack certificate)) certificates
-    known <- validPaths (map unpack (Map.elems probed))
-    let probe certificate = case known of
-            Just valid -> return (Set.member certificate valid)
-            Nothing -> pathValid certificate
-    Map.traverseWithKey (classify nodes probe) certificates
+rawStatusesBatched :: (Nix :> es) => StepStore -> (Text -> Bool) -> Map Int Text -> Eff es (Map Int (Text, Maybe Text))
+rawStatusesBatched store isRunning = traverse classify
   where
-    classify nodes probe sid certificate = do
-        certified <- certificateValid nodes probe sid (unpack certificate)
+    classify certificate = do
+        certified <- isBuilt (unpack certificate)
         return $
             if certified
                 then ("success", Nothing)
@@ -292,24 +287,9 @@ rawStatusesBatched store isRunning certificates = do
                         then ("running", Nothing)
                         else ("not-started", Nothing)
 
-    needsProbe nodes sid certificate
-        | not (isStorePath certificate) = False
-        | otherwise = case Map.lookup sid (ssDrvOf store) of
-            Nothing -> True
-            Just drv -> maybe False ((> 1) . length . dnOutputs) (Map.lookup drv nodes)
-
-    certificateValid nodes probe sid certificate
+    isBuilt certificate
         | not (isStorePath certificate) = return False
-        | otherwise = case Map.lookup sid (ssDrvOf store) of
-            Nothing -> probe certificate
-            Just drv -> case Map.lookup drv nodes of
-                Just node | length (dnOutputs node) > 1 -> probe certificate
-                _ ->
-                    return $
-                        not
-                            ( Set.member drv (spBuild (ssPlan store))
-                                || Set.member certificate (spFetch (ssPlan store))
-                            )
+        | otherwise = maybe (pathValid certificate) (return . Set.member certificate) (ssBuilt store)
 
 resolveStatusesBatched :: (Nix :> es, IOE :> es) => StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesBatched store statuses = do
@@ -322,7 +302,9 @@ resolveStatusesBatched store statuses = do
     ownLogs <-
         withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
             mapConcurrently (unlift . seedFailureLog) seeds
-    resolved <- liftIO $ newIORef (Map.fromList (catMaybes ownLogs))
+    let ownResolved = Map.fromList (catMaybes ownLogs)
+    resolved <- liftIO $ newIORef ownResolved
+    plan <- queryStorePlan (Set.toList (Set.fromList [drv | (sid, drv) <- seeds, Map.notMember sid ownResolved]))
     seedNodes <- fetchNodes (ssCache store) (map snd seeds)
     visited <- liftIO $ newIORef (Map.fromList [(sid, Set.singleton drv) | (sid, drv) <- seeds])
     frontierRef <-
@@ -344,7 +326,7 @@ resolveStatusesBatched store statuses = do
                     withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
                         mapConcurrently
                             ( \(sid, queue) ->
-                                fmap ((,) sid) (unlift (walkQueue store level (Map.findWithDefault Set.empty sid seen) queue))
+                                fmap ((,) sid) (unlift (walkQueue plan level (Map.findWithDefault Set.empty sid seen) queue))
                             )
                             [ (sid, queue)
                             | (sid, queue) <- Map.toList frontier
@@ -369,14 +351,14 @@ resolveStatusesBatched store statuses = do
         mLine <- localLogLine drv
         return $ fmap (\line -> (sid, ("failure", line))) mLine
 
-walkQueue :: (Nix :> es, IOE :> es) => StepStore -> Map FilePath DrvNode -> Set FilePath -> [(FilePath, Int)] -> Eff es (Maybe (Maybe Text), Set FilePath, [(FilePath, Int)])
-walkQueue store level seen queue = go seen [] queue
+walkQueue :: (Nix :> es, IOE :> es) => StorePlan -> Map FilePath DrvNode -> Set FilePath -> [(FilePath, Int)] -> Eff es (Maybe (Maybe Text), Set FilePath, [(FilePath, Int)])
+walkQueue plan level seen queue = go seen [] queue
   where
     go visited expanded [] = return (Nothing, visited, expanded)
     go visited expanded ((drv, depth) : rest)
         | drv `Set.member` visited = go visited expanded rest
         | depth > maxBfsDepth = go (Set.insert drv visited) expanded rest
-        | not (Set.member drv (spBuild (ssPlan store))) =
+        | not (Set.member drv (spBuild plan)) =
             go (Set.insert drv visited) expanded rest
         | otherwise = case Map.lookup drv level of
             Nothing -> go (Set.insert drv visited) expanded rest
