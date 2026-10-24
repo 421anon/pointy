@@ -23,6 +23,7 @@ library
     ApiTypes
     App
     ArtifactRdf
+    Bisect
     BuildLog
     BuildRunner
     Bus

@@ -17,6 +17,7 @@ module BuildLog (
     resolveStatusesBatched,
 ) where
 
+import Bisect (bisectBatch)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Monad (forM_, guard, join, unless, (>=>))
@@ -31,7 +32,7 @@ import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef,
 import Data.List (isPrefixOf, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.Maybe (catMaybes, isJust)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text, pack, unpack)
@@ -233,6 +234,12 @@ data StorePlan = StorePlan
     }
     deriving (Show)
 
+instance Semigroup StorePlan where
+    StorePlan build fetch <> StorePlan build' fetch' = StorePlan (build <> build') (fetch <> fetch')
+
+instance Monoid StorePlan where
+    mempty = StorePlan Set.empty Set.empty
+
 data StepStore = StepStore
     { ssDrvOf :: Map Int FilePath
     , ssBuilt :: Maybe (Set FilePath)
@@ -413,43 +420,23 @@ fetchNodes cacheRef paths = do
     return $ Map.union fetched (Map.restrictKeys cached wanted)
 
 queryDerivations :: (Nix :> es) => [FilePath] -> Eff es (Map FilePath DrvNode)
-queryDerivations [] = return Map.empty
-queryDerivations [path] = do
-    result <- runExceptT $ runNix ["derivation", "show", path]
-    return $ case result of
-        Right output -> fromMaybe Map.empty (decodeDrvNodes output)
-        Left _ -> Map.empty
-queryDerivations paths = do
-    result <- runExceptT $ runNix (["derivation", "show"] ++ paths)
-    case result of
-        Right output | Just nodes <- decodeDrvNodes output -> return nodes
-        _ -> do
-            let (left, right) = splitAt (length paths `div` 2) paths
-            Map.union <$> queryDerivations left <*> queryDerivations right
+queryDerivations = bisectBatch showDerivations (\_ _ -> return Map.empty)
+  where
+    showDerivations paths = do
+        result <- runExceptT $ runNix (["derivation", "show"] ++ paths)
+        return $ maybe (Left ()) Right (either (const Nothing) decodeDrvNodes result)
 
 decodeDrvNodes :: ByteString -> Maybe (Map FilePath DrvNode)
 decodeDrvNodes = either (const Nothing) Just . (eitherDecodeStrict >=> parseEither parseDerivationShow)
 
 queryStorePlan :: (Nix :> es) => [FilePath] -> Eff es StorePlan
-queryStorePlan [] = return (StorePlan Set.empty Set.empty)
-queryStorePlan [path] = do
-    (code, out, err) <- runNixStoreCli ["--realise", "--dry-run", path]
-    return $ case code of
-        ExitSuccess -> parseStorePlan (out <> err)
-        ExitFailure _ -> StorePlan (Set.singleton path) Set.empty
-queryStorePlan paths = do
-    (code, out, err) <- runNixStoreCli (["--realise", "--dry-run"] ++ paths)
-    case code of
-        ExitSuccess -> return (parseStorePlan (out <> err))
-        ExitFailure _ -> do
-            let (left, right) = splitAt (length paths `div` 2) paths
-            leftPlan <- queryStorePlan left
-            rightPlan <- queryStorePlan right
-            return
-                StorePlan
-                    { spBuild = spBuild leftPlan <> spBuild rightPlan
-                    , spFetch = spFetch leftPlan <> spFetch rightPlan
-                    }
+queryStorePlan = bisectBatch dryRun (\_ path -> return (StorePlan (Set.singleton path) Set.empty))
+  where
+    dryRun paths = do
+        (code, out, err) <- runNixStoreCli (["--realise", "--dry-run"] ++ paths)
+        return $ case code of
+            ExitSuccess -> Right (parseStorePlan (out <> err))
+            ExitFailure _ -> Left ()
 
 parseStorePlan :: ByteString -> StorePlan
 parseStorePlan = go False (StorePlan Set.empty Set.empty) . BC.lines

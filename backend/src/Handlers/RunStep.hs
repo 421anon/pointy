@@ -13,8 +13,10 @@ module Handlers.RunStep (
     stopStepHandler,
 ) where
 
+import Bisect (bisectBatch)
 import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog, validPaths)
 import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
+import Certificates (renderIdList)
 import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
@@ -132,17 +134,14 @@ resolveStepTarget ctx eid = do
         eitherDecode (TLE.encodeUtf8 (TL.pack output))
 
 resolveStepTargets :: (Eval :> es) => ReadRepoContext -> [Int] -> Eff es (Map.Map Int (Either String StepTarget))
-resolveStepTargets _ [] = return Map.empty
-resolveStepTargets ctx [single] = Map.singleton single <$> runExceptT (resolveStepTarget ctx single)
-resolveStepTargets ctx ids = do
-    outcome <- runExceptT $ runNixEvalJsonApplyInRepo ctx certificatesOrLegacySteps "#pointy.steps"
-    case eitherDecode . TLE.encodeUtf8 . TL.pack <$> outcome of
-        Right (Right targets) | length targets == length ids -> return $ Map.fromList (zip ids (map Right targets))
-        _ -> do
-            let (left, right) = splitAt (length ids `div` 2) ids
-            Map.union <$> resolveStepTargets ctx left <*> resolveStepTargets ctx right
+resolveStepTargets ctx = bisectBatch evaluateTargets (\_ single -> Map.singleton single <$> runExceptT (resolveStepTarget ctx single))
   where
-    certificatesOrLegacySteps = "steps: map (id: (" ++ certificateOrLegacyStep ++ ") steps.${id}) [ " ++ unwords (map (show . show) ids) ++ " ]"
+    evaluateTargets ids = do
+        outcome <- runExceptT $ runNixEvalJsonApplyInRepo ctx (certificatesOrLegacySteps ids) "#pointy.steps"
+        pure $ case eitherDecode . TLE.encodeUtf8 . TL.pack <$> outcome of
+            Right (Right targets) | length targets == length ids -> Right (Map.fromList (zip ids (map Right targets)))
+            _ -> Left ()
+    certificatesOrLegacySteps ids = "steps: map (id: (" ++ certificateOrLegacyStep ++ ") steps.${id}) " ++ renderIdList ids
 
 certificateOrLegacyStep :: String
 certificateOrLegacyStep = "step: { certified = step ? certificate; path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; }"

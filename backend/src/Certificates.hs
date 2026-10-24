@@ -21,9 +21,11 @@ module Certificates (
     rawStatusesFor,
     runningBuildKeys,
     isCertificateBuilding,
+    renderIdList,
     ProjectDef (..),
 ) where
 
+import Bisect (bisectBatch)
 import BuildLog (StepStore, buildStepStore, rawStatusesBatched)
 import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName)
 import BuildStatus (StepPaths (..), markBuiltOutputs)
@@ -118,24 +120,20 @@ legacyProjectCertificates :: String
 legacyProjectCertificates = "project: builtins.mapAttrs (id: certificate: if certificate == null then null else { inherit certificate; output = project.outPaths.${id} or certificate; }) (project.certificates or project.outPaths)"
 
 resolveKeys :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) (Map Int (Maybe Text))
-resolveKeys _ [] = pure Map.empty
-resolveKeys ctx ids = do
-    outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepKeysExpression ids) "#pointy"
-    case outcome of
-        Right output -> case decodeJsonText output of
-            Just keys
-                | Map.size (versionedValue keys) == Set.size (Set.fromList ids) -> pure (versionedValue keys)
-            _ -> splitOrReportKeys ctx "the evaluation returned the wrong number of keys" ids
-        Left err -> splitOrReportKeys ctx err ids
-
-splitOrReportKeys :: (Eval :> es, IOE :> es) => ReadRepoContext -> String -> [Int] -> ExceptT String (Eff es) (Map Int (Maybe Text))
-splitOrReportKeys ctx err ids = case ids of
-    [single] -> do
+resolveKeys ctx = bisectBatch evaluateKeys reportMissingKey
+  where
+    evaluateKeys ids = do
+        outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepKeysExpression ids) "#pointy"
+        pure $ case outcome of
+            Right output
+                | Just keys <- decodeJsonText output
+                , Map.size (versionedValue keys) == Set.size (Set.fromList ids) ->
+                    Right (versionedValue keys)
+            Right _ -> Left "the evaluation returned the wrong number of keys"
+            Left err -> Left err
+    reportMissingKey err single = do
         liftIO $ putStrLn $ "Step " ++ show single ++ " has no key: " ++ errorSummary err
         pure $ Map.singleton single Nothing
-    _ -> do
-        let (left, right) = splitAt (length ids `div` 2) ids
-        Map.union <$> resolveKeys ctx left <*> resolveKeys ctx right
 
 scheduleRefreshIfMissing :: Text -> [Text] -> IO ()
 scheduleRefreshIfMissing commit keys = do
@@ -184,24 +182,18 @@ resolveCertificates ctx keys = do
             pure $ Map.union evaluatedPaths fromStore
 
 resolveCertificatePaths :: (Eval :> es, IOE :> es) => ReadRepoContext -> [Int] -> ExceptT String (Eff es) [(Int, Maybe StepPaths)]
-resolveCertificatePaths _ [] = pure []
-resolveCertificatePaths ctx ids = do
-    outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepCertificatesExpression ids) "#pointy.steps"
-    case outcome of
-        Right output -> case decodeJsonText output of
-            Just paths
-                | length paths == length ids -> pure $ zip ids paths
-            _ -> throwError "Failed to parse the certificate evaluation"
-        Left err -> splitOrReport ctx err ids
-
-splitOrReport :: (Eval :> es, IOE :> es) => ReadRepoContext -> String -> [Int] -> ExceptT String (Eff es) [(Int, Maybe StepPaths)]
-splitOrReport ctx err ids = case ids of
-    [single] -> do
+resolveCertificatePaths ctx = bisectBatch evaluatePaths reportMissingCertificate
+  where
+    evaluatePaths ids = do
+        outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepCertificatesExpression ids) "#pointy.steps"
+        case outcome of
+            Right output -> case decodeJsonText output of
+                Just paths | length paths == length ids -> pure (Right (zip ids paths))
+                _ -> throwError "Failed to parse the certificate evaluation"
+            Left err -> pure (Left err)
+    reportMissingCertificate err single = do
         liftIO $ putStrLn $ "Step " ++ show single ++ " has no certificate: " ++ errorSummary err
         pure [(single, Nothing)]
-    _ -> do
-        let (left, right) = splitAt (length ids `div` 2) ids
-        (++) <$> resolveCertificatePaths ctx left <*> resolveCertificatePaths ctx right
 
 errorSummary :: String -> String
 errorSummary text = case [rest | rest@(line : _) <- tails cleaned, "error:" `isPrefixOf` line] of
@@ -730,28 +722,17 @@ certificateKeysFor commit = go []
             Left err -> pure $ Left err
             Right resolved -> go (resolved : acc) rest
 certificateKeysBatch :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String (Map Int (Maybe Text)))
-certificateKeysBatch _ [] = pure $ Right Map.empty
-certificateKeysBatch commit ids = do
-    result <- nixEvalJson commit "pointy" (stepKeysExpression ids)
-    case result of
-        Right keys
-            | Map.size (versionedValue keys) == length ids -> pure $ Right (versionedValue keys)
-        failure -> splitOrReportKeysAt commit failure ids
-
-splitOrReportKeysAt :: (Nix :> es, IOE :> es) => Text -> Either String (Versioned (Map Int (Maybe Text))) -> [Int] -> Eff es (Either String (Map Int (Maybe Text)))
-splitOrReportKeysAt commit failure ids = case ids of
-    [single] -> do
-        liftIO $ putStrLn $ "Step " ++ show single ++ " has no key: " ++ describe
-        pure $ Right (Map.singleton single Nothing)
-    _ -> do
-        let (left, right) = splitAt (length ids `div` 2) ids
-        leftResult <- certificateKeysBatch commit left
-        rightResult <- certificateKeysBatch commit right
-        pure $ Map.union <$> leftResult <*> rightResult
+certificateKeysBatch commit = fmap Right . bisectBatch evaluateKeys reportMissingKey
   where
-    describe = case failure of
-        Left err -> err
-        Right _ -> "the evaluation returned the wrong number of keys"
+    evaluateKeys ids = do
+        result <- nixEvalJson commit "pointy" (stepKeysExpression ids)
+        pure $ case result of
+            Right keys | Map.size (versionedValue keys) == length ids -> Right (versionedValue keys)
+            Right _ -> Left "the evaluation returned the wrong number of keys"
+            Left err -> Left err
+    reportMissingKey err single = do
+        liftIO $ putStrLn $ "Step " ++ show single ++ " has no key: " ++ err
+        pure $ Map.singleton single Nothing
 
 certificatePathsAt :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String [(Int, Maybe StepPaths)])
 certificatePathsAt commit = go []
@@ -765,28 +746,17 @@ certificatePathsAt commit = go []
             Right evaluated -> go (reverse evaluated ++ acc) rest
 
 certificatePathsFor :: (Nix :> es, IOE :> es) => Text -> [Int] -> Eff es (Either String [(Int, Maybe StepPaths)])
-certificatePathsFor _ [] = pure $ Right []
-certificatePathsFor commit ids = do
-    result <- nixEvalJson commit "pointy.steps" (stepCertificatesExpression ids)
-    case result of
-        Right (paths :: [Maybe StepPaths])
-            | length paths == length ids -> pure $ Right (zip ids paths)
-        failure -> splitOrReportPaths commit failure ids
-
-splitOrReportPaths :: (Nix :> es, IOE :> es) => Text -> Either String [Maybe StepPaths] -> [Int] -> Eff es (Either String [(Int, Maybe StepPaths)])
-splitOrReportPaths commit failure ids = case ids of
-    [single] -> do
-        liftIO $ putStrLn $ "Step " ++ show single ++ " has no certificate: " ++ describe
-        pure $ Right [(single, Nothing)]
-    _ -> do
-        let (left, right) = splitAt (length ids `div` 2) ids
-        leftResult <- certificatePathsFor commit left
-        rightResult <- certificatePathsFor commit right
-        pure $ (++) <$> leftResult <*> rightResult
+certificatePathsFor commit = fmap Right . bisectBatch evaluatePaths reportMissingCertificate
   where
-    describe = case failure of
-        Left err -> err
-        Right _ -> "the evaluation returned the wrong number of certificates"
+    evaluatePaths ids = do
+        result <- nixEvalJson commit "pointy.steps" (stepCertificatesExpression ids)
+        pure $ case result of
+            Right (paths :: [Maybe StepPaths]) | length paths == length ids -> Right (zip ids paths)
+            Right _ -> Left "the evaluation returned the wrong number of certificates"
+            Left err -> Left err
+    reportMissingCertificate err single = do
+        liftIO $ putStrLn $ "Step " ++ show single ++ " has no certificate: " ++ err
+        pure [(single, Nothing)]
 
 projectMembershipAt :: App es => Text -> Eff es (Either String (Map Int [Int]))
 projectMembershipAt commit = do
