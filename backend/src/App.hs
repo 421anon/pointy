@@ -33,8 +33,9 @@ import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
+import Data.String (fromString)
 import Network.Wai (Application, Request, pathInfo)
-import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setPort)
+import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setHost, setPort)
 import Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 
 import Control.Monad.Except (mapExceptT)
@@ -295,7 +296,7 @@ serveApp runEffects middleware =
                 (hoistServer (Proxy :: Proxy API) (toHandler runEffects) server)
 
 
-runServer :: (forall x. Eff AppEffects x -> IO x) -> (Application -> Application) -> Int -> IO () -> IO ()
-runServer runEffects middleware port warm = do
+runServer :: (forall x. Eff AppEffects x -> IO x) -> (Application -> Application) -> String -> Int -> IO () -> IO ()
+runServer runEffects middleware host port warm = do
     installRunner (EffectRunner.Runner runEffects)
-    runSettings (setPort port (setBeforeMainLoop warm defaultSettings)) (serveApp runEffects middleware)
+    runSettings (setHost (fromString host) (setPort port (setBeforeMainLoop warm defaultSettings))) (serveApp runEffects middleware)

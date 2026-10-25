@@ -85,6 +85,7 @@ run options = do
     runServer
         (runFixture state)
         (fixtureApp state (optionFrontend options) reset)
+        "127.0.0.1"
         (optionPort options)
         (putStrLn "Fixture server listening.")
 

@@ -49,11 +49,13 @@ let
     '';
   };
 
-  backendEnvironment =
-    lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
-    // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
-    // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; }
-    // lib.optionalAttrs (cfg.agentMemoryMax != null) { POINTY_AGENT_MEMORY_MAX = cfg.agentMemoryMax; };
+  backendEnvironment = {
+    POINTY_LISTEN_HOST = cfg.listenHost;
+  }
+  // lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
+  // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
+  // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; }
+  // lib.optionalAttrs (cfg.agentMemoryMax != null) { POINTY_AGENT_MEMORY_MAX = cfg.agentMemoryMax; };
 
   agentMemoryServiceConfig = lib.optionalAttrs (cfg.agentMemoryMax != null) {
     Delegate = "memory";
@@ -64,6 +66,17 @@ in
 {
 
   options.services.pointy-backend = {
+    listenHost = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1";
+      description = ''
+        Address Warp binds the backend HTTP listener to. The default keeps the
+        backend on loopback behind nginx. Set to `0.0.0.0` only when the
+        backend must be reachable directly.
+      '';
+      example = "0.0.0.0";
+    };
+
     agentEnvFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;

@@ -14,6 +14,8 @@ import Handlers.ClusterStream (startClusterPoller)
 import Handlers.RunStep (restoreJobsFromSlurm)
 import Handlers.Statuses (restoreRunningStatuses)
 import Interpreters.Production (runProduction)
+import Data.Maybe (fromMaybe)
+import System.Environment (lookupEnv)
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo, fetchRepo)
 
@@ -37,8 +39,9 @@ main = do
         Left err -> putStrLn $ "Warning: Failed to fetch repository: " ++ err
         Right () -> putStrLn "Repository fetched successfully."
 
-    putStrLn "Starting server on port 8081..."
-    runServer runProduction id 8081 afterServerStart
+    listenHost <- fromMaybe "127.0.0.1" <$> lookupEnv "POINTY_LISTEN_HOST"
+    putStrLn ("Starting server on " ++ listenHost ++ ":8081...")
+    runServer runProduction id listenHost 8081 afterServerStart
   where
     afterServerStart = do
         putStrLn "Server listening on port 8081."
