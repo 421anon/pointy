@@ -42,7 +42,6 @@
 
           options.services.pointy.internal = {
             source = internalOption lib.types.str;
-            nixpkgsFlake = internalOption lib.types.raw;
             piConfigDir = internalOption lib.types.path;
             packages = {
               backend = internalOption lib.types.package;
@@ -55,7 +54,6 @@
 
           config.services.pointy.internal = {
             source = toString self;
-            nixpkgsFlake = nixpkgs;
             piConfigDir = "${self}/backend/pi";
             packages = {
               backend = self.packages.${targetSystem}.backend;

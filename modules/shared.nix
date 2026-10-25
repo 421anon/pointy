@@ -179,10 +179,7 @@ in
       shareKnownHosts = true;
     };
 
-    nix = {
-      settings.experimental-features = "nix-command flakes pipe-operators";
-      registry.nixpkgs.flake = pointy.nixpkgsFlake;
-    };
+    nix.settings.experimental-features = "nix-command flakes pipe-operators";
 
     security.polkit = {
       enable = true;
