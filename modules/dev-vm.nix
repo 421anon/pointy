@@ -101,7 +101,7 @@ in
     virtualHosts."localhost" = {
       locations."/api/".proxyPass = "http://127.0.0.1:3000/";
       locations."/backend/" = {
-        proxyPass = "http://127.0.0.1:8081/";
+        proxyPass = "http://127.0.0.1:${toString config.services.pointy-backend.listenPort}/";
         extraConfig = ''
           # SSE safety: prevent proxy buffering so events are flushed immediately.
           proxy_buffering off;

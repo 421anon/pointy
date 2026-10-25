@@ -30,7 +30,7 @@ let
     case "$JOBNAME" in
       pointy-nix-build-*)
         exec ${pkgs.curl}/bin/curl -fsS --max-time 2 -o /dev/null -X POST -G \
-          --data-urlencode "name=$JOBNAME" http://127.0.0.1:8081/job-ended
+          --data-urlencode "name=$JOBNAME" http://127.0.0.1:${toString cfg.listenPort}/job-ended
         ;;
     esac
   '';
@@ -51,6 +51,7 @@ let
 
   backendEnvironment = {
     POINTY_LISTEN_HOST = cfg.listenHost;
+    POINTY_LISTEN_PORT = toString cfg.listenPort;
   }
   // lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
   // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
@@ -75,6 +76,16 @@ in
         backend must be reachable directly.
       '';
       example = "0.0.0.0";
+    };
+
+    listenPort = lib.mkOption {
+      type = lib.types.port;
+      default = 8081;
+      description = ''
+        TCP port Warp binds the backend HTTP listener to. The bundled nginx
+        vhosts and the Slurm job-ended hook use the same value.
+      '';
+      example = 8081;
     };
 
     agentEnvFile = lib.mkOption {

@@ -17,6 +17,7 @@ import Interpreters.Production (runProduction)
 import Data.Maybe (fromMaybe)
 import System.Environment (lookupEnv)
 import System.IO (BufferMode (..), hSetBuffering, stdout)
+import Text.Read (readMaybe)
 import UserRepo (ensureUserRepo, fetchRepo)
 
 main :: IO ()
@@ -40,11 +41,13 @@ main = do
         Right () -> putStrLn "Repository fetched successfully."
 
     listenHost <- fromMaybe "127.0.0.1" <$> lookupEnv "POINTY_LISTEN_HOST"
-    putStrLn ("Starting server on " ++ listenHost ++ ":8081...")
-    runServer runProduction id listenHost 8081 afterServerStart
+    portText <- lookupEnv "POINTY_LISTEN_PORT"
+    let listenPort = maybe 8081 id (portText >>= readMaybe) :: Int
+    putStrLn ("Starting server on " ++ listenHost ++ ":" ++ show listenPort ++ "...")
+    runServer runProduction id listenHost listenPort afterServerStart
   where
     afterServerStart = do
-        putStrLn "Server listening on port 8081."
+        putStrLn "Server listening."
         _ <- forkIO $ do
             putStrLn "Restoring slurm jobs..."
             runProduction restoreJobsFromSlurm
