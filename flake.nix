@@ -38,8 +38,6 @@
             };
         in
         {
-          imports = [ sbox.nixosModules.sbox ];
-
           options.services.pointy.internal = {
             source = internalOption lib.types.str;
             piConfigDir = internalOption lib.types.path;
@@ -146,17 +144,20 @@
         })
     // {
       nixosModules = rec {
-        bootstrap = pointyBootstrap;
-        shared = {
-          imports = [
-            bootstrap
-            ./modules/shared.nix
-          ];
+        bootstrap = {
+          key = "github:421anon/pointy#nixosModules.bootstrap";
+          imports = [ pointyBootstrap ];
         };
         pointy-host = {
           imports = [
             bootstrap
             ./modules/pointy-host.nix
+          ];
+        };
+        single-node-slurm = {
+          imports = [
+            bootstrap
+            ./modules/single-node-slurm.nix
           ];
         };
         dev-vm = {

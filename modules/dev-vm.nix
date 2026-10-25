@@ -6,13 +6,13 @@
   ...
 }:
 let
-  pointy = config.services.pointy.internal;
   slurmRealMemory = toString ((config.virtualisation.memorySize or 1536) - 512);
 in
 {
   imports = [
     "${modulesPath}/virtualisation/qemu-vm.nix"
-    ./shared.nix
+    ./pointy-host.nix
+    ./single-node-slurm.nix
   ];
 
   services.openssh.enable = true;
@@ -97,28 +97,9 @@ in
 
   '';
 
-  services.nginx = {
-    virtualHosts."localhost" = {
-      locations."/api/".proxyPass = "http://127.0.0.1:3000/";
-      locations."/backend/" = {
-        proxyPass = "http://127.0.0.1:${toString config.services.pointy-backend.listenPort}/";
-        extraConfig = ''
-          # SSE safety: prevent proxy buffering so events are flushed immediately.
-          proxy_buffering off;
-          proxy_cache off;
-          proxy_http_version 1.1;
-          proxy_set_header Connection "";
-          proxy_read_timeout 1h;
-          add_header X-Accel-Buffering "no" always;
-        '';
-      };
-      locations."/artifact/".extraConfig = ''
-        add_header Vary Accept;
-        if ($http_accept ~* "text/turtle") {
-          rewrite ^/artifact/(.*)$ /backend/rdf/artifact/$1 last;
-        }
-      '';
-    };
+  services.pointy-host = {
+    hostname = "localhost";
+    tls = false;
   };
 
   system.stateVersion = "25.11";
