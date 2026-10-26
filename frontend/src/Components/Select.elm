@@ -1,6 +1,6 @@
 module Components.Select exposing (Item, Ranked, RelatedItem, SelectState, initSelectState, itemRef, rankLabels, rankedItems, selected, view)
 
-import Accessors exposing (An_Optic, Lens, get, lens, over, set)
+import Accessors exposing (An_Optic, Lens, lens, over, set)
 import Browser.Dom
 import Extra.Accessors exposing (remkT)
 import Extra.Decode as Decode
@@ -285,6 +285,17 @@ view { optic, selectState, selected_, matches, readOnly, hasChanged, label, mHin
         menuItemId index =
             "select-menu-item-" ++ String.fromInt index
 
+        moveActiveIndex step =
+            Flow.try (optic_ << scrollLock)
+                (\scrollLocked ->
+                    Flow.when (scrollLocked == Just False)
+                        (Flow.setting (optic_ << scrollLock)
+                            (Flow.over (optic_ << activeIndex) step
+                                |> Flow.seq (Flow.whenHas (optic_ << activeIndex) (menuItemId >> ensureVisible))
+                            )
+                        )
+                )
+
         setInputAction clearInput item s =
             if clearInput then
                 set input "" s
@@ -314,38 +325,10 @@ view { optic, selectState, selected_, matches, readOnly, hasChanged, label, mHin
                                 handleKey =
                                     Keyboard.decodeCombinations
                                         [ ( Keyboard.arrowDown
-                                          , Decode.succeed
-                                                (Flow.get
-                                                    |> Flow.map (get activeIndex)
-                                                    |> Flow.andThen
-                                                        (\activeIndex_ ->
-                                                            let
-                                                                nextIndex =
-                                                                    min (List.length menuItems - 1) (activeIndex_ + 1)
-                                                            in
-                                                            Flow.modify (set activeIndex nextIndex)
-                                                                |> Flow.seq (ensureVisible (menuItemId nextIndex))
-                                                        )
-                                                    |> Flow.locking scrollLock
-                                                    |> Flow.via optic_
-                                                )
+                                          , Decode.succeed (moveActiveIndex (\index -> min (List.length menuItems - 1) (index + 1)))
                                           )
                                         , ( Keyboard.arrowUp
-                                          , Decode.succeed
-                                                (Flow.get
-                                                    |> Flow.map (get activeIndex)
-                                                    |> Flow.andThen
-                                                        (\activeIndex_ ->
-                                                            let
-                                                                nextIndex =
-                                                                    max 0 (activeIndex_ - 1)
-                                                            in
-                                                            Flow.modify (set activeIndex nextIndex)
-                                                                |> Flow.seq (ensureVisible (menuItemId nextIndex))
-                                                        )
-                                                    |> Flow.locking scrollLock
-                                                    |> Flow.via optic_
-                                                )
+                                          , Decode.succeed (moveActiveIndex (\index -> max 0 (index - 1)))
                                           )
                                         , ( Keyboard.enter
                                           , menuItems

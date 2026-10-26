@@ -2010,9 +2010,9 @@ toggleSrcFile recordId path =
             )
 
 
-wrapDelimitedGridFlow : Int -> List String -> Flow Grid.State () -> Flow Model ()
-wrapDelimitedGridFlow recordId path =
-    Flow.via (fileDelimitedGridAt recordId path << just << gridState)
+updateDelimitedGrid : Int -> List String -> (Grid.State -> Grid.State) -> Flow Model ()
+updateDelimitedGrid recordId path =
+    Flow.over (fileDelimitedGridAt recordId path << just << gridState)
 
 
 setPlainFileScrollTop : Route.HighlightTarget -> Int -> List String -> Float -> Flow Model ()
@@ -4125,7 +4125,7 @@ investigateStepPrompt stepId log =
     "Investigate why step " ++ String.fromInt stepId ++ " failed:\n\n" ++ log
 
 
-listenAndProcessAgentTurns : Flow Model Decode.Value
+listenAndProcessAgentTurns : Flow Model Never
 listenAndProcessAgentTurns =
     Flow.subscribe onAgentTurnIn Channels.agentTurns
 
@@ -4176,7 +4176,7 @@ resyncWorkspace snapshotCommit =
         |> Flow.seq (Flow.forAll currentProjectId (\projectId -> requestProjectStatus projectId Nothing))
 
 
-listenAndProcessStepStatus : Flow Model Decode.Value
+listenAndProcessStepStatus : Flow Model Never
 listenAndProcessStepStatus =
     Flow.subscribe onStepStatusIn Channels.stepStatus
 
@@ -4405,7 +4405,7 @@ settlePendingBuild snapshotCommit stepId status_ =
             )
 
 
-startClusterStatusStream : Flow Model Decode.Value
+startClusterStatusStream : Flow Model Never
 startClusterStatusStream =
     Flow.subscribe onClusterStatusIn Channels.clusterStatus
 

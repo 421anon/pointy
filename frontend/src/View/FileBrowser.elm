@@ -629,7 +629,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                     gridAction =
                                         case ( mRecordId, mDirCtx ) of
                                             ( Just recordId, Just (OutputDir _ _) ) ->
-                                                Just (Actions.wrapDelimitedGridFlow recordId path)
+                                                Just (Actions.updateDelimitedGrid recordId path)
 
                                             _ ->
                                                 Nothing

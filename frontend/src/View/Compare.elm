@@ -118,8 +118,8 @@ viewBody model d =
         |> Maybe.unwrap panes (\( l, r ) -> viewTextDiff model d l r)
 
 
-viewPane : Model -> CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Bool -> Flow Model () -> Html (Flow Model ())
-viewPane model sel content gridFlow inspectOpen toggle =
+viewPane : Model -> CompareSelection -> ApiData CompareFile -> ((Grid.State -> Grid.State) -> Flow Model ()) -> Bool -> Flow Model () -> Html (Flow Model ())
+viewPane model sel content updateGrid inspectOpen toggle =
     let
         mParams =
             derivationParamsFor model sel
@@ -127,15 +127,15 @@ viewPane model sel content gridFlow inspectOpen toggle =
     Html.div [ class "compare-pane" ]
         [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
         , Html.div [ class "compare-pane-body" ]
-            [ viewPaneBody sel content gridFlow
+            [ viewPaneBody sel content updateGrid
             , viewInlineParams model sel inspectOpen mParams
             ]
         ]
 
 
-gridUpdate : An_Optic pr ls CompareActiveData (ApiData CompareFile) -> Flow Grid.State () -> Flow Model ()
+gridUpdate : An_Optic pr ls CompareActiveData (ApiData CompareFile) -> (Grid.State -> Grid.State) -> Flow Model ()
 gridUpdate contentLens =
-    Flow.via (compareState << compareActive << remkT contentLens << success << fileDelimitedGrid << just << gridState)
+    Flow.over (compareState << compareActive << remkT contentLens << success << fileDelimitedGrid << just << gridState)
 
 
 toggleFlag : An_Optic pr ls CompareActiveData Bool -> Flow Model ()
@@ -352,8 +352,8 @@ sourceRoute sel =
         )
 
 
-viewPaneBody : CompareSelection -> ApiData CompareFile -> (Flow Grid.State () -> Flow Model ()) -> Html (Flow Model ())
-viewPaneBody sel content gridFlow =
+viewPaneBody : CompareSelection -> ApiData CompareFile -> ((Grid.State -> Grid.State) -> Flow Model ()) -> Html (Flow Model ())
+viewPaneBody sel content updateGrid =
     case Model.compareSelectionMode sel of
         CompareImage ->
             Html.img [ src (rawUrl sel), class "compare-image" ] []
@@ -367,11 +367,11 @@ viewPaneBody sel content gridFlow =
                 []
 
         CompareText ->
-            viewTextContent gridFlow content
+            viewTextContent updateGrid content
 
 
-viewTextContent : (Flow Grid.State () -> Flow Model ()) -> ApiData CompareFile -> Html (Flow Model ())
-viewTextContent gridFlow content =
+viewTextContent : ((Grid.State -> Grid.State) -> Flow Model ()) -> ApiData CompareFile -> Html (Flow Model ())
+viewTextContent updateGrid content =
     case content of
         Success file ->
             let
@@ -381,7 +381,7 @@ viewTextContent gridFlow content =
             in
             case file.delimitedGrid of
                 Just grid ->
-                    Grid.view gridFlow plain grid.grid
+                    Grid.view updateGrid plain grid.grid
 
                 Nothing ->
                     plain ()
