@@ -47,6 +47,7 @@ init flags url key =
 
         _ ->
             Flow.async (Actions.applyAgentChatFromUrl True)
+                |> Flow.seq (Flow.async Actions.reattachSubmittedTurns)
                 |> Flow.seq initializeWorkspace
                 |> Flow.seq
                     (Flow.forAll route
@@ -218,6 +219,7 @@ subscriptions model =
         , Browser.Events.onKeyDown Organize.shortcutDecoder
         , Ports.organizeDragIn Organize.onOrganizeDragEvent
         , Ports.agentAutoApplyIn Actions.syncAgentAutoApply
+        , Ports.agentNotificationClickIn Actions.openAgentChatFromNotification
         , Browser.Events.onVisibilityChange
             (\visibility ->
                 if visibility == Browser.Events.Visible then

@@ -283,6 +283,54 @@ export function agentClientId() {
   return created;
 }
 
+const SUBMITTED_TURNS_KEY = "agent:submittedTurns";
+
+export function storedSubmittedTurns() {
+  try {
+    return JSON.parse(sessionStorage.getItem(SUBMITTED_TURNS_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function storeSubmittedTurns(turns) {
+  sessionStorage.setItem(SUBMITTED_TURNS_KEY, JSON.stringify(turns));
+}
+
+function requestNotificationPermission() {
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
+function scrolledToBottom({ id, slack }) {
+  const element = document.getElementById(id);
+  return element !== null && element.scrollHeight - (element.scrollTop + element.clientHeight) < slack;
+}
+
+const agentTurnNotifications = new Map();
+
+function notifyAgentTurn({ sessionId, turnId, title, body, threadOpen }) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (threadOpen && document.hasFocus()) return;
+  agentTurnNotifications.get(turnId)?.close();
+  let notification;
+  try {
+    notification = new Notification(title, { body });
+  } catch {
+    return;
+  }
+  agentTurnNotifications.set(turnId, notification);
+  notification.onclose = () => {
+    if (agentTurnNotifications.get(turnId) === notification) agentTurnNotifications.delete(turnId);
+  };
+  notification.onclick = () => {
+    window.focus();
+    notification.close();
+    elmApp?.ports?.agentNotificationClickIn?.send(sessionId);
+  };
+}
+
 export function connectPorts(app) {
   elmApp = app;
   function emitToElm(type, data) {
@@ -337,6 +385,10 @@ export function connectPorts(app) {
     storeLastChat,
     storeAutoApply,
     setUnsentTreeOps,
+    storeSubmittedTurns,
+    requestNotificationPermission,
+    notifyAgentTurn,
+    scrolledToBottom,
   };
 
   installGutterDragListeners(app);
