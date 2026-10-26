@@ -2410,9 +2410,12 @@ toggleSrcEntry recordId mOpen path =
         folderAction =
             Flow.forAll (stepShownRevision recordId)
                 (\revision ->
-                    callApi (srcFilesChildrenAt recordId path)
-                        (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) path)
-                        |> Flow.return ()
+                    Flow.forAll (srcFilesItemAtPath recordId path << folder)
+                        (\_ ->
+                            callApi (srcFilesChildrenAt recordId path)
+                                (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) path)
+                                |> Flow.return ()
+                        )
                 )
 
         fetchContent =
