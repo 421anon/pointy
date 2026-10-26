@@ -49,6 +49,12 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - When an agent proposes a commit that would introduce stale references, applying it is refused and the agent is asked to point the references at the folder the step is in now, or to drop their paths when the step was removed. Reviewed steps cannot be edited by the agent, so the backend rewrites their references itself when a folder they point into moves.
 - A step file may list the records its data is about beside `note`, for example a sample in an electronic lab notebook: `about = [ "https://notebook.example.org/graph/samples/…/" ];`. Editing or cloning the step in the UI keeps the list. Only absolute http(s) addresses are published.
 
+## AI agent
+
+- Sending a prompt asks for browser notification permission the first time. Afterwards, the tab that sent a turn shows a desktop notification when the turn finishes, fails or is stopped, and when the agent asks a question during the turn. No notification appears while the page has focus and that thread is open in the agent panel. Clicking a notification focuses the tab and opens the thread in the agent panel.
+- The tab keeps its sent turns in `sessionStorage`, so after a reload it resumes watching the ones still running and notifies about turns that ended during the reload. A question already notified before the reload is not notified again. Other tabs and new browser sessions don't notify about turns they didn't send.
+- Notifications are desktop-only: mobile browsers only allow notifications through a service worker, and Pointy unregisters service workers.
+
 ## Development
 
 A NixOS VM runs a server environment:

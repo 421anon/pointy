@@ -981,10 +981,26 @@ liveTurnSurvives activeTurnId live =
     String.isEmpty live.turnId || Just live.turnId == activeTurnId
 
 
+type alias SubmittedTurn =
+    { turnId : String
+    , questionNotified : Bool
+    }
+
+
+submittedTurnsDecoder : Decode.Decoder (Dict String SubmittedTurn)
+submittedTurnsDecoder =
+    Decode.dict
+        (Decode.map2 SubmittedTurn
+            (Decode.field "turnId" Decode.string)
+            (Decode.field "questionNotified" Decode.bool)
+        )
+
+
 type alias AgentState =
     { sessions : ApiData (List AgentSessionSummary)
     , sessionViews : Dict String (ApiData AgentSessionView)
     , liveTurns : Dict String AgentLiveTurn
+    , submittedTurns : Dict String SubmittedTurn
     , selectedSessionId : Maybe String
     , isPanelOpen : Bool
     , isSessionListOpen : Bool
@@ -1008,6 +1024,7 @@ initAgentState =
     { sessions = NotAsked
     , sessionViews = Dict.empty
     , liveTurns = Dict.empty
+    , submittedTurns = Dict.empty
     , selectedSessionId = Nothing
     , isPanelOpen = False
     , isSessionListOpen = False
@@ -2148,6 +2165,7 @@ type alias Flags =
     , clientId : String
     , isNarrow : Bool
     , now : Int
+    , submittedTurns : Value
     }
 
 
@@ -2159,7 +2177,7 @@ type StepStatusEvent
 
 type AgentTurnEvent
     = AgentTurnChunk { sessionId : String, chunk : String }
-    | AgentTurnDone String
+    | AgentTurnDone { sessionId : String, turnId : String }
     | AgentTurnHeartbeat
     | AgentTurnError { sessionId : String, message : String }
 
@@ -2212,7 +2230,13 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix flags.now
-        , agent = { initAgentState | lastChat = flags.lastChat, autoApply = flags.autoApply, clientId = flags.clientId }
+        , agent =
+            { initAgentState
+                | lastChat = flags.lastChat
+                , autoApply = flags.autoApply
+                , clientId = flags.clientId
+                , submittedTurns = Decode.decodeValue submittedTurnsDecoder flags.submittedTurns |> Result.withDefault Dict.empty
+            }
         , clusterStatus = ApiData.Loading Nothing
         , clusterDetail = Nothing
         , activeSteps = []

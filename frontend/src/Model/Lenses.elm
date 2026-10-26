@@ -954,6 +954,16 @@ liveTurnAt sessionId =
     liveTurns << Dict.Accessors.at sessionId
 
 
+submittedTurns : Lens ls AgentState (Dict String Model.SubmittedTurn) x y
+submittedTurns =
+    lens ".submittedTurns" .submittedTurns (\s turns -> { s | submittedTurns = turns })
+
+
+submittedTurnAt : String -> Lens ls AgentState (Maybe Model.SubmittedTurn) x y
+submittedTurnAt sessionId =
+    submittedTurns << Dict.Accessors.at sessionId
+
+
 turnId : Lens ls { a | turnId : b } b x y
 turnId =
     lens ".turnId" .turnId (\t turnId_ -> { t | turnId = turnId_ })

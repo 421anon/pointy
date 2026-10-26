@@ -279,7 +279,10 @@ turnEvent =
 
                     "done" ->
                         Decode.field "data"
-                            (Decode.map Model.AgentTurnDone (Decode.field "sessionId" Decode.string))
+                            (Decode.succeed (\sessionId turnId -> Model.AgentTurnDone { sessionId = sessionId, turnId = turnId })
+                                |> required "sessionId" Decode.string
+                                |> required "turnId" Decode.string
+                            )
 
                     "heartbeat" ->
                         Decode.succeed Model.AgentTurnHeartbeat

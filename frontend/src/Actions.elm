@@ -3073,20 +3073,10 @@ scrollAgentChatToBottom =
 
 agentChatAtBottom : Flow Model Bool
 agentChatAtBottom =
-    let
-        slackInPixels =
-            80
-    in
-    Flow.attemptTaskWith
-        (\result ->
-            case result of
-                Ok { scene, viewport } ->
-                    Flow.pure (scene.height - (viewport.y + viewport.height) < slackInPixels)
-
-                Err _ ->
-                    Flow.pure False
-        )
-        (Dom.getViewportOf agentChatId)
+    callJs "scrolledToBottom"
+        (\slackInPixels -> Encode.object [ ( "id", Encode.string agentChatId ), ( "slack", Encode.int slackInPixels ) ])
+        Decode.bool
+        80
 
 
 setAgentSessions : ApiData (List Model.AgentSessionSummary) -> Flow Model ()
@@ -3254,6 +3244,152 @@ stopWatchingSession sessionId =
             Flow.setAll (agent << liveTurnAt sessionId) Nothing
                 |> Flow.seq (closeAgentTurnStream (Maybe.withDefault "" mTurnId))
         )
+        |> Flow.seq (forgetSubmittedTurn sessionId)
+
+
+requestNotificationPermission : Flow Model ()
+requestNotificationPermission =
+    callJs "requestNotificationPermission" (\_ -> Encode.null) (Decode.succeed ()) ()
+
+
+trackSubmittedTurn : String -> String -> Flow Model ()
+trackSubmittedTurn sessionId submittedTurnId =
+    Flow.setAll (agent << submittedTurnAt sessionId) (Just { turnId = submittedTurnId, questionNotified = False })
+        |> Flow.seq storeSubmittedTurns
+
+
+forgetSubmittedTurn : String -> Flow Model ()
+forgetSubmittedTurn sessionId =
+    Flow.whenHas (agent << submittedTurnAt sessionId << just)
+        (\_ ->
+            Flow.setAll (agent << submittedTurnAt sessionId) Nothing
+                |> Flow.seq storeSubmittedTurns
+        )
+
+
+storeSubmittedTurns : Flow Model ()
+storeSubmittedTurns =
+    Flow.forAll (agent << submittedTurns)
+        (callJs "storeSubmittedTurns" (Encode.dict identity encodeSubmittedTurn) (Decode.succeed ()))
+
+
+encodeSubmittedTurn : Model.SubmittedTurn -> Encode.Value
+encodeSubmittedTurn submitted =
+    Encode.object
+        [ ( "turnId", Encode.string submitted.turnId )
+        , ( "questionNotified", Encode.bool submitted.questionNotified )
+        ]
+
+
+reattachSubmittedTurns : Flow Model ()
+reattachSubmittedTurns =
+    Flow.forAll (agent << submittedTurns)
+        (\turns ->
+            Flow.unless (Dict.isEmpty turns)
+                (loadAgentSessions
+                    |> Flow.seq (Flow.batchM (List.map reattachSubmittedTurn (Dict.toList turns)))
+                )
+        )
+
+
+reattachSubmittedTurn : ( String, Model.SubmittedTurn ) -> Flow Model ()
+reattachSubmittedTurn ( sessionId, submitted ) =
+    refreshAgentSession sessionId
+        |> Flow.seq
+            (Flow.try (agent << sessionViewDataAt sessionId << just)
+                (\mView ->
+                    case Maybe.andThen ApiData.toMaybe mView of
+                        Just view ->
+                            Flow.unless (view.session.activeTurnId == Just submitted.turnId)
+                                (notifySubmittedTurnFinished sessionId submitted.turnId)
+
+                        Nothing ->
+                            forgetSubmittedTurn sessionId
+                )
+            )
+
+
+notifySubmittedTurnQuestion : String -> Flow Model ()
+notifySubmittedTurnQuestion sessionId =
+    Flow.forAll agent
+        (\agentState ->
+            case ( Dict.get sessionId agentState.submittedTurns, Dict.get sessionId agentState.liveTurns ) of
+                ( Just submitted, Just live ) ->
+                    let
+                        asking =
+                            live.pendingQuestion /= Nothing
+                    in
+                    Flow.when (live.turnId == submitted.turnId && asking /= submitted.questionNotified)
+                        (Flow.setAll (agent << submittedTurnAt sessionId) (Just { submitted | questionNotified = asking })
+                            |> Flow.seq storeSubmittedTurns
+                            |> Flow.seq (Flow.when asking (notifyAgentTurn sessionId submitted.turnId "Needs your input"))
+                        )
+
+                _ ->
+                    Flow.pure ()
+        )
+
+
+notifySubmittedTurnFinished : String -> String -> Flow Model ()
+notifySubmittedTurnFinished sessionId finishedTurnId =
+    Flow.forAll agent
+        (\agentState ->
+            Flow.when (Maybe.map .turnId (Dict.get sessionId agentState.submittedTurns) == Just finishedTurnId)
+                (forgetSubmittedTurn sessionId
+                    |> Flow.seq (notifyAgentTurn sessionId finishedTurnId (finishedTurnMessage sessionId finishedTurnId agentState))
+                )
+        )
+
+
+finishedTurnMessage : String -> String -> Model.AgentState -> String
+finishedTurnMessage sessionId finishedTurnId agentState =
+    let
+        finishedTurn =
+            Dict.get sessionId agentState.sessionViews
+                |> Maybe.andThen ApiData.toMaybe
+                |> Maybe.andThen (.turns >> List.find (.turnId >> (==) finishedTurnId))
+    in
+    case Maybe.map Model.chatStatusFromTurn finishedTurn of
+        Just (Model.ChatFailed reason) ->
+            "Failed: " ++ reason
+
+        Just Model.ChatStopped ->
+            "Stopped"
+
+        _ ->
+            "Finished"
+
+
+notifyAgentTurn : String -> String -> String -> Flow Model ()
+notifyAgentTurn sessionId notifiedTurnId message =
+    Flow.forAll agent
+        (\agentState ->
+            callJs "notifyAgentTurn"
+                identity
+                (Decode.succeed ())
+                (Encode.object
+                    [ ( "sessionId", Encode.string sessionId )
+                    , ( "turnId", Encode.string notifiedTurnId )
+                    , ( "title", Encode.string (agentSessionDisplayName sessionId agentState) )
+                    , ( "body", Encode.string message )
+                    , ( "threadOpen", Encode.bool (agentState.isPanelOpen && agentState.selectedSessionId == Just sessionId) )
+                    ]
+                )
+        )
+
+
+agentSessionDisplayName : String -> Model.AgentState -> String
+agentSessionDisplayName sessionId agentState =
+    Model.sessionSummary sessionId agentState
+        |> Maybe.orElse (Dict.get sessionId agentState.sessionViews |> Maybe.andThen ApiData.toMaybe |> Maybe.map Model.summaryFromView)
+        |> Maybe.unwrap "New chat" Model.displayName
+
+
+openAgentChatFromNotification : String -> Flow Model ()
+openAgentChatFromNotification sessionId =
+    Flow.over agent (\s -> { s | isPanelOpen = True })
+        |> Flow.seq (Flow.forAll agent (\agentState -> Flow.when (ApiData.toMaybe agentState.sessions == Nothing) loadAgentSessions))
+        |> Flow.seq (openAgentChat sessionId)
 
 
 applyAgentSessionView : Model.AgentSessionView -> Model.AgentState -> Model.AgentState
@@ -3291,7 +3427,7 @@ handleAgentSessionResult sessionId result =
                                             (Flow.get
                                                 |> Flow.andThen
                                                     (\after ->
-                                                        Flow.when (atBottom && entriesBefore /= selectedChatEntries after) scrollAgentChatToBottom
+                                                        Flow.when (atBottom && entriesBefore /= selectedChatEntries after) (Flow.async scrollAgentChatToBottom)
                                                     )
                                             )
                                         |> Flow.seq (watchAgentTurn view)
@@ -3989,7 +4125,8 @@ sendAgentTurn view images promptSource =
         (withAgentPrompt images
             promptSource
             (\prompt ->
-                Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view))
+                requestNotificationPermission
+                    |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view)))
                     |> Flow.seq
                         (Flow.over (agent << liveTurnAt sessionId << just << entries)
                             (\entriesBefore ->
@@ -4004,6 +4141,7 @@ sendAgentTurn view images promptSource =
                     |> FlowError.foldResult
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
+                                |> Flow.seq (trackSubmittedTurn sessionId turn.turnId)
                                 |> Flow.seq (openAgentTurnStream sessionId turn.turnId)
                                 |> Flow.seq (refreshAgentSession sessionId)
                         )
@@ -4142,14 +4280,16 @@ onAgentTurnIn value =
                         |> Flow.andThen
                             (\atBottom ->
                                 Flow.over (agent << liveTurnAt sessionId << just) (Model.ingestLiveChunk chunk)
-                                    |> Flow.seq (Flow.when atBottom scrollAgentChatToBottom)
+                                    |> Flow.seq (Flow.when atBottom (Flow.async scrollAgentChatToBottom))
+                                    |> Flow.seq (notifySubmittedTurnQuestion sessionId)
                             )
                 )
 
-        Ok (Model.AgentTurnDone sessionId) ->
-            Flow.whenHas (agent << liveTurnAt sessionId << just << applying << just) (always (Flow.async reloadWorkspaceData))
-                |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId << just << finished) True)
-                |> Flow.seq (refreshAgentSession sessionId)
+        Ok (Model.AgentTurnDone done) ->
+            Flow.whenHas (agent << liveTurnAt done.sessionId << just << applying << just) (always (Flow.async reloadWorkspaceData))
+                |> Flow.seq (Flow.setAll (agent << liveTurnAt done.sessionId << just << finished) True)
+                |> Flow.seq (refreshAgentSession done.sessionId)
+                |> Flow.seq (notifySubmittedTurnFinished done.sessionId done.turnId)
 
         Ok Model.AgentTurnHeartbeat ->
             Flow.pure ()

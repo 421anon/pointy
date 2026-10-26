@@ -1,6 +1,6 @@
 import "./styles/main.scss";
 import { Elm } from "./src/Main.elm";
-import { agentClientId, connectPorts, storedAutoApply } from "./ffi.js";
+import { agentClientId, connectPorts, storedAutoApply, storedSubmittedTurns } from "./ffi.js";
 import "./code-editor.js";
 import "./molstar-viewer.js";
 import "./grid-resize.js";
@@ -16,6 +16,7 @@ const app = Elm.Main.init({
     clientId: agentClientId(),
     isNarrow: window.matchMedia("(max-width: 1000px)").matches,
     now: Date.now(),
+    submittedTurns: storedSubmittedTurns(),
   },
 });
 
