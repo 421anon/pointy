@@ -2592,13 +2592,15 @@ predictSrcFileChange recordId path prediction apiCall =
                     |> Flow.seq (callApi void apiCall)
                     |> FlowError.andThen
                         (\_ ->
-                            Flow.forAll (stepShownRevision recordId)
-                                (\revision ->
-                                    callApiMerge Model.updateDirectoryChildren
-                                        (srcFilesChildrenAt recordId dirPath)
-                                        (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) dirPath)
-                                        |> Flow.seq refreshReviews
-                                )
+                            refetchCommitHash
+                                |> Flow.seq
+                                    (Flow.forAll (stepShownRevision recordId)
+                                        (\revision ->
+                                            callApiMerge Model.updateDirectoryChildren
+                                                (srcFilesChildrenAt recordId dirPath)
+                                                (Api.fetchSrcDirectoryContents ApiDecode.directoryItemGeneric recordId (Just revision) dirPath)
+                                        )
+                                    )
                         )
                     |> FlowError.foldResult (\_ -> Flow.pure ())
                         (\_ ->
