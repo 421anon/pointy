@@ -1,4 +1,4 @@
-module View.Shadow exposing (viewProject)
+module View.Shadow exposing (viewProject, viewStepConfigUnavailable)
 
 import Accessors exposing (get, just, snd, try)
 import Actions
@@ -34,6 +34,20 @@ import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
 import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+
+
+viewStepConfigUnavailable : Model -> Html msg
+viewStepConfigUnavailable model =
+    case Model.getStepConfig model of
+        ApiData.Error error ->
+            Html.div []
+                [ Html.h2 [] [ Html.text "Step config failed to load" ]
+                , Html.p [] [ Html.text (Http.errorMessage error) ]
+                , Html.a [ Route.href (Route.fromPage (Route.projectPage [] Nothing)) ] [ Html.text "Go home" ]
+                ]
+
+        _ ->
+            Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading step config..." ]
 
 
 type alias ComparisonChip =
@@ -442,7 +456,7 @@ viewProject model projects_ proj =
         listing =
             case mStepConfig of
                 Nothing ->
-                    Html.span [ Html.Attributes.class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading step config..." ]
+                    viewStepConfigUnavailable model
 
                 Just _ ->
                     Html.div [ Html.Attributes.class "sections" ]

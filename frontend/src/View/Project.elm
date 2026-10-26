@@ -9,7 +9,7 @@ import Html.Extra as Html
 import Model.Core exposing (Model, ProjectRecord)
 import Model.Lenses exposing (currentProject, currentProjectPath, loadedProjects, projects, stepConfig)
 import Route
-import View.Shadow exposing (viewProject)
+import View.Shadow exposing (viewProject, viewStepConfigUnavailable)
 
 
 viewCurrentProject : Model -> Html (Flow Model ())
@@ -21,7 +21,7 @@ viewCurrentProject model =
         NotAsked ->
             case ApiData.toMaybe (get stepConfig model) of
                 Nothing ->
-                    Html.span [ class "shimmer-text shimmer-text--high-contrast" ] [ Html.text "Loading step config..." ]
+                    viewStepConfigUnavailable model
 
                 Just _ ->
                     viewLoadingProject
