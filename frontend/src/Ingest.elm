@@ -21,7 +21,7 @@ import Set exposing (Set)
 import Specs
 
 
-startIngestStream : Flow Model Decode.Value
+startIngestStream : Flow Model Never
 startIngestStream =
     Flow.subscribe onIngestJobsIn Channels.ingestJobs
 

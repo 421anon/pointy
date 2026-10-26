@@ -11,7 +11,6 @@ module Grid exposing
 
 import Array exposing (Array)
 import Dict exposing (Dict)
-import Flow exposing (Flow)
 import Grid.Aggregate as Aggregate
 import Grid.Filter as Filter exposing (Filter)
 import Html exposing (Html)
@@ -353,7 +352,7 @@ gutterCells hasSummaries =
         []
 
 
-view : (Flow State () -> msg) -> (() -> Html msg) -> State -> Html msg
+view : ((State -> State) -> msg) -> (() -> Html msg) -> State -> Html msg
 view toMsg viewPlainContent model =
     Html.div [ Html.Attributes.class "delimited-grid-shell" ]
         [ Html.div [ Html.Attributes.class "delimited-grid-toolbar" ]
@@ -363,7 +362,7 @@ view toMsg viewPlainContent model =
                 )
             , Html.viewIf model.showGrid (clearFiltersButton toMsg model)
             , Html.viewIf model.showGrid (summaryMenu toMsg model)
-            , viewModeToggle model.showGrid (stopClick (toMsg (Flow.modify toggleShowGrid)))
+            , viewModeToggle model.showGrid (stopClick (toMsg toggleShowGrid))
             ]
         , if model.showGrid then
             Html.map toMsg (viewGrid model)
@@ -373,14 +372,14 @@ view toMsg viewPlainContent model =
         ]
 
 
-clearFiltersButton : (Flow State () -> msg) -> State -> Html msg
+clearFiltersButton : ((State -> State) -> msg) -> State -> Html msg
 clearFiltersButton toMsg model =
     Html.viewIf (hasActiveFilters model)
         (Html.button
             [ Html.Attributes.class "btn delimited-grid-toolbar-btn"
             , Html.Attributes.type_ "button"
             , Html.Attributes.title "Clear filters"
-            , stopClick (toMsg (Flow.modify clearFilters))
+            , stopClick (toMsg clearFilters)
             ]
             [ icon True "filter_alt_off"
             , Html.span [ Html.Attributes.class "delimited-grid-toolbar-btn-label" ]
@@ -389,11 +388,11 @@ clearFiltersButton toMsg model =
         )
 
 
-summaryMenu : (Flow State () -> msg) -> State -> Html msg
+summaryMenu : ((State -> State) -> msg) -> State -> Html msg
 summaryMenu toMsg model =
     Html.div
         [ Html.Attributes.class "delimited-grid-summary-control"
-        , stopClick (toMsg Flow.none)
+        , stopClick (toMsg identity)
         ]
         [ Html.button
             [ Html.Attributes.class "btn delimited-grid-toolbar-btn"
@@ -401,7 +400,7 @@ summaryMenu toMsg model =
             , Html.Attributes.title "Summary rows"
             , Html.Attributes.attribute "aria-haspopup" "true"
             , Html.Attributes.attribute "aria-expanded" (boolString model.summaryMenuOpen)
-            , stopClick (toMsg (Flow.modify toggleSummaryMenu))
+            , stopClick (toMsg toggleSummaryMenu)
             ]
             [ icon True "functions"
             , Html.span [ Html.Attributes.class "delimited-grid-toolbar-btn-label" ]
@@ -415,7 +414,7 @@ summaryMenu toMsg model =
 
 
 viewSummaryMenuItem :
-    (Flow State () -> msg)
+    ((State -> State) -> msg)
     -> List Aggregate.Reducer
     -> Aggregate.Reducer
     -> Html msg
@@ -429,7 +428,7 @@ viewSummaryMenuItem toMsg active reducer =
         , Html.Attributes.classList [ ( "active", isActive ) ]
         , Html.Attributes.type_ "button"
         , Html.Attributes.attribute "aria-pressed" (boolString isActive)
-        , stopClick (toMsg (Flow.modify (toggleReducer reducer)))
+        , stopClick (toMsg (toggleReducer reducer))
         ]
         [ icon True
             (if isActive then
@@ -496,7 +495,7 @@ viewModeToggle showingGrid clickAttr =
         ]
 
 
-viewGrid : State -> Html (Flow State ())
+viewGrid : State -> Html (State -> State)
 viewGrid model =
     let
         hasSummaries =
@@ -518,7 +517,7 @@ viewGrid model =
     in
     Html.div
         [ Html.Attributes.class "delimited-grid-viewer"
-        , InfiniteList.onScroll (\listModel -> Flow.modify (setInfiniteList listModel))
+        , InfiniteList.onScroll setInfiniteList
         ]
         [ Html.div
             [ Html.Attributes.class "delimited-grid"
@@ -575,7 +574,7 @@ viewportEstimate =
 listConfig :
     List Column
     -> Bool
-    -> InfiniteList.Config ( Int, Row ) (Flow State ())
+    -> InfiniteList.Config ( Int, Row ) (State -> State)
 listConfig columns hasSummaries =
     InfiniteList.config
         { itemView = \_ _ ( _, row ) -> viewRow columns hasSummaries row
@@ -596,7 +595,7 @@ columnWidthStyle index col =
         ("var(--dg-col-" ++ String.fromInt index ++ ", " ++ String.fromInt col.width ++ "px)")
 
 
-viewHeaderCell : State -> Int -> Column -> Html (Flow State ())
+viewHeaderCell : State -> Int -> Column -> Html (State -> State)
 viewHeaderCell model index col =
     let
         sorted =
@@ -636,7 +635,7 @@ viewHeaderCell model index col =
         [ Html.Attributes.class "delimited-grid-th"
         , columnWidthStyle index col
         , Html.Attributes.classList [ ( "sorted", sorted ) ]
-        , Html.Events.onClick (Flow.modify (toggleSort index))
+        , Html.Events.onClick (toggleSort index)
         , Html.Attributes.title (filterHint col.type_)
         ]
         [ Html.div [ Html.Attributes.class "delimited-grid-header-cell" ]
@@ -649,8 +648,8 @@ viewHeaderCell model index col =
                 , Html.Attributes.value currentFilter
                 , Html.Attributes.title (filterHint col.type_)
                 , Html.Attributes.attribute "aria-invalid" (boolString filterInvalid)
-                , Html.Events.onInput (\v -> Flow.modify (setFilter index v))
-                , stopClick Flow.none
+                , Html.Events.onInput (setFilter index)
+                , stopClick identity
                 , Html.Attributes.placeholder ""
                 ]
                 []
@@ -681,7 +680,7 @@ viewCell index column row =
 viewSummaryRow :
     State
     -> ( Aggregate.Reducer, List String )
-    -> Html (Flow State ())
+    -> Html (State -> State)
 viewSummaryRow model ( reducer, values ) =
     let
         label =
@@ -699,7 +698,7 @@ viewSummaryRow model ( reducer, values ) =
                 , Html.Attributes.type_ "button"
                 , Html.Attributes.attribute "aria-label" removeLabel
                 , Html.Attributes.title removeLabel
-                , stopClick (Flow.modify (toggleReducer reducer))
+                , stopClick (toggleReducer reducer)
                 ]
                 [ icon True "close" ]
             ]

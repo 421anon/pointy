@@ -1,8 +1,8 @@
 {
 
       "421anon/elm-flow" = {
-        sha256 = "1xpwgpn63cls5334amha4vkm2c4vpcjaza65lviacxl9hnsyg69q";
-        version = "3.2.0";
+        sha256 = "18k9i7m4kc4lsiy9aw0xpn7sdb4zh2g4fgsiws7qx3iii9wdjlmr";
+        version = "6.0.2";
       };
 
       "BrianHicks/elm-csv" = {
