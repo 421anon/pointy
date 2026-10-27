@@ -3,7 +3,7 @@ module View.Main exposing (view)
 import Accessors exposing (try)
 import Actions
 import Api.Api as Api
-import Api.ApiData exposing (success)
+import Api.ApiData exposing (ApiData(..), success)
 import Browser
 import Components.AgentPanel as AgentPanel
 import Components.StatusBar as StatusBar
@@ -13,6 +13,8 @@ import Html.Attributes
 import Html.Events
 import Html.Extra as Html
 import Html.Keyed
+import Json.Decode as Decode
+import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses exposing (currentProject, name)
 import Model.Lib as Lib
@@ -21,11 +23,13 @@ import Route
 import Toast
 import View.Compare as Compare
 import View.Dialog as Dialog
+import View.Lib exposing (boolText)
 import View.Organize
 import View.Project exposing (viewCurrentProject)
 import View.Scratch exposing (viewScratchPicker)
 import View.Shadow
 import View.Sidebar
+import View.TextContent as TextContent
 
 
 view : Model -> Browser.Document (Flow Model ())
@@ -34,7 +38,7 @@ view model =
     , body =
         case (Model.getRoute model).page of
             Route.Artifact artifact ->
-                [ viewArtifact artifact ]
+                [ viewArtifact model artifact ]
 
             _ ->
                 let
@@ -44,7 +48,7 @@ view model =
                                 viewCurrentProject model
 
                             Route.Artifact artifact ->
-                                viewArtifact artifact
+                                viewArtifact model artifact
 
                             Route.NotFound _ ->
                                 view404
@@ -59,8 +63,7 @@ view model =
                     , Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
                     , AgentPanel.view model
                     ]
-                , Html.Keyed.node "div" [ Html.Attributes.class "toast-container" ] <|
-                    List.map (\toast -> ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) toast )) (Model.getToasts model)
+                , viewToasts model
                 , Dialog.viewConfirm (Model.getModalConfirm model)
                 , View.Organize.viewOrganizeDialog model
                 , View.Organize.viewContextMenu model
@@ -72,8 +75,14 @@ view model =
     }
 
 
-viewArtifact : Route.ArtifactParams -> Html (Flow Model ())
-viewArtifact artifact =
+viewToasts : Model -> Html (Flow Model ())
+viewToasts model =
+    Html.Keyed.node "div" [ Html.Attributes.class "toast-container" ] <|
+        List.map (\toast -> ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) toast )) (Model.getToasts model)
+
+
+viewArtifact : Model -> Route.ArtifactParams -> Html (Flow Model ())
+viewArtifact model artifact =
     let
         pointyRoute =
             Route.fromPage
@@ -84,20 +93,127 @@ viewArtifact artifact =
                     , mCompare = Nothing
                     }
                 )
+
+        isAgentOpen =
+            (Model.getAgent model).isPanelOpen
+
+        isTable =
+            Model.isDelimitedPath artifact.path
     in
     Html.div [ Html.Attributes.class "artifact-viewer" ]
-        [ Html.node "iframe"
-            [ Html.Attributes.src (Api.stepFileBundleUrl artifact.stepId artifact.commit artifact.path)
-            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
-            , Html.Attributes.class "artifact-viewer-frame"
+        [ Html.div [ Html.Attributes.class "artifact-viewer-main" ]
+            [ if isTable then
+                Html.div [ Html.Attributes.class "artifact-viewer-table" ]
+                    [ Model.getArtifactTable model
+                        |> Maybe.filter (\table -> table.artifact == artifact)
+                        |> Maybe.unwrap NotAsked .content
+                        |> TextContent.view "artifact-viewer-text" Actions.updateArtifactTable
+                    ]
+
+              else
+                Html.node "iframe"
+                    [ Html.Attributes.id Actions.artifactFrameId
+                    , Html.Attributes.src (Api.stepFileBundleUrl artifact.stepId artifact.commit artifact.path)
+                    , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
+                    , Html.Attributes.class "artifact-viewer-frame"
+                    ]
+                    []
+            , Html.viewIf (not isTable) (viewAreaCapture (Model.getAreaCapture model))
+            , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
+                [ Html.viewIf (not isTable)
+                    (Html.button
+                        [ Html.Attributes.class "artifact-viewer-action"
+                        , Html.Attributes.type_ "button"
+                        , Html.Events.onClick Actions.startAreaCapture
+                        , Html.Attributes.attribute "aria-pressed" (boolText (Model.getAreaCapture model /= Nothing))
+                        ]
+                        [ Html.text "Capture area" ]
+                    )
+                , Html.a
+                    [ Html.Attributes.href (Api.stepFileDownloadUrl artifact.stepId (Just artifact.commit) artifact.path)
+                    , Html.Attributes.download ""
+                    , Html.Attributes.class "artifact-viewer-action"
+                    ]
+                    [ Html.text "Download" ]
+                , Html.button
+                    [ Html.Attributes.class "artifact-viewer-action"
+                    , Html.Attributes.type_ "button"
+                    , Html.Events.onClick Actions.toggleAgentPanel
+                    , Html.Attributes.attribute "aria-controls" "agent-panel"
+                    , Html.Attributes.attribute "aria-expanded" (boolText isAgentOpen)
+                    ]
+                    [ Html.text "Agent" ]
+                , Html.a
+                    [ Route.href pointyRoute
+                    , Html.Attributes.class "artifact-viewer-action"
+                    ]
+                    [ Html.text "View in Pointy" ]
+                ]
             ]
-            []
-        , Html.a
-            [ Route.href pointyRoute
-            , Html.Attributes.class "artifact-pointy-link"
-            ]
-            [ Html.text "View in Pointy" ]
+        , AgentPanel.view model
+        , AgentPanel.viewLightbox model
+        , viewToasts model
         ]
+
+
+viewAreaCapture : Maybe Model.AreaCapture -> Html (Flow Model ())
+viewAreaCapture mCapture =
+    case mCapture of
+        Nothing ->
+            Html.nothing
+
+        Just capture ->
+            Html.div
+                [ Html.Attributes.class "artifact-viewer-capture"
+                , Html.Events.preventDefaultOn "mousedown" (Decode.map (\drag -> ( Actions.beginAreaDrag drag, True )) areaDragStartDecoder)
+                ]
+                [ case capture of
+                    Model.AreaCaptureArmed ->
+                        Html.nothing
+
+                    Model.AreaCaptureDragging drag ->
+                        let
+                            rect =
+                                Model.areaDragRect drag
+
+                            px value =
+                                String.fromFloat value ++ "px"
+                        in
+                        Html.div
+                            [ Html.Attributes.class "artifact-viewer-capture-area"
+                            , Html.Attributes.style "left" (px rect.x)
+                            , Html.Attributes.style "top" (px rect.y)
+                            , Html.Attributes.style "width" (px rect.width)
+                            , Html.Attributes.style "height" (px rect.height)
+                            ]
+                            []
+                ]
+
+
+areaDragStartDecoder : Decode.Decoder Model.AreaDrag
+areaDragStartDecoder =
+    Decode.field "button" Decode.int
+        |> Decode.andThen
+            (\button ->
+                if button == 0 then
+                    Decode.map3
+                        (\client offset overlaySize ->
+                            { overlayOrigin = { x = client.x - offset.x, y = client.y - offset.y }
+                            , overlaySize = overlaySize
+                            , anchor = offset
+                            , cursor = offset
+                            }
+                        )
+                        Actions.clientPointDecoder
+                        (Decode.map2 Model.AreaPoint (Decode.field "offsetX" Decode.float) (Decode.field "offsetY" Decode.float))
+                        (Decode.map2 Model.AreaPoint
+                            (Decode.at [ "currentTarget", "clientWidth" ] Decode.float)
+                            (Decode.at [ "currentTarget", "clientHeight" ] Decode.float)
+                        )
+
+                else
+                    Decode.fail "not the primary button"
+            )
 
 
 view404 : Html (Flow Model ())

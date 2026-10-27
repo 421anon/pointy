@@ -1729,6 +1729,8 @@ type Model
         , organizeContextMenu : Maybe OrganizeContextMenu
         , organizeDrag : Maybe OrganizeDrag
         , gutterDrag : Maybe GutterDrag
+        , artifactTable : Maybe ArtifactTable
+        , areaCapture : Maybe AreaCapture
         , compareState : CompareState
         , now : Time.Posix
         , agent : AgentState
@@ -1760,6 +1762,48 @@ type alias GutterDrag =
     }
 
 
+type AreaCapture
+    = AreaCaptureArmed
+    | AreaCaptureDragging AreaDrag
+
+
+type alias AreaDrag =
+    { overlayOrigin : AreaPoint
+    , overlaySize : AreaPoint
+    , anchor : AreaPoint
+    , cursor : AreaPoint
+    }
+
+
+type alias AreaPoint =
+    { x : Float
+    , y : Float
+    }
+
+
+type alias AreaRect =
+    { x : Float
+    , y : Float
+    , width : Float
+    , height : Float
+    }
+
+
+areaDragRect : AreaDrag -> AreaRect
+areaDragRect drag =
+    { x = min drag.anchor.x drag.cursor.x
+    , y = min drag.anchor.y drag.cursor.y
+    , width = abs (drag.cursor.x - drag.anchor.x)
+    , height = abs (drag.cursor.y - drag.anchor.y)
+    }
+
+
+type alias ArtifactTable =
+    { artifact : Route.ArtifactParams
+    , content : ApiData TextContent
+    }
+
+
 type CompareState
     = CompareIdle
     | CompareSelecting CompareSelection
@@ -1769,16 +1813,10 @@ type CompareState
 type alias CompareActiveData =
     { left : CompareSelection
     , right : CompareSelection
-    , leftContent : ApiData CompareFile
-    , rightContent : ApiData CompareFile
+    , leftContent : ApiData TextContent
+    , rightContent : ApiData TextContent
     , leftInspect : Bool
     , rightInspect : Bool
-    }
-
-
-type alias CompareFile =
-    { text : String
-    , delimitedGrid : Maybe DelimitedGrid
     }
 
 
@@ -2111,6 +2149,16 @@ getGutterDrag (Model model) =
     model.gutterDrag
 
 
+getAreaCapture : Model -> Maybe AreaCapture
+getAreaCapture (Model model) =
+    model.areaCapture
+
+
+getArtifactTable : Model -> Maybe ArtifactTable
+getArtifactTable (Model model) =
+    model.artifactTable
+
+
 getCompareState : Model -> CompareState
 getCompareState (Model model) =
     model.compareState
@@ -2228,6 +2276,8 @@ initialModel key route flags =
         , organizeContextMenu = Nothing
         , organizeDrag = Nothing
         , gutterDrag = Nothing
+        , areaCapture = Nothing
+        , artifactTable = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix flags.now
         , agent =
@@ -2548,6 +2598,30 @@ type alias TableMeta =
 type alias DelimitedGrid =
     { grid : Grid.State
     }
+
+
+type alias TextContent =
+    { text : String
+    , lineCount : Int
+    , delimitedGrid : Maybe DelimitedGrid
+    , plainScrollTop : Float
+    , plainViewportHeight : Float
+    }
+
+
+textContentFromFile : List String -> Maybe String -> String -> TextContent
+textContentFromFile path mimeType text =
+    { text = text
+    , lineCount = countLines text
+    , delimitedGrid = delimitedGridFromFile path mimeType text Nothing
+    , plainScrollTop = 0
+    , plainViewportHeight = 0
+    }
+
+
+isDelimitedPath : List String -> Bool
+isDelimitedPath path =
+    detectDelimitedFile path Nothing /= Nothing
 
 
 type DelimitedFileKind

@@ -172,6 +172,7 @@ instance ToSchema TurnRequest where
                 , ("prompt", stringField)
                 , ("images", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & required .~ ["mimeType", "data"] & properties .~ fromList [("mimeType", stringField), ("data", stringField)])))
                 , ("currentProjectId", nullableField OpenApiInteger)
+                , ("viewedArtifact", Inline (mempty & type_ ?~ OpenApiObject & nullable ?~ True & required .~ ["stepId", "commit", "path"] & properties .~ fromList [("stepId", integerField), ("commit", stringField), ("path", arrayOf stringField)]))
                 , ("autoApply", boolField)
                 , ("clientId", stringField)
                 ]

@@ -255,17 +255,17 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> [TurnImage] -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
-startAgentTurn sid prompt images mCurrentProjectId enabled client = do
+startAgentTurn :: Text -> Text -> [TurnImage] -> Maybe Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
+startAgentTurn sid prompt images viewedArtifact mCurrentProjectId enabled client = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
-    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId (UserTurn images)
+    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId (UserTurn images viewedArtifact)
 
-data TurnOrigin = UserTurn [TurnImage] | AutomaticFix (Maybe Text)
+data TurnOrigin = UserTurn [TurnImage] (Maybe Text) | AutomaticFix (Maybe Text)
 
 beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
 beginAgentTurn session_ prompt mCurrentProjectId origin = do
@@ -325,12 +325,13 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
                     else Nothing
             withConflict pending =
                 promptWithApplyConflict (targetBranch freshSession) (candidateWorktree pending) (fromMaybe "" nextError)
-            withCurrentProject projectId text = renderCurrentProject projectId <> "\n\n" <> text
+            withContext context text = context <> "\n\n" <> text
             request = if automatic then prompt else userMessage prompt
             refusal = (withConflict <$> pendingApply) <|> (promptWithEvaluationFailure <$> evaluationFailure)
             agentPrompt =
-                maybe id withCurrentProject changedCurrentProjectId $
-                    maybe prompt ($ request) refusal
+                maybe id (withContext . renderCurrentProject) changedCurrentProjectId $
+                    maybe id withContext viewedArtifact $
+                        maybe prompt ($ request) refusal
         when (isJust evaluationFailure) $
             appendLogLine (configAgent cfg) logPath "system" "The reason the last apply was refused was sent to the agent with this message."
         when (isJust pendingApply) $
@@ -349,9 +350,9 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
     return turn
   where
-    (automatic, inheritedStop, images) = case origin of
-        UserTurn sent -> (False, Nothing, sent)
-        AutomaticFix fixedTurnId -> (True, fixedTurnId, [])
+    (automatic, inheritedStop, images, viewedArtifact) = case origin of
+        UserTurn sent viewed -> (False, Nothing, sent, viewed)
+        AutomaticFix fixedTurnId -> (True, fixedTurnId, [], Nothing)
 
 setRunningAutoApply :: Text -> Bool -> ExceptT String IO ()
 setRunningAutoApply client enabled = do

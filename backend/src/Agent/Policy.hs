@@ -8,6 +8,7 @@ module Agent.Policy (
     appliedStepId,
     renderEmbeddedRules,
     renderCurrentProject,
+    renderViewedArtifact,
     promptWithEvaluationFailure,
     promptWithApplyConflict,
     userMessage,
@@ -72,6 +73,17 @@ renderCurrentProject projectId =
         , "id: " <> T.pack (show projectId)
         , "file: projects/" <> T.pack (show projectId) <> ".nix"
         ]
+
+renderViewedArtifact :: Int -> Text -> [Text] -> Maybe Text -> Text
+renderViewedArtifact stepId commit path mOutPath =
+    T.intercalate "\n" $
+        [ "The user is viewing this step output file:"
+        , "step id: " <> T.pack (show stepId)
+        , "step file: steps/" <> T.pack (show stepId) <> ".nix"
+        , "commit: " <> commit
+        , "path within the output: /" <> T.intercalate "/" path
+        ]
+            ++ ["store path: " <> T.intercalate "/" (outPath : path) | Just outPath <- [mOutPath]]
 
 promptWithEvaluationFailure :: Text -> Text -> Text
 promptWithEvaluationFailure failures prompt =

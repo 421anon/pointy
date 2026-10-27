@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, fromRawBase, stepBundleHandler, stepExtrasHandler, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
+module Handlers.Store (listHandler, downloadHandler, seekHandler, storeFilesHandler, stepListHandler, stepDownloadHandler, stepSeekHandler, stepRawHandler, fromRawBase, stepBundleHandler, stepExtrasHandler, resolveStepOutPath, DirEntry (..), FileChunk, LineOffset, ByteOffset, fileChunkSize, maxViewableSize, checkViewableAndMime, parseSeekOffset) where
 
 import ApiTypes (DynamicJson (..))
 

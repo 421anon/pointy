@@ -1,13 +1,12 @@
 module View.Compare exposing (viewCompareBanner, viewCompareDialog)
 
-import Accessors exposing (An_Optic, just, try)
+import Accessors exposing (An_Optic, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Dict exposing (Dict)
 import Extra.Accessors exposing (remkT)
 import Flow exposing (Flow)
-import Grid
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, id, src)
 import Html.Events
@@ -15,11 +14,12 @@ import Html.Extra as Html
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), Model, StepRecord)
-import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, fileDelimitedGrid, gridState, projectRecordById, stepRecordById)
+import Model.Core as Model exposing (CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), Model, StepRecord, TextContent)
+import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, projectRecordById, stepRecordById)
 import Model.Shadow as Shadow exposing (Field, StepArgValue(..), Widget(..))
 import Route exposing (Route)
 import View.Icons exposing (icon)
+import View.TextContent as TextContent
 
 
 viewCompareBanner : Model -> Html (Flow Model ())
@@ -110,16 +110,16 @@ viewBody model d =
 
         panes =
             Html.div [ class "compare-panes" ]
-                [ viewPane model d.left d.leftContent (gridUpdate compareLeftContent) d.leftInspect (toggleFlag compareLeftInspect)
-                , viewPane model d.right d.rightContent (gridUpdate compareRightContent) d.rightInspect (toggleFlag compareRightInspect)
+                [ viewPane model "compare-left-text" d.left d.leftContent (contentUpdate compareLeftContent) d.leftInspect (toggleFlag compareLeftInspect)
+                , viewPane model "compare-right-text" d.right d.rightContent (contentUpdate compareRightContent) d.rightInspect (toggleFlag compareRightInspect)
                 ]
     in
     mTextPair
         |> Maybe.unwrap panes (\( l, r ) -> viewTextDiff model d l r)
 
 
-viewPane : Model -> CompareSelection -> ApiData CompareFile -> ((Grid.State -> Grid.State) -> Flow Model ()) -> Bool -> Flow Model () -> Html (Flow Model ())
-viewPane model sel content updateGrid inspectOpen toggle =
+viewPane : Model -> String -> CompareSelection -> ApiData TextContent -> ((TextContent -> TextContent) -> Flow Model ()) -> Bool -> Flow Model () -> Html (Flow Model ())
+viewPane model viewerId sel content updateContent inspectOpen toggle =
     let
         mParams =
             derivationParamsFor model sel
@@ -127,15 +127,15 @@ viewPane model sel content updateGrid inspectOpen toggle =
     Html.div [ class "compare-pane" ]
         [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
         , Html.div [ class "compare-pane-body" ]
-            [ viewPaneBody sel content updateGrid
+            [ viewPaneBody viewerId sel content updateContent
             , viewInlineParams model sel inspectOpen mParams
             ]
         ]
 
 
-gridUpdate : An_Optic pr ls CompareActiveData (ApiData CompareFile) -> (Grid.State -> Grid.State) -> Flow Model ()
-gridUpdate contentLens =
-    Flow.over (compareState << compareActive << remkT contentLens << success << fileDelimitedGrid << just << gridState)
+contentUpdate : An_Optic pr ls CompareActiveData (ApiData TextContent) -> (TextContent -> TextContent) -> Flow Model ()
+contentUpdate contentLens =
+    Flow.over (compareState << compareActive << remkT contentLens << success)
 
 
 toggleFlag : An_Optic pr ls CompareActiveData Bool -> Flow Model ()
@@ -352,8 +352,8 @@ sourceRoute sel =
         )
 
 
-viewPaneBody : CompareSelection -> ApiData CompareFile -> ((Grid.State -> Grid.State) -> Flow Model ()) -> Html (Flow Model ())
-viewPaneBody sel content updateGrid =
+viewPaneBody : String -> CompareSelection -> ApiData TextContent -> ((TextContent -> TextContent) -> Flow Model ()) -> Html (Flow Model ())
+viewPaneBody viewerId sel content updateContent =
     case Model.compareSelectionMode sel of
         CompareImage ->
             Html.img [ src (rawUrl sel), class "compare-image" ] []
@@ -367,31 +367,7 @@ viewPaneBody sel content updateGrid =
                 []
 
         CompareText ->
-            viewTextContent updateGrid content
-
-
-viewTextContent : ((Grid.State -> Grid.State) -> Flow Model ()) -> ApiData CompareFile -> Html (Flow Model ())
-viewTextContent updateGrid content =
-    case content of
-        Success file ->
-            let
-                plain () =
-                    Html.div [ class "compare-pane-text" ]
-                        (List.map (\line -> Html.div [ class "diff-line" ] [ Html.text line ]) (String.lines file.text))
-            in
-            case file.delimitedGrid of
-                Just grid ->
-                    Grid.view updateGrid plain grid.grid
-
-                Nothing ->
-                    plain ()
-
-        Error _ ->
-            Html.div [ class "compare-error" ] [ Html.text "Failed to load file." ]
-
-        _ ->
-            Html.div [ class "compare-loading" ]
-                [ Html.span [ class "shimmer-text shimmer-text--low-contrast" ] [ Html.text "Loading file…" ] ]
+            TextContent.view viewerId updateContent content
 
 
 rawUrl : CompareSelection -> String

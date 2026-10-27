@@ -29,7 +29,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildKind(..), ChildRef, CompareActiveData, CompareFile, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), ListingSort(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TemplateSource(..), TreeOp(..))
+import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildKind(..), ChildRef, CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), ListingSort(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TemplateSource(..), TextContent, TreeOp(..))
 import Model.Lenses exposing (..)
 import Model.Lib exposing (canonicalPathTo)
 import Model.Selection as Selection
@@ -1929,13 +1929,13 @@ activateCompare left right =
             )
 
 
-fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData CompareFile) -> CompareSelection -> Flow Model ()
+fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData TextContent) -> CompareSelection -> Flow Model ()
 fetchCompareSide matchesActiveCompare contentLens sel =
     case Model.compareSelectionMode sel of
         CompareText ->
             callApi (compareState << compareActive << where_ matchesActiveCompare << remkT contentLens)
                 (fetchCompareContent sel
-                    |> Flow.map (Result.map (\s -> CompareFile s (Model.delimitedGridFromFile sel.path sel.mimeType s Nothing)))
+                    |> Flow.map (Result.map (Model.textContentFromFile sel.path sel.mimeType))
                 )
                 |> Flow.return ()
 
@@ -2013,6 +2013,34 @@ toggleSrcFile recordId path =
 updateDelimitedGrid : Int -> List String -> (Grid.State -> Grid.State) -> Flow Model ()
 updateDelimitedGrid recordId path =
     Flow.over (fileDelimitedGridAt recordId path << just << gridState)
+
+
+loadArtifactTable : Route.ArtifactParams -> Flow Model ()
+loadArtifactTable artifact =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if not (Model.isDelimitedPath artifact.path) then
+                    Flow.setAll artifactTable Nothing
+
+                else if has (artifactTable << just << where_ (\table -> table.artifact == artifact)) model then
+                    Flow.pure ()
+
+                else
+                    Flow.setAll artifactTable (Just { artifact = artifact, content = NotAsked })
+                        |> Flow.seq
+                            (callApi (artifactTable << just << where_ (\table -> table.artifact == artifact) << artifactTableContent)
+                                (Api.fetchFileContents artifact.stepId (Just artifact.commit) artifact.path
+                                    |> Flow.map (Result.map (Model.textContentFromFile artifact.path Nothing))
+                                )
+                                |> Flow.return ()
+                            )
+            )
+
+
+updateArtifactTable : (TextContent -> TextContent) -> Flow Model ()
+updateArtifactTable =
+    Flow.over (artifactTable << just << artifactTableContent << success)
 
 
 setPlainFileScrollTop : Route.HighlightTarget -> Int -> List String -> Float -> Flow Model ()
@@ -3839,16 +3867,26 @@ attachAgentImages files =
     in
     Flow.when (not (List.isEmpty rejected)) (addToast False "Only PNG, JPEG, GIF and WebP images can be attached.")
         |> Flow.seq
-            (Flow.getAll (agent << composerImages)
-                (\attached ->
-                    if encodedImagesLength (List.concat attached) + List.sum (List.map encodedFileLength images) > agentImagesBudget then
-                        addToast False "These images are too large to send together. Attach smaller or fewer images."
-
-                    else
-                        Flow.traverse readComposerImage images
-                            |> Flow.andThen (\read -> Flow.over (agent << composerImages) (\current -> current ++ read))
-                )
+            (withinAgentImagesBudget (List.sum (List.map encodedFileLength images))
+                (Flow.traverse readComposerImage images |> Flow.andThen appendComposerImages)
             )
+
+
+withinAgentImagesBudget : Int -> Flow Model () -> Flow Model ()
+withinAgentImagesBudget addedLength attach =
+    Flow.getAll (agent << composerImages)
+        (\attached ->
+            if encodedImagesLength (List.concat attached) + addedLength > agentImagesBudget then
+                addToast False "These images are too large to send together. Attach smaller or fewer images."
+
+            else
+                attach
+        )
+
+
+appendComposerImages : List Model.ComposerImage -> Flow Model ()
+appendComposerImages images =
+    Flow.over (agent << composerImages) (\current -> current ++ images)
 
 
 agentImagesBudget : Int
@@ -3881,6 +3919,91 @@ pickAgentImages =
 removeComposerImage : Int -> Flow Model ()
 removeComposerImage index =
     Flow.over (agent << composerImages) (List.removeAt index)
+
+
+artifactFrameId : String
+artifactFrameId =
+    "artifact-viewer-frame"
+
+
+clientPointDecoder : Decode.Decoder Model.AreaPoint
+clientPointDecoder =
+    Decode.map2 Model.AreaPoint (Decode.field "clientX" Decode.float) (Decode.field "clientY" Decode.float)
+
+
+startAreaCapture : Flow Model ()
+startAreaCapture =
+    Flow.setAll areaCapture (Just Model.AreaCaptureArmed)
+
+
+cancelAreaCapture : Flow Model ()
+cancelAreaCapture =
+    Flow.setAll areaCapture Nothing
+
+
+beginAreaDrag : Model.AreaDrag -> Flow Model ()
+beginAreaDrag drag =
+    Flow.setAll areaCapture (Just (Model.AreaCaptureDragging drag))
+
+
+moveAreaDrag : Model.AreaPoint -> Flow Model ()
+moveAreaDrag clientPoint =
+    Flow.over (areaCapture << just << areaCaptureDragging) (dragAreaTo clientPoint)
+
+
+finishAreaDrag : Model.AreaPoint -> Flow Model ()
+finishAreaDrag clientPoint =
+    Flow.forAll (areaCapture << just << areaCaptureDragging)
+        (\drag ->
+            let
+                rect =
+                    Model.areaDragRect (dragAreaTo clientPoint drag)
+            in
+            cancelAreaCapture
+                |> Flow.seq (Flow.when (rect.width > 0 && rect.height > 0) (captureArtifactArea rect))
+        )
+
+
+dragAreaTo : Model.AreaPoint -> Model.AreaDrag -> Model.AreaDrag
+dragAreaTo clientPoint drag =
+    { drag
+        | cursor =
+            { x = clamp 0 drag.overlaySize.x (clientPoint.x - drag.overlayOrigin.x)
+            , y = clamp 0 drag.overlaySize.y (clientPoint.y - drag.overlayOrigin.y)
+            }
+    }
+
+
+captureArtifactArea : Model.AreaRect -> Flow Model ()
+captureArtifactArea rect =
+    callJs "captureArtifactArea"
+        (\area ->
+            Encode.object
+                [ ( "frameId", Encode.string artifactFrameId )
+                , ( "x", Encode.float area.x )
+                , ( "y", Encode.float area.y )
+                , ( "width", Encode.float area.width )
+                , ( "height", Encode.float area.height )
+                ]
+        )
+        (Decode.nullable Decode.string)
+        rect
+        |> Flow.andThen
+            (\mDataUrl ->
+                case mDataUrl of
+                    Just dataUrl ->
+                        withinAgentImagesBudget (String.length dataUrl) (appendComposerImages [ Model.ComposerImage "image/png" dataUrl ])
+                            |> Flow.seq (Flow.forAll agent (\agentState -> Flow.unless agentState.isPanelOpen toggleAgentPanel))
+                            |> Flow.seq
+                                (Flow.forAll agent
+                                    (\agentState ->
+                                        Flow.when (agentState.selectedSessionId == Nothing && not agentState.isRestoringChat) createAgentSession
+                                    )
+                                )
+
+                    Nothing ->
+                        addToast False "Couldn't capture this area."
+            )
 
 
 agentLightboxId : String
@@ -4137,7 +4260,13 @@ sendAgentTurn view images promptSource =
                     |> Flow.seq clearAgentPrompt
                     |> Flow.seq (Flow.setAll (agent << composerImages) [])
                     |> Flow.seq scrollAgentChatToBottom
-                    |> Flow.seq (Flow.forAll agent (AgentApi.sendTurn sessionId prompt images >> Flow.try currentProjectId))
+                    |> Flow.seq
+                        (Flow.forAll agent
+                            (\agentState ->
+                                Flow.try currentProjectId
+                                    (\mProjectId -> Flow.try (route << Route.page << Route.artifact) (AgentApi.sendTurn sessionId prompt images agentState mProjectId))
+                            )
+                        )
                     |> FlowError.foldResult
                         (\turn ->
                             Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId

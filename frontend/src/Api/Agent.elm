@@ -24,6 +24,7 @@ import Json.Decode.Pipeline exposing (custom, optional, required)
 import Json.Encode as Encode
 import Maybe.Extra as Maybe
 import Model.Core as Model
+import Route
 
 
 baseUrl : String
@@ -79,8 +80,8 @@ autoApplyFields setting =
     ]
 
 
-sendTurn : String -> String -> List Model.ComposerImage -> AutoApplySetting a -> Maybe Int -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt images setting mCurrentProjectId =
+sendTurn : String -> String -> List Model.ComposerImage -> AutoApplySetting a -> Maybe Int -> Maybe Route.ArtifactParams -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt images setting mCurrentProjectId mViewedArtifact =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
@@ -91,11 +92,21 @@ sendTurn sessionId prompt images setting mCurrentProjectId =
                          , ( "prompt", Encode.string prompt )
                          , ( "images", Encode.list encodeImage images )
                          , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
+                         , ( "viewedArtifact", Maybe.unwrap Encode.null encodeViewedArtifact mViewedArtifact )
                          ]
                             ++ autoApplyFields setting
                         )
             , expect = Http.expectJson identity turnDecoder
             }
+
+
+encodeViewedArtifact : Route.ArtifactParams -> Encode.Value
+encodeViewedArtifact artifact =
+    Encode.object
+        [ ( "stepId", Encode.int artifact.stepId )
+        , ( "commit", Encode.string artifact.commit )
+        , ( "path", Encode.list Encode.string artifact.path )
+        ]
 
 
 encodeImage : Model.ComposerImage -> Encode.Value
