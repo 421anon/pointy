@@ -4,13 +4,14 @@ import Api.ApiData exposing (ApiData(..))
 import Grid
 import Html exposing (Html)
 import Html.Attributes exposing (class)
+import Html.Extra as Html
 import Html.Lazy
 import Model.Core exposing (TextContent)
 import View.PlainText as PlainText
 
 
-view : String -> ((TextContent -> TextContent) -> msg) -> ApiData TextContent -> Html msg
-view viewerId update content =
+view : String -> ((TextContent -> TextContent) -> msg) -> List (Html msg) -> ApiData TextContent -> Html msg
+view viewerId update actions content =
     case content of
         Success file ->
             let
@@ -39,13 +40,24 @@ view viewerId update content =
                                 , plainScrollTop = 0
                             }
                         )
+
+                toolbarActions =
+                    Html.viewIf (not (List.isEmpty actions))
+                        (Html.div [ class "delimited-grid-toolbar-actions" ] actions)
             in
             case file.delimitedGrid of
                 Just grid ->
-                    Grid.view updateGrid plain grid.grid
+                    Grid.view updateGrid plain toolbarActions grid.grid
 
                 Nothing ->
-                    plain ()
+                    if List.isEmpty actions then
+                        plain ()
+
+                    else
+                        Html.div [ class "delimited-grid-shell" ]
+                            [ Html.div [ class "delimited-grid-toolbar" ] [ toolbarActions ]
+                            , plain ()
+                            ]
 
         Error _ ->
             Html.div [ class "text-content-error" ] [ Html.text "Failed to load file." ]

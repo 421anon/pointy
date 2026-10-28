@@ -668,7 +668,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         in
                                         case ( file.delimitedGrid, gridAction ) of
                                             ( Just delimitedGrid, Just updateGrid ) ->
-                                                Grid.view updateGrid viewPlainContent_ delimitedGrid.grid
+                                                Grid.view updateGrid viewPlainContent_ Html.nothing delimitedGrid.grid
 
                                             _ ->
                                                 viewPlainContent_ ()

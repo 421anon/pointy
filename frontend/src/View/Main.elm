@@ -23,6 +23,7 @@ import Route
 import Toast
 import View.Compare as Compare
 import View.Dialog as Dialog
+import View.Icons exposing (icon)
 import View.Lib exposing (boolText)
 import View.Organize
 import View.Project exposing (viewCurrentProject)
@@ -107,7 +108,16 @@ viewArtifact model artifact =
                     [ Model.getArtifactTable model
                         |> Maybe.filter (\table -> table.artifact == artifact)
                         |> Maybe.unwrap NotAsked .content
-                        |> TextContent.view "artifact-viewer-text" Actions.updateArtifactTable
+                        |> TextContent.view "artifact-viewer-text"
+                            Actions.updateArtifactTable
+                            [ Html.a
+                                [ Html.Attributes.href (Api.stepFileDownloadUrl artifact.stepId (Just artifact.commit) artifact.path)
+                                , Html.Attributes.download ""
+                                , Html.Attributes.class "dir-item-icon-btn"
+                                , Html.Attributes.title "Download"
+                                ]
+                                [ icon True "download" ]
+                            ]
                     ]
 
               else
@@ -129,12 +139,6 @@ viewArtifact model artifact =
                         ]
                         [ Html.text "Capture area" ]
                     )
-                , Html.a
-                    [ Html.Attributes.href (Api.stepFileDownloadUrl artifact.stepId (Just artifact.commit) artifact.path)
-                    , Html.Attributes.download ""
-                    , Html.Attributes.class "artifact-viewer-action"
-                    ]
-                    [ Html.text "Download" ]
                 , Html.button
                     [ Html.Attributes.class "artifact-viewer-action"
                     , Html.Attributes.type_ "button"

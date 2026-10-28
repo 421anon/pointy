@@ -57,8 +57,8 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 
 ## Artifact viewer
 
-- An artifact permalink opened in the browser shows the file full-screen, with Download, Agent and View in Pointy buttons. The file browser links outputs the browser can show natively, and CSV or TSV outputs up to the in-app 5 MB limit.
-- CSV and TSV files open in the same grid as the file browser and Compare, with sorting, filters, summaries and the plain-text view; the plain-text view, like the file browser's, draws one text block and only the line numbers near the visible part.
+- An artifact permalink opened in the browser shows the file full-screen, with Agent and View in Pointy buttons. The file browser links outputs the browser can show natively, and CSV or TSV outputs up to the in-app 5 MB limit.
+- CSV and TSV files open in the same grid as the file browser and Compare, with sorting, filters, summaries and the plain-text view; the plain-text view, like the file browser's, draws one text block and only the line numbers near the visible part. A download button sits in the viewer's toolbar in both modes.
 - The Agent button opens the agent panel, closed by default. Every turn sent from the page tells the agent which step, commit and output file is open, and the output's store path when the backend can resolve it. The chat shows only what the user typed.
 - Capture area, shown when the file is rendered in a frame, lets the user drag a rectangle over it. On release, that area is rendered at the screen's pixel ratio and attached as a PNG to the agent's message box, without sending; the panel opens and, if no chat is open, a new one starts. Escape cancels. Pages without `<!doctype html>` may come out shifted, because the renderer lays out its copy in standards mode.
 

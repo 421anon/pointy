@@ -367,7 +367,7 @@ viewPaneBody viewerId sel content updateContent =
                 []
 
         CompareText ->
-            TextContent.view viewerId updateContent content
+            TextContent.view viewerId updateContent [] content
 
 
 rawUrl : CompareSelection -> String

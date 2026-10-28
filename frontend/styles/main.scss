@@ -1300,6 +1300,16 @@ $delimited-grid-row-height: 28px;
   margin-left: auto;
 }
 
+.delimited-grid-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--spacing-xs);
+
+  &:first-child {
+    margin-left: auto;
+  }
+}
+
 .delimited-grid-toolbar .delimited-grid-toolbar-btn {
   display: inline-flex;
   align-items: center;
