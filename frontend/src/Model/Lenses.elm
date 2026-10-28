@@ -860,6 +860,11 @@ artifactTable =
     lens ".artifactTable" Model.getArtifactTable (\(Model m) table -> Model { m | artifactTable = table })
 
 
+artifactTableFor : Route.ArtifactParams -> Traversal Model Model.ArtifactTable x y
+artifactTableFor artifact =
+    artifactTable << just << where_ (.artifact >> (==) artifact)
+
+
 artifactTableContent : Lens ls Model.ArtifactTable (ApiData TextContent) x y
 artifactTableContent =
     lens ".content" .content (\table content -> { table | content = content })

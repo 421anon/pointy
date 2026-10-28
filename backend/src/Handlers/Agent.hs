@@ -42,6 +42,7 @@ import Agent.Git (
 import Agent.Policy (renderViewedArtifact)
 import Agent.Runner (applySessionChanges, compactAgentSession, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
 import Agent.Session (AgentSessionSummary, AgentTurn (..), TurnImage, findTurn, turnImageFilePath)
+import Control.Lens ((^?), _Right)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
@@ -160,12 +161,9 @@ postTurnHandler req = do
     runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) viewedArtifact (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
 
 describeViewedArtifact :: ViewedArtifact -> IO Text
-describeViewedArtifact artifact = do
-    resolved <- runAppEffects $ runExceptT $ resolveStepOutPath stepId (Just commit)
-    return $ renderViewedArtifact stepId commit (viewedArtifactPath artifact) (either (const Nothing) Just resolved)
-  where
-    stepId = viewedArtifactStepId artifact
-    commit = viewedArtifactCommit artifact
+describeViewedArtifact (ViewedArtifact stepId commit path) =
+    renderViewedArtifact stepId commit path . (^? _Right)
+        <$> runAppEffects (runExceptT (resolveStepOutPath stepId (Just commit)))
 
 turnImageHandler :: Text -> Int -> Tagged AppM Application
 turnImageHandler tid index = Tagged $ \_ respond -> do

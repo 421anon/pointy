@@ -18,7 +18,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -819,63 +819,66 @@ pathFromAnchor gutterKeyValue anchor =
 
 
 viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> ( Int, Int ) -> Html (Flow Model ())
-viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text ( startLine, lineCount ) =
-    let
-        path =
-            pathFromAnchor gutterKeyValue anchor
-    in
-    PlainText.view
-        { id = "viewer-" ++ anchor
-        , layout = PlainText.FitLines
-        , scrollTop = scrollTop
-        , onScroll =
-            gutterFromKey gutterKeyValue
-                |> Maybe.map (\{ recordId, target } metrics -> Actions.setPlainFileScrollTop target recordId path metrics.scrollTop)
-        , lineSelection = gutterLineSelection gutterKeyValue hasGutterDrag selectedFrom selectedTo path
-        , loading = Nothing
-        , startLine = startLine
-        , lineCount = lineCount
-        }
+viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text =
+    viewGutteredPlainText gutterKeyValue
+        hasGutterDrag
+        selectedFrom
+        selectedTo
+        anchor
+        scrollTop
+        (\target recordId path -> .scrollTop >> Actions.setPlainFileScrollTop target recordId path)
+        Nothing
         (Html.Lazy.lazy PlainText.viewText text)
 
 
 viewSeekPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> SeekWindow -> Html (Flow Model ())
 viewSeekPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop window_ =
+    viewGutteredPlainText gutterKeyValue
+        hasGutterDrag
+        selectedFrom
+        selectedTo
+        anchor
+        scrollTop
+        Actions.onSeekScroll
+        window_.loading
+        (Html.Lazy.lazy2 viewFileChunks window_.loading window_.chunks)
+        ( windowStartLine window_, windowLineCount window_ )
+
+
+viewGutteredPlainText : Int -> Bool -> Int -> Int -> String -> Float -> (Route.HighlightTarget -> Int -> List String -> ScrollMetrics -> Flow Model ()) -> Maybe SeekDirection -> Html (Flow Model ()) -> ( Int, Int ) -> Html (Flow Model ())
+viewGutteredPlainText gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop onScroll loading content ( startLine, lineCount ) =
     let
         path =
             pathFromAnchor gutterKeyValue anchor
+
+        mGutter =
+            gutterFromKey gutterKeyValue
     in
     PlainText.view
         { id = "viewer-" ++ anchor
         , layout = PlainText.FitLines
         , scrollTop = scrollTop
-        , onScroll =
-            gutterFromKey gutterKeyValue
-                |> Maybe.map (\{ recordId, target } -> Actions.onSeekScroll target recordId path)
-        , lineSelection = gutterLineSelection gutterKeyValue hasGutterDrag selectedFrom selectedTo path
-        , loading = window_.loading
-        , startLine = windowStartLine window_
-        , lineCount = windowLineCount window_
+        , onScroll = Maybe.map (\{ recordId, target } -> onScroll target recordId path) mGutter
+        , lineSelection =
+            Maybe.map
+                (\{ recordId, target } ->
+                    { from = selectedFrom
+                    , to = selectedTo
+                    , onPointerDown = Actions.startGutterDrag target recordId path
+                    , onPointerEnter =
+                        if hasGutterDrag then
+                            Just (Actions.extendGutterDrag target recordId path)
+
+                        else
+                            Nothing
+                    }
+                )
+                mGutter
+        , loading = loading
+        , startLine = startLine
+        , lineCount = lineCount
         }
-        (Html.Lazy.lazy2 viewFileChunks window_.loading window_.chunks)
-
-
-gutterLineSelection : Int -> Bool -> Int -> Int -> List String -> Maybe (PlainText.LineSelection (Flow Model ()))
-gutterLineSelection gutterKeyValue hasGutterDrag selectedFrom selectedTo path =
-    gutterFromKey gutterKeyValue
-        |> Maybe.map
-            (\{ recordId, target } ->
-                { from = selectedFrom
-                , to = selectedTo
-                , onPointerDown = Actions.startGutterDrag target recordId path
-                , onPointerEnter =
-                    if hasGutterDrag then
-                        Just (Actions.extendGutterDrag target recordId path)
-
-                    else
-                        Nothing
-                }
-            )
+        content
 
 
 viewFileChunks : Maybe SeekDirection -> List FileChunk -> Html (Flow Model ())

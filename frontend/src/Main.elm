@@ -10,9 +10,10 @@ import Flow exposing (Flow)
 import Http
 import Ingest
 import Json.Decode as Decode
+import Json.Decode.Extra as Decode
 import Maybe.Extra as Maybe
-import Model.Core exposing (AddMode(..), AreaCapture(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
+import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
+import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
 import Model.Selection as Selection
 import Organize
 import Ports
@@ -274,33 +275,21 @@ gutterDragSubscription model =
 
 areaCaptureSubscription : Model -> Sub (Flow Model ())
 areaCaptureSubscription model =
-    case Model.Core.getAreaCapture model of
-        Nothing ->
+    Sub.batch
+        [ if has (areaCapture << just) model then
+            Browser.Events.onKeyDown (Decode.when (Decode.field "key" Decode.string) ((==) "Escape") (Decode.succeed Actions.cancelAreaCapture))
+
+          else
             Sub.none
-
-        Just capture ->
+        , if has (areaCapture << just << areaCaptureDragging) model then
             Sub.batch
-                [ Browser.Events.onKeyDown
-                    (Decode.field "key" Decode.string
-                        |> Decode.andThen
-                            (\key ->
-                                if key == "Escape" then
-                                    Decode.succeed Actions.cancelAreaCapture
-
-                                else
-                                    Decode.fail key
-                            )
-                    )
-                , case capture of
-                    AreaCaptureArmed ->
-                        Sub.none
-
-                    AreaCaptureDragging _ ->
-                        Sub.batch
-                            [ Browser.Events.onMouseMove (Decode.map Actions.moveAreaDrag Actions.clientPointDecoder)
-                            , Browser.Events.onMouseUp (Decode.map Actions.finishAreaDrag Actions.clientPointDecoder)
-                            ]
+                [ Browser.Events.onMouseMove (Decode.map Actions.moveAreaDrag Actions.clientPointDecoder)
+                , Browser.Events.onMouseUp (Decode.map Actions.finishAreaDrag Actions.clientPointDecoder)
                 ]
+
+          else
+            Sub.none
+        ]
 
 
 uploadProgressSubscription : Model -> Sub (Flow Model ())

@@ -1789,6 +1789,11 @@ type alias AreaRect =
     }
 
 
+areaPointDecoder : List String -> List String -> Decode.Decoder AreaPoint
+areaPointDecoder xPath yPath =
+    Decode.map2 AreaPoint (Decode.at xPath Decode.float) (Decode.at yPath Decode.float)
+
+
 areaDragRect : AreaDrag -> AreaRect
 areaDragRect drag =
     { x = min drag.anchor.x drag.cursor.x
@@ -2621,7 +2626,7 @@ textContentFromFile path mimeType text =
 
 isDelimitedPath : List String -> Bool
 isDelimitedPath path =
-    detectDelimitedFile path Nothing /= Nothing
+    Maybe.isJust (detectDelimitedFile path Nothing)
 
 
 type DelimitedFileKind

@@ -37,16 +37,11 @@ type alias LineSelection msg =
 view : Config msg -> Html msg -> Html msg
 view config content =
     let
-        ( loadingBefore, loadingAfter ) =
-            case config.loading of
-                Just Before ->
-                    ( True, False )
+        loadingBefore =
+            config.loading == Just Before
 
-                Just After ->
-                    ( False, True )
-
-                Nothing ->
-                    ( False, False )
+        loadingAfter =
+            config.loading == Just After
 
         hiddenFirstLines =
             if loadingBefore then
@@ -214,15 +209,20 @@ containerHeight : Layout -> Int -> Int
 containerHeight layout lineCount =
     case layout of
         FitLines ->
-            min (lineCount * plainLineHeight + plainViewerPadding) plainViewerMaxHeight
+            cappedLinesHeight lineCount
 
         FillParent measuredHeight ->
             max plainViewerMaxHeight (ceiling measuredHeight)
 
 
 fitLinesHeight : Int -> Int
-fitLinesHeight lineCount =
-    max (min (lineCount * plainLineHeight + plainViewerPadding) plainViewerMaxHeight) plainViewerMinHeight
+fitLinesHeight =
+    cappedLinesHeight >> max plainViewerMinHeight
+
+
+cappedLinesHeight : Int -> Int
+cappedLinesHeight lineCount =
+    min (lineCount * plainLineHeight + plainViewerPadding) plainViewerMaxHeight
 
 
 visibleLineIndexes : Int -> Float -> Int -> List Int

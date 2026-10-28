@@ -2017,24 +2017,19 @@ updateDelimitedGrid recordId path =
 
 loadArtifactTable : Route.ArtifactParams -> Flow Model ()
 loadArtifactTable artifact =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                if not (Model.isDelimitedPath artifact.path) then
-                    Flow.setAll artifactTable Nothing
+    if not (Model.isDelimitedPath artifact.path) then
+        Flow.setAll artifactTable Nothing
 
-                else if has (artifactTable << just << where_ (\table -> table.artifact == artifact)) model then
-                    Flow.pure ()
-
-                else
-                    Flow.setAll artifactTable (Just { artifact = artifact, content = NotAsked })
-                        |> Flow.seq
-                            (callApi (artifactTable << just << where_ (\table -> table.artifact == artifact) << artifactTableContent)
-                                (Api.fetchFileContents artifact.stepId (Just artifact.commit) artifact.path
-                                    |> Flow.map (Result.map (Model.textContentFromFile artifact.path Nothing))
-                                )
-                                |> Flow.return ()
-                            )
+    else
+        Flow.unlessHas (artifactTableFor artifact)
+            (Flow.setAll artifactTable (Just { artifact = artifact, content = NotAsked })
+                |> Flow.seq
+                    (callApi (artifactTableFor artifact << artifactTableContent)
+                        (Api.fetchFileContents artifact.stepId (Just artifact.commit) artifact.path
+                            |> Flow.map (Result.map (Model.textContentFromFile artifact.path Nothing))
+                        )
+                        |> Flow.return ()
+                    )
             )
 
 
@@ -3928,7 +3923,7 @@ artifactFrameId =
 
 clientPointDecoder : Decode.Decoder Model.AreaPoint
 clientPointDecoder =
-    Decode.map2 Model.AreaPoint (Decode.field "clientX" Decode.float) (Decode.field "clientY" Decode.float)
+    Model.areaPointDecoder [ "clientX" ] [ "clientY" ]
 
 
 startAreaCapture : Flow Model ()
@@ -3942,8 +3937,8 @@ cancelAreaCapture =
 
 
 beginAreaDrag : Model.AreaDrag -> Flow Model ()
-beginAreaDrag drag =
-    Flow.setAll areaCapture (Just (Model.AreaCaptureDragging drag))
+beginAreaDrag =
+    Flow.setAll areaCapture << Just << Model.AreaCaptureDragging
 
 
 moveAreaDrag : Model.AreaPoint -> Flow Model ()
@@ -3993,12 +3988,10 @@ captureArtifactArea rect =
                 case mDataUrl of
                     Just dataUrl ->
                         withinAgentImagesBudget (String.length dataUrl) (appendComposerImages [ Model.ComposerImage "image/png" dataUrl ])
-                            |> Flow.seq (Flow.forAll agent (\agentState -> Flow.unless agentState.isPanelOpen toggleAgentPanel))
+                            |> Flow.seq (Flow.unlessHas (agent << where_ .isPanelOpen) toggleAgentPanel)
                             |> Flow.seq
-                                (Flow.forAll agent
-                                    (\agentState ->
-                                        Flow.when (agentState.selectedSessionId == Nothing && not agentState.isRestoringChat) createAgentSession
-                                    )
+                                (Flow.whenHas (agent << where_ (\agentState -> agentState.selectedSessionId == Nothing && not agentState.isRestoringChat))
+                                    (always createAgentSession)
                                 )
 
                     Nothing ->
@@ -4264,7 +4257,7 @@ sendAgentTurn view images promptSource =
                         (Flow.forAll agent
                             (\agentState ->
                                 Flow.try currentProjectId
-                                    (\mProjectId -> Flow.try (route << Route.page << Route.artifact) (AgentApi.sendTurn sessionId prompt images agentState mProjectId))
+                                    (AgentApi.sendTurn sessionId prompt images agentState >> Flow.try (route << Route.page << Route.artifact))
                             )
                         )
                     |> FlowError.foldResult

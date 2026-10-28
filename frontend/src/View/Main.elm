@@ -1,6 +1,6 @@
 module View.Main exposing (view)
 
-import Accessors exposing (try)
+import Accessors exposing (has, just, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData exposing (ApiData(..), success)
@@ -14,9 +14,9 @@ import Html.Events
 import Html.Extra as Html
 import Html.Keyed
 import Json.Decode as Decode
-import Maybe.Extra as Maybe
+import Json.Decode.Extra as Decode
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (currentProject, name)
+import Model.Lenses exposing (areaCapture, areaCaptureDragging, artifactTableContent, artifactTableFor, currentProject, name)
 import Model.Lib as Lib
 import Organize
 import Route
@@ -105,9 +105,8 @@ viewArtifact model artifact =
         [ Html.div [ Html.Attributes.class "artifact-viewer-main" ]
             [ if isTable then
                 Html.div [ Html.Attributes.class "artifact-viewer-table" ]
-                    [ Model.getArtifactTable model
-                        |> Maybe.filter (\table -> table.artifact == artifact)
-                        |> Maybe.unwrap NotAsked .content
+                    [ try (artifactTableFor artifact << artifactTableContent) model
+                        |> Maybe.withDefault NotAsked
                         |> TextContent.view "artifact-viewer-text"
                             Actions.updateArtifactTable
                             [ Html.a
@@ -128,14 +127,14 @@ viewArtifact model artifact =
                     , Html.Attributes.class "artifact-viewer-frame"
                     ]
                     []
-            , Html.viewIf (not isTable) (viewAreaCapture (Model.getAreaCapture model))
+            , Html.viewIf (not isTable) (Html.viewMaybe viewAreaCapture (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
                 [ Html.viewIf (not isTable)
                     (Html.button
                         [ Html.Attributes.class "artifact-viewer-action"
                         , Html.Attributes.type_ "button"
                         , Html.Events.onClick Actions.startAreaCapture
-                        , Html.Attributes.attribute "aria-pressed" (boolText (Model.getAreaCapture model /= Nothing))
+                        , Html.Attributes.attribute "aria-pressed" (boolText (has (areaCapture << just) model))
                         ]
                         [ Html.text "Capture area" ]
                     )
@@ -160,64 +159,50 @@ viewArtifact model artifact =
         ]
 
 
-viewAreaCapture : Maybe Model.AreaCapture -> Html (Flow Model ())
-viewAreaCapture mCapture =
-    case mCapture of
-        Nothing ->
-            Html.nothing
+viewAreaCapture : Model.AreaCapture -> Html (Flow Model ())
+viewAreaCapture capture =
+    Html.div
+        [ Html.Attributes.class "artifact-viewer-capture"
+        , Html.Events.preventDefaultOn "mousedown" (Decode.map (\drag -> ( Actions.beginAreaDrag drag, True )) areaDragStartDecoder)
+        ]
+        [ Html.viewMaybe viewAreaDrag (try areaCaptureDragging capture) ]
 
-        Just capture ->
-            Html.div
-                [ Html.Attributes.class "artifact-viewer-capture"
-                , Html.Events.preventDefaultOn "mousedown" (Decode.map (\drag -> ( Actions.beginAreaDrag drag, True )) areaDragStartDecoder)
-                ]
-                [ case capture of
-                    Model.AreaCaptureArmed ->
-                        Html.nothing
 
-                    Model.AreaCaptureDragging drag ->
-                        let
-                            rect =
-                                Model.areaDragRect drag
+viewAreaDrag : Model.AreaDrag -> Html msg
+viewAreaDrag drag =
+    let
+        rect =
+            Model.areaDragRect drag
 
-                            px value =
-                                String.fromFloat value ++ "px"
-                        in
-                        Html.div
-                            [ Html.Attributes.class "artifact-viewer-capture-area"
-                            , Html.Attributes.style "left" (px rect.x)
-                            , Html.Attributes.style "top" (px rect.y)
-                            , Html.Attributes.style "width" (px rect.width)
-                            , Html.Attributes.style "height" (px rect.height)
-                            ]
-                            []
-                ]
+        px value =
+            String.fromFloat value ++ "px"
+    in
+    Html.div
+        [ Html.Attributes.class "artifact-viewer-capture-area"
+        , Html.Attributes.style "left" (px rect.x)
+        , Html.Attributes.style "top" (px rect.y)
+        , Html.Attributes.style "width" (px rect.width)
+        , Html.Attributes.style "height" (px rect.height)
+        ]
+        []
 
 
 areaDragStartDecoder : Decode.Decoder Model.AreaDrag
 areaDragStartDecoder =
-    Decode.field "button" Decode.int
-        |> Decode.andThen
-            (\button ->
-                if button == 0 then
-                    Decode.map3
-                        (\client offset overlaySize ->
-                            { overlayOrigin = { x = client.x - offset.x, y = client.y - offset.y }
-                            , overlaySize = overlaySize
-                            , anchor = offset
-                            , cursor = offset
-                            }
-                        )
-                        Actions.clientPointDecoder
-                        (Decode.map2 Model.AreaPoint (Decode.field "offsetX" Decode.float) (Decode.field "offsetY" Decode.float))
-                        (Decode.map2 Model.AreaPoint
-                            (Decode.at [ "currentTarget", "clientWidth" ] Decode.float)
-                            (Decode.at [ "currentTarget", "clientHeight" ] Decode.float)
-                        )
-
-                else
-                    Decode.fail "not the primary button"
+    Decode.when (Decode.field "button" Decode.int)
+        ((==) 0)
+        (Decode.map3
+            (\client offset overlaySize ->
+                { overlayOrigin = { x = client.x - offset.x, y = client.y - offset.y }
+                , overlaySize = overlaySize
+                , anchor = offset
+                , cursor = offset
+                }
             )
+            Actions.clientPointDecoder
+            (Model.areaPointDecoder [ "offsetX" ] [ "offsetY" ])
+            (Model.areaPointDecoder [ "currentTarget", "clientWidth" ] [ "currentTarget", "clientHeight" ])
+        )
 
 
 view404 : Html (Flow Model ())
