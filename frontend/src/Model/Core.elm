@@ -1758,6 +1758,7 @@ type Model
         , key : Browser.Navigation.Key
         , toasts : List (Toast (Flow Model ()))
         , nextToastId : Int
+        , toastHistory : List Toast.Past
         , nextClientId : Int
         , modalConfirm : ModalConfirmConfig
         , downstreamEntities : Dict Int (List Int)
@@ -2100,6 +2101,11 @@ getNextToastId (Model model) =
     model.nextToastId
 
 
+getToastHistory : Model -> List Toast.Past
+getToastHistory (Model model) =
+    model.toastHistory
+
+
 getNextClientId : Model -> Int
 getNextClientId (Model model) =
     model.nextClientId
@@ -2331,6 +2337,7 @@ type alias Flags =
     , isNarrow : Bool
     , now : Int
     , submittedTurns : Value
+    , toastHistory : Maybe String
     }
 
 
@@ -2349,6 +2356,12 @@ type AgentTurnEvent
 
 initialModel : Browser.Navigation.Key -> Route -> Flags -> Model
 initialModel key route flags =
+    let
+        storedToastHistory =
+            Maybe.withDefault "[]" flags.toastHistory
+                |> Decode.decodeString (Decode.list Toast.pastDecoder)
+                |> Result.withDefault []
+    in
     Model
         { projects = NotAsked
         , steps = Dict.empty
@@ -2359,7 +2372,8 @@ initialModel key route flags =
         , origin = flags.origin
         , key = key
         , toasts = []
-        , nextToastId = 0
+        , nextToastId = Maybe.unwrap 0 ((+) 1 << .id) (List.head storedToastHistory)
+        , toastHistory = storedToastHistory
         , nextClientId = 0
         , modalConfirm = initModalConfirmConfig
         , downstreamEntities = Dict.empty

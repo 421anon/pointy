@@ -1261,6 +1261,11 @@ nextToastId =
     lens ".nextToastId" Model.getNextToastId (\(Model t) nextToastId_ -> Model { t | nextToastId = nextToastId_ })
 
 
+toastHistory : Lens ls Model (List Toast.Past) x y
+toastHistory =
+    lens ".toastHistory" Model.getToastHistory (\(Model t) history -> Model { t | toastHistory = history })
+
+
 needsIntro : Lens ls { a | needsIntro : b } b x y
 needsIntro =
     lens ".needsIntro" .needsIntro (\t needsIntro_ -> { t | needsIntro = needsIntro_ })

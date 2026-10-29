@@ -1,6 +1,6 @@
 module Components.StatusBar exposing (view)
 
-import Accessors exposing (try)
+import Accessors exposing (get, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData)
 import Flow exposing (Flow)
@@ -13,11 +13,12 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
-import Model.Lenses exposing (loadedProjects, route)
+import Model.Lenses exposing (loadedProjects, route, toastHistory)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
 import Set exposing (Set)
 import Time
+import Toast
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
 import View.Organize as Organize
@@ -368,7 +369,8 @@ viewIndependentControls model =
             Model.getAgent model
     in
     Html.div [ class "status-bar__actions" ]
-        [ Html.button
+        [ viewToastHistory model
+        , Html.button
             [ classList
                 [ ( "status-bar__control", True )
                 , ( "status-bar__agent", True )
@@ -426,6 +428,40 @@ viewIndependentControls model =
                 ]
             ]
         , viewUserMenu model
+        ]
+
+
+viewToastHistory : Model -> Html (Flow Model ())
+viewToastHistory model =
+    let
+        popoverId =
+            "toast-history-popover"
+    in
+    Html.span [ class "toast-history" ]
+        [ Html.button
+            [ class "status-bar__control"
+            , type_ "button"
+            , attribute "popovertarget" popoverId
+            , style "anchor-name" ("--anchor-" ++ popoverId)
+            , title "Notifications"
+            , attribute "aria-label" "Notifications"
+            ]
+            [ iconCustom False "notifications" [ attribute "aria-hidden" "true" ] ]
+        , Html.Keyed.node "div"
+            [ class "listing-popover toast-history__popover"
+            , id popoverId
+            , attribute "popover" "auto"
+            , style "position-anchor" ("--anchor-" ++ popoverId)
+            ]
+            (( "header", Html.strong [ class "toast-history__header" ] [ Html.text "Notifications" ] )
+                :: (case get toastHistory model of
+                        [] ->
+                            [ ( "empty", Html.span [ class "toast-history__empty" ] [ Html.text "Nothing yet" ] ) ]
+
+                        history ->
+                            List.map (Toast.viewPast (Model.getNow model)) history
+                   )
+            )
         ]
 
 

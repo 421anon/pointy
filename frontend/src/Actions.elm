@@ -3090,17 +3090,34 @@ addToast isSuccess message =
 
 addToastAction : Bool -> String -> Maybe (Toast.ToastAction (Flow Model ())) -> Flow Model ()
 addToastAction isSuccess message mAction =
-    Flow.forAll nextToastId
-        (\nextId ->
-            Flow.setAll (toasts << each << needsIntro) False
-                |> Flow.seq (Flow.over toasts ((::) <| Toast message nextId isSuccess True mAction))
-                |> Flow.seq (Flow.over nextToastId (\_ -> nextId + 1))
-        )
+    Flow.performTask Time.now
+        |> Flow.andThen
+            (\addedAt ->
+                Flow.forAll nextToastId
+                    (\nextId ->
+                        Flow.setAll (toasts << each << needsIntro) False
+                            |> Flow.seq (Flow.over toasts ((::) <| Toast message nextId isSuccess True mAction))
+                            |> Flow.seq (Flow.over toastHistory (List.take 100 << (::) (Toast.Past message nextId isSuccess addedAt)))
+                    )
+                    |> Flow.seq (Flow.over nextToastId ((+) 1))
+                    |> Flow.seq storeToastHistory
+            )
+
+
+storeToastHistory : Flow Model ()
+storeToastHistory =
+    Flow.forAll toastHistory
+        (callJs "storeToastHistory" (Encode.string << Encode.encode 0 << Encode.list Toast.encodePast) (Decode.succeed ()))
 
 
 dismissToast : Int -> Flow Model ()
 dismissToast toastId =
     Flow.over toasts (List.removeWhen <| (==) toastId << .id)
+
+
+dismissAllToasts : Flow Model ()
+dismissAllToasts =
+    Flow.setAll toasts []
 
 
 resetNeedsIntro : Int -> Flow Model ()

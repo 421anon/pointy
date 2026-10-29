@@ -1,6 +1,6 @@
 module View.Main exposing (view)
 
-import Accessors exposing (has, just, try)
+import Accessors exposing (get, has, just, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData exposing (ApiData(..), success)
@@ -14,7 +14,7 @@ import Html.Events
 import Html.Extra as Html
 import Html.Keyed
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name)
+import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, toasts)
 import Model.Lib as Lib
 import Organize
 import Route
@@ -77,8 +77,17 @@ view model =
 
 viewToasts : Model -> Html (Flow Model ())
 viewToasts model =
+    let
+        viewToast mDismissAll toast =
+            ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) mDismissAll toast )
+    in
     Html.Keyed.node "div" [ Html.Attributes.class "toast-container" ] <|
-        List.map (\toast -> ( String.fromInt toast.id, Toast.view (Actions.dismissToast toast.id) toast )) (Model.getToasts model)
+        case get toasts model of
+            top :: ((_ :: _) as rest) ->
+                viewToast (Just Actions.dismissAllToasts) top :: List.map (viewToast Nothing) rest
+
+            single ->
+                List.map (viewToast Nothing) single
 
 
 viewArtifact : Model -> Route.ArtifactParams -> Html (Flow Model ())
