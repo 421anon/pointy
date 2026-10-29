@@ -1,4 +1,4 @@
-module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewStopButton, viewStoppingIndicator, viewUploadProgress)
+module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordLogPopover, viewStepRecordStatus, viewStopButton, viewStoppingIndicator, viewUploadProgress)
 
 import Accessors exposing (has, just, key, lens, set, try)
 import Actions
@@ -74,6 +74,7 @@ type alias ListingRow =
     , inlineRename : Maybe InlineRename
     , expanders : List (Html (Flow Model ()))
     , form : Html (Flow Model ())
+    , popovers : List (Html (Flow Model ()))
     }
 
 
@@ -288,13 +289,7 @@ viewListing { model, projects, scope, stepConfig, rows, header } =
         , Html.Keyed.node "div"
             ([ class "listing-groups" ]
                 ++ (if editable then
-                        [ Events.custom "contextmenu"
-                            (Decode.map2
-                                (\x y -> { message = Organize.openEmptyMenu x y, stopPropagation = True, preventDefault = True })
-                                (Decode.field "clientX" Decode.int)
-                                (Decode.field "clientY" Decode.int)
-                            )
-                        ]
+                        [ contextMenuOutsidePopovers Organize.openEmptyMenu ]
 
                     else
                         []
@@ -576,13 +571,14 @@ viewRow model rowContext orderedRefs edgeAttrs row =
             ]
             :: row.form
             :: row.expanders
+            ++ row.popovers
         )
 
 
 rowClickAttrs : Bool -> Model.ListingScope -> List Model.ChildRef -> Model.ChildRef -> Maybe (Flow Model ()) -> List (Html.Attribute (Flow Model ()))
 rowClickAttrs editable scope orderedRefs ref mOpenRow =
     [ Events.on "click"
-        (Decode.field "target" (Decode.whenNotInside "listing-row-actions" ())
+        (Decode.field "target" (Decode.whenNotInside (Decode.hasClass "listing-row-actions") ())
             |> Decode.andThen (\_ -> clickModsDecoder)
             |> Decode.andThen
                 (\mods ->
@@ -605,13 +601,21 @@ clickModsDecoder =
 
 rowContextMenuAttrs : Model.ListingScope -> Model.ChildRef -> List (Html.Attribute (Flow Model ()))
 rowContextMenuAttrs scope ref =
-    [ Events.custom "contextmenu"
-        (Decode.map2
-            (\x y -> { message = Organize.openRowMenu scope x y ref, stopPropagation = True, preventDefault = True })
-            (Decode.field "clientX" Decode.int)
-            (Decode.field "clientY" Decode.int)
+    [ contextMenuOutsidePopovers (\x y -> Organize.openRowMenu scope x y ref) ]
+
+
+contextMenuOutsidePopovers : (Int -> Int -> Flow Model ()) -> Html.Attribute (Flow Model ())
+contextMenuOutsidePopovers openMenu =
+    Events.custom "contextmenu"
+        (Decode.field "target" (Decode.whenNotInside (Decode.hasClass "row-popover") ())
+            |> Decode.andThen
+                (\_ ->
+                    Decode.map2
+                        (\x y -> { message = openMenu x y, stopPropagation = True, preventDefault = True })
+                        (Decode.field "clientX" Decode.int)
+                        (Decode.field "clientY" Decode.int)
+                )
         )
-    ]
 
 
 viewMtimeBadge : Maybe Posix -> Posix -> Html msg
@@ -632,8 +636,8 @@ viewMtimeBadge mPosix now =
         mPosix
 
 
-viewStatusApiData : String -> ApiData String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
-viewStatusApiData tableName logState mRecordId status =
+viewStatusApiData : String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
+viewStatusApiData tableName mRecordId status =
     let
         viewStatusPill s =
             let
@@ -650,83 +654,23 @@ viewStatusApiData tableName logState mRecordId status =
 
                         _ ->
                             presentation.label
-
-                showsLog =
-                    case s of
-                        StatusFailure _ ->
-                            True
-
-                        StatusCertificationFailed _ ->
-                            True
-
-                        _ ->
-                            False
             in
-            case ( showsLog, mRecordId ) of
+            case ( showsLog s, mRecordId ) of
                 ( True, Just stepId ) ->
                     let
                         popoverId =
-                            "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
+                            stepLogPopoverId tableName stepId
                     in
-                    Html.span [ class "status-log", Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True )) ]
-                        [ Html.button
-                            [ class "status-indicator-wrapper status-log-trigger"
-                            , title statusText
-                            , attribute "popovertarget" popoverId
-                            , style "anchor-name" ("--anchor-" ++ popoverId)
-                            , Events.onClick (Actions.loadStepLog stepId)
-                            ]
-                            [ Html.span
-                                [ class ("status-indicator " ++ colorClass) ]
-                                []
-                            ]
-                        , Html.div
-                            [ class "step-log-popover"
-                            , id popoverId
-                            , attribute "popover" "auto"
-                            , style "position-anchor" ("--anchor-" ++ popoverId)
-                            ]
-                            [ Html.div [ class "step-log-popover-header" ]
-                                [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
-                                , Html.span []
-                                    [ Html.viewMaybe
-                                        (\log ->
-                                            Html.button
-                                                [ class "icon-btn"
-                                                , title "Investigate with agent"
-                                                , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
-                                                ]
-                                                [ icon False "smart_toy" ]
-                                        )
-                                        (ApiData.toMaybe logState)
-                                    , Html.button
-                                        [ class "icon-btn"
-                                        , title "Close"
-                                        , Events.onClick (Actions.hidePopover popoverId)
-                                        ]
-                                        [ icon True "close" ]
-                                    ]
-                                ]
-                            , Html.div [ class "step-log-popover-body" ]
-                                [ case logState of
-                                    NotAsked ->
-                                        Html.text "Loading build log..."
-
-                                    Loading _ ->
-                                        Html.text "Loading build log..."
-
-                                    Success log ->
-                                        if String.isEmpty log then
-                                            Html.text "Build log is empty."
-
-                                        else
-                                            Html.div [ class "step-log-pre" ]
-                                                [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
-
-                                    Error err ->
-                                        Html.text (Http.errorMessage err)
-                                ]
-                            ]
+                    Html.button
+                        [ class "status-indicator-wrapper status-log-trigger"
+                        , title statusText
+                        , attribute "popovertarget" popoverId
+                        , style "anchor-name" ("--anchor-" ++ popoverId)
+                        , Events.stopPropagationOn "click" (Decode.succeed ( Actions.loadStepLog stepId, True ))
+                        ]
+                        [ Html.span
+                            [ class ("status-indicator " ++ colorClass) ]
+                            []
                         ]
 
                 _ ->
@@ -753,22 +697,116 @@ viewStatusApiData tableName logState mRecordId status =
                 ]
         )
         viewStatusPill
-        (always <| viewStatusPill (StatusFailure Nothing))
+        (always <| viewStatusPill statusFetchFailure)
         status
 
 
-viewStepRecordStatus : String -> StepConfigEntry -> ApiData String -> Bool -> StepRecord -> Html (Flow Model ())
-viewStepRecordStatus name entry logState ingesting record =
-    viewStatusApiData
-        name
-        logState
-        record.id
-        (if ingesting then
-            Success StatusRunning
+statusFetchFailure : Status
+statusFetchFailure =
+    StatusFailure Nothing
 
-         else
-            TableSpec.getStatus (Specs.steps name entry) record
-        )
+
+showsLog : Status -> Bool
+showsLog status =
+    case status of
+        StatusFailure _ ->
+            True
+
+        StatusCertificationFailed _ ->
+            True
+
+        _ ->
+            False
+
+
+stepLogPopoverId : String -> Int -> String
+stepLogPopoverId tableName stepId =
+    "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
+
+
+viewStepLogPopover : String -> ApiData String -> Int -> Html (Flow Model ())
+viewStepLogPopover tableName logState stepId =
+    let
+        popoverId =
+            stepLogPopoverId tableName stepId
+    in
+    Html.div
+        [ class "step-log-popover row-popover"
+        , id popoverId
+        , attribute "popover" "auto"
+        , style "position-anchor" ("--anchor-" ++ popoverId)
+        ]
+        [ Html.div [ class "step-log-popover-header" ]
+            [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
+            , Html.span []
+                [ Html.viewMaybe
+                    (\log ->
+                        Html.button
+                            [ class "icon-btn"
+                            , title "Investigate with agent"
+                            , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
+                            ]
+                            [ icon False "smart_toy" ]
+                    )
+                    (ApiData.toMaybe logState)
+                , Html.button
+                    [ class "icon-btn"
+                    , title "Close"
+                    , Events.onClick (Actions.hidePopover popoverId)
+                    ]
+                    [ icon True "close" ]
+                ]
+            ]
+        , Html.div [ class "step-log-popover-body" ]
+            [ case logState of
+                NotAsked ->
+                    Html.text "Loading build log..."
+
+                Loading _ ->
+                    Html.text "Loading build log..."
+
+                Success log ->
+                    if String.isEmpty log then
+                        Html.text "Build log is empty."
+
+                    else
+                        Html.div [ class "step-log-pre" ]
+                            [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
+
+                Error err ->
+                    Html.text (Http.errorMessage err)
+            ]
+        ]
+
+
+stepRecordStatus : String -> StepConfigEntry -> Bool -> StepRecord -> ApiData Status
+stepRecordStatus name entry ingesting record =
+    if ingesting then
+        Success StatusRunning
+
+    else
+        TableSpec.getStatus (Specs.steps name entry) record
+
+
+viewStepRecordStatus : String -> StepConfigEntry -> Bool -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatus name entry ingesting record =
+    viewStatusApiData name record.id (stepRecordStatus name entry ingesting record)
+
+
+viewStepRecordLogPopover : String -> StepConfigEntry -> ApiData String -> Bool -> StepRecord -> Html (Flow Model ())
+viewStepRecordLogPopover name entry logState ingesting record =
+    let
+        logShown =
+            stepRecordStatus name entry ingesting record
+                |> ApiData.foldVisible Nothing identity Just (always (Just statusFetchFailure))
+                |> Maybe.unwrap False showsLog
+    in
+    case ( logShown, record.id ) of
+        ( True, Just stepId ) ->
+            viewStepLogPopover name logState stepId
+
+        _ ->
+            Html.nothing
 
 
 actionsPopoverId : ChildLink -> String
@@ -1241,7 +1279,7 @@ upsertOnEnter spec =
     Events.on "keydown" <|
         Keyboard.decodeCombinations
             [ ( Keyboard.enter
-              , Decode.field "target" (Decode.whenNotInside "code-input" (TableSpec.getUpsertRecord spec)) |> Decode.when targetDecoder allowEnter
+              , Decode.field "target" (Decode.whenNotInside (Decode.hasClass "code-input") (TableSpec.getUpsertRecord spec)) |> Decode.when targetDecoder allowEnter
               )
             ]
 

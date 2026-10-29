@@ -508,7 +508,6 @@ onOrganizeDragEvent value =
     case Decode.decodeValue dragEventDecoder value of
         Ok (OrganizeDragStart { sourceScope, refs }) ->
             Flow.setAll organizeDrag (Just { sourceScope = sourceScope, refs = refs })
-                |> Flow.seq (Flow.setAll listingSelection (Selection.selectAllState sourceScope refs))
                 |> Flow.seq closeMenu
 
         Ok OrganizeDragEnd ->

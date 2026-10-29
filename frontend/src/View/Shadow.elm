@@ -33,7 +33,7 @@ import View.FileBrowser as FileBrowser
 import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
-import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewUploadProgress)
+import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordLogPopover, viewStepRecordStatus, viewUploadProgress)
 
 
 viewStepConfigUnavailable : Model -> Html msg
@@ -98,7 +98,7 @@ blockedReason comparison =
         comparison
 
 
-viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe (Html (Flow Model ()))
+viewReviewControls : Model -> TableSpec StepRecord -> Int -> StepRecord -> { controls : Maybe (Html (Flow Model ())), popover : Maybe (Html (Flow Model ())) }
 viewReviewControls model spec stepId record =
     let
         mReviewedAt =
@@ -108,20 +108,26 @@ viewReviewControls model spec stepId record =
             else
                 record.lastModifiedAt
 
-        content =
+        review =
             viewReviewPopover model spec stepId record
+
+        content =
+            Maybe.unwrap [] (.trigger >> List.singleton) review
                 ++ Maybe.unwrap [] (viewReviewIndicator model spec stepId mReviewedAt) record.review
     in
-    if List.isEmpty content then
-        Nothing
+    { controls =
+        if List.isEmpty content then
+            Nothing
 
-    else
-        Just <|
-            Html.span
-                [ Html.Attributes.class "step-review"
-                , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
-                ]
-                content
+        else
+            Just <|
+                Html.span
+                    [ Html.Attributes.class "step-review"
+                    , Html.Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+                    ]
+                    content
+    , popover = Maybe.map .popover review
+    }
 
 
 viewReviewIndicator : Model -> TableSpec StepRecord -> Int -> Maybe Posix -> Model.Review -> List (Html (Flow Model ()))
@@ -282,7 +288,7 @@ formatUtcMinute posix =
         |> String.replace "T" " "
 
 
-viewReviewPopover : Model -> TableSpec StepRecord -> Int -> StepRecord -> List (Html (Flow Model ()))
+viewReviewPopover : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe { trigger : Html (Flow Model ()), popover : Html (Flow Model ()) }
 viewReviewPopover model spec stepId record =
     let
         isReviewed =
@@ -338,7 +344,7 @@ viewReviewPopover model spec stepId record =
 
         popover =
             Html.div
-                [ Html.Attributes.class "step-review-popover"
+                [ Html.Attributes.class "step-review-popover row-popover"
                 , Html.Attributes.id popoverId
                 , Html.Attributes.attribute "popover" "auto"
                 , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
@@ -393,10 +399,10 @@ viewReviewPopover model spec stepId record =
                 ]
     in
     if not (isReviewed || isBuilt) then
-        []
+        Nothing
 
     else
-        [ trigger, popover ]
+        Just { trigger = trigger, popover = popover }
 
 
 viewProject : Model -> Dict Int ProjectRecord -> ProjectRecord -> Html (Flow Model ())
@@ -753,6 +759,7 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                 else
                     Nothing
             , expanders = []
+            , popovers = []
             , form =
                 if isEditing && not nameEditOnly && not readOnly then
                     Maybe.map
@@ -809,8 +816,8 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                         )
                         step.id
 
-                reviewControls =
-                    step.id |> Maybe.andThen (\stepId -> viewReviewControls model spec stepId step)
+                review =
+                    step.id |> Maybe.map (\stepId -> viewReviewControls model spec stepId step)
 
                 uploadProgressView =
                     step.id |> Maybe.andThen (\id -> Maybe.map (viewUploadProgress id) (Dict.get id uploads))
@@ -884,16 +891,15 @@ listingRow model projects_ parentId stepConfig presentTypes link =
             , typeName = step.type_
             , typeIcon = entry.icon
             , statusPill =
-                Html.Lazy.lazy5 viewStepRecordStatus
+                Html.Lazy.lazy4 viewStepRecordStatus
                     step.type_
                     entry
-                    recordLog
                     isIngesting
                     step
             , validationErrors = TableSpec.getValidationErrors spec step
             , alwaysVisibleActions =
                 Maybe.values
-                    [ reviewControls
+                    [ Maybe.andThen .controls review
                     , uploadProgressView
                     , ingestProgressView
                     ]
@@ -931,6 +937,15 @@ listingRow model projects_ parentId stepConfig presentTypes link =
             , inlineRename = mInlineRename
             , expanders = expanders
             , form = formView
+            , popovers =
+                [ Html.Lazy.lazy5 viewStepRecordLogPopover
+                    step.type_
+                    entry
+                    recordLog
+                    isIngesting
+                    step
+                , Html.viewMaybe identity (Maybe.andThen .popover review)
+                ]
             }
     in
     case link.kind of
