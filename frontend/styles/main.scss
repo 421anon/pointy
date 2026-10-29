@@ -446,8 +446,8 @@ body {
     background-color: var(--state-info-outline);
   }
 
-  &.drag-source > *,
-  &.listing-row-cut > * {
+  &.drag-source > :not([popover]),
+  &.listing-row-cut > :not([popover]) {
     opacity: 0.4;
   }
 
@@ -516,7 +516,6 @@ body {
 
   > .listing-row-checkbox,
   > .listing-row-status,
-  > .status-log,
   > .status-indicator-wrapper,
   > .project-error-indicator {
     justify-self: center;
@@ -2939,6 +2938,9 @@ body:has(dialog[open]) {
 .toast-message {
   flex: 1 1 auto;
   min-width: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   color: var(--text-primary);
   font-size: 14px;
   line-height: 1.4;
