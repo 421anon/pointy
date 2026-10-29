@@ -1836,6 +1836,46 @@ $delimited-grid-row-height: 28px;
   pointer-events: none;
 }
 
+.artifact-viewer-question {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-elevated);
+  cursor: auto;
+}
+
+.artifact-viewer-question-input {
+  flex: 1;
+  min-width: 0;
+  max-height: 160px;
+  padding: var(--spacing-xs);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  resize: none;
+  field-sizing: content;
+
+  &:focus {
+    outline: none;
+  }
+}
+
+.artifact-viewer-question-send[aria-busy="true"] {
+  cursor: progress;
+}
+
+.artifact-viewer-question-spinner {
+  animation: spin 1s linear infinite;
+}
+
 .artifact-viewer-table {
   display: flex;
   flex-direction: column;

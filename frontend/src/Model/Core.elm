@@ -889,6 +889,7 @@ type alias AgentSessionNameEdit =
 
 type AgentRequest
     = CreatingAgentSession
+    | StartingAgentChat
     | SendingAgentPrompt String
     | SteeringAgentTurn String
     | ArchivingAgentSession String
@@ -1826,6 +1827,7 @@ type alias GutterDrag =
 type AreaCapture
     = AreaCaptureArmed
     | AreaCaptureDragging AreaDrag
+    | AreaCaptureAsking AreaQuestion
 
 
 type alias AreaDrag =
@@ -1833,6 +1835,14 @@ type alias AreaDrag =
     , overlaySize : AreaPoint
     , anchor : AreaPoint
     , cursor : AreaPoint
+    }
+
+
+type alias AreaQuestion =
+    { rect : AreaRect
+    , overlaySize : AreaPoint
+    , capturedArea : Maybe CapturedArea
+    , prompt : String
     }
 
 

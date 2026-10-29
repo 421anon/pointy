@@ -13,14 +13,13 @@ import Html.Attributes
 import Html.Events
 import Html.Extra as Html
 import Html.Keyed
-import Json.Decode as Decode
-import Json.Decode.Extra as Decode
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, areaCaptureDragging, artifactTableContent, artifactTableFor, currentProject, name)
+import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name)
 import Model.Lib as Lib
 import Organize
 import Route
 import Toast
+import View.AreaCapture as AreaCapture
 import View.Compare as Compare
 import View.Dialog as Dialog
 import View.Icons exposing (icon, iconCustom)
@@ -127,7 +126,7 @@ viewArtifact model artifact =
                     , Html.Attributes.class "artifact-viewer-frame"
                     ]
                     []
-            , Html.viewIf (not isTable) (Html.viewMaybe viewAreaCapture (Model.getAreaCapture model))
+            , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
                 [ Html.viewIf (not isTable)
                     (Html.button
@@ -157,52 +156,6 @@ viewArtifact model artifact =
         , AgentPanel.viewLightbox model
         , viewToasts model
         ]
-
-
-viewAreaCapture : Model.AreaCapture -> Html (Flow Model ())
-viewAreaCapture capture =
-    Html.div
-        [ Html.Attributes.class "artifact-viewer-capture"
-        , Html.Events.preventDefaultOn "mousedown" (Decode.map (\drag -> ( Actions.beginAreaDrag drag, True )) areaDragStartDecoder)
-        ]
-        [ Html.viewMaybe viewAreaDrag (try areaCaptureDragging capture) ]
-
-
-viewAreaDrag : Model.AreaDrag -> Html msg
-viewAreaDrag drag =
-    let
-        rect =
-            Model.areaDragRect drag
-
-        px value =
-            String.fromFloat value ++ "px"
-    in
-    Html.div
-        [ Html.Attributes.class "artifact-viewer-capture-area"
-        , Html.Attributes.style "left" (px rect.x)
-        , Html.Attributes.style "top" (px rect.y)
-        , Html.Attributes.style "width" (px rect.width)
-        , Html.Attributes.style "height" (px rect.height)
-        ]
-        []
-
-
-areaDragStartDecoder : Decode.Decoder Model.AreaDrag
-areaDragStartDecoder =
-    Decode.when (Decode.field "button" Decode.int)
-        ((==) 0)
-        (Decode.map3
-            (\client offset overlaySize ->
-                { overlayOrigin = { x = client.x - offset.x, y = client.y - offset.y }
-                , overlaySize = overlaySize
-                , anchor = offset
-                , cursor = offset
-                }
-            )
-            Actions.clientPointDecoder
-            (Model.areaPointDecoder [ "offsetX" ] [ "offsetY" ])
-            (Model.areaPointDecoder [ "currentTarget", "clientWidth" ] [ "currentTarget", "clientHeight" ])
-        )
 
 
 view404 : Html (Flow Model ())
