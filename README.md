@@ -16,7 +16,7 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 
 - Organization batches reject newly introduced project cycles, including cycles assembled within a single batch, without committing partial changes.
 - Manual drag reorder follows the displayed folders-first order and, when grouped by type, works within each group; a drag holding rows from several groups can only drop into folders. Drop lines appear only where a drop changes the order, so a dragged row or contiguous block gets none beside or inside it, while a scattered selection can gather at any line. A drop lands directly above the row below the line, or directly below the last row, so the result never depends on which half of the line the pointer is over. A drag holding folders can't drop into those folders or anything inside them, matching the Move to and Link to dialogs. Every drop clears the selection.
-- Organize drags start only from a row's header. Links, images, selected text and form fields inside an open row keep the browser's native drag, and text in a row's build log and review popovers stays selectable.
+- Organize drags start only from a row's header. Links, images, selected text and form fields inside an open row keep the browser's native drag, and text in a row's build log and review popovers stays selectable, with the browser's native context menu.
 - Historical views are read-only, including toast Undo, and retain the browser's native context menu.
 - Long toast messages scroll within half the window height.
 - Listing header controls wrap on narrow screens. The selection action bar overlays the listing header, so selecting never shifts rows; it collapses to icons on narrow listings.

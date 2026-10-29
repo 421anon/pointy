@@ -10,6 +10,11 @@ whenNotInside cls msg =
     when decodeClassList (not << List.member cls) <| map (Maybe.withDefault msg) <| optionalField "parentNode" <| lazy (\() -> whenNotInside cls msg)
 
 
+whenNotInsidePopover : msg -> Decoder msg
+whenNotInsidePopover msg =
+    when (withDefault Nothing <| field "popover" <| nullable string) ((==) Nothing) <| map (Maybe.withDefault msg) <| optionalField "parentNode" <| lazy (\() -> whenNotInsidePopover msg)
+
+
 decodeClassList : Decoder (List String)
 decodeClassList =
     withDefault [] <| field "classList" <| collection string

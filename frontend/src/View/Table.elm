@@ -289,13 +289,7 @@ viewListing { model, projects, scope, stepConfig, rows, header } =
         , Html.Keyed.node "div"
             ([ class "listing-groups" ]
                 ++ (if editable then
-                        [ Events.custom "contextmenu"
-                            (Decode.map2
-                                (\x y -> { message = Organize.openEmptyMenu x y, stopPropagation = True, preventDefault = True })
-                                (Decode.field "clientX" Decode.int)
-                                (Decode.field "clientY" Decode.int)
-                            )
-                        ]
+                        [ contextMenuOutsidePopovers Organize.openEmptyMenu ]
 
                     else
                         []
@@ -607,13 +601,21 @@ clickModsDecoder =
 
 rowContextMenuAttrs : Model.ListingScope -> Model.ChildRef -> List (Html.Attribute (Flow Model ()))
 rowContextMenuAttrs scope ref =
-    [ Events.custom "contextmenu"
-        (Decode.map2
-            (\x y -> { message = Organize.openRowMenu scope x y ref, stopPropagation = True, preventDefault = True })
-            (Decode.field "clientX" Decode.int)
-            (Decode.field "clientY" Decode.int)
+    [ contextMenuOutsidePopovers (\x y -> Organize.openRowMenu scope x y ref) ]
+
+
+contextMenuOutsidePopovers : (Int -> Int -> Flow Model ()) -> Html.Attribute (Flow Model ())
+contextMenuOutsidePopovers openMenu =
+    Events.custom "contextmenu"
+        (Decode.field "target" (Decode.whenNotInsidePopover ())
+            |> Decode.andThen
+                (\_ ->
+                    Decode.map2
+                        (\x y -> { message = openMenu x y, stopPropagation = True, preventDefault = True })
+                        (Decode.field "clientX" Decode.int)
+                        (Decode.field "clientY" Decode.int)
+                )
         )
-    ]
 
 
 viewMtimeBadge : Maybe Posix -> Posix -> Html msg
