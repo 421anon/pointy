@@ -4,8 +4,11 @@ const OVERVIEW_MAX_EDGE = 1024;
 const OVERVIEW_BORDER_COLOR = "red";
 const OVERVIEW_BORDER_WIDTH = 2;
 const CAPTURE_SCROLL_BOX_ATTRIBUTE = "data-pointy-capture-scroll-box";
+const CAPTURE_FONT_SIZE_ATTRIBUTE = "data-pointy-capture-font-size";
 const XHTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const SCROLLING_OVERFLOWS = ["auto", "scroll"];
+const TRANSPARENT = "rgba(0, 0, 0, 0)";
+const DEFAULT_CANVAS_COLOR = "white";
 
 function scrollBoxState(element) {
   const style = element.ownerDocument.defaultView.getComputedStyle(element);
@@ -36,6 +39,13 @@ function markScrollBoxes(document) {
       return [element];
     });
   return () => marked.forEach((element) => element.removeAttribute(CAPTURE_SCROLL_BOX_ATTRIBUTE));
+}
+
+function markFontSizes(document) {
+  const styledElements = [...document.querySelectorAll("*")].filter((element) => element.style);
+  const fontSizes = styledElements.map((element) => document.defaultView.getComputedStyle(element).fontSize);
+  styledElements.forEach((element, index) => element.setAttribute(CAPTURE_FONT_SIZE_ATTRIBUTE, fontSizes[index]));
+  return () => styledElements.forEach((element) => element.removeAttribute(CAPTURE_FONT_SIZE_ATTRIBUTE));
 }
 
 // The copied style lists each logical property after its physical counterparts, so it would override what is set here. https://drafts.csswg.org/css-logical/#box
@@ -85,6 +95,11 @@ function shiftScrolledContent(box, scrollX, scrollY) {
   }
 }
 
+function restoreFontSize(element) {
+  element.style.fontSize = element.getAttribute(CAPTURE_FONT_SIZE_ATTRIBUTE);
+  element.removeAttribute(CAPTURE_FONT_SIZE_ATTRIBUTE);
+}
+
 function restoreScrollBox(box) {
   const { scrollX, scrollY, size } = JSON.parse(box.getAttribute(CAPTURE_SCROLL_BOX_ATTRIBUTE));
   box.removeAttribute(CAPTURE_SCROLL_BOX_ATTRIBUTE);
@@ -92,27 +107,50 @@ function restoreScrollBox(box) {
   if (scrollX !== 0 || scrollY !== 0) shiftScrolledContent(box, scrollX, scrollY);
 }
 
-function restoreScrollBoxes(svgUrl) {
+// A transformed root would become the containing block of the page's fixed elements and carry them off with the scroll, while an offset root leaves them on the viewport and lets sticky elements stick. https://drafts.csswg.org/css-transforms-1/#containing-block-for-all-descendants
+function scrollRoot(svg, { x, y }) {
+  const root = svg.querySelector("foreignObject").firstElementChild;
+  root.style.position = "relative";
+  offsetBox(root.style, x, y);
+}
+
+function restoreRenderedPage(svgUrl, scroll) {
   const dataStart = svgUrl.indexOf(",") + 1;
   const svg = new DOMParser().parseFromString(decodeURIComponent(svgUrl.slice(dataStart)), "image/svg+xml");
-  const boxes = svg.querySelectorAll(`[${CAPTURE_SCROLL_BOX_ATTRIBUTE}]`);
-  if (boxes.length === 0) return svgUrl;
-  boxes.forEach(restoreScrollBox);
+  svg.querySelectorAll(`[${CAPTURE_FONT_SIZE_ATTRIBUTE}]`).forEach(restoreFontSize);
+  svg.querySelectorAll(`[${CAPTURE_SCROLL_BOX_ATTRIBUTE}]`).forEach(restoreScrollBox);
+  scrollRoot(svg, scroll);
   return svgUrl.slice(0, dataStart) + encodeURIComponent(new XMLSerializer().serializeToString(svg));
 }
 
-async function renderPage(page, { pixelRatio, width, height, style }) {
+// The root's background, or else the body's, paints the whole canvas, beyond the root's box. https://www.w3.org/TR/css-backgrounds-3/#special-backgrounds
+function canvasColor(document) {
+  return (
+    [document.documentElement, document.body]
+      .filter(Boolean)
+      .map((element) => document.defaultView.getComputedStyle(element).backgroundColor)
+      .find((color) => color !== TRANSPARENT) ?? DEFAULT_CANVAS_COLOR
+  );
+}
+
+async function renderPage(page, { pixelRatio, width, height, style, scroll = { x: 0, y: 0 } }) {
   // html-to-image sizes the image from `width`/`height` and also writes them onto the root's style; `style` restores the page's own size so only the requested window is rendered without reflowing. https://github.com/bubkoo/html-to-image/blob/v1.11.13/src/apply-style.ts
   // Font embedding inserts fetched rules into live stylesheets, including the host page's. https://github.com/bubkoo/html-to-image/blob/v1.11.13/src/embed-webfonts.ts
   // Its copy of the page starts every scroll box at the top left and fixes each box's height without room for its scrollbars, so the state marked by markScrollBoxes is reapplied to the SVG before drawing. https://github.com/bubkoo/html-to-image/blob/v1.11.13/src/clone-node.ts
-  const svgUrl = await toSvg(page, { width, height, backgroundColor: "white", skipFonts: true, style });
+  // It also floors every font size and subtracts 0.1px, which narrows text and moves its line breaks, so the sizes marked by markFontSizes are reapplied too. https://github.com/bubkoo/html-to-image/blob/v1.11.13/src/clone-node.ts
+  // In the SVG the root is an ordinary box, so the canvas outside it, such as a collapsed body margin or the space below a short page, is painted separately.
+  const backgroundColor = canvasColor(page.ownerDocument);
+  const svgUrl = await toSvg(page, { width, height, backgroundColor, skipFonts: true, style });
   const image = new Image();
-  image.src = restoreScrollBoxes(svgUrl);
+  image.src = restoreRenderedPage(svgUrl, scroll);
   await image.decode();
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(width * pixelRatio);
   canvas.height = Math.round(height * pixelRatio);
-  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  const context = canvas.getContext("2d");
+  context.fillStyle = backgroundColor;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 
@@ -130,16 +168,14 @@ export async function captureArtifactArea({ frameId, x, y, width, height }) {
     height: Math.max(1, Math.round(height)),
   };
   const unmarkScrollBoxes = markScrollBoxes(frame.contentDocument);
+  const unmarkFontSizes = markFontSizes(frame.contentDocument);
   try {
     const viewport = await renderPage(page, {
       pixelRatio,
       width: frame.clientWidth,
       height: frame.clientHeight,
-      style: {
-        width: pageStyle.width,
-        height: pageStyle.height,
-        transform: `translate(${-view.scrollX}px, ${-view.scrollY}px)`,
-      },
+      style: { width: pageStyle.width, height: pageStyle.height },
+      scroll: { x: view.scrollX, y: view.scrollY },
     });
     const selection = document.createElement("canvas");
     selection.width = Math.round(width * pixelRatio);
@@ -172,6 +208,7 @@ export async function captureArtifactArea({ frameId, x, y, width, height }) {
     };
   } finally {
     unmarkScrollBoxes();
+    unmarkFontSizes();
   }
 }
 
