@@ -131,7 +131,7 @@ viewArtifact model artifact =
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
                 [ Html.viewIf (not isTable)
                     (Html.button
-                        [ Html.Attributes.class "artifact-viewer-action"
+                        [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
                         , Html.Attributes.type_ "button"
                         , Html.Events.onClick Actions.startAreaCapture
                         , Html.Attributes.attribute "aria-pressed" (boolText (has (areaCapture << just) model))
@@ -139,7 +139,7 @@ viewArtifact model artifact =
                         [ iconCustom False "ink_selection" [ Html.Attributes.attribute "aria-hidden" "true" ], Html.text "Ask agent" ]
                     )
                 , Html.button
-                    [ Html.Attributes.class "artifact-viewer-action"
+                    [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
                     , Html.Attributes.type_ "button"
                     , Html.Events.onClick Actions.toggleAgentPanel
                     , Html.Attributes.attribute "aria-controls" "agent-panel"

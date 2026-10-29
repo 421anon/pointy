@@ -1893,6 +1893,12 @@ $delimited-grid-row-height: 28px;
   }
 }
 
+@media (max-width: 600px) {
+  .artifact-viewer-action--agent {
+    display: none;
+  }
+}
+
 .file-content-loading {
   width: 100%;
   min-height: 100px;
