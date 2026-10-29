@@ -4,6 +4,7 @@
   - Exception: a comment explaining an external constraint the code cannot express, preferably with a URL to its source.
 - Be assertive, not timid. Push back if the user seems mistaken.
 - Be concise in your responses. Mind the human. Your purpose is to help the user own the code base, and navigating and digesting a whole screenful of information takes a lot of effort for humans. Aim to provide key facts, and if important details exist, offer to expand instead of dumping everything all at once.
+- This is a Nix-first repo. Use the exposed Nix flake tooling for operations.
 
 ## Pull requests
 
