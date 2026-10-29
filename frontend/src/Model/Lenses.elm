@@ -13,7 +13,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, TextContent, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareContent, ComparePane, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, TextContent, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -903,24 +903,59 @@ compareSelecting =
         )
 
 
-compareLeftContent : Lens ls CompareActiveData (ApiData TextContent) x y
+compareLeftPane : Lens ls CompareActiveData ComparePane x y
+compareLeftPane =
+    lens ".leftPane" .leftPane (\d v -> { d | leftPane = v })
+
+
+compareRightPane : Lens ls CompareActiveData ComparePane x y
+compareRightPane =
+    lens ".rightPane" .rightPane (\d v -> { d | rightPane = v })
+
+
+comparePaneContent : Lens ls ComparePane (ApiData CompareContent) x y
+comparePaneContent =
+    lens ".content" .content (\pane content -> { pane | content = content })
+
+
+comparePaneScrollTop : Lens ls ComparePane Float x y
+comparePaneScrollTop =
+    lens ".scrollTop" .scrollTop (\pane scrollTop -> { pane | scrollTop = scrollTop })
+
+
+comparePaneViewportHeight : Lens ls ComparePane Float x y
+comparePaneViewportHeight =
+    lens ".viewportHeight" .viewportHeight (\pane height -> { pane | viewportHeight = height })
+
+
+compareLeftContent : Lens ls CompareActiveData (ApiData CompareContent) x y
 compareLeftContent =
-    lens ".leftContent" .leftContent (\d v -> { d | leftContent = v })
+    compareLeftPane << comparePaneContent
 
 
-compareRightContent : Lens ls CompareActiveData (ApiData TextContent) x y
+compareRightContent : Lens ls CompareActiveData (ApiData CompareContent) x y
 compareRightContent =
-    lens ".rightContent" .rightContent (\d v -> { d | rightContent = v })
+    compareRightPane << comparePaneContent
 
 
-compareLeftInspect : Lens ls CompareActiveData Bool x y
-compareLeftInspect =
-    lens ".leftInspect" .leftInspect (\d v -> { d | leftInspect = v })
+compareLeftScrollTop : Lens ls CompareActiveData Float x y
+compareLeftScrollTop =
+    compareLeftPane << comparePaneScrollTop
 
 
-compareRightInspect : Lens ls CompareActiveData Bool x y
-compareRightInspect =
-    lens ".rightInspect" .rightInspect (\d v -> { d | rightInspect = v })
+compareRightScrollTop : Lens ls CompareActiveData Float x y
+compareRightScrollTop =
+    compareRightPane << comparePaneScrollTop
+
+
+compareLeftViewportHeight : Lens ls CompareActiveData Float x y
+compareLeftViewportHeight =
+    compareLeftPane << comparePaneViewportHeight
+
+
+compareRightViewportHeight : Lens ls CompareActiveData Float x y
+compareRightViewportHeight =
+    compareRightPane << comparePaneViewportHeight
 
 
 key : Lens ls Model Browser.Navigation.Key x y

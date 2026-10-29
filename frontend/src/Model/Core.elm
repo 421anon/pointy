@@ -1909,11 +1909,22 @@ type CompareState
 type alias CompareActiveData =
     { left : CompareSelection
     , right : CompareSelection
-    , leftContent : ApiData TextContent
-    , rightContent : ApiData TextContent
-    , leftInspect : Bool
-    , rightInspect : Bool
+    , leftPane : ComparePane
+    , rightPane : ComparePane
     }
+
+
+type alias ComparePane =
+    { content : ApiData CompareContent
+    , scrollTop : Float
+    , viewportHeight : Float
+    , inspectOpen : Bool
+    }
+
+
+type CompareContent
+    = CompareFullText TextContent
+    | CompareSeekedText SeekWindow
 
 
 type alias CompareSelection =

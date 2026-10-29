@@ -1917,40 +1917,240 @@ activateCompare left right =
                         (CompareActive
                             { left = left
                             , right = right
-                            , leftContent = NotAsked
-                            , rightContent = NotAsked
-                            , leftInspect = False
-                            , rightInspect = False
+                            , leftPane = emptyComparePane
+                            , rightPane = emptyComparePane
                             }
                         )
                         |> Flow.seq (openDialog "compare-dialog")
-                        |> Flow.seq (fetchCompareSide matchesActiveCompare compareLeftContent left)
-                        |> Flow.seq (fetchCompareSide matchesActiveCompare compareRightContent right)
+                        |> Flow.seq (fetchCompareSide matchesActiveCompare compareLeftContent compareLeftScrollTop "compare-left-text" left)
+                        |> Flow.seq (fetchCompareSide matchesActiveCompare compareRightContent compareRightScrollTop "compare-right-text" right)
+                        |> Flow.seq (prefetchCompareAdjacent matchesActiveCompare compareLeftContent compareLeftScrollTop "compare-left-text" left Model.Before)
+                        |> Flow.seq (prefetchCompareAdjacent matchesActiveCompare compareLeftContent compareLeftScrollTop "compare-left-text" left Model.After)
+                        |> Flow.seq (prefetchCompareAdjacent matchesActiveCompare compareRightContent compareRightScrollTop "compare-right-text" right Model.Before)
+                        |> Flow.seq (prefetchCompareAdjacent matchesActiveCompare compareRightContent compareRightScrollTop "compare-right-text" right Model.After)
             )
 
 
-fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData TextContent) -> CompareSelection -> Flow Model ()
-fetchCompareSide matchesActiveCompare contentLens sel =
+emptyComparePane : Model.ComparePane
+emptyComparePane =
+    { content = NotAsked
+    , scrollTop = 0
+    , viewportHeight = 0
+    , inspectOpen = False
+    }
+
+
+fetchCompareSide : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData Model.CompareContent) -> An_Optic pr ls CompareActiveData Float -> String -> CompareSelection -> Flow Model ()
+fetchCompareSide matchesActiveCompare contentLens scrollLens viewerId sel =
     case Model.compareSelectionMode sel of
         CompareText ->
-            callApi (compareState << compareActive << where_ matchesActiveCompare << remkT contentLens)
-                (fetchCompareContent sel
-                    |> Flow.map (Result.map (Model.textContentFromFile sel.path sel.mimeType))
-                )
-                |> Flow.return ()
+            requestCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel Model.After (Api.AtLine 1) seekChunkSizeInBytes
 
         _ ->
             Flow.pure ()
 
 
-fetchCompareContent : CompareSelection -> FlowError Http.Error Model String
-fetchCompareContent sel =
-    case sel.source of
-        FromOutput commit_ ->
-            Api.fetchFileContents sel.recordId (Just commit_) sel.path
+requestCompareChunk : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData Model.CompareContent) -> An_Optic pr ls CompareActiveData Float -> String -> CompareSelection -> Model.SeekDirection -> Api.SeekAnchor -> Int -> Flow Model ()
+requestCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel direction anchor bytes_ =
+    let
+        contentTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT contentLens
 
-        FromSrc commit_ ->
-            Api.fetchSrcFileContents sel.recordId commit_ sel.path
+        nextContent current =
+            case current of
+                Success (Model.CompareSeekedText window_) ->
+                    if Maybe.isJust window_.loading then
+                        Nothing
+
+                    else
+                        Just (Success (Model.CompareSeekedText { window_ | loading = Just direction }))
+
+                Success (Model.CompareFullText _) ->
+                    Nothing
+
+                _ ->
+                    Just (Loading Nothing)
+    in
+    Flow.forAll contentTraversal <|
+        \current ->
+            nextContent current
+                |> Maybe.unwrap (Flow.pure ())
+                    (\next ->
+                        Flow.setAll contentTraversal next
+                            |> Flow.seq (fetchCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel anchor bytes_)
+                    )
+
+
+fetchCompareChunk : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData Model.CompareContent) -> An_Optic pr ls CompareActiveData Float -> String -> CompareSelection -> Api.SeekAnchor -> Int -> Flow Model ()
+fetchCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel anchor bytes_ =
+    let
+        contentTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT contentLens
+
+        apiCall =
+            case sel.source of
+                FromOutput commit_ ->
+                    Api.fetchFileSeek sel.recordId (Just commit_) sel.path anchor bytes_
+
+                FromSrc commit_ ->
+                    Api.fetchSrcFileSeek sel.recordId commit_ sel.path anchor bytes_
+    in
+    Flow.forAll contentTraversal <|
+        \current ->
+            apiCall
+                |> FlowError.foldResult
+                    (applyCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel)
+                    (\e ->
+                        Flow.setAll contentTraversal
+                            (ApiData.toMaybe current
+                                |> Maybe.unwrap (ApiData.Error e)
+                                    (\content -> Success (stopCompareLoading content))
+                            )
+                            |> Flow.seq (addToast False (Http.errorMessage e))
+                    )
+
+
+applyCompareChunk : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData Model.CompareContent) -> An_Optic pr ls CompareActiveData Float -> String -> CompareSelection -> Model.FileChunk -> Flow Model ()
+applyCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel chunk =
+    let
+        contentTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT contentLens
+
+        scrollTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT scrollLens
+    in
+    Flow.forAll contentTraversal <|
+        \current ->
+            let
+                oldWindow =
+                    case ApiData.toMaybe current of
+                        Just (Model.CompareSeekedText window_) ->
+                            window_
+
+                        _ ->
+                            Model.emptySeekWindow
+
+                merged =
+                    Model.insertChunk oldWindow chunk
+
+                deltaLines =
+                    Model.windowStartLine oldWindow - Model.windowStartLine merged
+
+                content =
+                    if chunk.startOffset == 0 && chunk.eof then
+                        Model.CompareFullText (Model.textContentFromFile sel.path sel.mimeType chunk.content)
+
+                    else
+                        Model.CompareSeekedText merged
+            in
+            Flow.setAll contentTraversal (Success content)
+                |> Flow.seq
+                    (if deltaLines == 0 then
+                        Flow.pure ()
+
+                     else
+                        Flow.forAll scrollTraversal
+                            (\oldScrollTop ->
+                                let
+                                    newScrollTop =
+                                        max 0 (oldScrollTop + toFloat (deltaLines * Model.plainLineHeight))
+                                in
+                                Flow.setAll scrollTraversal newScrollTop
+                                    |> Flow.seq (Flow.attemptTask (Dom.setViewportOf viewerId 0 newScrollTop))
+                            )
+                    )
+
+
+stopCompareLoading : Model.CompareContent -> Model.CompareContent
+stopCompareLoading content =
+    case content of
+        Model.CompareSeekedText window_ ->
+            Model.CompareSeekedText { window_ | loading = Nothing }
+
+        other ->
+            other
+
+
+prefetchCompareAdjacent : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData Model.CompareContent) -> An_Optic pr ls CompareActiveData Float -> String -> CompareSelection -> Model.SeekDirection -> Flow Model ()
+prefetchCompareAdjacent matchesActiveCompare contentLens scrollLens viewerId sel direction =
+    let
+        contentTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT contentLens
+    in
+    Flow.forAll contentTraversal <|
+        \current ->
+            case current of
+                Success (Model.CompareSeekedText window_) ->
+                    requestAdjacentCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel direction window_
+
+                _ ->
+                    Flow.pure ()
+
+
+requestAdjacentCompareChunk : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData Model.CompareContent) -> An_Optic pr ls CompareActiveData Float -> String -> CompareSelection -> Model.SeekDirection -> SeekWindow -> Flow Model ()
+requestAdjacentCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel direction window_ =
+    if Maybe.isJust window_.loading then
+        Flow.pure ()
+
+    else
+        case direction of
+            Model.Before ->
+                Model.windowStartOffset window_
+                    |> Maybe.filter (\byteOffset -> byteOffset > 0)
+                    |> Maybe.unwrap (Flow.pure ())
+                        (\byteOffset ->
+                            requestCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel direction (Api.AtOffset byteOffset) -seekChunkSizeInBytes
+                        )
+
+            Model.After ->
+                if Model.windowEof window_ then
+                    Flow.pure ()
+
+                else
+                    Model.windowEndOffset window_
+                        |> Maybe.unwrap (Flow.pure ())
+                            (\byteOffset ->
+                                requestCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel direction (Api.AtOffset byteOffset) seekChunkSizeInBytes
+                            )
+
+
+onCompareScroll : (CompareActiveData -> Bool) -> An_Optic pr ls CompareActiveData (ApiData Model.CompareContent) -> An_Optic pr ls CompareActiveData Float -> An_Optic pr ls CompareActiveData Float -> String -> CompareSelection -> Model.ScrollMetrics -> Flow Model ()
+onCompareScroll matchesActiveCompare contentLens scrollLens viewportLens viewerId sel metrics =
+    let
+        contentTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT contentLens
+
+        scrollTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT scrollLens
+
+        viewportTraversal =
+            compareState << compareActive << where_ matchesActiveCompare << remkT viewportLens
+
+        nearBottom =
+            metrics.scrollTop + metrics.clientHeight >= metrics.scrollHeight - toFloat (seekPrefetchDistanceInLines * Model.plainLineHeight)
+
+        nearTop =
+            metrics.scrollTop <= toFloat (seekPrefetchDistanceInLines * Model.plainLineHeight)
+    in
+    Flow.setAll scrollTraversal metrics.scrollTop
+        |> Flow.seq (Flow.setAll viewportTraversal metrics.clientHeight)
+        |> Flow.seq
+            (Flow.forAll contentTraversal <|
+                \current ->
+                    case current of
+                        Success (Model.CompareSeekedText window_) ->
+                            if nearBottom && not (Model.windowEof window_) then
+                                requestAdjacentCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel Model.After window_
+
+                            else if nearTop then
+                                requestAdjacentCompareChunk matchesActiveCompare contentLens scrollLens viewerId sel Model.Before window_
+
+                            else
+                                Flow.pure ()
+
+                        _ ->
+                            Flow.pure ()
+            )
 
 
 shouldSkipFileContents : { r | mimeType : Maybe String } -> Bool

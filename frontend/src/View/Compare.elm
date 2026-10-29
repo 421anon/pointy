@@ -11,14 +11,16 @@ import Html exposing (Html)
 import Html.Attributes exposing (class, classList, id, src)
 import Html.Events
 import Html.Extra as Html
+import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), Model, StepRecord, TextContent)
-import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftInspect, compareRightContent, compareRightInspect, compareSelecting, compareState, projectRecordById, stepRecordById)
+import Model.Core as Model exposing (CompareActiveData, CompareContent(..), CompareMode(..), ComparePane, CompareSelection, CompareSource(..), Model, ScrollMetrics, StepRecord, TextContent)
+import Model.Lenses exposing (compareActive, compareLeftContent, compareLeftPane, compareLeftScrollTop, compareLeftViewportHeight, compareRightContent, compareRightPane, compareRightScrollTop, compareRightViewportHeight, compareSelecting, compareState, projectRecordById, stepRecordById)
 import Model.Shadow as Shadow exposing (Field, StepArgValue(..), Widget(..))
 import Route exposing (Route)
 import View.Icons exposing (icon)
+import View.PlainText as PlainText
 import View.TextContent as TextContent
 
 
@@ -97,8 +99,8 @@ viewBody : Model -> CompareActiveData -> Html (Flow Model ())
 viewBody model d =
     let
         mTextPair =
-            case ( Model.compareSelectionMode d.left, Model.compareSelectionMode d.right, ( d.leftContent, d.rightContent ) ) of
-                ( CompareText, CompareText, ( Success l, Success r ) ) ->
+            case ( Model.compareSelectionMode d.left, Model.compareSelectionMode d.right, ( d.leftPane.content, d.rightPane.content ) ) of
+                ( CompareText, CompareText, ( Success (CompareFullText l), Success (CompareFullText r) ) ) ->
                     if Maybe.isNothing l.delimitedGrid && Maybe.isNothing r.delimitedGrid then
                         Just ( l.text, r.text )
 
@@ -108,39 +110,61 @@ viewBody model d =
                 _ ->
                     Nothing
 
+        matchesActive candidate =
+            candidate.left == d.left && candidate.right == d.right
+
         panes =
             Html.div [ class "compare-panes" ]
-                [ viewPane model "compare-left-text" d.left d.leftContent (contentUpdate compareLeftContent) d.leftInspect (toggleFlag compareLeftInspect)
-                , viewPane model "compare-right-text" d.right d.rightContent (contentUpdate compareRightContent) d.rightInspect (toggleFlag compareRightInspect)
+                [ viewPane model
+                    "compare-left-text"
+                    d.left
+                    d.leftPane
+                    (contentUpdate compareLeftPane)
+                    (toggleFlag compareLeftPane)
+                    (Actions.onCompareScroll matchesActive compareLeftContent compareLeftScrollTop compareLeftViewportHeight "compare-left-text" d.left)
+                , viewPane model
+                    "compare-right-text"
+                    d.right
+                    d.rightPane
+                    (contentUpdate compareRightPane)
+                    (toggleFlag compareRightPane)
+                    (Actions.onCompareScroll matchesActive compareRightContent compareRightScrollTop compareRightViewportHeight "compare-right-text" d.right)
                 ]
     in
     mTextPair
         |> Maybe.unwrap panes (\( l, r ) -> viewTextDiff model d l r)
 
 
-viewPane : Model -> String -> CompareSelection -> ApiData TextContent -> ((TextContent -> TextContent) -> Flow Model ()) -> Bool -> Flow Model () -> Html (Flow Model ())
-viewPane model viewerId sel content updateContent inspectOpen toggle =
+viewPane : Model -> String -> CompareSelection -> ComparePane -> ((TextContent -> TextContent) -> Flow Model ()) -> Flow Model () -> (ScrollMetrics -> Flow Model ()) -> Html (Flow Model ())
+viewPane model viewerId sel pane updateContent toggle onScroll =
     let
         mParams =
             derivationParamsFor model sel
     in
     Html.div [ class "compare-pane" ]
-        [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
+        [ viewPaneHeader model sel (Maybe.isJust mParams) pane.inspectOpen toggle
         , Html.div [ class "compare-pane-body" ]
-            [ viewPaneBody viewerId sel content updateContent
-            , viewInlineParams model sel inspectOpen mParams
+            [ viewPaneBody viewerId sel pane updateContent onScroll
+            , viewInlineParams model sel pane.inspectOpen mParams
             ]
         ]
 
 
-contentUpdate : An_Optic pr ls CompareActiveData (ApiData TextContent) -> (TextContent -> TextContent) -> Flow Model ()
-contentUpdate contentLens =
-    Flow.over (compareState << compareActive << remkT contentLens << success)
+contentUpdate : An_Optic pr ls CompareActiveData ComparePane -> (TextContent -> TextContent) -> Flow Model ()
+contentUpdate paneLens changeText =
+    Flow.over (compareState << compareActive << remkT paneLens) <|
+        \pane ->
+            case pane.content of
+                Success (CompareFullText text) ->
+                    { pane | content = Success (CompareFullText (changeText text)) }
+
+                _ ->
+                    pane
 
 
-toggleFlag : An_Optic pr ls CompareActiveData Bool -> Flow Model ()
-toggleFlag flagLens =
-    Flow.over (compareState << compareActive << remkT flagLens) not
+toggleFlag : An_Optic pr ls CompareActiveData ComparePane -> Flow Model ()
+toggleFlag paneLens =
+    Flow.over (compareState << compareActive << remkT paneLens) (\pane -> { pane | inspectOpen = not pane.inspectOpen })
 
 
 viewPaneHeader : Model -> CompareSelection -> Bool -> Bool -> Flow Model () -> Html (Flow Model ())
@@ -352,8 +376,8 @@ sourceRoute sel =
         )
 
 
-viewPaneBody : String -> CompareSelection -> ApiData TextContent -> ((TextContent -> TextContent) -> Flow Model ()) -> Html (Flow Model ())
-viewPaneBody viewerId sel content updateContent =
+viewPaneBody : String -> CompareSelection -> ComparePane -> ((TextContent -> TextContent) -> Flow Model ()) -> (ScrollMetrics -> Flow Model ()) -> Html (Flow Model ())
+viewPaneBody viewerId sel pane updateContent onScroll =
     case Model.compareSelectionMode sel of
         CompareImage ->
             Html.img [ src (rawUrl sel), class "compare-image" ] []
@@ -367,7 +391,34 @@ viewPaneBody viewerId sel content updateContent =
                 []
 
         CompareText ->
-            TextContent.view viewerId updateContent [] content
+            viewTextPane viewerId pane updateContent onScroll
+
+
+viewTextPane : String -> ComparePane -> ((TextContent -> TextContent) -> Flow Model ()) -> (ScrollMetrics -> Flow Model ()) -> Html (Flow Model ())
+viewTextPane viewerId pane updateContent onScroll =
+    case pane.content of
+        Success (CompareFullText file) ->
+            TextContent.view viewerId updateContent [] (Success file)
+
+        Success (CompareSeekedText window_) ->
+            PlainText.view
+                { id = viewerId
+                , layout = PlainText.FillParent pane.viewportHeight
+                , scrollTop = pane.scrollTop
+                , onScroll = Just onScroll
+                , lineSelection = Nothing
+                , loading = window_.loading
+                , startLine = Model.windowStartLine window_
+                , lineCount = Model.windowLineCount window_
+                }
+                (Html.Lazy.lazy2 PlainText.viewChunks window_.loading window_.chunks)
+
+        Error _ ->
+            Html.div [ class "text-content-error" ] [ Html.text "Failed to load file." ]
+
+        _ ->
+            Html.div [ class "text-content-loading" ]
+                [ Html.span [ class "shimmer-text shimmer-text--low-contrast" ] [ Html.text "Loading file…" ] ]
 
 
 rawUrl : CompareSelection -> String
@@ -386,13 +437,13 @@ viewTextDiff model d leftStr rightStr =
         rows =
             alignLines (String.lines leftStr) (String.lines rightStr)
 
-        viewDiffPane sel inspectOpen toggle pick =
+        viewDiffPane sel pane toggle pick =
             let
                 mParams =
                     derivationParamsFor model sel
             in
             Html.div [ class "compare-diff-pane" ]
-                [ viewPaneHeader model sel (Maybe.isJust mParams) inspectOpen toggle
+                [ viewPaneHeader model sel (Maybe.isJust mParams) pane.inspectOpen toggle
                 , Html.div [ class "compare-diff-scroll" ]
                     [ Html.div [ class "compare-diff-lines" ]
                         (List.map
@@ -403,13 +454,13 @@ viewTextDiff model d leftStr rightStr =
                             )
                             rows
                         )
-                    , viewInlineParams model sel inspectOpen mParams
+                    , viewInlineParams model sel pane.inspectOpen mParams
                     ]
                 ]
     in
     Html.div [ class "compare-diff" ]
-        [ viewDiffPane d.left d.leftInspect (toggleFlag compareLeftInspect) Tuple.first
-        , viewDiffPane d.right d.rightInspect (toggleFlag compareRightInspect) Tuple.second
+        [ viewDiffPane d.left d.leftPane (toggleFlag compareLeftPane) Tuple.first
+        , viewDiffPane d.right d.rightPane (toggleFlag compareRightPane) Tuple.second
         ]
 
 

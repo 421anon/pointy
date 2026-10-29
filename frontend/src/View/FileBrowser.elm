@@ -18,7 +18,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -408,7 +408,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     has (mimeType << just << where_ ((==) "chemical/x-pdb")) file
 
                 mCompareSelection =
-                    if not file.isDeleted && (file.viewable || isImage) then
+                    if not file.isDeleted && (file.viewable || file.seekable || isImage) then
                         Maybe.map2 (\projectPath_ -> compareSelectionFor model projectPath_ itemName file.mimeType path)
                             (try currentProjectPath model)
                             mDirCtx
@@ -841,7 +841,7 @@ viewSeekPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor
         scrollTop
         Actions.onSeekScroll
         window_.loading
-        (Html.Lazy.lazy2 viewFileChunks window_.loading window_.chunks)
+        (Html.Lazy.lazy2 PlainText.viewChunks window_.loading window_.chunks)
         ( windowStartLine window_, windowLineCount window_ )
 
 
@@ -879,57 +879,3 @@ viewGutteredPlainText gutterKeyValue hasGutterDrag selectedFrom selectedTo ancho
         , lineCount = lineCount
         }
         content
-
-
-viewFileChunks : Maybe SeekDirection -> List FileChunk -> Html (Flow Model ())
-viewFileChunks loading chunks =
-    let
-        dropFirstLine texts =
-            case texts of
-                [] ->
-                    []
-
-                first :: rest ->
-                    case List.head (String.indexes "\n" first) of
-                        Just newline ->
-                            String.dropLeft (newline + 1) first :: rest
-
-                        Nothing ->
-                            "" :: dropFirstLine rest
-
-        dropLastLine texts =
-            let
-                drop reversed =
-                    case reversed of
-                        [] ->
-                            []
-
-                        last :: rest ->
-                            case List.last (String.indexes "\n" last) of
-                                Just newline ->
-                                    String.left newline last :: rest
-
-                                Nothing ->
-                                    "" :: drop rest
-            in
-            texts |> List.reverse |> drop |> List.reverse
-
-        loadingLine =
-            Html.div [ class "seek-loading-line" ]
-                [ Html.span [ class "seek-loading-icon" ] [ icon True "progress_activity" ] ]
-
-        chunkTexts =
-            List.map .content chunks
-
-        children =
-            case loading of
-                Just Before ->
-                    loadingLine :: List.map Html.text (dropFirstLine chunkTexts)
-
-                Just After ->
-                    List.map Html.text (dropLastLine chunkTexts) ++ [ loadingLine ]
-
-                Nothing ->
-                    List.map Html.text chunkTexts
-    in
-    Html.div [ class "file-text" ] children

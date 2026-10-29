@@ -1,12 +1,14 @@
-module View.PlainText exposing (Config, Layout(..), LineSelection, view, viewText)
+module View.PlainText exposing (Config, Layout(..), LineSelection, view, viewChunks, viewText)
 
 import Html exposing (Html)
 import Html.Attributes exposing (class, classList, id, style)
 import Html.Events
 import Html.Extra as Html
 import Json.Decode as Decode
+import List.Extra
 import Maybe.Extra as Maybe
-import Model.Core exposing (ScrollMetrics, SeekDirection(..), plainLineHeight)
+import Model.Core exposing (FileChunk, ScrollMetrics, SeekDirection(..), plainLineHeight)
+import View.Icons exposing (icon)
 
 
 type alias Config msg =
@@ -156,6 +158,60 @@ view config content =
 viewText : String -> Html msg
 viewText text =
     Html.div [ class "file-text" ] [ Html.text text ]
+
+
+viewChunks : Maybe SeekDirection -> List FileChunk -> Html msg
+viewChunks loading chunks =
+    let
+        dropFirstLine texts =
+            case texts of
+                [] ->
+                    []
+
+                first :: rest ->
+                    case List.head (String.indexes "\n" first) of
+                        Just newline ->
+                            String.dropLeft (newline + 1) first :: rest
+
+                        Nothing ->
+                            "" :: dropFirstLine rest
+
+        dropLastLine texts =
+            let
+                drop reversed =
+                    case reversed of
+                        [] ->
+                            []
+
+                        last :: rest ->
+                            case List.Extra.last (String.indexes "\n" last) of
+                                Just newline ->
+                                    String.left newline last :: rest
+
+                                Nothing ->
+                                    "" :: drop rest
+            in
+            texts |> List.reverse |> drop |> List.reverse
+
+        loadingLine =
+            Html.div [ class "seek-loading-line" ]
+                [ Html.span [ class "seek-loading-icon" ] [ icon True "progress_activity" ] ]
+
+        chunkTexts =
+            List.map .content chunks
+
+        children =
+            case loading of
+                Just Before ->
+                    loadingLine :: List.map Html.text (dropFirstLine chunkTexts)
+
+                Just After ->
+                    List.map Html.text (dropLastLine chunkTexts) ++ [ loadingLine ]
+
+                Nothing ->
+                    List.map Html.text chunkTexts
+    in
+    Html.div [ class "file-text" ] children
 
 
 px : Int -> String
