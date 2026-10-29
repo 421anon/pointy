@@ -23,7 +23,7 @@ import Route
 import Toast
 import View.Compare as Compare
 import View.Dialog as Dialog
-import View.Icons exposing (icon)
+import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (boolText)
 import View.Organize
 import View.Project exposing (viewCurrentProject)
@@ -136,7 +136,7 @@ viewArtifact model artifact =
                         , Html.Events.onClick Actions.startAreaCapture
                         , Html.Attributes.attribute "aria-pressed" (boolText (has (areaCapture << just) model))
                         ]
-                        [ Html.text "Capture area" ]
+                        [ iconCustom False "ink_selection" [ Html.Attributes.attribute "aria-hidden" "true" ], Html.text "Ask agent" ]
                     )
                 , Html.button
                     [ Html.Attributes.class "artifact-viewer-action"
@@ -145,7 +145,7 @@ viewArtifact model artifact =
                     , Html.Attributes.attribute "aria-controls" "agent-panel"
                     , Html.Attributes.attribute "aria-expanded" (boolText isAgentOpen)
                     ]
-                    [ Html.text "Agent" ]
+                    [ Html.text "Open agent" ]
                 , Html.a
                     [ Route.href pointyRoute
                     , Html.Attributes.class "artifact-viewer-action"

@@ -1869,6 +1869,7 @@ $delimited-grid-row-height: 28px;
 .artifact-viewer-action {
   display: inline-flex;
   align-items: center;
+  gap: var(--spacing-xs);
   min-height: 36px;
   padding: var(--spacing-xs) var(--spacing-md);
   border: 1px solid var(--border-color);
@@ -1881,6 +1882,10 @@ $delimited-grid-row-height: 28px;
   cursor: pointer;
   text-decoration: none;
   opacity: 0.88;
+
+  .material-symbols-outlined {
+    font-size: 18px;
+  }
 
   &:hover,
   &:focus-visible {
