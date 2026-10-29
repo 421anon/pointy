@@ -48,6 +48,7 @@ const LOGICAL_PROPERTY = /(^|-)(block|inline)(-|$)|^border-(start|end)-(start|en
 const UNRENDERED_PROPERTY =
   /^(cursor|pointer-events|user-select|touch-action|-webkit-tap-highlight-color|interactivity|scroll-behavior|scroll-initial-target|timeline-scope)$|^(caret|transition|animation|scroll-margin|scroll-padding|scroll-snap|scroll-timeline|view-timeline|view-transition|overscroll-behavior)-/;
 const PROBE_COLOR = "rgb(1, 2, 3)";
+const GENERIC_FONT_FAMILIES = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "-apple-system", "blinkmacsystemfont"]);
 
 // Chromium shades inset, outset, groove and ridge borders differently when their color is currentcolor than when it is the same color given explicitly, so border colors are always copied.
 const BORDER_COLOR = /^border-(top|right|bottom|left)-color$/;
@@ -127,11 +128,12 @@ function isImpliedByReset(index, values) {
   return drivers[index].every((driver) => values[driver] === initial[driver]);
 }
 
-// Values that only the user agent may set, like text-align: -internal-center on th, fall back to the user agent's style.
-function declarations(values, resetsToInitial) {
+// Values that only the user agent may set, like text-align: -internal-center on th, fall back to the user agent's style. A table's height is distributed over its rows, which already carry their own heights, so declaring the table's height again would redistribute them.
+function declarations(values, resetsToInitial, isTable) {
   const { names } = copiedProperties;
   let text = "";
   for (let index = 0; index < names.length; index++) {
+    if (isTable && names[index] === "height") continue;
     if (!resetsToInitial) text += `${names[index]}:${values[index]};`;
     else if (!isImpliedByReset(index, values)) text += `${names[index]}:${settableValue(names[index], values[index])};`;
   }
@@ -142,15 +144,62 @@ function computedValues(computed) {
   return copiedProperties.names.map((name) => computed.getPropertyValue(name));
 }
 
+function noteFontFamilies(value, context) {
+  if (context.seenFontFamilies.has(value)) return;
+  context.seenFontFamilies.add(value);
+  for (const family of value.split(",")) {
+    const name = family.trim().replace(/^['"]|['"]$/g, "");
+    if (name && !GENERIC_FONT_FAMILIES.has(name.toLowerCase())) context.fontFamilies.add(name.toLowerCase());
+  }
+}
+
+// A style sheet's font files cannot load into an SVG drawn as an image, so the faces the page uses carry their data inline. https://www.w3.org/TR/SVG2/conform.html#secure-static-mode
+async function embedFontFaces(document, context) {
+  if (context.fontFamilies.size === 0) return "";
+  const faces = [];
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue;
+    }
+    for (const rule of rules) {
+      if (rule.type !== CSSRule.FONT_FACE_RULE) continue;
+      const family = rule.style.getPropertyValue("font-family").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+      if (!context.fontFamilies.has(family)) continue;
+      const sources = [...rule.style.getPropertyValue("src").matchAll(CSS_URL)].map((match) => match[1]).filter((source) => !isDataUrl(source));
+      faces.push(
+        (async () => {
+          for (const source of sources) {
+            let url;
+            try {
+              url = new URL(source, document.baseURI).href;
+            } catch {
+              continue;
+            }
+            const dataUrl = await embeddedResource(url);
+            if (dataUrl) return rule.cssText.replace(/src\s*:[^;}]*;?/i, `src: url("${dataUrl}");`);
+          }
+          return "";
+        })(),
+      );
+    }
+  }
+  return (await Promise.all(faces)).join("");
+}
+
 // Reading one property across a run of elements is faster than reading every property of one element in turn.
 function styleElements(styledElements, context) {
   const { names } = copiedProperties;
+  const fontFamily = names.indexOf("font-family");
   for (let start = 0; start < styledElements.length; start += STYLE_READ_BATCH) {
     const batch = styledElements.slice(start, start + STYLE_READ_BATCH);
     const values = batch.map(() => new Array(names.length));
     names.forEach((name, index) => batch.forEach(({ computed }, row) => (values[row][index] = computed.getPropertyValue(name))));
-    batch.forEach(({ clone, resetsToInitial, extraDeclarations }, row) =>
-      clone.classList.add(styleClass(context, "", declarations(values[row], resetsToInitial) + extraDeclarations)),
+    if (fontFamily >= 0) values.forEach((row) => noteFontFamilies(row[fontFamily], context));
+    batch.forEach(({ clone, computed, resetsToInitial, extraDeclarations }, row) =>
+      clone.classList.add(styleClass(context, "", declarations(values[row], resetsToInitial, computed.display === "table") + extraDeclarations)),
     );
   }
 }
@@ -454,12 +503,12 @@ function escapeAttribute(text) {
 // Clones the page as XHTML that renders like the live page inside an SVG foreignObject: computed styles in a style sheet, resources embedded and scroll offsets applied. The root's position and size are left to `markup`, so one clone can be rendered at different sizes and scroll positions.
 export async function clonePage(document) {
   copiedProperties ??= measureCopiedProperties();
-  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap() };
+  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set() };
   const root = document.documentElement;
   const rootOffset = positionOffset(document.defaultView.getComputedStyle(root));
   const rootClone = cloneElement(root, context);
   styleElements(context.styledElements, context);
-  await Promise.all(context.embeddings);
+  const [fontFaces] = await Promise.all([embedFontFaces(document, context), Promise.all(context.embeddings)]);
   const rootInlineStyle = rootClone.getAttribute("style") ?? "";
   rootClone.setAttribute("style", ROOT_STYLE_PLACEHOLDER);
   const serialized = new XMLSerializer().serializeToString(rootClone);
@@ -467,7 +516,7 @@ export async function clonePage(document) {
   const beforeRootStyle = serialized.slice(0, placeholderStart);
   const afterRootStyle = serialized.slice(placeholderStart + ROOT_STYLE_PLACEHOLDER.length);
   return {
-    styleSheet: RESET_STYLE_SHEET + context.styleRules.join(""),
+    styleSheet: RESET_STYLE_SHEET + fontFaces + context.styleRules.join(""),
     // A transformed root would become the containing block of the page's fixed elements and carry them off with the scroll, while an offset root leaves them on the viewport and lets sticky elements stick. https://drafts.csswg.org/css-transforms-1/#containing-block-for-all-descendants
     markup: ({ width, height, backgroundColor, scroll }) =>
       beforeRootStyle +
