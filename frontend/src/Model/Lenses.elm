@@ -850,7 +850,21 @@ areaCaptureDragging =
                 Model.AreaCaptureDragging drag ->
                     Ok drag
 
-                Model.AreaCaptureArmed ->
+                _ ->
+                    Err capture
+        )
+
+
+areaCaptureAsking : Prism pr Model.AreaCapture Model.AreaQuestion x y
+areaCaptureAsking =
+    prism ">AreaCaptureAsking"
+        Model.AreaCaptureAsking
+        (\capture ->
+            case capture of
+                Model.AreaCaptureAsking question ->
+                    Ok question
+
+                _ ->
                     Err capture
         )
 

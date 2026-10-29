@@ -973,12 +973,23 @@
 
 .agent-panel__image--area-capture {
   border: 1px dashed var(--link);
+
+  img {
+    height: auto;
+    max-height: 96px;
+    object-fit: contain;
+  }
 }
 
 .agent-panel__images--composer .agent-panel__image img {
   min-width: 40px;
   max-width: 112px;
   height: 56px;
+}
+
+.agent-panel__images--composer .agent-panel__image--area-capture img {
+  height: auto;
+  max-height: 56px;
 }
 
 .agent-panel__images--group {

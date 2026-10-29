@@ -3954,8 +3954,11 @@ finishAreaDrag clientPoint =
                 rect =
                     Model.areaDragRect (dragAreaTo clientPoint drag)
             in
-            cancelAreaCapture
-                |> Flow.seq (Flow.when (rect.width > 0 && rect.height > 0) (captureArtifactArea rect))
+            if rect.width > 0 && rect.height > 0 then
+                askAboutArea { rect = rect, overlaySize = drag.overlaySize, capturedArea = Nothing, prompt = "" }
+
+            else
+                cancelAreaCapture
         )
 
 
@@ -3969,8 +3972,42 @@ dragAreaTo clientPoint drag =
     }
 
 
-captureArtifactArea : Model.AreaRect -> Flow Model ()
-captureArtifactArea rect =
+areaQuestionInputId : String
+areaQuestionInputId =
+    "artifact-area-question"
+
+
+askAboutArea : Model.AreaQuestion -> Flow Model ()
+askAboutArea question =
+    let
+        stillAsked =
+            areaCapture << just << areaCaptureAsking << where_ (.rect >> (==) question.rect)
+    in
+    Flow.setAll areaCapture (Just (Model.AreaCaptureAsking question))
+        |> Flow.seq (Flow.attemptTask (Dom.focus areaQuestionInputId))
+        |> Flow.seq (captureArtifactArea question.rect)
+        |> Flow.andThen
+            (\mCapturedArea ->
+                Flow.whenHas stillAsked
+                    (\_ ->
+                        case mCapturedArea of
+                            Just capturedArea ->
+                                if encodedImagesLength [ capturedArea.overview, capturedArea.selection ] > agentImagesBudget then
+                                    cancelAreaCapture
+                                        |> Flow.seq (addToast False "This area is too large to send. Select a smaller one.")
+
+                                else
+                                    Flow.over stillAsked (\asked -> { asked | capturedArea = Just capturedArea })
+
+                            Nothing ->
+                                cancelAreaCapture
+                                    |> Flow.seq (addToast False "Couldn't capture this area.")
+                    )
+            )
+
+
+captureArtifactArea : Model.AreaRect -> Flow Model (Maybe Model.CapturedArea)
+captureArtifactArea =
     callJs "captureArtifactArea"
         (\area ->
             Encode.object
@@ -3982,24 +4019,38 @@ captureArtifactArea rect =
                 ]
         )
         (Decode.nullable Model.capturedAreaDecoder)
-        rect
+
+
+updateAreaQuestion : String -> Flow Model ()
+updateAreaQuestion prompt =
+    Flow.over (areaCapture << just << areaCaptureAsking) (\question -> { question | prompt = prompt })
+
+
+areaQuestionToSend : Model.AgentState -> Model.AreaQuestion -> Maybe ( Model.CapturedArea, String )
+areaQuestionToSend agentState question =
+    let
+        prompt =
+            String.trim question.prompt
+    in
+    if String.isEmpty prompt || Model.agentMutationPending agentState then
+        Nothing
+
+    else
+        Maybe.map (\capturedArea -> ( capturedArea, prompt )) question.capturedArea
+
+
+submitAreaQuestion : Flow Model ()
+submitAreaQuestion =
+    Flow.get
         |> Flow.andThen
-            (\mCapturedArea ->
-                case mCapturedArea of
-                    Just capturedArea ->
-                        let
-                            attachment =
-                                Model.ComposerCapturedArea capturedArea
-                        in
-                        withinAgentImagesBudget (encodedImagesLength (Model.composerAttachmentImages attachment)) (appendComposerAttachments [ attachment ])
-                            |> Flow.seq (Flow.unlessHas (agent << where_ .isPanelOpen) toggleAgentPanel)
-                            |> Flow.seq
-                                (Flow.whenHas (agent << where_ (\agentState -> agentState.selectedSessionId == Nothing && not agentState.isRestoringChat))
-                                    (always createAgentSession)
-                                )
+            (\model ->
+                case try (areaCapture << just << areaCaptureAsking) model |> Maybe.andThen (areaQuestionToSend (Model.getAgent model)) of
+                    Just ( capturedArea, prompt ) ->
+                        cancelAreaCapture
+                            |> Flow.seq (askAgentInNewChat [ Model.ComposerCapturedArea capturedArea ] prompt)
 
                     Nothing ->
-                        addToast False "Couldn't capture this area."
+                        Flow.pure ()
             )
 
 
@@ -4366,6 +4417,11 @@ togglePicked optionNumber question =
 
 investigateStepWithAgent : Int -> String -> Flow Model ()
 investigateStepWithAgent stepId log =
+    askAgentInNewChat [] (investigateStepPrompt stepId log)
+
+
+askAgentInNewChat : List Model.ComposerAttachment -> String -> Flow Model ()
+askAgentInNewChat attachments prompt =
     Flow.over agent (\s -> { s | isPanelOpen = True })
         |> Flow.seq loadAgentSessions
         |> Flow.seq
@@ -4377,7 +4433,7 @@ investigateStepWithAgent stepId log =
                                 |> Flow.seq (openAgentChat view.session.sessionId)
                                 |> Flow.seq (applyAgentChatFromUrl True)
                                 |> Flow.seq (clearRequestIfMatches Model.CreatingAgentSession)
-                                |> Flow.seq (submitAgentPromptFrom [] (Flow.pure (investigateStepPrompt stepId log)))
+                                |> Flow.seq (submitAgentPromptFrom attachments (Flow.pure prompt))
                         )
                         (\err -> addToast False (Http.errorMessage err))
                 )
