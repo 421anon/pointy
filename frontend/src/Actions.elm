@@ -3019,7 +3019,7 @@ pruneBlankAgentChats =
                         Just summary.session.sessionId /= openChatId && agentSessionBlank summary agentState
 
                     chatBeingCreated =
-                        agentState.request == Just Model.CreatingAgentSession
+                        List.member agentState.request [ Just Model.CreatingAgentSession, Just Model.StartingAgentChat ]
                 in
                 Flow.unless chatBeingCreated
                     (ApiData.withDefault [] agentState.sessions
@@ -4046,8 +4046,7 @@ submitAreaQuestion =
             (\model ->
                 case try (areaCapture << just << areaCaptureAsking) model |> Maybe.andThen (areaQuestionToSend (Model.getAgent model)) of
                     Just ( capturedArea, prompt ) ->
-                        cancelAreaCapture
-                            |> Flow.seq (askAgentInNewChat [ Model.ComposerCapturedArea capturedArea ] prompt)
+                        askAgentInNewChat cancelAreaCapture [ Model.ComposerCapturedArea capturedArea ] prompt
 
                     Nothing ->
                         Flow.pure ()
@@ -4257,7 +4256,7 @@ submitAgentPromptFrom attachments promptSource =
             Flow.forAll agent
                 (\agentState ->
                     if not (agentSessionRunning view.session.sessionId agentState) then
-                        sendAgentTurn view attachments promptSource
+                        sendAgentTurn (Flow.pure ()) view attachments promptSource
 
                     else if List.isEmpty attachments then
                         steerAgentTurn view promptSource
@@ -4286,8 +4285,8 @@ withAgentPrompt attachments promptSource send =
             )
 
 
-sendAgentTurn : Model.AgentSessionView -> List Model.ComposerAttachment -> Flow Model String -> Flow Model ()
-sendAgentTurn view attachments promptSource =
+sendAgentTurn : Flow Model () -> Model.AgentSessionView -> List Model.ComposerAttachment -> Flow Model String -> Flow Model ()
+sendAgentTurn whenPending view attachments promptSource =
     let
         sessionId =
             view.session.sessionId
@@ -4305,6 +4304,7 @@ sendAgentTurn view attachments promptSource =
                                     ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", status = Model.ChatPending } ]
                             )
                         )
+                    |> Flow.seq whenPending
                     |> Flow.seq clearAgentPrompt
                     |> Flow.seq (Flow.setAll (agent << composerAttachments) [])
                     |> Flow.seq scrollAgentChatToBottom
@@ -4417,27 +4417,32 @@ togglePicked optionNumber question =
 
 investigateStepWithAgent : Int -> String -> Flow Model ()
 investigateStepWithAgent stepId log =
-    askAgentInNewChat [] (investigateStepPrompt stepId log)
+    askAgentInNewChat (Flow.pure ()) [] (investigateStepPrompt stepId log)
 
 
-askAgentInNewChat : List Model.ComposerAttachment -> String -> Flow Model ()
-askAgentInNewChat attachments prompt =
-    Flow.over agent (\s -> { s | isPanelOpen = True })
-        |> Flow.seq loadAgentSessions
-        |> Flow.seq
-            (withAgentRequest Model.CreatingAgentSession
-                (AgentApi.createSession
-                    |> FlowError.foldResult
-                        (\view ->
-                            Flow.over agent (applyAgentSessionView view)
-                                |> Flow.seq (openAgentChat view.session.sessionId)
-                                |> Flow.seq (applyAgentChatFromUrl True)
-                                |> Flow.seq (clearRequestIfMatches Model.CreatingAgentSession)
-                                |> Flow.seq (submitAgentPromptFrom attachments (Flow.pure prompt))
-                        )
-                        (\err -> addToast False (Http.errorMessage err))
+askAgentInNewChat : Flow Model () -> List Model.ComposerAttachment -> String -> Flow Model ()
+askAgentInNewChat beforeShowing attachments prompt =
+    withAgentRequest Model.StartingAgentChat
+        (AgentApi.createSession
+            |> FlowError.foldResult
+                (\view ->
+                    Flow.over agent (applyAgentSessionView view)
+                        |> Flow.seq (clearRequestIfMatches Model.StartingAgentChat)
+                        |> Flow.seq (sendAgentTurn (beforeShowing |> Flow.seq (showAgentChat view.session.sessionId)) view attachments (Flow.pure prompt))
                 )
-            )
+                (\err -> addToast False (Http.errorMessage err))
+        )
+
+
+showAgentChat : String -> Flow Model ()
+showAgentChat sessionId =
+    Flow.forAll agent
+        (\agentState ->
+            Flow.over agent (\s -> { s | isPanelOpen = True, isSessionListOpen = False })
+                |> Flow.seq (openAgentChat sessionId)
+                |> Flow.seq (applyAgentChatFromUrl True)
+                |> Flow.seq (Flow.unless agentState.isPanelOpen (Flow.async loadAgentSessions))
+        )
 
 
 investigateStepPrompt : Int -> String -> String

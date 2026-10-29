@@ -9,7 +9,7 @@ import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
-import View.Icons exposing (icon)
+import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (boolText)
 
 
@@ -91,8 +91,18 @@ questionPlacement { rect, overlaySize } =
 viewQuestion : Model.AgentState -> Model.AreaQuestion -> Html (Flow Model ())
 viewQuestion agentState question =
     let
-        capturing =
-            Maybe.isNothing question.capturedArea
+        startingChat =
+            agentState.request == Just Model.StartingAgentChat
+
+        busyLabel =
+            if Maybe.isNothing question.capturedArea then
+                Just "Capturing the area…"
+
+            else if startingChat then
+                Just "Starting a new chat…"
+
+            else
+                Nothing
     in
     Html.form
         ([ class "artifact-viewer-question"
@@ -108,6 +118,7 @@ viewQuestion agentState question =
             , Html.Attributes.placeholder "Ask about this area…"
             , Html.Attributes.attribute "aria-label" "Question about the selected area"
             , Html.Attributes.value question.prompt
+            , Html.Attributes.readonly startingChat
             , Events.onInput Actions.updateAreaQuestion
             , Events.preventDefaultOn "keydown" (Decode.map (\send -> ( send, True )) sendOnEnter)
             ]
@@ -116,17 +127,16 @@ viewQuestion agentState question =
             [ class "icon-btn artifact-viewer-question-send"
             , Html.Attributes.type_ "submit"
             , Html.Attributes.disabled (Maybe.isNothing (Actions.areaQuestionToSend agentState question))
-            , Html.Attributes.attribute "aria-busy" (boolText capturing)
-            , Html.Attributes.title
-                (if capturing then
-                    "Capturing the area…"
-
-                 else
-                    "Ask in a new chat (Enter)"
-                )
+            , Html.Attributes.attribute "aria-busy" (boolText (Maybe.isJust busyLabel))
+            , Html.Attributes.title (Maybe.withDefault "Ask in a new chat (Enter)" busyLabel)
             , Html.Attributes.attribute "aria-label" "Ask in a new chat"
             ]
-            [ icon True "arrow_upward" ]
+            [ if startingChat then
+                iconCustom True "progress_activity" [ class "artifact-viewer-question-spinner" ]
+
+              else
+                icon True "arrow_upward"
+            ]
         ]
 
 

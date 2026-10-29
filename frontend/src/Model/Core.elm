@@ -889,6 +889,7 @@ type alias AgentSessionNameEdit =
 
 type AgentRequest
     = CreatingAgentSession
+    | StartingAgentChat
     | SendingAgentPrompt String
     | SteeringAgentTurn String
     | ArchivingAgentSession String

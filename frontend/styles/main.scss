@@ -1872,6 +1872,10 @@ $delimited-grid-row-height: 28px;
   cursor: progress;
 }
 
+.artifact-viewer-question-spinner {
+  animation: spin 1s linear infinite;
+}
+
 .artifact-viewer-table {
   display: flex;
   flex-direction: column;
