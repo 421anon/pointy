@@ -8,6 +8,10 @@ const SCROLLING_OVERFLOWS = ["auto", "scroll"];
 const CHECKABLE_INPUT_TYPES = ["checkbox", "radio"];
 const EMBEDDED_URL_PROPERTIES = ["background-image", "mask-image", "-webkit-mask-image"];
 const CSS_URL = /url\("((?:[^"\\]|\\.)*)"\)/g;
+const BEFORE_OR_AFTER = /::?(?:before|after)\b/i;
+const PSEUDO_ELEMENT_GENERATING_PROPERTIES = ["content", "animation-name"];
+// Quotation marks in all browsers, and Firefox's alt text for images. https://searchfox.org/mozilla-central/source/layout/style/res/html.css
+const USER_AGENT_PSEUDO_ELEMENT_HOSTS = ["q", "img", "input[type=image i]"];
 const CHILD_DEPENDENCY_PROBES = [
   "color-scheme: dark",
   "font: italic 700 37px / 3 serif",
@@ -417,7 +421,79 @@ function styleClass(context, pseudo, declarationText) {
   return className;
 }
 
+function splitSelectorList(selectorText) {
+  const selectors = [];
+  let depth = 0;
+  let quote = null;
+  let start = 0;
+  for (let index = 0; index < selectorText.length; index++) {
+    const character = selectorText[index];
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === "(" || character === "[") depth += 1;
+    else if (character === ")" || character === "]") depth -= 1;
+    else if (character === "," && depth === 0) {
+      selectors.push(selectorText.slice(start, index));
+      start = index + 1;
+    }
+  }
+  selectors.push(selectorText.slice(start));
+  return selectors;
+}
+
+function originatingElementSelector(selector) {
+  const match = BEFORE_OR_AFTER.exec(selector);
+  if (!match) return null;
+  const compound = selector.slice(0, match.index).trim();
+  if (compound === "") return "*";
+  return /[>+~]$/.test(compound) ? `${compound} *` : compound;
+}
+
+// A ::before or ::after box exists only where a rule gives it content, possibly through an animation, so only elements matching such a rule are asked for their pseudo-element styles, which browsers otherwise resolve one element at a time. Returns null when the rules cannot all be read or matched, and then every element is asked.
+function pseudoElementHosts(document) {
+  const view = document.defaultView;
+  const selectors = [...USER_AGENT_PSEUDO_ELEMENT_HOSTS];
+  const collect = (rules, nested) => {
+    for (const rule of rules) {
+      if (rule instanceof view.CSSImportRule) {
+        if (!rule.styleSheet || !collect(rule.styleSheet.cssRules, nested)) return false;
+      } else if (view.CSSScopeRule && rule instanceof view.CSSScopeRule) {
+        if ([...rule.cssRules].some((inner) => BEFORE_OR_AFTER.test(inner.cssText))) return false;
+      } else if (rule instanceof view.CSSStyleRule) {
+        const generates = PSEUDO_ELEMENT_GENERATING_PROPERTIES.some((name) => rule.style.getPropertyValue(name) !== "");
+        if (generates && BEFORE_OR_AFTER.test(rule.selectorText)) {
+          if (nested) return false;
+          selectors.push(...splitSelectorList(rule.selectorText).map(originatingElementSelector).filter((selector) => selector !== null));
+        }
+        if (rule.cssRules && !collect(rule.cssRules, true)) return false;
+      } else if (rule.cssRules && !collect(rule.cssRules, nested)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  try {
+    for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])]) {
+      if (!collect(sheet.cssRules, false)) return null;
+    }
+    return new Set(document.querySelectorAll(selectors.join(",")));
+  } catch {
+    return null;
+  }
+}
+
+function mayHavePseudoElements(element, context) {
+  const root = element.getRootNode();
+  if (root.nodeType !== Node.DOCUMENT_NODE) return true;
+  if (!context.pseudoElementHosts.has(root)) context.pseudoElementHosts.set(root, pseudoElementHosts(root));
+  const hosts = context.pseudoElementHosts.get(root);
+  return hosts === null || hosts.has(element);
+}
+
 function copyPseudoElements(element, clone, context) {
+  if (!mayHavePseudoElements(element, context)) return;
   const view = element.ownerDocument.defaultView;
   const resetsToInitial = clone.namespaceURI === XHTML_NAMESPACE;
   for (const pseudo of ["::before", "::after"]) {
@@ -537,7 +613,7 @@ export async function clonePage(document, { yieldBetweenSlices }) {
     copiedProperties = measureCopiedProperties();
     await yieldBetweenSlices();
   }
-  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set(), scrollBoxes: [], formStates: [] };
+  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set(), scrollBoxes: [], formStates: [], pseudoElementHosts: new Map() };
   const root = document.documentElement;
   const rootOffset = positionOffset(document.defaultView.getComputedStyle(root));
   const rootClone = await cloneElementTree(root, context, yieldBetweenSlices);
