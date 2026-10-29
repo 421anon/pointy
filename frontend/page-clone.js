@@ -464,17 +464,21 @@ function cloneNode(node, context) {
 function cloneElement(element, context, frameComputed = null) {
   const view = element.ownerDocument.defaultView;
   const computed = view.getComputedStyle(element);
+  const styled = frameComputed ?? computed;
   const isFrame = element.namespaceURI === XHTML_NAMESPACE && element.localName === "iframe";
   const body = isFrame ? frameBody(element) : null;
   if (body) return cloneElement(body, context, computed);
   const clone = shallowClone(element, context);
-  const isHidden = computed.display === "none";
+  const isHidden = styled.display === "none";
   if (hasChildrenToCopy(element)) {
     const children = isHidden ? hiddenResources(element, context) : Array.from(sourceChildren(element), (child) => cloneNode(child, context));
     for (const child of children) if (child) clone.append(child);
   }
   if (!clone.style) return clone;
-  const styled = frameComputed ?? computed;
+  if (isHidden) {
+    clone.classList.add(styleClass(context, "", "display:none"));
+    return clone;
+  }
   keepCustomProperties(element, clone);
   context.styledElements.push({
     clone,
@@ -483,7 +487,6 @@ function cloneElement(element, context, frameComputed = null) {
     extraDeclarations: (isFrame || frameComputed) && styled.display === "inline" ? "display:block;" : "",
   });
   context.computedStyles.set(clone, styled);
-  if (isHidden) return clone;
   embedStyleUrls(context, clone, styled);
   copyPseudoElements(element, clone, context);
   copyFormState(element, clone);

@@ -6,6 +6,68 @@ const OVERVIEW_BORDER_WIDTH = 2;
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const TRANSPARENT = "rgba(0, 0, 0, 0)";
 const DEFAULT_CANVAS_COLOR = "white";
+const CLONE_INVALIDATING_EVENTS = ["pointerdown", "pointerup", "pointercancel", "keydown", "keyup", "input", "change", "toggle", "focusin", "focusout", "load", "error", "animationstart", "transitionrun"];
+const pageClones = new WeakMap();
+
+function forgetPageClone(entry) {
+  entry.stale = true;
+  entry.observer.disconnect();
+  entry.cleanups.splice(0).forEach((cleanup) => cleanup());
+}
+
+// The clone keeps every element's computed style, form values and inner scroll offsets, so any interaction, mutation or load ends its use; scrolling the page itself does not, because the clone is rendered at the requested offset.
+function watchPageClone(document) {
+  const entry = { page: null, stale: false, cleanups: [], observer: new MutationObserver(() => forgetPageClone(entry)) };
+  const forget = () => forgetPageClone(entry);
+  const listen = (target, name, listener, options) => {
+    target.addEventListener(name, listener, options);
+    entry.cleanups.push(() => target.removeEventListener(name, listener, options));
+  };
+  const view = document.defaultView;
+  entry.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+  for (const name of CLONE_INVALIDATING_EVENTS) listen(document, name, forget, { capture: true, passive: true });
+  listen(
+    document,
+    "scroll",
+    (event) => {
+      if (event.target !== document && event.target !== document.scrollingElement) forget();
+    },
+    { capture: true, passive: true },
+  );
+  listen(view, "resize", forget, { passive: true });
+  listen(view, "hashchange", forget, { passive: true });
+  listen(view.matchMedia("(prefers-color-scheme: dark)"), "change", forget);
+  if (document.fonts) listen(document.fonts, "loadingdone", forget);
+  return entry;
+}
+
+// Canvas and video frames, nested documents and shadow roots change without a mutation the observer can see.
+function isStaticDocument(document) {
+  if (document.querySelector("canvas, video, iframe, object, embed")) return false;
+  for (const element of document.querySelectorAll("*")) if (element.shadowRoot) return false;
+  if (document.fonts && document.fonts.status !== "loaded") return false;
+  return !document.getAnimations || document.getAnimations().length === 0;
+}
+
+async function pageCloneFor(document) {
+  const cached = pageClones.get(document);
+  if (cached && !cached.stale) return cached.page;
+  pageClones.delete(document);
+  const watched = isStaticDocument(document) ? watchPageClone(document) : null;
+  try {
+    const page = await clonePage(document);
+    if (watched && !watched.stale) {
+      watched.page = page;
+      pageClones.set(document, watched);
+    } else if (watched) {
+      forgetPageClone(watched);
+    }
+    return page;
+  } catch (error) {
+    if (watched) forgetPageClone(watched);
+    throw error;
+  }
+}
 
 // The root's background, or else the body's, paints the whole canvas, beyond the root's box. https://www.w3.org/TR/css-backgrounds-3/#special-backgrounds
 function canvasColor(document) {
@@ -60,7 +122,7 @@ export async function captureArtifactArea({ frameId, x, y, width, height }) {
     height: Math.max(1, Math.round(height)),
   };
   const overviewScale = Math.min(1, OVERVIEW_MAX_EDGE / Math.max(documentSize.width, documentSize.height));
-  const page = await clonePage(frame.contentDocument);
+  const page = await pageCloneFor(frame.contentDocument);
   const [viewport, overview] = await Promise.all([
     renderPage(page, {
       size: { width: frame.clientWidth, height: frame.clientHeight },
