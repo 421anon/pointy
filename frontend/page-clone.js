@@ -190,7 +190,7 @@ async function embedFontFaces(document, context) {
 }
 
 // Reading one property across a run of elements is faster than reading every property of one element in turn.
-function styleElements(styledElements, context) {
+async function styleElements(styledElements, context, yieldBetweenBatches) {
   const { names } = copiedProperties;
   const fontFamily = names.indexOf("font-family");
   for (let start = 0; start < styledElements.length; start += STYLE_READ_BATCH) {
@@ -201,6 +201,7 @@ function styleElements(styledElements, context) {
     batch.forEach(({ clone, computed, resetsToInitial, extraDeclarations }, row) =>
       clone.classList.add(styleClass(context, "", declarations(values[row], resetsToInitial, computed.display === "table") + extraDeclarations)),
     );
+    if (yieldBetweenBatches) await yieldBetweenBatches();
   }
 }
 
@@ -503,14 +504,14 @@ function escapeAttribute(text) {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-// Clones the page as XHTML that renders like the live page inside an SVG foreignObject: computed styles in a style sheet, resources embedded and scroll offsets applied. The root's position and size are left to `markup`, so one clone can be rendered at different sizes and scroll positions.
-export async function clonePage(document) {
+// Clones the page as XHTML that renders like the live page inside an SVG foreignObject: computed styles in a style sheet, resources embedded and scroll offsets applied. The root's position and size are left to `markup`, so one clone can be rendered at different sizes and scroll positions. `yieldBetweenBatches` lets a page stay responsive while a large clone is built.
+export async function clonePage(document, { yieldBetweenBatches = null } = {}) {
   copiedProperties ??= measureCopiedProperties();
   const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set() };
   const root = document.documentElement;
   const rootOffset = positionOffset(document.defaultView.getComputedStyle(root));
   const rootClone = cloneElement(root, context);
-  styleElements(context.styledElements, context);
+  await styleElements(context.styledElements, context, yieldBetweenBatches);
   const [fontFaces] = await Promise.all([embedFontFaces(document, context), Promise.all(context.embeddings)]);
   const rootInlineStyle = rootClone.getAttribute("style") ?? "";
   rootClone.setAttribute("style", ROOT_STYLE_PLACEHOLDER);

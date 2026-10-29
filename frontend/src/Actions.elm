@@ -4129,6 +4129,7 @@ clientPointDecoder =
 startAreaCapture : Flow Model ()
 startAreaCapture =
     Flow.setAll areaCapture (Just Model.AreaCaptureArmed)
+        |> Flow.seq prepareArtifactArea
 
 
 cancelAreaCapture : Flow Model ()
@@ -4204,6 +4205,14 @@ askAboutArea question =
                                     |> Flow.seq (addToast False "Couldn't capture this area.")
                     )
             )
+
+
+prepareArtifactArea : Flow Model ()
+prepareArtifactArea =
+    callJs "prepareArtifactArea"
+        (\frameId -> Encode.object [ ( "frameId", Encode.string frameId ) ])
+        (Decode.succeed ())
+        artifactFrameId
 
 
 captureArtifactArea : Model.AreaRect -> Flow Model (Maybe Model.CapturedArea)
