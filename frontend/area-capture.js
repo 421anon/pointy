@@ -16,8 +16,27 @@ function snapshotFor(frame) {
 export function prepareArtifactArea({ frameId }) {
   const frame = document.getElementById(frameId);
   if (!frame?.contentDocument) return;
-  const snapshot = snapshotFor(frame);
-  requestAnimationFrame(() => requestAnimationFrame(() => snapshot.prepare().catch(() => {})));
+  const armOnFirstMove = () => {
+    const overlay = frame.parentElement?.querySelector(".artifact-viewer-capture");
+    if (!overlay) return false;
+    if (overlay.dataset.prewarming) return true;
+    overlay.dataset.prewarming = "true";
+    overlay.addEventListener(
+      "pointermove",
+      () => {
+        delete overlay.dataset.prewarming;
+        snapshotFor(frame)
+          .prepare()
+          .catch(() => {});
+      },
+      { once: true },
+    );
+    return true;
+  };
+  if (armOnFirstMove()) return;
+  requestAnimationFrame(() => {
+    if (!armOnFirstMove()) snapshotFor(frame).prepare().catch(() => {});
+  });
 }
 
 export async function captureArtifactArea({ frameId, x, y, width, height }) {

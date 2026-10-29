@@ -9,7 +9,8 @@ const DEFAULT_MARKER_COLOR = "red";
 const DEFAULT_MARKER_WIDTH = 2;
 const CLONE_INVALIDATING_EVENTS = ["pointerdown", "pointerup", "pointercancel", "keydown", "keyup", "input", "change", "toggle", "focusin", "focusout", "load", "error", "animationstart", "transitionrun"];
 
-const yieldToBrowser = () => globalThis.scheduler?.yield?.() ?? new Promise((resolve) => setTimeout(resolve, 0));
+// A timer task lets the page paint and take input between slices of a long clone.
+const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 // A reusable snapshot of a document. prepare() clones the page and renders the current viewport and overview ahead of a capture; captureArea(rect) then only crops and marks the selection. Both are rebuilt on the next call after the page changes. Coordinates passed in are viewport CSS pixels; the returned selectionRect is in page CSS pixels.
 export function createPageSnapshot(document, options = {}) {
@@ -63,11 +64,11 @@ export function createPageSnapshot(document, options = {}) {
     return entry;
   }
 
-  async function clonePageInSlices() {
+  async function clonePageInSlices(cooperative) {
     const startedAt = generation;
     const watching = isStaticDocument(document) ? watch() : null;
     try {
-      const cloned = await clonePage(document, { yieldBetweenBatches: yieldToBrowser });
+      const cloned = cooperative ? await clonePage(document, { yieldBetweenBatches: yieldToBrowser }) : await clonePage(document);
       if (watching && !watching.stale && startedAt === generation) {
         watcher = watching;
         page = cloned;
@@ -81,15 +82,15 @@ export function createPageSnapshot(document, options = {}) {
     }
   }
 
-  async function preparePage() {
-    let result = await clonePageInSlices();
-    if (!result.consistent) result = await clonePageInSlices();
+  async function preparePage(cooperative) {
+    let result = await clonePageInSlices(cooperative);
+    if (!result.consistent) result = await clonePageInSlices(cooperative);
     return result.page;
   }
 
-  function ensurePage() {
+  function ensurePage(cooperative) {
     if (page) return Promise.resolve(page);
-    if (!pendingClone) pendingClone = preparePage().finally(() => (pendingClone = null));
+    if (!pendingClone) pendingClone = preparePage(cooperative).finally(() => (pendingClone = null));
     return pendingClone;
   }
 
@@ -110,13 +111,13 @@ export function createPageSnapshot(document, options = {}) {
     return [generation, scroll.x, scroll.y, rootStyle.width, rootStyle.height, backgroundColor, documentSize.width, documentSize.height, pixelRatio, viewportSize.width, viewportSize.height].join("|");
   }
 
-  async function ensureRenders(measurement) {
+  async function ensureRenders(measurement, cooperative) {
     const key = renderKey(measurement);
     if (watcher && renders?.key === key) return renders;
     if (pendingRenders && pendingRendersKey === key) return pendingRenders;
     pendingRendersKey = key;
     pendingRenders = (async () => {
-      const cloned = await ensurePage();
+      const cloned = await ensurePage(cooperative);
       const { scroll, rootStyle, backgroundColor, documentSize, pixelRatio, viewportSize } = measurement;
       const overviewScale = Math.min(1, overviewMaxEdge / Math.max(documentSize.width, documentSize.height));
       const [viewport, overview] = await Promise.all([
@@ -143,14 +144,14 @@ export function createPageSnapshot(document, options = {}) {
 
   async function prepare() {
     if (disposed) throw new Error("This page snapshot has been disposed.");
-    await ensurePage();
-    if (watcher) await ensureRenders(measure());
+    await ensurePage(true);
+    if (watcher) await ensureRenders(measure(), true);
   }
 
   async function captureArea(rect) {
     if (disposed) throw new Error("This page snapshot has been disposed.");
     const measurement = measure();
-    const { viewport, overview, overviewScale } = await ensureRenders(measurement);
+    const { viewport, overview, overviewScale } = await ensureRenders(measurement, false);
     const selectionRect = {
       x: Math.round(rect.x + measurement.scroll.x),
       y: Math.round(rect.y + measurement.scroll.y),

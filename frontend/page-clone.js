@@ -3,6 +3,7 @@ const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const ROOT_STYLE_PLACEHOLDER = "pointy-capture-root-style";
 const STYLE_CLASS_PREFIX = "pointy-";
 const STYLE_READ_BATCH = 512;
+const SLICE_ELEMENTS = 128;
 const PAGE_STYLE_LAYER = "pointy-capture-page";
 const SCROLLING_OVERFLOWS = ["auto", "scroll"];
 const CHECKABLE_INPUT_TYPES = ["checkbox", "radio"];
@@ -193,8 +194,9 @@ async function embedFontFaces(document, context) {
 async function styleElements(styledElements, context, yieldBetweenBatches) {
   const { names } = copiedProperties;
   const fontFamily = names.indexOf("font-family");
-  for (let start = 0; start < styledElements.length; start += STYLE_READ_BATCH) {
-    const batch = styledElements.slice(start, start + STYLE_READ_BATCH);
+  const batchSize = yieldBetweenBatches ? SLICE_ELEMENTS : STYLE_READ_BATCH;
+  for (let start = 0; start < styledElements.length; start += batchSize) {
+    const batch = styledElements.slice(start, start + batchSize);
     const values = batch.map(() => new Array(names.length));
     names.forEach((name, index) => batch.forEach(({ computed }, row) => (values[row][index] = computed.getPropertyValue(name))));
     if (fontFamily >= 0) values.forEach((row) => noteFontFamilies(row[fontFamily], context));
@@ -456,29 +458,25 @@ function frameBody(frame) {
   }
 }
 
-function cloneNode(node, context) {
-  if (node.nodeType === Node.TEXT_NODE) return node.cloneNode(false);
-  if (node.nodeType === Node.ELEMENT_NODE) return cloneElement(node, context);
-  return null;
-}
-
-function cloneElement(element, context, frameComputed = null) {
+// Elements are prepared on the way down and their children are appended from an explicit stack, so a large page can be cloned over several turns of the event loop.
+function prepareElement(element, context, frameComputed = null) {
   const view = element.ownerDocument.defaultView;
   const computed = view.getComputedStyle(element);
   const styled = frameComputed ?? computed;
   const isFrame = element.namespaceURI === XHTML_NAMESPACE && element.localName === "iframe";
   const body = isFrame ? frameBody(element) : null;
-  if (body) return cloneElement(body, context, computed);
+  if (body) return prepareElement(body, context, computed);
   const clone = shallowClone(element, context);
   const isHidden = styled.display === "none";
+  const children = [];
   if (hasChildrenToCopy(element)) {
-    const children = isHidden ? hiddenResources(element, context) : Array.from(sourceChildren(element), (child) => cloneNode(child, context));
-    for (const child of children) if (child) clone.append(child);
+    if (isHidden) for (const resource of hiddenResources(element, context)) clone.append(resource);
+    else children.push(...sourceChildren(element));
   }
-  if (!clone.style) return clone;
+  if (!clone.style) return { clone, children };
   if (isHidden) {
     clone.classList.add(styleClass(context, "", "display:none"));
-    return clone;
+    return { clone, children: [] };
   }
   keepCustomProperties(element, clone);
   context.styledElements.push({
@@ -490,14 +488,47 @@ function cloneElement(element, context, frameComputed = null) {
   context.computedStyles.set(clone, styled);
   embedStyleUrls(context, clone, styled);
   copyPseudoElements(element, clone, context);
-  copyFormState(element, clone);
+  context.formStates.push({ element, clone });
   const ownerDocument = element.ownerDocument;
   if (element !== ownerDocument.documentElement && element !== ownerDocument.scrollingElement) {
     const scrollBox = scrollBoxState(element, computed);
     if (scrollBox?.size) pinBoxSize(clone.style, scrollBox.size);
-    if (scrollBox && (scrollBox.scrollX !== 0 || scrollBox.scrollY !== 0)) shiftScrolledContent(clone, styled, scrollBox.scrollX, scrollBox.scrollY, context);
+    if (scrollBox && (scrollBox.scrollX !== 0 || scrollBox.scrollY !== 0)) context.scrollBoxes.push({ clone, computed: styled, scrollX: scrollBox.scrollX, scrollY: scrollBox.scrollY });
   }
-  return clone;
+  return { clone, children };
+}
+
+async function cloneElementTree(root, context, yieldBetweenSlices) {
+  const prepared = prepareElement(root, context);
+  const stack = prepared.children.length > 0 ? [{ clone: prepared.clone, children: prepared.children, next: 0 }] : [];
+  let slice = 0;
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame.next >= frame.children.length) {
+      stack.pop();
+      continue;
+    }
+    const node = frame.children[frame.next];
+    frame.next += 1;
+    if (node.nodeType === Node.TEXT_NODE) {
+      frame.clone.append(node.cloneNode(false));
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const entry = prepareElement(node, context);
+    frame.clone.append(entry.clone);
+    if (entry.children.length > 0) stack.push({ clone: entry.clone, children: entry.children, next: 0 });
+    if (yieldBetweenSlices) {
+      slice += 1;
+      if (slice >= SLICE_ELEMENTS) {
+        slice = 0;
+        await yieldBetweenSlices();
+      }
+    }
+  }
+  for (const box of context.scrollBoxes) shiftScrolledContent(box.clone, box.computed, box.scrollX, box.scrollY, context);
+  for (const state of context.formStates) copyFormState(state.element, state.clone);
+  return prepared.clone;
 }
 
 function escapeAttribute(text) {
@@ -507,10 +538,10 @@ function escapeAttribute(text) {
 // Clones the page as XHTML that renders like the live page inside an SVG foreignObject: computed styles in a style sheet, resources embedded and scroll offsets applied. The root's position and size are left to `markup`, so one clone can be rendered at different sizes and scroll positions. `yieldBetweenBatches` lets a page stay responsive while a large clone is built.
 export async function clonePage(document, { yieldBetweenBatches = null } = {}) {
   copiedProperties ??= measureCopiedProperties();
-  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set() };
+  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set(), scrollBoxes: [], formStates: [] };
   const root = document.documentElement;
   const rootOffset = positionOffset(document.defaultView.getComputedStyle(root));
-  const rootClone = cloneElement(root, context);
+  const rootClone = await cloneElementTree(root, context, yieldBetweenBatches);
   await styleElements(context.styledElements, context, yieldBetweenBatches);
   const [fontFaces] = await Promise.all([embedFontFaces(document, context), Promise.all(context.embeddings)]);
   const rootInlineStyle = rootClone.getAttribute("style") ?? "";
