@@ -760,7 +760,7 @@ type alias AgentTurn =
     { turnId : String
     , turnSessionId : String
     , turnPrompt : String
-    , turnImages : List String
+    , turnAttachments : List Attachment
     , turnAutomatic : Bool
     , turnStatus : String
     , turnExitCode : Maybe Int
@@ -841,7 +841,7 @@ type ChatTurnStatus
 type alias ChatTurn =
     { turnId : String
     , prompt : Maybe String
-    , images : List String
+    , attachments : List Attachment
     , assistant : String
     , status : ChatTurnStatus
     }
@@ -933,6 +933,67 @@ type alias ComposerImage =
     }
 
 
+type ComposerAttachment
+    = ComposerImageAttachment ComposerImage
+    | ComposerCapturedArea CapturedArea
+
+
+type Attachment
+    = ImageAttachment String
+    | CapturedAreaAttachment { overviewUrl : String, selectionUrl : String }
+
+
+composerAttachmentImages : ComposerAttachment -> List ComposerImage
+composerAttachmentImages attachment =
+    case attachment of
+        ComposerImageAttachment image ->
+            [ image ]
+
+        ComposerCapturedArea area ->
+            [ area.overview, area.selection ]
+
+
+composerAttachmentView : ComposerAttachment -> Attachment
+composerAttachmentView attachment =
+    case attachment of
+        ComposerImageAttachment image ->
+            ImageAttachment image.url
+
+        ComposerCapturedArea area ->
+            CapturedAreaAttachment { overviewUrl = area.overview.url, selectionUrl = area.selection.url }
+
+
+composerPlainImages : List ComposerAttachment -> List ComposerImage
+composerPlainImages =
+    List.filterMap
+        (\attachment ->
+            case attachment of
+                ComposerImageAttachment image ->
+                    Just image
+
+                ComposerCapturedArea _ ->
+                    Nothing
+        )
+
+
+composerCapturedAreas : List ComposerAttachment -> List CapturedArea
+composerCapturedAreas =
+    List.filterMap
+        (\attachment ->
+            case attachment of
+                ComposerImageAttachment _ ->
+                    Nothing
+
+                ComposerCapturedArea area ->
+                    Just area
+        )
+
+
+sentAttachmentViews : List ComposerAttachment -> List Attachment
+sentAttachmentViews attachments =
+    List.map composerAttachmentView (List.map ComposerImageAttachment (composerPlainImages attachments) ++ List.map ComposerCapturedArea (composerCapturedAreas attachments))
+
+
 type alias Lightbox =
     { images : List String
     , index : Int
@@ -1014,7 +1075,7 @@ type alias AgentState =
     , isRestoringChat : Bool
     , autoApply : Bool
     , clientId : String
-    , composerImages : List ComposerImage
+    , composerAttachments : List ComposerAttachment
     , lightbox : Maybe Lightbox
     }
 
@@ -1038,7 +1099,7 @@ initAgentState =
     , isRestoringChat = False
     , autoApply = True
     , clientId = ""
-    , composerImages = []
+    , composerAttachments = []
     , lightbox = Nothing
     }
 
@@ -1143,14 +1204,14 @@ appendPersistedTurn turn entries =
                 if turn.turnAutomatic then
                     Nothing
 
-                else if String.isEmpty (String.trim turn.turnPrompt) && List.isEmpty turn.turnImages then
+                else if String.isEmpty (String.trim turn.turnPrompt) && List.isEmpty turn.turnAttachments then
                     Just "Prompt unavailable"
 
                 else
                     Just turn.turnPrompt
 
             seeded =
-                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, images = turn.turnImages, assistant = "", status = chatStatusFromTurn turn } ]
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, attachments = turn.turnAttachments, assistant = "", status = chatStatusFromTurn turn } ]
 
             logLines =
                 turnLogLines turn
@@ -1299,7 +1360,7 @@ appendChatLine rawLine entries =
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
                     mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, images = [], assistant = "", status = ChatPending } ]
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = [], assistant = "", status = ChatPending } ]
 
                 Err _ ->
                     entries
@@ -1787,6 +1848,36 @@ type alias AreaRect =
     , width : Float
     , height : Float
     }
+
+
+type alias AreaSize =
+    { width : Float
+    , height : Float
+    }
+
+
+type alias CapturedArea =
+    { overview : ComposerImage
+    , selection : ComposerImage
+    , documentSize : AreaSize
+    , selectionRect : AreaRect
+    }
+
+
+capturedAreaDecoder : Decode.Decoder CapturedArea
+capturedAreaDecoder =
+    Decode.map4 CapturedArea
+        (Decode.field "overview" (Decode.map (ComposerImage "image/png") Decode.string))
+        (Decode.field "selection" (Decode.map (ComposerImage "image/png") Decode.string))
+        (Decode.field "documentSize" (Decode.map2 AreaSize (Decode.field "width" Decode.float) (Decode.field "height" Decode.float)))
+        (Decode.field "selectionRect"
+            (Decode.map4 AreaRect
+                (Decode.field "x" Decode.float)
+                (Decode.field "y" Decode.float)
+                (Decode.field "width" Decode.float)
+                (Decode.field "height" Decode.float)
+            )
+        )
 
 
 areaPointDecoder : List String -> List String -> Decode.Decoder AreaPoint

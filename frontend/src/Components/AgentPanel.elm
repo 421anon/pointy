@@ -630,7 +630,7 @@ viewCreatingSession agent =
         , context = Html.nothing
         , error = Html.nothing
         , chat = viewEmptyChat EmptyCreating
-        , composer = viewPrompt agent.composerImages agent.autoApply False ComposerIdle False True
+        , composer = viewPrompt agent.composerAttachments agent.autoApply False ComposerIdle False True
         }
 
 
@@ -728,7 +728,7 @@ viewSession now mentionsAwaited mentionSources agent summary sessionView =
                         else
                             ComposerIdle
                 in
-                viewPrompt agent.composerImages agent.autoApply (runnerActive && applyingDiff == Nothing) busy stopping submitBlocked
+                viewPrompt agent.composerAttachments agent.autoApply (runnerActive && applyingDiff == Nothing) busy stopping submitBlocked
         }
 
 
@@ -973,8 +973,8 @@ type ComposerBusy
     | ComposerSteering
 
 
-viewPrompt : List Model.ComposerImage -> Bool -> Bool -> ComposerBusy -> Bool -> Bool -> Html (Flow Model ())
-viewPrompt images autoApply runnerActive busy stopping submitBlocked =
+viewPrompt : List Model.ComposerAttachment -> Bool -> Bool -> ComposerBusy -> Bool -> Bool -> Html (Flow Model ())
+viewPrompt attachments autoApply runnerActive busy stopping submitBlocked =
     let
         steering =
             runnerActive || stopping
@@ -987,7 +987,7 @@ viewPrompt images autoApply runnerActive busy stopping submitBlocked =
                 "Auto-apply is off."
     in
     Html.div [ class "agent-panel__composer" ]
-        [ Html.viewIf (not (List.isEmpty images)) (viewComposerImages (List.map .url images))
+        [ Html.viewIf (not (List.isEmpty attachments)) (viewComposerAttachments (List.map Model.composerAttachmentView attachments))
         , Html.div [ class "agent-panel__composer-row" ]
             [ Html.div [ class "agent-panel__prompt-field" ]
                 [ Html.textarea
@@ -1039,53 +1039,118 @@ attachedImages transfer =
             )
 
 
-viewComposerImages : List String -> Html (Flow Model ())
-viewComposerImages urls =
+viewComposerAttachments : List Model.Attachment -> Html (Flow Model ())
+viewComposerAttachments attachments =
+    let
+        urls =
+            lightboxUrls attachments
+    in
     Html.div [ class "agent-panel__images agent-panel__images--composer" ]
         (List.indexedMap
-            (\index url ->
+            (\index tile ->
                 Html.div [ class "agent-panel__composer-image" ]
-                    [ viewImageButton urls index url
-                    , viewIconButton ("Remove image " ++ String.fromInt (index + 1))
+                    [ viewImageButton urls tile
+                    , viewIconButton
+                        ((if tile.isCapturedArea then
+                            "Remove area capture "
+
+                          else
+                            "Remove image "
+                         )
+                            ++ String.fromInt (index + 1)
+                        )
                         "close"
                         [ class "icon-btn agent-panel__composer-image-remove"
-                        , Events.onClick (Actions.removeComposerImage index)
+                        , Events.onClick (Actions.removeComposerAttachment index)
                         ]
                     ]
             )
-            urls
+            (imageTiles attachments)
         )
 
 
-viewImageButton : List String -> Int -> String -> Html (Flow Model ())
-viewImageButton urls index url =
+type alias ImageTile =
+    { url : String
+    , lightboxIndex : Int
+    , isCapturedArea : Bool
+    }
+
+
+imageTiles : List Model.Attachment -> List ImageTile
+imageTiles attachments =
+    let
+        addTile attachment ( offset, tiles ) =
+            case attachment of
+                Model.ImageAttachment url ->
+                    ( offset + 1, { url = url, lightboxIndex = offset, isCapturedArea = False } :: tiles )
+
+                Model.CapturedAreaAttachment area ->
+                    ( offset + 2, { url = area.selectionUrl, lightboxIndex = offset + 1, isCapturedArea = True } :: tiles )
+    in
+    List.foldl addTile ( 0, [] ) attachments
+        |> Tuple.second
+        |> List.reverse
+
+
+lightboxUrls : List Model.Attachment -> List String
+lightboxUrls =
+    List.concatMap
+        (\attachment ->
+            case attachment of
+                Model.ImageAttachment url ->
+                    [ url ]
+
+                Model.CapturedAreaAttachment area ->
+                    [ area.overviewUrl, area.selectionUrl ]
+        )
+
+
+viewImageButton : List String -> ImageTile -> Html (Flow Model ())
+viewImageButton urls tile =
     Html.button
         [ type_ "button"
-        , class "agent-panel__image"
-        , attribute "aria-label" (imageLabel urls index)
-        , Events.onClick (Actions.openLightbox urls index)
+        , classList
+            [ ( "agent-panel__image", True )
+            , ( "agent-panel__image--area-capture", tile.isCapturedArea )
+            ]
+        , attribute "aria-label"
+            ((if tile.isCapturedArea then
+                "Area capture. "
+
+              else
+                ""
+             )
+                ++ imageLabel urls tile.lightboxIndex
+            )
+        , Events.onClick (Actions.openLightbox urls tile.lightboxIndex)
         ]
-        [ Html.img [ src url, alt "", attribute "loading" "lazy" ] [] ]
+        [ Html.img [ src tile.url, alt "", attribute "loading" "lazy" ] [] ]
 
 
-viewSentImages : List String -> Html (Flow Model ())
-viewSentImages urls =
+viewSentImages : List Model.Attachment -> Html (Flow Model ())
+viewSentImages attachments =
     let
+        urls =
+            lightboxUrls attachments
+
+        tiles =
+            imageTiles attachments
+
         count =
-            List.length urls
+            List.length tiles
 
         hiddenCount =
             count - sentImageTiles + 1
 
-        viewTile index url =
+        viewTile index tile =
             if index == sentImageTiles - 1 && hiddenCount > 1 then
                 Html.div [ class "agent-panel__image-tile" ]
-                    [ viewImageButton urls index url
+                    [ viewImageButton urls tile
                     , Html.span [ class "agent-panel__image-more", attribute "aria-hidden" "true" ] [ Html.text ("+" ++ String.fromInt hiddenCount) ]
                     ]
 
             else
-                viewImageButton urls index url
+                viewImageButton urls tile
     in
     Html.div
         [ classList
@@ -1094,7 +1159,7 @@ viewSentImages urls =
             , ( "agent-panel__images--trio", count == 3 )
             ]
         ]
-        (List.indexedMap viewTile (List.take sentImageTiles urls))
+        (List.indexedMap viewTile (List.take sentImageTiles tiles))
 
 
 sentImageTiles : Int
@@ -1361,8 +1426,8 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
                                 ]
                                 [ Html.text "You" ]
                         ]
-                    , Html.viewIf (not (List.isEmpty turn.images))
-                        (viewSentImages turn.images)
+                    , Html.viewIf (not (List.isEmpty turn.attachments))
+                        (viewSentImages turn.attachments)
                     , Html.viewIf (not (String.isEmpty prompt))
                         (Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ] [ Html.text prompt ])
                     ]

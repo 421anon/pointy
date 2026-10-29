@@ -65,6 +65,7 @@ watchSleeper logPath input = do
             , turnSessionId = "watchdog-session"
             , turnPrompt = "watchdog"
             , turnImages = []
+            , turnAreaCaptures = []
             , turnAutomatic = False
             , turnStatus = "running"
             , turnExitCode = Nothing

@@ -1043,9 +1043,9 @@ autoApply =
     lens ".autoApply" .autoApply (\t autoApply_ -> { t | autoApply = autoApply_ })
 
 
-composerImages : Lens ls AgentState (List Model.ComposerImage) x y
-composerImages =
-    lens ".composerImages" .composerImages (\s images -> { s | composerImages = images })
+composerAttachments : Lens ls AgentState (List Model.ComposerAttachment) x y
+composerAttachments =
+    lens ".composerAttachments" .composerAttachments (\s attachments -> { s | composerAttachments = attachments })
 
 
 lightbox : Lens ls AgentState (Maybe Model.Lightbox) x y

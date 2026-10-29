@@ -260,6 +260,22 @@ test-suite turn-stream
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite area-capture
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          AreaCapture.hs
+  ghc-options:      -threaded
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , bytestring
+    , text
+    , time
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite turn-log
   import:           warnings
   type:             exitcode-stdio-1.0

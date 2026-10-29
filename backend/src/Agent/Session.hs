@@ -9,6 +9,10 @@ module Agent.Session (
     applyConflictsPending,
     AgentTurn (..),
     TurnImage (..),
+    AreaCapture (..),
+    StoredAreaCapture (..),
+    DocumentSize (..),
+    SelectionRect (..),
     turnIsUnfinished,
     latestUnfinishedTurn,
     inferTurnExitCode,
@@ -154,6 +158,7 @@ data AgentTurn = AgentTurn
     , turnSessionId :: Text
     , turnPrompt :: Text
     , turnImages :: [Text]
+    , turnAreaCaptures :: [StoredAreaCapture]
     , turnAutomatic :: Bool
     , turnStatus :: Text
     , turnExitCode :: Maybe Int
@@ -171,6 +176,7 @@ instance ToJSON AgentTurn where
             , "turnSessionId" .= turnSessionId turn
             , "turnPrompt" .= turnPrompt turn
             , "turnImages" .= turnImages turn
+            , "turnAreaCaptures" .= turnAreaCaptures turn
             , "turnAutomatic" .= turnAutomatic turn
             , "turnStatus" .= turnStatus turn
             , "turnExitCode" .= turnExitCode turn
@@ -187,6 +193,7 @@ instance FromJSON AgentTurn where
             <*> obj .: "turnSessionId"
             <*> obj .:? "turnPrompt" .!= ""
             <*> obj .:? "turnImages" .!= []
+            <*> obj .:? "turnAreaCaptures" .!= []
             <*> obj .:? "turnAutomatic" .!= False
             <*> obj .: "turnStatus"
             <*> obj .:? "turnExitCode"
@@ -212,6 +219,66 @@ instance FromJSON TurnImage where
 
 turnImageMimeTypes :: [Text]
 turnImageMimeTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+
+data DocumentSize = DocumentSize
+    { documentWidth :: Int
+    , documentHeight :: Int
+    }
+    deriving (Show, Eq)
+
+instance ToJSON DocumentSize where
+    toJSON size = object ["width" .= documentWidth size, "height" .= documentHeight size]
+
+instance FromJSON DocumentSize where
+    parseJSON = withObject "DocumentSize" $ \obj -> DocumentSize <$> obj .: "width" <*> obj .: "height"
+
+data SelectionRect = SelectionRect
+    { selectionX :: Int
+    , selectionY :: Int
+    , selectionWidth :: Int
+    , selectionHeight :: Int
+    }
+    deriving (Show, Eq)
+
+instance ToJSON SelectionRect where
+    toJSON rect = object ["x" .= selectionX rect, "y" .= selectionY rect, "width" .= selectionWidth rect, "height" .= selectionHeight rect]
+
+instance FromJSON SelectionRect where
+    parseJSON = withObject "SelectionRect" $ \obj ->
+        SelectionRect <$> obj .: "x" <*> obj .: "y" <*> obj .: "width" <*> obj .: "height"
+
+data AreaCapture = AreaCapture
+    { areaCaptureOverview :: TurnImage
+    , areaCaptureSelection :: TurnImage
+    , areaCaptureDocumentSize :: DocumentSize
+    , areaCaptureSelectionRect :: SelectionRect
+    }
+    deriving (Show, Eq)
+
+instance FromJSON AreaCapture where
+    parseJSON = withObject "AreaCapture" $ \obj ->
+        AreaCapture <$> obj .: "overview" <*> obj .: "selection" <*> obj .: "documentSize" <*> obj .: "selectionRect"
+
+data StoredAreaCapture = StoredAreaCapture
+    { storedOverviewImage :: Int
+    , storedSelectionImage :: Int
+    , storedDocumentSize :: DocumentSize
+    , storedSelectionRect :: SelectionRect
+    }
+    deriving (Show, Eq)
+
+instance ToJSON StoredAreaCapture where
+    toJSON stored =
+        object
+            [ "overviewImage" .= storedOverviewImage stored
+            , "selectionImage" .= storedSelectionImage stored
+            , "documentSize" .= storedDocumentSize stored
+            , "selectionRect" .= storedSelectionRect stored
+            ]
+
+instance FromJSON StoredAreaCapture where
+    parseJSON = withObject "StoredAreaCapture" $ \obj ->
+        StoredAreaCapture <$> obj .: "overviewImage" <*> obj .: "selectionImage" <*> obj .: "documentSize" <*> obj .: "selectionRect"
 
 turnIsUnfinished :: AgentTurn -> Bool
 turnIsUnfinished turn =

@@ -23,12 +23,14 @@ module Agent.Runner (
 
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
 import Agent.Model (chatModelArgs, prepareChatModel)
-import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderCurrentProject, renderEmbeddedRules, userMessage)
+import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderAreaCapture, renderCurrentProject, renderEmbeddedRules, userMessage)
 import Agent.Sandbox (agentMemoryMax, bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, piIsolationFlags, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxPiHome, sandboxProcess, seedPiConfig, sessionPaths, toolEnvironment)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
+    AreaCapture (..),
     PreparedApply (..),
+    StoredAreaCapture (..),
     TurnImage (..),
     acquireSessionCompaction,
     applyConflictsPending,
@@ -255,17 +257,17 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> [TurnImage] -> Maybe Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
-startAgentTurn sid prompt images viewedArtifact mCurrentProjectId enabled client = do
+startAgentTurn :: Text -> Text -> [TurnImage] -> [AreaCapture] -> Maybe Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
+startAgentTurn sid prompt images areaCaptures viewedArtifact mCurrentProjectId enabled client = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
     when (status session_ == "archived") $ Except.throwError "session_archived"
     hasRunner <- sessionHasActiveRunner session_
     when hasRunner $ Except.throwError "runner_active"
-    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId (UserTurn images viewedArtifact)
+    beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId (UserTurn images areaCaptures viewedArtifact)
 
-data TurnOrigin = UserTurn [TurnImage] (Maybe Text) | AutomaticFix (Maybe Text)
+data TurnOrigin = UserTurn [TurnImage] [AreaCapture] (Maybe Text) | AutomaticFix (Maybe Text)
 
 beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
 beginAgentTurn session_ prompt mCurrentProjectId origin = do
@@ -284,6 +286,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
                 , turnSessionId = sid
                 , turnPrompt = prompt
                 , turnImages = map turnImageMimeType images
+                , turnAreaCaptures = storedAreaCaptures
                 , turnAutomatic = automatic
                 , turnStatus = "running"
                 , turnExitCode = Nothing
@@ -326,12 +329,14 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             withConflict pending =
                 promptWithApplyConflict (targetBranch freshSession) (candidateWorktree pending) (fromMaybe "" nextError)
             withContext context text = context <> "\n\n" <> text
+            withAreaCaptures text = foldr withContext text areaCaptureContexts
             request = if automatic then prompt else userMessage prompt
             refusal = (withConflict <$> pendingApply) <|> (promptWithEvaluationFailure <$> evaluationFailure)
             agentPrompt =
                 maybe id (withContext . renderCurrentProject) changedCurrentProjectId $
                     maybe id withContext viewedArtifact $
-                        maybe prompt ($ request) refusal
+                        withAreaCaptures $
+                            maybe prompt ($ request) refusal
         when (isJust evaluationFailure) $
             appendLogLine (configAgent cfg) logPath "system" "The reason the last apply was refused was sent to the agent with this message."
         when (isJust pendingApply) $
@@ -350,9 +355,15 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
     return turn
   where
-    (automatic, inheritedStop, images, viewedArtifact) = case origin of
-        UserTurn sent viewed -> (False, Nothing, sent, viewed)
-        AutomaticFix fixedTurnId -> (True, fixedTurnId, [], Nothing)
+    (automatic, inheritedStop, plainImages, areaCaptures, viewedArtifact) = case origin of
+        UserTurn sent captured viewed -> (False, Nothing, sent, captured, viewed)
+        AutomaticFix fixedTurnId -> (True, fixedTurnId, [], [], Nothing)
+    images = plainImages ++ concatMap (\capture -> [areaCaptureOverview capture, areaCaptureSelection capture]) areaCaptures
+    firstCaptureImages = [length plainImages, length plainImages + 2 ..]
+    storedAreaCaptures = zipWith storeAreaCapture firstCaptureImages areaCaptures
+    storeAreaCapture firstImage capture = StoredAreaCapture firstImage (firstImage + 1) (areaCaptureDocumentSize capture) (areaCaptureSelectionRect capture)
+    areaCaptureContexts = zipWith describeAreaCapture firstCaptureImages areaCaptures
+    describeAreaCapture firstImage capture = renderAreaCapture (firstImage + 1) (firstImage + 2) (areaCaptureDocumentSize capture) (areaCaptureSelectionRect capture)
 
 setRunningAutoApply :: Text -> Bool -> ExceptT String IO ()
 setRunningAutoApply client enabled = do

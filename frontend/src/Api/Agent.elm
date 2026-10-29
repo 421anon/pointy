@@ -80,8 +80,8 @@ autoApplyFields setting =
     ]
 
 
-sendTurn : String -> String -> List Model.ComposerImage -> AutoApplySetting a -> Maybe Int -> Maybe Route.ArtifactParams -> Flow s (Result Http.Error Model.AgentTurn)
-sendTurn sessionId prompt images setting mCurrentProjectId mViewedArtifact =
+sendTurn : String -> String -> List Model.ComposerAttachment -> AutoApplySetting a -> Maybe Int -> Maybe Route.ArtifactParams -> Flow s (Result Http.Error Model.AgentTurn)
+sendTurn sessionId prompt attachments setting mCurrentProjectId mViewedArtifact =
     Flow.lift <|
         Http.post
             { url = baseUrl ++ "/turn"
@@ -90,7 +90,8 @@ sendTurn sessionId prompt images setting mCurrentProjectId mViewedArtifact =
                     Encode.object
                         ([ ( "sessionId", Encode.string sessionId )
                          , ( "prompt", Encode.string prompt )
-                         , ( "images", Encode.list encodeImage images )
+                         , ( "images", Encode.list encodeImage (Model.composerPlainImages attachments) )
+                         , ( "areaCaptures", Encode.list encodeCapturedArea (Model.composerCapturedAreas attachments) )
                          , ( "currentProjectId", Maybe.unwrap Encode.null Encode.int mCurrentProjectId )
                          , ( "viewedArtifact", Maybe.unwrap Encode.null encodeViewedArtifact mViewedArtifact )
                          ]
@@ -114,6 +115,28 @@ encodeImage image =
     Encode.object
         [ ( "mimeType", Encode.string image.mimeType )
         , ( "data", Encode.string (String.dropLeft (String.length ("data:" ++ image.mimeType ++ ";base64,")) image.url) )
+        ]
+
+
+encodeCapturedArea : Model.CapturedArea -> Encode.Value
+encodeCapturedArea area =
+    Encode.object
+        [ ( "overview", encodeImage area.overview )
+        , ( "selection", encodeImage area.selection )
+        , ( "documentSize"
+          , Encode.object
+                [ ( "width", Encode.int (round area.documentSize.width) )
+                , ( "height", Encode.int (round area.documentSize.height) )
+                ]
+          )
+        , ( "selectionRect"
+          , Encode.object
+                [ ( "x", Encode.int (round area.selectionRect.x) )
+                , ( "y", Encode.int (round area.selectionRect.y) )
+                , ( "width", Encode.int (round area.selectionRect.width) )
+                , ( "height", Encode.int (round area.selectionRect.height) )
+                ]
+          )
         ]
 
 
@@ -255,7 +278,7 @@ turnDecoder =
         |> required "turnId" Decode.string
         |> required "turnSessionId" Decode.string
         |> optional "turnPrompt" Decode.string ""
-        |> custom turnImagesDecoder
+        |> custom turnAttachmentsDecoder
         |> optional "turnAutomatic" Decode.bool False
         |> required "turnStatus" Decode.string
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
@@ -263,11 +286,49 @@ turnDecoder =
         |> optional "turnLog" Decode.string ""
 
 
-turnImagesDecoder : Decoder (List String)
-turnImagesDecoder =
-    Decode.map2 (\turnId -> List.indexedMap (\index _ -> turnImageUrl turnId index))
+turnAttachmentsDecoder : Decoder (List Model.Attachment)
+turnAttachmentsDecoder =
+    Decode.map3 turnAttachments
         (Decode.field "turnId" Decode.string)
         (Decode.field "turnImages" (Decode.list Decode.string))
+        (Decode.field "turnAreaCaptures" (Decode.list storedAreaCaptureDecoder))
+
+
+type alias StoredAreaCapture =
+    { overviewImage : Int
+    , selectionImage : Int
+    }
+
+
+storedAreaCaptureDecoder : Decoder StoredAreaCapture
+storedAreaCaptureDecoder =
+    Decode.map2 StoredAreaCapture
+        (Decode.field "overviewImage" Decode.int)
+        (Decode.field "selectionImage" Decode.int)
+
+
+turnAttachments : String -> List String -> List StoredAreaCapture -> List Model.Attachment
+turnAttachments turnId mimeTypes areaCaptures =
+    let
+        capturedIndexes =
+            List.concatMap (\capture -> [ capture.overviewImage, capture.selectionImage ]) areaCaptures
+
+        plainImages =
+            List.range 0 (List.length mimeTypes - 1)
+                |> List.filter (\index -> not (List.member index capturedIndexes))
+                |> List.map (Model.ImageAttachment << turnImageUrl turnId)
+
+        capturedAreas =
+            List.map
+                (\capture ->
+                    Model.CapturedAreaAttachment
+                        { overviewUrl = turnImageUrl turnId capture.overviewImage
+                        , selectionUrl = turnImageUrl turnId capture.selectionImage
+                        }
+                )
+                areaCaptures
+    in
+    plainImages ++ capturedAreas
 
 
 turnImageUrl : String -> Int -> String

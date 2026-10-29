@@ -41,7 +41,7 @@ import Agent.Git (
  )
 import Agent.Policy (renderViewedArtifact)
 import Agent.Runner (applySessionChanges, compactAgentSession, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
-import Agent.Session (AgentSessionSummary, AgentTurn (..), TurnImage, findTurn, turnImageFilePath)
+import Agent.Session (AgentSessionSummary, AgentTurn (..), AreaCapture, TurnImage, findTurn, turnImageFilePath)
 import Control.Lens ((^?), _Right)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -65,6 +65,7 @@ data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
     , turnRequestPrompt :: Text
     , turnRequestImages :: [TurnImage]
+    , turnRequestAreaCaptures :: [AreaCapture]
     , turnRequestCurrentProjectId :: Maybe Int
     , turnRequestViewedArtifact :: Maybe ViewedArtifact
     , turnRequestAutoApply :: Bool
@@ -78,6 +79,7 @@ instance FromJSON TurnRequest where
             <$> obj .: "sessionId"
             <*> obj .: "prompt"
             <*> obj .:? "images" .!= []
+            <*> obj .:? "areaCaptures" .!= []
             <*> obj .:? "currentProjectId"
             <*> obj .:? "viewedArtifact"
             <*> obj .:? "autoApply" .!= True
@@ -158,7 +160,7 @@ getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req = do
     viewedArtifact <- liftIO $ traverse describeViewedArtifact (turnRequestViewedArtifact req)
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) viewedArtifact (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) (turnRequestAreaCaptures req) viewedArtifact (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
 
 describeViewedArtifact :: ViewedArtifact -> IO Text
 describeViewedArtifact (ViewedArtifact stepId commit path) =

@@ -3863,15 +3863,15 @@ attachAgentImages files =
     Flow.when (not (List.isEmpty rejected)) (addToast False "Only PNG, JPEG, GIF and WebP images can be attached.")
         |> Flow.seq
             (withinAgentImagesBudget (List.sum (List.map encodedFileLength images))
-                (Flow.traverse readComposerImage images |> Flow.andThen appendComposerImages)
+                (Flow.traverse readComposerImage images |> Flow.andThen (appendComposerAttachments << List.map Model.ComposerImageAttachment))
             )
 
 
 withinAgentImagesBudget : Int -> Flow Model () -> Flow Model ()
 withinAgentImagesBudget addedLength attach =
-    Flow.getAll (agent << composerImages)
+    Flow.getAll (agent << composerAttachments)
         (\attached ->
-            if encodedImagesLength (List.concat attached) + addedLength > agentImagesBudget then
+            if encodedImagesLength (List.concatMap Model.composerAttachmentImages (List.concat attached)) + addedLength > agentImagesBudget then
                 addToast False "These images are too large to send together. Attach smaller or fewer images."
 
             else
@@ -3879,9 +3879,9 @@ withinAgentImagesBudget addedLength attach =
         )
 
 
-appendComposerImages : List Model.ComposerImage -> Flow Model ()
-appendComposerImages images =
-    Flow.over (agent << composerImages) (\current -> current ++ images)
+appendComposerAttachments : List Model.ComposerAttachment -> Flow Model ()
+appendComposerAttachments attachments =
+    Flow.over (agent << composerAttachments) (\current -> current ++ attachments)
 
 
 agentImagesBudget : Int
@@ -3911,9 +3911,9 @@ pickAgentImages =
         |> Flow.join
 
 
-removeComposerImage : Int -> Flow Model ()
-removeComposerImage index =
-    Flow.over (agent << composerImages) (List.removeAt index)
+removeComposerAttachment : Int -> Flow Model ()
+removeComposerAttachment index =
+    Flow.over (agent << composerAttachments) (List.removeAt index)
 
 
 artifactFrameId : String
@@ -3981,13 +3981,17 @@ captureArtifactArea rect =
                 , ( "height", Encode.float area.height )
                 ]
         )
-        (Decode.nullable Decode.string)
+        (Decode.nullable Model.capturedAreaDecoder)
         rect
         |> Flow.andThen
-            (\mDataUrl ->
-                case mDataUrl of
-                    Just dataUrl ->
-                        withinAgentImagesBudget (String.length dataUrl) (appendComposerImages [ Model.ComposerImage "image/png" dataUrl ])
+            (\mCapturedArea ->
+                case mCapturedArea of
+                    Just capturedArea ->
+                        let
+                            attachment =
+                                Model.ComposerCapturedArea capturedArea
+                        in
+                        withinAgentImagesBudget (encodedImagesLength (Model.composerAttachmentImages attachment)) (appendComposerAttachments [ attachment ])
                             |> Flow.seq (Flow.unlessHas (agent << where_ .isPanelOpen) toggleAgentPanel)
                             |> Flow.seq
                                 (Flow.whenHas (agent << where_ (\agentState -> agentState.selectedSessionId == Nothing && not agentState.isRestoringChat))
@@ -4192,19 +4196,19 @@ compactAgentSession sessionId =
 
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
-    Flow.forAll (agent << composerImages) (\images -> submitAgentPromptFrom images readAgentPrompt)
+    Flow.forAll (agent << composerAttachments) (\attachments -> submitAgentPromptFrom attachments readAgentPrompt)
 
 
-submitAgentPromptFrom : List Model.ComposerImage -> Flow Model String -> Flow Model ()
-submitAgentPromptFrom images promptSource =
+submitAgentPromptFrom : List Model.ComposerAttachment -> Flow Model String -> Flow Model ()
+submitAgentPromptFrom attachments promptSource =
     withSelectedAgentSession
         (\view ->
             Flow.forAll agent
                 (\agentState ->
                     if not (agentSessionRunning view.session.sessionId agentState) then
-                        sendAgentTurn view images promptSource
+                        sendAgentTurn view attachments promptSource
 
-                    else if List.isEmpty images then
+                    else if List.isEmpty attachments then
                         steerAgentTurn view promptSource
 
                     else
@@ -4213,14 +4217,14 @@ submitAgentPromptFrom images promptSource =
         )
 
 
-withAgentPrompt : List Model.ComposerImage -> Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
-withAgentPrompt images promptSource send =
+withAgentPrompt : List Model.ComposerAttachment -> Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
+withAgentPrompt attachments promptSource send =
     promptSource
         |> Flow.andThen
             (\rawPrompt ->
                 case String.trim rawPrompt of
                     "" ->
-                        if List.isEmpty images then
+                        if List.isEmpty attachments then
                             addToast False "Enter an agent prompt first."
 
                         else
@@ -4231,14 +4235,14 @@ withAgentPrompt images promptSource send =
             )
 
 
-sendAgentTurn : Model.AgentSessionView -> List Model.ComposerImage -> Flow Model String -> Flow Model ()
-sendAgentTurn view images promptSource =
+sendAgentTurn : Model.AgentSessionView -> List Model.ComposerAttachment -> Flow Model String -> Flow Model ()
+sendAgentTurn view attachments promptSource =
     let
         sessionId =
             view.session.sessionId
     in
     withAgentRequest (Model.SendingAgentPrompt sessionId)
-        (withAgentPrompt images
+        (withAgentPrompt attachments
             promptSource
             (\prompt ->
                 requestNotificationPermission
@@ -4247,17 +4251,17 @@ sendAgentTurn view images promptSource =
                         (Flow.over (agent << liveTurnAt sessionId << just << entries)
                             (\entriesBefore ->
                                 entriesBefore
-                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, images = List.map .url images, assistant = "", status = Model.ChatPending } ]
+                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", status = Model.ChatPending } ]
                             )
                         )
                     |> Flow.seq clearAgentPrompt
-                    |> Flow.seq (Flow.setAll (agent << composerImages) [])
+                    |> Flow.seq (Flow.setAll (agent << composerAttachments) [])
                     |> Flow.seq scrollAgentChatToBottom
                     |> Flow.seq
                         (Flow.forAll agent
                             (\agentState ->
                                 Flow.try currentProjectId
-                                    (AgentApi.sendTurn sessionId prompt images agentState >> Flow.try (route << Route.page << Route.artifact))
+                                    (AgentApi.sendTurn sessionId prompt attachments agentState >> Flow.try (route << Route.page << Route.artifact))
                             )
                         )
                     |> FlowError.foldResult
@@ -4276,7 +4280,7 @@ sendAgentTurn view images promptSource =
                                 |> Flow.seq (Flow.over (agent << liveTurnAt sessionId << just << entries) (Model.failLatestPendingChatTurn message))
                                 |> Flow.seq (addToast False message)
                                 |> Flow.seq (restoreAgentPrompt prompt)
-                                |> Flow.seq (Flow.over (agent << composerImages) (\current -> images ++ current))
+                                |> Flow.seq (Flow.over (agent << composerAttachments) (\current -> attachments ++ current))
                         )
             )
         )
