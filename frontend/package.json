@@ -28,7 +28,6 @@
     "@codemirror/view": "^6.41.1",
     "codemirror": "^6.0.2",
     "fp-ts": "^2.16.11",
-    "html-to-image": "^1.11.13",
     "molstar": "^5.11.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
