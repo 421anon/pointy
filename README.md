@@ -55,6 +55,13 @@ User and admin guides are available at [pointy.cloud](https://pointy.cloud/).
 - The tab keeps its sent turns in `sessionStorage`, so after a reload it resumes watching the ones still running and notifies about turns that ended during the reload. A question already notified before the reload is not notified again. Other tabs and new browser sessions don't notify about turns they didn't send.
 - Notifications are desktop-only: mobile browsers only allow notifications through a service worker, and Pointy unregisters service workers.
 
+## Artifact viewer
+
+- An artifact permalink opened in the browser shows the file full-screen, with Open agent and View in Pointy buttons. The file browser links outputs the browser can show natively, and CSV or TSV outputs up to the in-app 5 MB limit.
+- CSV and TSV files open in the same grid as the file browser and Compare, with sorting, filters, summaries and the plain-text view; the plain-text view, like the file browser's, draws one text block and only the line numbers near the visible part. A download button sits in the viewer's toolbar in both modes.
+- The Open agent button opens the agent panel, closed by default. Every turn sent from the page tells the agent which step, commit and output file is open, and the output's store path when the backend can resolve it. The chat shows only what the user typed.
+- Ask agent, shown when the file is rendered in a frame, lets the user drag a rectangle over it. On release, the selection is attached to the agent's message box as one area capture, without sending; the panel opens and, if no chat is open, a new one starts. Escape cancels. The composer and the chat show it as a single image tile of the selected area with the selector's dashed border; clicking it opens the selected area and the overview in the image viewer. An area capture holds the selected area rendered at the screen's pixel ratio, the whole embedded document scaled down to at most 1024 pixels on its longest side with the selection outlined in red, the document's size, and the selection's position and size in the document's CSS pixels. The agent receives both images and a note saying which two images they are and what the numbers mean. Pages without `<!doctype html>` may come out shifted, because the renderer lays out its copy in standards mode.
+
 ## Development
 
 A NixOS VM runs a server environment:

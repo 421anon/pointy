@@ -13,7 +13,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareFile, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, TextContent, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -836,6 +836,40 @@ gutterDrag =
     lens ".gutterDrag" Model.getGutterDrag (\(Model m) drag -> Model { m | gutterDrag = drag })
 
 
+areaCapture : Lens ls Model (Maybe Model.AreaCapture) x y
+areaCapture =
+    lens ".areaCapture" Model.getAreaCapture (\(Model m) capture -> Model { m | areaCapture = capture })
+
+
+areaCaptureDragging : Prism pr Model.AreaCapture Model.AreaDrag x y
+areaCaptureDragging =
+    prism ">AreaCaptureDragging"
+        Model.AreaCaptureDragging
+        (\capture ->
+            case capture of
+                Model.AreaCaptureDragging drag ->
+                    Ok drag
+
+                Model.AreaCaptureArmed ->
+                    Err capture
+        )
+
+
+artifactTable : Lens ls Model (Maybe Model.ArtifactTable) x y
+artifactTable =
+    lens ".artifactTable" Model.getArtifactTable (\(Model m) table -> Model { m | artifactTable = table })
+
+
+artifactTableFor : Route.ArtifactParams -> Traversal Model Model.ArtifactTable x y
+artifactTableFor artifact =
+    artifactTable << just << where_ (.artifact >> (==) artifact)
+
+
+artifactTableContent : Lens ls Model.ArtifactTable (ApiData TextContent) x y
+artifactTableContent =
+    lens ".content" .content (\table content -> { table | content = content })
+
+
 compareState : Lens ls Model CompareState x y
 compareState =
     lens ".compareState" Model.getCompareState (\(Model m) s -> Model { m | compareState = s })
@@ -869,12 +903,12 @@ compareSelecting =
         )
 
 
-compareLeftContent : Lens ls CompareActiveData (ApiData CompareFile) x y
+compareLeftContent : Lens ls CompareActiveData (ApiData TextContent) x y
 compareLeftContent =
     lens ".leftContent" .leftContent (\d v -> { d | leftContent = v })
 
 
-compareRightContent : Lens ls CompareActiveData (ApiData CompareFile) x y
+compareRightContent : Lens ls CompareActiveData (ApiData TextContent) x y
 compareRightContent =
     lens ".rightContent" .rightContent (\d v -> { d | rightContent = v })
 
@@ -1009,9 +1043,9 @@ autoApply =
     lens ".autoApply" .autoApply (\t autoApply_ -> { t | autoApply = autoApply_ })
 
 
-composerImages : Lens ls AgentState (List Model.ComposerImage) x y
-composerImages =
-    lens ".composerImages" .composerImages (\s images -> { s | composerImages = images })
+composerAttachments : Lens ls AgentState (List Model.ComposerAttachment) x y
+composerAttachments =
+    lens ".composerAttachments" .composerAttachments (\s attachments -> { s | composerAttachments = attachments })
 
 
 lightbox : Lens ls AgentState (Maybe Model.Lightbox) x y

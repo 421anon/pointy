@@ -11,7 +11,7 @@
 module Docs.OpenApi (pointyOpenApi) where
 
 import Agent.Git (AgentGitState, AgentSessionView, AgentUsage)
-import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedApply)
+import Agent.Session (AgentSession, AgentSessionSummary, AgentTurn, PreparedApply, StoredAreaCapture)
 import Api (API)
 import ApiTypes (DynamicJson)
 import Control.Lens (ALens', cloneLens, imap, (%~), (&), (.~), (?~), _Just)
@@ -163,6 +163,26 @@ objectSchema typeName fields =
             & properties .~ fromList fields
             & required .~ map fst fields
 
+imageField :: Referenced Schema
+imageField = Inline (mempty & type_ ?~ OpenApiObject & required .~ ["mimeType", "data"] & properties .~ fromList [("mimeType", stringField), ("data", stringField)])
+
+documentSizeField :: Referenced Schema
+documentSizeField = Inline (mempty & type_ ?~ OpenApiObject & required .~ ["width", "height"] & properties .~ fromList [("width", integerField), ("height", integerField)])
+
+selectionRectField :: Referenced Schema
+selectionRectField = Inline (mempty & type_ ?~ OpenApiObject & required .~ ["x", "y", "width", "height"] & properties .~ fromList [("x", integerField), ("y", integerField), ("width", integerField), ("height", integerField)])
+
+instance ToSchema StoredAreaCapture where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "StoredAreaCapture"
+                [ ("overviewImage", integerField)
+                , ("selectionImage", integerField)
+                , ("documentSize", documentSizeField)
+                , ("selectionRect", selectionRectField)
+                ]
+
 instance ToSchema TurnRequest where
     declareNamedSchema _ =
         pure $
@@ -170,8 +190,10 @@ instance ToSchema TurnRequest where
                 "TurnRequest"
                 [ ("sessionId", stringField)
                 , ("prompt", stringField)
-                , ("images", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & required .~ ["mimeType", "data"] & properties .~ fromList [("mimeType", stringField), ("data", stringField)])))
+                , ("images", arrayOf imageField)
+                , ("areaCaptures", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & required .~ ["overview", "selection", "documentSize", "selectionRect"] & properties .~ fromList [("overview", imageField), ("selection", imageField), ("documentSize", documentSizeField), ("selectionRect", selectionRectField)] & description ?~ "A selected area of the embedded document: the whole document scaled down with the area outlined in red, the area at native resolution, and their sizes and position in CSS pixels.")))
                 , ("currentProjectId", nullableField OpenApiInteger)
+                , ("viewedArtifact", Inline (mempty & type_ ?~ OpenApiObject & nullable ?~ True & required .~ ["stepId", "commit", "path"] & properties .~ fromList [("stepId", integerField), ("commit", stringField), ("path", arrayOf stringField)]))
                 , ("autoApply", boolField)
                 , ("clientId", stringField)
                 ]

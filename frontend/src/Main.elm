@@ -10,9 +10,10 @@ import Flow exposing (Flow)
 import Http
 import Ingest
 import Json.Decode as Decode
+import Json.Decode.Extra as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, stepConfig, stepForms, steps, userRepoInfo)
+import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
 import Model.Selection as Selection
 import Organize
 import Ports
@@ -41,29 +42,38 @@ init flags url key =
             Route.fromUrl url
     in
     ( initialModel key initialRoute flags
-    , case initialRoute.page of
-        Route.Artifact _ ->
-            Flow.pure ()
+    , Flow.async (Actions.applyAgentChatFromUrl True)
+        |> Flow.seq initializeAgent
+        |> Flow.seq
+            (case initialRoute.page of
+                Route.Artifact artifact ->
+                    Flow.async (Actions.loadArtifactTable artifact)
+                        |> Flow.seq Actions.loadStepConfig
+                        |> Flow.seq Actions.loadProjects
 
-        _ ->
-            Flow.async (Actions.applyAgentChatFromUrl True)
-                |> Flow.seq (Flow.async Actions.reattachSubmittedTurns)
-                |> Flow.seq initializeWorkspace
-                |> Flow.seq
-                    (Flow.forAll route
-                        (\currentRoute ->
-                            Flow.when (currentRoute == initialRoute) (applyRouteFromUrl True url)
-                        )
-                    )
+                _ ->
+                    initializeWorkspace
+                        |> Flow.seq
+                            (Flow.forAll route
+                                (\currentRoute ->
+                                    Flow.when (currentRoute == initialRoute) (applyRouteFromUrl True url)
+                                )
+                            )
+            )
     )
+
+
+initializeAgent : Flow Model ()
+initializeAgent =
+    Flow.async Actions.reattachSubmittedTurns
+        |> Flow.seq (Flow.async Actions.listenAndProcessAgentTurns)
+        |> Flow.seq (Flow.async Actions.loadUserRepoInfo)
 
 
 initializeWorkspace : Flow Model ()
 initializeWorkspace =
-    Flow.async Actions.listenAndProcessAgentTurns
-        |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
+    Flow.async Actions.listenAndProcessStepStatus
         |> Flow.seq (Flow.async Actions.loadTokenSession)
-        |> Flow.seq Actions.loadUserRepoInfo
         |> Flow.seq Actions.loadSearchInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadPresets
@@ -106,7 +116,7 @@ applyRoute forceRevealHighlight newRoute =
                                 []
 
                     workspaceNotStarted =
-                        case get userRepoInfo model of
+                        case get searchInfo model of
                             NotAsked ->
                                 True
 
@@ -198,8 +208,9 @@ applyRoute forceRevealHighlight newRoute =
                                                     )
                                                 |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
-                                        Route.Artifact _ ->
+                                        Route.Artifact artifact ->
                                             Actions.syncCompareFromRoute newRoute
+                                                |> Flow.seq (Flow.async (Actions.loadArtifactTable artifact))
 
                                         Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute
@@ -213,6 +224,7 @@ subscriptions model =
     Sub.batch
         [ uploadProgressSubscription model
         , gutterDragSubscription model
+        , areaCaptureSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
         , agentActivitySubscription model
         , statusBarClockSubscription model
@@ -259,6 +271,25 @@ gutterDragSubscription model =
 
     else
         Sub.none
+
+
+areaCaptureSubscription : Model -> Sub (Flow Model ())
+areaCaptureSubscription model =
+    Sub.batch
+        [ if has (areaCapture << just) model then
+            Browser.Events.onKeyDown (Decode.when (Decode.field "key" Decode.string) ((==) "Escape") (Decode.succeed Actions.cancelAreaCapture))
+
+          else
+            Sub.none
+        , if has (areaCapture << just << areaCaptureDragging) model then
+            Sub.batch
+                [ Browser.Events.onMouseMove (Decode.map Actions.moveAreaDrag Actions.clientPointDecoder)
+                , Browser.Events.onMouseUp (Decode.map Actions.finishAreaDrag Actions.clientPointDecoder)
+                ]
+
+          else
+            Sub.none
+        ]
 
 
 uploadProgressSubscription : Model -> Sub (Flow Model ())

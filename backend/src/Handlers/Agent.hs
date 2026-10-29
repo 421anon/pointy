@@ -5,6 +5,7 @@
 module Handlers.Agent (
     TurnRequest (..),
     SessionRequest (..),
+    ViewedArtifact (..),
     RenameSessionRequest (..),
     ApplyRequest (..),
     AutoApplyRequest (..),
@@ -38,8 +39,10 @@ import Agent.Git (
     purgeAgentSession,
     renameAgentSession,
  )
+import Agent.Policy (renderViewedArtifact)
 import Agent.Runner (applySessionChanges, compactAgentSession, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
-import Agent.Session (AgentSessionSummary, AgentTurn (..), TurnImage, findTurn, turnImageFilePath)
+import Agent.Session (AgentSessionSummary, AgentTurn (..), AreaCapture, TurnImage, findTurn, turnImageFilePath)
+import Control.Lens ((^?), _Right)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), withObject, (.!=), (.:), (.:?))
@@ -48,8 +51,10 @@ import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import EffectRunner (runAppEffects)
 import Effects (AppM)
 import GHC.Generics (Generic)
+import Handlers.Store (resolveStepOutPath)
 import Interpreters.Production (runProduction)
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, responseFile, responseLBS)
@@ -60,7 +65,9 @@ data TurnRequest = TurnRequest
     { turnRequestSessionId :: Text
     , turnRequestPrompt :: Text
     , turnRequestImages :: [TurnImage]
+    , turnRequestAreaCaptures :: [AreaCapture]
     , turnRequestCurrentProjectId :: Maybe Int
+    , turnRequestViewedArtifact :: Maybe ViewedArtifact
     , turnRequestAutoApply :: Bool
     , turnRequestClientId :: Maybe Text
     }
@@ -72,9 +79,25 @@ instance FromJSON TurnRequest where
             <$> obj .: "sessionId"
             <*> obj .: "prompt"
             <*> obj .:? "images" .!= []
+            <*> obj .:? "areaCaptures" .!= []
             <*> obj .:? "currentProjectId"
+            <*> obj .:? "viewedArtifact"
             <*> obj .:? "autoApply" .!= True
             <*> obj .:? "clientId"
+
+data ViewedArtifact = ViewedArtifact
+    { viewedArtifactStepId :: Int
+    , viewedArtifactCommit :: Text
+    , viewedArtifactPath :: [Text]
+    }
+    deriving (Show, Eq, Generic)
+
+instance FromJSON ViewedArtifact where
+    parseJSON = withObject "ViewedArtifact" $ \obj ->
+        ViewedArtifact
+            <$> obj .: "stepId"
+            <*> obj .: "commit"
+            <*> obj .: "path"
 
 data SessionRequest = SessionRequest
     { sessionRequestSessionId :: Text
@@ -135,8 +158,14 @@ getSessionHandler :: Text -> Handler AgentSessionView
 getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
-postTurnHandler req =
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+postTurnHandler req = do
+    viewedArtifact <- liftIO $ traverse describeViewedArtifact (turnRequestViewedArtifact req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) (turnRequestAreaCaptures req) viewedArtifact (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+
+describeViewedArtifact :: ViewedArtifact -> IO Text
+describeViewedArtifact (ViewedArtifact stepId commit path) =
+    renderViewedArtifact stepId commit path . (^? _Right)
+        <$> runAppEffects (runExceptT (resolveStepOutPath stepId (Just commit)))
 
 turnImageHandler :: Text -> Int -> Tagged AppM Application
 turnImageHandler tid index = Tagged $ \_ respond -> do

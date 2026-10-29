@@ -1,3 +1,4 @@
+import { toCanvas } from "html-to-image";
 import { installDragDropListeners } from "./drag-drop.js";
 
 function openDialog(id) {
@@ -60,6 +61,70 @@ function zoomIframe({ id, zoom }) {
       }
     });
   }
+}
+
+const OVERVIEW_MAX_EDGE = 1024;
+const OVERVIEW_BORDER_COLOR = "red";
+const OVERVIEW_BORDER_WIDTH = 2;
+
+function renderPage(page, { pixelRatio, width, height, style }) {
+  // html-to-image sizes the image from `width`/`height` and also writes them onto the root's style; `style` restores the page's own size so only the requested window is rendered without reflowing. https://github.com/bubkoo/html-to-image/blob/v1.11.13/src/apply-style.ts
+  // Font embedding inserts fetched rules into live stylesheets, including the host page's. https://github.com/bubkoo/html-to-image/blob/v1.11.13/src/embed-webfonts.ts
+  return toCanvas(page, { pixelRatio, width, height, backgroundColor: "white", skipFonts: true, style });
+}
+
+async function captureArtifactArea({ frameId, x, y, width, height }) {
+  const frame = document.getElementById(frameId);
+  const view = frame.contentWindow;
+  const page = frame.contentDocument.documentElement;
+  const pageStyle = view.getComputedStyle(page);
+  const pixelRatio = window.devicePixelRatio;
+  const documentSize = { width: page.scrollWidth, height: page.scrollHeight };
+  const selectionRect = {
+    x: Math.round(x + view.scrollX),
+    y: Math.round(y + view.scrollY),
+    width: Math.max(1, Math.round(width)),
+    height: Math.max(1, Math.round(height)),
+  };
+  const viewport = await renderPage(page, {
+    pixelRatio,
+    width: frame.clientWidth,
+    height: frame.clientHeight,
+    style: {
+      width: pageStyle.width,
+      height: pageStyle.height,
+      transform: `translate(${-view.scrollX}px, ${-view.scrollY}px)`,
+    },
+  });
+  const selection = document.createElement("canvas");
+  selection.width = Math.round(width * pixelRatio);
+  selection.height = Math.round(height * pixelRatio);
+  selection.getContext("2d").drawImage(viewport, x * pixelRatio, y * pixelRatio, selection.width, selection.height, 0, 0, selection.width, selection.height);
+  const overviewScale = Math.min(1, OVERVIEW_MAX_EDGE / Math.max(documentSize.width, documentSize.height));
+  const overview = await renderPage(page, {
+    pixelRatio: overviewScale,
+    width: documentSize.width,
+    height: documentSize.height,
+    style: {
+      width: `${documentSize.width}px`,
+      height: `${documentSize.height}px`,
+    },
+  });
+  const overviewContext = overview.getContext("2d");
+  overviewContext.strokeStyle = OVERVIEW_BORDER_COLOR;
+  overviewContext.lineWidth = OVERVIEW_BORDER_WIDTH;
+  overviewContext.strokeRect(
+    selectionRect.x * overviewScale,
+    selectionRect.y * overviewScale,
+    selectionRect.width * overviewScale,
+    selectionRect.height * overviewScale,
+  );
+  return {
+    overview: overview.toDataURL("image/png"),
+    selection: selection.toDataURL("image/png"),
+    documentSize,
+    selectionRect,
+  };
 }
 
 let clusterStatusSource = null;
@@ -379,6 +444,7 @@ export function connectPorts(app) {
     copyToClipboard,
     closeAgentTurnStream,
     zoomIframe,
+    captureArtifactArea,
     toggleTheme,
     agentPrompt,
     restoreAgentPrompt,
@@ -395,8 +461,13 @@ export function connectPorts(app) {
   installDragDropListeners(app);
 
   if (app.ports && app.ports.ffiOut) {
-    app.ports.ffiOut.subscribe((req) => {
-      const value = ffiFns[req.fn]?.(req.value);
+    app.ports.ffiOut.subscribe(async (req) => {
+      let value = null;
+      try {
+        value = await ffiFns[req.fn]?.(req.value);
+      } catch (error) {
+        console.error(error);
+      }
       app.ports.ffiIn.send({ key: req.key, value: value ?? null });
     });
   }

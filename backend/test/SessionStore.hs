@@ -103,6 +103,7 @@ turnFor now sid n =
         , turnSessionId = sid
         , turnPrompt = "prompt"
         , turnImages = []
+        , turnAreaCaptures = []
         , turnAutomatic = False
         , turnStatus = "running"
         , turnExitCode = Nothing

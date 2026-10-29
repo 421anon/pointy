@@ -352,8 +352,8 @@ gutterCells hasSummaries =
         []
 
 
-view : ((State -> State) -> msg) -> (() -> Html msg) -> State -> Html msg
-view toMsg viewPlainContent model =
+view : ((State -> State) -> msg) -> (() -> Html msg) -> Html msg -> State -> Html msg
+view toMsg viewPlainContent toolbarActions model =
     Html.div [ Html.Attributes.class "delimited-grid-shell" ]
         [ Html.div [ Html.Attributes.class "delimited-grid-toolbar" ]
             [ Html.viewIf model.showGrid
@@ -363,6 +363,7 @@ view toMsg viewPlainContent model =
             , Html.viewIf model.showGrid (clearFiltersButton toMsg model)
             , Html.viewIf model.showGrid (summaryMenu toMsg model)
             , viewModeToggle model.showGrid (stopClick (toMsg toggleShowGrid))
+            , toolbarActions
             ]
         , if model.showGrid then
             Html.map toMsg (viewGrid model)

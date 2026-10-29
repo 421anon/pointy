@@ -971,6 +971,10 @@
   }
 }
 
+.agent-panel__image--area-capture {
+  border: 1px dashed var(--link);
+}
+
 .agent-panel__images--composer .agent-panel__image img {
   min-width: 40px;
   max-width: 112px;

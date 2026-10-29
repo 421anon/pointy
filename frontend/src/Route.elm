@@ -9,6 +9,7 @@ module Route exposing
     , Page(..)
     , ProjectParams
     , Route
+    , artifact
     , backToHead
     , chat
     , chatHref
@@ -143,6 +144,20 @@ project =
         (\page_ ->
             case page_ of
                 Project params ->
+                    Ok params
+
+                _ ->
+                    Err page_
+        )
+
+
+artifact : Prism pr Page ArtifactParams x y
+artifact =
+    prism ">Artifact"
+        Artifact
+        (\page_ ->
+            case page_ of
+                Artifact params ->
                     Ok params
 
                 _ ->

@@ -44,6 +44,7 @@ main = withSystemTempDirectory "turn-stream-test" $ \home -> do
                 , turnSessionId = "s1"
                 , turnPrompt = "hello"
                 , turnImages = []
+                , turnAreaCaptures = []
                 , turnAutomatic = False
                 , turnStatus = "running"
                 , turnExitCode = Nothing

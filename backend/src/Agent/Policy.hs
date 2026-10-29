@@ -8,12 +8,15 @@ module Agent.Policy (
     appliedStepId,
     renderEmbeddedRules,
     renderCurrentProject,
+    renderViewedArtifact,
+    renderAreaCapture,
     promptWithEvaluationFailure,
     promptWithApplyConflict,
     userMessage,
     automaticFixPrompt,
 ) where
 
+import Agent.Session (DocumentSize (..), SelectionRect (..))
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -72,6 +75,30 @@ renderCurrentProject projectId =
         , "id: " <> T.pack (show projectId)
         , "file: projects/" <> T.pack (show projectId) <> ".nix"
         ]
+
+renderViewedArtifact :: Int -> Text -> [Text] -> Maybe Text -> Text
+renderViewedArtifact stepId commit path mOutPath =
+    T.intercalate "\n" $
+        [ "The user is viewing this step output file:"
+        , "step id: " <> T.pack (show stepId)
+        , "step file: steps/" <> T.pack (show stepId) <> ".nix"
+        , "commit: " <> commit
+        , "path within the output: /" <> T.intercalate "/" path
+        ]
+            ++ ["store path: " <> T.intercalate "/" (outPath : path) | Just outPath <- [mOutPath]]
+
+renderAreaCapture :: Int -> Int -> DocumentSize -> SelectionRect -> Text
+renderAreaCapture overviewImageNumber selectionImageNumber document selection =
+    T.intercalate
+        "\n"
+        [ "The user attached an area capture of the document embedded in the Pointy page, not of the Pointy page itself. It is two of the attached images:"
+        , "image " <> number overviewImageNumber <> ": the whole document scaled down, with the selected area outlined by a red border"
+        , "image " <> number selectionImageNumber <> ": the selected area alone, at native resolution"
+        , "document size: " <> number (documentWidth document) <> " x " <> number (documentHeight document) <> " CSS pixels"
+        , "selected area: x " <> number (selectionX selection) <> ", y " <> number (selectionY selection) <> ", width " <> number (selectionWidth selection) <> ", height " <> number (selectionHeight selection) <> " CSS pixels, measured from the document's top-left corner"
+        ]
+  where
+    number = T.pack . show
 
 promptWithEvaluationFailure :: Text -> Text -> Text
 promptWithEvaluationFailure failures prompt =

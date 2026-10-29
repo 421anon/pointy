@@ -644,6 +644,7 @@ appendLifecycleTurn sid prompt body changesetDiff = do
                 , turnSessionId = sid
                 , turnPrompt = prompt
                 , turnImages = []
+                , turnAreaCaptures = []
                 , turnAutomatic = False
                 , turnStatus = "succeeded"
                 , turnExitCode = Just 0

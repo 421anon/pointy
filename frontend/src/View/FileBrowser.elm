@@ -11,20 +11,21 @@ import Filesize
 import Flow exposing (Flow)
 import Grid
 import Html exposing (Html)
-import Html.Attributes exposing (class, classList, disabled, href, id, placeholder, readonly, rel, src, style, target, type_)
+import Html.Attributes exposing (class, classList, disabled, href, id, placeholder, readonly, rel, src, target, type_)
 import Html.Events
 import Html.Extra as Html
 import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, plainLineHeight, stepRevision, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), FileChunk, Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
 import Route
 import View.Icons exposing (icon)
 import View.Lib exposing (viewLoading)
+import View.PlainText as PlainText
 
 
 type DirContext
@@ -415,8 +416,15 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     else
                         Nothing
 
+                opensAsArtifact =
+                    if Model.Core.isDelimitedPath path then
+                        file.viewable
+
+                    else
+                        has (mimeType << just << where_ isBrowserNative) file
+
                 externalArtifactUrl =
-                    case ( try currentProjectPath model, mDirCtx, has (mimeType << just << where_ isBrowserNative) file ) of
+                    case ( try currentProjectPath model, mDirCtx, opensAsArtifact ) of
                         ( Just projectPath_, Just (OutputDir stepId_ commit_), True ) ->
                             Just <|
                                 Route.toString <|
@@ -660,7 +668,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         in
                                         case ( file.delimitedGrid, gridAction ) of
                                             ( Just delimitedGrid, Just updateGrid ) ->
-                                                Grid.view updateGrid viewPlainContent_ delimitedGrid.grid
+                                                Grid.view updateGrid viewPlainContent_ Html.nothing delimitedGrid.grid
 
                                             _ ->
                                                 viewPlainContent_ ()
@@ -810,264 +818,67 @@ pathFromAnchor gutterKeyValue anchor =
                 []
 
 
-lineNumberDecoder : Decode.Decoder Int
-lineNumberDecoder =
-    Decode.at [ "currentTarget", "dataset", "line" ] Decode.string
-        |> Decode.andThen
-            (\lineStr ->
-                case String.toInt lineStr of
-                    Just line ->
-                        Decode.succeed line
-
-                    Nothing ->
-                        Decode.fail ("Invalid line number: " ++ lineStr)
-            )
-
-
-scrollMetricsDecoder : Decode.Decoder ScrollMetrics
-scrollMetricsDecoder =
-    Decode.map3 ScrollMetrics
-        (Decode.at [ "target", "scrollTop" ] Decode.float)
-        (Decode.at [ "target", "clientHeight" ] Decode.float)
-        (Decode.at [ "target", "scrollHeight" ] Decode.float)
-
-
-plainViewerPadding : Int
-plainViewerPadding =
-    16
-
-
-plainViewerMaxHeight : Int
-plainViewerMaxHeight =
-    600
-
-
-plainViewerMinHeight : Int
-plainViewerMinHeight =
-    100
-
-
-plainViewerOverscan : Int
-plainViewerOverscan =
-    600
-
-
-visibleLineIndexes : Float -> Int -> List Int
-visibleLineIndexes scrollTop lineCount =
-    let
-        containerHeight =
-            min (lineCount * plainLineHeight + plainViewerPadding) plainViewerMaxHeight
-
-        visibleCount =
-            (containerHeight + 2 * plainViewerOverscan) // plainLineHeight + 1
-
-        firstIndex =
-            max 0 ((floor scrollTop - plainViewerOverscan) // plainLineHeight)
-
-        boundedFirstIndex =
-            min firstIndex (max 0 (lineCount - 1))
-
-        lastIndexExclusive =
-            min lineCount (boundedFirstIndex + visibleCount)
-    in
-    if lastIndexExclusive <= boundedFirstIndex then
-        []
-
-    else
-        List.range boundedFirstIndex (lastIndexExclusive - 1)
-
-
-type PlainContentMode
-    = EagerContent
-    | SeekContent (Maybe SeekDirection)
-
-
 viewPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> String -> ( Int, Int ) -> Html (Flow Model ())
-viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text lineRange =
-    viewPlainContentBody EagerContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop (Html.Lazy.lazy viewFileText text) lineRange
-
-
-viewSeekPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> SeekWindow -> Html (Flow Model ())
-viewSeekPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop window_ =
-    viewPlainContentBody
-        (SeekContent window_.loading)
-        gutterKeyValue
+viewPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop text =
+    viewGutteredPlainText gutterKeyValue
         hasGutterDrag
         selectedFrom
         selectedTo
         anchor
         scrollTop
+        (\target recordId path -> .scrollTop >> Actions.setPlainFileScrollTop target recordId path)
+        Nothing
+        (Html.Lazy.lazy PlainText.viewText text)
+
+
+viewSeekPlainContent : Int -> Bool -> Int -> Int -> String -> Float -> SeekWindow -> Html (Flow Model ())
+viewSeekPlainContent gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop window_ =
+    viewGutteredPlainText gutterKeyValue
+        hasGutterDrag
+        selectedFrom
+        selectedTo
+        anchor
+        scrollTop
+        Actions.onSeekScroll
+        window_.loading
         (Html.Lazy.lazy2 viewFileChunks window_.loading window_.chunks)
         ( windowStartLine window_, windowLineCount window_ )
 
 
-viewPlainContentBody : PlainContentMode -> Int -> Bool -> Int -> Int -> String -> Float -> Html (Flow Model ()) -> ( Int, Int ) -> Html (Flow Model ())
-viewPlainContentBody mode gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop fileText ( startLine, lineCount_ ) =
+viewGutteredPlainText : Int -> Bool -> Int -> Int -> String -> Float -> (Route.HighlightTarget -> Int -> List String -> ScrollMetrics -> Flow Model ()) -> Maybe SeekDirection -> Html (Flow Model ()) -> ( Int, Int ) -> Html (Flow Model ())
+viewGutteredPlainText gutterKeyValue hasGutterDrag selectedFrom selectedTo anchor scrollTop onScroll loading content ( startLine, lineCount ) =
     let
         path =
             pathFromAnchor gutterKeyValue anchor
 
         mGutter =
             gutterFromKey gutterKeyValue
-
-        hasGutter =
-            Maybe.isJust mGutter
-
-        ( loadingBefore, loadingAfter ) =
-            case mode of
-                SeekContent (Just Before) ->
-                    ( True, False )
-
-                SeekContent (Just After) ->
-                    ( False, True )
-
-                _ ->
-                    ( False, False )
-
-        hiddenFirstLines =
-            if loadingBefore then
-                1
-
-            else
-                0
-
-        hiddenLastLines =
-            if loadingAfter then
-                1
-
-            else
-                0
-
-        lineCount =
-            max 1 lineCount_
-
-        lineIndexes =
-            visibleLineIndexes scrollTop lineCount
-
-        firstVisibleIndex =
-            List.head lineIndexes |> Maybe.withDefault 0
-
-        topOffset =
-            firstVisibleIndex * plainLineHeight
-
-        totalHeight =
-            lineCount * plainLineHeight
-
-        gutterWidth =
-            "calc(" ++ String.fromInt (String.length (String.fromInt (startLine + lineCount - 1))) ++ "ch + var(--spacing-sm) + var(--spacing-xs))"
-
-        gutterEventAttrs =
-            case mGutter of
-                Just { recordId, target } ->
-                    let
-                        lineAction action =
-                            Decode.map (action target recordId path) lineNumberDecoder
-
-                        pointerDown =
-                            Html.Events.on "pointerdown" (lineAction Actions.startGutterDrag)
-                    in
-                    if hasGutterDrag then
-                        let
-                            pointerEnter =
-                                Html.Events.on "pointerenter" (lineAction Actions.extendGutterDrag)
-                        in
-                        [ pointerDown, pointerEnter ]
-
-                    else
-                        [ pointerDown ]
-
-                Nothing ->
-                    []
-
-        scrollAttrs =
-            case ( mode, mGutter ) of
-                ( SeekContent _, Just { recordId, target } ) ->
-                    [ Html.Events.on "scroll" (Decode.map (Actions.onSeekScroll target recordId path) scrollMetricsDecoder) ]
-
-                ( EagerContent, Just { recordId, target } ) ->
-                    [ Html.Events.on "scroll" (Decode.map (\metrics -> Actions.setPlainFileScrollTop target recordId path metrics.scrollTop) scrollMetricsDecoder) ]
-
-                _ ->
-                    []
-
-        renderLineNumber lineIndex =
-            let
-                isLoadingLine =
-                    (loadingBefore && lineIndex == 0) || (loadingAfter && lineIndex == lineCount - 1)
-            in
-            if isLoadingLine then
-                let
-                    attrs =
-                        [ class "file-line-number"
-                        , style "height" (String.fromInt plainLineHeight ++ "px")
-                        , style "line-height" (String.fromInt plainLineHeight ++ "px")
-                        ]
-                in
-                Html.div attrs []
-
-            else
-                let
-                    lineNum =
-                        startLine + lineIndex
-                in
-                Html.div
-                    (classList
-                        [ ( "file-line-number", True )
-                        , ( "is-gutter", hasGutter )
-                        , ( "highlighted", selectedFrom > 0 && lineNum >= selectedFrom && lineNum <= selectedTo )
-                        ]
-                        :: Html.Attributes.attribute "data-line" (String.fromInt lineNum)
-                        :: style "height" (String.fromInt plainLineHeight ++ "px")
-                        :: style "line-height" (String.fromInt plainLineHeight ++ "px")
-                        :: gutterEventAttrs
-                    )
-                    [ Html.text (String.fromInt lineNum) ]
-
-        overlayFrom =
-            max (startLine + hiddenFirstLines) selectedFrom
-
-        overlayTo =
-            min selectedTo (startLine + lineCount - 1 - hiddenLastLines)
-
-        highlightOverlay =
-            Html.viewIf (selectedFrom > 0 && overlayFrom <= overlayTo) <|
-                Html.div
-                    [ class "file-highlight-overlay"
-                    , style "top" (String.fromInt ((overlayFrom - startLine) * plainLineHeight) ++ "px")
-                    , style "height" (String.fromInt ((overlayTo - overlayFrom + 1) * plainLineHeight) ++ "px")
-                    ]
-                    []
     in
-    Html.div
-        ([ class "file-content"
-         , id ("viewer-" ++ anchor)
-         , style "max-height" (calculateViewerHeight lineCount)
-         ]
-            ++ scrollAttrs
-        )
-        [ Html.div
-            [ class "file-body"
-            , style "height" (String.fromInt totalHeight ++ "px")
-            ]
-            [ Html.div
-                [ class "file-gutter"
-                , style "width" gutterWidth
-                ]
-                [ Html.div
-                    [ class "file-gutter-window"
-                    , style "top" (String.fromInt topOffset ++ "px")
-                    ]
-                    (List.map renderLineNumber lineIndexes)
-                ]
-            , highlightOverlay
-            , fileText
-            ]
-        ]
+    PlainText.view
+        { id = "viewer-" ++ anchor
+        , layout = PlainText.FitLines
+        , scrollTop = scrollTop
+        , onScroll = Maybe.map (\{ recordId, target } -> onScroll target recordId path) mGutter
+        , lineSelection =
+            Maybe.map
+                (\{ recordId, target } ->
+                    { from = selectedFrom
+                    , to = selectedTo
+                    , onPointerDown = Actions.startGutterDrag target recordId path
+                    , onPointerEnter =
+                        if hasGutterDrag then
+                            Just (Actions.extendGutterDrag target recordId path)
 
-
-viewFileText : String -> Html (Flow Model ())
-viewFileText text =
-    Html.div [ class "file-text" ] [ Html.text text ]
+                        else
+                            Nothing
+                    }
+                )
+                mGutter
+        , loading = loading
+        , startLine = startLine
+        , lineCount = lineCount
+        }
+        content
 
 
 viewFileChunks : Maybe SeekDirection -> List FileChunk -> Html (Flow Model ())
@@ -1122,18 +933,3 @@ viewFileChunks loading chunks =
                     List.map Html.text chunkTexts
     in
     Html.div [ class "file-text" ] children
-
-
-calculateViewerHeight : Int -> String
-calculateViewerHeight lineCount =
-    let
-        calculatedHeight =
-            lineCount * plainLineHeight + plainViewerPadding
-
-        cappedHeight =
-            min calculatedHeight plainViewerMaxHeight
-
-        finalHeight =
-            max cappedHeight plainViewerMinHeight
-    in
-    String.fromInt finalHeight ++ "px"

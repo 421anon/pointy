@@ -1300,6 +1300,16 @@ $delimited-grid-row-height: 28px;
   margin-left: auto;
 }
 
+.delimited-grid-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--spacing-xs);
+
+  &:first-child {
+    margin-left: auto;
+  }
+}
+
 .delimited-grid-toolbar .delimited-grid-toolbar-btn {
   display: inline-flex;
   align-items: center;
@@ -1588,6 +1598,11 @@ $delimited-grid-row-height: 28px;
   color: var(--text-primary);
   overflow: auto;
   padding: var(--spacing-sm) 0;
+
+  &.is-filling {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
 }
 
 .file-body {
@@ -1783,7 +1798,21 @@ $delimited-grid-row-height: 28px;
   position: fixed;
   inset: 0;
   z-index: 2000;
+  display: flex;
   background: white;
+}
+
+.artifact-viewer-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.artifact-viewer > .agent-panel {
+  top: 0;
+  height: 100vh;
+  height: 100dvh;
+  border-radius: 0;
 }
 
 .artifact-viewer-frame {
@@ -1794,13 +1823,53 @@ $delimited-grid-row-height: 28px;
   background: white;
 }
 
-.artifact-pointy-link {
+.artifact-viewer-capture {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.artifact-viewer-capture-area {
+  position: absolute;
+  border: 1px dashed var(--link);
+  background: var(--focus-ring);
+  pointer-events: none;
+}
+
+.artifact-viewer-table {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--spacing-md) var(--spacing-md) calc(36px + 2 * var(--spacing-md));
+  overflow: auto;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+
+  > .delimited-grid-shell {
+    flex: 1;
+  }
+
+  .delimited-grid-viewer {
+    flex: 1;
+    max-height: none;
+    resize: none;
+  }
+}
+
+.artifact-viewer-actions {
   position: absolute;
   bottom: var(--spacing-md);
   right: var(--spacing-md);
   z-index: 1;
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.artifact-viewer-action {
   display: inline-flex;
   align-items: center;
+  gap: var(--spacing-xs);
   min-height: 36px;
   padding: var(--spacing-xs) var(--spacing-md);
   border: 1px solid var(--border-color);
@@ -1808,9 +1877,15 @@ $delimited-grid-row-height: 28px;
   background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: var(--shadow-elevated);
+  font: inherit;
   font-weight: 600;
+  cursor: pointer;
   text-decoration: none;
   opacity: 0.88;
+
+  .material-symbols-outlined {
+    font-size: 18px;
+  }
 
   &:hover,
   &:focus-visible {
@@ -4120,14 +4195,14 @@ body:has(dialog[open]) {
   overflow: hidden;
 }
 
-.compare-loading,
-.compare-error {
+.text-content-loading,
+.text-content-error {
   width: 100%;
   padding: var(--spacing-lg);
   text-align: center;
   color: var(--text-muted);
 }
-.compare-error { color: var(--state-danger); }
+.text-content-error { color: var(--state-danger); }
 
 .compare-panes,
 .compare-diff {
@@ -4167,19 +4242,10 @@ body:has(dialog[open]) {
   overflow: auto;
 }
 
-.compare-pane-text,
 .compare-diff {
   font-family: "Courier New", monospace;
   font-size: var(--font-size-sm);
   line-height: 1.5;
-}
-.compare-pane-text {
-  width: 100%;
-  overflow: auto;
-  border: 1px solid var(--border-color);
-  padding: var(--spacing-xs) 0;
-}
-.compare-diff {
   overflow: hidden;
 }
 
