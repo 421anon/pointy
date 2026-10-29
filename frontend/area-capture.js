@@ -13,6 +13,13 @@ function snapshotFor(frame) {
   return snapshot;
 }
 
+function prepareSoon(frame) {
+  setTimeout(() => {
+    if (frame.isConnected && frame.contentDocument) snapshotFor(frame).prepare().catch(() => {});
+  }, 0);
+}
+
+// The browser shows the overlay's crosshair only after the pointermove that reaches the overlay has been handled, so the snapshot starts in a later task.
 export function prepareArtifactArea({ frameId }) {
   const frame = document.getElementById(frameId);
   if (!frame?.contentDocument) return;
@@ -25,9 +32,7 @@ export function prepareArtifactArea({ frameId }) {
       "pointermove",
       () => {
         delete overlay.dataset.prewarming;
-        snapshotFor(frame)
-          .prepare()
-          .catch(() => {});
+        prepareSoon(frame);
       },
       { once: true },
     );
@@ -35,7 +40,7 @@ export function prepareArtifactArea({ frameId }) {
   };
   if (armOnFirstMove()) return;
   requestAnimationFrame(() => {
-    if (!armOnFirstMove()) snapshotFor(frame).prepare().catch(() => {});
+    if (!armOnFirstMove()) prepareSoon(frame);
   });
 }
 

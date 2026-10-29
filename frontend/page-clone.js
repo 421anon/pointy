@@ -2,7 +2,6 @@ const XHTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const ROOT_STYLE_PLACEHOLDER = "pointy-capture-root-style";
 const STYLE_CLASS_PREFIX = "pointy-";
-const STYLE_READ_BATCH = 512;
 const SLICE_ELEMENTS = 128;
 const PAGE_STYLE_LAYER = "pointy-capture-page";
 const SCROLLING_OVERFLOWS = ["auto", "scroll"];
@@ -191,19 +190,18 @@ async function embedFontFaces(document, context) {
 }
 
 // Reading one property across a run of elements is faster than reading every property of one element in turn.
-async function styleElements(styledElements, context, yieldBetweenBatches) {
+async function styleElements(styledElements, context, yieldBetweenSlices) {
   const { names } = copiedProperties;
   const fontFamily = names.indexOf("font-family");
-  const batchSize = yieldBetweenBatches ? SLICE_ELEMENTS : STYLE_READ_BATCH;
-  for (let start = 0; start < styledElements.length; start += batchSize) {
-    const batch = styledElements.slice(start, start + batchSize);
+  for (let start = 0; start < styledElements.length; start += SLICE_ELEMENTS) {
+    const batch = styledElements.slice(start, start + SLICE_ELEMENTS);
     const values = batch.map(() => new Array(names.length));
     names.forEach((name, index) => batch.forEach(({ computed }, row) => (values[row][index] = computed.getPropertyValue(name))));
     if (fontFamily >= 0) values.forEach((row) => noteFontFamilies(row[fontFamily], context));
     batch.forEach(({ clone, computed, resetsToInitial, extraDeclarations }, row) =>
       clone.classList.add(styleClass(context, "", declarations(values[row], resetsToInitial, computed.display === "table") + extraDeclarations)),
     );
-    if (yieldBetweenBatches) await yieldBetweenBatches();
+    await yieldBetweenSlices();
   }
 }
 
@@ -518,12 +516,10 @@ async function cloneElementTree(root, context, yieldBetweenSlices) {
     const entry = prepareElement(node, context);
     frame.clone.append(entry.clone);
     if (entry.children.length > 0) stack.push({ clone: entry.clone, children: entry.children, next: 0 });
-    if (yieldBetweenSlices) {
-      slice += 1;
-      if (slice >= SLICE_ELEMENTS) {
-        slice = 0;
-        await yieldBetweenSlices();
-      }
+    slice += 1;
+    if (slice >= SLICE_ELEMENTS) {
+      slice = 0;
+      await yieldBetweenSlices();
     }
   }
   for (const box of context.scrollBoxes) shiftScrolledContent(box.clone, box.computed, box.scrollX, box.scrollY, context);
@@ -535,14 +531,17 @@ function escapeAttribute(text) {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-// Clones the page as XHTML that renders like the live page inside an SVG foreignObject: computed styles in a style sheet, resources embedded and scroll offsets applied. The root's position and size are left to `markup`, so one clone can be rendered at different sizes and scroll positions. `yieldBetweenBatches` lets a page stay responsive while a large clone is built.
-export async function clonePage(document, { yieldBetweenBatches = null } = {}) {
-  copiedProperties ??= measureCopiedProperties();
+// Clones the page as XHTML that renders like the live page inside an SVG foreignObject: computed styles in a style sheet, resources embedded and scroll offsets applied. The root's position and size are left to `markup`, so one clone can be rendered at different sizes and scroll positions. `yieldBetweenSlices` is awaited between slices of the work so that a large page stays responsive.
+export async function clonePage(document, { yieldBetweenSlices }) {
+  if (!copiedProperties) {
+    copiedProperties = measureCopiedProperties();
+    await yieldBetweenSlices();
+  }
   const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set(), scrollBoxes: [], formStates: [] };
   const root = document.documentElement;
   const rootOffset = positionOffset(document.defaultView.getComputedStyle(root));
-  const rootClone = await cloneElementTree(root, context, yieldBetweenBatches);
-  await styleElements(context.styledElements, context, yieldBetweenBatches);
+  const rootClone = await cloneElementTree(root, context, yieldBetweenSlices);
+  await styleElements(context.styledElements, context, yieldBetweenSlices);
   const [fontFaces] = await Promise.all([embedFontFaces(document, context), Promise.all(context.embeddings)]);
   const rootInlineStyle = rootClone.getAttribute("style") ?? "";
   rootClone.setAttribute("style", ROOT_STYLE_PLACEHOLDER);

@@ -9,8 +9,19 @@ const DEFAULT_MARKER_COLOR = "red";
 const DEFAULT_MARKER_WIDTH = 2;
 const CLONE_INVALIDATING_EVENTS = ["pointerdown", "pointerup", "pointercancel", "keydown", "keyup", "input", "change", "toggle", "focusin", "focusout", "load", "error", "animationstart", "transitionrun"];
 
-// A timer task lets the page paint and take input between slices of a long clone.
-const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
+// While the user is still selecting, a timer task between slices of a long clone lets the page paint and take input. Once a capture waits for the clone, a message task keeps the page responsive without the timer's minimum delay, which browsers raise to a second or more in background tabs. https://developer.mozilla.org/en-US/docs/Web/API/Window/setTimeout#reasons_for_delays_longer_than_specified
+const yieldToTimer = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+function yieldToMessage() {
+  const channel = new MessageChannel();
+  return new Promise((resolve) => {
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
 
 // A reusable snapshot of a document. prepare() clones the page and renders the current viewport and overview ahead of a capture; captureArea(rect) then only crops and marks the selection. Both are rebuilt on the next call after the page changes. Coordinates passed in are viewport CSS pixels; the returned selectionRect is in page CSS pixels.
 export function createPageSnapshot(document, options = {}) {
@@ -26,6 +37,8 @@ export function createPageSnapshot(document, options = {}) {
   let watcher = null;
   let generation = 0;
   let disposed = false;
+  let waitingCaptures = 0;
+  const yieldBetweenSlices = () => (waitingCaptures > 0 ? yieldToMessage() : yieldToTimer());
 
   function invalidateEntry(entry) {
     forgetPageClone(entry);
@@ -64,11 +77,11 @@ export function createPageSnapshot(document, options = {}) {
     return entry;
   }
 
-  async function clonePageInSlices(cooperative) {
+  async function clonePageInSlices() {
     const startedAt = generation;
     const watching = isStaticDocument(document) ? watch() : null;
     try {
-      const cloned = cooperative ? await clonePage(document, { yieldBetweenBatches: yieldToBrowser }) : await clonePage(document);
+      const cloned = await clonePage(document, { yieldBetweenSlices });
       if (watching && !watching.stale && startedAt === generation) {
         watcher = watching;
         page = cloned;
@@ -82,15 +95,15 @@ export function createPageSnapshot(document, options = {}) {
     }
   }
 
-  async function preparePage(cooperative) {
-    let result = await clonePageInSlices(cooperative);
-    if (!result.consistent) result = await clonePageInSlices(cooperative);
+  async function preparePage() {
+    let result = await clonePageInSlices();
+    if (!result.consistent) result = await clonePageInSlices();
     return result.page;
   }
 
-  function ensurePage(cooperative) {
+  function ensurePage() {
     if (page) return Promise.resolve(page);
-    if (!pendingClone) pendingClone = preparePage(cooperative).finally(() => (pendingClone = null));
+    if (!pendingClone) pendingClone = preparePage().finally(() => (pendingClone = null));
     return pendingClone;
   }
 
@@ -111,13 +124,13 @@ export function createPageSnapshot(document, options = {}) {
     return [generation, scroll.x, scroll.y, rootStyle.width, rootStyle.height, backgroundColor, documentSize.width, documentSize.height, pixelRatio, viewportSize.width, viewportSize.height].join("|");
   }
 
-  async function ensureRenders(measurement, cooperative) {
+  async function ensureRenders(measurement) {
     const key = renderKey(measurement);
     if (watcher && renders?.key === key) return renders;
     if (pendingRenders && pendingRendersKey === key) return pendingRenders;
     pendingRendersKey = key;
     pendingRenders = (async () => {
-      const cloned = await ensurePage(cooperative);
+      const cloned = await ensurePage();
       const { scroll, rootStyle, backgroundColor, documentSize, pixelRatio, viewportSize } = measurement;
       const overviewScale = Math.min(1, overviewMaxEdge / Math.max(documentSize.width, documentSize.height));
       const [viewport, overview] = await Promise.all([
@@ -144,14 +157,15 @@ export function createPageSnapshot(document, options = {}) {
 
   async function prepare() {
     if (disposed) throw new Error("This page snapshot has been disposed.");
-    await ensurePage(true);
-    if (watcher) await ensureRenders(measure(), true);
+    await ensurePage();
+    if (watcher) await ensureRenders(measure());
   }
 
   async function captureArea(rect) {
     if (disposed) throw new Error("This page snapshot has been disposed.");
     const measurement = measure();
-    const { viewport, overview, overviewScale } = await ensureRenders(measurement, false);
+    waitingCaptures += 1;
+    const { viewport, overview, overviewScale } = await ensureRenders(measurement).finally(() => (waitingCaptures -= 1));
     const selectionRect = {
       x: Math.round(rect.x + measurement.scroll.x),
       y: Math.round(rect.y + measurement.scroll.y),
