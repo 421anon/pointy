@@ -578,7 +578,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
 rowClickAttrs : Bool -> Model.ListingScope -> List Model.ChildRef -> Model.ChildRef -> Maybe (Flow Model ()) -> List (Html.Attribute (Flow Model ()))
 rowClickAttrs editable scope orderedRefs ref mOpenRow =
     [ Events.on "click"
-        (Decode.field "target" (Decode.whenNotInside "listing-row-actions" ())
+        (Decode.field "target" (Decode.whenNotInside (Decode.hasClass "listing-row-actions") ())
             |> Decode.andThen (\_ -> clickModsDecoder)
             |> Decode.andThen
                 (\mods ->
@@ -607,7 +607,7 @@ rowContextMenuAttrs scope ref =
 contextMenuOutsidePopovers : (Int -> Int -> Flow Model ()) -> Html.Attribute (Flow Model ())
 contextMenuOutsidePopovers openMenu =
     Events.custom "contextmenu"
-        (Decode.field "target" (Decode.whenNotInsidePopover ())
+        (Decode.field "target" (Decode.whenNotInside (Decode.hasClass "row-popover") ())
             |> Decode.andThen
                 (\_ ->
                     Decode.map2
@@ -731,7 +731,7 @@ viewStepLogPopover tableName logState stepId =
             stepLogPopoverId tableName stepId
     in
     Html.div
-        [ class "step-log-popover"
+        [ class "step-log-popover row-popover"
         , id popoverId
         , attribute "popover" "auto"
         , style "position-anchor" ("--anchor-" ++ popoverId)
@@ -1279,7 +1279,7 @@ upsertOnEnter spec =
     Events.on "keydown" <|
         Keyboard.decodeCombinations
             [ ( Keyboard.enter
-              , Decode.field "target" (Decode.whenNotInside "code-input" (TableSpec.getUpsertRecord spec)) |> Decode.when targetDecoder allowEnter
+              , Decode.field "target" (Decode.whenNotInside (Decode.hasClass "code-input") (TableSpec.getUpsertRecord spec)) |> Decode.when targetDecoder allowEnter
               )
             ]
 

@@ -344,7 +344,7 @@ viewReviewPopover model spec stepId record =
 
         popover =
             Html.div
-                [ Html.Attributes.class "step-review-popover"
+                [ Html.Attributes.class "step-review-popover row-popover"
                 , Html.Attributes.id popoverId
                 , Html.Attributes.attribute "popover" "auto"
                 , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)

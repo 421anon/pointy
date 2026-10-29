@@ -5,14 +5,14 @@ import Json.Decode exposing (..)
 import Json.Decode.Extra exposing (..)
 
 
-whenNotInside : String -> msg -> Decoder msg
-whenNotInside cls msg =
-    when decodeClassList (not << List.member cls) <| map (Maybe.withDefault msg) <| optionalField "parentNode" <| lazy (\() -> whenNotInside cls msg)
+whenNotInside : Decoder Bool -> msg -> Decoder msg
+whenNotInside matches msg =
+    when matches not <| map (Maybe.withDefault msg) <| optionalField "parentNode" <| lazy (\() -> whenNotInside matches msg)
 
 
-whenNotInsidePopover : msg -> Decoder msg
-whenNotInsidePopover msg =
-    when (withDefault Nothing <| field "popover" <| nullable string) ((==) Nothing) <| map (Maybe.withDefault msg) <| optionalField "parentNode" <| lazy (\() -> whenNotInsidePopover msg)
+hasClass : String -> Decoder Bool
+hasClass cls =
+    map (List.member cls) decodeClassList
 
 
 decodeClassList : Decoder (List String)
