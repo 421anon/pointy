@@ -54,6 +54,43 @@ const UNRENDERED_PROPERTY =
 const PROBE_COLOR = "rgb(1, 2, 3)";
 const GENERIC_FONT_FAMILIES = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "-apple-system", "blinkmacsystemfont"]);
 
+// Elements with the same parent style, tag, attributes and matches of the page's selectors that look beyond those have the same computed style, so its values are read once per style. getComputedStyle still answers these with each element's laid-out size and position. https://drafts.csswg.org/cssom/#resolved-values
+const LAYOUT_DEPENDENT_PROPERTIES = new Set([
+  "width",
+  "height",
+  "margin-top",
+  "margin-right",
+  "margin-bottom",
+  "margin-left",
+  "padding-top",
+  "padding-right",
+  "padding-bottom",
+  "padding-left",
+  "top",
+  "right",
+  "bottom",
+  "left",
+  "transform",
+  "transform-origin",
+  "perspective-origin",
+  "grid-template-columns",
+  "grid-template-rows",
+]);
+// The user agent's style sheets style these by state, content or position among siblings, which the page's selectors do not show.
+const UNSHARED_ELEMENTS =
+  "input, select, textarea, button, option, optgroup, datalist, progress, meter, output, fieldset, legend, details, summary, dialog, img, picture, video, audio, canvas, iframe, frame, object, embed, bdi, [dir=auto i], [popover]";
+const PSEUDO_ELEMENT_SELECTOR = /::|:(before|after|first-line|first-letter)\b/i;
+const SELECTOR_ESCAPES_ATTRIBUTES_AND_STRINGS = /\\.|\[[^\]]*\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
+const NON_LOCAL_SELECTOR = /[:+~]/;
+const CONTAINER_DEPENDENT_STYLE = /container|\dcq(?:[whib]|min|max)\b/i;
+const SELECTOR_COMBINATOR = /[\s>+~]/;
+const PARENTHESIZED = /\([^()]*\)/;
+const SELECTOR_TAG = /^[a-zA-Z][\w-]*/;
+const SELECTOR_ID_OR_CLASS = /([.#])(-?[_a-zA-Z\u0080-\uffff][\w\u0080-\uffff-]*)/g;
+// Matching each selector costs about one test per element, which can outweigh the reads that sharing saves.
+const MAX_SELECTOR_TESTS = 30_000_000;
+const MAX_SELECTOR_MATCHES = 2_000_000;
+
 // Chromium shades inset, outset, groove and ridge borders differently when their color is currentcolor than when it is the same color given explicitly, so border colors are always copied.
 const BORDER_COLOR = /^border-(top|right|bottom|left)-color$/;
 const supportedValues = new Map();
@@ -109,6 +146,7 @@ function measureCopiedProperties() {
       drivers,
       followsColor: colorProbe.values.map((value, index) => value === PROBE_COLOR && !BORDER_COLOR.test(names[index])),
       colorIndex: names.indexOf("color"),
+      layoutIndices: names.flatMap((name, index) => (LAYOUT_DEPENDENT_PROPERTIES.has(name) ? [index] : [])),
     };
   } finally {
     sandbox.remove();
@@ -193,18 +231,58 @@ async function embedFontFaces(document, context) {
   return (await Promise.all(faces)).join("");
 }
 
-// Reading one property across a run of elements is faster than reading every property of one element in turn.
-async function styleElements(styledElements, context, yieldBetweenSlices) {
+function propertyValues(entries, indices) {
   const { names } = copiedProperties;
+  const values = entries.map(() => new Array(names.length));
+  for (const index of indices) {
+    const name = names[index];
+    entries.forEach(({ computed }, row) => (values[row][index] = computed.getPropertyValue(name)));
+  }
+  return values;
+}
+
+// Reading one property across a run of elements is faster than reading every property of one element in turn. An element sharing its style with an earlier one reads only the properties that follow its layout.
+async function styleElements(styledElements, context, yieldBetweenSlices) {
+  const { names, layoutIndices } = copiedProperties;
+  const allIndices = names.map((_, index) => index);
   const fontFamily = names.indexOf("font-family");
+  const valuesByStyle = new Map();
+  const classesByStyleAndLayout = new Map();
   for (let start = 0; start < styledElements.length; start += SLICE_ELEMENTS) {
     const batch = styledElements.slice(start, start + SLICE_ELEMENTS);
-    const values = batch.map(() => new Array(names.length));
-    names.forEach((name, index) => batch.forEach(({ computed }, row) => (values[row][index] = computed.getPropertyValue(name))));
-    if (fontFamily >= 0) values.forEach((row) => noteFontFamilies(row[fontFamily], context));
-    batch.forEach(({ clone, computed, resetsToInitial, extraDeclarations }, row) =>
-      clone.classList.add(styleClass(context, "", declarations(values[row], resetsToInitial, computed.display === "table") + extraDeclarations)),
-    );
+    const stylesInBatch = new Set();
+    const read = [];
+    const shared = [];
+    for (const entry of batch) {
+      const { styleKey } = entry;
+      if (styleKey !== null && (valuesByStyle.has(styleKey) || stylesInBatch.has(styleKey))) {
+        shared.push(entry);
+      } else {
+        read.push(entry);
+        if (styleKey !== null) stylesInBatch.add(styleKey);
+      }
+    }
+    const valuesByEntry = new Map();
+    propertyValues(read, allIndices).forEach((values, row) => {
+      valuesByEntry.set(read[row], values);
+      if (read[row].styleKey !== null) valuesByStyle.set(read[row].styleKey, values);
+      if (fontFamily >= 0) noteFontFamilies(values[fontFamily], context);
+    });
+    propertyValues(shared, layoutIndices).forEach((layoutValues, row) => {
+      const values = [...valuesByStyle.get(shared[row].styleKey)];
+      for (const index of layoutIndices) values[index] = layoutValues[index];
+      valuesByEntry.set(shared[row], values);
+    });
+    for (const entry of batch) {
+      const values = valuesByEntry.get(entry);
+      const styleAndLayout = entry.styleKey === null ? null : `${entry.styleKey}\u0000${layoutIndices.map((index) => values[index]).join("\u0000")}`;
+      let className = styleAndLayout === null ? undefined : classesByStyleAndLayout.get(styleAndLayout);
+      if (className === undefined) {
+        className = styleClass(context, "", declarations(values, entry.resetsToInitial, entry.computed.display === "table") + entry.extraDeclarations);
+        if (styleAndLayout !== null) classesByStyleAndLayout.set(styleAndLayout, className);
+      }
+      entry.clone.classList.add(className);
+    }
     await yieldBetweenSlices();
   }
 }
@@ -492,6 +570,141 @@ function mayHavePseudoElements(element, context) {
   return hosts === null || hosts.has(element);
 }
 
+function matchesSelector(element, selector) {
+  try {
+    return element.matches(selector);
+  } catch {
+    return false;
+  }
+}
+
+function selectorCompounds(selector) {
+  const compounds = [];
+  let depth = 0;
+  let quote = null;
+  let start = 0;
+  for (let index = 0; index < selector.length; index++) {
+    const character = selector[index];
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = null;
+    } else if (character === "\\") index += 1;
+    else if (character === '"' || character === "'") quote = character;
+    else if (character === "(" || character === "[") depth += 1;
+    else if (character === ")" || character === "]") depth -= 1;
+    else if (depth === 0 && SELECTOR_COMBINATOR.test(character)) {
+      compounds.push(selector.slice(start, index));
+      start = index + 1;
+    }
+  }
+  compounds.push(selector.slice(start));
+  return compounds.filter((compound) => compound !== "");
+}
+
+// The tag, ids and classes an element needs to match the compound, outside any functional pseudo-class. Returns null when escapes or namespaces make them uncertain.
+function requiredNames(compound) {
+  if (compound.includes("\\") || compound.includes("|")) return null;
+  let bare = compound.replace(SELECTOR_ESCAPES_ATTRIBUTES_AND_STRINGS, "");
+  while (PARENTHESIZED.test(bare)) bare = bare.replace(PARENTHESIZED, "");
+  const tag = SELECTOR_TAG.exec(bare)?.[0].toLowerCase() ?? null;
+  const names = [...bare.matchAll(SELECTOR_ID_OR_CLASS)].map(([, kind, name]) => ({ kind, name }));
+  return { tag, names };
+}
+
+function namesInDocument(document) {
+  const tags = new Set();
+  const ids = new Set();
+  const classes = new Set();
+  for (const element of document.getElementsByTagName("*")) {
+    tags.add(element.localName);
+    if (element.id) ids.add(element.id);
+    for (const name of element.classList) classes.add(name);
+  }
+  return { tags, ids, classes };
+}
+
+// A selector matches nothing when one of its compounds needs a tag, id or class that no element has.
+function mayMatchIn(selector, present) {
+  return selectorCompounds(selector.trim()).every((compound) => {
+    const required = requiredNames(compound);
+    if (required === null) return true;
+    if (required.tag !== null && !present.tags.has(required.tag)) return false;
+    return required.names.every(({ kind, name }) => (kind === "#" ? present.ids : present.classes).has(name));
+  });
+}
+
+// A selector that names only tags, ids, classes and attributes of an element and its ancestors matches alike wherever those are alike; any other selector is matched against the elements it may apply to. Returns null when a style may depend on what the style key leaves out: quirks, shadow trees, nested or scoped rules, or container sizes.
+function styleSharing(document) {
+  const view = document.defaultView;
+  if (document.compatMode === "BackCompat" || document.querySelector('[style*="container" i], [style*="cq" i]')) return null;
+  const nonLocalSelectors = [];
+  const collect = (rules) => {
+    for (const rule of rules) {
+      if (rule instanceof view.CSSImportRule) {
+        if (!rule.styleSheet || !collect(rule.styleSheet.cssRules)) return false;
+      } else if (rule instanceof view.CSSStyleRule) {
+        if (rule.cssRules?.length > 0 || CONTAINER_DEPENDENT_STYLE.test(rule.style.cssText)) return false;
+        for (const selector of splitSelectorList(rule.selectorText)) {
+          const bare = selector.replace(SELECTOR_ESCAPES_ATTRIBUTES_AND_STRINGS, "");
+          if (!PSEUDO_ELEMENT_SELECTOR.test(bare) && NON_LOCAL_SELECTOR.test(bare)) nonLocalSelectors.push(selector.trim());
+        }
+      } else if ((view.CSSContainerRule && rule instanceof view.CSSContainerRule) || (view.CSSScopeRule && rule instanceof view.CSSScopeRule)) {
+        return false;
+      } else if (rule.cssRules && !collect(rule.cssRules)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  try {
+    for (const sheet of [...document.styleSheets, ...document.adoptedStyleSheets]) {
+      if (!collect(sheet.cssRules)) return null;
+    }
+  } catch {
+    return null;
+  }
+  const elements = document.getElementsByTagName("*");
+  for (const element of elements) if (element.shadowRoot) return null;
+  const present = namesInDocument(document);
+  const selectors = nonLocalSelectors.filter((selector) => mayMatchIn(selector, present));
+  if (selectors.length * elements.length > MAX_SELECTOR_TESTS) return null;
+  const unshared = new Set(document.querySelectorAll(UNSHARED_ELEMENTS));
+  if (document.activeElement) unshared.add(document.activeElement);
+  for (const animation of document.getAnimations()) if (animation.effect?.target) unshared.add(animation.effect.target);
+  const selectorMatches = new Map();
+  if (selectors.length > 0) {
+    const affected = document.querySelectorAll(`:is(${selectors.join(",")})`);
+    if (affected.length * selectors.length > MAX_SELECTOR_MATCHES) {
+      for (const element of affected) unshared.add(element);
+    } else {
+      for (const element of affected) selectorMatches.set(element, selectors.map((selector) => (matchesSelector(element, selector) ? "1" : "0")).join(""));
+    }
+  }
+  return { document, unshared, selectorMatches, keys: new Map(), ids: new Map(), uniqueKeys: 0 };
+}
+
+// Returns the element's style key, or null when its style is read on its own. Children of such an element can still share a style with each other.
+function assignStyleKey(element, context, shareable) {
+  const sharing = context.styleSharing;
+  if (!sharing) return null;
+  const parentKey = element === sharing.document.documentElement ? "root" : sharing.keys.get(element.parentElement);
+  let key;
+  if (!shareable || parentKey === undefined || element.ownerDocument !== sharing.document || element.namespaceURI !== XHTML_NAMESPACE || element.localName.includes("-") || sharing.unshared.has(element)) {
+    sharing.uniqueKeys -= 1;
+    key = sharing.uniqueKeys;
+  } else {
+    let text = `${parentKey}\u0000${element.localName}\u0000${sharing.selectorMatches.get(element) ?? ""}`;
+    for (const { name, value } of element.attributes) text += `\u0000${name.length}:${name}${value.length}:${value}`;
+    key = sharing.ids.get(text);
+    if (key === undefined) {
+      key = sharing.ids.size;
+      sharing.ids.set(text, key);
+    }
+  }
+  sharing.keys.set(element, key);
+  return key >= 0 ? key : null;
+}
+
 function copyPseudoElements(element, clone, context) {
   if (!mayHavePseudoElements(element, context)) return;
   const view = element.ownerDocument.defaultView;
@@ -558,6 +771,7 @@ function prepareElement(element, context, frameComputed = null) {
     computed: styled,
     resetsToInitial: clone.namespaceURI === XHTML_NAMESPACE,
     extraDeclarations: (isFrame || frameComputed) && styled.display === "inline" ? "display:block;" : "",
+    styleKey: assignStyleKey(element, context, !isFrame && !frameComputed),
   });
   context.computedStyles.set(clone, styled);
   embedStyleUrls(context, clone, styled);
@@ -613,7 +827,7 @@ export async function clonePage(document, { yieldBetweenSlices }) {
     copiedProperties = measureCopiedProperties();
     await yieldBetweenSlices();
   }
-  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set(), scrollBoxes: [], formStates: [], pseudoElementHosts: new Map() };
+  const context = { styleClasses: new Map(), styleRules: [], styledElements: [], embeddings: [], computedStyles: new WeakMap(), fontFamilies: new Set(), seenFontFamilies: new Set(), scrollBoxes: [], formStates: [], pseudoElementHosts: new Map(), styleSharing: styleSharing(document) };
   const root = document.documentElement;
   const rootOffset = positionOffset(document.defaultView.getComputedStyle(root));
   const rootClone = await cloneElementTree(root, context, yieldBetweenSlices);
