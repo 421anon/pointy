@@ -300,25 +300,29 @@ within gap ( first, last ) =
     first <= gap && gap <= last
 
 
-moveValid : Dict Int ProjectRecord -> ListingScope -> Int -> ChildRef -> Bool
-moveValid projects_ sourceScope targetId ref =
+moveValid : Model.ProjectIndex -> ListingScope -> Int -> ChildRef -> Bool
+moveValid index sourceScope targetId ref =
     sourceScope
         /= targetId
-        && not (Lib.linkCreatesCycle projects_ targetId ref)
+        && not (Lib.linkCreatesCycle index targetId ref)
 
 
-resolveInto : Model -> Dict Int ProjectRecord -> OrganizeDrag -> Int -> List OrganizeDropAction
-resolveInto model projects_ drag targetId =
-    if not (listingEditable model) || List.any (Lib.linkCreatesCycle projects_ targetId) drag.refs then
+resolveInto : Model -> OrganizeDrag -> Int -> List OrganizeDropAction
+resolveInto model drag targetId =
+    let
+        index =
+            Model.getProjectIndex model
+    in
+    if not (listingEditable model) || List.any (Lib.linkCreatesCycle index targetId) drag.refs then
         []
 
     else
         let
             movePossible =
-                List.any (moveValid projects_ drag.sourceScope targetId) drag.refs
+                List.any (moveValid index drag.sourceScope targetId) drag.refs
 
             linkPossible =
-                List.any (Lib.linkValid projects_ targetId) drag.refs
+                List.any (Lib.linkValid index targetId) drag.refs
         in
         List.filter Tuple.first
             [ ( movePossible, OrganizeDropMove )
@@ -350,14 +354,14 @@ dropActionToken action =
             "link"
 
 
-dropAllowed : Model -> Dict Int ProjectRecord -> Int -> List OrganizeDropAction
-dropAllowed model projects_ folderId =
+dropAllowed : Model -> Int -> List OrganizeDropAction
+dropAllowed model folderId =
     case get organizeDrag model of
         Nothing ->
             []
 
         Just drag ->
-            resolveInto model projects_ drag folderId
+            resolveInto model drag folderId
 
 
 displayOrder : Model.ListingPreferences -> List ChildRef -> List ChildRef
@@ -413,16 +417,19 @@ reorderForEdgeDrop visual ref before payload =
         |> Maybe.map (insertAt >> (\at -> List.take at withoutPayload ++ present ++ List.drop at withoutPayload))
 
 
-organizeTargets : Model -> Dict Int ProjectRecord -> OrganizeDialogMode -> ListingScope -> List ChildRef -> List ( Int, String )
-organizeTargets model projects_ mode sourceScope refs =
+organizeTargets : Model -> OrganizeDialogMode -> ListingScope -> List ChildRef -> List ( Int, String )
+organizeTargets model mode sourceScope refs =
     let
+        index =
+            Model.getProjectIndex model
+
         excluded id =
             (mode == OrganizeMove && sourceScope == id)
-                || List.any (Lib.linkCreatesCycle projects_ id) refs
+                || List.any (Lib.linkCreatesCycle index id) refs
     in
-    Dict.toList projects_
+    Dict.toList index.projects
         |> List.filter (\( id, _ ) -> not (excluded id))
-        |> List.map (\( id, _ ) -> ( id, Lib.canonicalNamePath model projects_ id ))
+        |> List.map (\( id, _ ) -> ( id, Lib.canonicalNamePath model id ))
         |> List.sortBy Tuple.second
 
 

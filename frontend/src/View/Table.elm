@@ -498,7 +498,7 @@ viewRow model rowContext orderedRefs edgeAttrs row =
                 View.Organize.rowDragAttrs scope row.link
                     ++ edgeAttrs
                     ++ (if isFolder then
-                            View.Organize.dropTargetAttrs model rowContext.projects row.link.id
+                            View.Organize.dropTargetAttrs model row.link.id
 
                         else
                             []
@@ -1075,8 +1075,8 @@ viewStepRecordActions model projects_ parentId link name entry stepConfig presen
         (uploadActions ++ runActions ++ quickCreateActions ++ viewRowActions model projects_ parentId link spec record)
 
 
-viewAddOrEditRecordForm : Model -> Dict Int ProjectRecord -> Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
-viewAddOrEditRecordForm model projects_ parentId spec table fields extraSection record =
+viewAddOrEditRecordForm : Model -> Int -> TableSpec (BaseRecord a) -> Table (BaseRecord a) -> { extraFields : List (Html (Flow Model ())), noteInput : Html (Flow Model ()) } -> Html (Flow Model ()) -> BaseRecord a -> Html (Flow Model ())
+viewAddOrEditRecordForm model parentId spec table fields extraSection record =
     let
         readOnly =
             stepFormReadOnly model spec record
@@ -1138,7 +1138,7 @@ viewAddOrEditRecordForm model projects_ parentId spec table fields extraSection 
         viewSelectExisting state =
             let
                 availableItems =
-                    Model.Lib.linkCandidates model projects_ parentId
+                    Model.Lib.linkCandidates model parentId
                         |> List.map
                             (\( ref, label ) ->
                                 { id = Just ref.id, name = label, mProjectId = Nothing, ref = Just ref }
@@ -1149,8 +1149,8 @@ viewAddOrEditRecordForm model projects_ parentId spec table fields extraSection 
                     item.ref
                         |> Maybe.unwrap []
                             (\ref ->
-                                Model.Lib.entityOtherParents projects_ ref.kind ref.id Nothing
-                                    |> List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model projects_ linkedParentId)
+                                Model.Lib.entityOtherParents (Model.getProjectIndex model) ref.kind ref.id Nothing
+                                    |> List.map (\linkedParentId -> "in " ++ Model.Lib.canonicalNamePath model linkedParentId)
                             )
             in
             Select.view
@@ -1236,7 +1236,7 @@ viewAddOrEditRecordForm model projects_ parentId spec table fields extraSection 
                     )
                 , Html.div [ class "form-body" ]
                     [ Html.viewIf (not editing) modeSelector
-                    , Html.viewIf (not editing && table.addMode == LinkExisting) <| Html.Lazy.lazy viewSelectExisting table.selectExistingSteps
+                    , Html.viewIf (not editing && table.addMode == LinkExisting) <| viewSelectExisting table.selectExistingSteps
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
                     , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|

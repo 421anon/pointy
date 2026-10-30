@@ -618,13 +618,13 @@ viewStep model kind step =
         ( folderTrail, folderPath ) =
             case ( try loadedProjects model, step.projectId ) of
                 ( Just projects_, Just projectId ) ->
-                    ( case canonicalPathNames model projects_ projectId of
+                    ( case canonicalPathNames model projectId of
                         [] ->
                             rootProjectName projects_
 
                         names ->
                             String.join " / " names
-                    , canonicalNamePath model projects_ projectId
+                    , canonicalNamePath model projectId
                     )
 
                 _ ->

@@ -1067,10 +1067,10 @@ recheckStepStatuses saved stepId downstream =
             (\model ->
                 try loadedProjects model
                     |> Maybe.unwrap (Flow.pure ())
-                        (\projects_ ->
+                        (\_ ->
                             let
                                 parentsOf id =
-                                    List.map Tuple.first (Model.childLinksTo StepChild id projects_)
+                                    List.map Tuple.first (Model.parentLinks StepChild id (Model.getProjectIndex model))
 
                                 ( rechecked, broadcastByServer ) =
                                     if saved then
@@ -3115,11 +3115,11 @@ onSelectSearch projectId stepId =
             (\model ->
                 try loadedProjects model
                     |> Maybe.unwrap (Flow.pure ())
-                        (\projects_ ->
+                        (\_ ->
                             goToRoute
                                 (Route.fromPage
                                     (Route.Project
-                                        { projectPath = canonicalPathTo model projects_ projectId
+                                        { projectPath = canonicalPathTo model projectId
                                         , mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
                                         , mCommit = try (route << Route.page << Route.viewedCommitT) model
                                         , mCompare = Nothing
@@ -4987,19 +4987,17 @@ type alias StepLocation =
     }
 
 
-stepLocations : (Int -> Bool) -> Dict Int ProjectRecord -> Dict Int StepRecord -> Dict Int (List StepLocation)
-stepLocations wanted projects_ steps_ =
+stepLocations : (Int -> Bool) -> Model.ProjectIndex -> Dict Int StepRecord -> Dict Int (List StepLocation)
+stepLocations wanted index steps_ =
     Dict.foldl
         (\stepId step locations ->
             if wanted stepId then
-                Model.childLinksTo StepChild stepId projects_
-                    |> List.foldl
-                        (\( projectId, _ ) acc ->
-                            Dict.update stepId
-                                (Maybe.withDefault [] >> (\locations_ -> { projectId = projectId, step = step } :: locations_) >> Just)
-                                acc
-                        )
+                case Model.parentLinks StepChild stepId index of
+                    [] ->
                         locations
+
+                    links ->
+                        Dict.insert stepId (List.map (\( projectId, _ ) -> { projectId = projectId, step = step }) links) locations
 
             else
                 locations
@@ -5042,12 +5040,12 @@ openRunningStep stepId =
         |> Flow.andThen
             (\model ->
                 case try loadedProjects model of
-                    Just projects_ ->
-                        stepOutputLocation (try currentProjectId model) (stepLocations ((==) stepId) projects_ (Model.getSteps model)) stepId
+                    Just _ ->
+                        stepOutputLocation (try currentProjectId model) (stepLocations ((==) stepId) (Model.getProjectIndex model) (Model.getSteps model)) stepId
                             |> Maybe.unwrap (Flow.pure ())
                                 (\location ->
                                     Flow.setAll statusBarOpen False
-                                        |> Flow.seq (goToRoute (stepOutputRoute (canonicalPathTo model projects_ location.projectId) stepId))
+                                        |> Flow.seq (goToRoute (stepOutputRoute (canonicalPathTo model location.projectId) stepId))
                                 )
 
                     Nothing ->

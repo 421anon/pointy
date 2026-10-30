@@ -53,18 +53,18 @@ currentProject =
         tryProjectPath =
             try (route << Route.page << projectRoute << projectPath)
 
-        set (Model m) value =
-            case ( m.projects, value ) of
+        set model value =
+            case ( Model.getProjects model, value ) of
                 ( Success projects_, Success project ) ->
                     case project.id of
                         Just projectId ->
-                            Model { m | projects = Success (Dict.insert projectId project projects_) }
+                            Model.setProjects (Success (Dict.insert projectId project projects_)) model
 
                         Nothing ->
-                            Model m
+                            model
 
                 _ ->
-                    Model m
+                    model
     in
     lens ".currentProject" get_ set
 
@@ -165,7 +165,7 @@ projectPath =
 
 projects : Lens ls Model (ApiData (Dict Int ProjectRecord)) x y
 projects =
-    lens ".projects" Model.getProjects (\(Model m) projects_ -> Model { m | projects = projects_ })
+    lens ".projects" Model.getProjects (\model projects_ -> Model.setProjects projects_ model)
 
 
 loadedProjects : Traversal Model (Dict Int ProjectRecord) x y

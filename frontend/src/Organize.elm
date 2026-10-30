@@ -1,6 +1,6 @@
 module Organize exposing (..)
 
-import Accessors exposing (get, just, over, try)
+import Accessors exposing (get, has, just, over, try)
 import Actions
 import Api.Api as Api
 import Api.ApiData as ApiData exposing (success)
@@ -150,7 +150,7 @@ runActionWith model projects_ scope refs action =
                 clearSelection
 
             OrganizePasteAction ->
-                Maybe.unwrap (Flow.pure ()) (pasteInto projects_ scope) (get organizeClipboard model)
+                Maybe.unwrap (Flow.pure ()) (pasteInto (Model.getProjectIndex model) scope) (get organizeClipboard model)
 
             OrganizeClearClipboardAction ->
                 Flow.setAll organizeClipboard Nothing
@@ -248,21 +248,21 @@ confirmDeleteRefs refs =
 
 moveRefsInto : ListingScope -> Int -> List ChildRef -> Flow Model ()
 moveRefsInto sourceScope targetId refs =
-    organizeOrToast "Move" "Nothing to move." (\projects_ -> List.concatMap (moveOps projects_ sourceScope targetId) refs)
+    organizeOrToast "Move" "Nothing to move." (\index -> List.concatMap (moveOps index sourceScope targetId) refs)
 
 
 linkRefsInto : Int -> List ChildRef -> Flow Model ()
 linkRefsInto targetId refs =
-    organizeOrToast "Link" "Nothing to link." (\projects_ -> List.concatMap (linkOps projects_ targetId) refs)
+    organizeOrToast "Link" "Nothing to link." (\index -> List.concatMap (linkOps index targetId) refs)
 
 
-organizeOrToast : String -> String -> (Dict Int ProjectRecord -> List TreeOp) -> Flow Model ()
+organizeOrToast : String -> String -> (Model.ProjectIndex -> List TreeOp) -> Flow Model ()
 organizeOrToast label emptyMessage buildOps =
-    Flow.forAll loadedProjects
-        (\projects_ ->
+    withProjectIndex
+        (\index ->
             let
                 ops =
-                    buildOps projects_
+                    buildOps index
             in
             if List.isEmpty ops then
                 Actions.addToast False emptyMessage
@@ -270,6 +270,12 @@ organizeOrToast label emptyMessage buildOps =
             else
                 organizeWithUndo label ops
         )
+
+
+withProjectIndex : (Model.ProjectIndex -> Flow Model ()) -> Flow Model ()
+withProjectIndex run =
+    Flow.get
+        |> Flow.andThen (\model -> Flow.when (has loadedProjects model) (run (Model.getProjectIndex model)))
 
 
 unhideAll : Int -> List ChildRef -> Flow Model ()
@@ -284,8 +290,8 @@ setClipboard mode label scope refs =
         |> Flow.seq (Actions.addToast True (label ++ " " ++ String.fromInt (List.length refs) ++ " item(s)"))
 
 
-pasteInto : Dict Int ProjectRecord -> Int -> Model.OrganizeClipboard -> Flow Model ()
-pasteInto projects_ targetId clipboard =
+pasteInto : Model.ProjectIndex -> Int -> Model.OrganizeClipboard -> Flow Model ()
+pasteInto index targetId clipboard =
     if clipboard.mode == ClipboardCut && clipboard.sourceScope == targetId then
         Flow.setAll organizeClipboard Nothing
 
@@ -294,10 +300,10 @@ pasteInto projects_ targetId clipboard =
             ops =
                 case clipboard.mode of
                     ClipboardCopy ->
-                        List.concatMap (linkOps projects_ targetId) clipboard.refs
+                        List.concatMap (linkOps index targetId) clipboard.refs
 
                     ClipboardCut ->
-                        List.concatMap (moveOps projects_ clipboard.sourceScope targetId) clipboard.refs
+                        List.concatMap (moveOps index clipboard.sourceScope targetId) clipboard.refs
         in
         if List.isEmpty ops then
             Actions.addToast False "Nothing to paste."
@@ -310,18 +316,18 @@ pasteInto projects_ targetId clipboard =
                     )
 
 
-moveOps : Dict Int ProjectRecord -> ListingScope -> Int -> ChildRef -> List TreeOp
-moveOps projects_ sourceScope targetId ref =
-    if Selection.moveValid projects_ sourceScope targetId ref then
+moveOps : Model.ProjectIndex -> ListingScope -> Int -> ChildRef -> List TreeOp
+moveOps index sourceScope targetId ref =
+    if Selection.moveValid index sourceScope targetId ref then
         [ UnlinkOp sourceScope ref, LinkOp targetId ref ]
 
     else
         []
 
 
-linkOps : Dict Int ProjectRecord -> Int -> ChildRef -> List TreeOp
-linkOps projects_ targetId ref =
-    if Lib.linkValid projects_ targetId ref then
+linkOps : Model.ProjectIndex -> Int -> ChildRef -> List TreeOp
+linkOps index targetId ref =
+    if Lib.linkValid index targetId ref then
         [ LinkOp targetId ref ]
 
     else
@@ -410,11 +416,11 @@ groupIntoNewFolder name sourceFolderId refs =
                     in
                     createFolder config sourceFolderId record <|
                         \newId newFolder ->
-                            Flow.forAll loadedProjects
-                                (\freshProjects ->
+                            withProjectIndex
+                                (\index ->
                                     let
                                         ops =
-                                            List.concatMap (moveOps freshProjects sourceFolderId newId) refs
+                                            List.concatMap (moveOps index sourceFolderId newId) refs
                                     in
                                     insertNewFolder sourceFolderId newId newFolder
                                         |> Flow.seq (Flow.when (not (List.isEmpty ops)) (organizeWithUndo "Group into new folder" ops))
@@ -460,8 +466,8 @@ dropIntoFolder targetId linkModifier =
         |> Flow.andThen
             (\model ->
                 case ( get organizeDrag model, try loadedProjects model ) of
-                    ( Just drag, Just projects_ ) ->
-                        case Selection.resolveDropAction linkModifier (Selection.resolveInto model projects_ drag targetId) of
+                    ( Just drag, Just _ ) ->
+                        case Selection.resolveDropAction linkModifier (Selection.resolveInto model drag targetId) of
                             Just OrganizeDropMove ->
                                 moveRefsInto drag.sourceScope targetId drag.refs
 

@@ -1576,7 +1576,7 @@ viewAgentMessage mentionSources autoApplyEcho turn =
                 ]
             ]
             [ Html.Lazy.lazy6 viewAgentMessageContent
-                mentionSources.projects
+                mentionSources.projectIndex
                 mentionSources.steps
                 mentionSources.route
                 mentionSources.stepConfig
@@ -1604,15 +1604,15 @@ viewAutoApplyEcho enabled =
         ]
 
 
-viewAgentMessageContent : Dict.Dict Int Model.ProjectRecord -> Dict.Dict Int Model.StepRecord -> Route.Route -> StepConfig -> Bool -> String -> Html (Flow Model ())
-viewAgentMessageContent projects_ steps_ route_ stepConfig_ pulse body =
+viewAgentMessageContent : Model.ProjectIndex -> Dict.Dict Int Model.StepRecord -> Route.Route -> StepConfig -> Bool -> String -> Html (Flow Model ())
+viewAgentMessageContent projectIndex steps_ route_ stepConfig_ pulse body =
     Html.div
         [ classList
             [ ( "agent-panel__chat-content", True )
             , ( "agent-panel__pulse", pulse )
             ]
         ]
-        (AgentMentions.toHtml { projects = projects_, steps = steps_, route = route_, stepConfig = stepConfig_ } body)
+        (AgentMentions.toHtml { projectIndex = projectIndex, steps = steps_, route = route_, stepConfig = stepConfig_ } body)
 
 
 viewAgentQuestion : String -> Bool -> Bool -> Model.PendingQuestion -> Html (Flow Model ())

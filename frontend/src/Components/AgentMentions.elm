@@ -11,7 +11,7 @@ import Html exposing (Html)
 import Html.Attributes exposing (attribute, class, title, type_)
 import Html.Events as Events
 import List.Extra as List
-import Model.Core as Model exposing (Model, ProjectRecord)
+import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses
 import Model.Shadow exposing (StepConfig)
 import Model.TableSpec as TableSpec
@@ -41,7 +41,7 @@ type alias Resolver =
 
 
 type alias Sources =
-    { projects : Dict.Dict Int ProjectRecord
+    { projectIndex : Model.ProjectIndex
     , steps : Dict.Dict Int Model.StepRecord
     , route : Route
     , stepConfig : StepConfig
@@ -50,7 +50,7 @@ type alias Sources =
 
 sources : Model -> Sources
 sources model =
-    { projects = ApiData.withDefault Dict.empty (Model.getProjects model)
+    { projectIndex = Model.getProjectIndex model
     , steps = Model.getSteps model
     , route = Model.getRoute model
     , stepConfig = ApiData.withDefault Dict.empty (Model.getStepConfig model)
@@ -70,7 +70,7 @@ resolver sources_ raw =
                 Dict.empty
 
             else
-                Actions.stepLocations (\stepId -> Set.member stepId candidateStepIds) sources_.projects sources_.steps
+                Actions.stepLocations (\stepId -> Set.member stepId candidateStepIds) sources_.projectIndex sources_.steps
 
         currentPath =
             try (Route.page << Lenses.projectRoute << Lenses.projectPath) sources_.route
@@ -79,7 +79,7 @@ resolver sources_ raw =
             Maybe.map Route.pathProjectId currentPath
 
         canonicalPath =
-            Model.canonicalProjectPath (Maybe.withDefault [] currentPath) sources_.projects
+            Model.canonicalProjectPath (Maybe.withDefault [] currentPath) sources_.projectIndex
     in
     \entityId fixed candidates ->
         let
@@ -114,7 +114,7 @@ resolver sources_ raw =
                         )
 
             ProjectId projectId ->
-                Dict.get projectId sources_.projects
+                Dict.get projectId sources_.projectIndex.projects
                     |> Maybe.map (\project -> resolved (Actions.projectPageRoute (canonicalPath projectId)) Nothing (Just project.name))
 
 

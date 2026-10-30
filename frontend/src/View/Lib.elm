@@ -11,7 +11,7 @@ import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (Model, ProjectRecord)
+import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
 import Model.Lib as Lib
 import Route
@@ -35,8 +35,8 @@ viewPage { header, content } =
         ]
 
 
-viewSearchBox : Model -> Dict Int ProjectRecord -> Html (Flow Model ())
-viewSearchBox model projects_ =
+viewSearchBox : Model -> Html (Flow Model ())
+viewSearchBox model =
     let
         state =
             get searchBox model
@@ -60,7 +60,7 @@ viewSearchBox model projects_ =
 
         relatedItems =
             if searching then
-                Lib.relatedSearchItems model projects_
+                Lib.relatedSearchItems model
 
             else
                 []
@@ -211,11 +211,11 @@ viewRollupSummary model mParentProjectId folderProjectId =
             Html.nothing
 
 
-viewAlsoInLinks : Model -> Dict Int ProjectRecord -> Maybe Int -> Model.ChildRef -> List (Html (Flow Model ()))
-viewAlsoInLinks model projects_ mCurrentParentId ref =
+viewAlsoInLinks : Model -> Maybe Int -> Model.ChildRef -> List (Html (Flow Model ()))
+viewAlsoInLinks model mCurrentParentId ref =
     let
-        otherParents =
-            Lib.entityOtherParents projects_ ref.kind ref.id mCurrentParentId
+        index =
+            Model.getProjectIndex model
 
         mCommit_ =
             Route.viewedCommit (Model.getRoute model).page
@@ -224,23 +224,23 @@ viewAlsoInLinks model projects_ mCurrentParentId ref =
             Html.a
                 [ Route.href
                     (Route.fromPage
-                        (Route.projectPage (Lib.canonicalPathTo model projects_ parentId) mCommit_)
+                        (Route.projectPage (Lib.canonicalPathTo model parentId) mCommit_)
                     )
                 , class "listing-menu-item"
-                , Html.Attributes.title (Lib.canonicalNamePath model projects_ parentId)
+                , Html.Attributes.title (Lib.canonicalNamePath model parentId)
                 ]
                 [ iconCustom False "folder" []
-                , Html.text (Dict.get parentId projects_ |> Maybe.unwrap ("#" ++ String.fromInt parentId) .name)
+                , Html.text (Dict.get parentId index.projects |> Maybe.unwrap ("#" ++ String.fromInt parentId) .name)
                 ]
     in
-    List.map parentEntry otherParents
+    List.map parentEntry (Lib.entityOtherParents index ref.kind ref.id mCurrentParentId)
 
 
-viewAlsoInButton : String -> Model -> Dict Int ProjectRecord -> Maybe Int -> Model.ChildRef -> Html (Flow Model ())
-viewAlsoInButton popoverId model projects_ mCurrentParentId ref =
+viewAlsoInButton : String -> Model -> Maybe Int -> Model.ChildRef -> Html (Flow Model ())
+viewAlsoInButton popoverId model mCurrentParentId ref =
     let
         links =
-            viewAlsoInLinks model projects_ mCurrentParentId ref
+            viewAlsoInLinks model mCurrentParentId ref
     in
     Html.viewIf (not (List.isEmpty links)) <|
         View.Organize.viewMenuPopover

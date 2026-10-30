@@ -15,17 +15,20 @@ import Set exposing (Set)
 import Time
 
 
-canonicalPathTo : Model -> Dict Int ProjectRecord -> Int -> List Int
-canonicalPathTo model projects_ targetId =
+canonicalPathTo : Model -> Int -> List Int
+canonicalPathTo model =
     Model.canonicalProjectPath
         (try currentProjectPath model |> Maybe.withDefault [])
-        projects_
-        targetId
+        (Model.getProjectIndex model)
 
 
-canonicalPathNames : Model -> Dict Int ProjectRecord -> Int -> List String
-canonicalPathNames model projects_ projectId =
-    canonicalPathTo model projects_ projectId
+canonicalPathNames : Model -> Int -> List String
+canonicalPathNames model projectId =
+    let
+        projects_ =
+            (Model.getProjectIndex model).projects
+    in
+    canonicalPathTo model projectId
         |> List.filterMap (\id -> Dict.get id projects_ |> Maybe.map .name)
 
 
@@ -37,14 +40,14 @@ rootProjectName projects_ =
         |> Maybe.withDefault "Home"
 
 
-canonicalNamePath : Model -> Dict Int ProjectRecord -> Int -> String
-canonicalNamePath model projects_ projectId =
-    "/" ++ String.join "/" (rootProjectName projects_ :: canonicalPathNames model projects_ projectId)
+canonicalNamePath : Model -> Int -> String
+canonicalNamePath model projectId =
+    "/" ++ String.join "/" (rootProjectName (Model.getProjectIndex model).projects :: canonicalPathNames model projectId)
 
 
-entityOtherParents : Dict Int ProjectRecord -> ChildKind -> Int -> Maybe Int -> List Int
-entityOtherParents projects_ kind id mCurrentParentId =
-    Model.childLinksTo kind id projects_
+entityOtherParents : Model.ProjectIndex -> ChildKind -> Int -> Maybe Int -> List Int
+entityOtherParents index kind id mCurrentParentId =
+    Model.parentLinks kind id index
         |> List.map Tuple.first
         |> List.filter (\parentId -> Just parentId /= mCurrentParentId)
 
@@ -56,9 +59,12 @@ currentProjectStepIds model =
         |> Maybe.unwrap Set.empty (Model.childIdsOf StepChild >> Set.fromList)
 
 
-entityPathLabel : Model -> Dict Int ProjectRecord -> ChildKind -> Int -> String
-entityPathLabel model projects_ kind id =
+entityPathLabel : Model -> ChildKind -> Int -> String
+entityPathLabel model kind id =
     let
+        index =
+            Model.getProjectIndex model
+
         stepName =
             Dict.get id (get steps model)
 
@@ -68,41 +74,42 @@ entityPathLabel model projects_ kind id =
         ( name, typeLabel, mPath ) =
             case kind of
                 ProjectChild ->
-                    ( Dict.get id projects_ |> Maybe.map .name |> Maybe.withDefault unnamed
+                    ( Dict.get id index.projects |> Maybe.map .name |> Maybe.withDefault unnamed
                     , "(folder) "
-                    , Just (canonicalNamePath model projects_ id)
+                    , Just (canonicalNamePath model id)
                     )
 
                 StepChild ->
                     ( stepName |> Maybe.map .name |> Maybe.withDefault unnamed
                     , stepName |> Maybe.map (\step -> "(" ++ step.type_ ++ ") ") |> Maybe.withDefault "(step) "
-                    , Model.childLinksTo StepChild id projects_
-                        |> List.head
-                        |> Maybe.map (\( parentId, _ ) -> canonicalNamePath model projects_ parentId)
+                    , stepParentProjectId index id |> Maybe.map (canonicalNamePath model)
                     )
     in
     typeLabel ++ name ++ Maybe.unwrap "" (\path -> " — " ++ path) mPath
 
 
-linkCreatesCycle : Dict Int ProjectRecord -> Int -> ChildRef -> Bool
-linkCreatesCycle projects_ targetId ref =
+linkCreatesCycle : Model.ProjectIndex -> Int -> ChildRef -> Bool
+linkCreatesCycle index targetId ref =
     ref.kind
         == ProjectChild
-        && (ref.id == targetId || Model.isAncestorProject projects_ ref.id targetId)
+        && (ref.id == targetId || Model.isAncestorProject index ref.id targetId)
 
 
-linkValid : Dict Int ProjectRecord -> Int -> ChildRef -> Bool
-linkValid projects_ targetId ref =
-    not (linkCreatesCycle projects_ targetId ref)
-        && not (List.any (Model.sameEntity ref) (Dict.get targetId projects_ |> Maybe.unwrap [] .children))
+linkValid : Model.ProjectIndex -> Int -> ChildRef -> Bool
+linkValid index targetId ref =
+    not (linkCreatesCycle index targetId ref)
+        && not (List.any (Tuple.first >> (==) targetId) (Model.parentLinks ref.kind ref.id index))
 
 
-linkCandidates : Model -> Dict Int ProjectRecord -> Int -> List ( ChildRef, String )
-linkCandidates model projects_ parentId =
+linkCandidates : Model -> Int -> List ( ChildRef, String )
+linkCandidates model parentId =
     let
+        index =
+            Model.getProjectIndex model
+
         candidate ref =
-            if linkValid projects_ parentId ref then
-                Just ( ref, entityPathLabel model projects_ ref.kind ref.id )
+            if linkValid index parentId ref then
+                Just ( ref, entityPathLabel model ref.kind ref.id )
 
             else
                 Nothing
@@ -111,7 +118,7 @@ linkCandidates model projects_ parentId =
             Dict.keys (get steps model) |> List.map (\id -> { kind = StepChild, id = id })
 
         projectRefs =
-            Dict.keys projects_
+            Dict.keys index.projects
                 |> List.filter ((/=) Route.rootProjectId)
                 |> List.map (\id -> { kind = ProjectChild, id = id })
     in
@@ -141,26 +148,21 @@ searchFolder match =
         match.fields
 
 
-stepSearchItems : Model -> Dict Int ProjectRecord -> List ( Item ChildRef, Fuzzy.Document SearchField )
-stepSearchItems model projects_ =
+stepSearchItems : Model -> List ( Item ChildRef, Fuzzy.Document SearchField )
+stepSearchItems model =
     let
         steps_ =
             get steps model
 
-        pathNamesByProject =
-            Dict.keys projects_
-                |> List.map (\projectId -> ( projectId, canonicalPathNames model projects_ projectId ))
-                |> Dict.fromList
-
-        stepParents =
-            stepParentLinks projects_
+        index =
+            Model.getProjectIndex model
 
         folderName projectId =
-            Dict.get projectId projects_ |> Maybe.unwrap "" .name
+            Dict.get projectId index.projects |> Maybe.unwrap "" .name
 
         ancestorNames projectId =
-            Dict.get projectId pathNamesByProject
-                |> Maybe.andThen List.init
+            canonicalPathNames model projectId
+                |> List.init
                 |> Maybe.withDefault []
 
         folderFields parents =
@@ -232,10 +234,7 @@ stepSearchItems model projects_ =
         itemFor parents id step =
             { id = Just id
             , name = step.name
-            , mProjectId =
-                List.find (not << .hidden << Tuple.second) parents
-                    |> Maybe.orElse (List.head parents)
-                    |> Maybe.map Tuple.first
+            , mProjectId = primaryParentId parents
             , ref = Just { kind = StepChild, id = id }
             }
     in
@@ -243,7 +242,7 @@ stepSearchItems model projects_ =
         |> List.sortBy (\( id, step ) -> ( Maybe.unwrap 0 (Time.posixToMillis >> negate) step.lastModifiedAt, String.length step.name, id ))
         |> List.filterMap
             (\( id, step ) ->
-                Dict.get id stepParents
+                Dict.get id index.stepParents
                     |> Maybe.map (\parents -> ( itemFor parents id step, documentFor parents id step ))
             )
 
@@ -253,14 +252,14 @@ refreshStepSearch model =
     let
         entries =
             case try loadedProjects model of
-                Just projects_ ->
+                Just _ ->
                     let
                         cached =
                             (get stepSearch model).entries
                                 |> List.filterMap (\( item, indexed ) -> item.id |> Maybe.map (\id -> ( id, indexed )))
                                 |> Dict.fromList
                     in
-                    stepSearchItems model projects_
+                    stepSearchItems model
                         |> List.map
                             (\( item, document ) ->
                                 ( item
@@ -288,13 +287,13 @@ rankStepSearch model =
 
         matches =
             case ( Fuzzy.isEmpty query, try loadedProjects model ) of
-                ( False, Just projects_ ) ->
+                ( False, Just _ ) ->
                     Select.rankedItems query Tuple.second state.entries
                         |> List.map
                             (\( ( item, _ ), match ) ->
                                 { item = item
                                 , match = match
-                                , detail = Just (stepSearchDetail model projects_ query match item)
+                                , detail = Just (stepSearchDetail model query match item)
                                 }
                             )
 
@@ -331,8 +330,8 @@ stepSearchFolder match item =
     searchFolder match |> Maybe.orElse item.mProjectId
 
 
-stepSearchDetail : Model -> Dict Int ProjectRecord -> Fuzzy.Query -> Fuzzy.Match SearchField -> Item ChildRef -> String
-stepSearchDetail model projects_ query match item =
+stepSearchDetail : Model -> Fuzzy.Query -> Fuzzy.Match SearchField -> Item ChildRef -> String
+stepSearchDetail model query match item =
     let
         fieldDetail field =
             case field.tag of
@@ -349,7 +348,7 @@ stepSearchDetail model projects_ query match item =
             let
                 path =
                     stepSearchFolder match item
-                        |> Maybe.unwrap "" (\projectId -> " · " ++ canonicalNamePath model projects_ projectId)
+                        |> Maybe.unwrap "" (\projectId -> " · " ++ canonicalNamePath model projectId)
 
                 typeName =
                     item.id
@@ -362,40 +361,20 @@ stepSearchDetail model projects_ query match item =
         |> Maybe.withDefaultLazy fallback
 
 
-stepParentLinks : Dict Int ProjectRecord -> Dict Int (List ( Int, ChildLink ))
-stepParentLinks projects_ =
-    Dict.foldl
-        (\parentId project acc ->
-            List.foldl
-                (\link acc_ ->
-                    if link.kind == StepChild then
-                        Dict.update link.id
-                            (\existing -> Just (( parentId, link ) :: Maybe.withDefault [] existing))
-                            acc_
-
-                    else
-                        acc_
-                )
-                acc
-                project.children
-        )
-        Dict.empty
-        projects_
-        |> Dict.map (\_ -> List.reverse)
+primaryParentId : List ( Int, ChildLink ) -> Maybe Int
+primaryParentId links =
+    List.find (not << .hidden << Tuple.second) links
+        |> Maybe.orElse (List.head links)
+        |> Maybe.map Tuple.first
 
 
-stepParentProjectId : Dict Int ProjectRecord -> Int -> Maybe Int
-stepParentProjectId projects_ stepId =
-    Dict.get stepId (stepParentLinks projects_)
-        |> Maybe.andThen
-            (\links ->
-                (List.find (not << .hidden << Tuple.second) links |> Maybe.orElse (List.head links))
-                    |> Maybe.map Tuple.first
-            )
+stepParentProjectId : Model.ProjectIndex -> Int -> Maybe Int
+stepParentProjectId index stepId =
+    primaryParentId (Model.parentLinks StepChild stepId index)
 
 
-relatedSearchItems : Model -> Dict Int ProjectRecord -> List (Select.RelatedItem ChildRef)
-relatedSearchItems model projects_ =
+relatedSearchItems : Model -> List (Select.RelatedItem ChildRef)
+relatedSearchItems model =
     get relatedSearch model
         |> .results
         |> ApiData.toMaybe
@@ -414,7 +393,7 @@ relatedSearchItems model projects_ =
                         }
                     )
                     (Dict.get related.stepId (get steps model))
-                    (stepParentProjectId projects_ related.stepId)
+                    (stepParentProjectId (Model.getProjectIndex model) related.stepId)
             )
 
 

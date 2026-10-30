@@ -438,7 +438,6 @@ viewProject model projects_ proj =
                             |> Maybe.map
                                 (\editedProject ->
                                     viewAddOrEditRecordForm model
-                                        projects_
                                         projectId
                                         spec
                                         (get Lenses.projectForms model)
@@ -490,7 +489,7 @@ viewProject model projects_ proj =
                         )
                         mProjectSpec
                 ]
-            , viewSearchBox model projects_
+            , viewSearchBox model
             ]
         , content = listing
         }
@@ -656,7 +655,6 @@ viewPendingStepForm model projects_ parentId stepConfig =
                                             stepFormReadOnly model spec record
                                     in
                                     viewAddOrEditRecordForm model
-                                        projects_
                                         parentId
                                         spec
                                         (get (Lenses.stepFormsAt typeName) model)
@@ -765,7 +763,6 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                     Maybe.map
                         (\edited ->
                             viewAddOrEditRecordForm model
-                                projects_
                                 parentId
                                 spec
                                 (get Lenses.projectForms model)
@@ -852,7 +849,6 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                         Html.viewMaybe
                             (\edited ->
                                 viewAddOrEditRecordForm model
-                                    projects_
                                     parentId
                                     spec
                                     (get (Lenses.stepFormsAt step.type_) model)
@@ -1025,7 +1021,7 @@ viewBreadcrumbs model projects_ proj =
                  , Html.Attributes.class "project-breadcrumb"
                  ]
                     ++ (if editable then
-                            dropTargetAttrs model projects_ (Route.pathProjectId pathPrefix)
+                            dropTargetAttrs model (Route.pathProjectId pathPrefix)
 
                         else
                             []
@@ -1050,7 +1046,7 @@ viewBreadcrumbs model projects_ proj =
         (List.concatMap (\pathPrefix -> [ crumb pathPrefix, iconCustom True "chevron_right" [ Html.Attributes.class "project-breadcrumb-separator" ] ]) ancestorPaths
             ++ [ Html.h2 []
                     [ crumb projectPath_
-                    , View.Lib.viewAlsoInButton "also-in-breadcrumb" model projects_ (Just currentParentId) currentRef
+                    , View.Lib.viewAlsoInButton "also-in-breadcrumb" model (Just currentParentId) currentRef
                     ]
                ]
         )

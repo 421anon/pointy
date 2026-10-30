@@ -550,42 +550,18 @@ descendantProjectIds projects rootId =
     expand Set.empty (childIds rootId)
 
 
-canonicalProjectPath : List Int -> Dict Int ProjectRecord -> Int -> List Int
-canonicalProjectPath currentPath projects targetId =
-    let
-        childIds id =
-            Dict.get id projects
-                |> Maybe.unwrap [] (childIdsOf ProjectChild)
-                |> List.unique
-
-        search queue visited =
-            case queue of
-                [] ->
-                    Nothing
-
-                ( id, path ) :: rest ->
-                    let
-                        unvisited =
-                            List.filter (\childId -> not (Set.member childId visited)) (childIds id)
-                    in
-                    if List.member targetId unvisited then
-                        Just (path ++ [ targetId ])
-
-                    else
-                        search
-                            (rest ++ List.map (\childId -> ( childId, path ++ [ childId ] )) unvisited)
-                            (List.foldl Set.insert visited unvisited)
-    in
+canonicalProjectPath : List Int -> ProjectIndex -> Int -> List Int
+canonicalProjectPath currentPath index targetId =
     if targetId == Route.rootProjectId then
         []
 
     else
         case List.findIndex ((==) targetId) currentPath of
-            Just index ->
-                List.take (index + 1) currentPath
+            Just position ->
+                List.take (position + 1) currentPath
 
             Nothing ->
-                search [ ( Route.rootProjectId, [] ) ] (Set.singleton Route.rootProjectId)
+                Dict.get targetId index.pathsFromRoot
                     |> Maybe.withDefault [ targetId ]
 
 
@@ -1749,6 +1725,7 @@ initRelatedSearchState =
 type Model
     = Model
         { projects : ApiData (Dict Int ProjectRecord)
+        , projectIndex : ProjectIndex
         , steps : Dict Int StepRecord
         , projectForms : Table ProjectRecord
         , stepForms : Dict String (Table StepRecord)
@@ -1985,6 +1962,20 @@ compareSelectionMode sel =
 getProjects : Model -> ApiData (Dict Int ProjectRecord)
 getProjects (Model model) =
     model.projects
+
+
+getProjectIndex : Model -> ProjectIndex
+getProjectIndex (Model model) =
+    model.projectIndex
+
+
+setProjects : ApiData (Dict Int ProjectRecord) -> Model -> Model
+setProjects projects (Model model) =
+    Model
+        { model
+            | projects = projects
+            , projectIndex = indexProjects (ApiData.toMaybe projects |> Maybe.withDefault Dict.empty)
+        }
 
 
 getSteps : Model -> Dict Int StepRecord
@@ -2353,6 +2344,7 @@ initialModel : Browser.Navigation.Key -> Route -> Flags -> Model
 initialModel key route flags =
     Model
         { projects = NotAsked
+        , projectIndex = indexProjects Dict.empty
         , steps = Dict.empty
         , projectForms = initialTable
         , stepForms = Dict.empty
@@ -2935,32 +2927,111 @@ mergeProjects fetched previous =
         fetched
 
 
-childLinksTo : ChildKind -> Int -> Dict Int ProjectRecord -> List ( Int, ChildLink )
-childLinksTo kind id projects =
+type alias ProjectIndex =
+    { projects : Dict Int ProjectRecord
+    , stepParents : Dict Int (List ( Int, ChildLink ))
+    , folderParents : Dict Int (List ( Int, ChildLink ))
+    , pathsFromRoot : Dict Int (List Int)
+    }
+
+
+indexProjects : Dict Int ProjectRecord -> ProjectIndex
+indexProjects projects =
     let
-        wanted =
-            { kind = kind, id = id }
-    in
-    Dict.foldl
-        (\parentId project acc ->
-            List.foldl
-                (\link acc_ ->
-                    if sameEntity wanted link then
-                        ( parentId, link ) :: acc_
+        addParent parentId link =
+            Dict.update link.id (\existing -> Just (( parentId, link ) :: Maybe.withDefault [] existing))
 
-                    else
-                        acc_
+        ( stepParents, folderParents ) =
+            Dict.foldr
+                (\parentId project acc ->
+                    List.foldr
+                        (\link ( steps, folders ) ->
+                            case link.kind of
+                                StepChild ->
+                                    ( addParent parentId link steps, folders )
+
+                                ProjectChild ->
+                                    ( steps, addParent parentId link folders )
+                        )
+                        acc
+                        project.children
                 )
-                acc
-                project.children
+                ( Dict.empty, Dict.empty )
+                projects
+    in
+    { projects = projects
+    , stepParents = stepParents
+    , folderParents = folderParents
+    , pathsFromRoot = pathsFromRoot projects
+    }
+
+
+pathsFromRoot : Dict Int ProjectRecord -> Dict Int (List Int)
+pathsFromRoot projects =
+    let
+        childIds id =
+            Dict.get id projects
+                |> Maybe.unwrap [] (childIdsOf ProjectChild)
+
+        discover path childId ( paths, next ) =
+            if Dict.member childId paths then
+                ( paths, next )
+
+            else
+                let
+                    childPath =
+                        path ++ [ childId ]
+                in
+                ( Dict.insert childId childPath paths, ( childId, childPath ) :: next )
+
+        expand frontier paths =
+            if List.isEmpty frontier then
+                paths
+
+            else
+                let
+                    ( expanded, next ) =
+                        List.foldl (\( id, path ) acc -> List.foldl (discover path) acc (childIds id)) ( paths, [] ) frontier
+                in
+                expand (List.reverse next) expanded
+    in
+    expand [ ( Route.rootProjectId, [] ) ] (Dict.singleton Route.rootProjectId [])
+
+
+parentLinks : ChildKind -> Int -> ProjectIndex -> List ( Int, ChildLink )
+parentLinks kind id index =
+    Dict.get id
+        (case kind of
+            StepChild ->
+                index.stepParents
+
+            ProjectChild ->
+                index.folderParents
         )
-        []
-        projects
+        |> Maybe.withDefault []
 
 
-isAncestorProject : Dict Int ProjectRecord -> Int -> Int -> Bool
-isAncestorProject projects ancestorId targetId =
-    targetId /= ancestorId && Set.member targetId (descendantProjectIds projects ancestorId)
+isAncestorProject : ProjectIndex -> Int -> Int -> Bool
+isAncestorProject index ancestorId targetId =
+    let
+        climb visited frontier =
+            let
+                parents =
+                    List.concatMap (\id -> parentLinks ProjectChild id index) frontier
+                        |> List.map Tuple.first
+                        |> List.filter (\parentId -> not (Set.member parentId visited))
+                        |> List.unique
+            in
+            if List.isEmpty parents then
+                False
+
+            else if List.member ancestorId parents then
+                True
+
+            else
+                climb (List.foldl Set.insert visited parents) parents
+    in
+    targetId /= ancestorId && climb (Set.singleton targetId) [ targetId ]
 
 
 applyTreeOp : TreeOp -> ( Dict Int ProjectRecord, Dict Int StepRecord ) -> ( Dict Int ProjectRecord, Dict Int StepRecord )

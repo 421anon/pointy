@@ -34,16 +34,16 @@ refToken ref =
     Model.childKindName ref.kind ++ ":" ++ String.fromInt ref.id
 
 
-dropTargetAttrs : Model -> Dict Int ProjectRecord -> Int -> List (Html.Attribute msg)
-dropTargetAttrs model projects_ folderId =
+dropTargetAttrs : Model -> Int -> List (Html.Attribute msg)
+dropTargetAttrs model folderId =
     [ attribute "data-drop-folder" (String.fromInt folderId)
-    , attribute "data-drop-allowed" (dropAllowedToken model projects_ folderId)
+    , attribute "data-drop-allowed" (dropAllowedToken model folderId)
     ]
 
 
-dropAllowedToken : Model -> Dict Int ProjectRecord -> Int -> String
-dropAllowedToken model projects_ folderId =
-    Selection.dropAllowed model projects_ folderId
+dropAllowedToken : Model -> Int -> String
+dropAllowedToken model folderId =
+    Selection.dropAllowed model folderId
         |> List.map Selection.dropActionToken
         |> String.join " "
 
@@ -196,13 +196,13 @@ viewOrganizeDialog model =
         , class "dialog organize-dialog"
         ]
         [ Html.viewMaybe
-            (\( dialog, projects_ ) -> viewOrganizeDialogContent model projects_ dialog)
+            (\( dialog, _ ) -> viewOrganizeDialogContent model dialog)
             (Maybe.map2 Tuple.pair (get organizeDialog model) (try loadedProjects model))
         ]
 
 
-viewOrganizeDialogContent : Model -> Dict Int ProjectRecord -> OrganizeDialog -> Html (Flow Model ())
-viewOrganizeDialogContent model projects_ dialog =
+viewOrganizeDialogContent : Model -> OrganizeDialog -> Html (Flow Model ())
+viewOrganizeDialogContent model dialog =
     let
         ( dialogTitle, confirmLabel ) =
             case dialog.mode of
@@ -270,7 +270,7 @@ viewOrganizeDialogContent model projects_ dialog =
                     ]
                     []
                 , Html.div [ class "organize-dialog-targets" ]
-                    (List.map (viewTargetOption dialog) (filteredTargets model projects_ dialog))
+                    (List.map (viewTargetOption dialog) (filteredTargets model dialog))
                 ]
             )
         , Html.div [ class "dialog-actions" ]
@@ -290,13 +290,13 @@ viewOrganizeDialogContent model projects_ dialog =
         ]
 
 
-filteredTargets : Model -> Dict Int ProjectRecord -> OrganizeDialog -> List ( Int, String )
-filteredTargets model projects_ dialog =
+filteredTargets : Model -> OrganizeDialog -> List ( Int, String )
+filteredTargets model dialog =
     let
         query =
             String.toLower (String.trim dialog.query)
     in
-    Selection.organizeTargets model projects_ dialog.mode dialog.sourceScope dialog.refs
+    Selection.organizeTargets model dialog.mode dialog.sourceScope dialog.refs
         |> List.filter
             (\( _, path ) ->
                 String.isEmpty query || String.contains query (String.toLower path)
