@@ -90,7 +90,7 @@ library
     , asn1-types
     , base16-bytestring
     , async
-    , base               ^>=4.19.2.0
+    , base               ^>=4.20
     , binary
     , bytestring
     , cassava

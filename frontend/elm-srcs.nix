@@ -136,8 +136,8 @@
       };
 
       "bburdette/toop" = {
-        sha256 = "10i3j97pzc903n0rwkxna6g1pf3lg4zipgrg6r2glygzazaigbs7";
-        version = "1.2.0";
+        sha256 = "00c2l9plicqbcphvkjl6c9fa41cswbcz60xxs6ndks6c1iclmym9";
+        version = "1.2.1";
       };
 
       "danfishgold/base64-bytes" = {

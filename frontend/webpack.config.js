@@ -1,6 +1,6 @@
 const path = require("path");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
-const nodePath = process.env.NODE_PATH || "node_modules";
+const nodeModulePaths = (process.env.NODE_PATH || "node_modules").split(":").filter(Boolean);
 
 module.exports = {
   entry: "./index.js",
@@ -73,11 +73,11 @@ module.exports = {
   },
 
   resolve: {
-    modules: nodePath.split(":"),
+    modules: nodeModulePaths,
     fallback: { path: false, fs: false, crypto: false },
   },
 
   resolveLoader: {
-    modules: nodePath.split(":"),
+    modules: nodeModulePaths,
   },
 };

@@ -27,7 +27,7 @@
       ${config.deps.fetchElmDeps {
         elmPackages = import ./elm-srcs.nix;
         registryDat = ./registry.dat;
-        elmVersion = "0.19.1";
+        elmVersion = "0.19.2";
       }}
       export NODE_ENV=production
     '';
