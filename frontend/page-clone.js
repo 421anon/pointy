@@ -431,6 +431,20 @@ function hiddenResources(element, context) {
     .map((resource) => (resource.localName === "svg" ? svgClone(resource, context) : layerPageStyle(resource.cloneNode(true))));
 }
 
+function unrenderedResources(element, context) {
+  if (element.localName === "svg") return [svgClone(element, context)];
+  if (element.localName === "style") return [layerPageStyle(element.cloneNode(true))];
+  return hiddenResources(element, context);
+}
+
+// A closed details element renders only its summary, unless the page makes the rest visible. Returns the children it leaves unrendered, or an empty list.
+function unrenderedDetailsChildren(element) {
+  if (element.namespaceURI !== XHTML_NAMESPACE || element.localName !== "details" || element.open) return [];
+  const summary = [...element.children].find((child) => child.namespaceURI === XHTML_NAMESPACE && child.localName === "summary");
+  const content = [...element.children].filter((child) => child !== summary);
+  return content.length > 0 && !content[0].checkVisibility() ? content : [];
+}
+
 function scrollBoxState(element, computed) {
   if (!SCROLLING_OVERFLOWS.includes(computed.overflowX) && !SCROLLING_OVERFLOWS.includes(computed.overflowY)) return null;
   const scrollbarWidth = element.offsetWidth - element.clientWidth - parseFloat(computed.borderLeftWidth) - parseFloat(computed.borderRightWidth);
@@ -758,7 +772,11 @@ function prepareElement(element, context, frameComputed = null) {
   const children = [];
   if (hasChildrenToCopy(element)) {
     if (isHidden) for (const resource of hiddenResources(element, context)) clone.append(resource);
-    else children.push(...sourceChildren(element));
+    else {
+      const unrendered = new Set(unrenderedDetailsChildren(element));
+      for (const child of unrendered) clone.append(...unrenderedResources(child, context));
+      children.push(...[...sourceChildren(element)].filter((child) => !unrendered.has(child)));
+    }
   }
   if (!clone.style) return { clone, children };
   if (isHidden) {
