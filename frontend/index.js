@@ -18,6 +18,7 @@ const app = Elm.Main.init({
     isNarrow: window.matchMedia("(max-width: 1000px)").matches,
     now: Date.now(),
     submittedTurns: storedSubmittedTurns(),
+    toastHistory: sessionStorage.getItem("toast-history"),
   },
 });
 

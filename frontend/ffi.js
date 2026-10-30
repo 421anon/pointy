@@ -57,6 +57,7 @@ export function connectPorts(app) {
     storeAutoApply,
     setUnsentTreeOps,
     storeSubmittedTurns,
+    storeToastHistory: (json) => sessionStorage.setItem("toast-history", json),
     requestNotificationPermission,
     notifyAgentTurn: (turn) => notifyAgentTurn(app, turn),
     scrolledToBottom,
