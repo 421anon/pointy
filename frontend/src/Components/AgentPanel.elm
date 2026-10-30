@@ -1049,7 +1049,7 @@ viewComposerAttachments attachments =
         (List.indexedMap
             (\index tile ->
                 Html.div [ class "agent-panel__composer-image" ]
-                    [ Html.viewMaybe viewArtifactPermalink tile.artifact
+                    [ Html.viewMaybe (viewArtifactPermalink Nothing) tile.artifact
                     , viewImageButton urls tile
                     , viewIconButton
                         ((if tile.isCapturedArea then
@@ -1094,11 +1094,15 @@ imageTiles attachments =
         |> List.reverse
 
 
-viewArtifactPermalink : Route.ArtifactParams -> Html msg
-viewArtifactPermalink artifact =
+viewArtifactPermalink : Maybe Route.ChatRef -> Route.ArtifactParams -> Html msg
+viewArtifactPermalink mChat artifact =
+    let
+        artifactRoute =
+            Route.fromPage (Route.Artifact artifact)
+    in
     Html.a
         [ class "icon-btn agent-panel__image-permalink"
-        , Html.Attributes.href (Route.toString (Route.fromPage (Route.Artifact artifact)))
+        , Html.Attributes.href (Route.toString { artifactRoute | chat = mChat })
         , Html.Attributes.target "_blank"
         , Html.Attributes.rel "noopener noreferrer"
         , title "Open the captured artifact"
@@ -1142,8 +1146,8 @@ viewImageButton urls tile =
         [ Html.img [ src tile.url, alt "", attribute "loading" "lazy" ] [] ]
 
 
-viewSentImages : List Model.Attachment -> Html (Flow Model ())
-viewSentImages attachments =
+viewSentImages : Route.ChatRef -> List Model.Attachment -> Html (Flow Model ())
+viewSentImages chatRef attachments =
     let
         urls =
             lightboxUrls attachments
@@ -1168,7 +1172,7 @@ viewSentImages attachments =
                 case tile.artifact of
                     Just artifact ->
                         Html.div [ class "agent-panel__capture" ]
-                            [ viewArtifactPermalink artifact
+                            [ viewArtifactPermalink (Just chatRef) artifact
                             , viewImageButton urls tile
                             ]
 
@@ -1450,7 +1454,7 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
                                 [ Html.text "You" ]
                         ]
                     , Html.viewIf (not (List.isEmpty turn.attachments))
-                        (viewSentImages turn.attachments)
+                        (viewSentImages (turnChatRef sessionId turn) turn.attachments)
                     , Html.viewIf (not (String.isEmpty prompt))
                         (Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--user" ] [ Html.text prompt ])
                     ]
@@ -1458,6 +1462,19 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
             turn.prompt
         , viewAgentMessage mentionSources autoApplyEcho turn
         ]
+
+
+turnChatRef : String -> Model.ChatTurn -> Route.ChatRef
+turnChatRef sessionId turn =
+    { sessionId = sessionId
+    , mTurnId =
+        if String.isEmpty turn.turnId then
+            Nothing
+
+        else
+            Just turn.turnId
+    }
+
 
 
 viewToolCall : Time.Posix -> Model.AgentToolCall -> Html (Flow Model ())
