@@ -54,6 +54,9 @@ const UNRENDERED_PROPERTY =
 const PROBE_COLOR = "rgb(1, 2, 3)";
 const GENERIC_FONT_FAMILIES = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "-apple-system", "blinkmacsystemfont"]);
 
+// The values of these attributes style nothing unless a selector or attr() reads them, though their presence can, as a link's href does.
+const VALUE_FREE_ATTRIBUTE = /^(data-|aria-)|^(href|src|srcset|alt|title|target|rel|download|hreflang|ping|referrerpolicy)$/;
+const ATTRIBUTE_SELECTOR_NAME = /\[\s*(?:[^\s|\]]*\|)?([^\s~|^$*=\]]+)/g;
 // Elements with the same parent style, tag, attributes and matches of the page's selectors that look beyond those have the same computed style, so its values are read once per style. getComputedStyle still answers these with each element's laid-out size and position. https://drafts.csswg.org/cssom/#resolved-values
 const LAYOUT_DEPENDENT_PROPERTIES = new Set([
   "width",
@@ -76,6 +79,20 @@ const LAYOUT_DEPENDENT_PROPERTIES = new Set([
   "grid-template-columns",
   "grid-template-rows",
 ]);
+// Within one style, these follow each element's layout only under the style's own conditions: insets of positioned boxes and the tracks of grid containers resolve to used values, and a transform to a matrix unless it is none. The origins take effect only with a transform or perspective, so without one the style's value draws the same on every element. https://drafts.csswg.org/cssom/#resolved-values
+const isPositioned = (value) => value("position") !== "static";
+const isGridContainer = (value) => value("display")?.includes("grid") ?? true;
+const LAYOUT_CONDITIONS = {
+  top: isPositioned,
+  right: isPositioned,
+  bottom: isPositioned,
+  left: isPositioned,
+  "grid-template-columns": isGridContainer,
+  "grid-template-rows": isGridContainer,
+  transform: (value) => value("transform") !== "none",
+  "transform-origin": (value) => ["transform", "rotate", "scale", "translate", "offset-path"].some((name) => value(name) !== "none"),
+  "perspective-origin": (value) => value("perspective") !== "none",
+};
 // The user agent's style sheets style these by state, content or position among siblings, which the page's selectors do not show.
 const UNSHARED_ELEMENTS =
   "input, select, textarea, button, option, optgroup, datalist, progress, meter, output, fieldset, legend, details, summary, dialog, img, picture, video, audio, canvas, iframe, frame, object, embed, bdi, [dir=auto i], [popover]";
@@ -241,12 +258,28 @@ function propertyValues(entries, indices) {
   return values;
 }
 
+// The indices of the properties each element of a style reads for itself, the same array for styles that read the same ones.
+function ownLayoutIndices(values, indicesBySignature) {
+  const { names, layoutIndices } = copiedProperties;
+  const value = (name) => {
+    const index = names.indexOf(name);
+    return index >= 0 ? values[index] : undefined;
+  };
+  const indices = layoutIndices.filter((index) => LAYOUT_CONDITIONS[names[index]]?.(value) ?? true);
+  const signature = indices.join(",");
+  if (!indicesBySignature.has(signature)) indicesBySignature.set(signature, indices);
+  return indicesBySignature.get(signature);
+}
+
 // Reading one property across a run of elements is faster than reading every property of one element in turn. An element sharing its style with an earlier one reads only the properties that follow its layout.
 async function styleElements(styledElements, context, yieldBetweenSlices) {
   const { names, layoutIndices } = copiedProperties;
   const allIndices = names.map((_, index) => index);
   const fontFamily = names.indexOf("font-family");
+  const display = names.indexOf("display");
   const valuesByStyle = new Map();
+  const ownIndicesByStyle = new Map();
+  const indicesBySignature = new Map();
   const classesByStyleAndLayout = new Map();
   for (let start = 0; start < styledElements.length; start += SLICE_ELEMENTS) {
     const batch = styledElements.slice(start, start + SLICE_ELEMENTS);
@@ -265,20 +298,31 @@ async function styleElements(styledElements, context, yieldBetweenSlices) {
     const valuesByEntry = new Map();
     propertyValues(read, allIndices).forEach((values, row) => {
       valuesByEntry.set(read[row], values);
-      if (read[row].styleKey !== null) valuesByStyle.set(read[row].styleKey, values);
+      if (read[row].styleKey !== null) {
+        valuesByStyle.set(read[row].styleKey, values);
+        ownIndicesByStyle.set(read[row].styleKey, ownLayoutIndices(values, indicesBySignature));
+      }
       if (fontFamily >= 0) noteFontFamilies(values[fontFamily], context);
     });
-    propertyValues(shared, layoutIndices).forEach((layoutValues, row) => {
-      const values = [...valuesByStyle.get(shared[row].styleKey)];
-      for (const index of layoutIndices) values[index] = layoutValues[index];
-      valuesByEntry.set(shared[row], values);
-    });
+    const sharedByIndices = new Map();
+    for (const entry of shared) {
+      const indices = ownIndicesByStyle.get(entry.styleKey);
+      if (!sharedByIndices.has(indices)) sharedByIndices.set(indices, []);
+      sharedByIndices.get(indices).push(entry);
+    }
+    for (const [indices, entries] of sharedByIndices) {
+      propertyValues(entries, indices).forEach((ownValues, row) => {
+        const values = [...valuesByStyle.get(entries[row].styleKey)];
+        for (const index of indices) values[index] = ownValues[index];
+        valuesByEntry.set(entries[row], values);
+      });
+    }
     for (const entry of batch) {
       const values = valuesByEntry.get(entry);
       const styleAndLayout = entry.styleKey === null ? null : `${entry.styleKey}\u0000${layoutIndices.map((index) => values[index]).join("\u0000")}`;
       let className = styleAndLayout === null ? undefined : classesByStyleAndLayout.get(styleAndLayout);
       if (className === undefined) {
-        className = styleClass(context, "", declarations(values, entry.resetsToInitial, entry.computed.display === "table") + entry.extraDeclarations);
+        className = styleClass(context, "", declarations(values, entry.resetsToInitial, (display >= 0 ? values[display] : entry.computed.display) === "table") + entry.extraDeclarations);
         if (styleAndLayout !== null) classesByStyleAndLayout.set(styleAndLayout, className);
       }
       entry.clone.classList.add(className);
@@ -652,16 +696,26 @@ function styleSharing(document) {
   const view = document.defaultView;
   if (document.compatMode === "BackCompat" || document.querySelector('[style*="container" i], [style*="cq" i]')) return null;
   const nonLocalSelectors = [];
+  const selectedAttributes = new Set();
+  let readsAttributeValues = document.querySelector('[style*="attr(" i]') !== null;
   const collect = (rules) => {
     for (const rule of rules) {
       if (rule instanceof view.CSSImportRule) {
         if (!rule.styleSheet || !collect(rule.styleSheet.cssRules)) return false;
       } else if (rule instanceof view.CSSStyleRule) {
         if (rule.cssRules?.length > 0 || CONTAINER_DEPENDENT_STYLE.test(rule.style.cssText)) return false;
+        let stylesElements = false;
         for (const selector of splitSelectorList(rule.selectorText)) {
           const bare = selector.replace(SELECTOR_ESCAPES_ATTRIBUTES_AND_STRINGS, "");
-          if (!PSEUDO_ELEMENT_SELECTOR.test(bare) && NON_LOCAL_SELECTOR.test(bare)) nonLocalSelectors.push(selector.trim());
+          const selectsPseudoElement = PSEUDO_ELEMENT_SELECTOR.test(bare);
+          stylesElements ||= !selectsPseudoElement;
+          if (!selectsPseudoElement && NON_LOCAL_SELECTOR.test(bare)) nonLocalSelectors.push(selector.trim());
         }
+        for (const [, name] of rule.selectorText.matchAll(ATTRIBUTE_SELECTOR_NAME)) {
+          if (name.includes("\\")) readsAttributeValues = true;
+          selectedAttributes.add(name.toLowerCase());
+        }
+        if (stylesElements && rule.style.cssText.includes("attr(")) readsAttributeValues = true;
       } else if ((view.CSSContainerRule && rule instanceof view.CSSContainerRule) || (view.CSSScopeRule && rule instanceof view.CSSScopeRule)) {
         return false;
       } else if (rule.cssRules && !collect(rule.cssRules)) {
@@ -694,7 +748,8 @@ function styleSharing(document) {
       for (const element of affected) selectorMatches.set(element, selectors.map((selector) => (matchesSelector(element, selector) ? "1" : "0")).join(""));
     }
   }
-  return { document, unshared, selectorMatches, keys: new Map(), ids: new Map(), uniqueKeys: 0 };
+  const ignoresValue = (name) => !readsAttributeValues && VALUE_FREE_ATTRIBUTE.test(name) && !selectedAttributes.has(name);
+  return { document, unshared, selectorMatches, ignoresValue, keys: new Map(), ids: new Map(), uniqueKeys: 0 };
 }
 
 // Returns the element's style key, or null when its style is read on its own. Children of such an element can still share a style with each other.
@@ -708,7 +763,7 @@ function assignStyleKey(element, context, shareable) {
     key = sharing.uniqueKeys;
   } else {
     let text = `${parentKey}\u0000${element.localName}\u0000${sharing.selectorMatches.get(element) ?? ""}`;
-    for (const { name, value } of element.attributes) text += `\u0000${name.length}:${name}${value.length}:${value}`;
+    for (const { name, value } of element.attributes) text += `\u0000${name.length}:${name}` + (sharing.ignoresValue(name) ? "" : `${value.length}:${value}`);
     key = sharing.ids.get(text);
     if (key === undefined) {
       key = sharing.ids.size;
