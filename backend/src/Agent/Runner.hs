@@ -361,7 +361,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
     images = plainImages ++ concatMap (\capture -> [areaCaptureOverview capture, areaCaptureSelection capture]) areaCaptures
     firstCaptureImages = [length plainImages, length plainImages + 2 ..]
     storedAreaCaptures = zipWith storeAreaCapture firstCaptureImages areaCaptures
-    storeAreaCapture firstImage capture = StoredAreaCapture firstImage (firstImage + 1) (areaCaptureDocumentSize capture) (areaCaptureSelectionRect capture)
+    storeAreaCapture firstImage capture = StoredAreaCapture firstImage (firstImage + 1) (areaCaptureDocumentSize capture) (areaCaptureSelectionRect capture) (Just (areaCaptureArtifact capture))
     areaCaptureContexts = zipWith describeAreaCapture firstCaptureImages areaCaptures
     describeAreaCapture firstImage capture = renderAreaCapture (firstImage + 1) (firstImage + 2) (areaCaptureDocumentSize capture) (areaCaptureSelectionRect capture)
 

@@ -11,6 +11,7 @@ module Agent.Session (
     TurnImage (..),
     AreaCapture (..),
     StoredAreaCapture (..),
+    CapturedArtifact (..),
     DocumentSize (..),
     SelectionRect (..),
     turnIsUnfinished,
@@ -247,23 +248,46 @@ instance FromJSON SelectionRect where
     parseJSON = withObject "SelectionRect" $ \obj ->
         SelectionRect <$> obj .: "x" <*> obj .: "y" <*> obj .: "width" <*> obj .: "height"
 
+data CapturedArtifact = CapturedArtifact
+    { capturedProjectPath :: [Int]
+    , capturedStepId :: Int
+    , capturedCommit :: Text
+    , capturedPath :: [Text]
+    }
+    deriving (Show, Eq)
+
+instance ToJSON CapturedArtifact where
+    toJSON artifact =
+        object
+            [ "projectPath" .= capturedProjectPath artifact
+            , "stepId" .= capturedStepId artifact
+            , "commit" .= capturedCommit artifact
+            , "path" .= capturedPath artifact
+            ]
+
+instance FromJSON CapturedArtifact where
+    parseJSON = withObject "CapturedArtifact" $ \obj ->
+        CapturedArtifact <$> obj .: "projectPath" <*> obj .: "stepId" <*> obj .: "commit" <*> obj .: "path"
+
 data AreaCapture = AreaCapture
     { areaCaptureOverview :: TurnImage
     , areaCaptureSelection :: TurnImage
     , areaCaptureDocumentSize :: DocumentSize
     , areaCaptureSelectionRect :: SelectionRect
+    , areaCaptureArtifact :: CapturedArtifact
     }
     deriving (Show, Eq)
 
 instance FromJSON AreaCapture where
     parseJSON = withObject "AreaCapture" $ \obj ->
-        AreaCapture <$> obj .: "overview" <*> obj .: "selection" <*> obj .: "documentSize" <*> obj .: "selectionRect"
+        AreaCapture <$> obj .: "overview" <*> obj .: "selection" <*> obj .: "documentSize" <*> obj .: "selectionRect" <*> obj .: "artifact"
 
 data StoredAreaCapture = StoredAreaCapture
     { storedOverviewImage :: Int
     , storedSelectionImage :: Int
     , storedDocumentSize :: DocumentSize
     , storedSelectionRect :: SelectionRect
+    , storedArtifact :: Maybe CapturedArtifact
     }
     deriving (Show, Eq)
 
@@ -274,11 +298,12 @@ instance ToJSON StoredAreaCapture where
             , "selectionImage" .= storedSelectionImage stored
             , "documentSize" .= storedDocumentSize stored
             , "selectionRect" .= storedSelectionRect stored
+            , "artifact" .= storedArtifact stored
             ]
 
 instance FromJSON StoredAreaCapture where
     parseJSON = withObject "StoredAreaCapture" $ \obj ->
-        StoredAreaCapture <$> obj .: "overviewImage" <*> obj .: "selectionImage" <*> obj .: "documentSize" <*> obj .: "selectionRect"
+        StoredAreaCapture <$> obj .: "overviewImage" <*> obj .: "selectionImage" <*> obj .: "documentSize" <*> obj .: "selectionRect" <*> obj .:? "artifact"
 
 turnIsUnfinished :: AgentTurn -> Bool
 turnIsUnfinished turn =

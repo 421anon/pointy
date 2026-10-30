@@ -4186,7 +4186,7 @@ askAboutArea question =
     in
     Flow.setAll areaCapture (Just (Model.AreaCaptureAsking question))
         |> Flow.seq (Flow.attemptTask (Dom.focus areaQuestionInputId))
-        |> Flow.seq (captureArtifactArea question.rect)
+        |> Flow.seq (Flow.try (route << Route.page << Route.artifact) (Maybe.unwrap (Flow.pure Nothing) (\artifact -> captureArtifactArea artifact question.rect)))
         |> Flow.andThen
             (\mCapturedArea ->
                 Flow.whenHas stillAsked
@@ -4215,8 +4215,8 @@ prepareArtifactArea =
         artifactFrameId
 
 
-captureArtifactArea : Model.AreaRect -> Flow Model (Maybe Model.CapturedArea)
-captureArtifactArea =
+captureArtifactArea : Route.ArtifactParams -> Model.AreaRect -> Flow Model (Maybe Model.CapturedArea)
+captureArtifactArea artifact =
     callJs "captureArtifactArea"
         (\area ->
             Encode.object
@@ -4227,7 +4227,7 @@ captureArtifactArea =
                 , ( "height", Encode.float area.height )
                 ]
         )
-        (Decode.nullable Model.capturedAreaDecoder)
+        (Decode.nullable (Model.capturedAreaDecoder artifact))
 
 
 updateAreaQuestion : String -> Flow Model ()

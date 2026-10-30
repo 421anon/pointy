@@ -172,6 +172,14 @@ documentSizeField = Inline (mempty & type_ ?~ OpenApiObject & required .~ ["widt
 selectionRectField :: Referenced Schema
 selectionRectField = Inline (mempty & type_ ?~ OpenApiObject & required .~ ["x", "y", "width", "height"] & properties .~ fromList [("x", integerField), ("y", integerField), ("width", integerField), ("height", integerField)])
 
+capturedArtifactSchema :: Schema
+capturedArtifactSchema =
+    mempty
+        & type_ ?~ OpenApiObject
+        & required .~ ["projectPath", "stepId", "commit", "path"]
+        & properties .~ fromList [("projectPath", arrayOf integerField), ("stepId", integerField), ("commit", stringField), ("path", arrayOf stringField)]
+        & description ?~ "The artifact the area was captured from, as the parts of its permalink."
+
 instance ToSchema StoredAreaCapture where
     declareNamedSchema _ =
         pure $
@@ -181,6 +189,7 @@ instance ToSchema StoredAreaCapture where
                 , ("selectionImage", integerField)
                 , ("documentSize", documentSizeField)
                 , ("selectionRect", selectionRectField)
+                , ("artifact", Inline (capturedArtifactSchema & nullable ?~ True))
                 ]
 
 instance ToSchema TurnRequest where
@@ -191,7 +200,7 @@ instance ToSchema TurnRequest where
                 [ ("sessionId", stringField)
                 , ("prompt", stringField)
                 , ("images", arrayOf imageField)
-                , ("areaCaptures", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & required .~ ["overview", "selection", "documentSize", "selectionRect"] & properties .~ fromList [("overview", imageField), ("selection", imageField), ("documentSize", documentSizeField), ("selectionRect", selectionRectField)] & description ?~ "A selected area of the embedded document: the whole document scaled down with the area outlined in red, the area at native resolution, and their sizes and position in CSS pixels.")))
+                , ("areaCaptures", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & required .~ ["overview", "selection", "documentSize", "selectionRect", "artifact"] & properties .~ fromList [("overview", imageField), ("selection", imageField), ("documentSize", documentSizeField), ("selectionRect", selectionRectField), ("artifact", Inline capturedArtifactSchema)] & description ?~ "A selected area of the embedded document: the whole document scaled down with the area outlined in red, the area at native resolution, their sizes and position in CSS pixels, and the artifact they were captured from.")))
                 , ("currentProjectId", nullableField OpenApiInteger)
                 , ("viewedArtifact", Inline (mempty & type_ ?~ OpenApiObject & nullable ?~ True & required .~ ["stepId", "commit", "path"] & properties .~ fromList [("stepId", integerField), ("commit", stringField), ("path", arrayOf stringField)]))
                 , ("autoApply", boolField)

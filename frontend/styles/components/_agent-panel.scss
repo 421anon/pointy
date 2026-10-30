@@ -280,6 +280,9 @@
 
 .agent-panel__composer-image {
   position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2xs);
   flex: 0 0 auto;
 }
 
@@ -1012,6 +1015,27 @@
 
 .agent-panel__image-tile {
   position: relative;
+}
+
+.agent-panel__capture {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2xs);
+  min-width: 0;
+
+  .agent-panel__image {
+    min-width: 0;
+  }
+}
+
+.agent-panel .agent-panel__image-permalink {
+  flex: 0 0 auto;
+  min-width: 22px;
+  min-height: 22px;
+
+  .material-symbols-outlined {
+    font-size: 16px;
+  }
 }
 
 .agent-panel__image-more {

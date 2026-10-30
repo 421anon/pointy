@@ -1049,7 +1049,8 @@ viewComposerAttachments attachments =
         (List.indexedMap
             (\index tile ->
                 Html.div [ class "agent-panel__composer-image" ]
-                    [ viewImageButton urls tile
+                    [ Html.viewMaybe viewArtifactPermalink tile.artifact
+                    , viewImageButton urls tile
                     , viewIconButton
                         ((if tile.isCapturedArea then
                             "Remove area capture "
@@ -1073,6 +1074,7 @@ type alias ImageTile =
     { url : String
     , lightboxIndex : Int
     , isCapturedArea : Bool
+    , artifact : Maybe Route.ArtifactParams
     }
 
 
@@ -1082,14 +1084,27 @@ imageTiles attachments =
         addTile attachment ( offset, tiles ) =
             case attachment of
                 Model.ImageAttachment url ->
-                    ( offset + 1, { url = url, lightboxIndex = offset, isCapturedArea = False } :: tiles )
+                    ( offset + 1, { url = url, lightboxIndex = offset, isCapturedArea = False, artifact = Nothing } :: tiles )
 
                 Model.CapturedAreaAttachment area ->
-                    ( offset + 2, { url = area.selectionUrl, lightboxIndex = offset + 1, isCapturedArea = True } :: tiles )
+                    ( offset + 2, { url = area.selectionUrl, lightboxIndex = offset + 1, isCapturedArea = True, artifact = area.artifact } :: tiles )
     in
     List.foldl addTile ( 0, [] ) attachments
         |> Tuple.second
         |> List.reverse
+
+
+viewArtifactPermalink : Route.ArtifactParams -> Html msg
+viewArtifactPermalink artifact =
+    Html.a
+        [ class "icon-btn agent-panel__image-permalink"
+        , Html.Attributes.href (Route.toString (Route.fromPage (Route.Artifact artifact)))
+        , Html.Attributes.target "_blank"
+        , Html.Attributes.rel "noopener noreferrer"
+        , title "Open the captured artifact"
+        , attribute "aria-label" "Open the captured artifact"
+        ]
+        [ View.Icons.icon False "open_in_new" ]
 
 
 lightboxUrls : List Model.Attachment -> List String
@@ -1150,7 +1165,15 @@ viewSentImages attachments =
                     ]
 
             else
-                viewImageButton urls tile
+                case tile.artifact of
+                    Just artifact ->
+                        Html.div [ class "agent-panel__capture" ]
+                            [ viewArtifactPermalink artifact
+                            , viewImageButton urls tile
+                            ]
+
+                    Nothing ->
+                        viewImageButton urls tile
     in
     Html.div
         [ classList

@@ -941,7 +941,7 @@ type ComposerAttachment
 
 type Attachment
     = ImageAttachment String
-    | CapturedAreaAttachment { overviewUrl : String, selectionUrl : String }
+    | CapturedAreaAttachment { overviewUrl : String, selectionUrl : String, artifact : Maybe Route.ArtifactParams }
 
 
 composerAttachmentImages : ComposerAttachment -> List ComposerImage
@@ -961,7 +961,7 @@ composerAttachmentView attachment =
             ImageAttachment image.url
 
         ComposerCapturedArea area ->
-            CapturedAreaAttachment { overviewUrl = area.overview.url, selectionUrl = area.selection.url }
+            CapturedAreaAttachment { overviewUrl = area.overview.url, selectionUrl = area.selection.url, artifact = Just area.artifact }
 
 
 composerPlainImages : List ComposerAttachment -> List ComposerImage
@@ -1871,12 +1871,13 @@ type alias CapturedArea =
     , selection : ComposerImage
     , documentSize : AreaSize
     , selectionRect : AreaRect
+    , artifact : Route.ArtifactParams
     }
 
 
-capturedAreaDecoder : Decode.Decoder CapturedArea
-capturedAreaDecoder =
-    Decode.map4 CapturedArea
+capturedAreaDecoder : Route.ArtifactParams -> Decode.Decoder CapturedArea
+capturedAreaDecoder artifact =
+    Decode.map5 CapturedArea
         (Decode.field "overview" (Decode.map (ComposerImage "image/png") Decode.string))
         (Decode.field "selection" (Decode.map (ComposerImage "image/png") Decode.string))
         (Decode.field "documentSize" (Decode.map2 AreaSize (Decode.field "width" Decode.float) (Decode.field "height" Decode.float)))
@@ -1888,6 +1889,7 @@ capturedAreaDecoder =
                 (Decode.field "height" Decode.float)
             )
         )
+        (Decode.succeed artifact)
 
 
 areaPointDecoder : List String -> List String -> Decode.Decoder AreaPoint

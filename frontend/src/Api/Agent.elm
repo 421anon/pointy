@@ -137,6 +137,17 @@ encodeCapturedArea area =
                 , ( "height", Encode.int (round area.selectionRect.height) )
                 ]
           )
+        , ( "artifact", encodeCapturedArtifact area.artifact )
+        ]
+
+
+encodeCapturedArtifact : Route.ArtifactParams -> Encode.Value
+encodeCapturedArtifact artifact =
+    Encode.object
+        [ ( "projectPath", Encode.list Encode.int artifact.projectPath )
+        , ( "stepId", Encode.int artifact.stepId )
+        , ( "commit", Encode.string artifact.commit )
+        , ( "path", Encode.list Encode.string artifact.path )
         ]
 
 
@@ -297,14 +308,25 @@ turnAttachmentsDecoder =
 type alias StoredAreaCapture =
     { overviewImage : Int
     , selectionImage : Int
+    , artifact : Maybe Route.ArtifactParams
     }
 
 
 storedAreaCaptureDecoder : Decoder StoredAreaCapture
 storedAreaCaptureDecoder =
-    Decode.map2 StoredAreaCapture
-        (Decode.field "overviewImage" Decode.int)
-        (Decode.field "selectionImage" Decode.int)
+    Decode.succeed StoredAreaCapture
+        |> required "overviewImage" Decode.int
+        |> required "selectionImage" Decode.int
+        |> optional "artifact" (Decode.map Just capturedArtifactDecoder) Nothing
+
+
+capturedArtifactDecoder : Decoder Route.ArtifactParams
+capturedArtifactDecoder =
+    Decode.succeed Route.ArtifactParams
+        |> required "projectPath" (Decode.list Decode.int)
+        |> required "stepId" Decode.int
+        |> required "commit" Decode.string
+        |> required "path" (Decode.list Decode.string)
 
 
 turnAttachments : String -> List String -> List StoredAreaCapture -> List Model.Attachment
@@ -324,6 +346,7 @@ turnAttachments turnId mimeTypes areaCaptures =
                     Model.CapturedAreaAttachment
                         { overviewUrl = turnImageUrl turnId capture.overviewImage
                         , selectionUrl = turnImageUrl turnId capture.selectionImage
+                        , artifact = capture.artifact
                         }
                 )
                 areaCaptures
