@@ -8,6 +8,8 @@ const RESOURCE_TIMING_BUFFER_SIZE = 250;
 const SKIPPING_CONTENT_VISIBILITIES = ["auto", "hidden"];
 const LAYOUT_SAMPLE_SIZE = 2000;
 const LAYOUT_TOLERANCE = 0.5;
+// scrollHeight rounds the page's height, so a frame exactly that tall can leave a fraction of a pixel overflowing and bring back the scrollbar, which narrows the page. A pixel more holds any fraction.
+const TALL_FRAME_SLACK = 1;
 
 function supportsElementImages(window) {
   return "drawElementImage" in window.CanvasRenderingContext2D.prototype && "requestPaint" in window.HTMLCanvasElement.prototype;
@@ -155,9 +157,10 @@ async function drawFrameArea(frame, rect) {
       context.drawElementImage(frame, 0, 0, host.width, host.height, { preserveElementGeometry: true });
       return copyOf(host);
     });
-    frame.style.height = `${documentSize.height}px`;
+    const tallHeight = documentSize.height + TALL_FRAME_SLACK;
+    frame.style.height = `${tallHeight}px`;
     frame.style.width = `${frameBox.width + Math.max(documentSize.width, layoutWidth) - root.clientWidth}px`;
-    if (root.scrollHeight !== documentSize.height || !keepsLayout(sample)) return null;
+    if (root.scrollHeight !== tallHeight || !keepsLayout(sample)) return null;
     const overviewScale = overviewScaleFor(documentSize, DEFAULT_OVERVIEW_MAX_EDGE);
     const overview = await drawOnNextPaint(host, (context) => {
       host.width = Math.max(1, Math.round(documentSize.width * overviewScale));
