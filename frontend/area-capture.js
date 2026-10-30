@@ -1,3 +1,4 @@
+import { canDrawFrame, captureFrameArea } from "./frame-drawing.js";
 import { createPageSnapshot } from "./page-snapshot.js";
 
 const snapshots = new WeakMap();
@@ -19,10 +20,10 @@ function prepareSoon(frame) {
   }, 0);
 }
 
-// The browser shows the overlay's crosshair only after the pointermove that reaches the overlay has been handled, so the snapshot starts in a later task.
+// The browser shows the overlay's crosshair only after the pointermove that reaches the overlay has been handled, so the snapshot starts in a later task. A frame the browser can draw needs no snapshot.
 export function prepareArtifactArea({ frameId }) {
   const frame = document.getElementById(frameId);
-  if (!frame?.contentDocument) return;
+  if (!frame?.contentDocument || canDrawFrame(frame)) return;
   const armOnFirstMove = () => {
     const overlay = frame.parentElement?.querySelector(".artifact-viewer-capture");
     if (!overlay) return false;
@@ -46,7 +47,8 @@ export function prepareArtifactArea({ frameId }) {
 
 export async function captureArtifactArea({ frameId, x, y, width, height }) {
   const frame = document.getElementById(frameId);
-  const { selection, overview, documentSize, selectionRect } = await snapshotFor(frame).captureArea({ x, y, width, height });
+  const rect = { x, y, width, height };
+  const { selection, overview, documentSize, selectionRect } = (await captureFrameArea(frame, rect)) ?? (await snapshotFor(frame).captureArea(rect));
   return {
     overview: overview.toDataURL("image/png"),
     selection: selection.toDataURL("image/png"),

@@ -1,12 +1,8 @@
+import { DEFAULT_MARKER_COLOR, DEFAULT_MARKER_WIDTH, DEFAULT_OVERVIEW_MAX_EDGE, canvasColor, canvasOf, cropAndMark, overviewScaleFor } from "./area-images.js";
 import { clonePage } from "./page-clone.js";
 
 const XHTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-const TRANSPARENT = "rgba(0, 0, 0, 0)";
-const DEFAULT_CANVAS_COLOR = "white";
-const DEFAULT_OVERVIEW_MAX_EDGE = 1024;
-const DEFAULT_MARKER_COLOR = "red";
-const DEFAULT_MARKER_WIDTH = 2;
 const CLONE_INVALIDATING_EVENTS = ["pointerdown", "pointerup", "pointercancel", "keydown", "keyup", "input", "change", "toggle", "focusin", "focusout", "load", "error", "animationstart", "transitionrun"];
 
 // While the user is still selecting, a timer task between slices of a long clone lets the page paint and take input. Once a capture waits for the clone, a message task keeps the page responsive without the timer's minimum delay, which browsers raise to a second or more in background tabs. https://developer.mozilla.org/en-US/docs/Web/API/Window/setTimeout#reasons_for_delays_longer_than_specified
@@ -132,7 +128,7 @@ export function createPageSnapshot(document, options = {}) {
     pendingRenders = (async () => {
       const cloned = await ensurePage();
       const { scroll, rootStyle, backgroundColor, documentSize, pixelRatio, viewportSize } = measurement;
-      const overviewScale = Math.min(1, overviewMaxEdge / Math.max(documentSize.width, documentSize.height));
+      const overviewScale = overviewScaleFor(documentSize, overviewMaxEdge);
       const [viewport, overview] = await Promise.all([
         renderPage(document, cloned, {
           size: viewportSize,
@@ -166,18 +162,7 @@ export function createPageSnapshot(document, options = {}) {
     const measurement = measure();
     waitingCaptures += 1;
     const { viewport, overview, overviewScale } = await ensureRenders(measurement).finally(() => (waitingCaptures -= 1));
-    const selectionRect = {
-      x: Math.round(rect.x + measurement.scroll.x),
-      y: Math.round(rect.y + measurement.scroll.y),
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height)),
-    };
-    const selection = canvasOf(document, Math.max(1, Math.round(rect.width * measurement.pixelRatio)), Math.max(1, Math.round(rect.height * measurement.pixelRatio)));
-    selection.getContext("2d").drawImage(viewport, rect.x * measurement.pixelRatio, rect.y * measurement.pixelRatio, selection.width, selection.height, 0, 0, selection.width, selection.height);
-    const markedOverview = canvasOf(document, overview.width, overview.height);
-    markedOverview.getContext("2d").drawImage(overview, 0, 0);
-    drawMarker(markedOverview, selectionRect, overviewScale, markerColor, markerWidth);
-    return { selection, overview: markedOverview, documentSize: measurement.documentSize, selectionRect };
+    return cropAndMark(document, rect, { ...measurement, viewport, overview, overviewScale, markerColor, markerWidth });
   }
 
   function invalidate() {
@@ -211,23 +196,6 @@ function htmlElement(document, name) {
   return document.createElementNS(XHTML_NAMESPACE, name);
 }
 
-function canvasOf(document, width, height) {
-  const canvas = htmlElement(document, "canvas");
-  canvas.width = width;
-  canvas.height = height;
-  return canvas;
-}
-
-// The root's background, or else the body's, paints the whole canvas, beyond the root's box. https://www.w3.org/TR/css-backgrounds-3/#special-backgrounds
-function canvasColor(document) {
-  return (
-    [document.documentElement, document.body]
-      .filter(Boolean)
-      .map((element) => document.defaultView.getComputedStyle(element).backgroundColor)
-      .find((color) => color !== TRANSPARENT) ?? DEFAULT_CANVAS_COLOR
-  );
-}
-
 function escapeText(text) {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
@@ -252,11 +220,4 @@ async function renderPage(document, page, { size, scale, root }) {
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return canvas;
-}
-
-function drawMarker(canvas, rect, scale, color, width) {
-  const context = canvas.getContext("2d");
-  context.strokeStyle = color;
-  context.lineWidth = width;
-  context.strokeRect(rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale);
 }
