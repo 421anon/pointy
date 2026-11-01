@@ -20,6 +20,7 @@ decodeClassList =
     withDefault [] <| field "classList" <| collection string
 
 
+-- Not `oneOf`: virtual-dom treats all `oneOf` decoders as equal, leaving stale handlers. https://github.com/elm/core/issues/904
 firstMatching : List (Decoder a) -> Decoder a
 firstMatching decoders =
     decoders
@@ -31,7 +32,7 @@ firstMatching decoders =
                         (\a ->
                             case a of
                                 Just _ ->
-                                    da
+                                    succeed a
 
                                 Nothing ->
                                     de
