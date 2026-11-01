@@ -1,6 +1,6 @@
 module Keyboard exposing
     ( Binding
-    , Combination
+    , Combination(..)
     , Key(..)
     , Modifier(..)
     , arrowDown
@@ -8,7 +8,6 @@ module Keyboard exposing
     , arrowRight
     , arrowUp
     , backspace
-    , combination
     , decodeCombinations
     , delete
     , enter
@@ -117,11 +116,6 @@ toName (Combination mods key) =
     String.join "-" <| List.map modName mods ++ [ keyName key ]
 
 
-combination : List Modifier -> Key -> Combination
-combination =
-    Combination
-
-
 primary : Key -> List Combination
 primary key =
     [ Combination [ Ctrl ] key, Combination [ Meta ] key ]
@@ -172,312 +166,163 @@ escape =
     Combination [] Escape
 
 
-toCode : Key -> Int
-toCode key =
+keyInfo : Key -> { code : Int, name : String }
+keyInfo key =
     case key of
         Escape ->
-            27
+            { code = 27, name = "Esc" }
 
         Enter ->
-            13
+            { code = 13, name = "↵" }
 
         Space ->
-            32
+            { code = 32, name = "⎵" }
 
         ArrowUp ->
-            38
+            { code = 38, name = "Up" }
 
         ArrowDown ->
-            40
+            { code = 40, name = "Down" }
 
         ArrowLeft ->
-            37
+            { code = 37, name = "Left" }
 
         ArrowRight ->
-            39
+            { code = 39, name = "Right" }
 
         Tab ->
-            9
+            { code = 9, name = "Tab" }
 
         Backspace ->
-            8
+            { code = 8, name = "⌫" }
 
         Delete ->
-            46
+            { code = 46, name = "Del" }
 
         Home ->
-            36
+            { code = 36, name = "Home" }
 
         End ->
-            35
+            { code = 35, name = "End" }
 
         PageUp ->
-            33
+            { code = 33, name = "PgUp" }
 
         PageDown ->
-            34
+            { code = 34, name = "PgDn" }
 
         KeyA ->
-            65
+            { code = 65, name = "A" }
 
         KeyB ->
-            66
+            { code = 66, name = "B" }
 
         KeyC ->
-            67
+            { code = 67, name = "C" }
 
         KeyD ->
-            68
+            { code = 68, name = "D" }
 
         KeyE ->
-            69
+            { code = 69, name = "E" }
 
         KeyF ->
-            70
+            { code = 70, name = "F" }
 
         KeyG ->
-            71
+            { code = 71, name = "G" }
 
         KeyH ->
-            72
+            { code = 72, name = "H" }
 
         KeyI ->
-            73
+            { code = 73, name = "I" }
 
         KeyJ ->
-            74
+            { code = 74, name = "J" }
 
         KeyK ->
-            75
+            { code = 75, name = "K" }
 
         KeyL ->
-            76
+            { code = 76, name = "L" }
 
         KeyM ->
-            77
+            { code = 77, name = "M" }
 
         KeyN ->
-            78
+            { code = 78, name = "N" }
 
         KeyO ->
-            79
+            { code = 79, name = "O" }
 
         KeyP ->
-            80
+            { code = 80, name = "P" }
 
         KeyQ ->
-            81
+            { code = 81, name = "Q" }
 
         KeyR ->
-            82
+            { code = 82, name = "R" }
 
         KeyS ->
-            83
+            { code = 83, name = "S" }
 
         KeyT ->
-            84
+            { code = 84, name = "T" }
 
         KeyU ->
-            85
+            { code = 85, name = "U" }
 
         KeyV ->
-            86
+            { code = 86, name = "V" }
 
         KeyW ->
-            87
+            { code = 87, name = "W" }
 
         KeyX ->
-            88
+            { code = 88, name = "X" }
 
         KeyY ->
-            89
+            { code = 89, name = "Y" }
 
         KeyZ ->
-            90
+            { code = 90, name = "Z" }
 
         Digit0 ->
-            48
+            { code = 48, name = "0" }
 
         Digit1 ->
-            49
+            { code = 49, name = "1" }
 
         Digit2 ->
-            50
+            { code = 50, name = "2" }
 
         Digit3 ->
-            51
+            { code = 51, name = "3" }
 
         Digit4 ->
-            52
+            { code = 52, name = "4" }
 
         Digit5 ->
-            53
+            { code = 53, name = "5" }
 
         Digit6 ->
-            54
+            { code = 54, name = "6" }
 
         Digit7 ->
-            55
+            { code = 55, name = "7" }
 
         Digit8 ->
-            56
+            { code = 56, name = "8" }
 
         Digit9 ->
-            57
+            { code = 57, name = "9" }
 
 
 keyName : Key -> String
-keyName key =
-    case key of
-        Escape ->
-            "Esc"
-
-        Enter ->
-            "↵"
-
-        Space ->
-            "⎵"
-
-        ArrowUp ->
-            "Up"
-
-        ArrowDown ->
-            "Down"
-
-        ArrowLeft ->
-            "Left"
-
-        ArrowRight ->
-            "Right"
-
-        Tab ->
-            "Tab"
-
-        Backspace ->
-            "⌫"
-
-        Delete ->
-            "Del"
-
-        Home ->
-            "Home"
-
-        End ->
-            "End"
-
-        PageUp ->
-            "PgUp"
-
-        PageDown ->
-            "PgDn"
-
-        KeyA ->
-            "A"
-
-        KeyB ->
-            "B"
-
-        KeyC ->
-            "C"
-
-        KeyD ->
-            "D"
-
-        KeyE ->
-            "E"
-
-        KeyF ->
-            "F"
-
-        KeyG ->
-            "G"
-
-        KeyH ->
-            "H"
-
-        KeyI ->
-            "I"
-
-        KeyJ ->
-            "J"
-
-        KeyK ->
-            "K"
-
-        KeyL ->
-            "L"
-
-        KeyM ->
-            "M"
-
-        KeyN ->
-            "N"
-
-        KeyO ->
-            "O"
-
-        KeyP ->
-            "P"
-
-        KeyQ ->
-            "Q"
-
-        KeyR ->
-            "R"
-
-        KeyS ->
-            "S"
-
-        KeyT ->
-            "T"
-
-        KeyU ->
-            "U"
-
-        KeyV ->
-            "V"
-
-        KeyW ->
-            "W"
-
-        KeyX ->
-            "X"
-
-        KeyY ->
-            "Y"
-
-        KeyZ ->
-            "Z"
-
-        Digit0 ->
-            "0"
-
-        Digit1 ->
-            "1"
-
-        Digit2 ->
-            "2"
-
-        Digit3 ->
-            "3"
-
-        Digit4 ->
-            "4"
-
-        Digit5 ->
-            "5"
-
-        Digit6 ->
-            "6"
-
-        Digit7 ->
-            "7"
-
-        Digit8 ->
-            "8"
-
-        Digit9 ->
-            "9"
+keyName =
+    .name << keyInfo
 
 
 modName : Modifier -> String
@@ -552,5 +397,5 @@ decodeSingle : Combination -> Decoder msg -> Decoder msg
 decodeSingle (Combination mods key) msgDecoder =
     processModifiers mods <|
         Decode.when (Decode.field "keyCode" Decode.int)
-            ((==) (toCode key))
+            ((==) (keyInfo key).code)
             msgDecoder
