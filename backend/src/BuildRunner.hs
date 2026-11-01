@@ -23,6 +23,7 @@ module BuildRunner (
     reconcileWatchedJobs,
     cancel,
     isRunningState,
+    realiseCommand,
     shellCommand,
 ) where
 
@@ -34,7 +35,7 @@ import Data.Bits (xor)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.Char (isAlphaNum, isDigit)
 import Data.List (foldl')
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Word (Word64)
@@ -44,6 +45,7 @@ import Effects (Slurm, SlurmQuery (..), SubmitRequest (..), cancelJob, querySlur
 import JobWatch (awaitJobEnded, isJobWatched, markJobsEnded, unwatchJob, watchJob, watchedJobNames)
 import qualified Effects as Effects
 import Numeric (showHex)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 
 data StepRequirements = StepRequirements
@@ -283,10 +285,13 @@ reconcileWatchedJobs = do
 jobActive :: (Slurm :> es) => String -> Eff es Bool
 jobActive name = either (const True) (any isRunningState . lines) <$> querySlurm (JobStatesByName name)
 
+realiseCommand :: IO FilePath
+realiseCommand = fromMaybe "pointy-realise" <$> lookupEnv "POINTY_REALISE_COMMAND"
+
 requirementSlurmArgs :: SlurmConfig -> StepRequirements -> [String]
 requirementSlurmArgs slurm requirements =
     enforcedResourceArgs slurm requirements
-        ++ [ "--export=ALL,POINTY_REQ_CPU="
+        ++ [ "--export=POINTY_REQ_CPU="
                 ++ show (cpu requirements)
                 ++ ",POINTY_REQ_RAM="
                 ++ T.unpack (ram requirements)

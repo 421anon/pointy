@@ -82,11 +82,12 @@ appliedAnswer document applyExpr attr
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
-    | "certified" `isInfixOf` applyExpr, attr == "#pointy.steps" = maybe (Left "fixture has no build target for one of the steps") (Right . encodeValue . toJSON . map stepTarget) (traverse (statusPathOf document) (idsIn applyExpr))
-    | "certified" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
+    | "step.certificate or step" `isInfixOf` applyExpr, attr == "#pointy.steps" = maybe (Left "fixture has no build target for one of the steps") (Right . encodeValue . toJSON . map stepTarget) (traverse (statusPathOf document) (idsIn applyExpr))
+    | "step.certificate or step" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
     | "srcFiles" `isInfixOf` applyExpr = Right (either (const (encodeValue Null)) id (jsonAnswer document ("#pointy.steps." ++ fromMaybe "" (listToMaybe (idsIn applyExpr)) ++ ".srcFiles")))
     | "presets" `isInfixOf` applyExpr = Right (encodeValue (documentPresets document))
     | "notices" `isInfixOf` applyExpr = Right (encodeValue (entry (documentNotices document)))
+    | "extras.drvPath" `isInfixOf` applyExpr = Right (encodeValue extrasTargetValue)
     | "extras.outPath" `isInfixOf` applyExpr = Right (encodeValue extrasValue)
     | stepEntries "p" `isInfixOf` applyExpr = Right (encodeValue (projectStepIdsAnswer (toJSON (map stepIdNumber (projectStepIds document (fromMaybe "" (listToMaybe (idsIn applyExpr))))))))
     | "reviewedRevision" `isInfixOf` applyExpr = Right (encodeValue (toJSON (map (\id_ -> [entryOf (documentReviews document) id_]) (idsIn applyExpr))))
@@ -110,6 +111,13 @@ appliedAnswer document applyExpr attr
     pathOf mapping id_ = maybe Null String (Map.lookup id_ mapping)
     extrasValue = case Map.lookup key (documentExtrasOutPaths document) of
         Just (Just path) -> String path
+        _ -> Null
+    extrasTargetValue = case Map.lookup key (documentExtrasOutPaths document) of
+        Just (Just path) ->
+            object
+                [ "path" .= path
+                , "drv" .= maybe (path <> ".drv") T.pack (derivationAnswer document (T.unpack path))
+                ]
         _ -> Null
     stepTarget path = object ["certified" .= certified document, "path" .= path, "drv" .= maybe (path <> ".drv") T.pack (derivationAnswer document (T.unpack path))]
 

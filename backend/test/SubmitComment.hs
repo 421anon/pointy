@@ -8,11 +8,11 @@ module Main (main) where
 import BuildRunner (BuildKey, JobComment (..), StepRequirements (..), buildKeyForOutPath, decodeJobComment, encodeJobComment, submitAndWait, submitJob)
 import Control.Monad (forM_, unless, void)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
-import Data.List (stripPrefix)
+import Data.List (isPrefixOf, stripPrefix)
 import Data.Maybe (listToMaybe, mapMaybe)
 import Effectful (Eff, IOE, liftIO, runEff)
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (Slurm (..), SubmitRequest)
+import Effects (Slurm (..), SubmitRequest (..))
 import Interpreters.Production (submitArgs)
 import System.Environment (setEnv)
 import System.FilePath ((</>))
@@ -28,8 +28,12 @@ main = withSystemTempDirectory "submit-comment" $ \dir -> do
     void $ recording requests $ submitAndWait requirements key (encodeJobComment comment) ["true"]
     submitted <- readIORef requests
     assertEqual "submissions" 2 (length submitted)
-    forM_ submitted $ \request ->
+    forM_ submitted $ \request -> do
         assertEqual "comment kept by sbatch" (Just comment) (decodeJobComment =<< keptComment (submitArgs request))
+        assertEqual
+            "only requested resources are exported"
+            ["--export=POINTY_REQ_CPU=2,POINTY_REQ_RAM=4G,POINTY_REQ_IOR=0,POINTY_REQ_IOW=0"]
+            (filter ("--export=" `isPrefixOf`) (submitOptions request))
 
 keptComment :: [String] -> Maybe String
 keptComment = listToMaybe . reverse . mapMaybe (stripPrefix "--comment=")

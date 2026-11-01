@@ -141,6 +141,9 @@
               buildInputs = oldAttrs.buildInputs ++ (with pkgs; [ haskell-language-server cabal-install fourmolu ]);
             });
           };
+          checks = nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            hub-realise = import ./tests/hub-realise.nix { inherit pkgs; };
+          };
         })
     // {
       nixosModules = rec {
@@ -153,6 +156,12 @@
             bootstrap
             ./modules/pointy-host.nix
           ];
+        };
+        pointy-node = {
+          imports = [ ./modules/pointy-node.nix ];
+        };
+        pointy-hub = {
+          imports = [ ./modules/pointy-hub.nix ];
         };
         single-node-slurm = {
           imports = [
