@@ -45,6 +45,7 @@ mapBindingMsg =
 type Key
     = Escape
     | Enter
+    | Space
     | ArrowUp
     | ArrowDown
     | ArrowLeft
@@ -56,7 +57,42 @@ type Key
     | End
     | PageUp
     | PageDown
-    | Character Char
+    | KeyA
+    | KeyB
+    | KeyC
+    | KeyD
+    | KeyE
+    | KeyF
+    | KeyG
+    | KeyH
+    | KeyI
+    | KeyJ
+    | KeyK
+    | KeyL
+    | KeyM
+    | KeyN
+    | KeyO
+    | KeyP
+    | KeyQ
+    | KeyR
+    | KeyS
+    | KeyT
+    | KeyU
+    | KeyV
+    | KeyW
+    | KeyX
+    | KeyY
+    | KeyZ
+    | Digit0
+    | Digit1
+    | Digit2
+    | Digit3
+    | Digit4
+    | Digit5
+    | Digit6
+    | Digit7
+    | Digit8
+    | Digit9
 
 
 type Modifier
@@ -123,7 +159,7 @@ enter =
 
 space : Combination
 space =
-    Combination [] (Character ' ')
+    Combination [] Space
 
 
 backspace : Combination
@@ -136,50 +172,158 @@ escape =
     Combination [] Escape
 
 
-keyValue : Key -> String
-keyValue key =
+toCode : Key -> Int
+toCode key =
     case key of
         Escape ->
-            "Escape"
+            27
 
         Enter ->
-            "Enter"
+            13
+
+        Space ->
+            32
 
         ArrowUp ->
-            "ArrowUp"
+            38
 
         ArrowDown ->
-            "ArrowDown"
+            40
 
         ArrowLeft ->
-            "ArrowLeft"
+            37
 
         ArrowRight ->
-            "ArrowRight"
+            39
 
         Tab ->
-            "Tab"
+            9
 
         Backspace ->
-            "Backspace"
+            8
 
         Delete ->
-            "Delete"
+            46
 
         Home ->
-            "Home"
+            36
 
         End ->
-            "End"
+            35
 
         PageUp ->
-            "PageUp"
+            33
 
         PageDown ->
-            "PageDown"
+            34
 
-        Character char ->
-            String.fromChar char
+        KeyA ->
+            65
+
+        KeyB ->
+            66
+
+        KeyC ->
+            67
+
+        KeyD ->
+            68
+
+        KeyE ->
+            69
+
+        KeyF ->
+            70
+
+        KeyG ->
+            71
+
+        KeyH ->
+            72
+
+        KeyI ->
+            73
+
+        KeyJ ->
+            74
+
+        KeyK ->
+            75
+
+        KeyL ->
+            76
+
+        KeyM ->
+            77
+
+        KeyN ->
+            78
+
+        KeyO ->
+            79
+
+        KeyP ->
+            80
+
+        KeyQ ->
+            81
+
+        KeyR ->
+            82
+
+        KeyS ->
+            83
+
+        KeyT ->
+            84
+
+        KeyU ->
+            85
+
+        KeyV ->
+            86
+
+        KeyW ->
+            87
+
+        KeyX ->
+            88
+
+        KeyY ->
+            89
+
+        KeyZ ->
+            90
+
+        Digit0 ->
+            48
+
+        Digit1 ->
+            49
+
+        Digit2 ->
+            50
+
+        Digit3 ->
+            51
+
+        Digit4 ->
+            52
+
+        Digit5 ->
+            53
+
+        Digit6 ->
+            54
+
+        Digit7 ->
+            55
+
+        Digit8 ->
+            56
+
+        Digit9 ->
+            57
 
 
 keyName : Key -> String
@@ -190,6 +334,9 @@ keyName key =
 
         Enter ->
             "↵"
+
+        Space ->
+            "⎵"
 
         ArrowUp ->
             "Up"
@@ -224,11 +371,113 @@ keyName key =
         PageDown ->
             "PgDn"
 
-        Character ' ' ->
-            "⎵"
+        KeyA ->
+            "A"
 
-        Character char ->
-            String.fromChar (Char.toUpper char)
+        KeyB ->
+            "B"
+
+        KeyC ->
+            "C"
+
+        KeyD ->
+            "D"
+
+        KeyE ->
+            "E"
+
+        KeyF ->
+            "F"
+
+        KeyG ->
+            "G"
+
+        KeyH ->
+            "H"
+
+        KeyI ->
+            "I"
+
+        KeyJ ->
+            "J"
+
+        KeyK ->
+            "K"
+
+        KeyL ->
+            "L"
+
+        KeyM ->
+            "M"
+
+        KeyN ->
+            "N"
+
+        KeyO ->
+            "O"
+
+        KeyP ->
+            "P"
+
+        KeyQ ->
+            "Q"
+
+        KeyR ->
+            "R"
+
+        KeyS ->
+            "S"
+
+        KeyT ->
+            "T"
+
+        KeyU ->
+            "U"
+
+        KeyV ->
+            "V"
+
+        KeyW ->
+            "W"
+
+        KeyX ->
+            "X"
+
+        KeyY ->
+            "Y"
+
+        KeyZ ->
+            "Z"
+
+        Digit0 ->
+            "0"
+
+        Digit1 ->
+            "1"
+
+        Digit2 ->
+            "2"
+
+        Digit3 ->
+            "3"
+
+        Digit4 ->
+            "4"
+
+        Digit5 ->
+            "5"
+
+        Digit6 ->
+            "6"
+
+        Digit7 ->
+            "7"
+
+        Digit8 ->
+            "8"
+
+        Digit9 ->
+            "9"
 
 
 modName : Modifier -> String
@@ -302,6 +551,6 @@ processModifiers mods =
 decodeSingle : Combination -> Decoder msg -> Decoder msg
 decodeSingle (Combination mods key) msgDecoder =
     processModifiers mods <|
-        Decode.when (Decode.field "key" Decode.string)
-            (\pressed -> String.toLower pressed == String.toLower (keyValue key))
+        Decode.when (Decode.field "keyCode" Decode.int)
+            ((==) (toCode key))
             msgDecoder
