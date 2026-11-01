@@ -633,11 +633,11 @@ keyBindings =
                 Keyboard.primary key
                     |> List.map (\combination -> ( combination, Decode.succeed msg ))
             )
-            [ ( Keyboard.KeyA, selectAll )
-            , ( Keyboard.KeyX, runAction OrganizeCutAction )
-            , ( Keyboard.KeyC, runAction OrganizeCopyAction )
-            , ( Keyboard.KeyV, runAction OrganizePasteAction )
-            , ( Keyboard.KeyZ, undoShortcut )
+            [ ( Keyboard.Character 'a', selectAll )
+            , ( Keyboard.Character 'x', runAction OrganizeCutAction )
+            , ( Keyboard.Character 'c', runAction OrganizeCopyAction )
+            , ( Keyboard.Character 'v', runAction OrganizePasteAction )
+            , ( Keyboard.Character 'z', undoShortcut )
             ]
 
 

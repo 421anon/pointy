@@ -8,6 +8,7 @@ module Keyboard exposing
     , arrowRight
     , arrowUp
     , backspace
+    , combination
     , decodeCombinations
     , delete
     , enter
@@ -44,7 +45,6 @@ mapBindingMsg =
 type Key
     = Escape
     | Enter
-    | Space
     | ArrowUp
     | ArrowDown
     | ArrowLeft
@@ -52,14 +52,11 @@ type Key
     | Tab
     | Backspace
     | Delete
-    | KeyA
-    | KeyC
-    | KeyV
-    | KeyX
-    | KeyZ
-    | KeyK
-    | KeyN
-    | KeyR
+    | Home
+    | End
+    | PageUp
+    | PageDown
+    | Character Char
 
 
 type Modifier
@@ -82,6 +79,11 @@ simpleCombinations =
 toName : Combination -> String
 toName (Combination mods key) =
     String.join "-" <| List.map modName mods ++ [ keyName key ]
+
+
+combination : List Modifier -> Key -> Combination
+combination =
+    Combination
 
 
 primary : Key -> List Combination
@@ -121,7 +123,7 @@ enter =
 
 space : Combination
 space =
-    Combination [] Space
+    Combination [] (Character ' ')
 
 
 backspace : Combination
@@ -134,62 +136,50 @@ escape =
     Combination [] Escape
 
 
-toCode : Key -> Int
-toCode key =
+keyValue : Key -> String
+keyValue key =
     case key of
         Escape ->
-            27
+            "Escape"
 
         Enter ->
-            13
-
-        Space ->
-            32
+            "Enter"
 
         ArrowUp ->
-            38
+            "ArrowUp"
 
         ArrowDown ->
-            40
+            "ArrowDown"
 
         ArrowLeft ->
-            37
+            "ArrowLeft"
 
         ArrowRight ->
-            39
+            "ArrowRight"
 
         Tab ->
-            9
+            "Tab"
 
         Backspace ->
-            8
+            "Backspace"
 
         Delete ->
-            46
+            "Delete"
 
-        KeyA ->
-            65
+        Home ->
+            "Home"
 
-        KeyC ->
-            67
+        End ->
+            "End"
 
-        KeyV ->
-            86
+        PageUp ->
+            "PageUp"
 
-        KeyX ->
-            88
+        PageDown ->
+            "PageDown"
 
-        KeyZ ->
-            90
-
-        KeyK ->
-            75
-
-        KeyN ->
-            78
-
-        KeyR ->
-            82
+        Character char ->
+            String.fromChar char
 
 
 keyName : Key -> String
@@ -200,9 +190,6 @@ keyName key =
 
         Enter ->
             "↵"
-
-        Space ->
-            "⎵"
 
         ArrowUp ->
             "Up"
@@ -225,29 +212,23 @@ keyName key =
         Delete ->
             "Del"
 
-        KeyA ->
-            "A"
+        Home ->
+            "Home"
 
-        KeyC ->
-            "C"
+        End ->
+            "End"
 
-        KeyV ->
-            "V"
+        PageUp ->
+            "PgUp"
 
-        KeyX ->
-            "X"
+        PageDown ->
+            "PgDn"
 
-        KeyZ ->
-            "Z"
+        Character ' ' ->
+            "⎵"
 
-        KeyK ->
-            "K"
-
-        KeyN ->
-            "N"
-
-        KeyR ->
-            "R"
+        Character char ->
+            String.fromChar (Char.toUpper char)
 
 
 modName : Modifier -> String
@@ -321,6 +302,6 @@ processModifiers mods =
 decodeSingle : Combination -> Decoder msg -> Decoder msg
 decodeSingle (Combination mods key) msgDecoder =
     processModifiers mods <|
-        Decode.when (Decode.field "keyCode" Decode.int)
-            ((==) (toCode key))
+        Decode.when (Decode.field "key" Decode.string)
+            (\pressed -> String.toLower pressed == String.toLower (keyValue key))
             msgDecoder
