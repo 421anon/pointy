@@ -94,6 +94,73 @@ To run the frontend dev server against the VM backend, from `frontend/`:
 nix develop .#frontend -c npm run dev-vm
 ```
 
+## Multi-node Slurm
+
+On an ordinary multi-node cluster every machine keeps its own local Nix store. Pointy evaluates on the head and runs each build as a Slurm job on a compute node. `pointy-realise-hub` moves the derivation, its inputs, its outputs and its build log between the node and the head:
+
+1. `nix copy --derivation --no-check-sigs --from ssh-ng://<hub> DRV`
+2. `nix build --no-link 'DRV^*'`
+3. `nix store copy-log --to ssh-ng://<hub> DRV`, also when the build fails
+4. on success, `nix copy --no-check-sigs --to ssh-ng://<hub> 'DRV^*'`
+
+The copies run without signature checks because the SSH connection is the trust boundary: the head authenticates the node keys. The head's daemon treats the `nix-ssh` user as trusted, so `nix store copy-log` (the `AddBuildLog` operation) is permitted and unsigned node outputs are accepted.
+
+On the head, enable the Nix store service:
+
+```nix
+{
+  imports = [
+    inputs.pointy.nixosModules.pointy-host
+    inputs.pointy.nixosModules.pointy-hub
+  ];
+
+  services.pointy-hub = {
+    enable = true;
+    nodeKeys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... root@compute-1"
+    ];
+  };
+
+  services.pointy-backend.slurm.realiseCommand =
+    config.services.pointy-hub.realiseCommand;
+}
+```
+
+The last line replaces the per-system `nix build` realiser with `/run/current-system/sw/bin/pointy-realise-hub`, the path `services.pointy-node` installs on every compute node. Set it on whichever host runs the backend; the path only has to exist on the compute nodes.
+
+On every compute node:
+
+```nix
+{
+  imports = [ inputs.pointy.nixosModules.pointy-node ];
+
+  services.pointy-node = {
+    enable = true;
+    hub = {
+      host = "pointy.example.com";
+      user = "nix-ssh";
+      sshKeyFile = "/etc/pointy/hub-key";
+      # hostPublicKey = "..."; # base64 of the head's SSH host public key line
+    };
+  };
+
+  programs.ssh.knownHosts = [
+    {
+      hostNames = [ "pointy.example.com" ];
+      publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...";
+    }
+  ];
+}
+```
+
+Generate one key per node with `ssh-keygen -t ed25519 -N '' -f /etc/pointy/hub-key`, put its public half in `services.pointy-hub.nodeKeys`, and make the private half readable by the user Slurm runs build jobs as (the Nix daemon reads it as root for substitution, and the user's `nix copy` reads it directly). The node module adds the head as an `ssh-ng` substituter, so inputs already built there are not rebuilt on every node, and enables Nix's `fallback` so builds continue from source when the head cannot serve a missing input. It does not need a `trusted-public-keys` entry: the SSH store is configured `trusted=true`, which is safe because it is authenticated by the node key.
+
+The VM test builds a head with `slurmctld` and a store, one compute node with `slurmd`, and realises successful and failing derivations through a Slurm job:
+
+```bash
+nix build .#checks.x86_64-linux.hub-realise
+```
+
 ## Building artifacts
 
 ```bash
