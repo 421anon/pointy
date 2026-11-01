@@ -26,11 +26,12 @@ import Network.HTTP.Types.URI (Query, parseQuery)
 import Processes (cli, cliBytes)
 import NixEvaluator (defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression)
 import Search.Http (embedRequest, judgeRequest)
-import System.Directory (doesFileExist, getFileSize, getModificationTime)
+import System.Directory (doesFileExist, getFileSize, getModificationTime, removeFile, renameFile)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
 import System.IO.Unsafe (unsafePerformIO)
+import System.Posix.Files (createSymbolicLink)
 
 
 runProduction :: Eff AppEffects a -> IO a
@@ -87,6 +88,15 @@ runNixProduction = interpret $ \_ -> \case
     RegisterGcRoot gcRootPath outPath -> do
         _ <- liftIO $ cli "nix-store" ["--add-root", gcRootPath, "--realise", outPath]
         pure ()
+    RegisterDerivationRoot gcRootPath drvPath -> do
+        let expression =
+                "derivation { name = \"pointy-realise-root\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [ \"-c\" \"\" ]; target = builtins.storePath "
+                    ++ show drvPath
+                    ++ "; }"
+        (code, _, err) <- liftIO $ cli "nix-instantiate" ["--add-root", gcRootPath, "--indirect", "--expr", expression]
+        case code of
+            ExitSuccess -> liftIO $ retargetGcRoot gcRootPath drvPath
+            ExitFailure _ -> liftIO $ putStrLn $ "nix-instantiate --add-root " ++ gcRootPath ++ " failed: " ++ err
     IngestDirectory directory name reportProgress -> liftIO $ runIngest directory name reportProgress
     ProbeMimeType path -> do
         (code, stdout, _) <- liftIO $ cli "file" ["-b", "-L", "--mime-type", path]
@@ -94,6 +104,13 @@ runNixProduction = interpret $ \_ -> \case
             ExitSuccess -> Just (T.strip (T.pack stdout))
             ExitFailure _ -> Nothing
     LocalLogStamp drv -> liftIO $ productionLogStamp drv
+
+retargetGcRoot :: FilePath -> FilePath -> IO ()
+retargetGcRoot gcRootPath target = do
+    let temporary = gcRootPath ++ ".tmp"
+    _ <- try @IOException (removeFile temporary)
+    createSymbolicLink target temporary
+    renameFile temporary gcRootPath
 
 productionLogStamp :: FilePath -> IO (Maybe LogStamp)
 productionLogStamp drv = do

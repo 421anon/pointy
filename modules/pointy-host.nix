@@ -44,6 +44,14 @@ let
     esac
   '';
 
+  pointyRealise = pkgs.writeShellApplication {
+    name = "pointy-realise";
+    runtimeInputs = [ config.nix.package ];
+    text = ''
+      nix build --no-link ${lib.optionalString (cfg.storeUrl != null) "--store ${lib.escapeShellArg cfg.storeUrl} "}"$1^*"
+    '';
+  };
+
   nixCopyIngest = pkgs.writeShellApplication {
     name = "pointy-ingest";
     runtimeInputs = [
@@ -61,6 +69,7 @@ let
   backendEnvironment = {
     POINTY_LISTEN_HOST = cfg.listenHost;
     POINTY_LISTEN_PORT = toString cfg.listenPort;
+    POINTY_REALISE_COMMAND = cfg.slurm.realiseCommand;
   }
   // lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
   // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
@@ -169,8 +178,10 @@ in
       default = null;
       description = ''
         Nix store the backend, its evaluators, its agents and its Slurm build jobs use,
-        exported as NIX_REMOTE. For `unix://SOCKET?root=ROOT` the backend reads store
-        contents from ROOT/nix/store. Null uses the host store.
+        exported to the backend as NIX_REMOTE. For `unix://SOCKET?root=ROOT` the backend
+        reads store contents from ROOT/nix/store. Slurm jobs reach it through the default
+        `slurm.realiseCommand`, which passes this URL as `nix build --store`. Null uses
+        the host store.
       '';
       example = "unix:///nix/var/nix/daemon-socket/socket?root=/var/lib/pointy-scratch-store/root&real=/var/lib/pointy-scratch-store/root/nix/store";
     };
@@ -221,6 +232,24 @@ in
         default = "${config.services.slurm.etcSlurm}/slurm.conf";
         defaultText = lib.literalExpression ''"''${config.services.slurm.etcSlurm}/slurm.conf"'';
         description = "slurm.conf of the cluster the backend submits build jobs to, exported as SLURM_CONF.";
+      };
+
+      realiseCommand = lib.mkOption {
+        type = lib.types.str;
+        default = "${pointyRealise}/bin/pointy-realise";
+        defaultText = lib.literalMD ''
+          a `pointy-realise` script that runs `nix build --no-link "$1^*"`, passing
+          `--store` when `services.pointy-backend.storeUrl` is set
+        '';
+        description = ''
+          Executable on every compute node. Each Slurm build job runs exactly
+          `<command> <drv>`, where `<drv>` is the absolute store path of a derivation the
+          backend already evaluated.
+
+          Exit 0 means every output of that derivation is valid in the backend's store
+          and the build log is readable there. Any other exit leaves the build failed.
+        '';
+        example = "/run/current-system/sw/bin/pointy-realise";
       };
 
       jobCompletionHook = lib.mkOption {

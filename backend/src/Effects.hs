@@ -31,6 +31,8 @@ module Effects (
     pathValid,
     registerGcRoot,
     rootStorePath,
+    rootDerivationForOutPath,
+    unrootDerivationForOutPath,
     ingestDirectory,
     probeMimeType,
     submitJob,
@@ -41,6 +43,7 @@ module Effects (
     judgeCandidates,
 ) where
 
+import Control.Exception (IOException, try)
 import Control.Monad.Except (ExceptT, MonadError, mapExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
@@ -48,7 +51,7 @@ import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import qualified Data.Vector.Unboxed as VU
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Directory (createDirectoryIfMissing, getHomeDirectory, removeFile)
 import System.Exit (ExitCode)
 import System.FilePath (takeFileName, (</>))
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, MonadIO, type (:>))
@@ -80,6 +83,7 @@ data Nix :: Effect where
     RunNixStoreCli :: [String] -> Nix m (ExitCode, ByteString, ByteString)
     PathValid :: FilePath -> Nix m Bool
     RegisterGcRoot :: FilePath -> FilePath -> Nix m ()
+    RegisterDerivationRoot :: FilePath -> FilePath -> Nix m ()
     IngestDirectory :: FilePath -> String -> (Integer -> Integer -> IO ()) -> Nix m (Either String IngestResult)
     ProbeMimeType :: FilePath -> Nix m (Maybe Text)
     LocalLogStamp :: FilePath -> Nix m (Maybe LogStamp)
@@ -149,11 +153,44 @@ registerGcRoot gcRootPath outPath = send (RegisterGcRoot gcRootPath outPath)
 
 rootStorePath :: (Nix :> es, IOE :> es) => FilePath -> Eff es ()
 rootStorePath path = do
-    home <- liftIO getHomeDirectory
-    let gcRootDir = home </> ".local" </> "state" </> "pointy" </> "gc-roots"
-        gcRootPath = gcRootDir </> takeFileName path
-    liftIO $ createDirectoryIfMissing True gcRootDir
+    gcRootPath <- liftIO $ gcRootPathFor path
     registerGcRoot gcRootPath path
+
+rootDerivationForOutPath :: (Nix :> es, IOE :> es) => FilePath -> FilePath -> Eff es ()
+rootDerivationForOutPath outPath drvPath = do
+    gcRootPath <- liftIO $ derivationGcRootPath outPath
+    registerDerivationRoot gcRootPath drvPath
+
+unrootDerivationForOutPath :: (IOE :> es) => FilePath -> Eff es ()
+unrootDerivationForOutPath outPath = do
+    gcRootPath <- liftIO $ derivationGcRootPath outPath
+    liftIO $ ignoreMissing $ removeFile gcRootPath
+
+registerDerivationRoot :: (Nix :> es) => FilePath -> FilePath -> Eff es ()
+registerDerivationRoot gcRootPath drvPath = send (RegisterDerivationRoot gcRootPath drvPath)
+
+gcRootDir :: IO FilePath
+gcRootDir = (</> ".local" </> "state" </> "pointy" </> "gc-roots") <$> getHomeDirectory
+
+gcRootPathFor :: FilePath -> IO FilePath
+gcRootPathFor path = do
+    directory <- gcRootDir
+    createDirectoryIfMissing True directory
+    return $ directory </> takeFileName path
+
+derivationGcRootPath :: FilePath -> IO FilePath
+derivationGcRootPath outPath = do
+    directory <- gcRootDir
+    let derivationRootDirectory = directory </> "derivations"
+    createDirectoryIfMissing True derivationRootDirectory
+    return $ derivationRootDirectory </> takeFileName outPath
+
+ignoreMissing :: IO () -> IO ()
+ignoreMissing action = do
+    outcome <- try action :: IO (Either IOException ())
+    case outcome of
+        Left _ -> return ()
+        Right () -> return ()
 
 ingestDirectory :: (Nix :> es) => FilePath -> String -> (Integer -> Integer -> IO ()) -> Eff es (Either String IngestResult)
 ingestDirectory directory name reportProgress = send (IngestDirectory directory name reportProgress)

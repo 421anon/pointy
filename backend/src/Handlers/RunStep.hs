@@ -15,7 +15,7 @@ module Handlers.RunStep (
 
 import Bisect (bisectBatch)
 import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog, validPaths)
-import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, submitAndWait, submitJob, waitForCompletion)
+import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, realiseCommand, submitAndWait, submitJob, waitForCompletion)
 import Certificates (renderIdList)
 import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
@@ -37,8 +37,9 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
+import Effects (App, AppM, Eval, Nix, pathValid, rootDerivationForOutPath, rootStorePath, unrootDerivationForOutPath)
 import Effectful (Eff, IOE, (:>))
-import Effects (App, AppM, Eval, Nix, pathValid, rootStorePath)
+import Effectful.Exception (finally, onException)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import Servant (NoContent (..), err404, err500, errBody)
 import System.Exit (ExitCode (..))
@@ -111,21 +112,16 @@ renderResolvedLog (ResolvedLog _ logText StepDrv) = TE.decodeUtf8Lenient logText
 renderResolvedLog (ResolvedLog drv logText (InputDrv _ _)) =
     "Build prerequisite failed: " <> T.pack drv <> "\n-----\n" <> TE.decodeUtf8Lenient logText
 
-repoInstallable :: ReadRepoContext -> String -> String
-repoInstallable (ReadRepoContext repoPath targetCommit) fragment =
-    "git+file://" ++ repoPath ++ "?rev=" ++ targetCommit ++ "&allRefs=true#" ++ fragment
-
 stepAttr :: Int -> String
 stepAttr eid = "pointy.steps." ++ show eid
 
 data StepTarget = StepTarget
-    { stepTargetCertified :: Bool
-    , stepTargetPath :: FilePath
+    { stepTargetPath :: FilePath
     , stepTargetDrv :: FilePath
     }
 
 instance FromJSON StepTarget where
-    parseJSON = withObject "StepTarget" $ \o -> StepTarget <$> o .: "certified" <*> o .: "path" <*> o .: "drv"
+    parseJSON = withObject "StepTarget" $ \o -> StepTarget <$> o .: "path" <*> o .: "drv"
 
 resolveStepTarget :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) StepTarget
 resolveStepTarget ctx eid = do
@@ -144,14 +140,7 @@ resolveStepTargets ctx = bisectBatch evaluateTargets (\_ single -> Map.singleton
     certificatesOrLegacySteps ids = "steps: map (id: (" ++ certificateOrLegacyStep ++ ") steps.${id}) " ++ renderIdList ids
 
 certificateOrLegacyStep :: String
-certificateOrLegacyStep = "step: { certified = step ? certificate; path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; }"
-
-stepTargetInstallable :: ReadRepoContext -> Int -> StepTarget -> String
-stepTargetInstallable ctx eid target =
-    repoInstallable ctx $ stepAttr eid ++ if stepTargetCertified target then ".certificate" else ""
-
-extrasInstallable :: ReadRepoContext -> Int -> String
-extrasInstallable ctx eid = repoInstallable ctx (stepAttr eid ++ ".meta.pointy.extras")
+certificateOrLegacyStep = "step: { path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; }"
 
 data SubmitOutcome
     = AlreadyCertified FilePath
@@ -187,19 +176,27 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                 else do
                     existing <- lift $ queryJobIds buildKey
                     if not (null existing)
-                        then return $ Enqueued certificate buildKey existing
+                        then do
+                            lift $ rootDerivationForOutPath certificate (stepTargetDrv target)
+                            return $ Enqueued certificate buildKey existing
                         else do
                             requirements <- getStepRequirements ctx sid
+                            command <- liftIO realiseCommand
                             submitted <-
                                 lift $
-                                    submitJob
-                                        requirements
-                                        buildKey
-                                        depJobIds
-                                        (encodeJobComment (JobComment "step" sid (readCommitHash ctx) certificate))
-                                        ["nix", "build", "--no-link", "--no-eval-cache", stepTargetInstallable ctx sid target]
+                                    do
+                                        rootDerivationForOutPath certificate (stepTargetDrv target)
+                                        submitJob
+                                            requirements
+                                            buildKey
+                                            depJobIds
+                                            (encodeJobComment (JobComment "step" sid (readCommitHash ctx) certificate))
+                                            [command, stepTargetDrv target]
+                                        `onException` unrootDerivationForOutPath certificate
                             case submitted of
-                                Left err -> throwError err
+                                Left err -> do
+                                    lift $ unrootDerivationForOutPath certificate
+                                    throwError err
                                 Right jobId -> return $ Enqueued certificate buildKey [jobId]
         return $ either NotSubmitted id result
   where
@@ -212,13 +209,14 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
 finishStep :: App es => ReadRepoContext -> (Int, SubmitOutcome) -> Eff es ()
 finishStep ctx (sid, outcome) = case outcome of
     AlreadyCertified certificate -> do
+        unrootDerivationForOutPath certificate
         rootStorePath certificate
         broadcastSingleStepForProjects sid targetCommitText certificate
         buildExtras ctx sid
     Enqueued certificate buildKey _ -> do
         trackBuild sid targetCommitText $ do
             broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
-            waitForCompletion buildKey
+            finally (waitForCompletion buildKey) (unrootDerivationForOutPath certificate)
         certified <- isBuilt certificate
         if certified
             then do
@@ -244,23 +242,29 @@ registerCertificationRoots ctx sid certificate = do
 buildExtras :: App es => ReadRepoContext -> Int -> Eff es ()
 buildExtras ctx eid = do
     result <- runExceptT $ do
-        mExtrasPath <- getExtrasOutPath ctx eid
-        case mExtrasPath of
+        mTarget <- getExtrasTarget ctx eid
+        case mTarget of
             Nothing -> return ()
-            Just extrasPath -> do
+            Just target -> do
+                let extrasPath = extrasTargetPath target
                 built <- lift $ isBuilt extrasPath
                 if built
                     then lift $ rootStorePath extrasPath
                     else do
                         requirements <- getExtrasRequirements ctx eid
+                        command <- liftIO realiseCommand
                         let buildKey = buildKeyForOutPath extrasPath
                         exitCode <-
-                            lift $
-                                submitAndWait
-                                    requirements
-                                    buildKey
-                                    (encodeJobComment (JobComment "extras" eid (readCommitHash ctx) extrasPath))
-                                    ["nix", "build", "--no-link", "--no-eval-cache", extrasInstallable ctx eid]
+                            lift $ do
+                                rootDerivationForOutPath extrasPath (extrasTargetDrv target)
+                                finally
+                                    ( submitAndWait
+                                        requirements
+                                        buildKey
+                                        (encodeJobComment (JobComment "extras" eid (readCommitHash ctx) extrasPath))
+                                        [command, extrasTargetDrv target]
+                                    )
+                                    (unrootDerivationForOutPath extrasPath)
                         case exitCode of
                             ExitSuccess -> do
                                 nowBuilt <- lift $ isBuilt extrasPath
@@ -275,18 +279,29 @@ getStepOutPath ctx eid = do
     output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
     return $ T.pack output
 
-getExtrasOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) (Maybe FilePath)
-getExtrasOutPath ctx eid = do
+data ExtrasTarget = ExtrasTarget
+    { extrasTargetPath :: FilePath
+    , extrasTargetDrv :: FilePath
+    }
+
+instance FromJSON ExtrasTarget where
+    parseJSON = withObject "ExtrasTarget" $ \o -> ExtrasTarget <$> o .: "path" <*> o .: "drv"
+
+getExtrasTarget :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) (Maybe ExtrasTarget)
+getExtrasTarget ctx eid = do
     result <-
         lift $
             runExceptT $
-                runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".meta.pointy.extras.outPath")
+                runNixEvalJsonApplyInRepo
+                    ctx
+                    "extras: { path = extras.outPath; drv = extras.drvPath; }"
+                    ("#pointy.steps." ++ show eid ++ ".meta.pointy.extras")
     case result of
         Left _ -> return Nothing
-        Right path ->
-            if null path
-                then return Nothing
-                else return (Just path)
+        Right output ->
+            case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
+                Left _ -> return Nothing
+                Right target -> return (Just target)
 
 getExtrasRequirements :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) StepRequirements
 getExtrasRequirements ctx eid = do
@@ -374,9 +389,9 @@ stopStepSync eid commit = do
 
         let ctx = ReadRepoContext repoPath (T.unpack targetCommit)
 
-        mExtrasPath <- getExtrasOutPath ctx eid
-        lift $ case mExtrasPath of
-            Just extrasPath -> cancel (buildKeyForOutPath extrasPath)
+        mExtrasTarget <- getExtrasTarget ctx eid
+        lift $ case mExtrasTarget of
+            Just extrasTarget -> cancel (buildKeyForOutPath (extrasTargetPath extrasTarget))
             Nothing -> return ()
 
         target <- resolveStepTarget ctx eid
@@ -444,9 +459,11 @@ watchRestoredJob ctx comment job = do
     let commitText = T.pack (jobCommentCommit comment)
         certificate = jobCommentOutPath comment
         buildKey = buildKeyForOutPath certificate
-    when (isRunningState (slurmJobState job)) $ trackBuild (jobCommentStep comment) commitText $ do
-        broadcastKnownStepStatus (jobCommentStep comment) commitText ("running", Nothing)
-        waitForCompletion buildKey
+    if isRunningState (slurmJobState job)
+        then trackBuild (jobCommentStep comment) commitText $ do
+            broadcastKnownStepStatus (jobCommentStep comment) commitText ("running", Nothing)
+            finally (waitForCompletion buildKey) (unrootDerivationForOutPath certificate)
+        else unrootDerivationForOutPath certificate
     certified <- isBuilt certificate
     if certified
         then do
