@@ -4,8 +4,6 @@ A notebook for writing, running, organizing and sharing research computation.
 
 [Home page](https://pointy.cloud/)
 
-![Project view](https://pointy.cloud/screenshots/projects-home.png)
-
 **For researchers**: Pointy is a web app where you upload experiment design / outcome data, and run analyses on them using any program. The results are pinned to the exact program versions that produced them for maximum traceability even after years. The server side needs to be set up on a Linux computer. Ask your admin.
 
 **For admins**: Pointy is a web app for templating Nix derivations and presenting an auto-generated web UI for users. You write Nix derivation templates, the researchers parametrize and run them, browse and share the outputs, and organize them in projects. The data plane is a pluggable git repository where templates and data co-evolve in a shared history.
