@@ -163,7 +163,10 @@ buildDirEntry coldFiles rel absPath n = do
                     pure $ DirEntry (T.pack n) True sz False False (Just "application/zip") isCold
                 else do
                     sz <- liftIO $ getFileSize p
-                    (isViewable, isSeekable, mime) <- checkViewableAndMime logical p sz
+                    (isViewable, isSeekable, mime) <-
+                        if isCold
+                            then pure (viewability sz (mimeTypeByExtension logical))
+                            else checkViewableAndMime logical p sz
                     pure $ DirEntry (T.pack n) False sz isViewable isSeekable mime isCold
 
 isZipPath :: FilePath -> Bool
@@ -298,10 +301,12 @@ checkViewableAndMime namePath contentPath sz = do
 
         else
             maybe (probeMimeType contentPath) (pure . Just) (mimeTypeByExtension namePath)
-    let isReadable = maybe False isReadableMimeType mType
-        isSeekable = isReadable && sz > maxViewableSize
-        isViewable = isReadable && sz <= maxViewableSize
-    pure (isViewable, isSeekable, mType)
+    pure (viewability sz mType)
+
+viewability :: Integer -> Maybe Text -> (Bool, Bool, Maybe Text)
+viewability sz mType = (isReadable && sz <= maxViewableSize, isReadable && sz > maxViewableSize, mType)
+  where
+    isReadable = maybe False isReadableMimeType mType
 
 isReadableMimeType :: Text -> Bool
 isReadableMimeType mimeType =

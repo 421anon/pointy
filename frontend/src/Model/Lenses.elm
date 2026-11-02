@@ -621,7 +621,7 @@ coldStatusAt recordId_ =
     stepRecordById recordId_ << runState << success << coldStatus
 
 
-coldPendingAt : Int -> Traversal Model (Maybe (List String)) x y
+coldPendingAt : Int -> Traversal Model (Maybe Model.ColdPending) x y
 coldPendingAt recordId_ =
     stepRecordById recordId_ << runState << success << coldPending
 

@@ -176,7 +176,18 @@ type alias StepRunState =
     , outputsCommit : String
     , directoryView : DirectoryFolder
     , coldStatus : Maybe ColdStatus
-    , coldPending : Maybe (List String)
+    , coldPending : Maybe ColdPending
+    }
+
+
+type ColdIntent
+    = OpenWhenLocal
+    | DownloadWhenLocal
+
+
+type alias ColdPending =
+    { path : List String
+    , intent : ColdIntent
     }
 
 

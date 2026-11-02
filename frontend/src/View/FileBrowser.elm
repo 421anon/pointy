@@ -428,7 +428,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
         downloadAction =
             case mDirCtx of
                 Just (OutputDir stepId_ commit_) ->
-                    Actions.downloadFile stepId_ commit_ path
+                    Actions.downloadOutputFile stepId_ commit_ path
 
                 Just (SrcDir id) ->
                     Actions.downloadSrcFile id (recordRevision model id) path

@@ -2508,9 +2508,7 @@ toggleOutputEntry recordId mOpen path =
             (\model ->
                 let
                     isPending =
-                        try (coldPendingAt recordId) model
-                            |> Maybe.withDefault Nothing
-                            |> (==) (Just path)
+                        isColdPendingPath recordId path model
 
                     isViewing =
                         try (fileIsViewingAt recordId path) model == Just True
@@ -2522,7 +2520,7 @@ toggleOutputEntry recordId mOpen path =
                                 Flow.pure False
 
                             else
-                                startColdPrefetch recordId path
+                                startColdPrefetch recordId { path = path, intent = Model.OpenWhenLocal }
                                     |> Flow.return False
 
                         else
@@ -2662,22 +2660,46 @@ toggleOutputEntryNow recordId mOpen path =
         )
 
 
-startColdPrefetch : Int -> List String -> Flow Model ()
-startColdPrefetch recordId path =
+downloadOutputFile : Int -> String -> List String -> Flow Model ()
+downloadOutputFile recordId commit path =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if try (fileColdAt recordId path) model /= Just True then
+                    downloadFile recordId commit path
+
+                else if isColdPendingPath recordId path model then
+                    Flow.pure ()
+
+                else
+                    startColdPrefetch recordId { path = path, intent = Model.DownloadWhenLocal }
+            )
+
+
+isColdPendingPath : Int -> List String -> Model -> Bool
+isColdPendingPath recordId path model =
+    try (coldPendingAt recordId) model
+        |> Maybe.withDefault Nothing
+        |> Maybe.map .path
+        |> (==) (Just path)
+
+
+startColdPrefetch : Int -> Model.ColdPending -> Flow Model ()
+startColdPrefetch recordId pending =
     Flow.forAll (stepOutputsRevision recordId) <|
         \commit_ ->
-            Flow.setAll (coldPendingAt recordId) (Just path)
+            Flow.setAll (coldPendingAt recordId) (Just pending)
                 |> Flow.seq
-                    (Api.prefetchCold recordId (Just commit_) path
+                    (Api.prefetchCold recordId (Just commit_) pending.path
                         |> FlowError.foldResult
                             (\response ->
                                 Flow.when (not response.ok)
-                                    (clearColdPendingPath recordId path
-                                        |> Flow.seq (coldFetchFailed path)
+                                    (clearColdPendingPath recordId pending.path
+                                        |> Flow.seq (coldFetchFailed pending.path)
                                     )
                             )
                             (\err ->
-                                clearColdPendingPath recordId path
+                                clearColdPendingPath recordId pending.path
                                     |> Flow.seq (addToast False (Http.errorMessage err))
                             )
                     )
@@ -2687,7 +2709,7 @@ clearColdPendingPath : Int -> List String -> Flow Model ()
 clearColdPendingPath recordId path =
     Flow.over (coldPendingAt recordId)
         (\mPending ->
-            if mPending == Just path then
+            if Maybe.map .path mPending == Just path then
                 Nothing
 
             else
@@ -2705,8 +2727,8 @@ markColdFile recordId path =
     Flow.setAll (fileColdAt recordId path) False
 
 
-reconcileColdStatus : Int -> Model.ColdStatus -> Flow Model ()
-reconcileColdStatus recordId status_ =
+reconcileColdStatus : Int -> String -> Model.ColdStatus -> Flow Model ()
+reconcileColdStatus recordId commit status_ =
     Flow.get
         |> Flow.andThen
             (\model ->
@@ -2715,14 +2737,21 @@ reconcileColdStatus recordId status_ =
                         if status_.onloading then
                             Flow.pure ()
 
-                        else if List.member pending status_.files then
+                        else if List.member pending.path status_.files then
                             Flow.setAll (coldPendingAt recordId) Nothing
-                                |> Flow.seq (coldFetchFailed pending)
+                                |> Flow.seq (coldFetchFailed pending.path)
 
                         else
                             Flow.setAll (coldPendingAt recordId) Nothing
-                                |> Flow.seq (markColdFile recordId pending)
-                                |> Flow.seq (toggleFile recordId pending)
+                                |> Flow.seq (markColdFile recordId pending.path)
+                                |> Flow.seq
+                                    (case pending.intent of
+                                        Model.OpenWhenLocal ->
+                                            toggleFile recordId pending.path
+
+                                        Model.DownloadWhenLocal ->
+                                            downloadFile recordId commit pending.path
+                                    )
 
                     Nothing ->
                         Flow.pure ()
@@ -2746,7 +2775,7 @@ refreshColdStatus recordId commit =
                             Flow.setAll (coldStatusAt recordId) (Just status_)
                                 |> Flow.seq
                                     (Flow.when hadPending
-                                        (reconcileColdStatus recordId status_)
+                                        (reconcileColdStatus recordId commit status_)
                                     )
                         )
                         (\_ -> Flow.pure ())
