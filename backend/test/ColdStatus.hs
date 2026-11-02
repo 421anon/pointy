@@ -4,7 +4,7 @@ module Main (main) where
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Set as Set
-import Handlers.Cold (ColdStatus (..), PrefetchResponse (..), parseColdFiles, parseColdStatus, parsePrefetchResponse)
+import Handlers.Cold (ColdFile (..), ColdStatus (..), PrefetchResponse (..), parseColdFiles, parseColdStatus, parsePrefetchResponse)
 
 main :: IO ()
 main = do
@@ -19,18 +19,18 @@ main = do
     assertEqual "prefetch error" (Left "no token") (parsePrefetchResponse "{\"ok\":false,\"error\":\"no token\"}")
 
 evictedStatus :: ColdStatus
-evictedStatus = ColdStatus True False 0 0 ["SRR1.fastq.gz"]
+evictedStatus = ColdStatus True False [ColdFile "SRR1.fastq.gz" 0 0]
 
 onloadingStatus :: ColdStatus
-onloadingStatus = ColdStatus True True 123 456 ["SRR1.fastq.gz"]
+onloadingStatus = ColdStatus True True [ColdFile "SRR1.fastq.gz" 123 456, ColdFile "SRR2.fastq.gz" 0 0]
 
 evicted :: BS.ByteString
 evicted =
     BS.pack $
         concat
             [ "{\"ok\":true,\"status\":{\"datasets\":[{\"store_path\":\"/nix/store/9hw-store-ref\","
-            , "\"phase\":\"evicted\",\"local\":false,\"evicted\":true,\"onload\":null,"
-            , "\"files\":[{\"path\":\"SRR1.fastq.gz\",\"size\":48204789210,\"local\":false,\"phase\":\"verified\"}]}]}}"
+            , "\"phase\":\"evicted\",\"local\":false,\"evicted\":true,"
+            , "\"files\":[{\"path\":\"SRR1.fastq.gz\",\"size\":48204789210,\"local\":false,\"phase\":\"verified\",\"onload\":null}]}]}}"
             ]
 
 onloadingJson :: BS.ByteString
@@ -39,9 +39,9 @@ onloadingJson =
         concat
             [ "{\"ok\":true,\"status\":{\"datasets\":[{\"store_path\":\"/nix/store/9hw-store-ref\","
             , "\"phase\":\"onloading\",\"local\":false,\"evicted\":false,"
-            , "\"onload\":{\"bytes_done\":123,\"bytes_total\":456},"
-            , "\"files\":[{\"path\":\"SRR1.fastq.gz\",\"size\":48204789210,\"local\":false,\"phase\":\"verified\"},"
-            , "{\"path\":\"SRR2.fastq.gz\",\"size\":10,\"local\":true,\"phase\":\"verified\"}]}]}}"
+            , "\"files\":[{\"path\":\"SRR1.fastq.gz\",\"size\":48204789210,\"local\":false,\"phase\":\"verified\","
+            , "\"onload\":{\"bytes_done\":123,\"bytes_total\":456}},"
+            , "{\"path\":\"SRR2.fastq.gz\",\"size\":10,\"local\":true,\"phase\":\"verified\",\"onload\":null}]}]}}"
             ]
 
 prefetch :: BS.ByteString

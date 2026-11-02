@@ -2737,7 +2737,7 @@ reconcileColdStatus recordId commit status_ =
                         if status_.onloading then
                             Flow.pure ()
 
-                        else if List.member pending.path status_.files then
+                        else if List.find (\file -> file.path == pending.path) status_.files /= Nothing then
                             Flow.setAll (coldPendingAt recordId) Nothing
                                 |> Flow.seq (coldFetchFailed pending.path)
 

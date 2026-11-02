@@ -202,7 +202,6 @@ viewDirectorySection model spec step =
                     (\rs ->
                         Html.div [ class "output-files-section" ]
                             [ Html.h3 [] [ Html.text "Output Files" ]
-                            , viewColdFetchProgress rs
                             , renderDirectoryContents model
                                 spec
                                 (Just stepId)
@@ -215,47 +214,49 @@ viewDirectorySection model spec step =
                     )
 
 
-viewColdFetchProgress : StepRunState -> Html msg
-viewColdFetchProgress rs =
-    Html.viewIf (rs.coldPending /= Nothing || Maybe.unwrap False .onloading rs.coldStatus) <|
-        let
-            total =
-                Maybe.map .total rs.coldStatus |> Maybe.withDefault 0
+viewColdFetchProgress : Maybe (Maybe ( Int, Int )) -> Html msg
+viewColdFetchProgress mFetch =
+    case mFetch of
+        Nothing ->
+            Html.nothing
 
-            done =
-                Maybe.map .done rs.coldStatus |> Maybe.withDefault 0
+        Just progress ->
+            let
+                mPercent =
+                    progress
+                        |> Maybe.andThen
+                            (\( done, total ) ->
+                                if total <= 0 then
+                                    Nothing
 
-            mPercent =
-                if total == 0 then
-                    Nothing
+                                else
+                                    Just (round (toFloat done / toFloat total * 100))
+                            )
 
-                else
-                    Just (round (toFloat done / toFloat total * 100))
+                message =
+                    case mPercent of
+                        Just percent ->
+                            String.fromInt percent ++ "%"
 
-            message =
-                case mPercent of
-                    Just percent ->
-                        "Fetching from cold storage, " ++ String.fromInt percent ++ "%"
+                        Nothing ->
+                            "fetching"
+            in
+            Html.span [ class "cold-fetch-progress", Html.Attributes.title "Fetching from cold storage" ]
+                [ Html.span [ class "upload-progress-bar cold-fetch-progress-bar" ]
+                    [ Html.span
+                        (class "upload-progress-fill"
+                            :: (case mPercent of
+                                    Just percent ->
+                                        [ Html.Attributes.style "width" (String.fromInt percent ++ "%") ]
 
-                    Nothing ->
-                        "Fetching from cold storage"
-        in
-        Html.div [ class "cold-fetch-progress" ]
-            [ Html.div [ class "upload-progress-bar cold-fetch-progress-bar" ]
-                [ Html.div
-                    (class "upload-progress-fill"
-                        :: (case mPercent of
-                                Just percent ->
-                                    [ Html.Attributes.style "width" (String.fromInt percent ++ "%") ]
-
-                                Nothing ->
-                                    [ class "upload-progress-fill--indeterminate" ]
-                           )
-                    )
-                    []
+                                    Nothing ->
+                                        [ class "upload-progress-fill--indeterminate" ]
+                               )
+                        )
+                        []
+                    ]
+                , Html.span [ class "cold-fetch-progress-label" ] [ Html.text message ]
                 ]
-            , Html.span [ class "cold-fetch-progress-label" ] [ Html.text message ]
-            ]
 
 
 viewSrcFilesSection : Model -> StepType -> StepSpec -> StepRecord -> Html (Flow Model ())
@@ -526,6 +527,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                 , Html.Attributes.title "On cold storage, fetched when opened"
                                 ]
                                 [ icon False "ac_unit" ]
+                        , viewColdFetchProgress (Maybe.andThen (\recordId -> Model.Core.coldFetchFor recordId path model) mRecordId)
                         , Html.span [ class "directory-item-meta" ] [ Html.text (Filesize.formatBase2 file.size) ]
                         ]
                     , Html.div [ class "file-actions" ]

@@ -993,9 +993,15 @@ coldStatus =
     Decode.succeed Model.ColdStatus
         |> required "cold" Decode.bool
         |> required "onloading" Decode.bool
+        |> required "files" (Decode.list coldFile)
+
+
+coldFile : Decoder Model.ColdFile
+coldFile =
+    Decode.succeed Model.ColdFile
+        |> required "path" coldPath
         |> required "done" Decode.int
         |> required "total" Decode.int
-        |> required "files" (Decode.list coldPath)
 
 
 coldPath : Decoder (List String)

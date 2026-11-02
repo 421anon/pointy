@@ -194,9 +194,14 @@ type alias ColdPending =
 type alias ColdStatus =
     { cold : Bool
     , onloading : Bool
+    , files : List ColdFile
+    }
+
+
+type alias ColdFile =
+    { path : List String
     , done : Int
     , total : Int
-    , files : List (List String)
     }
 
 
@@ -2027,6 +2032,27 @@ stepsAwaitingCold model =
 
                     _ ->
                         Nothing
+            )
+
+
+coldFetchFor : Int -> List String -> Model -> Maybe (Maybe ( Int, Int ))
+coldFetchFor recordId_ path model =
+    Dict.get recordId_ (getSteps model)
+        |> Maybe.andThen (\step -> ApiData.toMaybe step.runState)
+        |> Maybe.andThen
+            (\runState_ ->
+                if Maybe.map .path runState_.coldPending == Just path then
+                    Just Nothing
+
+                else
+                    Maybe.map .files runState_.coldStatus
+                        |> Maybe.andThen
+                            (\files ->
+                                files
+                                    |> List.filter (\file -> file.path == path && file.total > 0)
+                                    |> List.head
+                                    |> Maybe.map (\file -> Just ( file.done, file.total ))
+                            )
             )
 
 

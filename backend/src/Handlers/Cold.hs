@@ -4,6 +4,7 @@
 
 module Handlers.Cold (
     ColdStatus (..),
+    ColdFile (..),
     PrefetchResponse (..),
     coldFilesFor,
     refuseColdFile,
@@ -18,7 +19,7 @@ import Control.Exception (IOException, try)
 import Control.Monad (forM_, guard)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, withObject, (.:), (.:?))
+import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (fromMaybe, listToMaybe)
@@ -46,11 +47,24 @@ import System.Timeout (timeout)
 data ColdStatus = ColdStatus
     { cold :: Bool
     , onloading :: Bool
-    , done :: Integer
-    , total :: Integer
-    , files :: [Text]
+    , files :: [ColdFile]
     }
     deriving (Generic, Show, Eq, ToJSON)
+
+data ColdFile = ColdFile
+    { filePath :: Text
+    , fileDone :: Integer
+    , fileTotal :: Integer
+    }
+    deriving (Generic, Show, Eq)
+
+instance ToJSON ColdFile where
+    toJSON file =
+        object
+            [ "path" .= filePath file
+            , "done" .= fileDone file
+            , "total" .= fileTotal file
+            ]
 
 data PrefetchResponse = PrefetchResponse
     { ok :: Bool
@@ -72,7 +86,6 @@ data StoreStatus = StoreStatus
 data Dataset = Dataset
     { datasetPhase :: Text
     , datasetLocal :: Bool
-    , datasetOnload :: Maybe Onload
     , datasetFiles :: [DatasetFile]
     }
 
@@ -84,6 +97,7 @@ data Onload = Onload
 data DatasetFile = DatasetFile
     { datasetFilePath :: Text
     , datasetFileLocal :: Bool
+    , datasetFileOnload :: Maybe Onload
     }
 
 data PrefetchLine = PrefetchLine
@@ -107,7 +121,6 @@ instance FromJSON Dataset where
         Dataset
             <$> o .: "phase"
             <*> o .: "local"
-            <*> o .:? "onload"
             <*> (fromMaybe [] <$> o .:? "files")
 
 instance FromJSON Onload where
@@ -118,7 +131,7 @@ instance FromJSON Onload where
 
 instance FromJSON DatasetFile where
     parseJSON = withObject "cold storage dataset file" $ \o ->
-        DatasetFile <$> o .: "path" <*> o .: "local"
+        DatasetFile <$> o .: "path" <*> o .: "local" <*> o .:? "onload"
 
 instance FromJSON PrefetchLine where
     parseJSON = withObject "cold storage prefetch" $ \o ->
@@ -161,9 +174,15 @@ datasetColdStatus dataset =
     ColdStatus
         { cold = not (datasetLocal dataset)
         , onloading = datasetPhase dataset == "onloading"
-        , done = maybe 0 onloadDone (datasetOnload dataset)
-        , total = maybe 0 onloadTotal (datasetOnload dataset)
-        , files = datasetColdPaths dataset
+        , files = map coldFile (datasetFiles dataset)
+        }
+
+coldFile :: DatasetFile -> ColdFile
+coldFile file =
+    ColdFile
+        { filePath = datasetFilePath file
+        , fileDone = maybe 0 onloadDone (datasetFileOnload file)
+        , fileTotal = maybe 0 onloadTotal (datasetFileOnload file)
         }
 
 datasetColdPaths :: Dataset -> [Text]
@@ -171,7 +190,7 @@ datasetColdPaths dataset =
     [datasetFilePath file | file <- datasetFiles dataset, not (datasetFileLocal file)]
 
 emptyColdStatus :: ColdStatus
-emptyColdStatus = ColdStatus False False 0 0 []
+emptyColdStatus = ColdStatus False False []
 
 {-# NOINLINE coldOutPaths #-}
 coldOutPaths :: SingleFlightCache (Int, Text) Text

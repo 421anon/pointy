@@ -4055,18 +4055,16 @@ body:has(dialog[open]) {
 }
 
 .cold-fetch-progress {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  margin: var(--spacing-xs) 0 var(--spacing-sm);
+  gap: var(--spacing-xs);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
 }
 
 .cold-fetch-progress-bar {
-  flex: 1 1 auto;
-  min-width: 100px;
-  max-width: 240px;
+  width: 80px;
+  display: inline-block;
 }
 
 .cold-fetch-progress-label {
