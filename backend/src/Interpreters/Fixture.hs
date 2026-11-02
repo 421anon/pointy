@@ -135,7 +135,7 @@ runNixFixture state = interpret $ \_ -> \case
         ["--query", "--outputs", drv] -> pure (storePathsAnswer "outputs" (documentOutputs (fixtureDocument state)) drv)
         _ -> pure (ExitFailure 1, BS.empty, bytes ("fixture: unsupported nix-store invocation: " ++ unwords args))
     RegisterGcRoot _ _ -> pure ()
-    RegisterDerivationRoot _ _ -> pure ()
+    RegisterDerivationRoot _ _ -> pure (Right ())
     IngestDirectory _ _ _ -> pure (Left "fixture: the ingest program is not available")
     ProbeMimeType path -> liftIO $ do
         (code, stdout, _) <- cli "file" ["-b", "-L", "--mime-type", path]
@@ -249,6 +249,7 @@ runSlurmFixture state = interpret $ \_ -> \case
                     JobStatesByName name -> unlines [jobState job | job <- jobs, jobName job == name]
                     JobIdsByName name -> unlines [jobId job | job <- jobs, jobName job == name]
                     AllJobs -> unlines [intercalate "|" [jobId job, jobName job, jobComment job, jobState job, "0:00", "None"] | job <- jobs]
+                    AllAccountingJobs -> unlines [intercalate "|" [jobId job, jobName job, jobState job] | job <- jobs]
     CancelJob key -> liftIO $ do
         atomically $ modifyTVar' (fixtureJobs state) (Map.delete key)
         markJobsEnded [key]

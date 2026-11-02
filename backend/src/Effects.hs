@@ -6,6 +6,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -31,8 +32,11 @@ module Effects (
     pathValid,
     registerGcRoot,
     rootStorePath,
-    rootDerivationForOutPath,
-    unrootDerivationForOutPath,
+    rootDerivationForJob,
+    unrootDerivationRoot,
+    unrootDerivationRootsForJob,
+    listDerivationRootJobs,
+    uniquePath,
     ingestDirectory,
     probeMimeType,
     submitJob,
@@ -43,7 +47,7 @@ module Effects (
     judgeCandidates,
 ) where
 
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, displayException, try)
 import Control.Monad.Except (ExceptT, MonadError, mapExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
@@ -51,9 +55,10 @@ import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import qualified Data.Vector.Unboxed as VU
-import System.Directory (createDirectoryIfMissing, getHomeDirectory, removeFile)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getHomeDirectory, listDirectory, removeFile, removePathForcibly)
 import System.Exit (ExitCode)
 import System.FilePath (takeFileName, (</>))
+import System.IO (hClose, openTempFile)
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, MonadIO, type (:>))
 import Effectful.Dispatch.Dynamic (send)
 import Ingest (IngestResult)
@@ -83,7 +88,7 @@ data Nix :: Effect where
     RunNixStoreCli :: [String] -> Nix m (ExitCode, ByteString, ByteString)
     PathValid :: FilePath -> Nix m Bool
     RegisterGcRoot :: FilePath -> FilePath -> Nix m ()
-    RegisterDerivationRoot :: FilePath -> FilePath -> Nix m ()
+    RegisterDerivationRoot :: FilePath -> FilePath -> Nix m (Either String ())
     IngestDirectory :: FilePath -> String -> (Integer -> Integer -> IO ()) -> Nix m (Either String IngestResult)
     ProbeMimeType :: FilePath -> Nix m (Maybe Text)
     LocalLogStamp :: FilePath -> Nix m (Maybe LogStamp)
@@ -123,6 +128,7 @@ data SlurmQuery
     = JobStatesByName String
     | JobIdsByName String
     | AllJobs
+    | AllAccountingJobs
 
 evalJson :: (Eval :> es) => RepoSource -> String -> Eff es (Either String String)
 evalJson source attr = send (EvalJson source attr)
@@ -156,17 +162,35 @@ rootStorePath path = do
     gcRootPath <- liftIO $ gcRootPathFor path
     registerGcRoot gcRootPath path
 
-rootDerivationForOutPath :: (Nix :> es, IOE :> es) => FilePath -> FilePath -> Eff es ()
-rootDerivationForOutPath outPath drvPath = do
-    gcRootPath <- liftIO $ derivationGcRootPath outPath
-    registerDerivationRoot gcRootPath drvPath
+rootDerivationForJob :: (Nix :> es, IOE :> es) => String -> FilePath -> Eff es (Either String FilePath)
+rootDerivationForJob jobName drvPath = do
+    created <- liftIO $ try @IOException $ newDerivationGcRootPath jobName
+    case created of
+        Left error ->
+            return $ Left ("Could not create a GC root for " ++ drvPath ++ ": " ++ displayException error)
+        Right gcRootPath -> do
+            result <- registerDerivationRoot gcRootPath drvPath
+            case result of
+                Left error -> do
+                    liftIO $ ignoreMissing $ removeFile gcRootPath
+                    return (Left error)
+                Right () -> return (Right gcRootPath)
 
-unrootDerivationForOutPath :: (IOE :> es) => FilePath -> Eff es ()
-unrootDerivationForOutPath outPath = do
-    gcRootPath <- liftIO $ derivationGcRootPath outPath
-    liftIO $ ignoreMissing $ removeFile gcRootPath
+unrootDerivationRoot :: (IOE :> es) => FilePath -> Eff es ()
+unrootDerivationRoot gcRootPath = liftIO $ ignoreMissing $ removeFile gcRootPath
 
-registerDerivationRoot :: (Nix :> es) => FilePath -> FilePath -> Eff es ()
+unrootDerivationRootsForJob :: (IOE :> es) => String -> Eff es ()
+unrootDerivationRootsForJob jobName = liftIO $ do
+    directory <- (</> jobName) <$> derivationGcRootDirectory
+    ignoreMissing $ removePathForcibly directory
+
+listDerivationRootJobs :: IO [String]
+listDerivationRootJobs = do
+    directory <- derivationGcRootDirectory
+    exists <- doesDirectoryExist directory
+    if exists then listDirectory directory else return []
+
+registerDerivationRoot :: (Nix :> es) => FilePath -> FilePath -> Eff es (Either String ())
 registerDerivationRoot gcRootPath drvPath = send (RegisterDerivationRoot gcRootPath drvPath)
 
 gcRootDir :: IO FilePath
@@ -178,12 +202,21 @@ gcRootPathFor path = do
     createDirectoryIfMissing True directory
     return $ directory </> takeFileName path
 
-derivationGcRootPath :: FilePath -> IO FilePath
-derivationGcRootPath outPath = do
-    directory <- gcRootDir
-    let derivationRootDirectory = directory </> "derivations"
-    createDirectoryIfMissing True derivationRootDirectory
-    return $ derivationRootDirectory </> takeFileName outPath
+derivationGcRootDirectory :: IO FilePath
+derivationGcRootDirectory = (</> "derivations") <$> gcRootDir
+
+newDerivationGcRootPath :: String -> IO FilePath
+newDerivationGcRootPath jobName = do
+    directory <- (</> jobName) <$> derivationGcRootDirectory
+    createDirectoryIfMissing True directory
+    uniquePath directory "root-"
+
+uniquePath :: FilePath -> String -> IO FilePath
+uniquePath directory template = do
+    (path, handle) <- openTempFile directory template
+    hClose handle
+    removeFile path
+    return path
 
 ignoreMissing :: IO () -> IO ()
 ignoreMissing action = do

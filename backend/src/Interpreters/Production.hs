@@ -10,7 +10,7 @@ module Interpreters.Production (runProduction, submitArgs) where
 
 import BuildRunner (shellCommand)
 import Config (Config (..), EmbeddingConfig (..), JudgeConfig (..), ProviderConfig (..), SearchConfig (..), loadConfig, resolveConfigPath)
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, displayException, try)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import Data.List (intercalate)
@@ -20,16 +20,16 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (AppEffects, Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
+import Effects (AppEffects, Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..), uniquePath)
 import Ingest (runIngest)
 import Network.HTTP.Types.URI (Query, parseQuery)
 import Processes (cli, cliBytes)
 import NixEvaluator (defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression)
 import Search.Http (embedRequest, judgeRequest)
-import System.Directory (doesFileExist, getFileSize, getModificationTime, removeFile, renameFile)
+import System.Directory (doesFileExist, getFileSize, getModificationTime, renameFile)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeFileName, (</>))
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Files (createSymbolicLink)
 
@@ -93,10 +93,15 @@ runNixProduction = interpret $ \_ -> \case
                 "derivation { name = \"pointy-realise-root\"; system = builtins.currentSystem; builder = \"/bin/sh\"; args = [ \"-c\" \"\" ]; target = builtins.storePath "
                     ++ show drvPath
                     ++ "; }"
-        (code, _, err) <- liftIO $ cli "nix-instantiate" ["--add-root", gcRootPath, "--indirect", "--expr", expression]
-        case code of
-            ExitSuccess -> liftIO $ retargetGcRoot gcRootPath drvPath
-            ExitFailure _ -> liftIO $ putStrLn $ "nix-instantiate --add-root " ++ gcRootPath ++ " failed: " ++ err
+        result <- liftIO $ try @IOException $ do
+            (code, _, err) <- cli "nix-instantiate" ["--add-root", gcRootPath, "--indirect", "--expr", expression]
+            case code of
+                ExitSuccess -> retargetGcRoot gcRootPath drvPath
+                ExitFailure _ ->
+                    ioError $
+                        userError $
+                            "nix-instantiate --add-root " ++ gcRootPath ++ " failed: " ++ err
+        return $ either (Left . displayException) Right result
     IngestDirectory directory name reportProgress -> liftIO $ runIngest directory name reportProgress
     ProbeMimeType path -> do
         (code, stdout, _) <- liftIO $ cli "file" ["-b", "-L", "--mime-type", path]
@@ -107,8 +112,7 @@ runNixProduction = interpret $ \_ -> \case
 
 retargetGcRoot :: FilePath -> FilePath -> IO ()
 retargetGcRoot gcRootPath target = do
-    let temporary = gcRootPath ++ ".tmp"
-    _ <- try @IOException (removeFile temporary)
+    temporary <- uniquePath (takeDirectory gcRootPath) (takeFileName gcRootPath ++ ".tmp-")
     createSymbolicLink target temporary
     renameFile temporary gcRootPath
 
@@ -167,10 +171,10 @@ runSlurmProduction = interpret $ \_ -> \case
             ExitSuccess -> Right (takeWhile (/= ';') (takeWhile (/= '\n') stdout))
             ExitFailure _ -> Left ("sbatch failed (exit " ++ show code ++ "): " ++ stderr)
     QuerySlurm query -> do
-        (code, stdout, stderr) <- liftIO $ cli "squeue" (queryArgs query)
+        (code, stdout, stderr) <- liftIO $ cli (slurmQueryProgram query) (queryArgs query)
         pure $ case code of
             ExitSuccess -> Right stdout
-            ExitFailure _ -> Left ("squeue failed: " ++ stderr)
+            ExitFailure _ -> Left (slurmQueryProgram query ++ " failed: " ++ stderr)
     CancelJob key -> do
         _ <- liftIO $ cli "scancel" ["--name=" ++ key]
         pure ()
@@ -192,9 +196,15 @@ dependencyArgs :: [String] -> [String]
 dependencyArgs [] = []
 dependencyArgs jobIds = ["--dependency=afterok:" ++ intercalate ":" jobIds, "--kill-on-invalid-dep=yes"]
 
+slurmQueryProgram :: SlurmQuery -> String
+slurmQueryProgram = \case
+    AllAccountingJobs -> "sacct"
+    _ -> "squeue"
+
 queryArgs :: SlurmQuery -> [String]
 queryArgs = \case
     JobStatesByName name -> ["-h", "-n", name, "-o", "%T"]
     JobIdsByName name -> ["-h", "-n", name, "-o", "%i"]
     AllJobs -> ["-h", "-o", "%i|%j|%k|%T|%M|%r"]
+    AllAccountingJobs -> ["-X", "-n", "-P", "-o", "JobID,JobName%128,State"]
 

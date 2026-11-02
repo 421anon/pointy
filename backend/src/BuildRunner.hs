@@ -23,6 +23,8 @@ module BuildRunner (
     reconcileWatchedJobs,
     cancel,
     isRunningState,
+    runningJobNames,
+    isDerivationPath,
     realiseCommand,
     shellCommand,
 ) where
@@ -34,7 +36,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), decode, encode, object, withObjec
 import Data.Bits (xor)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.Char (isAlphaNum, isDigit)
-import Data.List (foldl')
+import Data.List (foldl', isSuffixOf, stripPrefix)
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -338,4 +340,59 @@ isRunningState state =
                , "SUSPENDED"
                , "RESIZING"
                , "STAGE_OUT"
+               , "COMPLETING"
                ]
+
+runningJobNames :: (Slurm :> es) => Eff es (Maybe (Set.Set String))
+runningJobNames = do
+    squeued <- querySlurm AllJobs
+    accounted <- querySlurm AllAccountingJobs
+    let squeueNames = case squeued of
+            Right stdout ->
+                Just $
+                    Set.fromList
+                        [ slurmJobName job
+                        | job <- mapMaybe parseSlurmJobLine (lines stdout)
+                        , isRunningState (slurmJobState job)
+                        ]
+            Left _ -> Nothing
+        accountingNames = case accounted of
+            Right stdout ->
+                Just $
+                    Set.fromList
+                        [ name
+                        | line <- lines stdout
+                        , Just (name, state) <- [parseAccountingJobLine line]
+                        , isRunningState state
+                        ]
+            Left _ -> Nothing
+    pure $ case (squeueNames, accountingNames) of
+        (Nothing, Nothing) -> Nothing
+        (Just names, Nothing) -> Just names
+        (Nothing, names) -> names
+        (Just squeueNames', Just accountingNames') -> Just (Set.union squeueNames' accountingNames')
+
+parseAccountingJobLine :: String -> Maybe (String, String)
+parseAccountingJobLine line = case splitOn '|' line of
+    (jobId : name : state : _) | not (null jobId) && not (null name) ->
+        Just (name, takeWhile (/= ' ') state)
+    _ -> Nothing
+
+isDerivationPath :: FilePath -> Bool
+isDerivationPath path = case stripPrefix "/nix/store/" path of
+    Just relative -> case break (== '-') relative of
+        (hash, '-' : name) ->
+            length hash == 32
+                && all isStoreHashChar hash
+                && not (null name)
+                && all isStoreNameChar name
+                && ".drv" `isSuffixOf` name
+                && name /= ".drv"
+        _ -> False
+    Nothing -> False
+  where
+    isStoreHashChar character =
+        isDigit character
+            || (character >= 'a' && character <= 'z')
+            || (character >= 'A' && character <= 'Z')
+    isStoreNameChar character = isAlphaNum character || character `elem` ("+-._?=" :: String)

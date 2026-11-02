@@ -15,14 +15,14 @@ module Handlers.RunStep (
 
 import Bisect (bisectBatch)
 import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog, validPaths)
-import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, realiseCommand, submitAndWait, submitJob, waitForCompletion)
+import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isDerivationPath, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, realiseCommand, runningJobNames, submitAndWait, submitJob, waitForCompletion)
 import Certificates (renderIdList)
 import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, catch)
-import Control.Monad (foldM, unless, void, when)
+import Control.Monad (foldM, forM_, unless, void, when)
 
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -37,7 +37,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
-import Effects (App, AppM, Eval, Nix, pathValid, rootDerivationForOutPath, rootStorePath, unrootDerivationForOutPath)
+import Effects (App, AppM, Eval, Nix, listDerivationRootJobs, pathValid, rootDerivationForJob, rootStorePath, unrootDerivationRoot, unrootDerivationRootsForJob)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (finally, onException)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
@@ -76,7 +76,7 @@ runStepSync eid commit = do
             stepIds <- liftEither $ topoOrder graph
             submitted <- lift $ submitGraph halted ctx graph stepIds
             stopped <- liftIO $ takeStopRequest eid
-            when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _) <- [Map.lookup eid submitted]]
+            when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _ _) <- [Map.lookup eid submitted]]
             return submitted
         unless (Map.member eid outcomes) $ lift $ broadcastStatusForStepProjects eid (T.pack targetCommit) Nothing
         liftIO $ mapConcurrently_ (runAppEffects . finishStep ctx) (Map.toList outcomes)
@@ -144,7 +144,7 @@ certificateOrLegacyStep = "step: { path = (step.certificate or step).outPath; dr
 
 data SubmitOutcome
     = AlreadyCertified FilePath
-    | Enqueued FilePath BuildKey [JobId]
+    | Enqueued FilePath BuildKey [JobId] FilePath
     | NotSubmitted String
 
 submitGraph :: App es => IO Bool -> ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
@@ -168,6 +168,7 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
     | otherwise = do
         result <- runExceptT $ do
             target <- liftEither resolvedTarget
+            liftEither $ validateStepTarget sid target
             let certificate = stepTargetPath target
             certified <- lift $ isCertified certificate
             let buildKey = buildKeyForOutPath certificate
@@ -177,46 +178,101 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                     existing <- lift $ queryJobIds buildKey
                     if not (null existing)
                         then do
-                            lift $ rootDerivationForOutPath certificate (stepTargetDrv target)
-                            return $ Enqueued certificate buildKey existing
+                            (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
+                            return $ Enqueued (stepTargetPath rootedTarget) buildKey existing root
                         else do
                             requirements <- getStepRequirements ctx sid
                             command <- liftIO realiseCommand
+                            (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
                             submitted <-
                                 lift $
-                                    do
-                                        rootDerivationForOutPath certificate (stepTargetDrv target)
-                                        submitJob
-                                            requirements
-                                            buildKey
-                                            depJobIds
-                                            (encodeJobComment (JobComment "step" sid (readCommitHash ctx) certificate))
-                                            [command, stepTargetDrv target]
-                                        `onException` unrootDerivationForOutPath certificate
+                                    submitJob
+                                        requirements
+                                        buildKey
+                                        depJobIds
+                                        (encodeJobComment (JobComment "step" sid (readCommitHash ctx) certificate))
+                                        [command, stepTargetDrv rootedTarget]
+                                        `onException` unrootDerivationRoot root
                             case submitted of
                                 Left err -> do
-                                    lift $ unrootDerivationForOutPath certificate
+                                    lift $ unrootDerivationRoot root
                                     throwError err
-                                Right jobId -> return $ Enqueued certificate buildKey [jobId]
+                                Right jobId -> return $ Enqueued certificate buildKey [jobId] root
         return $ either NotSubmitted id result
   where
     blockedOn = [d | d <- deps, isBlocked (Map.lookup d outcomes)]
     isBlocked (Just NotSubmitted{}) = True
     isBlocked Nothing = True
     isBlocked _ = False
-    depJobIds = nub [jobId | d <- deps, Just (Enqueued _ _ jobIds) <- [Map.lookup d outcomes], jobId <- jobIds]
+    depJobIds = nub [jobId | d <- deps, Just (Enqueued _ _ jobIds _) <- [Map.lookup d outcomes], jobId <- jobIds]
+
+validateStepTarget :: Int -> StepTarget -> Either String ()
+validateStepTarget sid = validateTarget ("step " ++ show sid) . stepTargetDrv
+
+validateTarget :: String -> FilePath -> Either String ()
+validateTarget label drvPath
+    | isDerivationPath drvPath = Right ()
+    | otherwise =
+        Left $
+            label
+                ++ " evaluated to an invalid derivation path "
+                ++ show drvPath
+                ++ "; expected /nix/store/<hash>-<name>.drv"
+
+ensureRooted :: App es => ReadRepoContext -> Int -> StepTarget -> Eff es (Either String (StepTarget, FilePath))
+ensureRooted ctx sid target =
+    case validateStepTarget sid target of
+        Left err -> return (Left err)
+        Right () -> do
+            firstAttempt <- tryRoot target
+            case firstAttempt of
+                Right root -> return (Right (target, root))
+                Left firstError -> do
+                    reevaluated <- runExceptT $ resolveStepTarget ctx sid
+                    case reevaluated of
+                        Left reevaluationError ->
+                            return $ Left (firstError ++ "; re-evaluating the step failed: " ++ reevaluationError)
+                        Right target' ->
+                            case validateStepTarget sid target' of
+                                Left invalid -> return $ Left (firstError ++ "; " ++ invalid)
+                                Right ()
+                                    | stepTargetPath target' /= stepTargetPath target ->
+                                        return $
+                                            Left
+                                                ( firstError
+                                                    ++ "; the step now evaluates to "
+                                                    ++ stepTargetPath target'
+                                                    ++ ", so it must be retried"
+                                                )
+                                    | otherwise -> do
+                                        secondAttempt <- tryRoot target'
+                                        case secondAttempt of
+                                            Right root -> return (Right (target', root))
+                                            Left secondError -> return $ Left (firstError ++ "; " ++ secondError)
+  where
+    tryRoot candidate = do
+        let drv = stepTargetDrv candidate
+        rooted <- rootDerivationForJob (unBuildKey (buildKeyForOutPath (stepTargetPath candidate))) drv
+        case rooted of
+            Left error -> return (Left error)
+            Right root -> do
+                stillValid <- pathValid drv
+                if stillValid
+                    then return (Right root)
+                    else do
+                        unrootDerivationRoot root
+                        return (Left ("the derivation " ++ drv ++ " disappeared before submission"))
 
 finishStep :: App es => ReadRepoContext -> (Int, SubmitOutcome) -> Eff es ()
 finishStep ctx (sid, outcome) = case outcome of
     AlreadyCertified certificate -> do
-        unrootDerivationForOutPath certificate
         rootStorePath certificate
         broadcastSingleStepForProjects sid targetCommitText certificate
         buildExtras ctx sid
-    Enqueued certificate buildKey _ -> do
+    Enqueued certificate buildKey _ root -> do
         trackBuild sid targetCommitText $ do
             broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
-            finally (waitForCompletion buildKey) (unrootDerivationForOutPath certificate)
+            finally (waitForCompletion buildKey) (unrootDerivationRoot root)
         certified <- isBuilt certificate
         if certified
             then do
@@ -246,6 +302,7 @@ buildExtras ctx eid = do
         case mTarget of
             Nothing -> return ()
             Just target -> do
+                liftEither $ validateTarget ("extras of step " ++ show eid) (extrasTargetDrv target)
                 let extrasPath = extrasTargetPath target
                 built <- lift $ isBuilt extrasPath
                 if built
@@ -254,9 +311,14 @@ buildExtras ctx eid = do
                         requirements <- getExtrasRequirements ctx eid
                         command <- liftIO realiseCommand
                         let buildKey = buildKeyForOutPath extrasPath
+                        root <-
+                            lift $
+                                rootDerivationForJob
+                                    (unBuildKey buildKey)
+                                    (extrasTargetDrv target)
+                        rootPath <- liftEither root
                         exitCode <-
-                            lift $ do
-                                rootDerivationForOutPath extrasPath (extrasTargetDrv target)
+                            lift $
                                 finally
                                     ( submitAndWait
                                         requirements
@@ -264,7 +326,7 @@ buildExtras ctx eid = do
                                         (encodeJobComment (JobComment "extras" eid (readCommitHash ctx) extrasPath))
                                         [command, extrasTargetDrv target]
                                     )
-                                    (unrootDerivationForOutPath extrasPath)
+                                    (unrootDerivationRoot rootPath)
                         case exitCode of
                             ExitSuccess -> do
                                 nowBuilt <- lift $ isBuilt extrasPath
@@ -408,10 +470,11 @@ restoreJobsFromSlurm = do
     eRepo <- withReadRepoTransaction $ \(ReadRepoContext repoPath _) -> return repoPath
     case eRepo of
         Left err -> liftIO $ putStrLn $ "restoreJobsFromSlurm: cannot access repo: " ++ err
-        Right repoPath ->
+        Right repoPath -> do
             liftIO $
                 scanJobs repoPath
                     `catch` \e -> putStrLn $ "restoreJobsFromSlurm failed: " ++ show (e :: SomeException)
+            sweepDerivationRoots
   where
     scanJobs :: FilePath -> IO ()
     scanJobs repoPath = do
@@ -431,18 +494,33 @@ restoreJobsFromSlurm = do
 
     attachOne :: FilePath -> SlurmJob -> IO ()
     attachOne repoPath job = case decodeJobComment =<< slurmJobComment job of
-        Nothing -> putStrLn $ "restoreJobsFromSlurm: no job comment on " ++ slurmJobName job ++ ", skipping"
+        Nothing -> do
+            putStrLn $ "restoreJobsFromSlurm: no job comment on " ++ slurmJobName job ++ ", skipping"
+            runAppEffects $ unrootDerivationRootsForJob (slurmJobName job)
         Just comment
-            | jobCommentKind comment /= "step" -> return ()
-            | buildKeyForOutPath (jobCommentOutPath comment) /= BuildKey (slurmJobName job) ->
+            | jobCommentKind comment == "extras" ->
+                void $
+                    forkIO $
+                        runAppEffects $
+                            watchRestoredExtrasJob (slurmJobName job) (slurmJobState job)
+            | jobCommentKind comment /= "step" -> do
+                putStrLn $
+                    "restoreJobsFromSlurm: unknown job kind on "
+                        ++ slurmJobName job
+                        ++ ", skipping"
+                runAppEffects $ unrootDerivationRootsForJob (slurmJobName job)
+            | buildKeyForOutPath (jobCommentOutPath comment) /= BuildKey (slurmJobName job) -> do
                 putStrLn $
                     "restoreJobsFromSlurm: job name mismatch for step "
                         ++ show (jobCommentStep comment)
                         ++ ", skipping"
+                runAppEffects $ do
+                    unrootDerivationRootsForJob (slurmJobName job)
+                    unrootDerivationRootsForJob (unBuildKey (buildKeyForOutPath (jobCommentOutPath comment)))
             | otherwise -> do
                 eReady <- runExceptT $ ensureRepoCommit (jobCommentCommit comment)
                 case eReady of
-                    Left err ->
+                    Left err -> do
                         putStrLn $
                             "restoreJobsFromSlurm: commit "
                                 ++ jobCommentCommit comment
@@ -450,28 +528,46 @@ restoreJobsFromSlurm = do
                                 ++ show (jobCommentStep comment)
                                 ++ ": "
                                 ++ err
+                        runAppEffects $ unrootDerivationRootsForJob (slurmJobName job)
                     Right () -> do
                         let ctx = ReadRepoContext repoPath (jobCommentCommit comment)
                         void $ forkIO $ runAppEffects $ watchRestoredJob ctx comment job
 
+sweepDerivationRoots :: App es => Eff es ()
+sweepDerivationRoots = do
+    running <- runningJobNames
+    case running of
+        Nothing -> return ()
+        Just names -> do
+            roots <- liftIO listDerivationRootJobs
+            forM_ roots $ \jobName ->
+                unless (Set.member jobName names) $ unrootDerivationRootsForJob jobName
+
+watchRestoredExtrasJob :: App es => String -> String -> Eff es ()
+watchRestoredExtrasJob jobName state = do
+    when (isRunningState state) $ waitForCompletion (BuildKey jobName)
+    unrootDerivationRootsForJob jobName
+
 watchRestoredJob :: App es => ReadRepoContext -> JobComment -> SlurmJob -> Eff es ()
 watchRestoredJob ctx comment job = do
-    let commitText = T.pack (jobCommentCommit comment)
+    let stepId = jobCommentStep comment
+        commitText = T.pack (jobCommentCommit comment)
         certificate = jobCommentOutPath comment
         buildKey = buildKeyForOutPath certificate
+        jobName = unBuildKey buildKey
     if isRunningState (slurmJobState job)
-        then trackBuild (jobCommentStep comment) commitText $ do
-            broadcastKnownStepStatus (jobCommentStep comment) commitText ("running", Nothing)
-            finally (waitForCompletion buildKey) (unrootDerivationForOutPath certificate)
-        else unrootDerivationForOutPath certificate
+        then trackBuild stepId commitText $ do
+            broadcastKnownStepStatus stepId commitText ("running", Nothing)
+            finally (waitForCompletion buildKey) (unrootDerivationRootsForJob jobName)
+        else unrootDerivationRootsForJob jobName
     certified <- isBuilt certificate
     if certified
         then do
-            registerCertificationRoots ctx (jobCommentStep comment) certificate
-            broadcastSingleStepForProjects (jobCommentStep comment) commitText certificate
-        else broadcastFailedStepForProjects (jobCommentStep comment) commitText
-    broadcastStepCertificateAtMovedHead (jobCommentStep comment) commitText
-    when certified $ buildExtras ctx (jobCommentStep comment)
+            registerCertificationRoots ctx stepId certificate
+            broadcastSingleStepForProjects stepId commitText certificate
+        else broadcastFailedStepForProjects stepId commitText
+    broadcastStepCertificateAtMovedHead stepId commitText
+    when certified $ buildExtras ctx stepId
 
 isPointyJob :: String -> Bool
 isPointyJob name = "pointy-nix-build-" `isPrefixOf` name
