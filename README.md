@@ -2,7 +2,7 @@
 
 A notebook for writing, running, organizing and sharing research computation.
 
-[Demo](https://demo.pointy.cloud/)
+[Home page](https://pointy.cloud/)
 
 ![Project view](https://pointy.cloud/screenshots/projects-home.png)
 
