@@ -25,6 +25,8 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -33,7 +35,9 @@ import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
 import Effects (AppM, Nix, probeMimeType)
 import GHC.Generics (Generic)
+import Handlers.Cold (coldFilesFor, refuseColdFile)
 import Handlers.RunStep (buildExtras)
+import Handlers.StepOutput (resolveStepOutPath)
 
 import qualified Handlers.Zip as Zip
 import Network.HTTP.Types (mkStatus, status200)
@@ -53,7 +57,7 @@ import Servant (
 import qualified Servant.Types.SourceT as S
 import System.Directory (doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.FilePath (joinPath, normalise, splitDirectories, splitPath, takeExtension, takeFileName, (</>))
-import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo, runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), runNixEvalJsonApplyInRepo, userRepoPath, withReadRepoTransaction)
 
 import System.IO (IOMode (..), SeekMode (..), hSeek, withBinaryFile)
 
@@ -64,33 +68,20 @@ data DirEntry = DirEntry
     , viewable :: Bool
     , seekable :: Bool
     , mimeType :: Maybe Text
+    , cold :: Bool
     }
     deriving (Generic, Show, ToJSON)
-
-resolveStepOutPath :: Int -> Maybe Text -> AppM Text
-resolveStepOutPath stepId mCommit = do
-    repoPath <- liftIO userRepoPath
-    commitHash <- case mCommit of
-        Just c -> return (unpack c)
-        Nothing -> do
-            result <- lift $ withReadRepoTransaction $ \(ReadRepoContext _ hash) -> return hash
-            case result of
-                Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("resolveStepOutPath: " ++ err))}
-                Right h -> return h
-    let ctx = ReadRepoContext repoPath commitHash
-    result <- lift $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
-    case result of
-        Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
-        Right path -> return (T.pack path)
 
 stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM [DirEntry]
 stepListHandler stepId mCommit mRel = do
     outPath <- resolveStepOutPath stepId mCommit
-    listHandler outPath mRel
+    coldFiles <- coldFilesFor outPath
+    listHandler coldFiles outPath mRel
 
 stepDownloadHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 stepDownloadHandler stepId mCommit rel = do
     outPath <- resolveStepOutPath stepId mCommit
+    refuseColdFile outPath rel
     downloadHandler outPath rel
 
 fromRawBase :: FilePath -> [String] -> Application
@@ -102,7 +93,10 @@ fromRawBase basePath segments _ respond = do
 
 stepRawHandler :: Int -> Maybe Text -> [String] -> Tagged AppM Application
 stepRawHandler stepId mCommit segments = Tagged $ \request respond -> do
-    resolution <- runAppEffects $ runExceptT $ resolveStepOutPath stepId mCommit
+    resolution <- runAppEffects $ runExceptT $ do
+        outPath <- resolveStepOutPath stepId mCommit
+        refuseColdFile outPath (joinPath segments)
+        pure outPath
     case resolution of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
         Right basePath -> fromRawBase (T.unpack basePath) segments request respond
@@ -142,8 +136,8 @@ storeFilesHandler' segments respond = do
             let headers = [("Content-Type", TE.encodeUtf8 mime)]
             respond $ responseLBS status200 headers lbs
 
-listHandler :: Text -> Maybe FilePath -> AppM [DirEntry]
-listHandler outPathText mRel = do
+listHandler :: Set Text -> Text -> Maybe FilePath -> AppM [DirEntry]
+listHandler coldFiles outPathText mRel = do
     let basePath = T.unpack outPathText
     assertNixStorePath basePath
     let rel = fromMaybe "" mRel
@@ -155,25 +149,29 @@ listHandler outPathText mRel = do
             map zipItemToDirEntry <$> liftZip err400 (Zip.listZipDirectory zipPath internalPath)
         Nothing -> do
             names <- liftIO $ listDirectory =<< resolveStorePath absPath
-            liftIO $ mapConcurrently (runAppEffects . buildDirEntry absPath) names
+            liftIO $ mapConcurrently (runAppEffects . buildDirEntry coldFiles rel absPath) names
 
-buildDirEntry :: (Nix :> es, IOE :> es) => FilePath -> FilePath -> Eff es DirEntry
-buildDirEntry absPath n = do
+buildDirEntry :: (Nix :> es, IOE :> es) => Set Text -> FilePath -> FilePath -> FilePath -> Eff es DirEntry
+buildDirEntry coldFiles rel absPath n = do
     let logical = absPath </> n
+        isCold = T.pack (normalise (rel </> n)) `Set.member` coldFiles
     p <- liftIO $ resolveStorePath logical
     isD <- liftIO $ doesDirectoryExist p
     if isD
-        then pure $ DirEntry (T.pack n) True 0 False False Nothing
+        then pure $ DirEntry (T.pack n) True 0 False False Nothing isCold
         else do
             isZipFile <- liftIO $ if isZipPath logical then doesFileExist p else pure False
             if isZipFile
                 then do
                     sz <- liftIO $ getFileSize p
-                    pure $ DirEntry (T.pack n) True sz False False (Just "application/zip")
+                    pure $ DirEntry (T.pack n) True sz False False (Just "application/zip") isCold
                 else do
                     sz <- liftIO $ getFileSize p
-                    (isViewable, isSeekable, mime) <- checkViewableAndMime logical p sz
-                    pure $ DirEntry (T.pack n) False sz isViewable isSeekable mime
+                    (isViewable, isSeekable, mime) <-
+                        if isCold
+                            then pure (viewability sz (mimeTypeByExtension logical))
+                            else checkViewableAndMime logical p sz
+                    pure $ DirEntry (T.pack n) False sz isViewable isSeekable mime isCold
 
 isZipPath :: FilePath -> Bool
 isZipPath p = map toLower (takeExtension p) == ".zip"
@@ -204,8 +202,8 @@ resolveZipPath basePath rel = do
                 else findZipPrefix comps (k + 1)
 
 zipItemToDirEntry item
-    | Zip.zipItemIsDirectory item = DirEntry itemName True 0 False False Nothing
-    | otherwise = DirEntry itemName False itemSize viewable' False mime
+    | Zip.zipItemIsDirectory item = DirEntry itemName True 0 False False Nothing False
+    | otherwise = DirEntry itemName False itemSize viewable' False mime False
   where
     itemName = T.pack $ Zip.zipItemName item
     itemSize = Zip.zipItemSize item
@@ -307,10 +305,12 @@ checkViewableAndMime namePath contentPath sz = do
 
         else
             maybe (probeMimeType contentPath) (pure . Just) (mimeTypeByExtension namePath)
-    let isReadable = maybe False isReadableMimeType mType
-        isSeekable = isReadable && sz > maxViewableSize
-        isViewable = isReadable && sz <= maxViewableSize
-    pure (isViewable, isSeekable, mType)
+    pure (viewability sz mType)
+
+viewability :: Integer -> Maybe Text -> (Bool, Bool, Maybe Text)
+viewability sz mType = (isReadable && sz <= maxViewableSize, isReadable && sz > maxViewableSize, mType)
+  where
+    isReadable = maybe False isReadableMimeType mType
 
 isReadableMimeType :: Text -> Bool
 isReadableMimeType mimeType =
@@ -434,6 +434,7 @@ stepSeekHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> In
 stepSeekHandler stepId mCommit rel line byteOffset bytes = do
     offset <- parseSeekOffset line byteOffset bytes
     outPath <- resolveStepOutPath stepId mCommit
+    refuseColdFile outPath rel
     seekHandler outPath rel offset bytes
 
 seekHandler :: Text -> FilePath -> Either LineOffset ByteOffset -> Int -> AppM FileChunk

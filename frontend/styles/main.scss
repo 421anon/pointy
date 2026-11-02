@@ -1184,6 +1184,20 @@ body {
   overflow-wrap: anywhere;
 }
 
+.file-cold-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  color: var(--text-muted);
+  opacity: 0.6;
+
+  .material-symbols-outlined {
+    font-size: var(--font-size-sm);
+  }
+}
+
 .src-file-change-status {
   flex: 0 0 auto;
   padding: 0 var(--spacing-xs);
@@ -4038,6 +4052,23 @@ body:has(dialog[open]) {
 .upload-progress-fill--indeterminate {
   width: 40%;
   animation: upload-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+.cold-fetch-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.cold-fetch-progress-bar {
+  width: 80px;
+  display: inline-block;
+}
+
+.cold-fetch-progress-label {
+  white-space: nowrap;
 }
 
 @keyframes upload-progress-indeterminate {

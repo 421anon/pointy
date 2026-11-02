@@ -15,6 +15,7 @@ import Control.Monad.Trans.Class (lift)
 import Data.Aeson (ToJSON, eitherDecode)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
@@ -80,7 +81,7 @@ getStepSrcFilesPath mCommit stepId =
 
 listSrcFilesHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM [DirEntry]
 listSrcFilesHandler stepId mCommit mRel =
-    lift (resolveStepSrcFiles mCommit stepId) >>= either throwError (maybe (return []) (\basePath -> listHandler (T.pack basePath) mRel))
+    lift (resolveStepSrcFiles mCommit stepId) >>= either throwError (maybe (return []) (\basePath -> listHandler Set.empty (T.pack basePath) mRel))
 
 downloadSrcFilesHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadSrcFilesHandler stepId mCommit rel = do

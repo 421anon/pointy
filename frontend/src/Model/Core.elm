@@ -175,6 +175,38 @@ type alias StepRunState =
     , status : ApiData Status
     , outputsCommit : String
     , directoryView : DirectoryFolder
+    , coldStatus : Maybe ColdStatus
+    , coldPending : Maybe ColdPending
+    }
+
+
+type ColdIntent
+    = OpenWhenLocal
+    | DownloadWhenLocal
+
+
+type alias ColdPending =
+    { path : List String
+    , intent : ColdIntent
+    }
+
+
+type alias ColdStatus =
+    { cold : Bool
+    , onloading : Bool
+    , files : List ColdFile
+    }
+
+
+type alias ColdFile =
+    { path : List String
+    , done : Int
+    , total : Int
+    }
+
+
+type alias PrefetchResponse =
+    { ok : Bool
     }
 
 
@@ -1984,6 +2016,46 @@ getSteps (Model model) =
     model.steps
 
 
+stepsAwaitingCold : Model -> List { id : Int, commit : String }
+stepsAwaitingCold model =
+    getSteps model
+        |> Dict.values
+        |> List.filterMap
+            (\step ->
+                case ( step.id, ApiData.toMaybe step.runState ) of
+                    ( Just id, Just runState_ ) ->
+                        if runState_.coldPending /= Nothing || Maybe.unwrap False .onloading runState_.coldStatus then
+                            Just { id = id, commit = runState_.outputsCommit }
+
+                        else
+                            Nothing
+
+                    _ ->
+                        Nothing
+            )
+
+
+coldFetchFor : Int -> List String -> Model -> Maybe (Maybe ( Int, Int ))
+coldFetchFor recordId_ path model =
+    Dict.get recordId_ (getSteps model)
+        |> Maybe.andThen (\step -> ApiData.toMaybe step.runState)
+        |> Maybe.andThen
+            (\runState_ ->
+                if Maybe.map .path runState_.coldPending == Just path then
+                    Just Nothing
+
+                else
+                    Maybe.map .files runState_.coldStatus
+                        |> Maybe.andThen
+                            (\files ->
+                                files
+                                    |> List.filter (\file -> file.path == path && file.total > 0)
+                                    |> List.head
+                                    |> Maybe.map (\file -> Just ( file.done, file.total ))
+                            )
+            )
+
+
 getProjectForms : Model -> Table ProjectRecord
 getProjectForms (Model model) =
     model.projectForms
@@ -2573,6 +2645,7 @@ type alias DirectoryFile =
     , editedContent : Maybe String
     , isNew : Bool
     , isDeleted : Bool
+    , cold : Bool
     }
 
 

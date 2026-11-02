@@ -7,6 +7,7 @@ module Api.Api exposing
     , createStep
     , deleteSrcFile
     , fetchAutocomplete
+    , fetchColdStatus
     , fetchCommitHash
     , fetchDirectoryContents
     , fetchExtras
@@ -28,6 +29,7 @@ module Api.Api exposing
     , fetchTokenSession
     , fetchUserRepoInfo
     , postTreeOps
+    , prefetchCold
     , refreshProjectStatus
     , removeReview
     , reviewDiffUrl
@@ -54,7 +56,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
+import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, PrefetchResponse, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -448,6 +450,27 @@ fetchDirectoryContents itemDecoder stepId commit folderPath =
         Http.get
             { url = UrlBuilder.absolute [ "backend", "step-files" ] (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" folderPath) ])
             , expect = Http.expectJson identity (Json.Decode.map Dict.fromList <| Json.Decode.list itemDecoder)
+            }
+
+
+fetchColdStatus : Int -> Maybe String -> Flow s (Result Http.Error ColdStatus)
+fetchColdStatus stepId commit =
+    Flow.lift <|
+        Http.get
+            { url = UrlBuilder.absolute [ "backend", "step-files", "cold" ] (stepFileQuery stepId commit)
+            , expect = Http.expectJson identity Decode.coldStatus
+            }
+
+
+prefetchCold : Int -> Maybe String -> List String -> Flow s (Result Http.Error PrefetchResponse)
+prefetchCold stepId commit path =
+    Flow.lift <|
+        Http.post
+            { url =
+                UrlBuilder.absolute [ "backend", "step-files", "prefetch" ]
+                    (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" path) ])
+            , body = Http.emptyBody
+            , expect = Http.expectJson identity Decode.prefetchResponse
             }
 
 

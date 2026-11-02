@@ -11,6 +11,7 @@ import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
+import Handlers.Cold (ColdStatus, PrefetchResponse)
 import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -49,6 +50,23 @@ type ListStepFiles =
         :> QueryParam "commit" Text
         :> QueryParam "path" FilePath
         :> Get '[JSON] [DirEntry]
+
+type GetStepColdStatus =
+    "step-files"
+        :> "cold"
+        :> Description "Reports whether a step's output lives in cold storage, how far an onload has progressed, and which files are not local yet."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> Get '[JSON] ColdStatus
+
+type PrefetchStepFile =
+    "step-files"
+        :> "prefetch"
+        :> Description "Starts fetching one file of a step's cold-stored output into local storage."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> QueryParam' '[Required] "path" FilePath
+        :> Post '[JSON] PrefetchResponse
 
 type ListSrcFiles =
     "src-files"
@@ -499,6 +517,8 @@ type API =
     GetCommitHash
         :<|> GetUserRepoInfo
         :<|> ListStepFiles
+        :<|> GetStepColdStatus
+        :<|> PrefetchStepFile
         :<|> DownloadStepFile
         :<|> StepFileSeek
         :<|> RawStepFile

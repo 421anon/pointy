@@ -18,7 +18,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, StepRunState, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec exposing (StepSpec)
@@ -214,6 +214,51 @@ viewDirectorySection model spec step =
                     )
 
 
+viewColdFetchProgress : Maybe (Maybe ( Int, Int )) -> Html msg
+viewColdFetchProgress mFetch =
+    case mFetch of
+        Nothing ->
+            Html.nothing
+
+        Just progress ->
+            let
+                mPercent =
+                    progress
+                        |> Maybe.andThen
+                            (\( done, total ) ->
+                                if total <= 0 then
+                                    Nothing
+
+                                else
+                                    Just (round (toFloat done / toFloat total * 100))
+                            )
+
+                message =
+                    case mPercent of
+                        Just percent ->
+                            String.fromInt percent ++ "%"
+
+                        Nothing ->
+                            "fetching"
+            in
+            Html.span [ class "cold-fetch-progress", Html.Attributes.title "Fetching from cold storage" ]
+                [ Html.span [ class "upload-progress-bar cold-fetch-progress-bar" ]
+                    [ Html.span
+                        (class "upload-progress-fill"
+                            :: (case mPercent of
+                                    Just percent ->
+                                        [ Html.Attributes.style "width" (String.fromInt percent ++ "%") ]
+
+                                    Nothing ->
+                                        [ class "upload-progress-fill--indeterminate" ]
+                               )
+                        )
+                        []
+                    ]
+                , Html.span [ class "cold-fetch-progress-label" ] [ Html.text message ]
+                ]
+
+
 viewSrcFilesSection : Model -> StepType -> StepSpec -> StepRecord -> Html (Flow Model ())
 viewSrcFilesSection model stepType spec step =
     let
@@ -384,7 +429,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
         downloadAction =
             case mDirCtx of
                 Just (OutputDir stepId_ commit_) ->
-                    Actions.downloadFile stepId_ commit_ path
+                    Actions.downloadOutputFile stepId_ commit_ path
 
                 Just (SrcDir id) ->
                     Actions.downloadSrcFile id (recordRevision model id) path
@@ -476,6 +521,13 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                           else
                             Html.viewIf (isEditableSrcFile && Maybe.isJust file.editedContent) <|
                                 Html.span [ class "src-file-change-status" ] [ Html.text "Changed" ]
+                        , Html.viewIf file.cold <|
+                            Html.span
+                                [ class "file-cold-icon"
+                                , Html.Attributes.title "On cold storage, fetched when opened"
+                                ]
+                                [ icon False "ac_unit" ]
+                        , viewColdFetchProgress (Maybe.andThen (\recordId -> Model.Core.coldFetchFor recordId path model) mRecordId)
                         , Html.span [ class "directory-item-meta" ] [ Html.text (Filesize.formatBase2 file.size) ]
                         ]
                     , Html.div [ class "file-actions" ]
