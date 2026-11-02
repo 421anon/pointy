@@ -2,8 +2,18 @@ let stepStatusSource = null;
 let clusterStatusSource = null;
 let ingestJobsSource = null;
 
+const REOPEN_DELAY_MS = 2000;
+
 function isOpen(source) {
   return source && source.readyState !== EventSource.CLOSED;
+}
+
+function reopenWhenClosed(source, reopen) {
+  source.addEventListener("error", () => {
+    if (source.readyState === EventSource.CLOSED) {
+      setTimeout(reopen, REOPEN_DELAY_MS);
+    }
+  });
 }
 
 function openStepStatusStream(app) {
@@ -16,6 +26,7 @@ function openStepStatusStream(app) {
     }
   };
   stepStatusSource = new EventSource("/backend/step-status-stream");
+  reopenWhenClosed(stepStatusSource, () => openStepStatusStream(app));
 
   stepStatusSource.addEventListener("snapshot", (event) => {
     try {
@@ -41,6 +52,7 @@ function openClusterStatusStream(app) {
     return;
   }
   clusterStatusSource = new EventSource("/backend/cluster-status-stream");
+  reopenWhenClosed(clusterStatusSource, () => openClusterStatusStream(app));
   clusterStatusSource.addEventListener("cluster-status", (event) => {
     try {
       if (app.ports && app.ports.clusterStatusIn) {
@@ -55,6 +67,7 @@ function openIngestStream(app) {
     return;
   }
   ingestJobsSource = new EventSource("/backend/ingest-stream");
+  reopenWhenClosed(ingestJobsSource, () => openIngestStream(app));
   ingestJobsSource.addEventListener("ingest-jobs", (event) => {
     try {
       if (app.ports && app.ports.ingestJobsIn) {
