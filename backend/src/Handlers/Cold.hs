@@ -21,6 +21,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict,
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (fromMaybe, listToMaybe)
+import Data.List (isPrefixOf)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -30,8 +31,10 @@ import Effectful (UnliftStrategy (SeqUnlift), withEffToIO)
 import Effects (AppM)
 import GHC.Generics (Generic)
 import Handlers.StepOutput (resolveStepOutPath)
+import NixStore (rootedPath)
 import Servant (ServerError (..), err502, err503, throwError)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
+import System.Directory (getSymbolicLinkTarget, pathIsSymbolicLink)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (normalise)
@@ -187,30 +190,46 @@ coldFilesFor storePath = do
     case mSocket of
         Nothing -> pure Set.empty
         Just socket -> do
-            result <- liftIO $ runStatus socket storePath
+            datasetPath <- liftIO (coldDatasetPath storePath)
+            result <- liftIO $ runStatus socket datasetPath
             pure $ either (const Set.empty) parseColdFiles result
 
 coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus
 coldStatusHandler stepId mCommit = do
-    outPath <- coldOutPath stepId mCommit
     mSocket <- liftIO coldStorageSocket
     case mSocket of
         Nothing -> pure emptyColdStatus
         Just socket -> do
-            result <- liftIO $ runStatus socket outPath
+            outPath <- coldOutPath stepId mCommit
+            datasetPath <- liftIO (coldDatasetPath outPath)
+            result <- liftIO $ runStatus socket datasetPath
             pure $ either (const emptyColdStatus) (fromMaybe emptyColdStatus . parseColdStatus) result
 
 prefetchHandler :: Int -> Maybe Text -> FilePath -> AppM PrefetchResponse
 prefetchHandler stepId mCommit rel = do
-    outPath <- coldOutPath stepId mCommit
     mSocket <- liftIO coldStorageSocket
     case mSocket of
         Nothing -> throwError err503{errBody = "cold storage is not configured"}
         Just socket -> do
-            result <- liftIO $ runColdStorage (prefetchCommand socket outPath rel)
+            outPath <- coldOutPath stepId mCommit
+            datasetPath <- liftIO (coldDatasetPath outPath)
+            result <- liftIO $ runColdStorage (prefetchCommand socket datasetPath rel)
             case result >>= parsePrefetchResponse of
                 Left message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
                 Right response -> pure response
+
+coldDatasetPath :: Text -> IO Text
+coldDatasetPath outPath = do
+    let real = rootedPath (T.unpack outPath)
+    symlink <- pathIsSymbolicLink real
+    if not symlink
+        then pure outPath
+        else do
+            target <- getSymbolicLinkTarget real
+            pure $
+                if "/nix/store/" `isPrefixOf` target
+                    then T.pack (normalise target)
+                    else outPath
 
 coldStorageSocket :: IO (Maybe String)
 coldStorageSocket = do
