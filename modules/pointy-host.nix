@@ -48,7 +48,7 @@ let
     name = "pointy-realise";
     runtimeInputs = [ config.nix.package ];
     text = ''
-      nix build --no-link ${lib.optionalString (cfg.storeUrl != null) "--store ${lib.escapeShellArg cfg.storeUrl} "}"$1^*"
+      nix build --no-link ${lib.optionalString (cfg.storeUrl != null) "--store ${lib.escapeShellArg cfg.storeUrl} "}-- "$1^*"
     '';
   };
 
@@ -238,7 +238,7 @@ in
         type = lib.types.str;
         default = "${pointyRealise}/bin/pointy-realise";
         defaultText = lib.literalMD ''
-          a `pointy-realise` script that runs `nix build --no-link "$1^*"`, passing
+          a `pointy-realise` script that runs `nix build --no-link -- "$1^*"`, passing
           `--store` when `services.pointy-backend.storeUrl` is set
         '';
         description = ''

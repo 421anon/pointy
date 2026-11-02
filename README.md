@@ -96,14 +96,17 @@ nix develop .#frontend -c npm run dev-vm
 
 ## Multi-node Slurm
 
-On an ordinary multi-node cluster every machine keeps its own local Nix store. Pointy evaluates on the head and runs each build as a Slurm job on a compute node. `pointy-realise-hub` moves the derivation, its inputs, its outputs and its build log between the node and the head:
+On an ordinary multi-node cluster every machine keeps its own local Nix store. Pointy evaluates on the head and runs each build as a Slurm job on a compute node. `pointy-realise-hub` moves the derivation, its inputs, its outputs and its build logs between the node and the head:
 
-1. `nix copy --derivation --no-check-sigs --from ssh-ng://<hub> DRV`
+1. `nix copy --derivation --from ssh-ng://<hub> DRV`
 2. `nix build --no-link 'DRV^*'`
-3. `nix store copy-log --to ssh-ng://<hub> DRV`, also when the build fails
-4. on success, `nix copy --no-check-sigs --to ssh-ng://<hub> 'DRV^*'`
+3. `nix store sign --key-file <node signing key> 'DRV^*'`
+4. `nix copy --to ssh-ng://<hub> 'DRV^*'`
+5. for every derivation in the closure of `DRV`, upload its build log to the head
 
-The copies run without signature checks because the SSH connection is the trust boundary: the head authenticates the node keys. The head's daemon treats the `nix-ssh` user as trusted, so `nix store copy-log` (the `AddBuildLog` operation) is permitted and unsigned node outputs are accepted.
+The head's `nix-ssh` user is not trusted. Nodes sign their outputs with a per-node Nix signing key, the head accepts a path only if it carries a signature from one of the node keys listed in `services.pointy-hub.nodePublicKeys`, and it serves those paths as a substituter. Every node lists the same node keys in `trusted-public-keys`, so substitution from the head keeps signature checking on. Derivations themselves are content-addressed and need no signature.
+
+`nix store copy-log` cannot be used here: the daemon handles the `AddBuildLog` operation only for trusted users (`daemon.cc` in Nix rejects it with "you are not privileged to add logs"). Instead, `pointy-realise-hub` forwards logs over a second SSH login whose forced command only accepts a derivation path and writes its log below the head's Nix log directory. That receiver is the `pointy-log` user; it has no Nix store privileges.
 
 On the head, enable the Nix store service:
 
@@ -118,6 +121,9 @@ On the head, enable the Nix store service:
     enable = true;
     nodeKeys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... root@compute-1"
+    ];
+    nodePublicKeys = [
+      "compute-1:AAAA..."
     ];
   };
 
@@ -136,6 +142,10 @@ On every compute node:
 
   services.pointy-node = {
     enable = true;
+    signingKeyFile = "/etc/pointy/node-signing-key";
+    nodePublicKeys = [
+      "compute-1:AAAA..."
+    ];
     hub = {
       host = "pointy.example.com";
       user = "nix-ssh";
@@ -153,9 +163,17 @@ On every compute node:
 }
 ```
 
-Generate one key per node with `ssh-keygen -t ed25519 -N '' -f /etc/pointy/hub-key`, put its public half in `services.pointy-hub.nodeKeys`, and make the private half readable by the user Slurm runs build jobs as (the Nix daemon reads it as root for substitution, and the user's `nix copy` reads it directly). The node module adds the head as an `ssh-ng` substituter, so inputs already built there are not rebuilt on every node, and enables Nix's `fallback` so builds continue from source when the head cannot serve a missing input. It does not need a `trusted-public-keys` entry: the SSH store is configured `trusted=true`, which is safe because it is authenticated by the node key.
+Generate the SSH key pair for store access and log upload with `ssh-keygen -t ed25519 -N '' -f /etc/pointy/hub-key`, put its public half in `services.pointy-hub.nodeKeys`, and make the private half readable by the user Slurm runs build jobs as (the Nix daemon reads it as root for substitution, and the user's `nix copy` and log upload read it directly).
 
-The VM test builds a head with `slurmctld` and a store, one compute node with `slurmd`, and realises successful and failing derivations through a Slurm job:
+Generate one Nix signing key per node and publish its public half to `nodePublicKeys` on the head and on every node:
+
+```bash
+nix-store --generate-binary-cache-key compute-1 /etc/pointy/node-signing-key /etc/pointy/node-signing-key.pub
+```
+
+The private signing key must be readable by the Slurm build user, which runs `nix store sign`. The node module adds the head as an `ssh-ng` substituter, so inputs already built there are not rebuilt on every node, and enables Nix's `fallback` so builds continue from source when the head cannot serve a missing input. Substitution still verifies the node signatures against `nodePublicKeys`.
+
+The VM test builds a head with `slurmctld` and a store, one compute node with `slurmd`, and realises successful and failing derivations through Slurm jobs that run as an unprivileged user with the backend's `--export` list. It checks that a node with the output already present reports success, that a failing dependency's log reaches the head, and that an unsigned path pushed by a node is rejected:
 
 ```bash
 nix build .#checks.x86_64-linux.hub-realise
