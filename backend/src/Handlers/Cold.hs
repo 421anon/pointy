@@ -6,6 +6,7 @@ module Handlers.Cold (
     ColdStatus (..),
     PrefetchResponse (..),
     coldFilesFor,
+    refuseColdFile,
     coldStatusHandler,
     prefetchHandler,
     parseColdStatus,
@@ -14,14 +15,14 @@ module Handlers.Cold (
 ) where
 
 import Control.Exception (IOException, try)
-import Control.Monad (guard)
+import Control.Monad (forM_, guard)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, withObject, (.:), (.:?))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Maybe (fromMaybe, listToMaybe)
-import Data.List (isPrefixOf)
+import Data.List (find, isPrefixOf)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -32,12 +33,12 @@ import Effects (AppM)
 import GHC.Generics (Generic)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixStore (rootedPath)
-import Servant (ServerError (..), err502, err503, throwError)
+import Servant (ServerError (..), err409, err502, err503, throwError)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
 import System.Directory (getSymbolicLinkTarget, pathIsSymbolicLink)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
-import System.FilePath (normalise)
+import System.FilePath (joinPath, normalise, splitDirectories)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process (readProcessWithExitCode)
 import System.Timeout (timeout)
@@ -193,6 +194,19 @@ coldFilesFor storePath = do
             datasetPath <- liftIO (coldDatasetPath storePath)
             result <- liftIO $ runStatus socket datasetPath
             pure $ either (const Set.empty) parseColdFiles result
+
+refuseColdFile :: Text -> FilePath -> AppM ()
+refuseColdFile storePath rel = do
+    mSocket <- liftIO coldStorageSocket
+    forM_ mSocket $ \socket -> do
+        datasetPath <- liftIO (coldDatasetPath storePath)
+        result <- liftIO $ runStatus socket datasetPath
+        let coldFiles = either (const Set.empty) parseColdFiles result
+            components = dropWhile (== "/") (splitDirectories (normalise rel))
+            enclosing = [T.pack (joinPath (take n components)) | n <- [1 .. length components]]
+        forM_ (find (`Set.member` coldFiles) enclosing) $ \coldFile -> do
+            _ <- liftIO $ runColdStorage (prefetchCommand socket datasetPath (T.unpack coldFile))
+            throwError err409{errBody = "This file is in cold storage. It is being fetched; try again once it is local."}
 
 coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus
 coldStatusHandler stepId mCommit = do

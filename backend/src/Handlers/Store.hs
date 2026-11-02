@@ -35,7 +35,7 @@ import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
 import Effects (AppM, Nix, probeMimeType)
 import GHC.Generics (Generic)
-import Handlers.Cold (coldFilesFor)
+import Handlers.Cold (coldFilesFor, refuseColdFile)
 import Handlers.RunStep (buildExtras)
 import Handlers.StepOutput (resolveStepOutPath)
 
@@ -81,6 +81,7 @@ stepListHandler stepId mCommit mRel = do
 stepDownloadHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 stepDownloadHandler stepId mCommit rel = do
     outPath <- resolveStepOutPath stepId mCommit
+    refuseColdFile outPath rel
     downloadHandler outPath rel
 
 fromRawBase :: FilePath -> [String] -> Application
@@ -92,7 +93,10 @@ fromRawBase basePath segments _ respond = do
 
 stepRawHandler :: Int -> Maybe Text -> [String] -> Tagged AppM Application
 stepRawHandler stepId mCommit segments = Tagged $ \request respond -> do
-    resolution <- runAppEffects $ runExceptT $ resolveStepOutPath stepId mCommit
+    resolution <- runAppEffects $ runExceptT $ do
+        outPath <- resolveStepOutPath stepId mCommit
+        refuseColdFile outPath (joinPath segments)
+        pure outPath
     case resolution of
         Left err -> respond $ responseLBS (mkStatus (errHTTPCode err) (TE.encodeUtf8 (T.pack (errReasonPhrase err)))) (errHeaders err) (errBody err)
         Right basePath -> fromRawBase (T.unpack basePath) segments request respond
@@ -430,6 +434,7 @@ stepSeekHandler :: Int -> Maybe Text -> FilePath -> Maybe Int -> Maybe Int -> In
 stepSeekHandler stepId mCommit rel line byteOffset bytes = do
     offset <- parseSeekOffset line byteOffset bytes
     outPath <- resolveStepOutPath stepId mCommit
+    refuseColdFile outPath rel
     seekHandler outPath rel offset bytes
 
 seekHandler :: Text -> FilePath -> Either LineOffset ByteOffset -> Int -> AppM FileChunk

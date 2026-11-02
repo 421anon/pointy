@@ -154,7 +154,7 @@ executable backend
   import:           warnings
   main-is:          Main.hs
 
-  ghc-options:      -threaded
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N -qn4"
   build-depends:
     , backend
     , base
