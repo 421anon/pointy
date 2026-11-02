@@ -74,6 +74,7 @@ let
   // lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
   // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
   // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; }
+  // lib.optionalAttrs (cfg.coldStorage.ingestSocket != null) { POINTY_COLD_STORE_SOCKET = cfg.coldStorage.ingestSocket; }
   // lib.optionalAttrs (cfg.agentMemoryMax != null) { POINTY_AGENT_MEMORY_MAX = cfg.agentMemoryMax; }
   // lib.optionalAttrs (hostCfg.tokenAuth != null) {
     POINTY_TOKEN_AUDIENCE = hostCfg.tokenAuth.audience;
@@ -184,6 +185,28 @@ in
         the host store.
       '';
       example = "unix:///nix/var/nix/daemon-socket/socket?root=/var/lib/pointy-scratch-store/root&real=/var/lib/pointy-scratch-store/root/nix/store";
+    };
+
+    coldStorage = {
+      package = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = null;
+        description = ''
+          Package providing `bin/pointy-scratch-store`, whose `status` and `prefetch`
+          commands the backend runs against offloaded step outputs. Added to the backend's
+          PATH when set. Null disables cold status and prefetch.
+        '';
+      };
+
+      ingestSocket = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Ingest socket of the running scratch store that serves cold storage, exported
+          to the backend as POINTY_COLD_STORE_SOCKET. Null disables cold status and prefetch.
+        '';
+        example = "/run/pointy-scratch-store/ingest.sock";
+      };
     };
 
     scratchDirectory = lib.mkOption {
@@ -392,7 +415,8 @@ in
           pointy.packages.pi
           pointy.packages.pi-glovebox
           cfg.ingestPackage
-        ];
+        ]
+        ++ lib.optional (cfg.coldStorage.package != null) cfg.coldStorage.package;
       environment = {
         SLURM_CONF = cfg.slurm.confFile;
       }

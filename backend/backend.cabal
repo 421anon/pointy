@@ -38,6 +38,7 @@ library
     Handlers.Agent
     Handlers.ArtifactRdf
     Handlers.Autocomplete
+    Handlers.Cold
     Handlers.TokenAuth
     Handlers.CommitHash
     Handlers.ClusterStream
@@ -52,6 +53,7 @@ library
     Handlers.Statuses
     Handlers.StatusStream
     Handlers.StepConfig
+    Handlers.StepOutput
     Handlers.StepReview
     Handlers.StepSearch
     Handlers.Steps
@@ -226,6 +228,20 @@ test-suite download-metadata
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite cold-status
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          ColdStatus.hs
+  build-depends:
+    , backend
+    , base
+    , bytestring
+    , containers
+    , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite store-path-traversal
   import:           warnings
   type:             exitcode-stdio-1.0
@@ -233,6 +249,7 @@ test-suite store-path-traversal
   build-depends:
     , backend
     , base
+    , containers
     , mtl
     , servant-server
     , text

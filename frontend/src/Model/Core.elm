@@ -175,6 +175,22 @@ type alias StepRunState =
     , status : ApiData Status
     , outputsCommit : String
     , directoryView : DirectoryFolder
+    , coldStatus : Maybe ColdStatus
+    , coldPending : Maybe (List String)
+    }
+
+
+type alias ColdStatus =
+    { cold : Bool
+    , onloading : Bool
+    , done : Int
+    , total : Int
+    , files : List (List String)
+    }
+
+
+type alias PrefetchResponse =
+    { ok : Bool
     }
 
 
@@ -1984,6 +2000,25 @@ getSteps (Model model) =
     model.steps
 
 
+stepsAwaitingCold : Model -> List { id : Int, commit : String }
+stepsAwaitingCold model =
+    getSteps model
+        |> Dict.values
+        |> List.filterMap
+            (\step ->
+                case ( step.id, ApiData.toMaybe step.runState ) of
+                    ( Just id, Just runState_ ) ->
+                        if runState_.coldPending /= Nothing || Maybe.unwrap False .onloading runState_.coldStatus then
+                            Just { id = id, commit = runState_.outputsCommit }
+
+                        else
+                            Nothing
+
+                    _ ->
+                        Nothing
+            )
+
+
 getProjectForms : Model -> Table ProjectRecord
 getProjectForms (Model model) =
     model.projectForms
@@ -2573,6 +2608,7 @@ type alias DirectoryFile =
     , editedContent : Maybe String
     , isNew : Bool
     , isDeleted : Bool
+    , cold : Bool
     }
 
 

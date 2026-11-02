@@ -223,6 +223,7 @@ subscriptions : Model -> Sub (Flow Model ())
 subscriptions model =
     Sub.batch
         [ uploadProgressSubscription model
+        , coldStatusSubscription model
         , gutterDragSubscription model
         , areaCaptureSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
@@ -250,6 +251,15 @@ agentActivitySubscription model =
 
     else
         Sub.none
+
+
+coldStatusSubscription : Model -> Sub (Flow Model ())
+coldStatusSubscription model =
+    if List.isEmpty (Model.Core.stepsAwaitingCold model) then
+        Sub.none
+
+    else
+        Time.every 1000 (\_ -> Actions.pollColdStatuses)
 
 
 statusBarClockSubscription : Model -> Sub (Flow Model ())

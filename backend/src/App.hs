@@ -16,6 +16,7 @@ import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHand
 import Handlers.ArtifactRdf (artifactRdfHandler)
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler, startClusterPoller)
+import Handlers.Cold (coldStatusHandler, prefetchHandler)
 import Handlers.TokenAuth (tokenAuthHandler, tokenLoginHandler, tokenLogoutHandler, tokenSessionHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
@@ -50,6 +51,8 @@ server =
     liftHandler getCommitHashHandler
         :<|> getUserRepoInfoHandler
         :<|> stepListHandler
+        :<|> coldStatusHandler
+        :<|> prefetchHandler
         :<|> stepDownloadHandler
         :<|> stepSeekHandler
         :<|> stepRawHandler
@@ -168,6 +171,20 @@ corsPolicy req = case pathInfo req of
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
                 , corsMethods = ["GET", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["step-files", "cold"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["GET", "OPTIONS"]
+                , corsOrigins = Nothing
+                }
+    ["step-files", "prefetch"] ->
+        Just $
+            simpleCorsResourcePolicy
+                { corsRequestHeaders = ["Content-Type"]
+                , corsMethods = ["POST", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     ("step-files" : _) ->

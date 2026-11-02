@@ -26,6 +26,7 @@ import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, Ses
 import Handlers.TokenAuth (TokenLoginForm, TokenSession)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
+import Handlers.Cold (ColdStatus, PrefetchResponse)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
@@ -244,6 +245,8 @@ instance ToSchema ByteOffset where
 
 instance ToSchema DirEntry
 instance ToSchema FileChunk
+instance ToSchema ColdStatus
+instance ToSchema PrefetchResponse
 instance ToSchema ScratchRootResponse where
     declareNamedSchema _ =
         pure $ objectSchema "ScratchRootResponse" [("root", nullableField OpenApiString)]

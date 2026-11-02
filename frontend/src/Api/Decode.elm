@@ -451,7 +451,7 @@ directoryItem fileView =
 
                 else
                     Decode.succeed
-                        (\name size viewable seekable mimeType ->
+                        (\name size viewable seekable mimeType cold ->
                             ( name
                             , File
                                 { content = NotAsked
@@ -466,6 +466,7 @@ directoryItem fileView =
                                 , editedContent = Nothing
                                 , isNew = False
                                 , isDeleted = False
+                                , cold = cold
                                 }
                             )
                         )
@@ -474,6 +475,7 @@ directoryItem fileView =
                         |> required "viewable" Decode.bool
                         |> optional "seekable" Decode.bool False
                         |> required "mimeType" (Decode.nullable Decode.string)
+                        |> optional "cold" Decode.bool False
             )
 
 
@@ -984,3 +986,24 @@ scratchEntry =
         |> required "name" Decode.string
         |> required "directory" Decode.bool
         |> optional "size" (Decode.nullable Decode.int) Nothing
+
+
+coldStatus : Decoder Model.ColdStatus
+coldStatus =
+    Decode.succeed Model.ColdStatus
+        |> required "cold" Decode.bool
+        |> required "onloading" Decode.bool
+        |> required "done" Decode.int
+        |> required "total" Decode.int
+        |> required "files" (Decode.list coldPath)
+
+
+coldPath : Decoder (List String)
+coldPath =
+    Decode.map (String.split "/" >> List.filter (not << String.isEmpty)) Decode.string
+
+
+prefetchResponse : Decoder Model.PrefetchResponse
+prefetchResponse =
+    Decode.succeed Model.PrefetchResponse
+        |> required "ok" Decode.bool
