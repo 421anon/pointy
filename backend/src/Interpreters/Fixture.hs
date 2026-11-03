@@ -25,7 +25,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -33,8 +33,8 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import qualified Data.Vector.Unboxed as VU
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (AppEffects, Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
-import Fixture.Document (FixtureDocument (..), appliedAnswer, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
+import Effects (AppEffects, ColdStorage (..), Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
+import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageDataset, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobsEnded)
 import Processes (cli)
 
@@ -72,12 +72,38 @@ resetFixture state = do
 
 runFixture :: FixtureState -> Eff AppEffects a -> IO a
 runFixture state action =
-    runEff (runInferenceFixture (runSlurmFixture state (runNixFixture state (runEvalFixture state action))))
+    runEff (runInferenceFixture (runColdStorageFixture state (runSlurmFixture state (runNixFixture state (runEvalFixture state action)))))
 
 runInferenceFixture :: (IOE :> es) => Eff (Inference : es) a -> Eff es a
 runInferenceFixture = interpret $ \_ -> \case
     Embed texts -> pure (Right (map fixtureVector texts))
     JudgeCandidates query candidates -> pure (Right (Map.fromList [(stepId, fixtureRelevance query document) | (stepId, document) <- candidates]))
+
+runColdStorageFixture :: (IOE :> es) => FixtureState -> Eff (ColdStorage : es) a -> Eff es a
+runColdStorageFixture state = interpret $ \_ -> \case
+    ColdStorageConfigured -> pure (isJust (documentColdStorage (fixtureDocument state)))
+    ColdStorageStatus storePath ->
+        let coldDatasets = maybe [] (: []) (coldStorageDataset (fixtureDocument state) storePath)
+         in pure $
+                Right $
+                    jsonBytes $
+                        object
+                            [ "ok" .= True
+                            , "status" .= object ["datasets" .= coldDatasets]
+                            ]
+    ColdStoragePrefetch _ rel ->
+        pure $
+            Right $
+                jsonBytes $
+                    object
+                        [ "ok" .= True
+                        , "started" .= [rel]
+                        , "skipped" .= ([] :: [Text])
+                        , "unknown" .= ([] :: [Text])
+                        ]
+
+jsonBytes :: A.Value -> BS.ByteString
+jsonBytes = LBS.toStrict . A.encode
 
 fixtureDimensions :: Int
 fixtureDimensions = 64
