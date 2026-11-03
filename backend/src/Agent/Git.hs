@@ -56,6 +56,7 @@ import Agent.Session (
     turnLogHasFinalizationFailure,
  )
 import Agent.TurnLog (createTurnLog)
+import Certificates (checkRevision, evalProjectDefinitions)
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
@@ -64,22 +65,21 @@ import Control.Monad (filterM, forM_, mfilter, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON, Value)
+import qualified Data.ByteString as BS
 import Data.Char (isControl)
 import Data.List (intercalate, nub, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
-import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import DependencyRefs (decodeStepDefinitions, flakeStepDefinitionsExpression, rewriteDependencyRefs, stepRelocations, stripReferencePaths)
+import EffectRunner (runAppEffects)
 import GHC.Generics (Generic)
-import Certificates (checkRevision, evalProjectDefinitions)
-import Handlers.StepReview (readableStepReviews)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
-import Interpreters.Production (runProduction)
+import Handlers.StepReview (readableStepReviews)
 import ProjectFiles (stepDefinitionNix, stepFilePath)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
@@ -391,7 +391,7 @@ mergeCandidate repoPath session_ origin targetHead_ agentHead_ = do
 
 verifyCandidate :: FilePath -> PreparedApply -> [Int] -> IO (Either String ())
 verifyCandidate repoPath candidate changedSteps =
-    runProduction $ runExceptT $ checkRevision (atCommit (targetHead candidate)) (atCommit (candidateHead candidate)) changedSteps
+    runAppEffects $ runExceptT $ checkRevision (atCommit (targetHead candidate)) (atCommit (candidateHead candidate)) changedSteps
   where
     atCommit commit = ReadRepoContext repoPath (T.unpack commit)
 
@@ -554,12 +554,12 @@ rewriteRelocatedReviewedSteps repoPath candidate = do
 projectTreeAt :: Text -> ExceptT String IO Value
 projectTreeAt commit = do
     repoPath <- liftIO userRepoPath
-    evaluation <- ExceptT (runProduction (runExceptT (evalProjectDefinitions (ReadRepoContext repoPath (T.unpack commit)))))
+    evaluation <- ExceptT (runAppEffects (runExceptT (evalProjectDefinitions (ReadRepoContext repoPath (T.unpack commit)))))
     return evaluation
 
 evaluatedStepDefinitions :: ReadRepoContext -> [Int] -> ExceptT String IO (Map.Map Int (Maybe Value))
 evaluatedStepDefinitions ctx stepIds = do
-    output <- ExceptT (runProduction (runExceptT (runNixEvalJsonApplyInRepo ctx (flakeStepDefinitionsExpression stepIds) "")))
+    output <- ExceptT (runAppEffects (runExceptT (runNixEvalJsonApplyInRepo ctx (flakeStepDefinitionsExpression stepIds) "")))
     either throwError return (decodeStepDefinitions output)
 
 allReviewedSteps :: FilePath -> Text -> ExceptT String IO [Int]
@@ -587,7 +587,7 @@ stepList = intercalate ", " . map (("step " ++) . show)
 
 reviewedSteps :: FilePath -> Text -> [Int] -> ExceptT String IO [Int]
 reviewedSteps repoPath commit stepIds =
-    Map.keys . Map.filter isJust <$> ExceptT (runProduction (runExceptT (readableStepReviews (ReadRepoContext repoPath (T.unpack commit)) stepIds)))
+    Map.keys . Map.filter isJust <$> ExceptT (runAppEffects (runExceptT (readableStepReviews (ReadRepoContext repoPath (T.unpack commit)) stepIds)))
 
 findReviewedSteps :: AgentSession -> ExceptT String IO [Int]
 findReviewedSteps session_ = do
@@ -771,8 +771,8 @@ hasStagedChanges worktree = ExceptT $ do
 
 broadcastAppliedStatuses :: Text -> [Int] -> [Int] -> IO ()
 broadcastAppliedStatuses commit projectIds stepIds = do
-    mapM_ (\pid -> runProduction $ broadcastProjectStatus pid commit Nothing) projectIds
-    mapM_ (\sid -> runProduction $ broadcastStatusForStepProjects sid commit Nothing) stepIds
+    mapM_ (\pid -> runAppEffects $ broadcastProjectStatus pid commit Nothing) projectIds
+    mapM_ (\sid -> runAppEffects $ broadcastStatusForStepProjects sid commit Nothing) stepIds
 
 sessionHasActiveRunner :: AgentSession -> ExceptT String IO Bool
 sessionHasActiveRunner session_ = do

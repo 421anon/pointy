@@ -3,21 +3,25 @@
 
 module Main (main) where
 
+import Agent.Runner (resetAgentSessions)
 import App (runServer)
 import Config (loadConfig)
 import Control.Exception (SomeException, try)
 import Control.Monad (when)
+import Data.Aeson (encode)
+import qualified Data.ByteString.Lazy as LBS
+import Data.Maybe (isJust)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Fixture.Document (FixtureDocument (..), loadDocument)
+import Fixture.Document (FixtureAgent (..), FixtureDocument (..), loadDocument)
 import Fixture.Server (fixtureApp)
 import Handlers.ClusterStream (startClusterPoller)
 import Interpreters.Fixture (newFixtureState, resetFixture, runFixture)
 import Processes (cli)
 import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, removeFile, setCurrentDirectory)
-import System.Environment (getArgs, setEnv)
+import System.Environment (getArgs, getExecutablePath, setEnv)
 import System.Exit (ExitCode (..), exitFailure)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import UserRepo (ensureUserRepo)
 
@@ -56,19 +60,33 @@ run options = do
         origin = workDir </> "origin.git"
         configPath = workDir </> "config.toml"
         keyfile = workDir </> "key"
+        planPath = workDir </> "agent-plan.json"
     createDirectoryIfMissing True home
     setEnv "HOME" home
     setEnv "XDG_CACHE_HOME" (workDir </> "cache")
     setEnv "GIT_CONFIG_GLOBAL" (workDir </> "gitconfig")
     writeFile (workDir </> "gitconfig") "[safe]\n\tdirectory = *\n"
     writeFile keyfile ""
+    resetAgentSessions
     document <- either (\err -> error ("fixture document: " ++ err)) pure =<< loadDocument (optionState options)
+    exeDir <- takeDirectory <$> getExecutablePath
+    case documentAgent document of
+        Just agent -> LBS.writeFile planPath (encode agent)
+        Nothing -> removePath planPath
     removePath origin
     removePath (home </> "user-repo.git")
     removePath (home </> "user-repo.lock")
     removePath (home </> ".local" </> "state" </> "pointy")
     cloneRepo (optionRepoSource options) origin
-    writeConfig configPath origin keyfile (documentBranch document)
+    writeConfig
+        configPath
+        origin
+        keyfile
+        (documentBranch document)
+        (documentAgent document)
+        (exeDir </> "pointy-fixture-sandbox")
+        (exeDir </> "pointy-fixture-runner")
+        planPath
     setEnv "POINTY_CONFIG_PATH" configPath
     config <- loadConfig configPath
     setCurrentDirectory workDir
@@ -76,6 +94,7 @@ run options = do
     state <- newFixtureState document
     let reset = do
             resetFixture state
+            resetAgentSessions
             removePath origin
             removePath (home </> ".local" </> "state" </> "pointy")
             cloneRepo (optionRepoSource options) origin
@@ -90,42 +109,66 @@ run options = do
         (optionPort options)
         (putStrLn "Fixture server listening." >> startClusterPoller)
 
-writeConfig :: FilePath -> FilePath -> FilePath -> T.Text -> IO ()
-writeConfig configPath origin keyfile branch =
+writeConfig :: FilePath -> FilePath -> FilePath -> T.Text -> Maybe FixtureAgent -> FilePath -> FilePath -> FilePath -> IO ()
+writeConfig configPath origin keyfile branch mAgent sandboxCommand runnerCommand planPath =
     TIO.writeFile configPath $
         T.unlines $
-            [ "[user-repo]"
-            , "url = \"file://" <> T.pack origin <> "\""
-            , "keyfile = \"" <> T.pack keyfile <> "\""
-            , "branch = \"" <> branch <> "\""
-            , "[[providers]]"
-            , "name = \"fixture\""
-            , "base-url = \"http://127.0.0.1:1/v1\""
-            , "api-key-env = \"POINTY_FIXTURE_API_KEY\""
-            , "[models.chat]"
-            , "provider = \"fixture\""
-            , "protocol = \"openai-completions\""
-            , "model = \"fixture-chat\""
-            , "[models.chat.pi]"
-            , "name = \"Fixture Chat\""
-            , "contextWindow = 128000"
-            , "maxTokens = 8192"
-            , "input = [\"text\"]"
-            , "[search]"
-            , "limit = 10"
-            , "judge-candidates = 24"
-            , "[search.embedding]"
-            , "provider = \"fixture\""
-            , "protocol = \"openai-embeddings\""
-            , "model = \"fixture-embedding\""
-            , "batch-size = 128"
-            , "min-similarity = 0.0"
-            , "[search.judge]"
-            , "provider = \"fixture\""
-            , "protocol = \"systemone\""
-            , "model = \"fixture-judge\""
-            , "min-relevance = 0.05"
+            baseConfig
+                ++ agentConfig
+  where
+    baseConfig =
+        [ "[user-repo]"
+        , "url = \"file://" <> T.pack origin <> "\""
+        , "keyfile = \"" <> T.pack keyfile <> "\""
+        , "branch = \"" <> branch <> "\""
+        , "[[providers]]"
+        , "name = \"fixture\""
+        , "base-url = \"http://127.0.0.1:1/v1\""
+        , "api-key-env = \"POINTY_FIXTURE_API_KEY\""
+        , "[models.chat]"
+        , "provider = \"fixture\""
+        , "protocol = \"openai-completions\""
+        , "model = \"fixture-chat\""
+        , "[models.chat.pi]"
+        , "name = \"Fixture Chat\""
+        , "contextWindow = 128000"
+        , "maxTokens = 8192"
+        , "input = [\"text\"]"
+        , "[search]"
+        , "limit = 10"
+        , "judge-candidates = 24"
+        , "[search.embedding]"
+        , "provider = \"fixture\""
+        , "protocol = \"openai-embeddings\""
+        , "model = \"fixture-embedding\""
+        , "batch-size = 128"
+        , "min-similarity = 0.0"
+        , "[search.judge]"
+        , "provider = \"fixture\""
+        , "protocol = \"systemone\""
+        , "model = \"fixture-judge\""
+        , "min-relevance = 0.05"
+        ]
+    agentConfig = case mAgent of
+        Nothing -> []
+        Just agent ->
+            [ "[agent]"
+            , "sbox-command = " <> tomlString sandboxCommand
+            , "sbox-args = [\"--bind\", \"{home}\", \"{home}\"]"
+            , "runner-command = " <> tomlString runnerCommand
+            , "runner-args = [" <> tomlString "--plan" <> ", " <> tomlString planPath <> "]"
+            , "title-prompt = " <> tomlString (if isJust (agentTitle agent) then fixtureTitlePrompt else "")
             ]
+
+fixtureTitlePrompt :: String
+fixtureTitlePrompt = "Name the chat that opens with the request in this message. Reply with the title only: five words at most, no quotes, no punctuation, no explanation."
+
+tomlString :: String -> T.Text
+tomlString value = "\"" <> T.concatMap escape (T.pack value) <> "\""
+  where
+    escape '"' = "\\\""
+    escape '\\' = "\\\\"
+    escape character = T.singleton character
 
 cloneRepo :: FilePath -> FilePath -> IO ()
 cloneRepo source target = do
