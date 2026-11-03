@@ -2227,7 +2227,7 @@ loadArtifactTable artifact =
             (Flow.setAll artifactTable (Just { artifact = artifact, content = NotAsked })
                 |> Flow.seq
                     (callApi (artifactTableFor artifact << artifactTableContent)
-                        (Api.fetchFileContents artifact.stepId (Just artifact.commit) artifact.path
+                        (Api.fetchFileContents artifact.stepId artifact.mCommit artifact.path
                             |> Flow.map (Result.map (Model.textContentFromFile artifact.path Nothing))
                         )
                         |> Flow.return ()
@@ -4380,7 +4380,7 @@ askAboutArea question =
     in
     Flow.setAll areaCapture (Just (Model.AreaCaptureAsking question))
         |> Flow.seq (Flow.attemptTask (Dom.focus areaQuestionInputId))
-        |> Flow.seq (Flow.try (route << Route.page << Route.artifact) (Maybe.unwrap (Flow.pure Nothing) (\artifact -> captureArtifactArea artifact question.rect)))
+        |> Flow.seq (withPinnedArtifact (Maybe.unwrap (Flow.pure Nothing) (\artifact -> captureArtifactArea artifact question.rect)))
         |> Flow.andThen
             (\mCapturedArea ->
                 Flow.whenHas stillAsked
@@ -4399,6 +4399,34 @@ askAboutArea question =
                                     |> Flow.seq (addToast False "Couldn't capture this area.")
                     )
             )
+
+
+withPinnedArtifact : (Maybe Route.ArtifactParams -> Flow Model a) -> Flow Model a
+withPinnedArtifact use =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                use (Maybe.map (\artifact -> { artifact | mCommit = Model.viewedRevision model }) (try (route << Route.page << Route.artifact) model))
+            )
+
+
+followArtifactToHead : Flow Model ()
+followArtifactToHead =
+    Flow.forAll route
+        (\currentRoute ->
+            case currentRoute.page of
+                Route.Artifact artifact ->
+                    Flow.setAll artifactTable Nothing
+                        |> Flow.seq (replaceRoute { currentRoute | page = Route.Artifact { artifact | mCommit = Nothing } })
+
+                _ ->
+                    Flow.pure ()
+        )
+
+
+reloadAppliedAgentChanges : Flow Model ()
+reloadAppliedAgentChanges =
+    followArtifactToHead |> Flow.seq (Flow.async reloadWorkspaceData)
 
 
 prepareArtifactArea : Flow Model ()
@@ -4619,7 +4647,7 @@ applyAgentChanges sessionId =
                 (\view ->
                     Flow.over agent (applyAgentSessionView view)
                         |> Flow.seq (watchAgentTurn view)
-                        |> Flow.seq (Flow.when (not view.gitState.hasAgentCommits) (Flow.async reloadWorkspaceData))
+                        |> Flow.seq (Flow.when (not view.gitState.hasAgentCommits) reloadAppliedAgentChanges)
                 )
                 (Http.errorMessage >> addToast False >> Flow.seq (refreshAgentSession sessionId))
         )
@@ -4715,7 +4743,7 @@ sendAgentTurn whenPending view attachments promptSource =
                         (Flow.forAll agent
                             (\agentState ->
                                 Flow.try currentProjectId
-                                    (AgentApi.sendTurn sessionId prompt attachments agentState >> Flow.try (route << Route.page << Route.artifact))
+                                    (AgentApi.sendTurn sessionId prompt attachments agentState >> withPinnedArtifact)
                             )
                         )
                     |> FlowError.foldResult
@@ -4876,7 +4904,7 @@ onAgentTurnIn value =
                 )
 
         Ok (Model.AgentTurnDone done) ->
-            Flow.whenHas (agent << liveTurnAt done.sessionId << just << applying << just) (always (Flow.async reloadWorkspaceData))
+            Flow.whenHas (agent << liveTurnAt done.sessionId << just << applying << just) (always reloadAppliedAgentChanges)
                 |> Flow.seq (Flow.setAll (agent << liveTurnAt done.sessionId << just << finished) True)
                 |> Flow.seq (refreshAgentSession done.sessionId)
                 |> Flow.seq (notifySubmittedTurnFinished done.sessionId done.turnId)

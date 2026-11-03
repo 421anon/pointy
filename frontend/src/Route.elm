@@ -70,7 +70,7 @@ type alias ProjectParams =
 type alias ArtifactParams =
     { projectPath : List Int
     , stepId : Int
-    , commit : String
+    , mCommit : Maybe String
     , path : List String
     }
 
@@ -198,7 +198,7 @@ viewedCommit page_ =
             params.mCommit
 
         Artifact params ->
-            Just params.commit
+            params.mCommit
 
         NotFound _ ->
             Nothing
@@ -213,7 +213,7 @@ viewedCommitT =
                     Maybe.toList params.mCommit
 
                 Artifact params ->
-                    [ params.commit ]
+                    Maybe.toList params.mCommit
 
                 NotFound _ ->
                     []
@@ -224,7 +224,7 @@ viewedCommitT =
                     Project { params | mCommit = Maybe.map f params.mCommit }
 
                 Artifact params ->
-                    Artifact { params | commit = f params.commit }
+                    Artifact { params | mCommit = Maybe.map f params.mCommit }
 
                 NotFound _ ->
                     page_
@@ -468,11 +468,25 @@ artifactQueryParser commit projectPath stepId =
             Artifact
                 { projectPath = projectPath
                 , stepId = stepId
-                , commit = commit
+                , mCommit = commitFromSegment commit
                 , path = Maybe.map (String.split "/") mPath |> Maybe.withDefault []
                 }
         )
         (Parser.query (Query.string "path"))
+
+
+headSegment : String
+headSegment =
+    "HEAD"
+
+
+commitFromSegment : String -> Maybe String
+commitFromSegment segment =
+    if segment == headSegment then
+        Nothing
+
+    else
+        Just segment
 
 
 pageQueryKeys : Page -> List String
@@ -652,8 +666,8 @@ projectUrlParts { projectPath, mHighlight, mCommit, mCompare } =
 
 
 artifactUrlParts : ArtifactParams -> ( String, List String )
-artifactUrlParts { projectPath, stepId, commit, path } =
-    ( "/artifact/" ++ String.join "/" (List.map String.fromInt (projectPath ++ [ stepId ]) ++ [ commit ])
+artifactUrlParts { projectPath, stepId, mCommit, path } =
+    ( "/artifact/" ++ String.join "/" (List.map String.fromInt (projectPath ++ [ stepId ]) ++ [ Maybe.withDefault headSegment mCommit ])
     , if List.isEmpty path then
         []
 

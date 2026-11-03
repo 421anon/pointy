@@ -98,7 +98,7 @@ viewArtifact model artifact =
                 (Route.Project
                     { projectPath = artifact.projectPath
                     , mHighlight = Just { id = artifact.stepId, target = Route.Output, path = artifact.path, range = Nothing }
-                    , mCommit = Just artifact.commit
+                    , mCommit = artifact.mCommit
                     , mCompare = Nothing
                     }
                 )
@@ -118,7 +118,7 @@ viewArtifact model artifact =
                         |> TextContent.view "artifact-viewer-text"
                             Actions.updateArtifactTable
                             [ Html.a
-                                [ Html.Attributes.href (Api.stepFileDownloadUrl artifact.stepId (Just artifact.commit) artifact.path)
+                                [ Html.Attributes.href (Api.stepFileDownloadUrl artifact.stepId artifact.mCommit artifact.path)
                                 , Html.Attributes.download ""
                                 , Html.Attributes.class "dir-item-icon-btn"
                                 , Html.Attributes.title "Download"
@@ -128,13 +128,17 @@ viewArtifact model artifact =
                     ]
 
               else
-                Html.node "iframe"
-                    [ Html.Attributes.id Actions.artifactFrameId
-                    , Html.Attributes.src (Api.stepFileBundleUrl artifact.stepId artifact.commit artifact.path)
-                    , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
-                    , Html.Attributes.class "artifact-viewer-frame"
-                    ]
-                    []
+                Html.viewMaybe
+                    (\commit ->
+                        Html.node "iframe"
+                            [ Html.Attributes.id Actions.artifactFrameId
+                            , Html.Attributes.src (Api.stepFileBundleUrl artifact.stepId commit artifact.path)
+                            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
+                            , Html.Attributes.class "artifact-viewer-frame"
+                            ]
+                            []
+                    )
+                    (Model.viewedRevision model)
             , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
                 [ Html.viewIf (not isTable)

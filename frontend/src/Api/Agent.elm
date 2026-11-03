@@ -105,7 +105,7 @@ encodeViewedArtifact : Route.ArtifactParams -> Encode.Value
 encodeViewedArtifact artifact =
     Encode.object
         [ ( "stepId", Encode.int artifact.stepId )
-        , ( "commit", Encode.string artifact.commit )
+        , ( "commit", Maybe.unwrap Encode.null Encode.string artifact.mCommit )
         , ( "path", Encode.list Encode.string artifact.path )
         ]
 
@@ -146,7 +146,7 @@ encodeCapturedArtifact artifact =
     Encode.object
         [ ( "projectPath", Encode.list Encode.int artifact.projectPath )
         , ( "stepId", Encode.int artifact.stepId )
-        , ( "commit", Encode.string artifact.commit )
+        , ( "commit", Maybe.unwrap Encode.null Encode.string artifact.mCommit )
         , ( "path", Encode.list Encode.string artifact.path )
         ]
 
@@ -325,7 +325,7 @@ capturedArtifactDecoder =
     Decode.succeed Route.ArtifactParams
         |> required "projectPath" (Decode.list Decode.int)
         |> required "stepId" Decode.int
-        |> required "commit" Decode.string
+        |> required "commit" (Decode.map Just Decode.string)
         |> required "path" (Decode.list Decode.string)
 
 

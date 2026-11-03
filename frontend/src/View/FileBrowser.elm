@@ -477,7 +477,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                         Route.Artifact
                                             { projectPath = projectPath_
                                             , stepId = stepId_
-                                            , commit = commit_
+                                            , mCommit = Just commit_
                                             , path = path
                                             }
 
