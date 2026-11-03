@@ -35,10 +35,6 @@ in
     ];
     writableStoreUseTmpfs = false;
     sharedDirectories = {
-      cache = {
-        source = "$HOME/.cache/nix";
-        target = "/var/cache/nix";
-      };
       nix-var = {
         source = "/nix/var/log";
         target = "/nix/var/log";
@@ -50,9 +46,6 @@ in
     };
   };
 
-  virtualisation.fileSystems."/var/cache/nix".options = [ "cache=mmap" ];
-
-  systemd.services.backend.environment.NIX_CACHE_HOME = "/var/cache/nix";
   services.slurm.nodeName = lib.mkForce [
     "${config.networking.hostName} CPUs=4 RealMemory=${slurmRealMemory} State=UNKNOWN"
   ];
