@@ -15,10 +15,10 @@ module Handlers.Cold (
     parsePrefetchResponse,
 ) where
 
-import Control.Exception (IOException, try)
-import Control.Monad (forM_, guard)
+import Control.Monad (forM_, guard, when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -30,19 +30,15 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Effectful (UnliftStrategy (SeqUnlift), withEffToIO)
-import Effects (AppM)
+import Effects (AppM, coldStorageConfigured, coldStoragePrefetch, coldStorageStatus)
 import GHC.Generics (Generic)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixStore (rootedPath)
 import Servant (ServerError (..), err409, err502, err503, throwError)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
 import System.Directory (getSymbolicLinkTarget, pathIsSymbolicLink)
-import System.Environment (lookupEnv)
-import System.Exit (ExitCode (..))
 import System.FilePath (joinPath, normalise, splitDirectories)
 import System.IO.Unsafe (unsafePerformIO)
-import System.Process (readProcessWithExitCode)
-import System.Timeout (timeout)
 
 data ColdStatus = ColdStatus
     { cold :: Bool
@@ -206,47 +202,47 @@ coldOutPath stepId mCommit = case mCommit of
 
 coldFilesFor :: Text -> AppM (Set Text)
 coldFilesFor storePath = do
-    mSocket <- liftIO coldStorageSocket
-    case mSocket of
-        Nothing -> pure Set.empty
-        Just socket -> do
+    configured <- lift coldStorageConfigured
+    if not configured
+        then pure Set.empty
+        else do
             datasetPath <- liftIO (coldDatasetPath storePath)
-            result <- liftIO $ runStatus socket datasetPath
+            result <- lift (coldStorageStatus datasetPath)
             pure $ either (const Set.empty) parseColdFiles result
 
 refuseColdFile :: Text -> FilePath -> AppM ()
 refuseColdFile storePath rel = do
-    mSocket <- liftIO coldStorageSocket
-    forM_ mSocket $ \socket -> do
+    configured <- lift coldStorageConfigured
+    when configured $ do
         datasetPath <- liftIO (coldDatasetPath storePath)
-        result <- liftIO $ runStatus socket datasetPath
+        result <- lift (coldStorageStatus datasetPath)
         let coldFiles = either (const Set.empty) parseColdFiles result
             components = dropWhile (== "/") (splitDirectories (normalise rel))
             enclosing = [T.pack (joinPath (take n components)) | n <- [1 .. length components]]
         forM_ (find (`Set.member` coldFiles) enclosing) $ \coldFile -> do
-            _ <- liftIO $ runColdStorage (prefetchCommand socket datasetPath (T.unpack coldFile))
+            _ <- lift (coldStoragePrefetch datasetPath (T.unpack coldFile))
             throwError err409{errBody = "This file is in cold storage. It is being fetched; try again once it is local."}
 
 coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus
 coldStatusHandler stepId mCommit = do
-    mSocket <- liftIO coldStorageSocket
-    case mSocket of
-        Nothing -> pure emptyColdStatus
-        Just socket -> do
+    configured <- lift coldStorageConfigured
+    if not configured
+        then pure emptyColdStatus
+        else do
             outPath <- coldOutPath stepId mCommit
             datasetPath <- liftIO (coldDatasetPath outPath)
-            result <- liftIO $ runStatus socket datasetPath
+            result <- lift (coldStorageStatus datasetPath)
             pure $ either (const emptyColdStatus) (fromMaybe emptyColdStatus . parseColdStatus) result
 
 prefetchHandler :: Int -> Maybe Text -> FilePath -> AppM PrefetchResponse
 prefetchHandler stepId mCommit rel = do
-    mSocket <- liftIO coldStorageSocket
-    case mSocket of
-        Nothing -> throwError err503{errBody = "cold storage is not configured"}
-        Just socket -> do
+    configured <- lift coldStorageConfigured
+    if not configured
+        then throwError err503{errBody = "cold storage is not configured"}
+        else do
             outPath <- coldOutPath stepId mCommit
             datasetPath <- liftIO (coldDatasetPath outPath)
-            result <- liftIO $ runColdStorage (prefetchCommand socket datasetPath rel)
+            result <- lift (coldStoragePrefetch datasetPath rel)
             case result >>= parsePrefetchResponse of
                 Left message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
                 Right response -> pure response
@@ -263,50 +259,3 @@ coldDatasetPath outPath = do
                 if "/nix/store/" `isPrefixOf` target
                     then T.pack (normalise target)
                     else outPath
-
-coldStorageSocket :: IO (Maybe String)
-coldStorageSocket = do
-    value <- lookupEnv "POINTY_COLD_STORE_SOCKET"
-    pure $ case value of
-        Just socket | not (null socket) -> Just socket
-        _ -> Nothing
-
-coldStorageProgram :: FilePath
-coldStorageProgram = "pointy-scratch-store"
-
-coldStatusTimeoutMicros :: Int
-coldStatusTimeoutMicros = 2000000
-
-runStatus :: String -> Text -> IO (Either Text BS.ByteString)
-runStatus socket storePath =
-    fromMaybe (Left "cold storage status command timed out")
-        <$> timeout coldStatusTimeoutMicros (runColdStorage (statusCommand socket storePath))
-
-statusCommand :: String -> Text -> [String]
-statusCommand socket storePath =
-    ["status", "--ingest-socket", socket, "--store-path", T.unpack storePath]
-
-prefetchCommand :: String -> Text -> FilePath -> [String]
-prefetchCommand socket storePath rel =
-    ["prefetch", "--ingest-socket", socket, "--store-path", T.unpack storePath, "--file", rel]
-
-runColdStorage :: [String] -> IO (Either Text BS.ByteString)
-runColdStorage args = do
-    result <-
-        try (readProcessWithExitCode coldStorageProgram args "") ::
-            IO (Either IOException (ExitCode, String, String))
-    pure $ case result of
-        Left err -> Left (T.pack (show err))
-        Right (ExitSuccess, out, _) -> Right (TE.encodeUtf8 (T.pack out))
-        Right (ExitFailure code, out, err) -> Left (commandFailure code (TE.encodeUtf8 (T.pack out)) err)
-
-commandFailure :: Int -> BS.ByteString -> String -> Text
-commandFailure code out err =
-    case eitherDecodeStrict out of
-        Right line | Just reported <- prefetchLineError line, not (T.null reported) -> reported
-        _ -> fallback
-  where
-    stderrText = T.strip (T.pack err)
-    fallback
-        | T.null stderrText = "cold storage command exited with code " <> T.pack (show code)
-        | otherwise = stderrText

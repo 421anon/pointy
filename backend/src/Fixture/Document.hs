@@ -11,6 +11,7 @@ module Fixture.Document (
     derivationAnswer,
     derivationOutputs,
     logAnswer,
+    coldStorageDataset,
     pseudoHash,
 ) where
 
@@ -49,6 +50,24 @@ data FixtureDocument = FixtureDocument
     , documentReferences :: Map.Map FilePath [FilePath]
     , documentOutputs :: Map.Map FilePath [FilePath]
     , documentAgent :: Maybe FixtureAgent
+    , documentColdStorage :: Maybe (Map.Map String FixtureColdDataset)
+    }
+
+data FixtureColdDataset = FixtureColdDataset
+    { coldDatasetPhase :: Text
+    , coldDatasetLocal :: Bool
+    , coldDatasetFiles :: [FixtureColdFile]
+    }
+
+data FixtureColdFile = FixtureColdFile
+    { coldFilePath :: Text
+    , coldFileLocal :: Bool
+    , coldFileOnload :: Maybe FixtureColdOnload
+    }
+
+data FixtureColdOnload = FixtureColdOnload
+    { coldOnloadDone :: Integer
+    , coldOnloadTotal :: Integer
     }
 
 data FixtureAgent = FixtureAgent
@@ -130,6 +149,50 @@ instance FromJSON FixtureDocument where
             <*> (Map.mapKeys T.unpack <$> obj .:? "references" .!= Map.empty)
             <*> (Map.mapKeys T.unpack <$> obj .:? "outputs" .!= Map.empty)
             <*> obj .:? "agent"
+            <*> obj .:? "coldStorage"
+
+instance FromJSON FixtureColdDataset where
+    parseJSON = withObject "cold storage dataset" $ \o ->
+        FixtureColdDataset
+            <$> o .:? "phase" .!= "evicted"
+            <*> o .:? "local" .!= False
+            <*> (fromMaybe [] <$> o .:? "files")
+
+instance ToJSON FixtureColdDataset where
+    toJSON dataset =
+        object
+            [ "phase" .= coldDatasetPhase dataset
+            , "local" .= coldDatasetLocal dataset
+            , "files" .= coldDatasetFiles dataset
+            ]
+
+instance FromJSON FixtureColdFile where
+    parseJSON = withObject "cold storage file" $ \o ->
+        FixtureColdFile
+            <$> o .: "path"
+            <*> o .:? "local" .!= False
+            <*> o .:? "onload"
+
+instance ToJSON FixtureColdFile where
+    toJSON file =
+        object
+            [ "path" .= coldFilePath file
+            , "local" .= coldFileLocal file
+            , "onload" .= coldFileOnload file
+            ]
+
+instance FromJSON FixtureColdOnload where
+    parseJSON = withObject "cold storage onload" $ \o ->
+        FixtureColdOnload
+            <$> (fromMaybe 0 <$> o .:? "bytes_done")
+            <*> (fromMaybe 0 <$> o .:? "bytes_total")
+
+instance ToJSON FixtureColdOnload where
+    toJSON onload =
+        object
+            [ "bytes_done" .= coldOnloadDone onload
+            , "bytes_total" .= coldOnloadTotal onload
+            ]
 
 loadDocument :: FilePath -> IO (Either String FixtureDocument)
 loadDocument path = eitherDecode <$> LBS.readFile path
@@ -271,6 +334,10 @@ derivationAnswer document path = Map.lookup path (documentDerivations document)
 
 derivationOutputs :: FixtureDocument -> FilePath -> [FilePath]
 derivationOutputs document drv = [path | (path, deriver) <- Map.toList (documentDerivations document), deriver == drv]
+
+coldStorageDataset :: FixtureDocument -> Text -> Maybe Value
+coldStorageDataset document storePath =
+    toJSON <$> (documentColdStorage document >>= Map.lookup (T.unpack storePath))
 
 logAnswer :: FixtureDocument -> FilePath -> IO (Maybe String)
 logAnswer document drv = case Map.lookup drv (documentLogs document) of

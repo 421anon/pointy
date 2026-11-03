@@ -18,6 +18,7 @@ module Effects (
     Nix (..),
     LogStamp (..),
     Slurm (..),
+    ColdStorage (..),
     Inference (..),
     SubmitRequest (..),
     SlurmQuery (..),
@@ -43,6 +44,9 @@ module Effects (
     querySlurm,
     cancelJob,
     clusterAvailability,
+    coldStorageConfigured,
+    coldStorageStatus,
+    coldStoragePrefetch,
     embedTexts,
     judgeCandidates,
 ) where
@@ -66,9 +70,9 @@ import NixEvaluator (RepoSource)
 import Servant.Server (ServerError)
 import Servant.Server.Internal.Handler (Handler (..))
 
-type AppEffects = '[Eval, Nix, Slurm, Inference, IOE]
+type AppEffects = '[Eval, Nix, Slurm, ColdStorage, Inference, IOE]
 
-type App es = (Eval :> es, Nix :> es, Slurm :> es, Inference :> es, IOE :> es)
+type App es = (Eval :> es, Nix :> es, Slurm :> es, ColdStorage :> es, Inference :> es, IOE :> es)
 
 type AppM = ExceptT ServerError (Eff AppEffects)
 
@@ -108,6 +112,13 @@ data Slurm :: Effect where
     ClusterAvailability :: Slurm m (Either String String)
 
 type instance DispatchOf Slurm = Dynamic
+
+data ColdStorage :: Effect where
+    ColdStorageConfigured :: ColdStorage m Bool
+    ColdStorageStatus :: Text -> ColdStorage m (Either Text ByteString)
+    ColdStoragePrefetch :: Text -> FilePath -> ColdStorage m (Either Text ByteString)
+
+type instance DispatchOf ColdStorage = Dynamic
 
 data Inference :: Effect where
     Embed :: [Text] -> Inference m (Either String [VU.Vector Float])
@@ -242,6 +253,15 @@ cancelJob = send . CancelJob
 
 clusterAvailability :: (Slurm :> es) => Eff es (Either String String)
 clusterAvailability = send ClusterAvailability
+
+coldStorageConfigured :: (ColdStorage :> es) => Eff es Bool
+coldStorageConfigured = send ColdStorageConfigured
+
+coldStorageStatus :: (ColdStorage :> es) => Text -> Eff es (Either Text ByteString)
+coldStorageStatus = send . ColdStorageStatus
+
+coldStoragePrefetch :: (ColdStorage :> es) => Text -> FilePath -> Eff es (Either Text ByteString)
+coldStoragePrefetch storePath = send . ColdStoragePrefetch storePath
 
 embedTexts :: (Inference :> es) => [Text] -> Eff es (Either String [VU.Vector Float])
 embedTexts = send . Embed
