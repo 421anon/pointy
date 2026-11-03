@@ -2,6 +2,8 @@
 
 module Fixture.Document (
     FixtureDocument (..),
+    FixtureAgent (..),
+    FixtureAgentEdit (..),
     loadDocument,
     jsonAnswer,
     rawAnswer,
@@ -12,20 +14,23 @@ module Fixture.Document (
     pseudoHash,
 ) where
 
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecode, object, toJSON, withObject, (.:?), (.!=), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecode, object, toJSON, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit, ord)
 import Data.List (isInfixOf, stripPrefix)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
-import Text.Read (readMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as Vector
-import System.Directory (doesFileExist)
 import ProjectTree (stepEntries)
+import System.Directory (doesFileExist)
+import Text.Read (readMaybe)
 
 data FixtureDocument = FixtureDocument
     { documentBranch :: Text
@@ -43,7 +48,68 @@ data FixtureDocument = FixtureDocument
     , documentLogs :: Map.Map FilePath FilePath
     , documentReferences :: Map.Map FilePath [FilePath]
     , documentOutputs :: Map.Map FilePath [FilePath]
+    , documentAgent :: Maybe FixtureAgent
     }
+
+data FixtureAgent = FixtureAgent
+    { agentTitle :: Maybe Text
+    , agentReply :: Maybe Text
+    , agentEdits :: [FixtureAgentEdit]
+    }
+
+data FixtureAgentEdit = FixtureAgentEdit
+    { editPath :: FilePath
+    , editContent :: Maybe Text
+    , editFind :: Maybe Text
+    , editReplace :: Maybe Text
+    }
+
+instance FromJSON FixtureAgent where
+    parseJSON = withObject "FixtureAgent" $ \obj ->
+        FixtureAgent
+            <$> obj .:? "title"
+            <*> obj .:? "reply"
+            <*> (obj .:? "edits" .!= Object KeyMap.empty >>= parseAgentEdits)
+
+instance ToJSON FixtureAgent where
+    toJSON agent =
+        object
+            [ "title" .= agentTitle agent
+            , "reply" .= agentReply agent
+            , "edits" .= agentEdits agent
+            ]
+
+instance FromJSON FixtureAgentEdit where
+    parseJSON = withObject "FixtureAgentEdit" $ \obj ->
+        FixtureAgentEdit
+            <$> obj .: "path"
+            <*> obj .:? "content"
+            <*> obj .:? "find"
+            <*> obj .:? "replace"
+
+instance ToJSON FixtureAgentEdit where
+    toJSON edit =
+        object $
+            ["path" .= editPath edit]
+                ++ maybe [] (\content -> ["content" .= content]) (editContent edit)
+                ++ maybe [] (\find -> ["find" .= find]) (editFind edit)
+                ++ maybe [] (\replace -> ["replace" .= replace]) (editReplace edit)
+
+parseAgentEdits :: Value -> Parser [FixtureAgentEdit]
+parseAgentEdits (Object edits) = mapM (uncurry parseNamedEdit) (KeyMap.toList edits)
+  where
+    parseNamedEdit name = parseEditValue (Key.toText name)
+parseAgentEdits (Array edits) = mapM parseJSON (Vector.toList edits)
+parseAgentEdits value = fail ("agent.edits must be an object or array of edits, not " ++ show value)
+
+parseEditValue :: Text -> Value -> Parser FixtureAgentEdit
+parseEditValue path (String content) = pure (FixtureAgentEdit (T.unpack path) (Just content) Nothing Nothing)
+parseEditValue path (Object fields) =
+    FixtureAgentEdit (T.unpack path)
+        <$> fields .:? "content"
+        <*> fields .:? "find"
+        <*> fields .:? "replace"
+parseEditValue path value = fail ("agent edit for " ++ T.unpack path ++ " must be a string or object, not " ++ show value)
 
 instance FromJSON FixtureDocument where
     parseJSON = withObject "FixtureDocument" $ \obj ->
@@ -63,6 +129,7 @@ instance FromJSON FixtureDocument where
             <*> (Map.mapKeys T.unpack <$> obj .:? "logs" .!= Map.empty)
             <*> (Map.mapKeys T.unpack <$> obj .:? "references" .!= Map.empty)
             <*> (Map.mapKeys T.unpack <$> obj .:? "outputs" .!= Map.empty)
+            <*> obj .:? "agent"
 
 loadDocument :: FilePath -> IO (Either String FixtureDocument)
 loadDocument path = eitherDecode <$> LBS.readFile path

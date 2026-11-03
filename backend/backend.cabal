@@ -179,8 +179,38 @@ executable pointy-fixture-server
   main-is:          FixtureMain.hs
   ghc-options:      -threaded
   build-depends:
+    , aeson
     , backend
     , base
+    , bytestring
+    , directory
+    , filepath
+    , text
+
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
+executable pointy-fixture-sandbox
+  import:           warnings
+  main-is:          FixtureSandbox.hs
+  build-depends:
+    , base
+    , directory
+    , filepath
+    , unix
+
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
+executable pointy-fixture-runner
+  import:           warnings
+  main-is:          FixtureRunner.hs
+  ghc-options:      -threaded
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , bytestring
     , directory
     , filepath
     , text

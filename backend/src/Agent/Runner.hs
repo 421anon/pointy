@@ -19,6 +19,7 @@ module Agent.Runner (
     streamHandle,
     planSteer,
     watchTurnBudget,
+    resetAgentSessions,
 ) where
 
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
@@ -33,8 +34,10 @@ import Agent.Session (
     StoredAreaCapture (..),
     TurnImage (..),
     acquireSessionCompaction,
+    agentSessionsRoot,
     applyConflictsPending,
     findTurn,
+    forgetSessionTurns,
     listTurns,
     loadSessionById,
     loadTurn,
@@ -45,9 +48,9 @@ import Agent.Session (
     saveTurn,
     sessionCompacting,
     touchSession,
+    turnImageFilePath,
     turnIsUnfinished,
     turnLogFilePath,
-    turnImageFilePath,
     turnLogHasFinalizationFailure,
     turnMetadataPath,
  )
@@ -159,6 +162,28 @@ retireTurn sid tid = do
 
 takeStopRequest :: Text -> STM Bool
 takeStopRequest tid = stateTVar stopRequestedTurns (\pending -> (Set.member tid pending, Set.delete tid pending))
+
+resetAgentSessions :: IO ()
+resetAgentSessions = do
+    (runners, inputs) <- atomically $ do
+        currentRunners <- readTVar activeRunners
+        currentInputs <- readTVar runnerInputs
+        writeTVar activeRunners Map.empty
+        writeTVar runnerInputs Map.empty
+        writeTVar waitingSteers Map.empty
+        writeTVar stopRequestedTurns Set.empty
+        return (currentRunners, currentInputs)
+    forM_ (Map.elems inputs) closeRunnerInput
+    forM_ (Map.elems runners) $ \(_, mProcess) ->
+        forM_ mProcess $ \ph -> do
+            void (try (terminateProcess ph) :: IO (Either SomeException ()))
+            void (timeout 2000000 (waitForProcess ph))
+    root <- agentSessionsRoot
+    exists <- doesDirectoryExist root
+    when exists $ do
+        names <- listDirectory root
+        forM_ (map T.pack names) forgetSessionTurns
+        removePathForcibly root
 
 budgetPollMicros :: Int
 budgetPollMicros = 1000000
