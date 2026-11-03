@@ -904,6 +904,11 @@ artifactTable =
     lens ".artifactTable" Model.getArtifactTable (\(Model m) table -> Model { m | artifactTable = table })
 
 
+lastShownArtifact : Lens ls Model (Maybe Route.ArtifactParams) x y
+lastShownArtifact =
+    lens ".lastShownArtifact" Model.getLastShownArtifact (\(Model m) shown -> Model { m | lastShownArtifact = shown })
+
+
 artifactTableFor : Route.ArtifactParams -> Traversal Model Model.ArtifactTable x y
 artifactTableFor artifact =
     artifactTable << just << where_ (.artifact >> (==) artifact)

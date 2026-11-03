@@ -42,14 +42,16 @@ init flags url key =
             Route.fromUrl url
     in
     ( initialModel key initialRoute flags
-    , Flow.async (Actions.applyAgentChatFromUrl True)
+    , Flow.async Actions.listenAndProcessStepStatus
+        |> Flow.seq (Flow.async (Actions.applyAgentChatFromUrl True))
         |> Flow.seq initializeAgent
         |> Flow.seq
             (case initialRoute.page of
-                Route.Artifact artifact ->
-                    Flow.async (Actions.loadArtifactTable artifact)
+                Route.Artifact _ ->
+                    Actions.syncShownArtifact
                         |> Flow.seq Actions.loadStepConfig
                         |> Flow.seq Actions.loadProjects
+                        |> Flow.seq Actions.requestArtifactStatus
 
                 _ ->
                     initializeWorkspace
@@ -72,8 +74,7 @@ initializeAgent =
 
 initializeWorkspace : Flow Model ()
 initializeWorkspace =
-    Flow.async Actions.listenAndProcessStepStatus
-        |> Flow.seq (Flow.async Actions.loadTokenSession)
+    Flow.async Actions.loadTokenSession
         |> Flow.seq Actions.loadSearchInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadPresets
@@ -208,9 +209,10 @@ applyRoute forceRevealHighlight newRoute =
                                                     )
                                                 |> Flow.seq (Actions.syncCompareFromRoute newRoute)
 
-                                        Route.Artifact artifact ->
+                                        Route.Artifact _ ->
                                             Actions.syncCompareFromRoute newRoute
-                                                |> Flow.seq (Flow.async (Actions.loadArtifactTable artifact))
+                                                |> Flow.seq Actions.syncShownArtifact
+                                                |> Flow.seq Actions.requestArtifactStatus
 
                                         Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute

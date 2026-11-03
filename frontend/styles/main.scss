@@ -1836,6 +1836,28 @@ $delimited-grid-row-height: 28px;
   background: white;
 }
 
+.artifact-viewer-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary);
+}
+
+.artifact-viewer-status {
+  position: absolute;
+  bottom: var(--spacing-md);
+  left: var(--spacing-md);
+  z-index: 1;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-elevated);
+  pointer-events: none;
+}
+
 .artifact-viewer-capture {
   position: absolute;
   inset: 0;

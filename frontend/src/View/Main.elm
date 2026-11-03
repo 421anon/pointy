@@ -13,6 +13,7 @@ import Html.Attributes
 import Html.Events
 import Html.Extra as Html
 import Html.Keyed
+import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, toasts)
 import Model.Lib as Lib
@@ -108,40 +109,27 @@ viewArtifact model artifact =
 
         isTable =
             Model.isDelimitedPath artifact.path
+
+        mShown =
+            Actions.shownArtifact model
+
+        mRunNote =
+            Actions.artifactRunNote model artifact
     in
     Html.div [ Html.Attributes.class "artifact-viewer" ]
         [ Html.div [ Html.Attributes.class "artifact-viewer-main" ]
-            [ if isTable then
-                Html.div [ Html.Attributes.class "artifact-viewer-table" ]
-                    [ try (artifactTableFor artifact << artifactTableContent) model
-                        |> Maybe.withDefault NotAsked
-                        |> TextContent.view "artifact-viewer-text"
-                            Actions.updateArtifactTable
-                            [ Html.a
-                                [ Html.Attributes.href (Api.stepFileDownloadUrl artifact.stepId artifact.mCommit artifact.path)
-                                , Html.Attributes.download ""
-                                , Html.Attributes.class "dir-item-icon-btn"
-                                , Html.Attributes.title "Download"
-                                ]
-                                [ icon True "download" ]
-                            ]
-                    ]
+            [ case mShown of
+                Nothing ->
+                    Html.div [ Html.Attributes.class "artifact-viewer-placeholder" ]
+                        [ Html.text (Maybe.unwrap "Checking the output…" ((++) "Output not built yet · ") mRunNote) ]
 
-              else
-                Html.viewMaybe
-                    (\commit ->
-                        Html.node "iframe"
-                            [ Html.Attributes.id Actions.artifactFrameId
-                            , Html.Attributes.src (Api.stepFileBundleUrl artifact.stepId commit artifact.path)
-                            , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
-                            , Html.Attributes.class "artifact-viewer-frame"
-                            ]
-                            []
-                    )
-                    (Model.viewedRevision model)
+                Just shown ->
+                    viewShownArtifact model isTable shown
+            , Html.viewMaybe (\note -> Html.div [ Html.Attributes.class "artifact-viewer-status" ] [ Html.text ("Previous version · " ++ note) ])
+                (Maybe.andThen (always mRunNote) mShown)
             , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
-                [ Html.viewIf (not isTable)
+                [ Html.viewIf (not isTable && Maybe.isJust mShown)
                     (Html.button
                         [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
                         , Html.Attributes.type_ "button"
@@ -169,6 +157,38 @@ viewArtifact model artifact =
         , AgentPanel.viewLightbox model
         , viewToasts model
         ]
+
+
+viewShownArtifact : Model -> Bool -> Route.ArtifactParams -> Html (Flow Model ())
+viewShownArtifact model isTable shown =
+    if isTable then
+        Html.div [ Html.Attributes.class "artifact-viewer-table" ]
+            [ try (artifactTableFor shown << artifactTableContent) model
+                |> Maybe.withDefault NotAsked
+                |> TextContent.view "artifact-viewer-text"
+                    Actions.updateArtifactTable
+                    [ Html.a
+                        [ Html.Attributes.href (Api.stepFileDownloadUrl shown.stepId shown.mCommit shown.path)
+                        , Html.Attributes.download ""
+                        , Html.Attributes.class "dir-item-icon-btn"
+                        , Html.Attributes.title "Download"
+                        ]
+                        [ icon True "download" ]
+                    ]
+            ]
+
+    else
+        Html.viewMaybe
+            (\commit ->
+                Html.node "iframe"
+                    [ Html.Attributes.id Actions.artifactFrameId
+                    , Html.Attributes.src (Api.stepFileBundleUrl shown.stepId commit shown.path)
+                    , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
+                    , Html.Attributes.class "artifact-viewer-frame"
+                    ]
+                    []
+            )
+            shown.mCommit
 
 
 view404 : Html (Flow Model ())

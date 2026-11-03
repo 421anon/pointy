@@ -4406,8 +4406,87 @@ withPinnedArtifact use =
     Flow.get
         |> Flow.andThen
             (\model ->
-                use (Maybe.map (\artifact -> { artifact | mCommit = Model.viewedRevision model }) (try (route << Route.page << Route.artifact) model))
+                use
+                    (Maybe.orElse
+                        (Maybe.map (\artifact -> { artifact | mCommit = Model.viewedRevision model }) (try (route << Route.page << Route.artifact) model))
+                        (shownArtifact model)
+                    )
             )
+
+
+artifactRunState : Model -> Route.ArtifactParams -> Maybe Model.StepRunState
+artifactRunState model artifact =
+    try (stepRecordById artifact.stepId << runState << success) model
+
+
+builtCommit : Model.StepRunState -> Maybe String
+builtCommit run =
+    if Maybe.unwrap False Model.hasBuiltOutput (ApiData.toMaybe run.status) then
+        Just run.commit
+
+    else
+        Nothing
+
+
+shownArtifact : Model -> Maybe Route.ArtifactParams
+shownArtifact model =
+    try (route << Route.page << Route.artifact) model
+        |> Maybe.andThen
+            (\artifact ->
+                case artifact.mCommit of
+                    Just _ ->
+                        Just artifact
+
+                    Nothing ->
+                        case artifactRunState model artifact |> Maybe.andThen builtCommit of
+                            Just commit ->
+                                Just { artifact | mCommit = Just commit }
+
+                            Nothing ->
+                                get lastShownArtifact model
+                                    |> Maybe.filter (\shown -> { shown | mCommit = Nothing } == artifact)
+            )
+
+
+artifactRunNote : Model -> Route.ArtifactParams -> Maybe String
+artifactRunNote model artifact =
+    if artifact.mCommit /= Nothing then
+        Nothing
+
+    else
+        case artifactRunState model artifact |> Maybe.andThen (.status >> ApiData.toMaybe) of
+            Just StatusNotStarted ->
+                Just "run pending"
+
+            Just StatusRunning ->
+                Just "running"
+
+            Just (StatusFailure _) ->
+                Just "run failed"
+
+            _ ->
+                Nothing
+
+
+syncShownArtifact : Flow Model ()
+syncShownArtifact =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                case shownArtifact model of
+                    Just shown ->
+                        Flow.setAll lastShownArtifact (Just shown)
+                            |> Flow.seq (Flow.async (loadArtifactTable shown))
+
+                    Nothing ->
+                        Flow.pure ()
+            )
+
+
+requestArtifactStatus : Flow Model ()
+requestArtifactStatus =
+    Flow.try (route << Route.page << Route.artifact)
+        (Maybe.unwrap (Flow.pure ()) (\artifact -> requestProjectStatus (Route.pathProjectId artifact.projectPath) artifact.mCommit))
 
 
 followArtifactToHead : Flow Model ()
@@ -4416,8 +4495,7 @@ followArtifactToHead =
         (\currentRoute ->
             case currentRoute.page of
                 Route.Artifact artifact ->
-                    Flow.setAll artifactTable Nothing
-                        |> Flow.seq (replaceRoute { currentRoute | page = Route.Artifact { artifact | mCommit = Nothing } })
+                    replaceRoute { currentRoute | page = Route.Artifact { artifact | mCommit = Nothing } }
 
                 _ ->
                     Flow.pure ()
@@ -4931,6 +5009,7 @@ resyncWorkspace snapshotCommit =
     refetchCommitHash
         |> Flow.seq (Flow.get |> Flow.assertCondition (has (commitHash << success << where_ ((==) snapshotCommit))))
         |> Flow.seq loadProjects
+        |> Flow.seq requestArtifactStatus
         |> Flow.seq (Flow.forAll currentProjectId (\projectId -> requestProjectStatus projectId Nothing))
 
 
@@ -5044,6 +5123,7 @@ applyListedStatuses statuses model =
         |> Flow.seq runBuiltStepStatusHooks
         |> Flow.seq (Flow.batchM (settles ++ reviewReloads))
         |> Flow.seq settlePendingStops
+        |> Flow.seq syncShownArtifact
 
 
 settlePendingStops : Flow Model ()
