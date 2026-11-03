@@ -38,7 +38,6 @@ in
       cache = {
         source = "$HOME/.cache/nix";
         target = "/var/cache/nix";
-        writable = true;
       };
       nix-var = {
         source = "/nix/var/log";
@@ -50,6 +49,8 @@ in
       };
     };
   };
+
+  virtualisation.fileSystems."/var/cache/nix".options = [ "cache=mmap" ];
 
   systemd.services.backend.environment.NIX_CACHE_HOME = "/var/cache/nix";
   services.slurm.nodeName = lib.mkForce [
