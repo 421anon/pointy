@@ -1815,10 +1815,17 @@ $delimited-grid-row-height: 28px;
   background: white;
 }
 
+.artifact-viewer-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
 .artifact-viewer-main {
   position: relative;
   flex: 1;
-  min-width: 0;
+  min-height: 0;
 }
 
 .artifact-viewer > .agent-panel {
@@ -1845,17 +1852,10 @@ $delimited-grid-row-height: 28px;
 }
 
 .artifact-viewer-status {
-  position: absolute;
-  bottom: var(--spacing-md);
-  left: var(--spacing-md);
-  z-index: 1;
   padding: var(--spacing-xs) var(--spacing-md);
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
+  border-bottom: 1px solid var(--border-color);
   background: var(--bg-elevated);
   color: var(--text-secondary);
-  box-shadow: var(--shadow-elevated);
-  pointer-events: none;
 }
 
 .artifact-viewer-capture {

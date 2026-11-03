@@ -117,40 +117,42 @@ viewArtifact model artifact =
             Actions.artifactRunNote model artifact
     in
     Html.div [ Html.Attributes.class "artifact-viewer" ]
-        [ Html.div [ Html.Attributes.class "artifact-viewer-main" ]
-            [ case mShown of
-                Nothing ->
-                    Html.div [ Html.Attributes.class "artifact-viewer-placeholder" ]
-                        [ Html.text (Maybe.unwrap "Checking the output…" ((++) "Output not built yet · ") mRunNote) ]
-
-                Just shown ->
-                    viewShownArtifact model isTable shown
-            , Html.viewMaybe (\note -> Html.div [ Html.Attributes.class "artifact-viewer-status" ] [ Html.text ("Previous version · " ++ note) ])
+        [ Html.div [ Html.Attributes.class "artifact-viewer-column" ]
+            [ Html.viewMaybe (\note -> Html.div [ Html.Attributes.class "artifact-viewer-status" ] [ Html.text ("Previous version · " ++ note) ])
                 (Maybe.andThen (always mRunNote) mShown)
-            , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
-            , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
-                [ Html.viewIf (not isTable && Maybe.isJust mShown)
-                    (Html.button
+            , Html.div [ Html.Attributes.class "artifact-viewer-main" ]
+                [ case mShown of
+                    Nothing ->
+                        Html.div [ Html.Attributes.class "artifact-viewer-placeholder" ]
+                            [ Html.text (Maybe.unwrap "Checking the output…" ((++) "Output not built yet · ") mRunNote) ]
+
+                    Just shown ->
+                        viewShownArtifact model isTable shown
+                , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
+                , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
+                    [ Html.viewIf (not isTable && Maybe.isJust mShown)
+                        (Html.button
+                            [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
+                            , Html.Attributes.type_ "button"
+                            , Html.Events.onClick Actions.startAreaCapture
+                            , Html.Attributes.attribute "aria-pressed" (boolText (has (areaCapture << just) model))
+                            ]
+                            [ iconCustom False "ink_selection" [ Html.Attributes.attribute "aria-hidden" "true" ], Html.text "Ask agent" ]
+                        )
+                    , Html.button
                         [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
                         , Html.Attributes.type_ "button"
-                        , Html.Events.onClick Actions.startAreaCapture
-                        , Html.Attributes.attribute "aria-pressed" (boolText (has (areaCapture << just) model))
+                        , Html.Events.onClick Actions.toggleAgentPanel
+                        , Html.Attributes.attribute "aria-controls" "agent-panel"
+                        , Html.Attributes.attribute "aria-expanded" (boolText isAgentOpen)
                         ]
-                        [ iconCustom False "ink_selection" [ Html.Attributes.attribute "aria-hidden" "true" ], Html.text "Ask agent" ]
-                    )
-                , Html.button
-                    [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
-                    , Html.Attributes.type_ "button"
-                    , Html.Events.onClick Actions.toggleAgentPanel
-                    , Html.Attributes.attribute "aria-controls" "agent-panel"
-                    , Html.Attributes.attribute "aria-expanded" (boolText isAgentOpen)
+                        [ Html.text "Open agent" ]
+                    , Html.a
+                        [ Route.href pointyRoute
+                        , Html.Attributes.class "artifact-viewer-action"
+                        ]
+                        [ Html.text "View in Pointy" ]
                     ]
-                    [ Html.text "Open agent" ]
-                , Html.a
-                    [ Route.href pointyRoute
-                    , Html.Attributes.class "artifact-viewer-action"
-                    ]
-                    [ Html.text "View in Pointy" ]
                 ]
             ]
         , AgentPanel.view model
