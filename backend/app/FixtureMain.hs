@@ -11,6 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Fixture.Document (FixtureDocument (..), loadDocument)
 import Fixture.Server (fixtureApp)
+import Handlers.ClusterStream (startClusterPoller)
 import Interpreters.Fixture (newFixtureState, resetFixture, runFixture)
 import Processes (cli)
 import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, removeFile, setCurrentDirectory)
@@ -87,7 +88,7 @@ run options = do
         (fixtureApp state (optionFrontend options) reset)
         "127.0.0.1"
         (optionPort options)
-        (putStrLn "Fixture server listening.")
+        (putStrLn "Fixture server listening." >> startClusterPoller)
 
 writeConfig :: FilePath -> FilePath -> FilePath -> T.Text -> IO ()
 writeConfig configPath origin keyfile branch =

@@ -23,7 +23,7 @@ import qualified Data.Aeson.Key as Key
 import Data.ByteArray (convert)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.List (intercalate)
+import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -37,6 +37,7 @@ import Effects (AppEffects, Eval (..), Inference (..), LogStamp (..), Nix (..), 
 import Fixture.Document (FixtureDocument (..), appliedAnswer, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobsEnded)
 import Processes (cli)
+import Text.Read (readMaybe)
 
 import System.Directory (doesPathExist)
 import System.Exit (ExitCode (..))
@@ -230,15 +231,16 @@ runSlurmFixture state = interpret $ \_ -> \case
             next <- readTVar (fixtureNextJob state)
             writeTVar (fixtureNextJob state) (next + 1)
             let jobId_ = show (1000 + next)
-            modifyTVar' (fixtureJobs state) $
+            modifyTVar' (fixtureJobs state) $ \jobs ->
                 Map.insert
                     (submitJobName request)
                     FixtureJob
                         { jobId = jobId_
                         , jobName = submitJobName request
                         , jobComment = submitComment request
-                        , jobState = "RUNNING"
+                        , jobState = if any isRunningJob jobs then pendingState else runningState
                         }
+                    jobs
             pure jobId_
         pure (Right generated)
     QuerySlurm query -> liftIO $ do
@@ -248,9 +250,32 @@ runSlurmFixture state = interpret $ \_ -> \case
                 case query of
                     JobStatesByName name -> unlines [jobState job | job <- jobs, jobName job == name]
                     JobIdsByName name -> unlines [jobId job | job <- jobs, jobName job == name]
-                    AllJobs -> unlines [intercalate "|" [jobId job, jobName job, jobComment job, jobState job, "0:00", "None"] | job <- jobs]
+                    AllJobs -> unlines [intercalate "|" [jobId job, jobName job, jobComment job, jobState job, "0:00", waitReason job] | job <- jobs]
                     AllAccountingJobs -> unlines [intercalate "|" [jobId job, jobName job, jobState job] | job <- jobs]
     CancelJob key -> liftIO $ do
-        atomically $ modifyTVar' (fixtureJobs state) (Map.delete key)
+        atomically $ modifyTVar' (fixtureJobs state) (admitNextPending . Map.delete key)
         markJobsEnded [key]
     ClusterAvailability -> pure (Right "pointy*|up|node1|idle\n")
+
+runningState :: String
+runningState = "RUNNING"
+
+pendingState :: String
+pendingState = "PENDING"
+
+isRunningJob :: FixtureJob -> Bool
+isRunningJob job = jobState job == runningState
+
+waitReason :: FixtureJob -> String
+waitReason job
+    | jobState job == pendingState = "Resources"
+    | otherwise = "None"
+
+admitNextPending :: Map.Map String FixtureJob -> Map.Map String FixtureJob
+admitNextPending jobs
+    | any isRunningJob jobs = jobs
+    | otherwise = case sortOn submissionOrder [job | job <- Map.elems jobs, jobState job == pendingState] of
+        next : _ -> Map.insert (jobName next) next{jobState = runningState} jobs
+        [] -> jobs
+  where
+    submissionOrder job = readMaybe (jobId job) :: Maybe Int

@@ -1845,8 +1845,8 @@ $delimited-grid-row-height: 28px;
 
 .artifact-viewer-capture-area {
   position: absolute;
-  border: 1px dashed var(--link);
-  background: var(--focus-ring);
+  border: 1px dashed var(--area-capture-border);
+  background: var(--area-capture-fill);
   pointer-events: none;
 }
 
