@@ -1549,7 +1549,7 @@ viewAgentMessage mentionSources autoApplyEcho turn =
     in
     Html.div [ class "agent-panel__chat-message agent-panel__chat-message--agent" ]
         [ Html.div [ class "agent-panel__chat-label" ]
-            [ Html.text "Agent"
+            [ Html.text (agentLabel turn.agent)
             , Html.span
                 [ classList
                     [ ( "agent-panel__chat-status", True )
@@ -1589,6 +1589,20 @@ viewAgentMessage mentionSources autoApplyEcho turn =
             (\err -> Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ])
             failedMessage
         ]
+
+
+agentLabel : Maybe String -> String
+agentLabel agent =
+    case agent of
+        Just "coder" ->
+            "Coder"
+
+        Just "answerer" ->
+            "Answerer"
+
+        _ ->
+            "Agent"
+
 
 
 viewAutoApplyEcho : Bool -> Html msg

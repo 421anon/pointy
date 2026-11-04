@@ -3,7 +3,7 @@
 
 module Agent.Title (generateSessionTitle) where
 
-import Agent.Model (chatModelArgs, prepareChatModel)
+import Agent.Model (AgentRole (..), chatModelArgs, prepareChatModel)
 import Agent.Sandbox (bindPath, expandSandboxArg, piIsolationFlags, runnerConfigArgs, runnerEnvironment, sandboxPiHome, sandboxProcess, seedPiConfig, sessionPaths)
 import Agent.Session (AgentSession (..))
 import Config (AgentConfig (..))
@@ -33,7 +33,7 @@ titleSystemPrompt = "You name chat sessions. Reply with the title only."
 
 generateSessionTitle :: AgentConfig -> AgentSession -> Text -> IO (Either String Text)
 generateSessionTitle cfg session_ request = do
-    chat <- prepareChatModel
+    chat <- prepareChatModel Coder
     let paths = sessionPaths session_
         piHome = sandboxPiHome paths
         expand = expandSandboxArg paths
@@ -47,7 +47,7 @@ generateSessionTitle cfg session_ request = do
                 ++ ["--system-prompt", T.unpack titleSystemPrompt]
                 ++ ["-p", T.unpack titlePrompt]
         args = bindPath piHome ++ ["--"] ++ runnerArgs
-    runnerEnv <- runnerEnvironment [("HOME", piHome)]
+    runnerEnv <- runnerEnvironment [("HOME", piHome), ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))]
     seedPiConfig piHome
     sandbox <- sandboxProcess cfg args
     let process =

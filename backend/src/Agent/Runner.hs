@@ -23,8 +23,9 @@ module Agent.Runner (
 ) where
 
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
-import Agent.Model (chatModelArgs, prepareChatModel)
-import Agent.Policy (automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderAreaCapture, renderCurrentProject, renderEmbeddedRules, userMessage)
+import Agent.Model (AgentRole (..), agentRoleName, chatModelArgs, prepareChatModel)
+import Agent.Policy (answererRules, automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderAreaCapture, renderCurrentProject, renderEmbeddedRules, userMessage)
+import Agent.Router (Route (..), routeTurn)
 import Agent.Sandbox (agentMemoryMax, bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, piIsolationFlags, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxPiHome, sandboxProcess, seedPiConfig, sessionPaths, toolEnvironment)
 import Agent.Session (
     AgentSession (..),
@@ -57,7 +58,7 @@ import Agent.Session (
 import Agent.Title (generateSessionTitle)
 import Agent.TurnLog (appendLogLine, createTurnLog, readTurnLogFile)
 import Agent.TurnSignal (registerTurnSignal, unregisterTurnSignal)
-import Config (AgentConfig (..), Config (..), loadConfig, resolveConfigPath)
+import Config (AgentConfig (..), ChatModelConfig (..), Config (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait, withAsync)
@@ -377,7 +378,8 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps
+        let routedRequest = if automatic || isJust refusal then Nothing else Just prompt
+        void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps routedRequest
     return turn
   where
     (automatic, inheritedStop, plainImages, areaCaptures, viewedArtifact) = case origin of
@@ -476,8 +478,8 @@ nameChat cfg session_ logPath prompt =
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> Bool -> [Int] -> IO ()
-runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject reviewedSteps =
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> Bool -> [Int] -> Maybe Text -> IO ()
+runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject reviewedSteps routedRequest =
     continueUnlessStopped run
         `finally` atomically (retireTurn sid tid)
   where
@@ -490,7 +492,14 @@ runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject re
             else action
     run = do
         appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> tid)
-        result <- try (runConfiguredProcess cfg session_ turn prompt images isFirstTurn reviewedSteps) :: IO (Either SomeException ExitCode)
+        route <- routeTurn routedRequest
+        role <- case route of
+            SoleCoder -> return Coder
+            Routed chosen failure -> do
+                appendLogLine cfg (turnLogPath turn) "agent" (agentRoleName chosen)
+                mapM_ (appendLogLine cfg (turnLogPath turn) "system") failure
+                return chosen
+        result <- try (runConfiguredProcess cfg session_ turn role prompt images isFirstTurn reviewedSteps) :: IO (Either SomeException ExitCode)
         exitCode <- case result of
             Left err -> do
                 appendLogLine cfg (turnLogPath turn) "system" ("Runner failed: " <> T.pack (displayException err))
@@ -498,11 +507,11 @@ runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject re
             Right code -> return code
         finishTurn cfg session_ turn sentCurrentProject exitCode
 
-withConfiguredRunner :: AgentConfig -> AgentSession -> FilePath -> [String] -> Text -> [Int] -> (Handle -> Handle -> Maybe Handle -> ProcessHandle -> IO a) -> IO a
-withConfiguredRunner cfg session_ logPath sessionFlag outputMarker reviewedSteps action = do
+withConfiguredRunner :: AgentConfig -> AgentSession -> AgentRole -> FilePath -> [String] -> Text -> [Int] -> (Handle -> Handle -> Maybe Handle -> ProcessHandle -> IO a) -> IO a
+withConfiguredRunner cfg session_ role logPath sessionFlag outputMarker reviewedSteps action = do
     repoPath <- userRepoPath
     nixBind <- nixDaemonBindArgs
-    chat <- prepareChatModel
+    chat <- prepareChatModel role
     memoryMax <- agentMemoryMax
     extensionsDir <- (</> "extensions") <$> piAgentConfigDir
     extensions <- sort <$> listDirectoryIfExists extensionsDir
@@ -526,7 +535,7 @@ withConfiguredRunner cfg session_ logPath sessionFlag outputMarker reviewedSteps
     seedPiConfig piHome
     movePiSessions toolHome piHome
     createDirectoryIfMissing True worktreeMask
-    TIO.writeFile systemPromptFile (renderEmbeddedRules memoryMax <> maybe "" ("\n# AGENTS.md\n\n" <>) agentsMd)
+    TIO.writeFile systemPromptFile (renderEmbeddedRules memoryMax <> maybe "" ("\n# AGENTS.md\n\n" <>) agentsMd <> (if role == Answerer then answererRules else ""))
     createDirectoryIfMissing True toolHome
     seedNixFetcherCache toolHome
     forM_ [socketDir, piTmpDir] $ \dir -> removePathForcibly dir >> createDirectoryIfMissing True dir
@@ -572,7 +581,9 @@ withConfiguredRunner cfg session_ logPath sessionFlag outputMarker reviewedSteps
     runnerEnv <-
         runnerEnvironment
             [ ("HOME", piHome)
+            , ("POINTY_AGENT_SESSION_ID", T.unpack (sessionId session_))
             , ("POINTY_AGENT_WORKTREE", worktree)
+            , ("POINTY_HOSTED_TOOLS", T.unpack (T.intercalate "," (foldMap chatHostedTools chat)))
             , ("POINTY_AGENT_OUTPUT_MARKER", T.unpack outputMarker)
             , ("PI_GLOVEBOX_SOCKET", socketPath)
             , ("TMPDIR", piTmpDir)
@@ -593,11 +604,11 @@ withConfiguredRunner cfg session_ logPath sessionFlag outputMarker reviewedSteps
         (Just hin, Just hout, mErr, ph) <- createProcess process
         action hin hout mErr ph
 
-runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> [Int] -> IO ExitCode
-runConfiguredProcess cfg session_ turn promptText images isFirstTurn reviewedSteps = do
+runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> AgentRole -> Text -> [TurnImage] -> Bool -> [Int] -> IO ExitCode
+runConfiguredProcess cfg session_ turn role promptText images isFirstTurn reviewedSteps = do
     let outputMarker = "__POINTY_AGENT_OUTPUT_BEGIN__" <> turnId turn <> "__"
         sessionFlag = if isFirstTurn then [] else ["-c"]
-    withConfiguredRunner cfg session_ (turnLogPath turn) sessionFlag outputMarker reviewedSteps $ \hin hout mErr ph -> do
+    withConfiguredRunner cfg session_ role (turnLogPath turn) sessionFlag outputMarker reviewedSteps $ \hin hout mErr ph -> do
         input <- newRunnerInput hin
         let cleanup = do
                 atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
@@ -647,7 +658,7 @@ runCompactionProcess :: AgentConfig -> AgentSession -> FilePath -> IO ()
 runCompactionProcess cfg session_ logPath = do
     let outputMarker = "__POINTY_AGENT_COMPACT_BEGIN__" <> sessionId session_ <> "__"
     ended <- newTVarIO False
-    withConfiguredRunner cfg session_ logPath ["-c"] outputMarker [] $ \hin hout mErr ph -> do
+    withConfiguredRunner cfg session_ Coder logPath ["-c"] outputMarker [] $ \hin hout mErr ph -> do
         input <- newRunnerInput hin
         let cleanup = closeRunnerInput input
             run = do

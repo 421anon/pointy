@@ -9,6 +9,7 @@ module Config (
     AgentConfig (..),
     ProviderConfig (..),
     ChatModelConfig (..),
+    RouterConfig (..),
     PiModelConfig (..),
     PiCompatConfig (..),
     PiCostConfig (..),
@@ -19,6 +20,7 @@ module Config (
     EmbeddingProtocol (..),
     JudgeProtocol (..),
     defaultAgentConfig,
+    agentChatModels,
     chatQualifier,
     chatProtocolName,
     loadConfig,
@@ -99,11 +101,19 @@ data EmbeddingProtocol = EmbeddingsOpenAi
 data JudgeProtocol = JudgeSystemOne
     deriving (Show, Eq)
 
+data RouterConfig = RouterConfig
+    { routerProvider :: Text
+    , routerProtocol :: JudgeProtocol
+    , routerModel :: Text
+    }
+    deriving (Show)
+
 data ChatModelConfig = ChatModelConfig
     { chatProvider :: Text
     , chatProtocol :: ChatProtocol
     , chatModel :: Text
     , chatThinking :: Maybe Text
+    , chatHostedTools :: [Text]
     , chatPi :: PiModelConfig
     }
     deriving (Show)
@@ -115,6 +125,7 @@ data PiModelConfig = PiModelConfig
     , piInput :: [Text]
     , piReasoning :: Maybe Bool
     , piThinkingLevelMap :: Map Text Text
+    , piHeaders :: Map Text Text
     , piDisabledThinkingLevels :: [Text]
     , piCost :: Maybe PiCostConfig
     , piCompat :: PiCompatConfig
@@ -169,6 +180,7 @@ emptyPiModel =
         , piInput = []
         , piReasoning = Nothing
         , piThinkingLevelMap = Map.empty
+        , piHeaders = Map.empty
         , piDisabledThinkingLevels = []
         , piCost = Nothing
         , piCompat = emptyPiCompat
@@ -222,11 +234,19 @@ data Config where
         , configSlurm :: SlurmConfig
         , configAgent :: AgentConfig
         , configProviders :: Map Text ProviderConfig
-        , configChat :: Maybe ChatModelConfig
+        , configCoder :: Maybe ChatModelConfig
+        , configAnswerer :: Maybe ChatModelConfig
+        , configRouter :: Maybe RouterConfig
         , configSearch :: Maybe SearchConfig
         } ->
         Config
     deriving (Show)
+
+agentChatModels :: Config -> [ChatModelConfig]
+agentChatModels = map snd . chatModelSections
+
+chatModelSections :: Config -> [(String, ChatModelConfig)]
+chatModelSections config = [(section, chat) | (section, Just chat) <- [("[models.coder]", configCoder config), ("[models.answerer]", configAnswerer config)]]
 
 chatQualifier :: ChatModelConfig -> Text
 chatQualifier chat = case chatThinking chat of
@@ -344,6 +364,7 @@ piModelCodec =
         <*> defaultedAt [] (Toml.arrayOf Toml._Text) "input" .= piInput
         <*> optionalAt Toml.bool "reasoning" .= piReasoning
         <*> defaultedAt Map.empty (Toml.tableMap Toml._KeyText Toml.text) "thinkingLevelMap" .= piThinkingLevelMap
+        <*> defaultedAt Map.empty (Toml.tableMap Toml._KeyText Toml.text) "headers" .= piHeaders
         <*> defaultedAt [] (Toml.arrayOf Toml._Text) "disabledThinkingLevels" .= piDisabledThinkingLevels
         <*> optionalAt (tableAt piCostCodec) "cost" .= piCost
         <*> defaultedAt emptyPiCompat (tableAt piCompatCodec) "compat" .= piCompat
@@ -378,6 +399,7 @@ chatModelCodec =
         <*> enumTextCodec chatProtocolOf chatProtocolName "protocol" .= chatProtocol
         <*> Toml.text "model" .= chatModel
         <*> optionalAt Toml.text "thinking" .= chatThinking
+        <*> defaultedAt [] (Toml.arrayOf Toml._Text) "hosted-tools" .= chatHostedTools
         <*> defaultedAt emptyPiModel (tableAt piModelCodec) "pi" .= chatPi
   where
     chatProtocolOf name = case name of
@@ -390,6 +412,13 @@ chatModelCodec =
 embeddingProtocolCodec :: TomlCodec EmbeddingProtocol
 embeddingProtocolCodec =
     enumTextCodec (\name -> if name == "openai-embeddings" then Just EmbeddingsOpenAi else Nothing) (const "openai-embeddings") "protocol"
+
+routerCodec :: TomlCodec RouterConfig
+routerCodec =
+    RouterConfig
+        <$> Toml.text "provider" .= routerProvider
+        <*> judgeProtocolCodec .= routerProtocol
+        <*> Toml.text "model" .= routerModel
 
 judgeProtocolCodec :: TomlCodec JudgeProtocol
 judgeProtocolCodec =
@@ -431,11 +460,13 @@ configCodec =
         <*> Toml.dimap Just (fromMaybe defaultSlurmConfig) (Toml.dioptional (Toml.table slurmCodec "slurm")) .= configSlurm
         <*> Toml.dioptional (Toml.table agentCodec "agent") .= (Just . configAgent)
         <*> providersCodec .= configProviders
-        <*> optionalAt (tableAt chatModelCodec) "models.chat" .= configChat
+        <*> optionalAt (tableAt chatModelCodec) "models.coder" .= configCoder
+        <*> optionalAt (tableAt chatModelCodec) "models.answerer" .= configAnswerer
+        <*> optionalAt (tableAt routerCodec) "models.router" .= configRouter
         <*> optionalAt (tableAt searchCodec) "search" .= configSearch
   where
-    mkConfig userRepo slurm mAgent providers chat search =
-        Config userRepo slurm (fromMaybe defaultAgentConfig mAgent) providers chat search
+    mkConfig userRepo slurm mAgent providers coder answerer router search =
+        Config userRepo slurm (fromMaybe defaultAgentConfig mAgent) providers coder answerer router search
 
 defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
@@ -473,6 +504,13 @@ validateConfig config = do
                 "Failed to parse config: " ++ section ++ " names provider \"" ++ T.unpack name ++ "\", which is not in [providers]"
     when (maybe False ((> 64) . searchJudgeCandidates) (configSearch config)) $
         error "Failed to parse config: [search] judge-candidates must be at most 64"
+    when (isJust (configAnswerer config) && isNothing (configCoder config)) $
+        error "Failed to parse config: [models.answerer] needs [models.coder]"
+    when (isJust (configAnswerer config) /= isJust (configRouter config)) $
+        error "Failed to parse config: [models.answerer] and [models.router] must be set together"
+    forM_ (chatModelSections config) $ \(section, chat) ->
+        when (not (null (chatHostedTools chat)) && chatProtocol chat /= ChatOpenAiCompletions) $
+            error ("Failed to parse config: " ++ section ++ " hosted-tools needs protocol = \"openai-completions\"")
 
 warnMissingProviderKeys :: Config -> IO ()
 warnMissingProviderKeys config =
@@ -492,9 +530,8 @@ warnMissingProviderKeys config =
 providerReferences :: Config -> [(Text, String)]
 providerReferences config =
     filter (not . T.null . fst) $
-        [ (chatProvider chat, "[models.chat]")
-        | chat <- mapMaybe id [configChat config]
-        ]
+        [(chatProvider chat, section) | (section, chat) <- chatModelSections config]
+            ++ [(routerProvider router, "[models.router]") | Just router <- [configRouter config]]
             ++ [ (embeddingProvider (searchEmbedding search), "[search.embedding]")
                | search <- mapMaybe id [configSearch config]
                ]

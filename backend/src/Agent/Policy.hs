@@ -7,6 +7,9 @@ module Agent.Policy (
     appliedProjectId,
     appliedStepId,
     renderEmbeddedRules,
+    answererRules,
+    routingInstructions,
+    routingCriteria,
     renderCurrentProject,
     renderViewedArtifact,
     renderAreaCapture,
@@ -16,6 +19,7 @@ module Agent.Policy (
     automaticFixPrompt,
 ) where
 
+import Agent.Model (AgentRole (..))
 import Agent.Session (DocumentSize (..), SelectionRect (..))
 import Data.Maybe (isJust)
 import Data.Text (Text)
@@ -66,6 +70,25 @@ renderEmbeddedRules memoryMax =
         [ "Every process you start here shares a " <> limit <> " memory limit with all other agent sessions, /tmp included. When the limit is hit the kernel kills the largest process, which shows up as `Killed` or exit code 137: the job is too big for the sandbox and belongs in a step run."
         , "For a quick DuckDB check here, `SET memory_limit` well below " <> limit <> " and `SET threads = 4`."
         ]
+
+answererRules :: Text
+answererRules =
+    T.unlines
+        [ ""
+        , "# Answerer"
+        , ""
+        , "The backend routes each user message either to you, the answerer, or to the coder, a separate agent that shares this conversation. You get the messages that ask questions."
+        , "Answer from what you find in the files, build logs and outputs. Change files only when the message asks for a change."
+        ]
+
+routingInstructions :: Text
+routingInstructions = "A user of a research notebook sent this message to its assistant. Which agent should handle it?"
+
+routingCriteria :: [(AgentRole, Text)]
+routingCriteria =
+    [ (Answerer, "Answers a question, explains, or looks things up; changes no files")
+    , (Coder, "Changes the notebook: creates, edits, fixes, moves or deletes steps, projects or code")
+    ]
 
 renderCurrentProject :: Int -> Text
 renderCurrentProject projectId =

@@ -851,6 +851,7 @@ type alias ChatTurn =
     , prompt : Maybe String
     , attachments : List Attachment
     , assistant : String
+    , agent : Maybe String
     , status : ChatTurnStatus
     }
 
@@ -1220,7 +1221,7 @@ appendPersistedTurn turn entries =
                     Just turn.turnPrompt
 
             seeded =
-                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, attachments = turn.turnAttachments, assistant = "", status = chatStatusFromTurn turn } ]
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, attachments = turn.turnAttachments, assistant = "", agent = Nothing, status = chatStatusFromTurn turn } ]
 
             logLines =
                 turnLogLines turn
@@ -1369,10 +1370,13 @@ appendChatLine rawLine entries =
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
                     mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = [], assistant = "", status = ChatPending } ]
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = [], assistant = "", agent = lastChatTurnAgent entries, status = ChatPending } ]
 
                 Err _ ->
                     entries
+
+        "agent" ->
+            mapLastChatTurn (\last -> { last | agent = Just (String.trim body) }) entries
 
         "runner" ->
             entries
@@ -1406,6 +1410,9 @@ splitLogPrefix line =
 
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )
+
+    else if String.startsWith "[agent] " line then
+        ( "agent", String.dropLeft 8 line )
 
     else
         ( "unknown", line )
@@ -1649,6 +1656,16 @@ mapLastChatTurn update entries =
 
         [] ->
             entries
+
+
+lastChatTurnAgent : List ChatEntry -> Maybe String
+lastChatTurnAgent entries =
+    case List.reverse entries of
+        (ChatTurnEntry last) :: _ ->
+            last.agent
+
+        _ ->
+            Nothing
 
 
 finishPending : ChatTurnStatus -> ChatTurn -> ChatTurn

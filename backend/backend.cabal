@@ -13,6 +13,7 @@ library
     Agent.Model
     Agent.PiConfig
     Agent.Policy
+    Agent.Router
     Agent.Runner
     Agent.Sandbox
     Agent.Session
@@ -73,11 +74,11 @@ library
     Certificates
     CertificateStore
     Processes
+    ProviderHttp
     ProjectFiles
     ProjectTree
     SingleFlightCache
     Search.Document
-    Search.Http
     Search.Store
     Sse
     Storage

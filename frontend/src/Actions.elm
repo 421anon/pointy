@@ -4704,7 +4704,7 @@ sendAgentTurn whenPending view attachments promptSource =
                         (Flow.over (agent << liveTurnAt sessionId << just << entries)
                             (\entriesBefore ->
                                 entriesBefore
-                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", status = Model.ChatPending } ]
+                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", agent = Nothing, status = Model.ChatPending } ]
                             )
                         )
                     |> Flow.seq whenPending

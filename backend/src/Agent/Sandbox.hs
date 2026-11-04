@@ -19,7 +19,7 @@ module Agent.Sandbox (
 ) where
 
 import Agent.Session (AgentSession (..))
-import Config (AgentConfig (..), ChatModelConfig (..), Config (..), ProviderConfig (..), loadConfig, resolveConfigPath)
+import Config (AgentConfig (..), ChatModelConfig (..), Config (..), ProviderConfig (..), agentChatModels, loadConfig, resolveConfigPath)
 import Control.Monad (filterM, forM_)
 import Data.List (stripPrefix)
 import qualified Data.Map.Strict as Map
@@ -109,23 +109,23 @@ expandSandboxArg paths = T.unpack . flip (foldr (uncurry T.replace)) placeholder
         ]
 
 runnerEnvironment :: [(String, String)] -> IO [(String, String)]
-runnerEnvironment ownVars = chatApiKeyEnv >>= sandboxEnvironment ownVars
+runnerEnvironment ownVars = chatApiKeyEnvs >>= sandboxEnvironment ownVars
 
 toolEnvironment :: [(String, String)] -> IO [(String, String)]
-toolEnvironment ownVars = sandboxEnvironment ownVars Nothing
+toolEnvironment ownVars = sandboxEnvironment ownVars []
 
-sandboxEnvironment :: [(String, String)] -> Maybe String -> IO [(String, String)]
-sandboxEnvironment ownVars chatKeyEnv = do
+sandboxEnvironment :: [(String, String)] -> [String] -> IO [(String, String)]
+sandboxEnvironment ownVars chatKeyEnvs = do
     baseEnv <- getEnvironment
     return $
         ("PATH", fromMaybe fallbackPath (lookup "PATH" baseEnv))
             : ownVars
             ++ remoteVars
-            ++ filter ((`elem` passthroughKeys chatKeyEnv) . fst) baseEnv
+            ++ filter ((`elem` passthroughKeys) . fst) baseEnv
   where
     fallbackPath = "/run/current-system/sw/bin:/usr/bin:/bin"
     remoteVars = maybe [] (\remote -> [("NIX_REMOTE", remote)]) (storeRemote nixStore)
-    passthroughKeys chatKey =
+    passthroughKeys =
         [ "USER"
         , "LOGNAME"
         , "SHELL"
@@ -136,16 +136,16 @@ sandboxEnvironment ownVars chatKeyEnv = do
         , "XDG_RUNTIME_DIR"
         , "XDG_DATA_DIRS"
         ]
-            ++ maybe [] (\key -> [key]) chatKey
+            ++ chatKeyEnvs
 
-chatApiKeyEnv :: IO (Maybe String)
-chatApiKeyEnv = do
+chatApiKeyEnvs :: IO [String]
+chatApiKeyEnvs = do
     config <- resolveConfigPath >>= loadConfig
-    case configChat config of
-        Nothing -> pure Nothing
-        Just chat -> case Map.lookup (chatProvider chat) (configProviders config) of
-            Nothing -> pure Nothing
-            Just provider -> pure (Just (T.unpack (providerApiKeyEnv provider)))
+    pure
+        [ T.unpack (providerApiKeyEnv provider)
+        | chat <- agentChatModels config
+        , Just provider <- [Map.lookup (chatProvider chat) (configProviders config)]
+        ]
 
 runnerConfigArgs :: (Text -> String) -> [Text] -> [String]
 runnerConfigArgs expand = strip

@@ -10,38 +10,39 @@ import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.List (nub)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, listToMaybe)
 import Data.Text (Text)
 import System.Directory (createDirectoryIfMissing, renameFile)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose, openBinaryTempFile)
 
-writePiConfig :: Map Text ProviderConfig -> Maybe ChatModelConfig -> IO ()
-writePiConfig providers mChat = do
+writePiConfig :: Map Text ProviderConfig -> [ChatModelConfig] -> IO ()
+writePiConfig providers chats = do
     dir <- piAgentConfigDir
     createDirectoryIfMissing True dir
-    case mChat >>= \chat -> fmap (\provider -> (chat, provider)) (Map.lookup (chatProvider chat) providers) of
-        Nothing -> do
-            writeIfChanged (dir </> "models.json") (encode (object ["providers" .= object []]))
-            writeIfChanged (dir </> "settings.json") (encode (object ["defaultProjectTrust" .= String "always"]))
-        Just (chat, provider) -> do
-            writeIfChanged (dir </> "models.json") (encode (object ["providers" .= object [Key.fromText (chatProvider chat) .= providerJson provider chat]]))
-            writeIfChanged (dir </> "settings.json") (encode (settingsJson chat))
+    writeIfChanged (dir </> "models.json") (encode (object ["providers" .= object providerEntries]))
+    writeIfChanged (dir </> "settings.json") (encode (maybe (object ["defaultProjectTrust" .= String "always"]) settingsJson (listToMaybe chats)))
+  where
+    providerEntries =
+        [ Key.fromText name .= providerJson provider [chat | chat <- chats, chatProvider chat == name]
+        | name <- nub (map chatProvider chats)
+        , Just provider <- [Map.lookup name providers]
+        ]
 
-providerJson :: ProviderConfig -> ChatModelConfig -> Value
-providerJson provider chat =
+providerJson :: ProviderConfig -> [ChatModelConfig] -> Value
+providerJson provider chats =
     object
         [ "baseUrl" .= providerBaseUrl provider
-        , "api" .= chatProtocolName (chatProtocol chat)
         , "apiKey" .= ("$" <> providerApiKeyEnv provider)
-        , "models" .= [modelJson chat]
+        , "models" .= map modelJson chats
         ]
 
 modelJson :: ChatModelConfig -> Value
 modelJson chat =
-    object (("id" .= chatModel chat) : piModelFields (chatPi chat))
+    object (("id" .= chatModel chat) : ("api" .= chatProtocolName (chatProtocol chat)) : piModelFields (chatPi chat))
 
 piModelFields :: PiModelConfig -> [(Key.Key, Value)]
 piModelFields model =
@@ -52,6 +53,7 @@ piModelFields model =
         , if null (piInput model) then Nothing else Just ("input" .= map String (piInput model))
         , fmap (\reasoning -> "reasoning" .= Bool reasoning) (piReasoning model)
         , if Map.null levels then Nothing else Just ("thinkingLevelMap" .= levels)
+        , if Map.null (piHeaders model) then Nothing else Just ("headers" .= piHeaders model)
         , fmap (\cost -> "cost" .= costJson cost) (piCost model)
         , case compatFields (piCompat model) of
             [] -> Nothing

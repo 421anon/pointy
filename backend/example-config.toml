@@ -28,7 +28,7 @@ enforcement = "scheduler"
 sbox-command = "sbox"
 sbox-args = ["--bind", "{home}", "{home}"]
 runner-command = "pi"
-# The backend passes the chat model from [models.chat] to the runner itself.
+# The backend passes the chat model of the agent that takes each turn to the runner itself.
 runner-args = []
 # title-prompt = "Name the chat that opens with the request in this message. Reply with the title only: five words at most, no quotes, no punctuation, no explanation."
 timeout-seconds = 1800
@@ -45,16 +45,30 @@ base-url = "https://api.neuralwatt.com/v1"
 api-key-env = "NEURALWATT_API_KEY"
 timeout-seconds = 60
 
-# The chat model the agent panel runs on. The backend writes it into Pi's models.json
-# and settings.json before the runner starts, and passes --model explicitly.
-# [models.chat]
+# The agent panel runs on up to two agents that share one conversation. The coder takes
+# every turn unless [models.answerer] and [models.router] are both set; then the router, a
+# System One decision model, reads each message the user writes and hands it to the answerer
+# when it asks a question. Turns the backend starts itself, such as automatic fixes, always go
+# to the coder, and so do chat titles and compaction. The backend writes both models into Pi's
+# models.json and settings.json before the runner starts, and passes --model explicitly.
+#
+# Both agents get the same tools, and each keeps its own model, thinking level and system
+# prompt for the whole conversation: changing any of them mid-conversation makes the provider
+# recompute that model's prompt cache. See
+# https://neuralwatt.com/news/why-harnesses-matter-for-energy-efficiency
+# [models.coder]
 # provider = "neuralwatt"
 # protocol = "openai-completions"
-# model = "deepseek-v4.1-flash-speed"
+# model = "deepseek-v4.1-flash"
 # thinking = "high"
+# Neuralwatt hosted tools the model may call on every request of the conversation; the
+# gateway runs them inside the response. Needs protocol = "openai-completions" and a model
+# whose /v1/models entry reports hosted_tools = true; -speed and -fast models report false.
+# https://docs.neuralwatt.com/hosted-tools/overview
+# hosted-tools = ["nw_web_search"]
 #
-# [models.chat.pi]
-# name = "DeepSeek V4.1 Flash (Speed)"
+# [models.coder.pi]
+# name = "DeepSeek V4.1 Flash"
 # contextWindow = 1000000
 # maxTokens = 384000
 # input = ["text", "image"]
@@ -65,6 +79,33 @@ timeout-seconds = 60
 # Prices per million tokens; all four are required and must be written as decimals.
 # cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
 # compat = { supportsStore = false, supportsDeveloperRole = false, supportsReasoningEffort = true, requiresReasoningContentOnAssistantMessages = true }
+# Request headers; Pi expands $NAME from the runner's environment, which holds the chat's
+# id in POINTY_AGENT_SESSION_ID. Neuralwatt keeps a conversation on the server that holds
+# its prompt cache when X-NW-Conversation-ID stays the same, and X-NW-Tools-Opt-Out keeps
+# the hosted tools switched on in its dashboard out of the request.
+# headers = { X-NW-Conversation-ID = "$POINTY_AGENT_SESSION_ID", X-NW-Tools-Opt-Out = "nw_consult,nw_look,nw_check_budget" }
+#
+# [models.answerer]
+# provider = "neuralwatt"
+# protocol = "openai-completions"
+# model = "kimi-k3"
+# thinking = "high"
+# hosted-tools = ["nw_web_search"]
+#
+# [models.answerer.pi]
+# name = "Kimi K3"
+# contextWindow = 1000000
+# maxTokens = 131072
+# input = ["text", "image"]
+# reasoning = true
+# thinkingLevelMap = { minimal = "low", low = "low", medium = "high", high = "high", xhigh = "max", max = "max" }
+# compat = { supportsStore = false, supportsDeveloperRole = false, supportsReasoningEffort = true, requiresReasoningContentOnAssistantMessages = true }
+# headers = { X-NW-Conversation-ID = "$POINTY_AGENT_SESSION_ID", X-NW-Tools-Opt-Out = "nw_consult,nw_look,nw_check_budget" }
+#
+# [models.router]
+# provider = "neuralwatt"
+# protocol = "systemone"
+# model = "clef-flash"
 
 # Embedding and judge models extend the step search box with a "Related" section.
 # [search]

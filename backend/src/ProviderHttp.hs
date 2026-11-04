@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Search.Http (
+module ProviderHttp (
     embedRequest,
     judgeRequest,
+    choiceRequest,
 ) where
 
 import Config (EmbeddingConfig (..), JudgeConfig (..), ProviderConfig (..))
@@ -68,6 +69,26 @@ judgeRequest judge provider query candidates = do
   where
     instructionsFor stepId =
         T.replace "{query}" query (T.replace "{id}" (T.pack (show stepId)) (judgeInstructions judge))
+
+choiceRequest :: ProviderConfig -> Text -> Value -> Text -> [(Text, Text)] -> IO (Either String Text)
+choiceRequest provider model state instructions criteria = do
+    key <- lookupEnv (T.unpack (providerApiKeyEnv provider))
+    case key of
+        Nothing -> pure (Left ("The router provider key " <> T.unpack (providerApiKeyEnv provider) <> " is not set."))
+        Just apiKey -> do
+            let question = object ["type" .= String "choice", "instructions" .= instructions, "criteria" .= object [Key.fromText label .= meaning | (label, meaning) <- criteria]]
+                body = object ["model" .= model, "state" .= state, "questions" .= object ["choice" .= question]]
+            response <- postJson provider apiKey "/systemone" body
+            pure (response >>= parseChoice)
+
+parseChoice :: Value -> Either String Text
+parseChoice (Object root) = case KeyMap.lookup "answers" root >>= field "choice" >>= field "choice" of
+    Just (String label) -> Right label
+    _ -> Left "The router response has no choice."
+  where
+    field name (Object object_) = KeyMap.lookup name object_
+    field _ _ = Nothing
+parseChoice _ = Left "The router response is not an object."
 
 questionId :: Int -> Key.Key
 questionId stepId = Key.fromText ("s" <> T.pack (show stepId))
