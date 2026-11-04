@@ -34,7 +34,9 @@ import Agent.Session (
     AgentSessionSummary (AgentSessionSummary),
     AgentTurn (..),
     PreparedApply (..),
+    applyChangesetPrompt,
     applyConflictsPending,
+    discardChangesetPrompt,
     forgetSessionTurns,
     freshSessionLayout,
     inferTurnExitCode,
@@ -332,7 +334,7 @@ applyPendingChanges origin sid = do
                 then return (preparedApply session_)
                 else mergeCandidate repoPath session_ origin targetHead_ agentHead_
         when (isNothing prepared && not (null dropped)) $
-            appendLifecycleTurn sid "Discard proposed changeset" (droppedStepsNote dropped <> " No changes were applied to `" <> targetBranch session_ <> "`.") (branchDiff branchState)
+            appendLifecycleTurn sid discardChangesetPrompt (droppedStepsNote dropped <> " No changes were applied to `" <> targetBranch session_ <> "`.") (branchDiff branchState)
         mapM_ (pushCandidate repoPath session_ origin dropped) (mfilter (not . applyConflictsPending) prepared)
 
 announce :: ApplyOrigin -> Text -> IO ()
@@ -504,7 +506,7 @@ pushCandidate repoPath session_ origin dropped candidate = do
                     liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead rewritten) (nub (mapMaybe appliedProjectId changedPaths)) stepIds
                     appendLifecycleTurn
                         (sessionId session_)
-                        "Apply proposed changeset"
+                        applyChangesetPrompt
                         (T.unwords ((appliedVerb origin <> " to `" <> targetBranch session_ <> "` at " <> shortCommit (candidateHead rewritten) <> ".") : [droppedStepsNote dropped | not (null dropped)]))
                         changesetDiff
                     saveSessionUpdate
@@ -627,7 +629,7 @@ discardAgentSession sid = do
     when (hasAgentCommits branchState) $
         appendLifecycleTurn
             sid
-            "Discard proposed changeset"
+            discardChangesetPrompt
             ("Discarded. No changes were applied to `" <> targetBranch session_ <> "`.")
             (branchDiff branchState)
     saveSessionUpdate session_{status = "open", baseCommit = latest, activeTurnId = Nothing, preparedApply = Nothing, lastError = Nothing}

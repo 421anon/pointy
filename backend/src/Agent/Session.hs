@@ -15,6 +15,9 @@ module Agent.Session (
     DocumentSize (..),
     SelectionRect (..),
     turnIsUnfinished,
+    applyChangesetPrompt,
+    discardChangesetPrompt,
+    isChangesetLifecycleTurn,
     latestUnfinishedTurn,
     inferTurnExitCode,
     turnLogHasFinalizationFailure,
@@ -310,6 +313,15 @@ turnIsUnfinished turn =
     turnStatus turn == "running"
         || turnExitCode turn == Nothing
         || turnFinishedAt turn == Nothing
+
+applyChangesetPrompt :: Text
+applyChangesetPrompt = "Apply proposed changeset"
+
+discardChangesetPrompt :: Text
+discardChangesetPrompt = "Discard proposed changeset"
+
+isChangesetLifecycleTurn :: AgentTurn -> Bool
+isChangesetLifecycleTurn turn = turnPrompt turn `elem` [applyChangesetPrompt, discardChangesetPrompt]
 
 latestUnfinishedTurn :: [AgentTurn] -> Maybe AgentTurn
 latestUnfinishedTurn =

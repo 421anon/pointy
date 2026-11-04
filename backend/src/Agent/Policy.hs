@@ -9,7 +9,8 @@ module Agent.Policy (
     renderEmbeddedRules,
     answererRules,
     routingInstructions,
-    routingCriteria,
+    RoutingChoice (..),
+    routingChoices,
     renderCurrentProject,
     renderViewedArtifact,
     renderAreaCapture,
@@ -77,17 +78,23 @@ answererRules =
         [ ""
         , "# Answerer"
         , ""
-        , "The backend routes each user message either to you, the answerer, or to the coder, a separate agent that shares this conversation. You get the messages that ask questions."
+        , "You are the answerer model working inside this Pointy instance's workspace. The backend routes each user message either to you or to the coder, a separate model that shares this conversation; you get the hard questions that need a heavy-weight specialist."
         , "Answer from what you find in the files, build logs and outputs. Change files only when the message asks for a change."
         ]
 
 routingInstructions :: Text
-routingInstructions = "A user of a research notebook sent this message to its assistant. Which agent should handle it?"
+routingInstructions = "A user of a Pointy research notebook is chatting with its assistant. The conversation lists their earlier messages, the model each one was routed to, and its reply. Which model should answer the last message? Be conservative with the heavy-weight specialist: it is expensive, so choose it only when the general model would likely fall short."
 
-routingCriteria :: [(AgentRole, Text)]
-routingCriteria =
-    [ (Answerer, "Answers a question, explains, or looks things up; changes no files")
-    , (Coder, "Changes the notebook: creates, edits, fixes, moves or deletes steps, projects or code")
+data RoutingChoice = RoutingChoice
+    { choiceRole :: AgentRole
+    , choiceLabel :: Text
+    , choiceMeaning :: Text
+    }
+
+routingChoices :: [RoutingChoice]
+routingChoices =
+    [ RoutingChoice Coder "general and coder" "The general and coder model: answers most messages, including looking up or computing values from files, data and logs, reading code, and every change to steps, projects and code"
+    , RoutingChoice Answerer "heavy-weight specialist" "The heavy-weight specialist model: expensive; only for interpreting results or explaining surprising findings where the answer needs scientific judgment rather than looking something up, and it changes nothing"
     ]
 
 renderCurrentProject :: Int -> Text

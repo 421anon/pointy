@@ -492,7 +492,7 @@ runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject re
             else action
     run = do
         appendLogLine cfg (turnLogPath turn) "system" ("Starting agent turn " <> tid)
-        route <- routeTurn routedRequest
+        route <- routeTurn turn routedRequest
         role <- case route of
             SoleCoder -> return Coder
             Routed chosen failure -> do
