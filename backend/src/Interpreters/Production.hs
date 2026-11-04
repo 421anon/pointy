@@ -48,11 +48,11 @@ runInferenceProduction = interpret $ \_ -> \case
         case request of
             Left err -> pure (Left err)
             Right (embedding, provider) -> liftIO (embedRequest embedding provider texts)
-    JudgeCandidates query candidates -> do
+    JudgeCandidates task -> do
         request <- liftIO inferenceJudgeRequest
         case request of
             Left err -> pure (Left err)
-            Right (judge, provider) -> liftIO (judgeRequest judge provider query candidates)
+            Right (judge, provider) -> liftIO (judgeRequest judge provider task)
 
 inferenceEmbedRequest :: IO (Either String (EmbeddingConfig, ProviderConfig))
 inferenceEmbedRequest = do

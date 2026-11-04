@@ -2,27 +2,21 @@
 
 module Agent.Router (Route (..), routeTurn) where
 
-import Agent.Model (AgentRole (..), agentRoleName)
+import Agent.Exchange (Exchange (..), exchangeReply, turnExchanges)
+import Agent.Model (AgentRole (..))
 import Agent.Policy (RoutingChoice (..), routingChoices, routingInstructions)
 import Agent.Session (AgentTurn (..), isChangesetLifecycleTurn, listTurnsWithLogs)
 import Config (Config (..), RouterConfig (..), loadConfig, resolveConfigPath)
-import Data.Aeson (Value, decodeStrict, object, (.=))
+import Data.Aeson (Value, object, (.=))
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import ProviderHttp (choiceRequest)
 
 data Route
     = SoleCoder
     | Routed AgentRole (Maybe Text)
-
-data Exchange = Exchange
-    { exchangeMessage :: Text
-    , exchangeRole :: Maybe AgentRole
-    , exchangeReplyLines :: [Text]
-    }
 
 routeTurn :: AgentTurn -> Maybe Text -> IO Route
 routeTurn turn mRequest = do
@@ -55,25 +49,11 @@ earlierExchanges current = do
         , exchange <- turnExchanges turn
         ]
 
-turnExchanges :: AgentTurn -> [Exchange]
-turnExchanges turn = reverse (foldl' readLine [Exchange (turnPrompt turn) Nothing []] (T.lines (turnLog turn)))
-  where
-    readLine exchanges@(latest : earlier) line
-        | Just name <- T.stripPrefix "[agent] " line =
-            latest{exchangeRole = find ((== name) . agentRoleName) [Coder, Answerer]} : earlier
-        | Just encoded <- T.stripPrefix "[steering] " line
-        , Just message <- decodeStrict (TE.encodeUtf8 encoded) =
-            Exchange message (exchangeRole latest) [] : exchanges
-        | Just text <- T.stripPrefix "[stdout] " line =
-            latest{exchangeReplyLines = text : exchangeReplyLines latest} : earlier
-        | otherwise = exchanges
-    readLine [] _ = []
-
 exchangeJson :: Exchange -> Value
 exchangeJson exchange =
     object $
         [ "message" .= exchangeMessage exchange
-        , "reply" .= T.strip (T.unlines (reverse (exchangeReplyLines exchange)))
+        , "reply" .= exchangeReply exchange
         ]
             ++ [ "routedTo" .= choiceLabel choice
                | Just role <- [exchangeRole exchange]

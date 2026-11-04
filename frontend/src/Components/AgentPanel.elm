@@ -4,10 +4,12 @@ import Accessors exposing (get, just, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Components.AgentMentions as AgentMentions
+import Components.Select as Select
 import Dict
 import Extra.Http as Http
 import File
 import Flow exposing (Flow)
+import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (alt, attribute, class, classList, disabled, id, placeholder, rows, src, title, type_, value)
 import Html.Events as Events
@@ -305,11 +307,113 @@ isCreatingAgentSession agent =
 
 viewSessionSidebar : Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
 viewSessionSidebar agent listed =
+    let
+        searchState =
+            agent.chatSearch
+
+        content =
+            if Fuzzy.isEmpty (Fuzzy.parse searchState.input) then
+                { firstResult = Nothing, nodes = viewSessionSidebarContent agent listed }
+
+            else
+                viewChatSearchResults agent
+    in
     Html.div
         [ class "agent-panel__sidebar"
         , id "agent-panel-sidebar"
         ]
-        (viewSessionSidebarContent agent listed)
+        (viewChatSearchInput searchState content.firstResult :: content.nodes)
+
+
+viewChatSearchInput : Model.ChatSearchState -> Maybe String -> Html (Flow Model ())
+viewChatSearchInput searchState firstResult =
+    let
+        ignored =
+            Decode.fail "not handled"
+    in
+    Html.div [ class "form-input tag-wrapper agent-panel__chat-search" ]
+        [ View.Icons.iconCustom True "search" [ class "form-input-icon" ]
+        , Html.input
+            [ type_ "search"
+            , class "agent-panel__chat-search-input"
+            , placeholder "Search chats"
+            , attribute "aria-label" "Search chats"
+            , value searchState.input
+            , Html.Attributes.autocomplete False
+            , Events.onInput Actions.onChatSearchInput
+            , Events.stopPropagationOn "keydown" <|
+                Keyboard.decodeCombinations
+                    [ ( Keyboard.escape
+                      , if String.isEmpty searchState.input then
+                            ignored
+
+                        else
+                            Decode.succeed ( Actions.clearChatSearch, True )
+                      )
+                    , ( Keyboard.enter
+                      , firstResult
+                            |> Maybe.map (\sessionId -> Decode.succeed ( Actions.selectAgentSession sessionId, True ))
+                            |> Maybe.withDefault ignored
+                      )
+                    ]
+            ]
+            []
+        ]
+
+
+viewChatSearchResults : Model.AgentState -> { firstResult : Maybe String, nodes : List (Html (Flow Model ())) }
+viewChatSearchResults agent =
+    let
+        searchState =
+            agent.chatSearch
+
+        query =
+            Fuzzy.parse searchState.input
+
+        matches =
+            List.map Tuple.first (Lib.rankChats searchState.input agent)
+
+        matchedIds =
+            List.map (.session >> .sessionId) matches
+
+        related =
+            ApiData.toMaybe searchState.related
+                |> Maybe.withDefault []
+                |> List.filter (\entry -> not (List.member entry.sessionId matchedIds))
+                |> List.filterMap (\entry -> Model.sessionSummary entry.sessionId agent |> Maybe.map (\summary -> ( summary, entry.detail )))
+
+        notice =
+            case searchState.related of
+                Loading _ ->
+                    Just "Looking for related chats…"
+
+                Error _ ->
+                    Just "Related chats are unavailable right now"
+
+                _ ->
+                    Nothing
+    in
+    { firstResult = List.head (matchedIds ++ List.map (Tuple.first >> .session >> .sessionId) related)
+    , nodes =
+        [ Html.div [ class "agent-panel__search-results" ]
+            [ Html.ul [ class "agent-panel__session-list" ]
+                (List.map
+                    (\summary -> viewSessionRowWith agent { name = Fuzzy.highlight Fuzzy.Loose query (sessionDisplayName summary), detail = Nothing } summary)
+                    matches
+                )
+            , Html.viewIf (not (List.isEmpty related))
+                (Html.div [ class "agent-panel__search-heading" ] [ Html.text "Related" ])
+            , Html.ul [ class "agent-panel__session-list" ]
+                (List.map
+                    (\( summary, detail ) -> viewSessionRowWith agent { name = [ Fuzzy.Plain (sessionDisplayName summary) ], detail = Just detail } summary)
+                    related
+                )
+            , Html.viewMaybe (\message -> Html.p [ class "agent-panel__empty-hint", attribute "role" "status" ] [ Html.text message ]) notice
+            , Html.viewIf (List.isEmpty matches && List.isEmpty related && notice == Nothing)
+                (Html.p [ class "agent-panel__empty-hint" ] [ Html.text "No matching chats." ])
+            ]
+        ]
+    }
 
 
 viewSessionSidebarContent : Model.AgentState -> List Model.AgentSessionSummary -> List (Html (Flow Model ()))
@@ -433,6 +537,11 @@ viewCreatingSessionRow =
 
 viewSessionRow : Model.AgentState -> Model.AgentSessionSummary -> Html (Flow Model ())
 viewSessionRow agent summary =
+    viewSessionRowWith agent { name = [ Fuzzy.Plain (sessionDisplayName summary) ], detail = Nothing } summary
+
+
+viewSessionRowWith : Model.AgentState -> { name : List Fuzzy.Segment, detail : Maybe String } -> Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionRowWith agent label summary =
     let
         session =
             summary.session
@@ -442,9 +551,6 @@ viewSessionRow agent summary =
 
         isArchived =
             Model.agentSessionArchived session.status
-
-        displayName =
-            sessionDisplayName summary
 
         isRunning =
             agentSessionRunning session.sessionId agent
@@ -491,7 +597,8 @@ viewSessionRow agent summary =
             Events.onClick (Actions.selectAgentSession session.sessionId) :: rowAttrs
         )
         [ Html.div [ class "agent-panel__session-row-main" ]
-            [ Html.div [ class "agent-panel__session-name" ] [ Html.text displayName ]
+            [ Html.div [ class "agent-panel__session-name" ] (List.map Select.viewSegment label.name)
+            , Html.viewMaybe (\detail -> Html.div [ class "agent-panel__session-meta" ] [ Html.text detail ]) label.detail
             , Html.viewIf (statusLabel /= "Ready" && statusLabel /= "Archived")
                 (Html.div [ class "agent-panel__session-meta" ] [ Html.text statusLabel ])
             , Html.viewIf summary.hasCommits

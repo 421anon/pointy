@@ -37,6 +37,7 @@ import Effects (AppEffects, ColdStorage (..), Eval (..), Inference (..), LogStam
 import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageDataset, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobsEnded)
 import Processes (cli)
+import ProviderHttp (JudgeTask (..))
 import Text.Read (readMaybe)
 
 import System.Directory (doesPathExist)
@@ -78,7 +79,7 @@ runFixture state action =
 runInferenceFixture :: (IOE :> es) => Eff (Inference : es) a -> Eff es a
 runInferenceFixture = interpret $ \_ -> \case
     Embed texts -> pure (Right (map fixtureVector texts))
-    JudgeCandidates query candidates -> pure (Right (Map.fromList [(stepId, fixtureRelevance query document) | (stepId, document) <- candidates]))
+    JudgeCandidates task -> pure (Right (Map.fromList [(candidateId, fixtureRelevance (judgeTaskQuery task) document) | (candidateId, document) <- judgeTaskCandidates task]))
 
 runColdStorageFixture :: (IOE :> es) => FixtureState -> Eff (ColdStorage : es) a -> Eff es a
 runColdStorageFixture state = interpret $ \_ -> \case

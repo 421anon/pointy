@@ -30,6 +30,7 @@ import Handlers.Cold (ColdFile, ColdStatus, PrefetchResponse)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
+import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
@@ -355,3 +356,17 @@ instance ToSchema StepSearchResponse where
 instance ToSchema StepSearchInfo where
     declareNamedSchema _ =
         pure $ objectSchema "StepSearchInfo" [("semantic", boolField), ("judge", boolField)]
+
+instance ToSchema ChatSearchRequest where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "ChatSearchRequest"
+                [ ("query", stringField)
+                , ("exclude", arrayOf stringField)
+                ]
+                & schema . required .~ ["query"]
+
+instance ToSchema ChatSearchResponse where
+    declareNamedSchema _ =
+        pure $ objectSchema "ChatSearchResponse" [("results", arrayOf (Inline (mempty & type_ ?~ OpenApiObject & properties .~ fromList [("session_id", stringField), ("similarity", numberField), ("relevance", nullableField OpenApiNumber)])))]

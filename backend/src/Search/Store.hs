@@ -4,12 +4,16 @@
 
 module Search.Store (
     SearchStore,
+    SearchDocument (..),
     SearchHit (..),
+    Corpus (..),
+    CorpusSnapshot (..),
     newSearchStore,
     storeSearch,
+    semanticSearchEnabled,
 ) where
 
-import Config (EmbeddingConfig (..), JudgeConfig (..), SearchConfig (..))
+import Config (Config (..), EmbeddingConfig (..), JudgeConfig (..), SearchConfig (..), loadConfig, resolveConfigPath)
 import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
 import Control.Monad (when)
 import Crypto.Hash (Digest, SHA256, hash)
@@ -34,142 +38,181 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector.Unboxed as VU
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Exception (bracket_)
-import Effects (Eval, Inference, embedTexts, judgeCandidates)
-import Search.Document (StepDocument (..), buildDocuments)
+import Effects (Inference, embedTexts, judgeCandidates)
+import ProviderHttp (JudgeTask (..))
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.FilePath ((</>))
-import UserRepo (ReadRepoContext (..), withReadRepoTransaction)
 
-data SearchHit = SearchHit
-    { hitStepId :: Int
+data SearchDocument key = SearchDocument
+    { documentKey :: key
+    , documentJudgeId :: Int
+    , documentText :: Text
+    }
+
+data SearchHit key = SearchHit
+    { hitKey :: key
     , hitSimilarity :: Double
     , hitRelevance :: Maybe Double
     }
     deriving (Show)
 
+data CorpusSnapshot es key = CorpusSnapshot
+    { snapshotVersion :: Text
+    , snapshotDocuments :: Eff es (Either String [SearchDocument key])
+    }
+
+data Corpus es key = Corpus
+    { corpusNoun :: Text
+    , corpusVectorDirectory :: FilePath
+    , corpusQueryTemplate :: EmbeddingConfig -> Text
+    , corpusJudgeInstructions :: JudgeConfig -> Text
+    , corpusSnapshot :: Eff es (Either String (CorpusSnapshot es key))
+    }
+
 data IndexKey = IndexKey
-    { keyCommit :: Text
+    { keyVersion :: Text
     , keyNamespace :: Text
     }
     deriving (Eq)
 
-data IndexState = IndexState
+data IndexedDocument = IndexedDocument
+    { indexedJudgeId :: Int
+    , indexedText :: Text
+    , indexedHash :: Text
+    }
+
+data IndexState key = IndexState
     { indexKey :: IndexKey
-    , indexDocuments :: Map Int StepDocument
+    , indexDocuments :: Map key IndexedDocument
     , indexVectors :: Map Text (VU.Vector Float)
     }
 
-data SearchStore = SearchStore
-    { storeState :: IORef (Maybe IndexState)
+data SearchStore key = SearchStore
+    { storeState :: IORef (Maybe (IndexState key))
     , storeLock :: MVar ()
     }
 
-newSearchStore :: IO SearchStore
+newSearchStore :: IO (SearchStore key)
 newSearchStore = SearchStore <$> newIORef Nothing <*> newMVar ()
 
-storeSearch :: (Eval :> es, Inference :> es, IOE :> es) => SearchStore -> SearchConfig -> Maybe Text -> Text -> [Int] -> Eff es [SearchHit]
-storeSearch store searchConfig commit query exclude = do
-    index <- ensureIndex store searchConfig commit
+semanticSearchEnabled :: SearchConfig -> Bool
+semanticSearchEnabled searchConfig = not (T.null (embeddingProvider (searchEmbedding searchConfig)))
+
+storeSearch :: (Ord key, Inference :> es, IOE :> es) => SearchStore key -> Corpus es key -> Text -> [key] -> Eff es [SearchHit key]
+storeSearch store corpus query exclude = do
+    config <- liftIO (resolveConfigPath >>= loadConfig)
+    case configSearch config of
+        Just searchConfig
+            | semanticSearchEnabled searchConfig
+            , not (T.null (T.strip query)) ->
+                searchIndex store corpus searchConfig query (Set.fromList exclude)
+        _ -> pure []
+
+searchIndex :: (Ord key, Inference :> es, IOE :> es) => SearchStore key -> Corpus es key -> SearchConfig -> Text -> Set.Set key -> Eff es [SearchHit key]
+searchIndex store corpus searchConfig query exclude = do
+    index <- ensureIndex store corpus searchConfig
     case index of
         Nothing -> pure []
         Just indexed -> do
-            embedding <- embedTexts [renderTemplate "{query}" (embeddingQueryTemplate (searchEmbedding searchConfig)) query]
+            embedding <- embedTexts [renderTemplate "{query}" (corpusQueryTemplate corpus (searchEmbedding searchConfig)) query]
             case embedding of
-                Right [queryVector] -> judgeRank searchConfig indexed query queryVector (Set.fromList exclude)
+                Right [queryVector] -> judgeRank corpus searchConfig indexed query queryVector exclude
                 Right vectors -> warn ("The embedding provider returned " <> show (length vectors) <> " vectors for one query.") >> pure []
-                Left err -> warn ("Failed to embed the search query: " <> err) >> pure []
+                Left err -> warn ("Failed to embed the " <> noun corpus <> " search query: " <> err) >> pure []
 
-judgeRank :: (Inference :> es, IOE :> es) => SearchConfig -> IndexState -> Text -> VU.Vector Float -> Set.Set Int -> Eff es [SearchHit]
-judgeRank searchConfig indexed query queryVector exclude = do
+judgeRank :: (Ord key, Inference :> es, IOE :> es) => Corpus es key -> SearchConfig -> IndexState key -> Text -> VU.Vector Float -> Set.Set key -> Eff es [SearchHit key]
+judgeRank corpus searchConfig indexed query queryVector exclude = do
     let limit = take (max 1 (searchLimit searchConfig))
         similarityRanked =
             take (max 1 (searchJudgeCandidates searchConfig)) $
                 sortOn
                     (Down . snd)
-                    [ (stepId, similarity)
-                    | (stepId, document) <- Map.toList (indexDocuments indexed)
-                    , Set.notMember stepId exclude
-                    , Just vector <- [Map.lookup (documentHash document) (indexVectors indexed)]
+                    [ ((key, document), similarity)
+                    | (key, document) <- Map.toList (indexDocuments indexed)
+                    , Set.notMember key exclude
+                    , Just vector <- [Map.lookup (indexedHash document) (indexVectors indexed)]
                     , VU.length vector == VU.length queryVector
                     , let similarity = realToFrac (VU.sum (VU.zipWith (*) queryVector vector))
                     , similarity >= embeddingMinSimilarity (searchEmbedding searchConfig)
                     ]
-        similarityHits = [SearchHit stepId similarity Nothing | (stepId, similarity) <- similarityRanked]
+        similarityHits = [SearchHit key similarity Nothing | ((key, _), similarity) <- similarityRanked]
     case searchJudge searchConfig of
         Nothing -> pure (limit similarityHits)
         Just _ | null similarityRanked -> pure []
         Just judge -> do
-            let candidates =
-                    [ (stepId, documentText document)
-                    | (stepId, _) <- similarityRanked
-                    , Just document <- [Map.lookup stepId (indexDocuments indexed)]
-                    ]
-            relevance <- judgeCandidates query candidates
+            relevance <-
+                judgeCandidates
+                    JudgeTask
+                        { judgeTaskSubject = corpusNoun corpus <> "s"
+                        , judgeTaskInstructions = corpusJudgeInstructions corpus judge
+                        , judgeTaskQuery = query
+                        , judgeTaskCandidates = [(indexedJudgeId document, indexedText document) | ((_, document), _) <- similarityRanked]
+                        }
             case relevance of
-                Left err -> warn ("Failed to judge the step search candidates: " <> err) >> pure (limit similarityHits)
+                Left err -> warn ("Failed to judge the " <> noun corpus <> " search candidates: " <> err) >> pure (limit similarityHits)
                 Right scores ->
                     pure $
                         limit $
                             sortOn
                                 (Down . fromMaybe 0 . hitRelevance)
-                                [ SearchHit stepId similarity (Just score)
-                                | (stepId, similarity) <- similarityRanked
-                                , Just score <- [Map.lookup stepId scores]
+                                [ SearchHit key similarity (Just score)
+                                | ((key, document), similarity) <- similarityRanked
+                                , Just score <- [Map.lookup (indexedJudgeId document) scores]
                                 , score >= judgeMinRelevance judge
                                 ]
 
-ensureIndex :: (Eval :> es, Inference :> es, IOE :> es) => SearchStore -> SearchConfig -> Maybe Text -> Eff es (Maybe IndexState)
-ensureIndex store searchConfig commit = do
-    resolved <- resolveCommit commit
-    case resolved of
-        Left err -> warn ("Failed to resolve the step search commit: " <> err) >> pure Nothing
-        Right target -> do
-            let key = IndexKey target (vectorNamespace (searchEmbedding searchConfig))
-                current = do
+ensureIndex :: (Ord key, Inference :> es, IOE :> es) => SearchStore key -> Corpus es key -> SearchConfig -> Eff es (Maybe (IndexState key))
+ensureIndex store corpus searchConfig = do
+    snapshot <- corpusSnapshot corpus
+    case snapshot of
+        Left err -> warn ("Failed to read the " <> noun corpus <> " search corpus: " <> err) >> pure Nothing
+        Right current -> do
+            let key = IndexKey (snapshotVersion current) (vectorNamespace (searchEmbedding searchConfig))
+                cachedIndex = do
                     cached <- liftIO (readIORef (storeState store))
                     pure (cached >>= \state -> if indexKey state == key then Just state else Nothing)
-            cached <- current
+            cached <- cachedIndex
             case cached of
                 Just state -> pure (Just state)
                 Nothing ->
                     bracket_ (liftIO (takeMVar (storeLock store))) (liftIO (putMVar (storeLock store) ())) $ do
-                        rechecked <- current
-                        maybe (buildIndex store searchConfig key) (pure . Just) rechecked
+                        rechecked <- cachedIndex
+                        maybe (buildIndex store corpus searchConfig key current) (pure . Just) rechecked
 
-resolveCommit :: (IOE :> es) => Maybe Text -> Eff es (Either String Text)
-resolveCommit (Just commit) = pure (Right commit)
-resolveCommit Nothing = withReadRepoTransaction (pure . T.pack . readCommitHash)
-
-buildIndex :: (Eval :> es, Inference :> es, IOE :> es) => SearchStore -> SearchConfig -> IndexKey -> Eff es (Maybe IndexState)
-buildIndex store searchConfig key = do
-    documents <- withReadRepoTransaction $ \ctx -> buildDocuments ctx{readCommitHash = T.unpack (keyCommit key)}
-    case documents of
-        Left err -> warn ("Failed to build the step search index: " <> err) >> pure Nothing
-        Right steps -> do
+buildIndex :: (Ord key, Inference :> es, IOE :> es) => SearchStore key -> Corpus es key -> SearchConfig -> IndexKey -> CorpusSnapshot es key -> Eff es (Maybe (IndexState key))
+buildIndex store corpus searchConfig key snapshot = do
+    built <- snapshotDocuments snapshot
+    case built of
+        Left err -> warn ("Failed to build the " <> noun corpus <> " search index: " <> err) >> pure Nothing
+        Right documents -> do
             let embedding = searchEmbedding searchConfig
-                namespace = keyNamespace key
-                texts = Map.fromList [(documentHash document, renderTemplate "{document}" (embeddingDocumentTemplate embedding) (documentText document)) | document <- steps]
-            stored <- liftIO (loadVectors namespace)
+                indexed = Map.fromList [(documentKey document, indexDocument document) | document <- documents]
+                texts = Map.fromList [(indexedHash document, renderTemplate "{document}" (embeddingDocumentTemplate embedding) (indexedText document)) | document <- Map.elems indexed]
+            cachePath <- liftIO (vectorCachePath (corpusVectorDirectory corpus) (keyNamespace key))
+            stored <- liftIO (loadVectors cachePath)
             let known = Map.restrictKeys stored (Map.keysSet texts)
                 missing = Map.toList (Map.withoutKeys texts (Map.keysSet known))
             when (null missing && Map.size known /= Map.size stored) $
-                liftIO (saveVectors namespace known)
-            embedded <- embedBatches namespace known (chunks (max 1 (embeddingBatchSize embedding)) missing)
+                liftIO (saveVectors cachePath known)
+            embedded <- embedBatches cachePath known (chunks (max 1 (embeddingBatchSize embedding)) missing)
             case embedded of
-                Left err -> warn ("Failed to embed the step documents: " <> err) >> pure Nothing
+                Left err -> warn ("Failed to embed the " <> noun corpus <> " documents: " <> err) >> pure Nothing
                 Right vectors -> do
-                    let state =
-                            IndexState
-                                { indexKey = key
-                                , indexDocuments = Map.fromList [(documentStepId document, document) | document <- steps]
-                                , indexVectors = vectors
-                                }
+                    let state = IndexState{indexKey = key, indexDocuments = indexed, indexVectors = vectors}
                     liftIO (writeIORef (storeState store) (Just state))
                     pure (Just state)
 
-embedBatches :: (Inference :> es, IOE :> es) => Text -> Map Text (VU.Vector Float) -> [[(Text, Text)]] -> Eff es (Either String (Map Text (VU.Vector Float)))
+indexDocument :: SearchDocument key -> IndexedDocument
+indexDocument document =
+    IndexedDocument
+        { indexedJudgeId = documentJudgeId document
+        , indexedText = documentText document
+        , indexedHash = hexDigest (hash (TE.encodeUtf8 (documentText document)) :: Digest SHA256)
+        }
+
+embedBatches :: (Inference :> es, IOE :> es) => FilePath -> Map Text (VU.Vector Float) -> [[(Text, Text)]] -> Eff es (Either String (Map Text (VU.Vector Float)))
 embedBatches _ known [] = pure (Right known)
-embedBatches namespace known (batch : rest) = do
+embedBatches cachePath known (batch : rest) = do
     response <- embedTexts (map snd batch)
     case response of
         Left err -> pure (Left err)
@@ -178,8 +221,11 @@ embedBatches namespace known (batch : rest) = do
                 pure (Left ("The embedding provider returned " <> show (length vectors) <> " vectors for " <> show (length batch) <> " texts."))
             | otherwise -> do
                 let known' = Map.union known (Map.fromList (zip (map fst batch) vectors))
-                liftIO (saveVectors namespace known')
-                embedBatches namespace known' rest
+                liftIO (saveVectors cachePath known')
+                embedBatches cachePath known' rest
+
+noun :: Corpus es key -> String
+noun = T.unpack . corpusNoun
 
 warn :: (IOE :> es) => String -> Eff es ()
 warn message = liftIO (putStrLn ("Warning: " <> message))
@@ -202,16 +248,15 @@ vectorNamespace embedding =
 cacheVersion :: Int
 cacheVersion = 2
 
-vectorCachePath :: Text -> IO FilePath
-vectorCachePath namespace = do
+vectorCachePath :: FilePath -> Text -> IO FilePath
+vectorCachePath directory namespace = do
     home <- getHomeDirectory
-    let dir = home </> ".local" </> "state" </> "pointy" </> "embeddings"
+    let dir = home </> ".local" </> "state" </> "pointy" </> directory
     createDirectoryIfMissing True dir
     pure (dir </> T.unpack namespace <> ".bin")
 
-loadVectors :: Text -> IO (Map Text (VU.Vector Float))
-loadVectors namespace = do
-    path <- vectorCachePath namespace
+loadVectors :: FilePath -> IO (Map Text (VU.Vector Float))
+loadVectors path = do
     exists <- doesFileExist path
     if not exists
         then pure Map.empty
@@ -233,7 +278,7 @@ decodeVectors bytes = case runGetOrFail getHeader bytes of
         | BL.null remaining = acc
         | otherwise = case runGetOrFail getEntry remaining of
             Left _ -> acc
-            Right (rest, _, (documentKey, vector)) -> decodeEntries rest (Map.insert documentKey vector acc)
+            Right (rest, _, (vectorKey, vector)) -> decodeEntries rest (Map.insert vectorKey vector acc)
     getEntry = do
         keyLength <- getWord32le
         keyBytes <- getByteString (fromIntegral keyLength)
@@ -250,16 +295,15 @@ encodeVectors vectors =
             putWord32le (fromIntegral (Map.size vectors))
             mapM_ putEntry (Map.toList vectors)
   where
-    putEntry (documentKey, vector) = do
-        let keyBytes = TE.encodeUtf8 documentKey
+    putEntry (vectorKey, vector) = do
+        let keyBytes = TE.encodeUtf8 vectorKey
         putWord32le (fromIntegral (BS.length keyBytes))
         putByteString keyBytes
         putWord32le (fromIntegral (VU.length vector))
         mapM_ BinaryPut.putFloatle (VU.toList vector)
 
-saveVectors :: Text -> Map Text (VU.Vector Float) -> IO ()
-saveVectors namespace vectors = do
-    path <- vectorCachePath namespace
+saveVectors :: FilePath -> Map Text (VU.Vector Float) -> IO ()
+saveVectors path vectors = do
     let staging = path <> ".tmp"
     BS.writeFile staging (encodeVectors vectors)
     renameFile staging path

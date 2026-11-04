@@ -9,6 +9,7 @@ common warnings
 library
   import:           warnings
   exposed-modules:
+    Agent.Exchange
     Agent.Git
     Agent.Model
     Agent.PiConfig
@@ -37,6 +38,7 @@ library
     Fixture.Document
     Fixture.Server
     Handlers.Agent
+    Handlers.ChatSearch
     Handlers.ArtifactRdf
     Handlers.Autocomplete
     Handlers.Cold
@@ -78,7 +80,8 @@ library
     ProjectFiles
     ProjectTree
     SingleFlightCache
-    Search.Document
+    Search.ChatCorpus
+    Search.StepCorpus
     Search.Store
     Sse
     Storage

@@ -1087,6 +1087,7 @@ type alias AgentState =
     , clientId : String
     , composerAttachments : List ComposerAttachment
     , lightbox : Maybe Lightbox
+    , chatSearch : ChatSearchState
     }
 
 
@@ -1111,7 +1112,27 @@ initAgentState =
     , clientId = ""
     , composerAttachments = []
     , lightbox = Nothing
+    , chatSearch = initChatSearchState
     }
+
+
+type alias RelatedChat =
+    { sessionId : String
+    , detail : String
+    }
+
+
+type alias ChatSearchState =
+    { input : String
+    , relatedQuery : String
+    , related : ApiData (List RelatedChat)
+    , debounce : Debounce String
+    }
+
+
+initChatSearchState : ChatSearchState
+initChatSearchState =
+    { input = "", relatedQuery = "", related = NotAsked, debounce = Debounce.init }
 
 
 agentMutationPending : AgentState -> Bool

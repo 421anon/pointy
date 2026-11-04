@@ -67,6 +67,7 @@ import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, MonadIO, typ
 import Effectful.Dispatch.Dynamic (send)
 import Ingest (IngestResult)
 import NixEvaluator (RepoSource)
+import ProviderHttp (JudgeTask)
 import Servant.Server (ServerError)
 import Servant.Server.Internal.Handler (Handler (..))
 
@@ -122,7 +123,7 @@ type instance DispatchOf ColdStorage = Dynamic
 
 data Inference :: Effect where
     Embed :: [Text] -> Inference m (Either String [VU.Vector Float])
-    JudgeCandidates :: Text -> [(Int, Text)] -> Inference m (Either String (Map Int Double))
+    JudgeCandidates :: JudgeTask -> Inference m (Either String (Map Int Double))
 
 type instance DispatchOf Inference = Dynamic
 
@@ -266,5 +267,5 @@ coldStoragePrefetch storePath = send . ColdStoragePrefetch storePath
 embedTexts :: (Inference :> es) => [Text] -> Eff es (Either String [VU.Vector Float])
 embedTexts = send . Embed
 
-judgeCandidates :: (Inference :> es) => Text -> [(Int, Text)] -> Eff es (Either String (Map Int Double))
-judgeCandidates query candidates = send (JudgeCandidates query candidates)
+judgeCandidates :: (Inference :> es) => JudgeTask -> Eff es (Either String (Map Int Double))
+judgeCandidates task = send (JudgeCandidates task)

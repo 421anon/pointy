@@ -1,5 +1,6 @@
 module Api.Agent exposing
-    ( applyChanges
+    ( ChatSearchResult
+    , applyChanges
     , archive
     , compact
     , createSession
@@ -9,6 +10,7 @@ module Api.Agent exposing
     , imageMimeTypes
     , listSessions
     , renameSession
+    , searchChats
     , sendTurn
     , setAutoApply
     , steer
@@ -58,6 +60,37 @@ sessionSummaryDecoder =
         |> required "title" Decode.string
         |> required "turnCount" Decode.int
         |> required "hasCommits" Decode.bool
+
+
+type alias ChatSearchResult =
+    { sessionId : String
+    , similarity : Float
+    , relevance : Maybe Float
+    }
+
+
+searchChats : { query : String, exclude : List String } -> Flow s (Result Http.Error (List ChatSearchResult))
+searchChats searchRequest =
+    Flow.lift <|
+        Http.post
+            { url = baseUrl ++ "/chat-search"
+            , body =
+                Http.jsonBody
+                    (Encode.object
+                        [ ( "query", Encode.string searchRequest.query )
+                        , ( "exclude", Encode.list Encode.string searchRequest.exclude )
+                        ]
+                    )
+            , expect = Http.expectJson identity (Decode.field "results" (Decode.list chatSearchResultDecoder))
+            }
+
+
+chatSearchResultDecoder : Decoder ChatSearchResult
+chatSearchResultDecoder =
+    Decode.succeed ChatSearchResult
+        |> required "session_id" Decode.string
+        |> required "similarity" Decode.float
+        |> optional "relevance" (Decode.maybe Decode.float) Nothing
 
 
 fetchSession : String -> Flow s (Result Http.Error Model.AgentSessionView)

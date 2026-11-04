@@ -192,6 +192,7 @@ data EmbeddingConfig = EmbeddingConfig
     , embeddingModel :: Text
     , embeddingDimensions :: Maybe Int
     , embeddingQueryTemplate :: Text
+    , embeddingChatQueryTemplate :: Text
     , embeddingDocumentTemplate :: Text
     , embeddingBatchSize :: Int
     , embeddingMinSimilarity :: Double
@@ -206,6 +207,7 @@ emptyEmbeddingConfig =
         , embeddingModel = ""
         , embeddingDimensions = Nothing
         , embeddingQueryTemplate = "{query}"
+        , embeddingChatQueryTemplate = "{query}"
         , embeddingDocumentTemplate = "{document}"
         , embeddingBatchSize = 128
         , embeddingMinSimilarity = 0.4
@@ -216,6 +218,7 @@ data JudgeConfig = JudgeConfig
     , judgeProtocol :: JudgeProtocol
     , judgeModel :: Text
     , judgeInstructions :: Text
+    , judgeChatInstructions :: Text
     , judgeMinRelevance :: Double
     }
     deriving (Show)
@@ -432,6 +435,7 @@ embeddingCodec =
         <*> Toml.text "model" .= embeddingModel
         <*> optionalAt Toml.int "dimensions" .= embeddingDimensions
         <*> defaultedAt "{query}" Toml.text "query-template" .= embeddingQueryTemplate
+        <*> defaultedAt "{query}" Toml.text "chat-query-template" .= embeddingChatQueryTemplate
         <*> defaultedAt "{document}" Toml.text "document-template" .= embeddingDocumentTemplate
         <*> defaultedAt 128 Toml.int "batch-size" .= embeddingBatchSize
         <*> defaultedAt 0.4 Toml.double "min-similarity" .= embeddingMinSimilarity
@@ -443,6 +447,7 @@ judgeCodec =
         <*> judgeProtocolCodec .= judgeProtocol
         <*> Toml.text "model" .= judgeModel
         <*> defaultedAt "Is step {id} one of the steps the person searching for \"{query}\" wants to find?" Toml.text "instructions" .= judgeInstructions
+        <*> defaultedAt "Is chat {id} one of the chats the person searching for \"{query}\" wants to find?" Toml.text "chat-instructions" .= judgeChatInstructions
         <*> defaultedAt 0.5 Toml.double "min-relevance" .= judgeMinRelevance
 
 searchCodec :: TomlCodec SearchConfig

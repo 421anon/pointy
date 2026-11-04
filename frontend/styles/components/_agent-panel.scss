@@ -430,6 +430,41 @@
   overflow: auto;
 }
 
+.agent-panel__chat-search {
+  flex: 0 0 auto;
+  padding-inline: var(--spacing-xs);
+}
+
+.agent-panel__chat-search-input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  color: var(--text-primary);
+
+  &::placeholder {
+    color: var(--text-secondary);
+  }
+}
+
+.agent-panel__search-results {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2xs);
+}
+
+.agent-panel__search-heading {
+  padding: var(--spacing-xs) var(--spacing-xs) var(--spacing-2xs);
+  border-top: 1px solid var(--line-color);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .agent-panel__session-row {
   display: flex;
   align-items: center;

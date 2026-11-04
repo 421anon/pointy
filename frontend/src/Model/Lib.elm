@@ -8,7 +8,7 @@ import Fuzzy
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (ChildKind(..), ChildLink, ChildRef, Model, ProjectRecord, SearchField(..))
-import Model.Lenses exposing (commitHash, currentProject, currentProjectPath, loadedProjects, presets, projects, relatedSearch, searchBox, stepConfig, stepSearch, steps)
+import Model.Lenses exposing (agentSessionBlank, commitHash, currentProject, currentProjectPath, loadedProjects, presets, projects, relatedSearch, searchBox, stepConfig, stepSearch, steps)
 import Model.Shadow exposing (StepArgValue(..))
 import Route
 import Set exposing (Set)
@@ -423,6 +423,38 @@ flattenArgValue steps_ value =
 
         TUploadHashValue _ ->
             []
+
+
+relatedDetail : { a | similarity : Float, relevance : Maybe Float } -> String
+relatedDetail result =
+    case result.relevance of
+        Just relevance ->
+            "Relevance " ++ String.fromInt (round (relevance * 100)) ++ "%"
+
+        Nothing ->
+            "Similarity " ++ String.fromInt (round (result.similarity * 100)) ++ "%"
+
+
+searchableChats : Model.AgentState -> List Model.AgentSessionSummary
+searchableChats agentState =
+    ApiData.toMaybe agentState.sessions
+        |> Maybe.withDefault []
+        |> List.filter (\summary -> not (agentSessionBlank summary agentState))
+
+
+rankChats : String -> Model.AgentState -> List ( Model.AgentSessionSummary, Fuzzy.Match () )
+rankChats input agentState =
+    Select.rankedItems (Fuzzy.parse input) (chatSearchDocument >> Fuzzy.index) (searchableChats agentState)
+
+
+chatSearchDocument : Model.AgentSessionSummary -> Fuzzy.Document ()
+chatSearchDocument summary =
+    { fields =
+        [ { tag = (), text = Model.displayName summary, weight = 100, precision = Fuzzy.Loose }
+        , { tag = (), text = summary.session.sessionId, weight = 120, precision = Fuzzy.Whole }
+        ]
+    , demoted = Model.agentSessionArchived summary.session.status
+    }
 
 
 isWorkspaceReloading : Model -> Bool

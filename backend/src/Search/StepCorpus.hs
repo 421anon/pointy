@@ -1,18 +1,17 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
-module Search.Document (
-    StepDocument (..),
-    buildDocuments,
+module Search.StepCorpus (
+    stepCorpus,
 ) where
 
 import Certificates (evalProjectDefinitions)
+import Config (EmbeddingConfig (..), JudgeConfig (..))
 import Control.Monad.Except (ExceptT, throwError)
-import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Object, Value (..), eitherDecode)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import Data.ByteArray (convert)
-import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Lazy as BL
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -26,15 +25,8 @@ import qualified Data.Vector as V
 import Effectful (Eff, IOE, (:>))
 import Effects (Eval)
 import ProjectTree (ChildRef (..), projectChildRefs, projectIds, projectObject)
-import UserRepo (ReadRepoContext, runNixEvalJsonInRepo)
-
-data StepDocument = StepDocument
-    { documentStepId :: Int
-    , documentName :: Text
-    , documentText :: Text
-    , documentHash :: Text
-    }
-    deriving (Show)
+import Search.Store (Corpus (..), CorpusSnapshot (..), SearchDocument (..))
+import UserRepo (ReadRepoContext (..), runNixEvalJsonInRepo, withReadRepoTransaction)
 
 data StepEntry = StepEntry
     { entryId :: Int
@@ -44,7 +36,27 @@ data StepEntry = StepEntry
     , entryArgs :: [(Text, Value)]
     }
 
-buildDocuments :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) [StepDocument]
+stepCorpus :: (Eval :> es, IOE :> es) => Maybe Text -> Corpus es Int
+stepCorpus commit =
+    Corpus
+        { corpusNoun = "step"
+        , corpusVectorDirectory = "embeddings"
+        , corpusQueryTemplate = embeddingQueryTemplate
+        , corpusJudgeInstructions = judgeInstructions
+        , corpusSnapshot = fmap snapshotAt <$> resolveCommit commit
+        }
+  where
+    snapshotAt target =
+        CorpusSnapshot
+            { snapshotVersion = target
+            , snapshotDocuments = withReadRepoTransaction $ \ctx -> buildDocuments ctx{readCommitHash = T.unpack target}
+            }
+
+resolveCommit :: (IOE :> es) => Maybe Text -> Eff es (Either String Text)
+resolveCommit (Just commit) = pure (Right commit)
+resolveCommit Nothing = withReadRepoTransaction (pure . T.pack . readCommitHash)
+
+buildDocuments :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) [SearchDocument Int]
 buildDocuments ctx = do
     projects <- evalProjectDefinitions ctx
     stepConfigOutput <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
@@ -53,21 +65,16 @@ buildDocuments ctx = do
         names = Map.fromList [(entryId entry, entryName entry) | entry <- entries]
         paths = folderPaths projects
     pure
-        [ StepDocument
-            { documentStepId = entryId entry
-            , documentName = entryName entry
-            , documentText = text
-            , documentHash = hexDigest (hash (TE.encodeUtf8 text) :: Digest SHA256)
+        [ SearchDocument
+            { documentKey = entryId entry
+            , documentJudgeId = entryId entry
+            , documentText = documentTextFor stepConfig names paths entry
             }
         | entry <- entries
-        , let text = documentTextFor stepConfig names paths entry
         ]
 
 decodeJson :: String -> Either String Value
 decodeJson = eitherDecode . BL.fromStrict . TE.encodeUtf8 . T.pack
-
-hexDigest :: Digest a -> Text
-hexDigest = TE.decodeUtf8 . Base16.encode . convert
 
 folderPaths :: Value -> Map Int Text
 folderPaths projects = Map.fromListWith (\_ first -> first) (concatMap (walk Set.empty []) roots)

@@ -107,7 +107,8 @@ timeout-seconds = 60
 # protocol = "systemone"
 # model = "clef-flash"
 
-# Embedding and judge models extend the step search box with a "Related" section.
+# Embedding and judge models extend the step search box and the chat history search
+# with a "Related" section.
 # [search]
 # limit = 10
 # judge-candidates = 24
@@ -117,6 +118,7 @@ timeout-seconds = 60
 # protocol = "openai-embeddings"
 # model = "qwen3-embedding-8b"
 # query-template = "Instruct: Given a search typed into a research notebook, retrieve the analysis steps it refers to\nQuery: {query}"
+# chat-query-template = "Instruct: Given a search typed into a research notebook's chat history, retrieve the conversations it refers to\nQuery: {query}"
 # document-template = "{document}"
 # batch-size = 128
 # min-similarity = 0.4
@@ -126,4 +128,5 @@ timeout-seconds = 60
 # protocol = "systemone"
 # model = "clef-flash"
 # instructions = "Is step {id} something the person searching for \"{query}\" wants to find?"
+# chat-instructions = "Is chat {id} something the person searching for \"{query}\" wants to find?"
 # min-relevance = 0.5

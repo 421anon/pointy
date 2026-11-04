@@ -1329,13 +1329,7 @@ applyRelatedSearchResult job result =
                                                 (List.map
                                                     (\entry ->
                                                         { stepId = entry.stepId
-                                                        , detail =
-                                                            case entry.relevance of
-                                                                Just relevance ->
-                                                                    "Relevance " ++ String.fromInt (round (relevance * 100)) ++ "%"
-
-                                                                Nothing ->
-                                                                    "Similarity " ++ String.fromInt (round (entry.similarity * 100)) ++ "%"
+                                                        , detail = Model.Lib.relatedDetail entry
                                                         }
                                                     )
                                                 )
@@ -1348,6 +1342,102 @@ applyRelatedSearchResult job result =
 clearRelatedSearch : Flow Model ()
 clearRelatedSearch =
     Flow.over relatedSearch (always Model.initRelatedSearchState)
+
+
+chatSearchDebounceConfig : Debounce.Config (Flow Model ())
+chatSearchDebounceConfig =
+    { strategy = Debounce.later searchDebounceDelay
+    , transform = chatSearchDebounceMsg
+    }
+
+
+onChatSearchInput : String -> Flow Model ()
+onChatSearchInput input =
+    let
+        query =
+            String.trim input
+    in
+    Flow.over (agent << chatSearch) (\state -> { state | input = input })
+        |> Flow.seq
+            (Flow.get
+                |> Flow.andThen
+                    (\model ->
+                        let
+                            semantic =
+                                Model.getSearchInfo model |> ApiData.withDefault { semantic = False, judge = False } |> .semantic
+                        in
+                        if String.length query < 3 || not semantic then
+                            clearRelatedChats
+
+                        else
+                            let
+                                ( newDebounce, debounceCmd ) =
+                                    Debounce.push chatSearchDebounceConfig query (get (agent << chatSearch) model).debounce
+                            in
+                            Flow.over (agent << chatSearch) (\state -> { state | relatedQuery = query, related = ApiData.loading Nothing, debounce = newDebounce })
+                                |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+                    )
+            )
+
+
+clearChatSearch : Flow Model ()
+clearChatSearch =
+    onChatSearchInput ""
+
+
+clearRelatedChats : Flow Model ()
+clearRelatedChats =
+    Flow.over (agent << chatSearch) (\state -> { state | relatedQuery = "", related = NotAsked })
+
+
+chatSearchDebounceMsg : Debounce.Msg -> Flow Model ()
+chatSearchDebounceMsg msg =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    send query =
+                        Task.perform (\_ -> runChatSearch query) (Task.succeed ())
+
+                    ( newDebounce, debounceCmd ) =
+                        Debounce.update chatSearchDebounceConfig (Debounce.takeLast send) msg (get (agent << chatSearch) model).debounce
+                in
+                Flow.over (agent << chatSearch) (\state -> { state | debounce = newDebounce })
+                    |> Flow.seq (Flow.lift debounceCmd |> Flow.andThen identity)
+            )
+
+
+runChatSearch : String -> Flow Model ()
+runChatSearch query =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    agentState =
+                        get agent model
+                in
+                AgentApi.searchChats
+                    { query = query
+                    , exclude = List.map (Tuple.first >> .session >> .sessionId) (Model.Lib.rankChats query agentState)
+                    }
+            )
+        |> Flow.andThen (applyChatSearchResult query)
+
+
+applyChatSearchResult : String -> Result Http.Error (List AgentApi.ChatSearchResult) -> Flow Model ()
+applyChatSearchResult query result =
+    Flow.over (agent << chatSearch)
+        (\state ->
+            if state.relatedQuery /= query then
+                state
+
+            else
+                { state
+                    | related =
+                        ApiData.fromResult
+                            (Result.map (List.map (\entry -> { sessionId = entry.sessionId, detail = Model.Lib.relatedDetail entry })) result)
+                }
+        )
 
 
 autocompleteStateWithJob : Model.AutocompleteJob -> Maybe Model.AutocompleteState -> Model.AutocompleteState

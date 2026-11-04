@@ -1,4 +1,4 @@
-module Components.Select exposing (Item, Ranked, RelatedItem, SelectState, initSelectState, itemRef, rankLabels, rankedItems, selected, view)
+module Components.Select exposing (Item, Ranked, RelatedItem, SelectState, initSelectState, itemRef, rankLabels, rankedItems, selected, view, viewSegment)
 
 import Accessors exposing (An_Optic, Lens, lens, over, set)
 import Browser.Dom

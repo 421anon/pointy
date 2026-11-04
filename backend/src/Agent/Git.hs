@@ -14,6 +14,7 @@ module Agent.Git (
     renameAgentSession,
     nameUnnamedAgentSession,
     loadAgentSessionView,
+    sessionDisplayTitle,
     sessionHasActiveRunner,
     commitAgentTurnOutputs,
     refreshSessionBase,

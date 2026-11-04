@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module ProviderHttp (
+    JudgeTask (..),
     embedRequest,
     judgeRequest,
     choiceRequest,
@@ -47,28 +48,35 @@ embedRequest embedding provider texts = do
             response <- postJson provider apiKey "/embeddings" body
             pure (response >>= parseEmbeddings)
 
-judgeRequest :: JudgeConfig -> ProviderConfig -> Text -> [(Int, Text)] -> IO (Either String (Map Int Double))
-judgeRequest judge provider query candidates = do
+data JudgeTask = JudgeTask
+    { judgeTaskSubject :: Text
+    , judgeTaskInstructions :: Text
+    , judgeTaskQuery :: Text
+    , judgeTaskCandidates :: [(Int, Text)]
+    }
+
+judgeRequest :: JudgeConfig -> ProviderConfig -> JudgeTask -> IO (Either String (Map Int Double))
+judgeRequest judge provider task = do
     key <- lookupEnv (T.unpack (providerApiKeyEnv provider))
     case key of
         Nothing -> pure (Left ("The judge provider key " <> T.unpack (providerApiKeyEnv provider) <> " is not set."))
         Just apiKey -> do
             let state =
                     object
-                        [ "search" .= query
-                        , "steps" .= object [questionId stepId .= document | (stepId, document) <- candidates]
+                        [ "search" .= judgeTaskQuery task
+                        , Key.fromText (judgeTaskSubject task) .= object [questionId candidateId .= document | (candidateId, document) <- judgeTaskCandidates task]
                         ]
                 questions =
                     object
-                        [ questionId stepId .= object ["type" .= String "noul", "instructions" .= instructionsFor stepId]
-                        | (stepId, _) <- candidates
+                        [ questionId candidateId .= object ["type" .= String "noul", "instructions" .= instructionsFor candidateId]
+                        | (candidateId, _) <- judgeTaskCandidates task
                         ]
                 body = object ["model" .= judgeModel judge, "state" .= state, "questions" .= questions]
             response <- postJson provider apiKey "/systemone" body
-            pure (response >>= parseJudge (map fst candidates))
+            pure (response >>= parseJudge (map fst (judgeTaskCandidates task)))
   where
-    instructionsFor stepId =
-        T.replace "{query}" query (T.replace "{id}" (T.pack (show stepId)) (judgeInstructions judge))
+    instructionsFor candidateId =
+        T.replace "{query}" (judgeTaskQuery task) (T.replace "{id}" (T.pack (show candidateId)) (judgeTaskInstructions task))
 
 choiceRequest :: ProviderConfig -> Text -> Value -> Text -> [(Text, Text)] -> IO (Either String Text)
 choiceRequest provider model state instructions criteria = do
@@ -91,7 +99,7 @@ parseChoice (Object root) = case KeyMap.lookup "answers" root >>= field "choice"
 parseChoice _ = Left "The router response is not an object."
 
 questionId :: Int -> Key.Key
-questionId stepId = Key.fromText ("s" <> T.pack (show stepId))
+questionId candidateId = Key.fromText ("s" <> T.pack (show candidateId))
 
 postJson :: ProviderConfig -> String -> String -> Value -> IO (Either String Value)
 postJson provider apiKey endpoint body = do
@@ -142,13 +150,13 @@ normalize vector
     norm = sqrt (VU.sum (VU.map (\value -> value * value) vector))
 
 parseJudge :: [Int] -> Value -> Either String (Map Int Double)
-parseJudge stepIds (Object root) = case KeyMap.lookup "answers" root of
+parseJudge candidateIds (Object root) = case KeyMap.lookup "answers" root of
     Just (Object answers) ->
         Right $
             Map.fromList
-                [ (stepId, toRealFloat probability)
-                | stepId <- stepIds
-                , Just (Object answer) <- [KeyMap.lookup (questionId stepId) answers]
+                [ (candidateId, toRealFloat probability)
+                | candidateId <- candidateIds
+                , Just (Object answer) <- [KeyMap.lookup (questionId candidateId) answers]
                 , Just (Number probability) <- [KeyMap.lookup "noul" answer]
                 ]
     _ -> Left "The judge response has no answers object."

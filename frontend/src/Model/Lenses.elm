@@ -1022,6 +1022,11 @@ sessions =
     lens ".sessions" .sessions (\s sessions_ -> { s | sessions = sessions_ })
 
 
+chatSearch : Lens ls AgentState Model.ChatSearchState x y
+chatSearch =
+    lens ".chatSearch" .chatSearch (\s chatSearch_ -> { s | chatSearch = chatSearch_ })
+
+
 sessionViews : Lens ls AgentState (Dict String (ApiData AgentSessionView)) x y
 sessionViews =
     lens ".sessionViews" .sessionViews (\s views -> { s | sessionViews = views })

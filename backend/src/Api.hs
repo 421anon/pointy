@@ -18,6 +18,7 @@ import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
 import Handlers.StepReview (ReviewRequest, StepReviewReport)
+import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (DirEntry, FileChunk)
 import Servant
@@ -227,6 +228,13 @@ type AgentUsageEndpoint =
         :> "usage"
         :> Description "Returns aggregate counts of agent sessions by state."
         :> Get '[JSON] AgentUsage
+
+type ChatSearch =
+    "agent"
+        :> "chat-search"
+        :> Description "Returns chats related to a search query, ranked by embedding similarity and optionally filtered by the judge."
+        :> ReqBody '[JSON] ChatSearchRequest
+        :> Post '[JSON] ChatSearchResponse
 
 type DownloadStepFile =
     "step-files"
@@ -574,6 +582,7 @@ type API =
         :<|> RenameSession
         :<|> DeleteSession
         :<|> AgentUsageEndpoint
+        :<|> ChatSearch
         :<|> TokenAuth
         :<|> TokenSessionEndpoint
         :<|> TokenLogin
