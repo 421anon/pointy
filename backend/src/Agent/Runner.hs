@@ -25,15 +25,17 @@ module Agent.Runner (
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
 import Agent.Model (AgentRole (..), agentRoleName, chatModelArgs, prepareChatModel)
 import Agent.Policy (answererRules, automaticFixPrompt, promptWithApplyConflict, promptWithEvaluationFailure, renderAreaCapture, renderCurrentProject, renderEmbeddedRules, userMessage)
-import Agent.Router (Route (..), routeTurn)
+import Agent.Router (JudgedMessage (..), Route (..), routeTurn)
 import Agent.Sandbox (agentMemoryMax, bindPath, bindPathReadOnly, expandSandboxArg, nixDaemonBindArgs, piAgentConfigDir, piIsolationFlags, runnerConfigArgs, runnerEnvironment, sandboxHome, sandboxPiHome, sandboxProcess, seedPiConfig, sessionPaths, toolEnvironment)
 import Agent.Session (
     AgentSession (..),
     AgentTurn (..),
     AreaCapture (..),
+    CapturedArtifact (..),
     PreparedApply (..),
     StoredAreaCapture (..),
     TurnImage (..),
+    ViewedArtifact (..),
     acquireSessionCompaction,
     agentSessionsRoot,
     applyConflictsPending,
@@ -78,7 +80,7 @@ import Data.Char (isDigit)
 import Data.List (sort, sortOn, stripPrefix)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -283,7 +285,7 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
         void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
     return Nothing
 
-startAgentTurn :: Text -> Text -> [TurnImage] -> [AreaCapture] -> Maybe Text -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
+startAgentTurn :: Text -> Text -> [TurnImage] -> [AreaCapture] -> Maybe (ViewedArtifact, Text) -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
 startAgentTurn sid prompt images areaCaptures viewedArtifact mCurrentProjectId enabled client = do
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
@@ -293,7 +295,7 @@ startAgentTurn sid prompt images areaCaptures viewedArtifact mCurrentProjectId e
     when hasRunner $ Except.throwError "runner_active"
     beginAgentTurn session_{autoApply = enabled, autoApplyClient = client} prompt mCurrentProjectId (UserTurn images areaCaptures viewedArtifact)
 
-data TurnOrigin = UserTurn [TurnImage] [AreaCapture] (Maybe Text) | AutomaticFix (Maybe Text)
+data TurnOrigin = UserTurn [TurnImage] [AreaCapture] (Maybe (ViewedArtifact, Text)) | AutomaticFix (Maybe Text)
 
 beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
 beginAgentTurn session_ prompt mCurrentProjectId origin = do
@@ -360,7 +362,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             refusal = (withConflict <$> pendingApply) <|> (promptWithEvaluationFailure <$> evaluationFailure)
             agentPrompt =
                 maybe id (withContext . renderCurrentProject) changedCurrentProjectId $
-                    maybe id withContext viewedArtifact $
+                    maybe id (withContext . snd) viewedArtifact $
                         withAreaCaptures $
                             maybe prompt ($ request) refusal
         when (isJust evaluationFailure) $
@@ -378,7 +380,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
             void $
                 forkIO $
                     nameChat (configAgent cfg) freshSession logPath prompt
-        let routedRequest = if automatic || isJust refusal then Nothing else Just prompt
+        let routedRequest = if automatic || isJust refusal then Nothing else Just (JudgedMessage prompt (length plainImages) (length areaCaptures) artifactInView)
         void $ forkIO $ runTurnProcess (configAgent cfg) touched turn agentPrompt images isFirstTurn (isJust changedCurrentProjectId) reviewedSteps routedRequest
     return turn
   where
@@ -391,6 +393,7 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
     storeAreaCapture firstImage capture = StoredAreaCapture firstImage (firstImage + 1) (areaCaptureDocumentSize capture) (areaCaptureSelectionRect capture) (Just (areaCaptureArtifact capture))
     areaCaptureContexts = zipWith describeAreaCapture firstCaptureImages areaCaptures
     describeAreaCapture firstImage capture = renderAreaCapture (firstImage + 1) (firstImage + 2) (areaCaptureDocumentSize capture) (areaCaptureSelectionRect capture)
+    artifactInView = (fst <$> viewedArtifact) <|> listToMaybe [ViewedArtifact (capturedStepId captured) (capturedCommit captured) (capturedPath captured) | captured <- map areaCaptureArtifact areaCaptures]
 
 setRunningAutoApply :: Text -> Bool -> ExceptT String IO ()
 setRunningAutoApply client enabled = do
@@ -478,7 +481,7 @@ nameChat cfg session_ logPath prompt =
             >>= either (note "Could not store this chat's name: ") return
     note prefix = appendLogLine cfg logPath "system" . (prefix <>) . T.pack
 
-runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> Bool -> [Int] -> Maybe Text -> IO ()
+runTurnProcess :: AgentConfig -> AgentSession -> AgentTurn -> Text -> [TurnImage] -> Bool -> Bool -> [Int] -> Maybe JudgedMessage -> IO ()
 runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject reviewedSteps routedRequest =
     continueUnlessStopped run
         `finally` atomically (retireTurn sid tid)
@@ -495,7 +498,8 @@ runTurnProcess cfg session_ turn prompt images isFirstTurn sentCurrentProject re
         route <- routeTurn turn routedRequest
         role <- case route of
             SoleCoder -> return Coder
-            Routed chosen failure -> do
+            Routed chosen context failure -> do
+                mapM_ (appendLogLine cfg (turnLogPath turn) "judge-context" . jsonLine) context
                 appendLogLine cfg (turnLogPath turn) "agent" (agentRoleName chosen)
                 mapM_ (appendLogLine cfg (turnLogPath turn) "system") failure
                 return chosen

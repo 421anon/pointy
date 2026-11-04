@@ -5,7 +5,6 @@
 module Handlers.Agent (
     TurnRequest (..),
     SessionRequest (..),
-    ViewedArtifact (..),
     RenameSessionRequest (..),
     ApplyRequest (..),
     AutoApplyRequest (..),
@@ -41,7 +40,7 @@ import Agent.Git (
  )
 import Agent.Policy (renderViewedArtifact)
 import Agent.Runner (applySessionChanges, compactAgentSession, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
-import Agent.Session (AgentSessionSummary, AgentTurn (..), AreaCapture, TurnImage, findTurn, turnImageFilePath)
+import Agent.Session (AgentSessionSummary, AgentTurn (..), AreaCapture, TurnImage, ViewedArtifact (..), findTurn, turnImageFilePath)
 import Control.Lens ((^?), _Right)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -84,20 +83,6 @@ instance FromJSON TurnRequest where
             <*> obj .:? "viewedArtifact"
             <*> obj .:? "autoApply" .!= True
             <*> obj .:? "clientId"
-
-data ViewedArtifact = ViewedArtifact
-    { viewedArtifactStepId :: Int
-    , viewedArtifactCommit :: Text
-    , viewedArtifactPath :: [Text]
-    }
-    deriving (Show, Eq, Generic)
-
-instance FromJSON ViewedArtifact where
-    parseJSON = withObject "ViewedArtifact" $ \obj ->
-        ViewedArtifact
-            <$> obj .: "stepId"
-            <*> obj .: "commit"
-            <*> obj .: "path"
 
 data SessionRequest = SessionRequest
     { sessionRequestSessionId :: Text
@@ -159,8 +144,8 @@ getSessionHandler sid = runSharedAction (loadAgentSessionView sid)
 
 postTurnHandler :: TurnRequest -> Handler AgentTurn
 postTurnHandler req = do
-    viewedArtifact <- liftIO $ traverse describeViewedArtifact (turnRequestViewedArtifact req)
-    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) (turnRequestAreaCaptures req) viewedArtifact (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
+    viewed <- liftIO $ traverse (\artifact -> (,) artifact <$> describeViewedArtifact artifact) (turnRequestViewedArtifact req)
+    runLockedAction $ startAgentTurn (turnRequestSessionId req) (turnRequestPrompt req) (turnRequestImages req) (turnRequestAreaCaptures req) viewed (turnRequestCurrentProjectId req) (turnRequestAutoApply req) (turnRequestClientId req)
 
 describeViewedArtifact :: ViewedArtifact -> IO Text
 describeViewedArtifact (ViewedArtifact stepId commit path) =

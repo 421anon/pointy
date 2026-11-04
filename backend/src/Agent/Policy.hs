@@ -83,7 +83,7 @@ answererRules =
         ]
 
 routingInstructions :: Text
-routingInstructions = "A user of a Pointy research notebook is chatting with its assistant. The conversation lists their earlier messages, the model each one was routed to, and its reply. Which model should answer the last message? Be conservative with the heavy-weight specialist: it is expensive, so choose it only when the general model would likely fall short."
+routingInstructions = "A user of a Pointy research notebook is chatting with its assistant. The conversation lists their messages, each with the model it was routed to and its reply, and, in context, how many images and area selections came with it and the step output file they were viewing, with that step's definition and source file names. Which model should answer the last message? Be conservative with the heavy-weight specialist: it is expensive, so choose it only when the general model would likely fall short."
 
 data RoutingChoice = RoutingChoice
     { choiceRole :: AgentRole

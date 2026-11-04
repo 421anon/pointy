@@ -12,6 +12,7 @@ module Agent.Session (
     AreaCapture (..),
     StoredAreaCapture (..),
     CapturedArtifact (..),
+    ViewedArtifact (..),
     DocumentSize (..),
     SelectionRect (..),
     turnIsUnfinished,
@@ -271,6 +272,17 @@ instance ToJSON CapturedArtifact where
 instance FromJSON CapturedArtifact where
     parseJSON = withObject "CapturedArtifact" $ \obj ->
         CapturedArtifact <$> obj .: "projectPath" <*> obj .: "stepId" <*> obj .: "commit" <*> obj .: "path"
+
+data ViewedArtifact = ViewedArtifact
+    { viewedArtifactStepId :: Int
+    , viewedArtifactCommit :: Text
+    , viewedArtifactPath :: [Text]
+    }
+    deriving (Show, Eq)
+
+instance FromJSON ViewedArtifact where
+    parseJSON = withObject "ViewedArtifact" $ \obj ->
+        ViewedArtifact <$> obj .: "stepId" <*> obj .: "commit" <*> obj .: "path"
 
 data AreaCapture = AreaCapture
     { areaCaptureOverview :: TurnImage
