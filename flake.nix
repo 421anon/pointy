@@ -94,6 +94,13 @@
                 "$@"
             '';
 
+          lib.mkDocs =
+            { screenshots }:
+            pkgs.callPackage ./docs {
+              inherit screenshots;
+              inherit (self.packages.${system}) sourcey openapi-json;
+            };
+
           apps = {
             update-elm = mkApp "update-elm" ''
               cd frontend
@@ -135,6 +142,10 @@
               modules = [ ./frontend/module.nix ];
               specialArgs = { inherit self; };
             };
+            openapi-json = pkgs.runCommand "openapi.json" { } ''
+              ${self.packages.${system}.backend}/bin/generate-openapi $out
+            '';
+            sourcey = pkgs.callPackage ./docs/sourcey { };
           };
           devShells = {
             backend = self.packages.${system}.backend.env.overrideAttrs (oldAttrs: {

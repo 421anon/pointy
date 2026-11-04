@@ -1,0 +1,337 @@
+@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL@0..1&display=block");
+
+:root {
+  --color-background-light: 250 250 250;
+  --color-code-block-light: 255 255 255;
+  --docs-nav-icon-color: #6e6e6e;
+  --docs-nav-running-color: #c99700;
+}
+
+:root.dark {
+  --color-background-dark: 30 30 30;
+  --color-code-block-dark: 45 45 48;
+  --docs-nav-icon-color: #808080;
+  --docs-nav-running-color: #e2b714;
+}
+
+/*
+ * Sourcey 3.6.4 places its single, fully wired #theme-toggle inside the
+ * desktop-only actions wrapper. On mobile, flatten that layout-only wrapper
+ * so the existing button joins the header's flex row instead of cloning the
+ * control or duplicating Sourcey's theme state and event handling.
+ *
+ * The direct-child :has() selector limits this override to the immediate
+ * wrapper that owns the toggle. Its desktop navigation must remain hidden
+ * while the wrapper is flattened. Sourcey's lg breakpoint starts at 64rem,
+ * so this range ends immediately below it and leaves desktop layout unchanged.
+ * Remove this override once Sourcey exposes the same toggle on mobile.
+ */
+@media (max-width: 63.999rem) {
+  #navbar div:has(> #theme-toggle) {
+    display: contents;
+  }
+
+  #navbar div:has(> #theme-toggle) > nav {
+    display: none;
+  }
+}
+
+#nav .nav-link:is(
+    [href$="projects/"],
+    [href$="organize/"],
+    [href$="search/"],
+    [href$="steps/"],
+    [href$="execution/"],
+    [href$="outputs/"],
+    [href$="reviews/"],
+    [href$="sharing/"],
+    [href$="agent/"],
+    [href$="changesets/"],
+    [href$="chats/"]
+  )::before,
+.mobile-nav-dialog .nav-link:is(
+    [href$="projects/"],
+    [href$="organize/"],
+    [href$="search/"],
+    [href$="steps/"],
+    [href$="execution/"],
+    [href$="outputs/"],
+    [href$="reviews/"],
+    [href$="sharing/"],
+    [href$="agent/"],
+    [href$="changesets/"],
+    [href$="chats/"]
+  )::before {
+  content: "";
+  flex: 0 0 18px;
+  width: 18px;
+  height: 24px;
+  display: inline-block;
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 18px;
+  line-height: 24px;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: "liga";
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "FILL" 0;
+  text-align: center;
+  color: var(--docs-nav-icon-color);
+}
+
+#nav .nav-link[href$="projects/"]::before,
+.mobile-nav-dialog .nav-link[href$="projects/"]::before {
+  content: "folder";
+}
+
+#nav .nav-link[href$="organize/"]::before,
+.mobile-nav-dialog .nav-link[href$="organize/"]::before {
+  content: "drive_file_move";
+}
+
+#nav .nav-link[href$="search/"]::before,
+.mobile-nav-dialog .nav-link[href$="search/"]::before {
+  content: "search";
+}
+
+#nav .nav-link[href$="steps/"]::before,
+.mobile-nav-dialog .nav-link[href$="steps/"]::before {
+  content: "terminal";
+}
+
+#nav .nav-link[href$="outputs/"]::before,
+.mobile-nav-dialog .nav-link[href$="outputs/"]::before {
+  content: "folder_open";
+}
+
+#nav .nav-link[href$="reviews/"]::before,
+.mobile-nav-dialog .nav-link[href$="reviews/"]::before {
+  content: "fact_check";
+}
+
+#nav .nav-link[href$="sharing/"]::before,
+.mobile-nav-dialog .nav-link[href$="sharing/"]::before {
+  content: "share";
+}
+
+#nav .nav-link[href$="agent/"]::before,
+.mobile-nav-dialog .nav-link[href$="agent/"]::before {
+  content: "smart_toy";
+}
+
+#nav .nav-link[href$="changesets/"]::before,
+.mobile-nav-dialog .nav-link[href$="changesets/"]::before {
+  content: "difference";
+}
+
+#nav .nav-link[href$="chats/"]::before,
+.mobile-nav-dialog .nav-link[href$="chats/"]::before {
+  content: "history";
+}
+
+#nav .nav-link[href$="execution/"]::before,
+.mobile-nav-dialog .nav-link[href$="execution/"]::before {
+  content: "";
+  flex: 0 0 9px;
+  width: 9px;
+  height: 9px;
+  margin: 7.5px 4.5px 0;
+  border-radius: 50%;
+  background: var(--docs-nav-running-color);
+  box-shadow: none;
+  animation: docs-nav-pulse-running 1.5s ease-in-out infinite;
+  font-size: 0;
+}
+
+:root.dark #nav .nav-link[href$="execution/"]::before,
+:root.dark .mobile-nav-dialog .nav-link[href$="execution/"]::before {
+  background: radial-gradient(
+    circle at 30% 30%,
+    rgba(255, 255, 255, 0.4),
+    var(--docs-nav-running-color) 60%
+  );
+  box-shadow:
+    inset -1px -1px 2px rgba(0, 0, 0, 0.2),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.6),
+    0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+@keyframes docs-nav-pulse-running {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: scale(0.85);
+  }
+}
+
+/* Screenshot theme fade */
+#sourcey img[data-theme-screenshot="true"] {
+  transition: opacity 0.15s ease-in-out;
+}
+
+#sourcey img[data-theme-screenshot="true"][data-theme-screenshot-ready="false"] {
+  opacity: 0;
+}
+
+
+#navbar a[href="https://github.com/421anon/pointy"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2rem;
+}
+
+#navbar a[href="https://github.com/421anon/pointy"] > svg {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+#navbar a[href="https://github.com/421anon/pointy"] > span {
+  margin-left: 0;
+}
+
+.cookie-settings {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 40;
+  padding: 0.375rem 0.625rem;
+  color: #52525b;
+  background: rgb(var(--color-code-block-light));
+  border: 1px solid #d4d4d8;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 10%);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.cookie-settings:hover {
+  color: #27272a;
+  border-color: #a1a1aa;
+}
+
+.cookie-settings:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+:root.dark .cookie-settings {
+  color: #d4d4d8;
+  background: rgb(var(--color-code-block-dark));
+  border-color: #52525b;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 30%);
+}
+
+:root.dark .cookie-settings:hover {
+  color: #fff;
+  border-color: #a1a1aa;
+}
+
+.cookie-banner {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 36rem;
+  padding: 0.875rem 1rem;
+  color: #27272a;
+  background: rgb(var(--color-code-block-light));
+  border: 1px solid #e4e4e7;
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.cookie-banner p {
+  margin: 0;
+}
+
+.cookie-banner__actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cookie-banner__button {
+  padding: 0.5rem 0.75rem;
+  color: #fff;
+  background: #0969da;
+  border: 1px solid #0969da;
+  border-radius: 0.5rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cookie-banner__button:hover {
+  background: #0550ae;
+  border-color: #0550ae;
+}
+
+.cookie-banner__button--secondary {
+  color: inherit;
+  background: transparent;
+  border-color: #a1a1aa;
+}
+
+.cookie-banner__button--secondary:hover {
+  background: #f4f4f5;
+  border-color: #71717a;
+}
+
+.cookie-banner__button:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+:root.dark .cookie-banner {
+  color: #f4f4f5;
+  background: rgb(var(--color-code-block-dark));
+  border-color: #52525b;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+:root.dark .cookie-banner__button--secondary:hover {
+  background: #3f3f46;
+  border-color: #a1a1aa;
+}
+
+:root.dark .cookie-banner__button:focus-visible,
+:root.dark .cookie-settings:focus-visible {
+  outline-color: #fff;
+  box-shadow: 0 0 0 4px #0969da;
+}
+
+@media (max-width: 40rem) {
+  .cookie-banner {
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-width: none;
+  }
+
+  .cookie-banner__actions {
+    justify-content: flex-end;
+  }
+}
