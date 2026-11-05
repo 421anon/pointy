@@ -6,7 +6,7 @@ description: "How the agent runner isolates its working copies, tools, and crede
 
 ## Agent runner configuration
 
-The embedded agent runner is configured through the `[agent]` table in `config.toml`; its model comes from `[[providers]]` and `[models.chat]`. Every field is optional; the backend falls back to the defaults shown in the [configuration reference](config.md#backend-configuration).
+The embedded agent runner is configured through the `[agent]` table in `config.toml`; its models come from `[[providers]]`, `[models.coder]`, and `[models.answerer]` (see [Providers](providers.md)). Every field is optional; the backend falls back to the defaults shown in the [configuration reference](config.md#backend-configuration).
 
 ### Working copies and permitted files
 
@@ -30,7 +30,7 @@ Each turn runs two `sbox` sandboxes. The **tool sandbox** runs `pi-glovebox-serv
 
 The **runner sandbox** runs Pi in RPC mode with its own `{sessionRoot}/pi` home, Pi config, and session history. It sees an empty directory in place of the worktree, reaches the tools through the glovebox socket, and mounts the extensions directory read-only. Its binds are fixed; `runner-args` only changes Pi's arguments. Pi starts with `--no-context-files`, `--no-skills`, `--no-extensions`, `--no-prompt-templates`, `--no-themes`, `--no-mcp`, and `--no-approve`; the backend then adds the configured extensions, the `.pi/skills` and `AGENTS.md` from the session's base commit, and a system prompt containing its built-in rules. The backend's own `HOME`, SSH keys, and Git credentials are not passed to either sandbox.
 
-The runner receives `PATH`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LC_ALL`, `TZ`, `XDG_RUNTIME_DIR`, `XDG_DATA_DIRS`, and the key named by the chat provider's `api-key-env`. It also receives `HOME`, `POINTY_AGENT_WORKTREE`, `POINTY_AGENT_OUTPUT_MARKER`, `PI_GLOVEBOX_SOCKET`, and `TMPDIR`. The tool sandbox receives `PATH`, the same user/locale/XDG variables, `HOME`, `POINTY_AGENT_WORKTREE`, and `POINTY_AGENT_SESSION_ID`, but no provider keys. Both receive `NIX_REMOTE` when `storeUrl` is set. Other backend environment variables are not passed through. Supply provider secrets through `services.pointy-backend.agentEnvFile`, not `config.toml`.
+The runner receives `PATH`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LC_ALL`, `TZ`, `XDG_RUNTIME_DIR`, `XDG_DATA_DIRS`, and the keys named by the `api-key-env` of the coder's and answerer's providers. It also receives `HOME`, `POINTY_AGENT_WORKTREE`, `POINTY_AGENT_OUTPUT_MARKER`, `POINTY_AGENT_SESSION_ID`, `PI_GLOVEBOX_SOCKET`, and `TMPDIR`. The tool sandbox receives `PATH`, the same user/locale/XDG variables, `HOME`, `POINTY_AGENT_WORKTREE`, and `POINTY_AGENT_SESSION_ID`, but no provider keys. Both receive `NIX_REMOTE` when `storeUrl` is set. Other backend environment variables are not passed through. Supply provider secrets through `services.pointy-backend.agentEnvFile`, not `config.toml`.
 
 The module puts an `sbox` on the backend's `PATH` that always runs with `--network isolated --history off`; it does not install `sbox` system-wide. Network isolation here is a sandbox setting, not a promise that the agent cannot contact a model provider. Check the sandbox's connectivity and any extra binds as part of your deployment policy.
 

@@ -46,16 +46,19 @@ base-url = "https://api.neuralwatt.com/v1"
 api-key-env = "NEURALWATT_API_KEY"
 timeout-seconds = 60
 
-# The chat model the agent panel runs on. The backend writes it into Pi's
-# models.json and settings.json before a turn and passes --model explicitly.
-[models.chat]
+# The coder takes every agent turn unless [models.answerer] and [models.router] are both
+# set; then the router reads each message the user writes and hands questions to the
+# answerer. The backend writes both models into Pi's models.json and settings.json before
+# a turn and passes --model explicitly.
+[models.coder]
 provider = "neuralwatt"
 protocol = "openai-completions"
-model = "deepseek-v4.1-flash-speed"
+model = "deepseek-v4.1-flash"
 thinking = "high"
+# hosted-tools = ["nw_web_search"]
 
-[models.chat.pi]
-name = "DeepSeek V4.1 Flash (Speed)"
+[models.coder.pi]
+name = "DeepSeek V4.1 Flash"
 contextWindow = 1000000
 maxTokens = 384000
 input = ["text", "image"]
@@ -65,6 +68,25 @@ disabledThinkingLevels = ["off"]
 # Prices per million tokens; all four are required and must be written as decimals.
 cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
 compat = { supportsStore = false, supportsDeveloperRole = false, supportsReasoningEffort = true, requiresReasoningContentOnAssistantMessages = true }
+# headers = { X-NW-Conversation-ID = "$POINTY_AGENT_SESSION_ID" }
+
+# [models.answerer]
+# provider = "neuralwatt"
+# protocol = "openai-completions"
+# model = "kimi-k3"
+# thinking = "high"
+#
+# [models.answerer.pi]
+# name = "Kimi K3"
+# contextWindow = 1000000
+# maxTokens = 131072
+# input = ["text", "image"]
+# reasoning = true
+#
+# [models.router]
+# provider = "neuralwatt"
+# protocol = "systemone"
+# model = "clef-flash"
 
 # Optional semantic step and chat search. Without [search.embedding] the search
 # boxes stay lexical; with [search.judge] the judge filters the embedding candidates.
@@ -97,7 +119,7 @@ These settings tell the backend:
 - which SSH key to use for Git operations
 - which branch contains the live Pointy state
 
-The backend re-reads `config.toml` for every repository transaction, Slurm submission, and `/user-repo-info` request, so changes to the branch, keyfile, and `[slurm]` settings apply without a restart. The `[agent]`, `[[providers]]`, `[models.chat]`, and `[search]` sections are re-read when they are used, so changes apply to the next turn or request. A changed repository `url` applies only at startup: the backend moves `/home/backend/user-repo.git` to `/home/backend/user-repo.git-replaced` and clones the new remote fresh.
+The backend re-reads `config.toml` for every repository transaction, Slurm submission, and `/user-repo-info` request, so changes to the branch, keyfile, and `[slurm]` settings apply without a restart. The `[agent]`, `[[providers]]`, `[models.coder]`, `[models.answerer]`, `[models.router]`, and `[search]` sections are re-read when they are used, so changes apply to the next turn or request. A changed repository `url` applies only at startup: the backend moves `/home/backend/user-repo.git` to `/home/backend/user-repo.git-replaced` and clones the new remote fresh.
 
 The optional `[slurm]` section controls how the backend submits build jobs:
 
@@ -129,4 +151,3 @@ The `[agent]` section configures the embedded agent runner. When this section is
 | `POINTY_LINKED_DATA_BASE` | `services.pointy-host.linkedDataBase` | Origin used for `@base` in artifact Turtle. |
 | `SLURM_CONF` | `services.pointy-backend.slurm.confFile` | Slurm client configuration. |
 | `HOME` | the `backend` account | Root of every state path under `/home/backend`. |
-| `NIX_CACHE_HOME` | the development VM | `/var/cache/nix`, shared from the host. |
