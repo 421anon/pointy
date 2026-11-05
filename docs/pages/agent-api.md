@@ -21,6 +21,7 @@ All POST bodies below are JSON unless the body is shown as “none”. `sessionI
 | `GET /agent/turn/<id>/stream` | — | Turn-log SSE stream. |
 | `GET /agent/turn/<id>/image/<index>` | — | Raw image attached to the turn, by zero-based index; 404 `image not found`. |
 | `GET /agent/turn/<id>/shown-image/<file>` | — | Raw image the agent showed during the turn, named by an `[image]` log line; 404 `image not found`. |
+| `GET /agent/step/<id>/stream?commit=<hash>` | — | Step SSE stream for the step viewed at `commit`; see [Step events](#step-events). |
 | `POST /agent/apply` | `{ "sessionId": "…", "autoApply": true, "clientId": "…" }` | Applies the changes that are not applied yet and returns the session view; `clientId` is optional. A refused changeset leaves `prepare_conflict` or `evaluation_failed` and starts a corrective turn. |
 | `POST /agent/auto-apply` | `{ "clientId": "…", "autoApply": false }` | Empty 204; changes the auto-apply choice of running turns this client started. |
 | `POST /agent/compact` | `{ "sessionId": "…" }` | Session view after summarising the conversation to free context; a failure is recorded in the latest turn log. |
@@ -46,6 +47,17 @@ Turn SSE events are `chunk` with `{ "turnId": "…", "chunk": "…" }`, `heartbe
 Every connection replays the log from the beginning. There is no offset query parameter or `Last-Event-ID` resume support. Replace/reset your accumulated log on reconnect, or discard the already-delivered prefix as the built-in client does. Otherwise a reconnect duplicates the conversation.
 
 Chunks contain the backend's labeled log lines, not just assistant prose. In particular, `[question]` is followed by JSON `{ "multi": true, "options": ["…"] }`, and `[steering]` carries a JSON string and clears the pending question. `[image]` carries JSON `{ "turnId": "…", "file": "0.png" }` for an image the agent showed the user at that point of its reply; fetch it from `/agent/turn/<turnId>/shown-image/<file>`. Preserve partial lines between chunks. Answer through `/agent/steer`: a single selection is its 1-based option number; a multi-selection is a comma- or space-separated list of numbers; free text is also accepted. Only one question is pending at a time.
+
+### Step events
+
+The step stream sends two kinds of events:
+
+- `newer-revision` with `{ "stepId": 42, "commit": "<viewed hash>", "revision": "<head hash>" | null, "built": true }`, on connect and then every few seconds and after each build of the step. `revision` is the branch head when the step's build output there differs from its output at `commit`, otherwise null; `built` says whether that output exists, meaning its build succeeded. Each event is the complete current answer: keep only the latest.
+- `build-started` and `build-finished` with `{ "stepId": 42, "revision": "<hash>", "appInstanceId": "…" }`: a build of the step at `revision` started and ended, whatever its outcome. `appInstanceId` is the `app_instance_id` query parameter of the `POST /run-step` request that started it, and is absent when the request carried none.
+
+The built-in artifact viewer shows the latest `newer-revision` answer for the step and commit it displays: a newer revision that is not built is only mentioned, a built one can be viewed. Only for builds started from its own `appInstanceId` does it report build progress and, on `build-finished`, switch to `revision` by itself.
+
+Viewing an older artifact does not pin the chat's step data to that revision. The chat uses current step records and build statuses, so Run in a step mention builds the step's current revision, not the artifact's displayed commit. The build starts only when the user clicks Run.
 
 ### Applying changes safely
 
