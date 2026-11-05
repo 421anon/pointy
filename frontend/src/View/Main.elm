@@ -7,6 +7,7 @@ import Api.ApiData exposing (ApiData(..), success)
 import Browser
 import Components.AgentPanel as AgentPanel
 import Components.StatusBar as StatusBar
+import Extra.Accessors exposing (where_)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
@@ -14,7 +15,7 @@ import Html.Events
 import Html.Extra as Html
 import Html.Keyed
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, toasts)
+import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, newerStepRevision, toasts)
 import Model.Lib as Lib
 import Organize
 import Route
@@ -137,7 +138,9 @@ viewArtifact model artifact =
                     []
             , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
-                [ Html.viewIf (not isTable)
+                [ Html.viewMaybe viewNewerRevisionNotice
+                    (try (newerStepRevision << just << where_ (\answer -> answer.stepId == artifact.stepId && answer.commit == artifact.commit)) model)
+                , Html.viewIf (not isTable)
                     (Html.button
                         [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
                         , Html.Attributes.type_ "button"
@@ -165,6 +168,28 @@ viewArtifact model artifact =
         , AgentPanel.viewLightbox model
         , viewToasts model
         ]
+
+
+viewNewerRevisionNotice : Model.NewerStepRevision -> Html (Flow Model ())
+viewNewerRevisionNotice answer =
+    Html.viewMaybe
+        (\revision ->
+            Html.div [ Html.Attributes.class "artifact-viewer-revision-notice", Html.Attributes.attribute "role" "status" ]
+                (if answer.built then
+                    [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is built.")
+                    , Html.button
+                        [ Html.Attributes.class "artifact-viewer-revision-action"
+                        , Html.Attributes.type_ "button"
+                        , Html.Events.onClick (Actions.showArtifactRevision revision)
+                        ]
+                        [ Html.text "View newer revision" ]
+                    ]
+
+                 else
+                    [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is not built yet.") ]
+                )
+        )
+        answer.revision
 
 
 view404 : Html (Flow Model ())

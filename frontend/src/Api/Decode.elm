@@ -5,7 +5,7 @@ import Dict exposing (Dict)
 import Http
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
-import Json.Decode.Pipeline exposing (custom, optional, required)
+import Json.Decode.Pipeline exposing (custom, optional, optionalAt, required, requiredAt)
 import Model.Core as Model exposing (DirectoryItem(..), FileView, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), blankProject, blankStep)
 import Model.Shadow exposing (Artifact, Field, Preset, Presets, StepArgValue(..), StepConfig, StepConfigEntry, StepRef, StepType(..), Widget(..), WithSrcFiles(..))
 
@@ -27,6 +27,55 @@ stepStatusEvent =
 
                     _ ->
                         Decode.fail ("Unknown SSE event type: " ++ type_)
+            )
+
+
+stepStreamMessage : Decoder Model.StepStreamMessage
+stepStreamMessage =
+    Decode.field "type" Decode.string
+        |> Decode.andThen
+            (\type_ ->
+                case type_ of
+                    "newer-revision" ->
+                        Decode.map Model.NewerRevisionAnswer (Decode.field "data" newerStepRevision)
+
+                    _ ->
+                        Decode.map Model.BuildEvent stepEvent
+            )
+
+
+newerStepRevision : Decoder Model.NewerStepRevision
+newerStepRevision =
+    Decode.succeed Model.NewerStepRevision
+        |> required "stepId" Decode.int
+        |> required "commit" Decode.string
+        |> required "revision" (Decode.nullable Decode.string)
+        |> required "built" Decode.bool
+
+
+stepEvent : Decoder Model.StepEvent
+stepEvent =
+    Decode.succeed Model.StepEvent
+        |> required "type" stepEventKind
+        |> requiredAt [ "data", "stepId" ] Decode.int
+        |> requiredAt [ "data", "revision" ] Decode.string
+        |> optionalAt [ "data", "appInstanceId" ] (Decode.map Just Decode.string) Nothing
+
+
+stepEventKind : Decoder Model.StepEventKind
+stepEventKind =
+    Decode.string
+        |> Decode.andThen
+            (\kind ->
+                case kind of
+                    "build-started" ->
+                        Decode.succeed Model.StepBuildStarted
+
+                    "build-finished" ->
+                        Decode.succeed Model.StepBuildFinished
+
+                    _ ->
+                        Decode.fail ("Unknown step event: " ++ kind)
             )
 
 

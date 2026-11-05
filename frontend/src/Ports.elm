@@ -1,7 +1,8 @@
-port module Ports exposing (agentAutoApplyIn, agentNotificationClickIn, agentTurnIn, clusterStatusIn, ffiIn, ffiOut, gutterDragEnd, ingestJobsIn, openAgentTurnStream, openClusterStatusStream, openIngestStream, openStepStatusStream, organizeDragIn, stepStatusIn)
+port module Ports exposing (agentAutoApplyIn, agentNotificationClickIn, agentTurnIn, clusterStatusIn, ffiIn, ffiOut, gutterDragEnd, ingestJobsIn, openAgentTurnStream, openClusterStatusStream, openIngestStream, openStepStatusStream, organizeDragIn, stepEventIn, stepStatusIn, watchStepEvents)
 
 import Json.Decode
 import Json.Encode
+import Route
 
 
 port ffiOut : { key : String, fn : String, value : Json.Encode.Value } -> Cmd msg
@@ -44,3 +45,9 @@ port openIngestStream : {} -> Cmd msg
 
 
 port ingestJobsIn : (Json.Decode.Value -> msg) -> Sub msg
+
+
+port watchStepEvents : Route.ArtifactParams -> Cmd msg
+
+
+port stepEventIn : (Json.Decode.Value -> msg) -> Sub msg
