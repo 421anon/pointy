@@ -116,7 +116,7 @@ Inputs from other steps are JSON objects such as `{ "step": 42 }`; several input
 
 ## Running work
 
-`POST /run-step?id=42&commit=<hash>` starts asynchronous evaluation and scheduling. A successful empty response means the request was dispatched, **not** that scheduling or execution succeeded; it is returned before the step or commit is even read. The backend builds missing upstream dependencies too, reusing valid build targets and in-flight jobs.
+`POST /run-step?id=42&commit=<hash>` starts asynchronous evaluation and scheduling. A successful empty response means the request was dispatched, **not** that scheduling or execution succeeded; it is returned before the step or commit is even read. The backend builds missing upstream dependencies too, reusing valid build targets and in-flight jobs. The optional `app_instance_id` tags the build's start and end events on the [step event stream](agent-api.md#step-events).
 
 Listen for status snapshots, and use `GET /step-log?id=42&commit=<hash>` for a build log. On revisions whose stdlib publishes `pointy.schemaVersion`, the logged derivation is the step's certificate; a failed prerequisite appears as `Build prerequisite failed: <drv>` followed by `-----` and the log. A missing log returns 404 with `No build log available for step <id>`; it does not establish that the step succeeded.
 

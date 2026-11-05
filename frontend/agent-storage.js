@@ -11,12 +11,16 @@ export function storeAutoApply(enabled) {
   localStorage.setItem(AUTO_APPLY_KEY, String(enabled));
 }
 
+export function randomHexId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+}
+
 export function agentClientId() {
   const stored = localStorage.getItem(CLIENT_ID_KEY);
   if (stored) return stored;
-  const created = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
+  const created = randomHexId();
   try {
     localStorage.setItem(CLIENT_ID_KEY, created);
   } catch {}

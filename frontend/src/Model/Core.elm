@@ -1802,6 +1802,8 @@ type Model
         , listingPreferences : ListingPreferences
         , route : Route
         , origin : String
+        , appInstanceId : String
+        , newerStepRevision : Maybe NewerStepRevision
         , key : Browser.Navigation.Key
         , toasts : List (Toast (Flow Model ()))
         , nextToastId : Int
@@ -2214,6 +2216,16 @@ getNextClientId (Model model) =
     model.nextClientId
 
 
+getAppInstanceId : Model -> String
+getAppInstanceId (Model model) =
+    model.appInstanceId
+
+
+getNewerStepRevision : Model -> Maybe NewerStepRevision
+getNewerStepRevision (Model model) =
+    model.newerStepRevision
+
+
 getStepConfig : Model -> ApiData StepConfig
 getStepConfig (Model model) =
     model.stepConfig
@@ -2437,6 +2449,7 @@ type alias Flags =
     , lastChat : Maybe String
     , autoApply : Bool
     , clientId : String
+    , appInstanceId : String
     , isNarrow : Bool
     , now : Int
     , submittedTurns : Value
@@ -2457,6 +2470,32 @@ type AgentTurnEvent
     | AgentTurnError { sessionId : String, message : String }
 
 
+type StepStreamMessage
+    = NewerRevisionAnswer NewerStepRevision
+    | BuildEvent StepEvent
+
+
+type StepEventKind
+    = StepBuildStarted
+    | StepBuildFinished
+
+
+type alias StepEvent =
+    { kind : StepEventKind
+    , stepId : Int
+    , revision : String
+    , appInstanceId : Maybe String
+    }
+
+
+type alias NewerStepRevision =
+    { stepId : Int
+    , commit : String
+    , revision : Maybe String
+    , built : Bool
+    }
+
+
 initialModel : Browser.Navigation.Key -> Route -> Flags -> Model
 initialModel key route flags =
     let
@@ -2474,6 +2513,8 @@ initialModel key route flags =
         , listingPreferences = defaultListingPreferences
         , route = route
         , origin = flags.origin
+        , appInstanceId = flags.appInstanceId
+        , newerStepRevision = Nothing
         , key = key
         , toasts = []
         , nextToastId = Maybe.unwrap 0 ((+) 1 << .id) (List.head storedToastHistory)

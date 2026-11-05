@@ -430,6 +430,16 @@ nextClientId =
     lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })
 
 
+appInstanceId : Lens ls Model String x y
+appInstanceId =
+    lens ".appInstanceId" Model.getAppInstanceId (\(Model t) appInstanceId_ -> Model { t | appInstanceId = appInstanceId_ })
+
+
+newerStepRevision : Lens ls Model (Maybe Model.NewerStepRevision) x y
+newerStepRevision =
+    lens ".newerStepRevision" Model.getNewerStepRevision (\(Model t) newerStepRevision_ -> Model { t | newerStepRevision = newerStepRevision_ })
+
+
 folderExpanded : Lens ls { a | expanded : b } b x y
 folderExpanded =
     lens ".expanded" .expanded (\folder_ expanded_ -> { folder_ | expanded = expanded_ })
