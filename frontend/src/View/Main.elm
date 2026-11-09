@@ -7,14 +7,16 @@ import Api.ApiData exposing (ApiData(..), success)
 import Browser
 import Components.AgentPanel as AgentPanel
 import Components.StatusBar as StatusBar
+import Extra.Accessors exposing (orElseT)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Html.Extra as Html
 import Html.Keyed
+import Json.Decode as Decode
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, toasts)
+import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, shownArtifactTitle, toasts)
 import Model.Lib as Lib
 import Organize
 import Route
@@ -34,7 +36,7 @@ import View.TextContent as TextContent
 
 view : Model -> Browser.Document (Flow Model ())
 view model =
-    { title = try (currentProject << success << name) model |> Maybe.map (\n -> n ++ " • " ++ "Pointy Notebook") |> Maybe.withDefault "Pointy Notebook"
+    { title = try (orElseT shownArtifactTitle (currentProject << success << name)) model |> Maybe.map (\n -> n ++ " • " ++ "Pointy Notebook") |> Maybe.withDefault "Pointy Notebook"
     , body =
         case (Model.getRoute model).page of
             Route.Artifact artifact ->
@@ -133,6 +135,7 @@ viewArtifact model artifact =
                     , Html.Attributes.src (Api.stepFileBundleUrl artifact.stepId artifact.commit artifact.path)
                     , Html.Attributes.attribute "sandbox" "allow-same-origin allow-scripts allow-top-navigation-by-user-activation allow-popups allow-popups-to-escape-sandbox"
                     , Html.Attributes.class "artifact-viewer-frame"
+                    , Html.Events.on "load" (Decode.map Actions.setArtifactTitle (Decode.maybe (Decode.at [ "target", "contentDocument", "title" ] Decode.string)))
                     ]
                     []
             , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))

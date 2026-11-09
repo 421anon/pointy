@@ -1840,6 +1840,7 @@ type Model
         , organizeDrag : Maybe OrganizeDrag
         , gutterDrag : Maybe GutterDrag
         , artifactTable : Maybe ArtifactTable
+        , artifactTitle : Maybe String
         , areaCapture : Maybe AreaCapture
         , compareState : CompareState
         , now : Time.Posix
@@ -2385,6 +2386,11 @@ getArtifactTable (Model model) =
     model.artifactTable
 
 
+getArtifactTitle : Model -> Maybe String
+getArtifactTitle (Model model) =
+    model.artifactTitle
+
+
 getCompareState : Model -> CompareState
 getCompareState (Model model) =
     model.compareState
@@ -2513,6 +2519,7 @@ initialModel key route flags =
         , gutterDrag = Nothing
         , areaCapture = Nothing
         , artifactTable = Nothing
+        , artifactTitle = Nothing
         , compareState = CompareIdle
         , now = Time.millisToPosix flags.now
         , agent =
