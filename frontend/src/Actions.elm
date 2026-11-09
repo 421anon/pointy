@@ -2330,6 +2330,11 @@ updateArtifactTable =
     Flow.over (artifactTable << just << artifactTableContent << success)
 
 
+setArtifactTitle : Maybe String -> Flow Model ()
+setArtifactTitle =
+    Flow.setAll artifactTitle
+
+
 setPlainFileScrollTop : Route.HighlightTarget -> Int -> List String -> Float -> Flow Model ()
 setPlainFileScrollTop target recordId path scrollTop =
     Flow.setAll (plainScrollTopAt target recordId path) scrollTop

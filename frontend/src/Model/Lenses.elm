@@ -1,6 +1,6 @@
 module Model.Lenses exposing (..)
 
-import Accessors exposing (A_Prism, Lens, Prism, Traversal, all, each, get, just, lens, new, over, prism, set, traversal, try, values)
+import Accessors exposing (A_Prism, Lens, Prism, Traversal, all, each, get, has, just, lens, new, over, prism, set, traversal, try, values)
 import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Browser.Navigation
 import Components.Select exposing (SelectState)
@@ -902,6 +902,16 @@ areaCaptureAsking =
 artifactTable : Lens ls Model (Maybe Model.ArtifactTable) x y
 artifactTable =
     lens ".artifactTable" Model.getArtifactTable (\(Model m) table -> Model { m | artifactTable = table })
+
+
+artifactTitle : Lens ls Model (Maybe String) x y
+artifactTitle =
+    lens ".artifactTitle" Model.getArtifactTitle (\(Model m) title_ -> Model { m | artifactTitle = title_ })
+
+
+shownArtifactTitle : Traversal Model String x y
+shownArtifactTitle =
+    where_ (has (route << Route.page << Route.artifact)) << artifactTitle << just << where_ (String.trim >> String.isEmpty >> not)
 
 
 artifactTableFor : Route.ArtifactParams -> Traversal Model Model.ArtifactTable x y
