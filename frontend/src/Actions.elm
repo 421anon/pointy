@@ -503,7 +503,7 @@ applyLoadedProjects target result =
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async refreshProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
-                            |> Flow.seq (Flow.forAll (route << Route.page << Route.artifact) (flip requestProjectStatus Nothing << Route.pathProjectId << .projectPath))
+                            |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (flip requestProjectStatus Nothing << Route.pathProjectId << .projectPath))
                     )
 
         Err err ->
