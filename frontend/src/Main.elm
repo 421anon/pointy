@@ -48,7 +48,7 @@ init flags url key =
             (case initialRoute.page of
                 Route.Artifact artifact ->
                     Flow.async (Actions.loadArtifactTable artifact)
-                        |> Flow.seq (Actions.watchStepEvents artifact)
+                        |> Flow.seq (Actions.requestArtifactStatus artifact)
                         |> Flow.seq Actions.loadStepConfig
                         |> Flow.seq Actions.loadProjects
 
@@ -68,7 +68,6 @@ initializeAgent : Flow Model ()
 initializeAgent =
     Flow.async Actions.reattachSubmittedTurns
         |> Flow.seq (Flow.async Actions.listenAndProcessAgentTurns)
-        |> Flow.seq (Flow.async Actions.listenAndProcessStepEvents)
         |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
         |> Flow.seq (Flow.async Actions.loadUserRepoInfo)
 
@@ -213,7 +212,7 @@ applyRoute forceRevealHighlight newRoute =
                                         Route.Artifact artifact ->
                                             Actions.syncCompareFromRoute newRoute
                                                 |> Flow.seq (Flow.async (Actions.loadArtifactTable artifact))
-                                                |> Flow.seq (Actions.watchStepEvents artifact)
+                                                |> Flow.seq (Actions.requestArtifactStatus artifact)
 
                                         Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute

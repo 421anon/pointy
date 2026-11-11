@@ -411,9 +411,9 @@ postTreeOps ops =
     request "POST" batchProjectsUrl (Http.jsonBody (Encode.treeOps ops))
 
 
-runStep : Int -> Maybe String -> String -> Flow s (Result Http.Error ())
-runStep id commit appInstanceId =
-    request "POST" (appendCommitQuery ("/backend/run-step?id=" ++ String.fromInt id ++ "&app_instance_id=" ++ appInstanceId) commit) Http.emptyBody
+runStep : Int -> Maybe String -> Flow s (Result Http.Error ())
+runStep id commit =
+    stepAction "run-step" id commit
 
 
 refreshProjectStatus : Int -> Maybe String -> Flow s (Result Http.Error ())

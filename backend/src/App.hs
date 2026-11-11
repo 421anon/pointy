@@ -30,7 +30,6 @@ import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.StepReview (getProjectReviewHandler, removeReviewHandler, reviewDiffHandler, reviewStepHandler)
-import Handlers.StepEventStream (stepEventStreamHandler)
 import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.ChatSearch (chatSearchHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
@@ -102,7 +101,6 @@ server =
         :<|> (\request -> liftHandler (steerTurnHandler request))
         :<|> (\request -> liftHandler (compactSessionHandler request))
         :<|> (\turnId -> liftHandler (turnLogStreamHandler turnId))
-        :<|> stepEventStreamHandler
         :<|> turnImageHandler
         :<|> turnShownImageHandler
         :<|> (\request -> liftHandler (applyChangesHandler request))

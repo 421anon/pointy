@@ -60,7 +60,6 @@ library
     Handlers.StepReview
     Handlers.StepSearch
     Handlers.Steps
-    Handlers.StepEventStream
     Handlers.Store
     Handlers.Upload
     Handlers.Zip
@@ -85,7 +84,6 @@ library
     Search.StepCorpus
     Search.Store
     Sse
-    StepEventBus
     Storage
     UserRepo
 

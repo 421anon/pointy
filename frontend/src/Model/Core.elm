@@ -1821,8 +1821,7 @@ type Model
         , listingPreferences : ListingPreferences
         , route : Route
         , origin : String
-        , appInstanceId : String
-        , newerStepRevision : Maybe NewerStepRevision
+        , artifactCertificate : Maybe ArtifactCertificate
         , key : Browser.Navigation.Key
         , toasts : List (Toast (Flow Model ()))
         , nextToastId : Int
@@ -2236,14 +2235,9 @@ getNextClientId (Model model) =
     model.nextClientId
 
 
-getAppInstanceId : Model -> String
-getAppInstanceId (Model model) =
-    model.appInstanceId
-
-
-getNewerStepRevision : Model -> Maybe NewerStepRevision
-getNewerStepRevision (Model model) =
-    model.newerStepRevision
+getArtifactCertificate : Model -> Maybe ArtifactCertificate
+getArtifactCertificate (Model model) =
+    model.artifactCertificate
 
 
 getStepConfig : Model -> ApiData StepConfig
@@ -2474,7 +2468,6 @@ type alias Flags =
     , lastChat : Maybe String
     , autoApply : Bool
     , clientId : String
-    , appInstanceId : String
     , isNarrow : Bool
     , now : Int
     , submittedTurns : Value
@@ -2495,29 +2488,10 @@ type AgentTurnEvent
     | AgentTurnError { sessionId : String, message : String }
 
 
-type StepStreamMessage
-    = NewerRevisionAnswer NewerStepRevision
-    | BuildEvent StepEvent
-
-
-type StepEventKind
-    = StepBuildStarted
-    | StepBuildFinished
-
-
-type alias StepEvent =
-    { kind : StepEventKind
-    , stepId : Int
-    , revision : String
-    , appInstanceId : Maybe String
-    }
-
-
-type alias NewerStepRevision =
+type alias ArtifactCertificate =
     { stepId : Int
     , commit : String
-    , revision : Maybe String
-    , built : Bool
+    , certificate : String
     }
 
 
@@ -2538,8 +2512,7 @@ initialModel key route flags =
         , listingPreferences = defaultListingPreferences
         , route = route
         , origin = flags.origin
-        , appInstanceId = flags.appInstanceId
-        , newerStepRevision = Nothing
+        , artifactCertificate = Nothing
         , key = key
         , toasts = []
         , nextToastId = Maybe.unwrap 0 ((+) 1 << .id) (List.head storedToastHistory)

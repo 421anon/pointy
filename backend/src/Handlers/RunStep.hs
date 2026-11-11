@@ -43,12 +43,11 @@ import Effectful.Exception (finally, onException)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import Servant (NoContent (..), err404, err500, errBody)
 import System.Exit (ExitCode (..))
-import StepEventBus (StepEvent (..), StepEventKind (..), publishStepEvent)
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
-runStepHandler :: Int -> Maybe T.Text -> Maybe T.Text -> AppM NoContent
-runStepHandler eid commit appInstance = do
-    _ <- liftIO $ forkIO $ runAppEffects $ runStepSync eid commit appInstance
+runStepHandler :: Int -> Maybe T.Text -> AppM NoContent
+runStepHandler eid commit = do
+    _ <- liftIO $ forkIO $ runAppEffects $ runStepSync eid commit
     return NoContent
 
 stopStepHandler :: Int -> Maybe T.Text -> AppM NoContent
@@ -61,8 +60,8 @@ jobEndedHandler name = do
     lift $ notifyJobEnded (BuildKey name)
     return NoContent
 
-runStepSync :: App es => Int -> Maybe T.Text -> Maybe T.Text -> Eff es ()
-runStepSync eid commit appInstance = do
+runStepSync :: App es => Int -> Maybe T.Text -> Eff es ()
+runStepSync eid commit = do
     result <- runExceptT $ do
         (repoPath, targetCommit) <-
             ExceptT $
@@ -71,19 +70,16 @@ runStepSync eid commit appInstance = do
 
         let ctx = ReadRepoContext repoPath targetCommit
             halted = stopRequested eid
-            announce kind = liftIO $ publishStepEvent (StepEvent kind eid (T.pack targetCommit) appInstance)
-        lift $ announce BuildStarted
-        ExceptT $ (`finally` announce BuildFinished) $ runExceptT $ do
-            outcomes <- ExceptT $ trackBuild eid (T.pack targetCommit) $ runExceptT $ do
-                _ <- liftIO $ takeStopRequest eid
-                graph <- getDependencyGraph halted ctx eid
-                stepIds <- liftEither $ topoOrder graph
-                submitted <- lift $ submitGraph halted ctx graph stepIds
-                stopped <- liftIO $ takeStopRequest eid
-                when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _ _) <- [Map.lookup eid submitted]]
-                return submitted
-            unless (Map.member eid outcomes) $ lift $ broadcastStatusForStepProjects eid (T.pack targetCommit) Nothing
-            liftIO $ mapConcurrently_ (runAppEffects . finishStep ctx) (Map.toList outcomes)
+        outcomes <- ExceptT $ trackBuild eid (T.pack targetCommit) $ runExceptT $ do
+            _ <- liftIO $ takeStopRequest eid
+            graph <- getDependencyGraph halted ctx eid
+            stepIds <- liftEither $ topoOrder graph
+            submitted <- lift $ submitGraph halted ctx graph stepIds
+            stopped <- liftIO $ takeStopRequest eid
+            when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _ _) <- [Map.lookup eid submitted]]
+            return submitted
+        unless (Map.member eid outcomes) $ lift $ broadcastStatusForStepProjects eid (T.pack targetCommit) Nothing
+        liftIO $ mapConcurrently_ (runAppEffects . finishStep ctx) (Map.toList outcomes)
 
     case result of
         Left err -> liftIO $ putStrLn $ "runStepAsync error: " ++ err

@@ -7,7 +7,6 @@ module Handlers.Cold (
     ColdFile (..),
     PrefetchResponse (..),
     coldFilesFor,
-    coldOutPath,
     refuseColdFile,
     coldStatusHandler,
     prefetchHandler,

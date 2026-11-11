@@ -1,4 +1,4 @@
-module Channels exposing (agentTurns, clusterStatus, ingestJobs, stepEvents, stepStatus)
+module Channels exposing (agentTurns, clusterStatus, ingestJobs, stepStatus)
 
 import Flow exposing (ChannelSpec)
 import Json.Decode
@@ -23,8 +23,3 @@ clusterStatus =
 ingestJobs : ChannelSpec Json.Decode.Value
 ingestJobs =
     Flow.connect Ports.ingestJobsIn (\_ -> Ports.openIngestStream {})
-
-
-stepEvents : ChannelSpec Json.Decode.Value
-stepEvents =
-    Flow.listen Ports.stepEventIn

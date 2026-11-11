@@ -109,10 +109,9 @@ type Autocomplete =
 
 type RunStep =
     "run-step"
-        :> Description "Triggers a build of a step. app_instance_id names the app instance that asked for the build on the step's event stream."
+        :> Description "Triggers a build of a step."
         :> ReqId
         :> QueryParam "commit" Text
-        :> QueryParam "app_instance_id" Text
         :> Post '[PlainText] NoContent
 
 type StopStep =
@@ -467,15 +466,6 @@ type AgentTurnStream =
         :> Description "Streams output of an agent turn as server-sent events."
         :> SseStream
 
-type AgentStepEventStream =
-    "agent"
-        :> "step"
-        :> Capture "id" Int
-        :> "stream"
-        :> Description "Streams, for a step viewed at commit, the newer revision as server-sent events: the branch head when the step's build output there differs from its output at commit, and whether that output is built, re-sent every few seconds. Also streams the starts and ends of the step's builds, tagged with the app instance that initiated them."
-        :> QueryParam' '[Required, Strict] "commit" Text
-        :> SseStream
-
 type AgentTurnImage =
     "agent"
         :> "turn"
@@ -593,7 +583,6 @@ type API =
         :<|> SteerTurn
         :<|> CompactSession
         :<|> AgentTurnStream
-        :<|> AgentStepEventStream
         :<|> AgentTurnImage
         :<|> AgentTurnShownImage
         :<|> ApplyChanges

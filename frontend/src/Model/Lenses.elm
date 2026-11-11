@@ -279,6 +279,16 @@ viewedRevision =
         (commitHash << orElseT success ApiData.reloading)
 
 
+stepArtifact : Int -> Traversal Model Route.ArtifactParams x y
+stepArtifact stepId =
+    route << Route.page << Route.artifact << where_ (.stepId >> (==) stepId)
+
+
+revisionArtifact : String -> Traversal Model Route.ArtifactParams x y
+revisionArtifact revision =
+    route << Route.page << Route.artifact << where_ (.commit >> (==) revision)
+
+
 stepShownRevision : Int -> Traversal Model String x y
 stepShownRevision stepId =
     orElseT (stepRecordById stepId << runState << success << commit)
@@ -430,14 +440,9 @@ nextClientId =
     lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })
 
 
-appInstanceId : Lens ls Model String x y
-appInstanceId =
-    lens ".appInstanceId" Model.getAppInstanceId (\(Model t) appInstanceId_ -> Model { t | appInstanceId = appInstanceId_ })
-
-
-newerStepRevision : Lens ls Model (Maybe Model.NewerStepRevision) x y
-newerStepRevision =
-    lens ".newerStepRevision" Model.getNewerStepRevision (\(Model t) newerStepRevision_ -> Model { t | newerStepRevision = newerStepRevision_ })
+artifactCertificate : Lens ls Model (Maybe Model.ArtifactCertificate) x y
+artifactCertificate =
+    lens ".artifactCertificate" Model.getArtifactCertificate (\(Model t) artifactCertificate_ -> Model { t | artifactCertificate = artifactCertificate_ })
 
 
 folderExpanded : Lens ls { a | expanded : b } b x y

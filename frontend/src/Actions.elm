@@ -1688,6 +1688,7 @@ runStep spec id =
                     |> Flow.seq (Flow.get |> Flow.andThen (clearStepLog id << stepRevisionById id))
                     |> Flow.seq (Flow.over pendingStops (Set.remove id))
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
+                    |> Flow.seq (Flow.whenHas (stepArtifact id) (\_ -> addToast True ("Building step " ++ String.fromInt id ++ "…")))
                     |> Flow.seq
                         (registerStepStatusHook id
                             (Flow.forAll (stepRecordById id << runState << success << status << success << where_ ((==) StatusSuccess))
@@ -1701,9 +1702,10 @@ runStep spec id =
                                                 "Step completed"
                                         )
                                 )
+                                |> Flow.seq (showBuiltArtifactRevision id)
                             )
                         )
-                    |> Flow.seq (Flow.get |> Flow.andThen (callApi void << Flow.forAll appInstanceId << Api.runStep id << stepRevisionById id))
+                    |> Flow.seq (Flow.get |> Flow.andThen (callApi void << Api.runStep id << stepRevisionById id))
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
@@ -1720,7 +1722,7 @@ buildViewedRevision spec id =
                         Flow.when (model |> has (TableSpec.getLens spec << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                             |> Flow.seq (Flow.over pendingBuilds (Dict.insert id revision))
                             |> Flow.seq (clearStepLog id (Just revision))
-                            |> Flow.seq (callApi void (Flow.forAll appInstanceId (Api.runStep id (Just revision))))
+                            |> Flow.seq (callApi void (Api.runStep id (Just revision)))
                     )
             )
         |> FlowError.foldResult
@@ -5002,25 +5004,21 @@ resyncWorkspace snapshotCommit =
         |> Flow.seq (Flow.forAll currentProjectId (\projectId -> requestProjectStatus projectId Nothing))
 
 
-watchStepEvents : Route.ArtifactParams -> Flow Model ()
-watchStepEvents =
-    Ports.watchStepEvents >> Flow.lift >> Flow.async
+requestArtifactStatus : Route.ArtifactParams -> Flow Model ()
+requestArtifactStatus artifact =
+    requestProjectStatus (Route.pathProjectId artifact.projectPath) (Just artifact.commit)
 
 
-listenAndProcessStepEvents : Flow Model Never
-listenAndProcessStepEvents =
-    Flow.subscribe (Decode.decodeValue ApiDecode.stepStreamMessage >> Result.toMaybe >> Maybe.unwrap (Flow.pure ()) onStepStreamMessage) Channels.stepEvents
-
-
-onStepStreamMessage : Model.StepStreamMessage -> Flow Model ()
-onStepStreamMessage message =
-    case message of
-        Model.NewerRevisionAnswer answer ->
-            Flow.setAll newerStepRevision (Just answer)
-
-        Model.BuildEvent event ->
-            Flow.whenHas (appInstanceId << where_ (Just >> (==) event.appInstanceId))
-                (always (Flow.whenHas (route << Route.page << Route.artifact << where_ (.stepId >> (==) event.stepId)) (always (reactToOwnBuildEvent event))))
+recordArtifactCertificate : String -> List { step | stepId : Int, certificate : Maybe String } -> Flow Model ()
+recordArtifactCertificate snapshotCommit steps =
+    Flow.forAll (revisionArtifact snapshotCommit)
+        (\artifact ->
+            List.filter (.stepId >> (==) artifact.stepId) steps
+                |> List.filterMap .certificate
+                |> List.head
+                |> Maybe.unwrap (Flow.pure ())
+                    (\certificate -> Flow.setAll artifactCertificate (Just { stepId = artifact.stepId, commit = snapshotCommit, certificate = certificate }))
+        )
 
 
 showArtifactRevision : String -> Flow Model ()
@@ -5028,19 +5026,10 @@ showArtifactRevision revision =
     Flow.forAll route (set (Route.page << Route.artifact << commit) revision >> goToRoute)
 
 
-reactToOwnBuildEvent : Model.StepEvent -> Flow Model ()
-reactToOwnBuildEvent event =
-    let
-        revision =
-            String.left 12 event.revision
-    in
-    case event.kind of
-        Model.StepBuildStarted ->
-            addToast True ("Building step " ++ String.fromInt event.stepId ++ " at " ++ revision ++ "…")
-
-        Model.StepBuildFinished ->
-            addToast True ("Step " ++ String.fromInt event.stepId ++ " finished building; showing revision " ++ revision ++ ".")
-                |> Flow.seq (showArtifactRevision event.revision)
+showBuiltArtifactRevision : Int -> Flow Model ()
+showBuiltArtifactRevision stepId =
+    Flow.forAll (stepArtifact stepId)
+        (\artifact -> Flow.forAll (stepRecordById stepId << runState << success << commit << where_ ((/=) artifact.commit)) showArtifactRevision)
 
 
 listenAndProcessStepStatus : Flow Model Never
@@ -5062,6 +5051,7 @@ onStepStatusIn value =
                         Flow.when (headMovedRemotely model commit) (Flow.async (resyncWorkspace commit))
                             |> Flow.seq (bufferUnlistedStatuses model commit statuses)
                             |> Flow.seq (applyStepStatuses statuses)
+                            |> Flow.seq (recordArtifactCertificate commit steps)
                             |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async refreshProjectRollup))
                     )
 
@@ -5079,6 +5069,7 @@ headMovedRemotely : Model -> String -> Bool
 headMovedRemotely model snapshotCommit =
     has (commitHash << success << where_ ((/=) snapshotCommit)) model
         && not (isReadOnlyRoute model)
+        && not (has (revisionArtifact snapshotCommit) model)
 
 
 rollupAffectedFor : Model -> Dict Int Model.StatusReport -> Bool

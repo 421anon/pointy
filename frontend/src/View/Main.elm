@@ -16,7 +16,7 @@ import Html.Extra as Html
 import Html.Keyed
 import Json.Decode as Decode
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, newerStepRevision, shownArtifactTitle, toasts)
+import Model.Lenses exposing (areaCapture, artifactCertificate, artifactTableContent, artifactTableFor, currentProject, name, runState, shownArtifactTitle, stepRecordById, toasts)
 import Model.Lib as Lib
 import Organize
 import Route
@@ -140,8 +140,7 @@ viewArtifact model artifact =
                     []
             , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
-                [ Html.viewMaybe viewNewerRevisionNotice
-                    (try (newerStepRevision << just << where_ (\answer -> answer.stepId == artifact.stepId && answer.commit == artifact.commit)) model)
+                [ Html.viewMaybe viewNewerRevisionNotice (newerArtifactRevision model artifact)
                 , Html.viewIf (not isTable)
                     (Html.button
                         [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
@@ -172,26 +171,32 @@ viewArtifact model artifact =
         ]
 
 
-viewNewerRevisionNotice : Model.NewerStepRevision -> Html (Flow Model ())
-viewNewerRevisionNotice answer =
-    Html.viewMaybe
-        (\revision ->
-            Html.div [ Html.Attributes.class "artifact-viewer-revision-notice", Html.Attributes.attribute "role" "status" ]
-                (if answer.built then
-                    [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is built.")
-                    , Html.button
-                        [ Html.Attributes.class "artifact-viewer-revision-action"
-                        , Html.Attributes.type_ "button"
-                        , Html.Events.onClick (Actions.showArtifactRevision revision)
-                        ]
-                        [ Html.text "View newer revision" ]
-                    ]
+newerArtifactRevision : Model -> Route.ArtifactParams -> Maybe { revision : String, built : Bool }
+newerArtifactRevision model artifact =
+    try (artifactCertificate << just << where_ (\shown -> shown.stepId == artifact.stepId && shown.commit == artifact.commit)) model
+        |> Maybe.andThen
+            (\shown ->
+                try (stepRecordById artifact.stepId << runState << success << where_ (.certificate >> Maybe.map ((/=) shown.certificate) >> Maybe.withDefault False)) model
+            )
+        |> Maybe.map (\head -> { revision = head.commit, built = has (success << where_ Model.hasBuiltOutput) head.status })
 
-                 else
-                    [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is not built yet.") ]
-                )
+
+viewNewerRevisionNotice : { revision : String, built : Bool } -> Html (Flow Model ())
+viewNewerRevisionNotice { revision, built } =
+    Html.div [ Html.Attributes.class "artifact-viewer-revision-notice", Html.Attributes.attribute "role" "status" ]
+        (if built then
+            [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is built.")
+            , Html.button
+                [ Html.Attributes.class "artifact-viewer-revision-action"
+                , Html.Attributes.type_ "button"
+                , Html.Events.onClick (Actions.showArtifactRevision revision)
+                ]
+                [ Html.text "View newer revision" ]
+            ]
+
+         else
+            [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is not built yet.") ]
         )
-        answer.revision
 
 
 view404 : Html (Flow Model ())

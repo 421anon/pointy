@@ -1,8 +1,6 @@
 let stepStatusSource = null;
 let clusterStatusSource = null;
 let ingestJobsSource = null;
-let stepEventSource = null;
-let watchedStepStream = null;
 
 const REOPEN_DELAY_MS = 2000;
 
@@ -79,32 +77,11 @@ function openIngestStream(app) {
   });
 }
 
-function watchStepEvents(app, { stepId, commit }) {
-  const stepStream = `/backend/agent/step/${stepId}/stream?commit=${encodeURIComponent(commit)}`;
-  if (stepStream === watchedStepStream && isOpen(stepEventSource)) {
-    return;
-  }
-  stepEventSource?.close();
-  watchedStepStream = stepStream;
-  stepEventSource = new EventSource(stepStream);
-  reopenWhenClosed(stepEventSource, () => {
-    if (watchedStepStream === stepStream) watchStepEvents(app, { stepId, commit });
-  });
-  for (const type of ["newer-revision", "build-started", "build-finished"]) {
-    stepEventSource.addEventListener(type, (event) => {
-      try {
-        app.ports?.stepEventIn?.send({ type, data: JSON.parse(event.data) });
-      } catch (_) {}
-    });
-  }
-}
-
 function closeBackendStreams() {
   stepStatusSource?.close();
   stepStatusSource = null;
   clusterStatusSource?.close();
   ingestJobsSource?.close();
-  stepEventSource?.close();
 }
 
 export function connectBackendStreams(app) {
@@ -117,6 +94,5 @@ export function connectBackendStreams(app) {
   if (app.ports && app.ports.openIngestStream) {
     app.ports.openIngestStream.subscribe(() => openIngestStream(app));
   }
-  app.ports?.watchStepEvents?.subscribe((artifact) => watchStepEvents(app, artifact));
   window.addEventListener("beforeunload", closeBackendStreams);
 }

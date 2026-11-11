@@ -1,6 +1,6 @@
 import "./styles/main.scss";
 import { Elm } from "./src/Main.elm";
-import { agentClientId, randomHexId, storedAutoApply, storedLastChat, storedSubmittedTurns } from "./agent-storage.js";
+import { agentClientId, storedAutoApply, storedLastChat, storedSubmittedTurns } from "./agent-storage.js";
 import { connectPorts } from "./ffi.js";
 import "./code-editor.js";
 import "./molstar-viewer.js";
@@ -15,7 +15,6 @@ const app = Elm.Main.init({
     lastChat: storedLastChat(),
     autoApply: storedAutoApply(),
     clientId: agentClientId(),
-    appInstanceId: randomHexId(),
     isNarrow: window.matchMedia("(max-width: 1000px)").matches,
     now: Date.now(),
     submittedTurns: storedSubmittedTurns(),
