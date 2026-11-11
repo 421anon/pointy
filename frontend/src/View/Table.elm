@@ -1138,12 +1138,16 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
         viewSelectExisting state =
             let
                 availableItems =
-                    Model.Lib.linkCandidates model parentId
-                        |> List.map
-                            (\( ref, label ) ->
-                                { id = Just ref.id, name = label, mProjectId = Nothing, ref = Just ref }
-                            )
-                        |> List.filter (\item -> not (List.any (\chosen -> chosen.ref == item.ref) state.selected))
+                    if state.active || not (String.isEmpty state.input) then
+                        Model.Lib.linkCandidates model parentId
+                            |> List.map
+                                (\( ref, label ) ->
+                                    { id = Just ref.id, name = label, mProjectId = Nothing, ref = Just ref }
+                                )
+                            |> List.filter (\item -> not (List.any (\chosen -> chosen.ref == item.ref) state.selected))
+
+                    else
+                        []
 
                 toItemTooltip item =
                     item.ref
@@ -1236,7 +1240,8 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                     )
                 , Html.div [ class "form-body" ]
                     [ Html.viewIf (not editing) modeSelector
-                    , Html.viewIf (not editing && table.addMode == LinkExisting) <| viewSelectExisting table.selectExistingSteps
+                    , Html.viewIfLazy (not editing && table.addMode == LinkExisting) <|
+                        \() -> viewSelectExisting table.selectExistingSteps
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
                     , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|

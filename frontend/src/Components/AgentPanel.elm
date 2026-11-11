@@ -223,7 +223,7 @@ viewSessionBody now mentionsAwaited mentionSources agent =
             , ( "is-session-list-open", agent.isSessionListOpen )
             ]
         ]
-        [ viewSessionSidebar agent listed
+        [ Html.viewIfLazy agent.isSessionListOpen (\() -> viewSessionSidebar agent listed)
         , if agent.isRestoringChat then
             viewSessionsLoading
 

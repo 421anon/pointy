@@ -2078,6 +2078,11 @@ setProjects projects (Model model) =
         }
 
 
+stopProjectsLoading : Model -> Model
+stopProjectsLoading (Model model) =
+    Model { model | projects = ApiData.stopLoading model.projects }
+
+
 getSteps : Model -> Dict Int StepRecord
 getSteps (Model model) =
     model.steps

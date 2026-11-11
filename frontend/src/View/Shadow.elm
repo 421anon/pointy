@@ -845,20 +845,21 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                     stepFormReadOnly model spec step
 
                 formView =
-                    Html.viewIf isEditing <|
-                        Html.viewMaybe
-                            (\edited ->
-                                viewAddOrEditRecordForm model
-                                    parentId
-                                    spec
-                                    (get (Lenses.stepFormsAt step.type_) model)
-                                    { extraFields = [ viewStepExtraFormFields model readOnly step.type_ entry.stepType ]
-                                    , noteInput = viewStepNoteField model readOnly step.type_
-                                    }
-                                    (FileBrowser.viewSrcFilesSection model entry.stepType spec step)
-                                    edited
-                            )
-                            (try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model)
+                    Html.viewIfLazy isEditing <|
+                        \() ->
+                            Html.viewMaybe
+                                (\edited ->
+                                    viewAddOrEditRecordForm model
+                                        parentId
+                                        spec
+                                        (get (Lenses.stepFormsAt step.type_) model)
+                                        { extraFields = [ viewStepExtraFormFields model readOnly step.type_ entry.stepType ]
+                                        , noteInput = viewStepNoteField model readOnly step.type_
+                                        }
+                                        (FileBrowser.viewSrcFilesSection model entry.stepType spec step)
+                                        edited
+                                )
+                                (try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model)
 
                 mInlineRename =
                     try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model
