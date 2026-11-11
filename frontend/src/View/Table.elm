@@ -1240,11 +1240,8 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                     )
                 , Html.div [ class "form-body" ]
                     [ Html.viewIf (not editing) modeSelector
-                    , if not editing && table.addMode == LinkExisting then
-                        viewSelectExisting table.selectExistingSteps
-
-                      else
-                        Html.nothing
+                    , Html.viewIfLazy (not editing && table.addMode == LinkExisting) <|
+                        \() -> viewSelectExisting table.selectExistingSteps
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) nameInput
                     , Html.viewIf (not editing && table.addMode == AddNew || editing) noteInput
                     , Html.viewIf ((not editing && table.addMode == AddNew || editing) && not (List.isEmpty extraFields)) <|
