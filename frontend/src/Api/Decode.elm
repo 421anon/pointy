@@ -364,6 +364,13 @@ reviewComparison comparison detail =
             Decode.fail ("Unknown step review comparison: " ++ other)
 
 
+stepComparison : Decoder (Maybe Model.ReviewComparison)
+stepComparison =
+    Decode.field "comparison" Decode.string
+        |> Decode.andThen (\comparison -> reviewComparison comparison Nothing)
+        |> Decode.map (Maybe.andThen Api.ApiData.toMaybe)
+
+
 reviewReport : Decoder Model.ReviewReport
 reviewReport =
     Decode.succeed (\revision reviewedBy comments reviewedStatus_ reviewedStatusError reviewedCertificate comparison detail -> { revision = revision, reviewedBy = reviewedBy, comments = comments, reviewedStatus = Maybe.map (\status_ -> applyError status_ reviewedStatusError) reviewedStatus_, reviewedCertificate = reviewedCertificate, comparison = comparison, detail = detail })

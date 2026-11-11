@@ -7,6 +7,7 @@
 
 module Handlers.StepReview (
     ReviewRequest (..),
+    StepComparison (..),
     StepReviewReport (..),
     ensureStepsUnreviewed,
     getProjectReviewHandler,
@@ -17,6 +18,7 @@ module Handlers.StepReview (
     reviewedPaths,
     reviewedStatuses,
     stepCertificatesOrLegacyOutPaths,
+    stepComparisonHandler,
     stepOutPaths,
     stepReviews,
     readableStepReviews,
@@ -94,18 +96,26 @@ instance ToJSON StepReviewReport where
             , "reviewedStatus" .= fmap fst mStatus
             , "reviewedStatusError" .= (mStatus >>= snd)
             , "reviewedCertificate" .= mCertificate
-            , "comparison" .= (comparisonText :: Text)
+            , "comparison" .= comparisonText
             , "comparisonDetail" .= detail
             ]
       where
-        (comparisonText, detail) = case comparison of
-            NoReview -> ("no-review", Nothing)
-            SameOutPath -> ("same-out-path", Nothing)
-            SameContent -> ("same-content", Nothing)
-            DifferentContent -> ("different-content", Nothing)
-            ViewedOutputUnbuilt -> ("viewed-output-unbuilt", Nothing)
-            ReviewedOutputUnbuilt text -> ("reviewed-output-unbuilt", Just text)
-            Unresolvable text -> ("unresolvable", Just text)
+        (comparisonText, detail) = comparisonCode comparison
+
+newtype StepComparison = StepComparison ReviewComparison
+
+instance ToJSON StepComparison where
+    toJSON (StepComparison comparison) = object ["comparison" .= fst (comparisonCode comparison)]
+
+comparisonCode :: ReviewComparison -> (Text, Maybe Text)
+comparisonCode = \case
+    NoReview -> ("no-review", Nothing)
+    SameOutPath -> ("same-out-path", Nothing)
+    SameContent -> ("same-content", Nothing)
+    DifferentContent -> ("different-content", Nothing)
+    ViewedOutputUnbuilt -> ("viewed-output-unbuilt", Nothing)
+    ReviewedOutputUnbuilt text -> ("reviewed-output-unbuilt", Just text)
+    Unresolvable text -> ("unresolvable", Just text)
 
 type StepReviews = Map Int (Maybe Review)
 
@@ -125,6 +135,16 @@ getProjectReviewHandler projectId commit = do
         statuses <- lift $ reviewedStatuses reviewedCertificates reviewedOutputs
         let stepReport stepId review = StepReviewReport review (either (const Nothing) Just =<< Map.lookup stepId reviewedCertificates) (Map.lookup stepId statuses) (Map.findWithDefault NoReview stepId comparisons)
         pure $ Map.mapKeys show $ Map.mapWithKey stepReport reviews
+    orFail err500 result
+
+stepComparisonHandler :: Int -> Text -> Text -> AppM StepComparison
+stepComparisonHandler stepId revision commit = do
+    result <- lift $ withReadRepoTransaction $ \context -> do
+        let outputAt revision_ = lookupOutPath stepId <$> ((`stepOutPaths` [stepId]) =<< commitContextEff (readRepoPath context) revision_)
+        viewedOutput <- outputAt commit
+        revisionOutput <- outputAt revision
+        hashes <- storeHashes (rights [viewedOutput, revisionOutput])
+        pure (StepComparison (outputComparison hashes stepId viewedOutput revisionOutput))
     orFail err500 result
 
 reviewStepHandler :: Int -> Maybe Text -> ReviewRequest -> AppM Bool
@@ -459,15 +479,18 @@ stepComparisons viewed revisions reviewedOutputs
     reviewed = Map.mapMaybe id revisions
     comparisonFor viewedOutputs hashes stepId = \case
         Nothing -> NoReview
-        Just _ -> case (lookupOutPath stepId viewedOutputs, lookupOutPath stepId reviewedOutputs) of
-            (Left err, _) -> Unresolvable (T.pack (errorSummary err))
-            (_, Left err) -> Unresolvable (T.pack (errorSummary err))
-            (Right viewedPath, Right reviewedPath)
-                | Map.notMember reviewedPath hashes -> ReviewedOutputUnbuilt (reviewedOutputUnbuiltDetail stepId reviewedPath)
-                | viewedPath == reviewedPath -> SameOutPath
-                | Map.notMember viewedPath hashes -> ViewedOutputUnbuilt
-                | Map.lookup viewedPath hashes == Map.lookup reviewedPath hashes -> SameContent
-                | otherwise -> DifferentContent
+        Just _ -> outputComparison hashes stepId (lookupOutPath stepId viewedOutputs) (lookupOutPath stepId reviewedOutputs)
+
+outputComparison :: Map FilePath Text -> Int -> Either String FilePath -> Either String FilePath -> ReviewComparison
+outputComparison hashes stepId viewedOutput reviewedOutput = case (viewedOutput, reviewedOutput) of
+    (Left err, _) -> Unresolvable (T.pack (errorSummary err))
+    (_, Left err) -> Unresolvable (T.pack (errorSummary err))
+    (Right viewedPath, Right reviewedPath)
+        | Map.notMember reviewedPath hashes -> ReviewedOutputUnbuilt (reviewedOutputUnbuiltDetail stepId reviewedPath)
+        | viewedPath == reviewedPath -> SameOutPath
+        | Map.notMember viewedPath hashes -> ViewedOutputUnbuilt
+        | Map.lookup viewedPath hashes == Map.lookup reviewedPath hashes -> SameContent
+        | otherwise -> DifferentContent
 
 reviewedOutputUnbuiltDetail :: Int -> FilePath -> Text
 reviewedOutputUnbuiltDetail stepId outPath =

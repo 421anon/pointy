@@ -197,8 +197,8 @@ viewedCommit page_ =
         Project params ->
             params.mCommit
 
-        Artifact params ->
-            Just params.commit
+        Artifact _ ->
+            Nothing
 
         NotFound _ ->
             Nothing
@@ -212,8 +212,8 @@ viewedCommitT =
                 Project params ->
                     Maybe.toList params.mCommit
 
-                Artifact params ->
-                    [ params.commit ]
+                Artifact _ ->
+                    []
 
                 NotFound _ ->
                     []
@@ -223,8 +223,8 @@ viewedCommitT =
                 Project params ->
                     Project { params | mCommit = Maybe.map f params.mCommit }
 
-                Artifact params ->
-                    Artifact { params | commit = f params.commit }
+                Artifact _ ->
+                    page_
 
                 NotFound _ ->
                     page_

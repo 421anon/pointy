@@ -30,6 +30,8 @@ Files with a browser-friendly type — HTML, plain text, CSS, XML, JSON, JavaScr
 
 ![An HTML output opened in the full-window view, with the Ask agent, Open agent, and View in Pointy buttons at the bottom right.](screenshots/light/output-file-external-view.png)
 
+When the step's output at the branch head differs from the one shown, the view says so, and once that output is built, **View newer revision** opens it. The chat in this view works with the step's current revision, so **Run** in a step mention builds the head, not the shown commit; when that build produces output, the view switches to it.
+
 Images open inline, and PDB output files have an interactive molecular viewer. Zip archives can be expanded like folders, so you can inspect their contents without downloading and unpacking the whole archive. The archive's download button still retrieves the zip file itself.
 
 ![The output files browser open on a fastqc step, showing chim_R1_fastqc.html previewed inline with its FastQC Report content visible alongside the other output files.](screenshots/light/output-files-html-preview.png)

@@ -7,7 +7,7 @@ import Api.ApiData exposing (ApiData(..), success)
 import Browser
 import Components.AgentPanel as AgentPanel
 import Components.StatusBar as StatusBar
-import Extra.Accessors exposing (orElseT)
+import Extra.Accessors exposing (orElseT, where_)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
@@ -16,7 +16,7 @@ import Html.Extra as Html
 import Html.Keyed
 import Json.Decode as Decode
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, currentProject, name, shownArtifactTitle, toasts)
+import Model.Lenses exposing (areaCapture, artifactComparison, artifactTableContent, artifactTableFor, currentProject, name, shownArtifactTitle, toasts)
 import Model.Lib as Lib
 import Organize
 import Route
@@ -140,7 +140,8 @@ viewArtifact model artifact =
                     []
             , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
-                [ Html.viewIf (not isTable)
+                [ Html.viewMaybe viewNewerRevisionNotice (newerArtifactRevision model artifact)
+                , Html.viewIf (not isTable)
                     (Html.button
                         [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
                         , Html.Attributes.type_ "button"
@@ -168,6 +169,41 @@ viewArtifact model artifact =
         , AgentPanel.viewLightbox model
         , viewToasts model
         ]
+
+
+newerArtifactRevision : Model -> Route.ArtifactParams -> Maybe { revision : String, built : Bool }
+newerArtifactRevision model artifact =
+    try (artifactComparison << just << where_ (\shown -> shown.stepId == artifact.stepId && shown.revision == artifact.commit)) model
+        |> Maybe.andThen
+            (\shown ->
+                case shown.comparison of
+                    Model.ViewedOutputUnbuilt ->
+                        Just { revision = shown.head, built = False }
+
+                    Model.DifferentContent ->
+                        Just { revision = shown.head, built = True }
+
+                    _ ->
+                        Nothing
+            )
+
+
+viewNewerRevisionNotice : { revision : String, built : Bool } -> Html (Flow Model ())
+viewNewerRevisionNotice { revision, built } =
+    Html.div [ Html.Attributes.class "artifact-viewer-revision-notice", Html.Attributes.attribute "role" "status" ]
+        (if built then
+            [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is built.")
+            , Html.button
+                [ Html.Attributes.class "artifact-viewer-revision-action"
+                , Html.Attributes.type_ "button"
+                , Html.Events.onClick (Actions.showArtifactRevision revision)
+                ]
+                [ Html.text "View newer revision" ]
+            ]
+
+         else
+            [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is not built yet.") ]
+        )
 
 
 view404 : Html (Flow Model ())

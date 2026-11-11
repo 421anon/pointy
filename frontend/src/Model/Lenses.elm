@@ -279,6 +279,11 @@ viewedRevision =
         (commitHash << orElseT success ApiData.reloading)
 
 
+stepArtifact : Int -> Traversal Model Route.ArtifactParams x y
+stepArtifact stepId =
+    route << Route.page << Route.artifact << where_ (.stepId >> (==) stepId)
+
+
 stepShownRevision : Int -> Traversal Model String x y
 stepShownRevision stepId =
     orElseT (stepRecordById stepId << runState << success << commit)
@@ -428,6 +433,11 @@ autocompleteDebounce =
 nextClientId : Lens ls Model Int x y
 nextClientId =
     lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })
+
+
+artifactComparison : Lens ls Model (Maybe Model.ArtifactComparison) x y
+artifactComparison =
+    lens ".artifactComparison" Model.getArtifactComparison (\(Model t) artifactComparison_ -> Model { t | artifactComparison = artifactComparison_ })
 
 
 folderExpanded : Lens ls { a | expanded : b } b x y

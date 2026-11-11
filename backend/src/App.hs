@@ -29,7 +29,7 @@ import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSr
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
 import Handlers.Statuses (restoreRunningStatuses)
 import Handlers.StepConfig (getStepConfigHandler)
-import Handlers.StepReview (getProjectReviewHandler, removeReviewHandler, reviewDiffHandler, reviewStepHandler)
+import Handlers.StepReview (getProjectReviewHandler, removeReviewHandler, reviewDiffHandler, reviewStepHandler, stepComparisonHandler)
 import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.ChatSearch (chatSearchHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
@@ -79,6 +79,7 @@ server =
         :<|> patchStepHandler
         :<|> postStepHandler
         :<|> getProjectReviewHandler
+        :<|> stepComparisonHandler
         :<|> reviewStepHandler
         :<|> removeReviewHandler
         :<|> reviewDiffHandler

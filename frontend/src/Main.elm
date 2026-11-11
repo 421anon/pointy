@@ -44,6 +44,7 @@ init flags url key =
     ( initialModel key initialRoute flags
     , Flow.async (Actions.applyAgentChatFromUrl True)
         |> Flow.seq initializeAgent
+        |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
         |> Flow.seq
             (case initialRoute.page of
                 Route.Artifact artifact ->
@@ -72,8 +73,7 @@ initializeAgent =
 
 initializeWorkspace : Flow Model ()
 initializeWorkspace =
-    Flow.async Actions.listenAndProcessStepStatus
-        |> Flow.seq (Flow.async Actions.loadTokenSession)
+    Flow.async Actions.loadTokenSession
         |> Flow.seq Actions.loadSearchInfo
         |> Flow.seq Actions.loadStepConfig
         |> Flow.seq Actions.loadPresets
@@ -211,6 +211,7 @@ applyRoute forceRevealHighlight newRoute =
                                         Route.Artifact artifact ->
                                             Actions.syncCompareFromRoute newRoute
                                                 |> Flow.seq (Flow.async (Actions.loadArtifactTable artifact))
+                                                |> Flow.seq (Flow.async (Actions.loadArtifactComparison artifact))
 
                                         Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute

@@ -24,6 +24,7 @@ module Api.Api exposing
     , fetchSrcDirectoryContents
     , fetchSrcFileContents
     , fetchSrcFileSeek
+    , fetchStepComparison
     , fetchStepConfig
     , fetchStepLog
     , fetchTokenSession
@@ -56,7 +57,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, PrefetchResponse, ProjectRecord, ProjectRollup, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
+import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, PrefetchResponse, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -205,6 +206,15 @@ fetchProjectReviews projectId commit =
         Http.get
             { url = appendCommitQuery ("/backend/project-review?project_id=" ++ String.fromInt projectId) (Just commit)
             , expect = Http.expectJson identity Decode.reviewReports
+            }
+
+
+fetchStepComparison : Int -> String -> String -> Flow s (Result Http.Error (Maybe ReviewComparison))
+fetchStepComparison stepId revision commit =
+    Flow.lift <|
+        Http.get
+            { url = UrlBuilder.absolute [ "backend", "step-comparison" ] [ UrlBuilder.int "id" stepId, UrlBuilder.string "revision" revision, UrlBuilder.string "commit" commit ]
+            , expect = Http.expectJson identity Decode.stepComparison
             }
 
 

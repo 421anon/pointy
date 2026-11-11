@@ -1947,6 +1947,31 @@ $delimited-grid-row-height: 28px;
   }
 }
 
+.artifact-viewer-revision-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-height: 36px;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  opacity: 0.88;
+}
+
+.artifact-viewer-revision-action {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 @media (max-width: 600px) {
   .artifact-viewer-action--agent {
     display: none;
