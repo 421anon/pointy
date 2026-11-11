@@ -57,6 +57,7 @@ renderEmbeddedRules memoryMax =
                , "Every bash command without an explicit `timeout` is stopped after 120 seconds and returns the output it produced so far. Set `timeout` in seconds when you expect a command to run longer, and expect a search through /nix/store, /data or the git history to be stopped at that limit: narrow it with a path, -maxdepth, or a name pattern instead of scanning everything."
                , "Use this sandbox to inspect files and to check logic on small inputs: a sample of reads, a `LIMIT`, one region of a BAM. Never run a full step workload here, such as an alignment, a merge, a DuckDB query over whole BAM or FASTQ files, or a script over a full dataset. Finish the step file instead, ask the user to run the step once your changeset is applied, and read its build log and outputs afterwards. A step run is a Slurm job that gets the memory and CPUs the step requests, such as a duckdb step's `memoryLimit`."
                , "Keep scratch files and DuckDB `temp_directory` under $HOME, not /tmp: /tmp is held in memory."
+               , "The user sees none of the files you read or write, images included. To show the user an image, such as a chart you made, call show_image with its path; it appears in the chat at that point of your reply. Never call an image shown, \"above\", or \"this chart\" unless show_image displayed it."
                ]
             ++ maybe [] memoryCapLines memoryMax
             ++ [ "Follow the Embedded agents only section in AGENTS.md."

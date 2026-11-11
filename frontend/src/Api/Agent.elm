@@ -18,6 +18,7 @@ module Api.Agent exposing
     , turnEvent
     )
 
+import Api.AgentPaths exposing (baseUrl)
 import Flow exposing (Flow)
 import Http
 import Iso8601
@@ -27,11 +28,6 @@ import Json.Encode as Encode
 import Maybe.Extra as Maybe
 import Model.Core as Model
 import Route
-
-
-baseUrl : String
-baseUrl =
-    "/backend/agent"
 
 
 createSession : Flow s (Result Http.Error Model.AgentSessionView)

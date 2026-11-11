@@ -32,6 +32,9 @@ module Agent.Session (
     turnMetadataPath,
     turnLogFilePath,
     turnImageFilePath,
+    turnShownImageFilePath,
+    storeShownImage,
+    shownImageMimeType,
     newTurnId,
     newSessionId,
     normalizeSessionName,
@@ -53,12 +56,13 @@ import Agent.TurnLog (readTurnLogFile)
 import Agent.TurnSignal (signalTurnLog)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar)
-import Control.Monad (filterM, unless)
+import Control.Monad (filterM, guard, mfilter, unless)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.ByteArray.Encoding (Base (..), convertFromBase)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Char (isAlphaNum, isAscii)
+import Data.Char (isAlphaNum, isAscii, isDigit)
+import Data.List (isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
@@ -70,7 +74,7 @@ import Data.Time.Clock (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory, renameFile)
-import System.FilePath (takeDirectory, takeFileName, (</>))
+import System.FilePath (dropExtension, takeDirectory, takeFileName, (</>))
 import System.IO (hClose, openBinaryTempFile)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Process (getProcessID)
@@ -391,6 +395,23 @@ turnImageFilePath :: Text -> Text -> Int -> IO FilePath
 turnImageFilePath sid tid index = do
     dir <- turnsDir sid
     return $ dir </> (T.unpack tid ++ "-image-" ++ show index)
+
+turnShownImageFilePath :: FilePath -> Text -> FilePath
+turnShownImageFilePath logPath fileName = dropExtension logPath ++ "-shown-" ++ T.unpack fileName
+
+storeShownImage :: FilePath -> TurnImage -> IO Text
+storeShownImage logPath image = do
+    let shownPrefix = takeFileName (turnShownImageFilePath logPath "")
+    index <- length . filter (shownPrefix `isPrefixOf`) <$> listDirectory (takeDirectory logPath)
+    let fileName = T.pack (show index) <> "." <> T.takeWhileEnd (/= '/') (turnImageMimeType image)
+    BS.writeFile (turnShownImageFilePath logPath fileName) (turnImageBytes image)
+    return fileName
+
+shownImageMimeType :: Text -> Maybe Text
+shownImageMimeType fileName = do
+    let (index, subtype) = T.breakOn "." fileName
+    guard (not (T.null index) && T.all isDigit index)
+    mfilter (`elem` turnImageMimeTypes) (Just ("image/" <> T.drop 1 subtype))
 
 newSessionId :: IO Text
 newSessionId = do

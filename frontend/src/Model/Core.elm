@@ -1,5 +1,6 @@
 module Model.Core exposing (..)
 
+import Api.AgentPaths as AgentPaths
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Array
 import Browser.Navigation
@@ -1396,6 +1397,14 @@ appendChatLine rawLine entries =
                 Err _ ->
                     entries
 
+        "image" ->
+            case Decode.decodeString shownImageUrlDecoder (String.trim body) of
+                Ok url ->
+                    appendToCurrentAssistant ("\n![Image shown by the agent](" ++ url ++ ")\n") entries
+
+                Err _ ->
+                    entries
+
         "agent" ->
             mapLastChatTurn (\last -> { last | agent = Just (String.trim body) }) entries
 
@@ -1404,6 +1413,13 @@ appendChatLine rawLine entries =
 
         _ ->
             entries
+
+
+shownImageUrlDecoder : Decode.Decoder String
+shownImageUrlDecoder =
+    Decode.map2 AgentPaths.shownImageUrl
+        (Decode.field "turnId" Decode.string)
+        (Decode.field "file" Decode.string)
 
 
 splitLogPrefix : String -> ( String, String )
@@ -1431,6 +1447,9 @@ splitLogPrefix line =
 
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )
+
+    else if String.startsWith "[image] " line then
+        ( "image", String.dropLeft 8 line )
 
     else if String.startsWith "[agent] " line then
         ( "agent", String.dropLeft 8 line )
