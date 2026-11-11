@@ -128,6 +128,8 @@ Listen for status snapshots, and use `GET /step-log?id=42&commit=<hash>` for a b
 
 Comparison values are `no-review`, `same-out-path`, `same-content`, `different-content`, `viewed-output-unbuilt`, `reviewed-output-unbuilt`, and `unresolvable`, decided in this order: no review; either side unresolvable; the reviewed output missing from the store; the same output path; the viewed output missing from the store; the same content; otherwise different content. Do not collapse missing outputs or evaluation failures into “different”.
 
+`GET /step-comparison?id=42&revision=<hash>&commit=<hash>` makes the same comparison for one step between any two revisions and returns `{ "comparison": …, "comparisonDetail": … }`: `revision` takes the reviewed side and `commit` the viewed side, so `viewed-output-unbuilt` means the output at `commit` is not in the store, and `no-review` never occurs. The artifact viewer uses it with the displayed commit as `revision` and the branch head as `commit`.
+
 `POST /step-review?id=42&commit=<viewed-hash>` takes:
 
 ```json

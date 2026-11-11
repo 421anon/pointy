@@ -435,9 +435,9 @@ nextClientId =
     lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })
 
 
-stepOutPaths : Lens ls Model (Dict ( Int, String ) String) x y
-stepOutPaths =
-    lens ".stepOutPaths" Model.getStepOutPaths (\(Model t) stepOutPaths_ -> Model { t | stepOutPaths = stepOutPaths_ })
+artifactComparison : Lens ls Model (Maybe Model.ArtifactComparison) x y
+artifactComparison =
+    lens ".artifactComparison" Model.getArtifactComparison (\(Model t) artifactComparison_ -> Model { t | artifactComparison = artifactComparison_ })
 
 
 folderExpanded : Lens ls { a | expanded : b } b x y

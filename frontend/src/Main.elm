@@ -48,7 +48,6 @@ init flags url key =
             (case initialRoute.page of
                 Route.Artifact artifact ->
                     Flow.async (Actions.loadArtifactTable artifact)
-                        |> Flow.seq (Flow.async (Actions.loadArtifactOutPaths artifact))
                         |> Flow.seq Actions.loadStepConfig
                         |> Flow.seq Actions.loadProjects
 
@@ -212,7 +211,7 @@ applyRoute forceRevealHighlight newRoute =
                                         Route.Artifact artifact ->
                                             Actions.syncCompareFromRoute newRoute
                                                 |> Flow.seq (Flow.async (Actions.loadArtifactTable artifact))
-                                                |> Flow.seq (Flow.async (Actions.loadArtifactOutPaths artifact))
+                                                |> Flow.seq (Flow.async (Actions.loadArtifactComparison artifact))
 
                                         Route.NotFound _ ->
                                             Actions.syncCompareFromRoute newRoute

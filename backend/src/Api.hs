@@ -17,7 +17,7 @@ import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StatusStream (EventStream)
-import Handlers.StepReview (ReviewRequest, StepReviewReport)
+import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (DirEntry, FileChunk)
@@ -59,14 +59,6 @@ type GetStepColdStatus =
         :> ReqId
         :> QueryParam "commit" Text
         :> Get '[JSON] ColdStatus
-
-type GetStepOutPath =
-    "step-files"
-        :> "out-path"
-        :> Description "Returns the store path of a step's output at a commit."
-        :> ReqId
-        :> QueryParam' '[Required, Strict] "commit" Text
-        :> Get '[PlainText] Text
 
 type PrefetchStepFile =
     "step-files"
@@ -401,6 +393,14 @@ type GetProjectReview =
         :> QueryParam "commit" Text
         :> Get '[JSON] (Map String StepReviewReport)
 
+type GetStepComparison =
+    "step-comparison"
+        :> Description "Compares a step's output at revision with its output at commit, with the outcomes of a review comparison: revision takes the reviewed side and commit the viewed side."
+        :> ReqId
+        :> QueryParam' '[Required, Strict] "revision" Text
+        :> QueryParam' '[Required, Strict] "commit" Text
+        :> Get '[JSON] StepComparison
+
 type ReviewStep =
     "step-review"
         :> Description "Records the viewed revision as a step's reviewed revision, together with who reviewed it and their comments, when there is no review or its output is unchanged. Returns whether the viewed output differs from the reviewed one."
@@ -543,7 +543,6 @@ type API =
         :<|> GetUserRepoInfo
         :<|> ListStepFiles
         :<|> GetStepColdStatus
-        :<|> GetStepOutPath
         :<|> PrefetchStepFile
         :<|> DownloadStepFile
         :<|> StepFileSeek
@@ -570,6 +569,7 @@ type API =
         :<|> UpdateStep
         :<|> CreateStep
         :<|> GetProjectReview
+        :<|> GetStepComparison
         :<|> ReviewStep
         :<|> RemoveReview
         :<|> ReviewDiff

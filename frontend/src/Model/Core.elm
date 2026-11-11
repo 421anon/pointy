@@ -241,6 +241,14 @@ type alias ReviewReport =
     }
 
 
+type alias ArtifactComparison =
+    { stepId : Int
+    , revision : String
+    , head : String
+    , comparison : ReviewComparison
+    }
+
+
 type alias ReviewDraft =
     { stepId : Int
     , reviewedBy : String
@@ -1821,7 +1829,7 @@ type Model
         , listingPreferences : ListingPreferences
         , route : Route
         , origin : String
-        , stepOutPaths : Dict ( Int, String ) String
+        , artifactComparison : Maybe ArtifactComparison
         , key : Browser.Navigation.Key
         , toasts : List (Toast (Flow Model ()))
         , nextToastId : Int
@@ -2235,9 +2243,9 @@ getNextClientId (Model model) =
     model.nextClientId
 
 
-getStepOutPaths : Model -> Dict ( Int, String ) String
-getStepOutPaths (Model model) =
-    model.stepOutPaths
+getArtifactComparison : Model -> Maybe ArtifactComparison
+getArtifactComparison (Model model) =
+    model.artifactComparison
 
 
 getStepConfig : Model -> ApiData StepConfig
@@ -2505,7 +2513,7 @@ initialModel key route flags =
         , listingPreferences = defaultListingPreferences
         , route = route
         , origin = flags.origin
-        , stepOutPaths = Dict.empty
+        , artifactComparison = Nothing
         , key = key
         , toasts = []
         , nextToastId = Maybe.unwrap 0 ((+) 1 << .id) (List.head storedToastHistory)

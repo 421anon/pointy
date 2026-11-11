@@ -29,7 +29,7 @@ import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Cold (ColdFile, ColdStatus, PrefetchResponse)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
-import Handlers.StepReview (ReviewRequest, StepReviewReport)
+import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
@@ -289,6 +289,10 @@ instance ToSchema AgentUsage
 instance ToSchema ReviewRequest where
     declareNamedSchema _ =
         pure $ objectSchema "ReviewRequest" [("reviewedBy", stringField), ("reviewComments", stringField)]
+
+instance ToSchema StepComparison where
+    declareNamedSchema _ =
+        pure $ objectSchema "StepComparison" [("comparison", stringField), ("comparisonDetail", stringField)]
 
 instance ToSchema StepReviewReport where
     declareNamedSchema _ =

@@ -504,7 +504,7 @@ applyLoadedProjects target result =
                             |> Flow.seq (Flow.async refreshProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
                             |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (flip requestProjectStatus Nothing << Route.pathProjectId << .projectPath))
-                            |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (Flow.async << loadArtifactOutPaths))
+                            |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (Flow.async << loadArtifactComparison))
                     )
 
         Err err ->
@@ -5005,22 +5005,26 @@ resyncWorkspace snapshotCommit =
         |> Flow.seq (Flow.forAll currentProjectId (\projectId -> requestProjectStatus projectId Nothing))
 
 
-loadArtifactOutPaths : Route.ArtifactParams -> Flow Model ()
-loadArtifactOutPaths artifact =
-    loadStepOutPath artifact.stepId artifact.commit
-        |> Flow.seq (Flow.forAll (commitHash << success) (loadStepOutPath artifact.stepId))
-
-
-loadStepOutPath : Int -> String -> Flow Model ()
-loadStepOutPath stepId revision =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.when (not (Dict.member ( stepId, revision ) (Model.getStepOutPaths model)))
-                    (Api.fetchStepOutPath stepId revision
-                        |> Flow.andThen (Result.toMaybe >> Maybe.unwrap (Flow.pure ()) (Flow.over stepOutPaths << Dict.insert ( stepId, revision )))
+loadArtifactComparison : Route.ArtifactParams -> Flow Model ()
+loadArtifactComparison artifact =
+    Flow.forAll (commitHash << success)
+        (\head ->
+            Api.fetchStepComparison artifact.stepId artifact.commit head
+                |> Flow.andThen
+                    (\result ->
+                        let
+                            mComparison =
+                                Maybe.join (Result.toMaybe result)
+                        in
+                        Flow.setAll artifactComparison (Maybe.map (Model.ArtifactComparison artifact.stepId artifact.commit head) mComparison)
+                            |> Flow.seq
+                                (Flow.when (mComparison == Just Model.ViewedOutputUnbuilt)
+                                    (registerStepStatusHook artifact.stepId
+                                        (Flow.whenHas (route << Route.page << Route.artifact << where_ ((==) artifact)) (always (loadArtifactComparison artifact)))
+                                    )
+                                )
                     )
-            )
+        )
 
 
 showArtifactRevision : String -> Flow Model ()
