@@ -16,7 +16,6 @@ module Handlers.Cold (
 ) where
 
 import Control.Monad (forM_, guard, when)
-import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, object, withObject, (.:), (.:?), (.=))
@@ -29,16 +28,13 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Effectful (UnliftStrategy (SeqUnlift), withEffToIO)
 import Effects (AppM, coldStorageConfigured, coldStoragePrefetch, coldStorageStatus)
 import GHC.Generics (Generic)
-import Handlers.StepOutput (resolveStepOutPath)
+import Handlers.StepOutput (resolveStepOutPath, stepOutPathAt)
 import NixStore (rootedPath)
 import Servant (ServerError (..), err409, err502, err503, throwError)
-import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
 import System.Directory (getSymbolicLinkTarget, pathIsSymbolicLink)
 import System.FilePath (joinPath, normalise, splitDirectories)
-import System.IO.Unsafe (unsafePerformIO)
 
 data ColdStatus = ColdStatus
     { cold :: Bool
@@ -188,17 +184,8 @@ datasetColdPaths dataset =
 emptyColdStatus :: ColdStatus
 emptyColdStatus = ColdStatus False False []
 
-{-# NOINLINE coldOutPaths #-}
-coldOutPaths :: SingleFlightCache (Int, Text) Text
-coldOutPaths = unsafePerformIO (newSingleFlightCache 256)
-
 coldOutPath :: Int -> Maybe Text -> AppM Text
-coldOutPath stepId mCommit = case mCommit of
-    Nothing -> resolveStepOutPath stepId Nothing
-    Just commit ->
-        ExceptT $
-            withEffToIO SeqUnlift $ \unlift ->
-                cachedSuccess coldOutPaths (stepId, commit) (unlift (runExceptT (resolveStepOutPath stepId (Just commit))))
+coldOutPath stepId = maybe (resolveStepOutPath stepId Nothing) (stepOutPathAt stepId)
 
 coldFilesFor :: Text -> AppM (Set Text)
 coldFilesFor storePath = do

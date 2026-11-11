@@ -34,6 +34,7 @@ import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.ChatSearch (chatSearchHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
+import Handlers.StepOutput (stepOutPathAt)
 import Handlers.Upload (uploadHandler)
 import Data.String (fromString)
 import Network.Wai (Application, Request, pathInfo)
@@ -53,6 +54,7 @@ server =
         :<|> getUserRepoInfoHandler
         :<|> stepListHandler
         :<|> coldStatusHandler
+        :<|> stepOutPathAt
         :<|> prefetchHandler
         :<|> stepDownloadHandler
         :<|> stepSeekHandler

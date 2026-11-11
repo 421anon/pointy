@@ -60,6 +60,14 @@ type GetStepColdStatus =
         :> QueryParam "commit" Text
         :> Get '[JSON] ColdStatus
 
+type GetStepOutPath =
+    "step-files"
+        :> "out-path"
+        :> Description "Returns the store path of a step's output at a commit."
+        :> ReqId
+        :> QueryParam' '[Required, Strict] "commit" Text
+        :> Get '[PlainText] Text
+
 type PrefetchStepFile =
     "step-files"
         :> "prefetch"
@@ -535,6 +543,7 @@ type API =
         :<|> GetUserRepoInfo
         :<|> ListStepFiles
         :<|> GetStepColdStatus
+        :<|> GetStepOutPath
         :<|> PrefetchStepFile
         :<|> DownloadStepFile
         :<|> StepFileSeek

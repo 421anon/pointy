@@ -8,6 +8,8 @@ description: "Read, upload, and edit files, fetch cold outputs and Turtle, and s
 
 `GET /step-files?id=…` and `GET /src-files?id=…` list a directory; `path` selects a relative subdirectory and `commit` pins the revision. Path traversal rules apply to every store-backed read, source files included: a normalised `path` with any `..` component, or one that does not stay inside the base, returns 400 `Path traversal not allowed`; a base outside `/nix/store/` returns 400 `Invalid store path`. An absolute `path` inside the output is accepted, and symlinks are followed wherever they point. Entries contain `name`, `isDir`, `size`, `viewable`, `seekable`, `mimeType`, and `cold`. Listings are unsorted and include dotfiles. A cold entry is not read while listing: its MIME type comes from the file extension, and its `viewable`/`seekable` flags from the recorded size. Zip files appear as expandable directories with a size and `application/zip` MIME type; append their internal paths to browse or download entries (seek inside a zip gives 404).
 
+`GET /step-files/out-path?id=…&commit=…` returns the store path of the step's output at that commit as plain text, whether or not it is built; a step that does not evaluate there gives 500. The artifact viewer compares these paths to tell whether the branch head has a different output from the one shown.
+
 Use these routes for file contents:
 
 | Route | Response |

@@ -7,7 +7,8 @@ import Api.ApiData exposing (ApiData(..), success)
 import Browser
 import Components.AgentPanel as AgentPanel
 import Components.StatusBar as StatusBar
-import Extra.Accessors exposing (orElseT, where_)
+import Dict
+import Extra.Accessors exposing (orElseT)
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes
@@ -16,7 +17,7 @@ import Html.Extra as Html
 import Html.Keyed
 import Json.Decode as Decode
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, artifactCertificate, artifactTableContent, artifactTableFor, currentProject, name, runState, shownArtifactTitle, stepRecordById, toasts)
+import Model.Lenses exposing (areaCapture, artifactTableContent, artifactTableFor, builtStepStatus, commitHash, currentProject, name, shownArtifactTitle, toasts)
 import Model.Lib as Lib
 import Organize
 import Route
@@ -173,12 +174,20 @@ viewArtifact model artifact =
 
 newerArtifactRevision : Model -> Route.ArtifactParams -> Maybe { revision : String, built : Bool }
 newerArtifactRevision model artifact =
-    try (artifactCertificate << just << where_ (\shown -> shown.stepId == artifact.stepId && shown.commit == artifact.commit)) model
-        |> Maybe.andThen
-            (\shown ->
-                try (stepRecordById artifact.stepId << runState << success << where_ (.certificate >> Maybe.map ((/=) shown.certificate) >> Maybe.withDefault False)) model
-            )
-        |> Maybe.map (\head -> { revision = head.commit, built = has (success << where_ Model.hasBuiltOutput) head.status })
+    let
+        outPathAt revision =
+            Dict.get ( artifact.stepId, revision ) (Model.getStepOutPaths model)
+    in
+    case ( try (commitHash << success) model, outPathAt artifact.commit ) of
+        ( Just head, Just shown ) ->
+            if outPathAt head /= Nothing && outPathAt head /= Just shown then
+                Just { revision = head, built = has (builtStepStatus artifact.stepId) model }
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
 
 
 viewNewerRevisionNotice : { revision : String, built : Bool } -> Html (Flow Model ())

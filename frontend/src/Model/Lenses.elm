@@ -284,11 +284,6 @@ stepArtifact stepId =
     route << Route.page << Route.artifact << where_ (.stepId >> (==) stepId)
 
 
-revisionArtifact : String -> Traversal Model Route.ArtifactParams x y
-revisionArtifact revision =
-    route << Route.page << Route.artifact << where_ (.commit >> (==) revision)
-
-
 stepShownRevision : Int -> Traversal Model String x y
 stepShownRevision stepId =
     orElseT (stepRecordById stepId << runState << success << commit)
@@ -440,9 +435,9 @@ nextClientId =
     lens ".nextClientId" Model.getNextClientId (\(Model t) nextClientId_ -> Model { t | nextClientId = nextClientId_ })
 
 
-artifactCertificate : Lens ls Model (Maybe Model.ArtifactCertificate) x y
-artifactCertificate =
-    lens ".artifactCertificate" Model.getArtifactCertificate (\(Model t) artifactCertificate_ -> Model { t | artifactCertificate = artifactCertificate_ })
+stepOutPaths : Lens ls Model (Dict ( Int, String ) String) x y
+stepOutPaths =
+    lens ".stepOutPaths" Model.getStepOutPaths (\(Model t) stepOutPaths_ -> Model { t | stepOutPaths = stepOutPaths_ })
 
 
 folderExpanded : Lens ls { a | expanded : b } b x y

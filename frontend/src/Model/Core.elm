@@ -1821,7 +1821,7 @@ type Model
         , listingPreferences : ListingPreferences
         , route : Route
         , origin : String
-        , artifactCertificate : Maybe ArtifactCertificate
+        , stepOutPaths : Dict ( Int, String ) String
         , key : Browser.Navigation.Key
         , toasts : List (Toast (Flow Model ()))
         , nextToastId : Int
@@ -2235,9 +2235,9 @@ getNextClientId (Model model) =
     model.nextClientId
 
 
-getArtifactCertificate : Model -> Maybe ArtifactCertificate
-getArtifactCertificate (Model model) =
-    model.artifactCertificate
+getStepOutPaths : Model -> Dict ( Int, String ) String
+getStepOutPaths (Model model) =
+    model.stepOutPaths
 
 
 getStepConfig : Model -> ApiData StepConfig
@@ -2488,13 +2488,6 @@ type AgentTurnEvent
     | AgentTurnError { sessionId : String, message : String }
 
 
-type alias ArtifactCertificate =
-    { stepId : Int
-    , commit : String
-    , certificate : String
-    }
-
-
 initialModel : Browser.Navigation.Key -> Route -> Flags -> Model
 initialModel key route flags =
     let
@@ -2512,7 +2505,7 @@ initialModel key route flags =
         , listingPreferences = defaultListingPreferences
         , route = route
         , origin = flags.origin
-        , artifactCertificate = Nothing
+        , stepOutPaths = Dict.empty
         , key = key
         , toasts = []
         , nextToastId = Maybe.unwrap 0 ((+) 1 << .id) (List.head storedToastHistory)

@@ -26,6 +26,7 @@ module Api.Api exposing
     , fetchSrcFileSeek
     , fetchStepConfig
     , fetchStepLog
+    , fetchStepOutPath
     , fetchTokenSession
     , fetchUserRepoInfo
     , postTreeOps
@@ -373,6 +374,15 @@ fetchCommitHash =
     Flow.lift <|
         Http.get
             { url = "/backend/commit-hash"
+            , expect = Http.expectString identity
+            }
+
+
+fetchStepOutPath : Int -> String -> Flow s (Result Http.Error String)
+fetchStepOutPath stepId commit =
+    Flow.lift <|
+        Http.get
+            { url = "/backend/step-files/out-path?id=" ++ String.fromInt stepId ++ "&commit=" ++ commit
             , expect = Http.expectString identity
             }
 

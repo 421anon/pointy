@@ -504,6 +504,7 @@ applyLoadedProjects target result =
                             |> Flow.seq (Flow.async refreshProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
                             |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (flip requestProjectStatus Nothing << Route.pathProjectId << .projectPath))
+                            |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (Flow.async << loadArtifactOutPaths))
                     )
 
         Err err ->
@@ -5004,21 +5005,22 @@ resyncWorkspace snapshotCommit =
         |> Flow.seq (Flow.forAll currentProjectId (\projectId -> requestProjectStatus projectId Nothing))
 
 
-requestArtifactStatus : Route.ArtifactParams -> Flow Model ()
-requestArtifactStatus artifact =
-    requestProjectStatus (Route.pathProjectId artifact.projectPath) (Just artifact.commit)
+loadArtifactOutPaths : Route.ArtifactParams -> Flow Model ()
+loadArtifactOutPaths artifact =
+    loadStepOutPath artifact.stepId artifact.commit
+        |> Flow.seq (Flow.forAll (commitHash << success) (loadStepOutPath artifact.stepId))
 
 
-recordArtifactCertificate : String -> List { step | stepId : Int, certificate : Maybe String } -> Flow Model ()
-recordArtifactCertificate snapshotCommit steps =
-    Flow.forAll (revisionArtifact snapshotCommit)
-        (\artifact ->
-            List.filter (.stepId >> (==) artifact.stepId) steps
-                |> List.filterMap .certificate
-                |> List.head
-                |> Maybe.unwrap (Flow.pure ())
-                    (\certificate -> Flow.setAll artifactCertificate (Just { stepId = artifact.stepId, commit = snapshotCommit, certificate = certificate }))
-        )
+loadStepOutPath : Int -> String -> Flow Model ()
+loadStepOutPath stepId revision =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                Flow.when (not (Dict.member ( stepId, revision ) (Model.getStepOutPaths model)))
+                    (Api.fetchStepOutPath stepId revision
+                        |> Flow.andThen (Result.toMaybe >> Maybe.unwrap (Flow.pure ()) (Flow.over stepOutPaths << Dict.insert ( stepId, revision )))
+                    )
+            )
 
 
 showArtifactRevision : String -> Flow Model ()
@@ -5051,7 +5053,6 @@ onStepStatusIn value =
                         Flow.when (headMovedRemotely model commit) (Flow.async (resyncWorkspace commit))
                             |> Flow.seq (bufferUnlistedStatuses model commit statuses)
                             |> Flow.seq (applyStepStatuses statuses)
-                            |> Flow.seq (recordArtifactCertificate commit steps)
                             |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async refreshProjectRollup))
                     )
 
@@ -5069,7 +5070,6 @@ headMovedRemotely : Model -> String -> Bool
 headMovedRemotely model snapshotCommit =
     has (commitHash << success << where_ ((/=) snapshotCommit)) model
         && not (isReadOnlyRoute model)
-        && not (has (revisionArtifact snapshotCommit) model)
 
 
 rollupAffectedFor : Model -> Dict Int Model.StatusReport -> Bool
