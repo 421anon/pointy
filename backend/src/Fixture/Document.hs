@@ -314,7 +314,7 @@ valueId _ = Nothing
 
 lastSegment :: String -> String
 lastSegment attr = case break (== '.') (reverse attr) of
-    (segment, _ : rest) -> reverse segment
+    (segment, _ : _) -> reverse segment
     (segment, []) -> reverse segment
 
 idsIn :: String -> [String]

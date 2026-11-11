@@ -4,7 +4,6 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text, pack)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Interpreters.Production (runProduction)
 import Servant (Handler, throwError)
 import Servant.Server (err500, errBody)
 import UserRepo (ReadRepoContext (..), withReadRepoTransactionIO)

@@ -15,6 +15,7 @@ import qualified Data.Aeson as A
 import Data.Aeson.Key (Key)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -68,7 +69,7 @@ consume :: Handle -> (Integer -> Integer -> IO ()) -> IO (Maybe IngestLine)
 consume handle reportProgress = go Nothing
   where
     go final = do
-        line <- try (BS.hGetLine handle)
+        line <- try (BSC.hGetLine handle)
         case line of
             Left (_ :: IOException) -> pure final
             Right bytes -> case parseIngestLine bytes of
@@ -93,6 +94,7 @@ fromValue (A.Object object_) = case KM.lookup "progress" object_ of
             <*> textField object_ "nar_hash"
             <*> integerField object_ "nar_size"
             <*> boolField object_ "references_source"
+fromValue _ = Nothing
 
 textField :: KM.KeyMap A.Value -> Key -> Maybe Text
 textField object_ key = case KM.lookup key object_ of

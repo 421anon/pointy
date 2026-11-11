@@ -7,10 +7,15 @@
   ];
 
   deps = { nixpkgs, ... }: {
-    inherit (nixpkgs) nodejs rsync;
+    nodejs = nixpkgs.nodejs.overrideAttrs (old: {
+      passthru = old.passthru // { src = nixpkgs.nodejs-slim.src; };
+    });
+    inherit (nixpkgs) rsync;
     elm = nixpkgs.elmPackages.elm;
     fetchElmDeps = nixpkgs.elmPackages.fetchElmDeps;
   };
+
+  nodejs-devshell-v3.nodeModules.deps.nodejs = config.deps.nodejs;
 
   name = "pointy-frontend";
   version = "1.0.0";

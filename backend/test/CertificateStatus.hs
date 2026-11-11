@@ -136,6 +136,8 @@ document :: FixtureDocument
 document =
     FixtureDocument
         { documentBranch = "main"
+        , documentAgent = Nothing
+        , documentColdStorage = Nothing
         , documentJson = Map.empty
         , documentRaw = Map.empty
         , documentPresets = Null

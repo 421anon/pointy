@@ -32,7 +32,7 @@ import Network.Wai (Application, responseLBS)
 import Certificates (withWriteRepoTransaction)
 import Servant (Header, Headers, NoContent (..), ServerError (..), Tagged (..), err400, err404, err409, err500, errBody, throwError)
 import qualified Servant.Types.SourceT as S
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, removeFile)
+import System.Directory (createDirectoryIfMissing, doesFileExist, doesPathExist, removeFile)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, (</>))
 import UserRepo (ReadRepoContext (..), WriteRepoContext (..), commitAndPushChanges, commitContext, runNixEvalJsonApplyInRepo, withReadRepoTransaction)
 

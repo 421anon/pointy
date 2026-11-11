@@ -10,7 +10,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Interpreters.Fixture (FixtureState, resetFixture)
+import Interpreters.Fixture (FixtureState)
 import Data.List (intercalate)
 import Network.HTTP.Types (Status, hContentType, status200, status404, status405, status500)
 import Network.Wai (Application, Request (..), Response, pathInfo, responseLBS)
@@ -18,7 +18,7 @@ import System.Directory (doesFileExist)
 import System.FilePath (takeExtension, (</>))
 
 fixtureApp :: FixtureState -> FilePath -> IO () -> Application -> Application
-fixtureApp state frontendDir reset backend request respond =
+fixtureApp _state frontendDir reset backend request respond =
     case (requestMethod request, pathInfo request) of
         ("POST", ["fixture", "reset"]) -> do
             outcome <- try reset

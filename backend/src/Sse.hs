@@ -2,7 +2,7 @@
 
 module Sse (broadcastLoop, heartbeatDelayMicros, sseComment, sseEvent) where
 
-import Control.Concurrent.STM (STM, TChan, atomically, orElse, readTChan, readTVar, registerDelay, retry, tryReadTChan)
+import Control.Concurrent.STM (TChan, atomically, orElse, readTChan, readTVar, registerDelay, retry, tryReadTChan)
 import Data.Aeson (encode, object)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -49,8 +49,8 @@ broadcastLoop render chan = do
             Just values ->
                 return $ foldr S.Yield loop (map (uncurry sseEvent . render) values)
 
-    drain chan = do
-        mItem <- tryReadTChan chan
+    drain queue = do
+        mItem <- tryReadTChan queue
         case mItem of
             Nothing -> return []
-            Just item -> (item :) <$> drain chan
+            Just item -> (item :) <$> drain queue

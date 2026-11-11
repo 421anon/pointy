@@ -28,7 +28,7 @@ import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:))
-import Data.List (foldl', isPrefixOf, nub, partition)
+import Data.List (isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
@@ -254,7 +254,7 @@ ensureRooted ctx sid target =
         let drv = stepTargetDrv candidate
         rooted <- rootDerivationForJob (unBuildKey (buildKeyForOutPath (stepTargetPath candidate))) drv
         case rooted of
-            Left error -> return (Left error)
+            Left err -> return (Left err)
             Right root -> do
                 stillValid <- pathValid drv
                 if stillValid

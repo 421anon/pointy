@@ -12,7 +12,6 @@ import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), Object, Result (..), ToJSON, Value (..), eitherDecode, encode, fromJSON, toJSON, withObject, (.:))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import Data.List (foldl')
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set

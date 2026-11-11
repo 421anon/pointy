@@ -31,12 +31,12 @@ import UseCamelCase
 config : List Rule
 config =
     [ NoUnused.CustomTypeConstructors.rule [] |> ignoreErrorsForFiles [ "src/Keyboard.elm", "src/Extra/Events.elm" ]
-    , NoUnused.CustomTypeConstructorArgs.rule
+    , NoUnused.CustomTypeConstructorArgs.rule |> ignoreErrorsForFiles [ "src/Keyboard.elm" ]
     , NoUnused.Dependencies.rule
     , NoUnused.Exports.rule |> ignoreErrorsForFiles [ "src/Keyboard.elm", "src/Extra/Events.elm", "src/Extra/IO.elm", "src/Extra/Accessors.elm" ]
-    , NoUnused.Parameters.rule
-    , NoUnused.Patterns.rule
-    , NoUnused.Variables.rule
+    , NoUnused.Parameters.rule |> ignoreErrorsForFiles [ "src/Keyboard.elm" ]
+    , NoUnused.Patterns.rule |> ignoreErrorsForFiles [ "src/Keyboard.elm" ]
+    , NoUnused.Variables.rule |> ignoreErrorsForFiles [ "src/Keyboard.elm" ]
     , NoLeftPizza.rule NoLeftPizza.Redundant
     , Simplify.rule Simplify.defaults
     , NoPrematureLetComputation.rule

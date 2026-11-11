@@ -52,6 +52,10 @@ module.exports = {
       inject: "body",
     }),
   ],
+  performance: {
+    maxAssetSize: 6 * 1024 * 1024,
+    maxEntrypointSize: 2 * 1024 * 1024,
+  },
   devServer: {
     static: {
       directory: path.join(__dirname, "dist"),

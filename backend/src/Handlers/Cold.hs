@@ -219,8 +219,8 @@ refuseColdFile storePath rel = do
         let coldFiles = either (const Set.empty) parseColdFiles result
             components = dropWhile (== "/") (splitDirectories (normalise rel))
             enclosing = [T.pack (joinPath (take n components)) | n <- [1 .. length components]]
-        forM_ (find (`Set.member` coldFiles) enclosing) $ \coldFile -> do
-            _ <- lift (coldStoragePrefetch datasetPath (T.unpack coldFile))
+        forM_ (find (`Set.member` coldFiles) enclosing) $ \coldPath -> do
+            _ <- lift (coldStoragePrefetch datasetPath (T.unpack coldPath))
             throwError err409{errBody = "This file is in cold storage. It is being fetched; try again once it is local."}
 
 coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus

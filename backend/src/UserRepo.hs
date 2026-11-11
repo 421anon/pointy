@@ -39,13 +39,12 @@ import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.ByteString (ByteString)
 import Data.List (isInfixOf)
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket, finally)
-import Effects (App, Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, runNixCli)
+import Effects (Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, runNixCli)
 import NixEvaluator (RepoSource (..))
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
@@ -53,7 +52,7 @@ import System.Exit (ExitCode (..))
 import System.FileLock (SharedExclusive (..))
 import qualified System.FileLock
 import System.FilePath ((</>))
-import System.IO.Temp (createTempDirectory, withSystemTempDirectory)
+import System.IO.Temp (createTempDirectory)
 import System.Posix.Process (getProcessID)
 import System.Process (
     CreateProcess (..),

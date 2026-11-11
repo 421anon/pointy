@@ -20,7 +20,7 @@ import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful (IOE, liftIO, (:>))
 import Search.Store (Corpus (..), CorpusSnapshot (..), SearchDocument (..))
 
 data ChatTranscript = ChatTranscript

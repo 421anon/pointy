@@ -4,7 +4,7 @@ module Main (main) where
 
 import Agent.Git (finalizeApplyResolution)
 import Agent.Session (AgentSession (..), PreparedApply (..))
-import Control.Monad (unless, void)
+import Control.Monad (void)
 import Control.Monad.Except (runExceptT)
 import Data.Text (Text)
 import qualified Data.Text as T

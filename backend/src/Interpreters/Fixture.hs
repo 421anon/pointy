@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
@@ -123,8 +124,8 @@ fixtureVector text =
 tokenComponent :: Text -> Int -> Float
 tokenComponent token index =
     let digest = hash (TE.encodeUtf8 (token <> ":" <> T.pack (show index))) :: Digest SHA256
-        bytes = BS.unpack (BS.take 2 (convert digest))
-     in case bytes of
+        digestBytes = BS.unpack (BS.take 2 (convert digest))
+     in case digestBytes of
             [a, b] -> fromIntegral (fromIntegral a * 256 + fromIntegral b :: Int) / 32768 - 1
             _ -> 0
 
@@ -145,7 +146,7 @@ runEvalFixture state = interpret $ \_ -> \case
 
 
 evalNixJson :: FixtureState -> String -> IO (Either String String)
-evalNixJson state expression = do
+evalNixJson _state expression = do
     (code, stdout, stderr) <- cli "nix" ["--extra-experimental-features", "nix-command", "eval", "--impure", "--json", "--expr", expression]
     pure $ case code of
         ExitSuccess -> Right stdout
@@ -198,7 +199,7 @@ answerNix document args = case args of
     logFor drv = do
         recorded <- logAnswer document drv
         pure $ case recorded of
-            Just log -> (ExitSuccess, bytes log, BS.empty)
+            Just buildLog -> (ExitSuccess, bytes buildLog, BS.empty)
             Nothing -> (ExitFailure 1, BS.empty, bytes ("fixture: no build log recorded for " ++ drv))
 
 storePathsAnswer :: String -> Map.Map FilePath [FilePath] -> FilePath -> (ExitCode, BS.ByteString, BS.ByteString)

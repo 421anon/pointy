@@ -2,7 +2,7 @@
 
 module Handlers.Zip (ZipItem(..), listZipDirectory, safeZipPath, readZipFile) where
 
-import Data.List (break, find, isPrefixOf)
+import Data.List (find, isPrefixOf)
 import Control.Exception (SomeException, evaluate, try)
 import Control.Monad (guard, when)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
@@ -18,7 +18,9 @@ data ZipItem = ZipItem { zipItemName :: FilePath, zipItemIsDirectory :: Bool, zi
 
 safeZipPath :: FilePath -> Maybe ([FilePath], Bool)
 safeZipPath path = do
-    guard $ not (null path) && head path /= pathSeparator && '\NUL' `notElem` path
+    guard $ case path of
+        initial : _ -> initial /= pathSeparator && '\NUL' `notElem` path
+        [] -> False
     let trailingSlash = last path == pathSeparator
         parts = splitOn pathSeparator path
         components = if trailingSlash then init parts else parts

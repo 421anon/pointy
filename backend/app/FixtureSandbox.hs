@@ -16,12 +16,11 @@ main = do
     hSetBuffering stdout LineBuffering
     arguments <- getArgs
     case break (== "--") arguments of
-        (_, []) -> exitFailure
         (_, _ : command : commandArguments) ->
             case command of
                 "pi-glovebox-server" -> serve commandArguments
                 _ -> executeFile command True commandArguments Nothing
-        (_, ["--"]) -> exitFailure
+        _ -> exitFailure
 
 serve :: [String] -> IO ()
 serve (socketPath : _) = do

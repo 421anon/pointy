@@ -52,7 +52,7 @@ module Effects (
 ) where
 
 import Control.Exception (IOException, displayException, try)
-import Control.Monad.Except (ExceptT, MonadError, mapExceptT)
+import Control.Monad.Except (ExceptT, mapExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import Data.Map.Strict (Map)
@@ -63,7 +63,7 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getHomeDi
 import System.Exit (ExitCode)
 import System.FilePath (takeFileName, (</>))
 import System.IO (hClose, openTempFile)
-import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, MonadIO, type (:>))
+import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (send)
 import Ingest (IngestResult)
 import NixEvaluator (RepoSource)
@@ -178,14 +178,14 @@ rootDerivationForJob :: (Nix :> es, IOE :> es) => String -> FilePath -> Eff es (
 rootDerivationForJob jobName drvPath = do
     created <- liftIO $ try @IOException $ newDerivationGcRootPath jobName
     case created of
-        Left error ->
-            return $ Left ("Could not create a GC root for " ++ drvPath ++ ": " ++ displayException error)
+        Left err ->
+            return $ Left ("Could not create a GC root for " ++ drvPath ++ ": " ++ displayException err)
         Right gcRootPath -> do
             result <- registerDerivationRoot gcRootPath drvPath
             case result of
-                Left error -> do
+                Left err -> do
                     liftIO $ ignoreMissing $ removeFile gcRootPath
-                    return (Left error)
+                    return (Left err)
                 Right () -> return (Right gcRootPath)
 
 unrootDerivationRoot :: (IOE :> es) => FilePath -> Eff es ()

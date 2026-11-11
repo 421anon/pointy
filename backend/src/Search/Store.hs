@@ -69,10 +69,7 @@ data Corpus es key = Corpus
     , corpusSnapshot :: Eff es (Either String (CorpusSnapshot es key))
     }
 
-data IndexKey = IndexKey
-    { keyVersion :: Text
-    , keyNamespace :: Text
-    }
+data IndexKey = IndexKey Text Text
     deriving (Eq)
 
 data IndexedDocument = IndexedDocument
@@ -188,7 +185,8 @@ buildIndex store corpus searchConfig key snapshot = do
             let embedding = searchEmbedding searchConfig
                 indexed = Map.fromList [(documentKey document, indexDocument document) | document <- documents]
                 texts = Map.fromList [(indexedHash document, renderTemplate "{document}" (embeddingDocumentTemplate embedding) (indexedText document)) | document <- Map.elems indexed]
-            cachePath <- liftIO (vectorCachePath (corpusVectorDirectory corpus) (keyNamespace key))
+            let IndexKey _ namespace = key
+            cachePath <- liftIO (vectorCachePath (corpusVectorDirectory corpus) namespace)
             stored <- liftIO (loadVectors cachePath)
             let known = Map.restrictKeys stored (Map.keysSet texts)
                 missing = Map.toList (Map.withoutKeys texts (Map.keysSet known))

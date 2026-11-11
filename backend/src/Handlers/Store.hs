@@ -201,6 +201,7 @@ resolveZipPath basePath rel = do
                         else findZipPrefix comps (k + 1)
                 else findZipPrefix comps (k + 1)
 
+zipItemToDirEntry :: Zip.ZipItem -> DirEntry
 zipItemToDirEntry item
     | Zip.zipItemIsDirectory item = DirEntry itemName True 0 False False Nothing False
     | otherwise = DirEntry itemName False itemSize viewable' False mime False

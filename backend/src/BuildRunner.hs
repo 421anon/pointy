@@ -36,7 +36,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), decode, encode, object, withObjec
 import Data.Bits (xor)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.Char (isAlphaNum, isDigit)
-import Data.List (foldl', isSuffixOf, stripPrefix)
+import Data.List (isSuffixOf, stripPrefix)
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
