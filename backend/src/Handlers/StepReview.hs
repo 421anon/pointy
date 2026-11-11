@@ -105,9 +105,7 @@ instance ToJSON StepReviewReport where
 newtype StepComparison = StepComparison ReviewComparison
 
 instance ToJSON StepComparison where
-    toJSON (StepComparison comparison) =
-        let (comparisonText, detail) = comparisonCode comparison
-         in object ["comparison" .= comparisonText, "comparisonDetail" .= detail]
+    toJSON (StepComparison comparison) = object ["comparison" .= fst (comparisonCode comparison)]
 
 comparisonCode :: ReviewComparison -> (Text, Maybe Text)
 comparisonCode = \case

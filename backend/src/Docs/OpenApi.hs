@@ -292,7 +292,7 @@ instance ToSchema ReviewRequest where
 
 instance ToSchema StepComparison where
     declareNamedSchema _ =
-        pure $ objectSchema "StepComparison" [("comparison", stringField), ("comparisonDetail", stringField)]
+        pure $ objectSchema "StepComparison" [("comparison", stringField)]
 
 instance ToSchema StepReviewReport where
     declareNamedSchema _ =

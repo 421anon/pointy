@@ -503,8 +503,13 @@ applyLoadedProjects target result =
                             |> Flow.seq (Flow.async replayStepStatusBuffer)
                             |> Flow.seq (Flow.async refreshProjectRollup)
                             |> Flow.seq (Flow.async loadProjectReviews)
-                            |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (flip requestProjectStatus Nothing << Route.pathProjectId << .projectPath))
-                            |> Flow.seq (Flow.whenHas (route << Route.page << Route.artifact) (Flow.async << loadArtifactComparison))
+                            |> Flow.seq
+                                (Flow.whenHas (route << Route.page << Route.artifact)
+                                    (\artifact ->
+                                        Flow.async (loadArtifactComparison artifact)
+                                            |> Flow.seq (requestProjectStatus (Route.pathProjectId artifact.projectPath) Nothing)
+                                    )
+                                )
                     )
 
         Err err ->
@@ -1683,30 +1688,33 @@ runStep spec id =
     Flow.get
         |> Flow.andThen
             (\model ->
+                let
+                    quotedName =
+                        Maybe.unwrap "" (\stepName -> " '" ++ stepName ++ "'") (try (stepRecordById id << name) model)
+                in
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
                     |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
                     |> Flow.seq (Flow.get |> Flow.andThen (clearStepLog id << stepRevisionById id))
                     |> Flow.seq (Flow.over pendingStops (Set.remove id))
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
-                    |> Flow.seq (Flow.whenHas (stepArtifact id) (\_ -> addToast True ("Building step " ++ String.fromInt id ++ "…")))
+                    |> Flow.seq (Flow.whenHas (stepArtifact id) (\_ -> addToast True ("Building step" ++ quotedName ++ "…")))
                     |> Flow.seq
-                        (registerStepStatusHook id
-                            (Flow.forAll (stepRecordById id << runState << success << status << success << where_ ((==) StatusSuccess))
-                                (\_ ->
-                                    addToast True
-                                        (case try (stepRecordById id << name) model of
-                                            Just stepName ->
-                                                "Step '" ++ stepName ++ "' completed"
-
-                                            Nothing ->
-                                                "Step completed"
+                        (Flow.get
+                            |> Flow.andThen
+                                (\current ->
+                                    let
+                                        revision =
+                                            stepRevisionById id current
+                                    in
+                                    registerStepStatusHook id
+                                        (Flow.forAll (stepRecordById id << runState << success << status << success << where_ ((==) StatusSuccess))
+                                            (\_ -> addToast True ("Step" ++ quotedName ++ " completed"))
+                                            |> Flow.seq (Maybe.unwrap (Flow.pure ()) (showBuiltArtifactRevision id) revision)
                                         )
+                                        |> Flow.seq (callApi void (Api.runStep id revision))
                                 )
-                                |> Flow.seq (showBuiltArtifactRevision id)
-                            )
                         )
-                    |> Flow.seq (Flow.get |> Flow.andThen (callApi void << Api.runStep id << stepRevisionById id))
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
@@ -5009,21 +5017,25 @@ loadArtifactComparison : Route.ArtifactParams -> Flow Model ()
 loadArtifactComparison artifact =
     Flow.forAll (commitHash << success)
         (\head ->
-            Api.fetchStepComparison artifact.stepId artifact.commit head
-                |> Flow.andThen
-                    (\result ->
-                        let
-                            mComparison =
-                                Maybe.join (Result.toMaybe result)
-                        in
-                        Flow.setAll artifactComparison (Maybe.map (Model.ArtifactComparison artifact.stepId artifact.commit head) mComparison)
-                            |> Flow.seq
-                                (Flow.when (mComparison == Just Model.ViewedOutputUnbuilt)
-                                    (registerStepStatusHook artifact.stepId
-                                        (Flow.whenHas (route << Route.page << Route.artifact << where_ ((==) artifact)) (always (loadArtifactComparison artifact)))
+            if head == artifact.commit then
+                Flow.setAll artifactComparison Nothing
+
+            else
+                Api.fetchStepComparison artifact.stepId artifact.commit head
+                    |> Flow.andThen
+                        (\result ->
+                            let
+                                mComparison =
+                                    Maybe.join (Result.toMaybe result)
+                            in
+                            Flow.setAll artifactComparison (Maybe.map (Model.ArtifactComparison artifact.stepId artifact.commit head) mComparison)
+                                |> Flow.seq
+                                    (Flow.when (mComparison == Just Model.ViewedOutputUnbuilt)
+                                        (registerStepStatusHook artifact.stepId
+                                            (Flow.whenHas (route << Route.page << Route.artifact << where_ ((==) artifact)) (always (Flow.async (loadArtifactComparison artifact))))
+                                        )
                                     )
-                                )
-                    )
+                        )
         )
 
 
@@ -5032,10 +5044,10 @@ showArtifactRevision revision =
     Flow.forAll route (set (Route.page << Route.artifact << commit) revision >> goToRoute)
 
 
-showBuiltArtifactRevision : Int -> Flow Model ()
-showBuiltArtifactRevision stepId =
-    Flow.forAll (stepArtifact stepId)
-        (\artifact -> Flow.forAll (stepRecordById stepId << runState << success << commit << where_ ((/=) artifact.commit)) showArtifactRevision)
+showBuiltArtifactRevision : Int -> String -> Flow Model ()
+showBuiltArtifactRevision stepId revision =
+    Flow.whenHas (stepArtifact stepId << where_ (.commit >> (/=) revision))
+        (\_ -> Flow.whenHas (stepRecordById stepId << runState << success << commit << where_ ((==) revision)) (\_ -> showArtifactRevision revision))
 
 
 listenAndProcessStepStatus : Flow Model Never

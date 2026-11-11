@@ -366,20 +366,9 @@ reviewComparison comparison detail =
 
 stepComparison : Decoder (Maybe Model.ReviewComparison)
 stepComparison =
-    Decode.succeed reviewComparison
-        |> required "comparison" Decode.string
-        |> optional "comparisonDetail" (maybe Decode.string) Nothing
-        |> Decode.andThen identity
-        |> Decode.map
-            (\outcome ->
-                case outcome of
-                    Just (Success comparison) ->
-                        Just comparison
-
-                    _ ->
-                        Nothing
-            )
-
+    Decode.field "comparison" Decode.string
+        |> Decode.andThen (\comparison -> reviewComparison comparison Nothing)
+        |> Decode.map (Maybe.andThen Api.ApiData.toMaybe)
 
 
 reviewReport : Decoder Model.ReviewReport

@@ -44,6 +44,7 @@ init flags url key =
     ( initialModel key initialRoute flags
     , Flow.async (Actions.applyAgentChatFromUrl True)
         |> Flow.seq initializeAgent
+        |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
         |> Flow.seq
             (case initialRoute.page of
                 Route.Artifact artifact ->
@@ -67,7 +68,6 @@ initializeAgent : Flow Model ()
 initializeAgent =
     Flow.async Actions.reattachSubmittedTurns
         |> Flow.seq (Flow.async Actions.listenAndProcessAgentTurns)
-        |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
         |> Flow.seq (Flow.async Actions.loadUserRepoInfo)
 
 
