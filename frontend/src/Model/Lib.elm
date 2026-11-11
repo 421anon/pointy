@@ -469,4 +469,4 @@ lastKnownWorkspace : Model -> Model
 lastKnownWorkspace model =
     over stepConfig ApiData.stopLoading model
         |> over presets ApiData.stopLoading
-        |> over projects ApiData.stopLoading
+        |> Model.stopProjectsLoading

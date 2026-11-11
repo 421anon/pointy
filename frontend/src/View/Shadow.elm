@@ -31,7 +31,7 @@ import Time exposing (Posix)
 import Time.Distance
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (icon, iconCustom)
-import View.Lib exposing (viewPage, viewSearchBox)
+import View.Lib exposing (isPopoverOpen, popoverToggleTracking, viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
 import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordLogPopover, viewStepRecordStatus, viewUploadProgress)
 
@@ -294,29 +294,18 @@ viewReviewPopover model spec stepId record =
         isReviewed =
             Maybe.isJust record.review
 
-        status =
-            TableSpec.getStatus spec record
-
         isBuilt =
-            ApiData.toMaybe status == Just Model.StatusSuccess
-
-        canRecord =
-            Maybe.unwrap (status == ApiData.Success Model.StatusSuccess) (\reviewed -> List.member (ApiData.toMaybe reviewed.comparison) [ Just Model.SameContent, Just Model.SameOutPath ]) record.review
-
-        draft =
-            Model.getReviewDraft model
-                |> Maybe.filter (.stepId >> (==) stepId)
-                |> Maybe.withDefault { stepId = stepId, reviewedBy = Maybe.unwrap "" .reviewedBy record.review, comments = Maybe.unwrap "" .comments record.review }
+            ApiData.toMaybe (TableSpec.getStatus spec record) == Just Model.StatusSuccess
 
         popoverId =
             "step-review-popover-" ++ TableSpec.getName spec ++ "-" ++ String.fromInt stepId
 
-        ( title, submitLabel ) =
+        title =
             if isReviewed then
-                ( "Review of step " ++ String.fromInt stepId, "Update review" )
+                "Review of step " ++ String.fromInt stepId
 
             else
-                ( "Review step " ++ String.fromInt stepId, "Review step" )
+                "Review step " ++ String.fromInt stepId
 
         trigger =
             Html.button
@@ -330,6 +319,52 @@ viewReviewPopover model spec stepId record =
                 , Html.span [ Html.Attributes.class "icon-btn-text" ] [ Html.text title ]
                 ]
 
+        popover =
+            Html.div
+                [ Html.Attributes.class "step-review-popover row-popover"
+                , Html.Attributes.id popoverId
+                , Html.Attributes.attribute "popover" "auto"
+                , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
+                , popoverToggleTracking popoverId
+                ]
+                (if isPopoverOpen model popoverId then
+                    viewReviewPopoverContent model spec stepId record { popoverId = popoverId, title = title }
+
+                 else
+                    []
+                )
+    in
+    if not (isReviewed || isBuilt) then
+        Nothing
+
+    else
+        Just { trigger = trigger, popover = popover }
+
+
+viewReviewPopoverContent : Model -> TableSpec StepRecord -> Int -> StepRecord -> { popoverId : String, title : String } -> List (Html (Flow Model ()))
+viewReviewPopoverContent model spec stepId record { popoverId, title } =
+    let
+        isReviewed =
+            Maybe.isJust record.review
+
+        status =
+            TableSpec.getStatus spec record
+
+        canRecord =
+            Maybe.unwrap (status == ApiData.Success Model.StatusSuccess) (\reviewed -> List.member (ApiData.toMaybe reviewed.comparison) [ Just Model.SameContent, Just Model.SameOutPath ]) record.review
+
+        draft =
+            Model.getReviewDraft model
+                |> Maybe.filter (.stepId >> (==) stepId)
+                |> Maybe.withDefault { stepId = stepId, reviewedBy = Maybe.unwrap "" .reviewedBy record.review, comments = Maybe.unwrap "" .comments record.review }
+
+        submitLabel =
+            if isReviewed then
+                "Update review"
+
+            else
+                "Review step"
+
         field labelText control =
             Html.label [ Html.Attributes.class "step-review-field" ]
                 [ Html.span [] [ Html.text labelText ], control ]
@@ -341,68 +376,55 @@ viewReviewPopover model spec stepId record =
         blockedNote =
             Html.viewMaybe (\reason -> Html.p [ Html.Attributes.class "step-review-note" ] [ Html.text reason ])
                 (Maybe.andThen (.comparison >> blockedReason) (Maybe.filter (always (not canRecord)) record.review))
-
-        popover =
-            Html.div
-                [ Html.Attributes.class "step-review-popover row-popover"
-                , Html.Attributes.id popoverId
-                , Html.Attributes.attribute "popover" "auto"
-                , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
-                ]
-                [ Html.div [ Html.Attributes.class "step-review-popover-header" ]
-                    [ Html.strong [] [ Html.text title ]
-                    , Html.button
-                        [ Html.Attributes.class "icon-btn"
-                        , Html.Attributes.title "Close"
-                        , Html.Events.onClick (Actions.hidePopover popoverId)
-                        ]
-                        [ iconCustom True "close" [] ]
-                    ]
-                , Html.div [ Html.Attributes.class "step-review-popover-body" ]
-                    [ blockedNote
-                    , field "Reviewed by" <|
-                        Html.input
-                            [ Html.Attributes.class "step-review-input"
-                            , Html.Attributes.type_ "text"
-                            , Html.Attributes.value draft.reviewedBy
-                            , Html.Attributes.readonly (not canRecord)
-                            , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | reviewedBy = value })
-                            , Html.Events.on "keydown" (Keyboard.decodeCombinations [ ( Keyboard.enter, Decode.succeed submit ) ])
-                            ]
-                            []
-                    , field "Comments" <|
-                        Html.textarea
-                            [ Html.Attributes.class "step-review-comments"
-                            , Html.Attributes.placeholder "Optional"
-                            , Html.Attributes.rows 4
-                            , Html.Attributes.value draft.comments
-                            , Html.Attributes.readonly (not canRecord)
-                            , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | comments = value })
-                            ]
-                            []
-                    , Html.div [ Html.Attributes.class "step-review-popover-actions" ]
-                        [ Html.viewIf canRecord <|
-                            Html.button
-                                [ Html.Attributes.class "btn"
-                                , Html.Attributes.disabled (String.trim draft.reviewedBy == "")
-                                , Html.Events.onClick submit
-                                ]
-                                [ Html.text submitLabel ]
-                        , Html.viewIf isReviewed <|
-                            Html.button
-                                [ Html.Attributes.class "btn btn-danger"
-                                , Html.Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.removeReview stepId))
-                                ]
-                                [ Html.text "Remove review" ]
-                        ]
-                    ]
-                ]
     in
-    if not (isReviewed || isBuilt) then
-        Nothing
-
-    else
-        Just { trigger = trigger, popover = popover }
+    [ Html.div [ Html.Attributes.class "step-review-popover-header" ]
+        [ Html.strong [] [ Html.text title ]
+        , Html.button
+            [ Html.Attributes.class "icon-btn"
+            , Html.Attributes.title "Close"
+            , Html.Events.onClick (Actions.hidePopover popoverId)
+            ]
+            [ iconCustom True "close" [] ]
+        ]
+    , Html.div [ Html.Attributes.class "step-review-popover-body" ]
+        [ blockedNote
+        , field "Reviewed by" <|
+            Html.input
+                [ Html.Attributes.class "step-review-input"
+                , Html.Attributes.type_ "text"
+                , Html.Attributes.value draft.reviewedBy
+                , Html.Attributes.readonly (not canRecord)
+                , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | reviewedBy = value })
+                , Html.Events.on "keydown" (Keyboard.decodeCombinations [ ( Keyboard.enter, Decode.succeed submit ) ])
+                ]
+                []
+        , field "Comments" <|
+            Html.textarea
+                [ Html.Attributes.class "step-review-comments"
+                , Html.Attributes.placeholder "Optional"
+                , Html.Attributes.rows 4
+                , Html.Attributes.value draft.comments
+                , Html.Attributes.readonly (not canRecord)
+                , Html.Events.onInput (\value -> Actions.setReviewDraft { draft | comments = value })
+                ]
+                []
+        , Html.div [ Html.Attributes.class "step-review-popover-actions" ]
+            [ Html.viewIf canRecord <|
+                Html.button
+                    [ Html.Attributes.class "btn"
+                    , Html.Attributes.disabled (String.trim draft.reviewedBy == "")
+                    , Html.Events.onClick submit
+                    ]
+                    [ Html.text submitLabel ]
+            , Html.viewIf isReviewed <|
+                Html.button
+                    [ Html.Attributes.class "btn btn-danger"
+                    , Html.Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.removeReview stepId))
+                    ]
+                    [ Html.text "Remove review" ]
+            ]
+        ]
+    ]
 
 
 viewProject : Model -> Dict Int ProjectRecord -> ProjectRecord -> Html (Flow Model ())

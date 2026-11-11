@@ -230,15 +230,16 @@ derivationParamsFor model sel =
 
 viewInlineParams : Model -> CompareSelection -> Bool -> Maybe ( StepRecord, List Field ) -> Html (Flow Model ())
 viewInlineParams model sel inspectOpen mParams =
-    Html.viewIf inspectOpen <|
-        Html.viewMaybe
-            (\( step, fields ) ->
-                Html.div [ class "compare-params" ]
-                    [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
-                    , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model step.args fields)
-                    ]
-            )
-            mParams
+    Html.viewIfLazy inspectOpen <|
+        \() ->
+            Html.viewMaybe
+                (\( step, fields ) ->
+                    Html.div [ class "compare-params" ]
+                        [ Html.div [ class "compare-params-label" ] [ Html.text "Parameters" ]
+                        , Html.div [ class "compare-params-form" ] (viewNote step.note ++ viewNamedArgs model step.args fields)
+                        ]
+                )
+                mParams
 
 
 viewNote : String -> List (Html (Flow Model ()))

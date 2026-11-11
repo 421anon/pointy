@@ -861,6 +861,11 @@ reviewDraft =
     lens ".reviewDraft" Model.getReviewDraft (\(Model m) draft -> Model { m | reviewDraft = draft })
 
 
+openPopover : Lens ls Model (Maybe String) x y
+openPopover =
+    lens ".openPopover" Model.getOpenPopover (\(Model m) popoverId -> Model { m | openPopover = popoverId })
+
+
 gutterDrag : Lens ls Model (Maybe Model.GutterDrag) x y
 gutterDrag =
     lens ".gutterDrag" Model.getGutterDrag (\(Model m) drag -> Model { m | gutterDrag = drag })

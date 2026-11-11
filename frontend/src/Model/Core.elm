@@ -1849,6 +1849,7 @@ type Model
         , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
         , reviewDraft : Maybe ReviewDraft
+        , openPopover : Maybe String
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
         , organizeQueue : OrganizeQueue
@@ -2067,6 +2068,11 @@ setProjects projects (Model model) =
             | projects = projects
             , projectIndex = indexProjects (ApiData.toMaybe projects |> Maybe.withDefault Dict.empty)
         }
+
+
+stopProjectsLoading : Model -> Model
+stopProjectsLoading (Model model) =
+    Model { model | projects = ApiData.stopLoading model.projects }
 
 
 getSteps : Model -> Dict Int StepRecord
@@ -2527,6 +2533,7 @@ initialModel key route flags =
         , pendingStops = Set.empty
         , openDiff = Nothing
         , reviewDraft = Nothing
+        , openPopover = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , organizeQueue = noOrganizeQueue
@@ -3466,6 +3473,11 @@ getModalConfirm (Model model) =
 getReviewDraft : Model -> Maybe ReviewDraft
 getReviewDraft (Model model) =
     model.reviewDraft
+
+
+getOpenPopover : Model -> Maybe String
+getOpenPopover (Model model) =
+    model.openPopover
 
 
 getSearchBox : Model -> SelectState ChildRef
