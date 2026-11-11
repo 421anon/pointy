@@ -17,6 +17,7 @@ module Handlers.Agent (
     turnLogStreamHandler,
     compactSessionHandler,
     turnImageHandler,
+    turnShownImageHandler,
     applyChangesHandler,
     autoApplyHandler,
     discardSessionHandler,
@@ -40,7 +41,7 @@ import Agent.Git (
  )
 import Agent.Policy (renderViewedArtifact)
 import Agent.Runner (applySessionChanges, compactAgentSession, setRunningAutoApply, startAgentTurn, steerAgentTurn, stopAgentTurn, turnLogStreamHandler)
-import Agent.Session (AgentSessionSummary, AgentTurn (..), AreaCapture, TurnImage, ViewedArtifact (..), findTurn, turnImageFilePath)
+import Agent.Session (AgentSessionSummary, AgentTurn (..), AreaCapture, TurnImage, ViewedArtifact (..), findTurn, shownImageMimeType, turnImageFilePath, turnShownImageFilePath)
 import Control.Lens ((^?), _Right)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -58,6 +59,7 @@ import Interpreters.Production (runProduction)
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, responseFile, responseLBS)
 import Servant (Handler, NoContent (..), Tagged (..), err400, err404, err409, err500, errBody, throwError)
+import System.Directory (doesFileExist)
 import UserRepo (withUserRepoExclusiveIO, withUserRepoSharedIO)
 
 data TurnRequest = TurnRequest
@@ -160,6 +162,19 @@ turnImageHandler tid index = Tagged $ \_ respond -> do
         Just (sid, mimeType) -> do
             path <- turnImageFilePath sid tid index
             respond (responseFile status200 [(hContentType, TE.encodeUtf8 mimeType)] path Nothing)
+
+turnShownImageHandler :: Text -> Text -> Tagged AppM Application
+turnShownImageHandler tid fileName = Tagged $ \_ respond -> do
+    mTurn <- findTurn tid
+    let notFound = respond (responseLBS status404 [] "image not found")
+    case (mTurn, shownImageMimeType fileName) of
+        (Just turn, Just mimeType) -> do
+            let path = turnShownImageFilePath (turnLogPath turn) fileName
+            stored <- doesFileExist path
+            if stored
+                then respond (responseFile status200 [(hContentType, TE.encodeUtf8 mimeType)] path Nothing)
+                else notFound
+        _ -> notFound
 
 stopTurnHandler :: SessionRequest -> Handler AgentSessionView
 stopTurnHandler req =

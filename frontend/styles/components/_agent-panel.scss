@@ -1406,6 +1406,14 @@
   text-align: right;
 }
 
+.agent-panel__chat-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line-color);
+  border-radius: var(--radius-sm);
+}
+
 .agent-panel__mention {
   display: inline-flex;
   align-items: stretch;

@@ -475,6 +475,15 @@ type AgentTurnImage =
         :> Description "Serves an image the user sent with an agent turn."
         :> Raw
 
+type AgentTurnShownImage =
+    "agent"
+        :> "turn"
+        :> Capture "id" Text
+        :> "shown-image"
+        :> Capture "file" Text
+        :> Description "Serves an image the agent showed the user during a turn."
+        :> Raw
+
 type StepSearchInfoEndpoint =
     "step-search"
         :> "info"
@@ -575,6 +584,7 @@ type API =
         :<|> CompactSession
         :<|> AgentTurnStream
         :<|> AgentTurnImage
+        :<|> AgentTurnShownImage
         :<|> ApplyChanges
         :<|> SetAutoApply
         :<|> DiscardSession

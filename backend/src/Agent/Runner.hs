@@ -51,6 +51,7 @@ import Agent.Session (
     saveTurn,
     sessionCompacting,
     touchSession,
+    storeShownImage,
     turnImageFilePath,
     turnIsUnfinished,
     turnLogFilePath,
@@ -95,7 +96,7 @@ import qualified Servant.Types.SourceT as S
 import Sse (sseComment, sseEvent)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, getFileSize, getHomeDirectory, getModificationTime, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath (takeBaseName, takeDirectory, (</>))
 import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsEOF, hSetBuffering)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (sigKILL, signalProcess)
@@ -989,8 +990,10 @@ handleRpcEvent cfg logPath input event =
                     , "startedAt" Aeson..= (realToFrac (utcTimeToPOSIXSeconds now) :: Double)
                     ]
         Just "tool_execution_end"
-            | Just callId <- event ^? key "toolCallId" . _String ->
+            | Just callId <- event ^? key "toolCallId" . _String -> do
                 logActivity ["state" Aeson..= ("finished" :: Text), "id" Aeson..= callId]
+                when (event ^. key "toolName" . _String == "show_image" && event ^? key "isError" . _Bool /= Just True) $
+                    forM_ (event ^? key "result" . key "details") showImage
         Just "agent_end" -> send "get_state"
         Just "auto_retry_start" -> setRetrying True
         Just "auto_retry_end" -> do
@@ -1030,6 +1033,11 @@ handleRpcEvent cfg logPath input event =
     setRetrying value = modifyMVar_ input $ return . fmap (\control -> control{inputRetrying = value})
     stateFlag name = event ^? key "data" . key name . _Bool
     logActivity = appendLogLine cfg logPath "activity" . jsonLine . Aeson.object
+    showImage details = case Aeson.fromJSON details of
+        Aeson.Error err -> appendLogLine cfg logPath "system" ("Could not show an image: " <> T.pack err)
+        Aeson.Success image -> do
+            fileName <- storeShownImage logPath image
+            appendLogLine cfg logPath "image" (jsonLine (Aeson.object ["turnId" Aeson..= takeBaseName logPath, "file" Aeson..= fileName]))
 
 handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
 handleRpcEventSafely cfg logPath input event =

@@ -125,18 +125,7 @@ sandboxEnvironment ownVars chatKeyEnvs = do
   where
     fallbackPath = "/run/current-system/sw/bin:/usr/bin:/bin"
     remoteVars = maybe [] (\remote -> [("NIX_REMOTE", remote)]) (storeRemote nixStore)
-    passthroughKeys =
-        [ "USER"
-        , "LOGNAME"
-        , "SHELL"
-        , "TERM"
-        , "LANG"
-        , "LC_ALL"
-        , "TZ"
-        , "XDG_RUNTIME_DIR"
-        , "XDG_DATA_DIRS"
-        ]
-            ++ chatKeyEnvs
+    passthroughKeys = ["USER", "LANG", "LOCALE_ARCHIVE"] ++ chatKeyEnvs
 
 chatApiKeyEnvs :: IO [String]
 chatApiKeyEnvs = do
