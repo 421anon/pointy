@@ -9,9 +9,7 @@ import Flow exposing (Flow)
 import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (class)
-import Html.Events
 import Html.Extra as Html
-import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
@@ -35,20 +33,6 @@ viewPage { header, content } =
         [ Html.div [ class "page-header" ] header
         , Html.div [] [ content ]
         ]
-
-
-popoverToggleTracking : String -> Html.Attribute (Flow Model ())
-popoverToggleTracking popoverId =
-    -- stopPropagation makes Elm render synchronously, so a popover opening on this event has its content before the browser shows it: https://github.com/elm/virtual-dom/blob/1.0.4/src/Elm/Kernel/VirtualDom.js#L670
-    Html.Events.stopPropagationOn "beforetoggle"
-        (Decode.field "newState" Decode.string
-            |> Decode.map (\newState -> ( Actions.trackPopoverToggle popoverId newState, True ))
-        )
-
-
-isPopoverOpen : Model -> String -> Bool
-isPopoverOpen model popoverId =
-    Model.getOpenPopover model == Just popoverId
 
 
 viewSearchBox : Model -> Html (Flow Model ())

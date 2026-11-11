@@ -3429,15 +3429,6 @@ hidePopover popoverId =
     callJs "hidePopover" Encode.string (Decode.succeed ()) popoverId
 
 
-trackPopoverToggle : String -> String -> Flow Model ()
-trackPopoverToggle popoverId newState =
-    if newState == "open" then
-        Flow.setAll openPopover (Just popoverId)
-
-    else
-        Flow.over openPopover (Maybe.filter ((/=) popoverId))
-
-
 openDialog : String -> Flow Model ()
 openDialog id =
     callJs "openDialog" Encode.string (Decode.succeed ()) id

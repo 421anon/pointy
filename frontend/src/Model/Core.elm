@@ -1849,7 +1849,6 @@ type Model
         , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
         , reviewDraft : Maybe ReviewDraft
-        , openPopover : Maybe String
         , autocomplete : Dict String AutocompleteState
         , autocompleteDebounce : Debounce AutocompleteJob
         , organizeQueue : OrganizeQueue
@@ -2533,7 +2532,6 @@ initialModel key route flags =
         , pendingStops = Set.empty
         , openDiff = Nothing
         , reviewDraft = Nothing
-        , openPopover = Nothing
         , autocomplete = Dict.empty
         , autocompleteDebounce = Debounce.init
         , organizeQueue = noOrganizeQueue
@@ -3473,11 +3471,6 @@ getModalConfirm (Model model) =
 getReviewDraft : Model -> Maybe ReviewDraft
 getReviewDraft (Model model) =
     model.reviewDraft
-
-
-getOpenPopover : Model -> Maybe String
-getOpenPopover (Model model) =
-    model.openPopover
 
 
 getSearchBox : Model -> SelectState ChildRef
