@@ -845,7 +845,7 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                     stepFormReadOnly model spec step
 
                 formView =
-                    Html.viewIf isEditing <|
+                    if isEditing then
                         Html.viewMaybe
                             (\edited ->
                                 viewAddOrEditRecordForm model
@@ -859,6 +859,9 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                                     edited
                             )
                             (try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model)
+
+                    else
+                        Html.nothing
 
                 mInlineRename =
                     try (Lenses.stepFormsAt step.type_ << Lenses.edited << just) model
