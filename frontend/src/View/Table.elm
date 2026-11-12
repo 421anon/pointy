@@ -1209,17 +1209,7 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                         "Edit " ++ displayName
 
         closeAction =
-            let
-                endEdit =
-                    Actions.endRecordEdit (TableSpec.getLens spec)
-            in
-            case ( readOnly, record.id, TableSpec.getChildKind spec ) of
-                ( False, Just recordId, Model.StepChild ) ->
-                    Actions.discardSrcFileChanges recordId
-                        |> Flow.seq endEdit
-
-                _ ->
-                    endEdit
+            Actions.toggleAddOrEditRecordForm spec record.id
     in
     Html.div [ class "table-form-wrapper", id (TableSpec.formId spec) ]
         [ Html.div

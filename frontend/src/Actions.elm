@@ -102,6 +102,24 @@ expandSidebarPath projectPath =
     Flow.over sidebarExpanded (Set.union (Set.fromList (Route.rootProjectId :: projectPath)))
 
 
+discardEditedSrcFiles : TableSpec (BaseRecord a) -> Model -> Model
+discardEditedSrcFiles spec model =
+    case ( TableSpec.getChildKind spec, try (TableSpec.getLens spec << edited << just << recordId << just) model ) of
+        ( StepChild, Just recordId_ ) ->
+            over (stepRecordById recordId_ << srcFiles) Model.discardDirectoryFileChanges model
+
+        _ ->
+            model
+
+
+discardAllEditedSrcFiles : Model -> Model
+discardAllEditedSrcFiles model =
+    all (stepForms << values << edited << just << recordId << just) model
+        |> List.foldl
+            (\recordId_ -> over (stepRecordById recordId_ << srcFiles) Model.discardDirectoryFileChanges)
+            model
+
+
 toggleAddOrEditRecordForm : TableSpec (BaseRecord a) -> Maybe Int -> Flow Model ()
 toggleAddOrEditRecordForm spec mRecordId =
     let
@@ -160,8 +178,12 @@ toggleAddOrEditRecordForm spec mRecordId =
         focusNameInput editedRecord =
             focusInput (FormInputs.nameInputId (TableSpec.getName spec) editedRecord.id)
     in
-    Flow.get
-        |> Flow.andThen (\model -> Flow.over formLens (updateTable (isReadOnlyRoute model) model))
+    Flow.modify
+        (\model ->
+            model
+                |> discardEditedSrcFiles spec
+                |> over formLens (updateTable (isReadOnlyRoute model) model)
+        )
         |> Flow.seq Flow.get
         |> Flow.map (try (formLens << edited << just))
         |> Flow.andThen
@@ -178,9 +200,14 @@ toggleAddOrEditRecordForm spec mRecordId =
             )
 
 
-startInlineRecordNameEdit : TableSpec a -> a -> Flow Model ()
+startInlineRecordNameEdit : TableSpec (BaseRecord a) -> BaseRecord a -> Flow Model ()
 startInlineRecordNameEdit spec record =
-    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True, addMode = AddNew })
+    Flow.modify
+        (\model ->
+            model
+                |> discardEditedSrcFiles spec
+                |> over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True, addMode = AddNew })
+        )
 
 
 stopInlineRecordNameEdit : TableSpec a -> Flow Model ()
@@ -987,7 +1014,7 @@ upsertRecord spec readExtraInputs createNew saveExisting =
                                             )
 
                                     ( Just recordId, _ ) ->
-                                        saveExisting model recordId typed
+                                        Flow.setting (lens << isUpdating) (saveExisting model recordId typed)
                             )
                     )
             )
@@ -1113,7 +1140,6 @@ upsertStep spec =
 
                                     saveSrcFiles =
                                         saveSrcFileChanges stepId srcFileEdits srcFilePaths
-                                            |> Flow.return ()
                                 in
                                 invalidateStepStatuses downstream
                                     |> Flow.seq (saveExistingRecordWith saveSrcFiles (stepRecordById stepId) edited_ mergeFn spec)
@@ -1168,10 +1194,10 @@ endRecordEdit lens =
 
 saveExistingRecord : A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
 saveExistingRecord =
-    saveExistingRecordWith (Flow.pure ())
+    saveExistingRecordWith (Flow.pure True)
 
 
-saveExistingRecordWith : Flow Model () -> A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
+saveExistingRecordWith : Flow Model Bool -> A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
 saveExistingRecordWith beforeRequest storeRecord record mergeFn spec =
     let
         clearUpdating =
@@ -1181,20 +1207,31 @@ saveExistingRecordWith beforeRequest storeRecord record mergeFn spec =
                         (\r -> { r | isUpdating = False, lastModifiedAt = Just posix })
                         |> Flow.seq refreshReviews
                 )
+
+        saveRecord =
+            Flow.over storeRecord
+                (\r ->
+                    let
+                        merged =
+                            mergeFn r
+                    in
+                    { merged | isUpdating = True }
+                )
+                |> Flow.seq (endRecordEdit (TableSpec.getLens spec))
+                |> Flow.seq
+                    (callApi void (Api.saveRecord spec record)
+                        |> FlowError.foldResult (\_ -> clearUpdating |> Flow.return True) (\_ -> clearUpdating |> Flow.return False)
+                    )
     in
-    Flow.over storeRecord
-        (\r ->
-            let
-                m =
-                    mergeFn r
-            in
-            { m | isUpdating = True }
-        )
-        |> Flow.seq (endRecordEdit (TableSpec.getLens spec))
+    Flow.over storeRecord (\r -> { r | isUpdating = True })
         |> Flow.seq beforeRequest
-        |> Flow.seq
-            (callApi void (Api.saveRecord spec record)
-                |> FlowError.foldResult (\_ -> clearUpdating |> Flow.return True) (\_ -> clearUpdating |> Flow.return False)
+        |> Flow.andThen
+            (\beforeRequestSucceeded ->
+                if beforeRequestSucceeded then
+                    saveRecord
+
+                else
+                    clearUpdating |> Flow.return False
             )
 
 
@@ -3116,11 +3153,6 @@ saveSrcFileChanges recordId typedContents paths =
                             (saveSrcFileChanges recordId typedContents remaining)
                         )
                 )
-
-
-discardSrcFileChanges : Int -> Flow Model ()
-discardSrcFileChanges recordId =
-    Flow.over (stepRecordById recordId << srcFiles) Model.discardDirectoryFileChanges
 
 
 setSrcFileDraftOpen : StepSpec -> Bool -> Flow Model ()

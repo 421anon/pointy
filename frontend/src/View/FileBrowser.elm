@@ -171,8 +171,16 @@ renderDirectoryContents : Model -> StepSpec -> Maybe Int -> Maybe DirContext -> 
 renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssClass children =
     let
         viewContents childrenDict =
-            Html.div [ class "directory-tree" ]
-                (Dict.toList childrenDict |> List.map (\( itemName, item ) -> viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item))
+            Html.Keyed.node "div"
+                [ class "directory-tree" ]
+                (Dict.toList childrenDict
+                    |> List.map
+                        (\( itemName, item ) ->
+                            ( itemName
+                            , viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item
+                            )
+                        )
+                )
     in
     Html.div [ class cssClass ]
         [ ApiData.foldVisible
