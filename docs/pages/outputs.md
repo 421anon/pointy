@@ -66,7 +66,7 @@ A step may have **Source Files**, such as a script, a configuration file, or a s
 
 To edit them in Pointy, open the step's **Edit** form:
 
-1. Open a text file with its **Edit …** button, labelled with the file name, and change its contents, or choose **New file**, enter a name and contents, and click **Create**.
+1. Open a text file with its **Edit …** button, labelled with the file name, and change its contents, or choose **New file**, enter a name and contents, and click **Create**. Closing a file's editor discards the changes made in it.
 2. Use **Delete** to remove a file or **Restore** to cancel its planned deletion. Check the **New**, **Changed**, and **Deleted** badges before saving.
 3. Click the step form's **Save** to keep the changes. **Cancel** discards the unsaved changes.
 

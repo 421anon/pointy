@@ -1213,6 +1213,14 @@ body {
   &.is-deleted {
     background: var(--state-danger-outline);
   }
+
+  &--edited {
+    display: none;
+
+    .directory-file-container:has(code-editor[data-changed]) & {
+      display: inline;
+    }
+  }
 }
 
 .file-actions {
@@ -2450,7 +2458,8 @@ code-editor.code-input {
     min-height: 200px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   }
-  &.field-changed .cm-editor {
+  &.field-changed .cm-editor,
+  &[data-changed] .cm-editor {
     border-color: var(--state-warning);
   }
 
@@ -2652,7 +2661,10 @@ $readonly-disabled-targets: (
 input.field-changed,
 textarea.field-changed,
 select.field-changed,
-.command-input.field-changed {
+.command-input.field-changed,
+input[data-changed],
+textarea[data-changed],
+.command-input:has([data-changed]) {
   border-color: var(--state-warning) !important;
 
   input,

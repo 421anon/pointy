@@ -13,7 +13,7 @@ import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
+import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
 import Model.Selection as Selection
 import Organize
 import Ports
@@ -143,16 +143,7 @@ applyRoute forceRevealHighlight newRoute =
                         try (Route.page << Route.viewedCommitT) route_
 
                     resetTable table =
-                        let
-                            stashed =
-                                case ( viewedCommitOf currentRoute, table.edited ) of
-                                    ( Nothing, Just draft ) ->
-                                        set (draftAt draft.id) (Just draft) table
-
-                                    _ ->
-                                        table
-                        in
-                        { stashed | edited = Nothing, nameEditOnly = False, addMode = AddNew }
+                        { table | edited = Nothing, nameEditOnly = False, addMode = AddNew }
                 in
                 Flow.modify (set route newRoute)
                     |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute) (Flow.modify Selection.clear))

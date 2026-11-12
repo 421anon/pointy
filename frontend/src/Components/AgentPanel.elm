@@ -1099,7 +1099,7 @@ viewPrompt attachments autoApply runnerActive busy stopping submitBlocked =
             [ Html.div [ class "agent-panel__prompt-field" ]
                 [ Html.textarea
                     [ class "agent-panel__prompt"
-                    , id "agent-prompt"
+                    , id Actions.agentPromptInputId
                     , rows 1
                     , placeholder "Ask for a change..."
                     , attribute "aria-label" "Agent prompt"
