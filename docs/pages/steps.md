@@ -82,7 +82,7 @@ Duplicating also copies the step's **Source Files**, if it has any. You can edit
 
 ### Change highlighting while editing
 
-A yellow border marks a field you have changed but not yet saved. Check these highlights before choosing **Save**, or use **Cancel** to leave the step unchanged. Closing the form without saving keeps your edits as a draft until you open that step's form again.
+A yellow border marks a field you have changed but not yet saved. Check these highlights before choosing **Save**, or use **Cancel** to leave the step unchanged. Closing the form without saving discards your edits.
 
 ### Notes on steps
 

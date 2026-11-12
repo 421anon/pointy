@@ -117,16 +117,14 @@ viewQuestion agentState question =
             , Html.Attributes.rows 1
             , Html.Attributes.placeholder "Ask about this area…"
             , Html.Attributes.attribute "aria-label" "Question about the selected area"
-            , Html.Attributes.value question.prompt
             , Html.Attributes.readonly startingChat
-            , Events.onInput Actions.updateAreaQuestion
             , Events.preventDefaultOn "keydown" (Decode.map (\send -> ( send, True )) sendOnEnter)
             ]
             []
         , Html.button
             [ class "icon-btn artifact-viewer-question-send"
             , Html.Attributes.type_ "submit"
-            , Html.Attributes.disabled (Maybe.isNothing (Actions.areaQuestionToSend agentState question))
+            , Html.Attributes.disabled (Maybe.isNothing (Actions.areaQuestionReady agentState question))
             , Html.Attributes.attribute "aria-busy" (boolText (Maybe.isJust busyLabel))
             , Html.Attributes.title (Maybe.withDefault "Ask in a new chat (Enter)" busyLabel)
             , Html.Attributes.attribute "aria-label" "Ask in a new chat"

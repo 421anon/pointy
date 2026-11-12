@@ -13,6 +13,7 @@ import Extra.Accessors exposing (A_Traversal, by, remkT, where_)
 import Extra.Decode as Decode
 import Extra.Http as Http
 import Flow exposing (Flow)
+import FormInputs
 import Html exposing (Html)
 import Html.Attributes exposing (..)
 import Html.Events as Events
@@ -28,10 +29,10 @@ import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildLink, ListingSort(..), Model, ProjectRecord, Status(..), StepRecord, Table, TemplateSource(..), UploadProgress)
-import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyRoute, note, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
+import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyRoute, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
 import Model.Lib
 import Model.Selection
-import Model.Shadow exposing (Field, StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), tBoolValue, tEnumValue, tIntValue, tStepId, tStringValue)
+import Model.Shadow exposing (StepArgValue(..), StepConfig, StepConfigEntry, StepType(..), Widget(..), tBoolValue, tEnumValue, tIntValue, tStepId, tStringValue)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Organize
 import Route exposing (Route)
@@ -79,8 +80,8 @@ type alias ListingRow =
 
 
 type alias InlineRename =
-    { value : String
-    , onInput : String -> Flow Model ()
+    { id : String
+    , initialValue : String
     , onSubmit : Flow Model ()
     , onCancel : Flow Model ()
     }
@@ -442,18 +443,19 @@ viewRow model rowContext orderedRefs edgeAttrs row =
             case row.inlineRename of
                 Just rename ->
                     Html.input
-                        [ type_ "text"
-                        , value rename.value
-                        , Events.onInput rename.onInput
-                        , class "form-input"
-                        , Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
-                        , Events.onBlur rename.onSubmit
-                        , Events.on "keydown" <|
+                        ([ type_ "text"
+                         , id rename.id
+                         , class "form-input"
+                         , Events.stopPropagationOn "click" (Decode.succeed ( Flow.none, True ))
+                         , Events.onBlur rename.onSubmit
+                         , Events.on "keydown" <|
                             Keyboard.decodeCombinations
                                 [ ( Keyboard.enter, Decode.succeed rename.onSubmit )
                                 , ( Keyboard.escape, Decode.succeed rename.onCancel )
                                 ]
-                        ]
+                         ]
+                            ++ FormInputs.uncontrolled rename.initialValue False
+                        )
                         []
 
                 Nothing ->
@@ -1095,18 +1097,19 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
 
         nameInput =
             let
-                originalRecord =
-                    record.id |> Maybe.andThen (\id -> TableSpec.getFindRecord spec id model)
+                editingSavedRecord =
+                    record.id
+                        |> Maybe.andThen (\recordId -> TableSpec.getFindRecord spec recordId model)
+                        |> Maybe.isJust
             in
             textField
                 { label = "Name"
                 , mHint = Nothing
                 , placeholder = TableSpec.getDisplayName spec ++ " name"
-                , value = record.name
-                , onInput = Actions.editRecordName (TableSpec.getLens spec)
-                , hasChanged = not readOnly && fieldChanged .name record.name originalRecord
+                , initialValue = record.name
+                , tracked = not readOnly && editingSavedRecord
                 , readOnly = readOnly
-                , id = TableSpec.getName spec ++ "-name-input"
+                , id = FormInputs.nameInputId (TableSpec.getName spec) record.id
                 }
 
         formClasses =
@@ -1206,17 +1209,7 @@ viewAddOrEditRecordForm model parentId spec table fields extraSection record =
                         "Edit " ++ displayName
 
         closeAction =
-            let
-                endEdit =
-                    Actions.endRecordEdit (TableSpec.getLens spec)
-            in
-            case ( readOnly, record.id, TableSpec.getChildKind spec ) of
-                ( False, Just recordId, Model.StepChild ) ->
-                    Actions.discardSrcFileChanges recordId
-                        |> Flow.seq endEdit
-
-                _ ->
-                    endEdit
+            Actions.toggleAddOrEditRecordForm spec record.id
     in
     Html.div [ class "table-form-wrapper", id (TableSpec.formId spec) ]
         [ Html.div
@@ -1279,7 +1272,7 @@ upsertOnEnter spec =
                 (Decode.at [ "target", "id" ] Decode.string |> Decode.maybe |> Decode.map (Maybe.withDefault ""))
 
         allowEnter target =
-            target.tag /= "TEXTAREA" && target.id /= "save-button" && target.id /= "select-input" && target.id /= "src-file-name-input" && not (String.endsWith "-list-input" target.id)
+            target.tag /= "TEXTAREA" && target.id /= "save-button" && target.id /= "select-input" && not (FormInputs.isSrcFileDraftNameInputId target.id) && not (String.endsWith "-list-input" target.id)
     in
     Events.on "keydown" <|
         Keyboard.decodeCombinations
@@ -1658,11 +1651,23 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 setItems =
                     rawSet << Just << TListValue
 
+                updateTypedItems change =
+                    Actions.readArgValue cfg.id cfg.widget (TListValue items)
+                        |> Flow.andThen
+                            (\typed ->
+                                case typed of
+                                    TListValue typedItems ->
+                                        setItems (change typedItems)
+
+                                    _ ->
+                                        setItems (change items)
+                            )
+
                 addItem value =
-                    setItems (items ++ [ value ]) |> Flow.seq (focus cfg.id)
+                    updateTypedItems (\current -> current ++ [ value ]) |> Flow.seq (focus cfg.id)
 
                 removeItem idx =
-                    setItems (List.removeAt idx items) |> Flow.seq (focus cfg.id)
+                    updateTypedItems (List.removeAt idx) |> Flow.seq (focus cfg.id)
 
                 addString rawValue =
                     let
@@ -1687,40 +1692,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 asTags values =
                     List.map (\s -> { body = Html.text s, route = Nothing, backgroundColor = Nothing }) values
 
-                valueOfRecord idx =
-                    case List.getAt idx items of
-                        Just (TRecordValue d) ->
-                            d
-
-                        _ ->
-                            Dict.empty
-
-                defaultValue widget_ =
-                    case widget_ of
-                        WCheckbox ->
-                            TBoolValue False
-
-                        WSelect (( first, _ ) :: _) ->
-                            TEnumValue first
-
-                        WSelect [] ->
-                            TEnumValue ""
-
-                        WRecord recordFields ->
-                            TRecordValue (Dict.fromList (List.map (\f -> ( f.name, defaultValue f.widget )) recordFields))
-
-                        WList _ ->
-                            TListValue []
-
-                        WTokens _ ->
-                            TListValue []
-
-                        WSteps _ ->
-                            TListValue []
-
-                        _ ->
-                            TStringValue ""
-
                 stringValue =
                     Maybe.withDefault "" (Maybe.andThen (try tStringValue) get)
 
@@ -1729,9 +1700,8 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         { label = cfg.label
                         , mHint = cfg.hint
                         , placeholder = cfg.label
-                        , value = stringValue
-                        , onInput = \s -> rawSet (Just (TStringValue s))
-                        , hasChanged = cfg.changed
+                        , initialValue = stringValue
+                        , tracked = cfg.tracked
                         , readOnly = cfg.readOnly
                         , id = cfg.id
                         }
@@ -1745,13 +1715,18 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                             Dict.get stateKey (Model.getAutocomplete model)
                                 |> Maybe.withDefault Model.initAutocompleteState
 
-                        autocompleteRequest query =
-                            { template = tableId
-                            , autocomplete = hook
-                            , context = cfg.context
-                            , query = query
-                            , limit = 25
-                            }
+                        withAutocompleteRequest query send =
+                            cfg.context
+                                |> Flow.andThen
+                                    (\context ->
+                                        send
+                                            { template = tableId
+                                            , autocomplete = hook
+                                            , context = context
+                                            , query = query
+                                            , limit = 25
+                                            }
+                                    )
                     in
                     autocompleteListField
                         { label = cfg.label
@@ -1761,15 +1736,14 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         , suggestions = autocompleteState.suggestions
                         , activeIndex = autocompleteState.activeIndex
                         , onQueryChange =
-                            Actions.fetchAutocomplete stateKey currentRouteCommit
-                                << autocompleteRequest
+                            \query -> withAutocompleteRequest query (Actions.fetchAutocomplete stateKey currentRouteCommit)
                         , onSuggestionSelect =
                             \suggestion ->
                                 Actions.clearAutocomplete stateKey
                                     |> Flow.seq (addString suggestion)
                         , onAddItem =
                             \val ->
-                                Flow.async (Actions.checkAutocompleteValue stateKey currentRouteCommit (autocompleteRequest (String.trim val)))
+                                withAutocompleteRequest (String.trim val) (Flow.async << Actions.checkAutocompleteValue stateKey currentRouteCommit)
                                     |> Flow.seq (Actions.clearAutocomplete stateKey)
                                     |> Flow.seq (addString val)
                         , onRemoveIndex = removeItem
@@ -1799,24 +1773,31 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         }
 
                 viewRows element =
+                    let
+                        rowCount =
+                            String.fromInt (List.length items)
+                    in
                     Html.div [ class "form-field" ]
                         [ Html.label [ class "form-label" ] [ Html.text cfg.label ]
-                        , Html.div [ class "record-list" ]
+                        , Html.Keyed.node "div"
+                            [ class "record-list" ]
                             (List.indexedMap
-                                (\idx _ ->
-                                    Html.div [ class "record-item" ]
+                                (\idx ( rowId, item ) ->
+                                    ( rowCount ++ "/" ++ rowId
+                                    , Html.div [ class "record-item" ]
                                         [ Html.div [ class "record-item-fields" ]
                                             [ viewValue
                                                 { label = cfg.label
                                                 , hint = Nothing
                                                 , stateKey = cfg.stateKey ++ "#" ++ String.fromInt idx
-                                                , id = cfg.id ++ "-" ++ String.fromInt idx
+                                                , id = rowId
                                                 , changed = False
+                                                , tracked = False
                                                 , readOnly = cfg.readOnly
-                                                , context = contextOfRecord (valueOfRecord idx)
+                                                , context = Actions.readArgValue rowId element item |> Flow.map contextOfRecord
                                                 , widget = element
                                                 }
-                                                (\_ -> List.getAt idx items)
+                                                (\_ -> Just item)
                                                 (\mValue ->
                                                     setItems
                                                         (List.updateAt idx (\old -> Maybe.withDefault old mValue) items)
@@ -1830,38 +1811,46 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                                 ]
                                                 [ icon True "remove" ]
                                         ]
+                                    )
                                 )
-                                items
+                                (FormInputs.listRows cfg.id items)
                                 ++ (if cfg.readOnly then
                                         []
 
                                     else
-                                        [ Html.button
-                                            [ Events.onClick (addItem (defaultValue element))
-                                            , class "add-record-btn"
-                                            , attribute "type" "button"
-                                            ]
-                                            [ Html.text ("Add " ++ cfg.label) ]
+                                        [ ( "add"
+                                          , Html.button
+                                                [ Events.onClick (addItem (FormInputs.defaultArgValue element))
+                                                , class "add-record-btn"
+                                                , attribute "type" "button"
+                                                ]
+                                                [ Html.text ("Add " ++ cfg.label) ]
+                                          )
                                         ]
                                    )
                             )
                         ]
 
-                contextOfRecord recordDict =
-                    Dict.foldl
-                        (\k v acc ->
-                            case v of
-                                TEnumValue s ->
-                                    Dict.insert k s acc
+                contextOfRecord value =
+                    case value of
+                        TRecordValue recordDict ->
+                            Dict.foldl
+                                (\k v acc ->
+                                    case v of
+                                        TEnumValue s ->
+                                            Dict.insert k s acc
 
-                                TStringValue s ->
-                                    Dict.insert k s acc
+                                        TStringValue s ->
+                                            Dict.insert k s acc
 
-                                _ ->
-                                    acc
-                        )
-                        Dict.empty
-                        recordDict
+                                        _ ->
+                                            acc
+                                )
+                                Dict.empty
+                                recordDict
+
+                        _ ->
+                            Dict.empty
             in
             case cfg.widget of
                 WText _ ->
@@ -1875,9 +1864,8 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         { label = cfg.label
                         , mHint = cfg.hint
                         , placeholder = ""
-                        , value = stringValue
-                        , onInput = rawSet << Just << TStringValue
-                        , hasChanged = cfg.changed
+                        , initialValue = stringValue
+                        , tracked = cfg.tracked
                         , readOnly = cfg.readOnly
                         , id = cfg.id
                         }
@@ -1886,9 +1874,8 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                     codeField
                         { label = cfg.label
                         , mHint = cfg.hint
-                        , value = stringValue
-                        , onInput = rawSet << Just << TStringValue
-                        , hasChanged = cfg.changed
+                        , initialValue = stringValue
+                        , tracked = cfg.tracked
                         , readOnly = cfg.readOnly
                         , id = cfg.id
                         , language = language
@@ -1899,16 +1886,15 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         { label = cfg.label
                         , mHint = cfg.hint
                         , placeholder = cfg.label
-                        , value = stringValue
-                        , onInput = rawSet << Just << TStringValue
-                        , hasChanged = cfg.changed
+                        , initialValue = stringValue
+                        , tracked = cfg.tracked
                         , readOnly = cfg.readOnly
                         , id = cfg.id
                         , commandPrefix = prefix
                         }
 
                 WNumber ->
-                    textField
+                    numberField
                         { label = cfg.label
                         , mHint = cfg.hint
                         , placeholder = cfg.label
@@ -1982,36 +1968,40 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 WRecord recordFields ->
                     Html.div [ class "record-item-fields" ]
                         (List.map
-                            (\f ->
+                            (\input ->
                                 viewValue
-                                    { label = Maybe.withDefault f.name f.label
+                                    { label = Maybe.withDefault input.field.name input.field.label
                                     , hint = Nothing
-                                    , stateKey = cfg.stateKey ++ "." ++ f.name
-                                    , id = cfg.id ++ "-" ++ f.name
+                                    , stateKey = cfg.stateKey ++ "." ++ input.field.name
+                                    , id = input.id
                                     , changed = False
+                                    , tracked = False
                                     , readOnly = cfg.readOnly
                                     , context = cfg.context
-                                    , widget = f.widget
+                                    , widget = input.field.widget
                                     }
-                                    (\_ -> Dict.get f.name currentDict)
+                                    (\_ -> input.value)
                                     (\mValue ->
                                         rawSet <|
                                             Just <|
                                                 TRecordValue <|
                                                     case mValue of
                                                         Just fieldValue ->
-                                                            Dict.insert f.name fieldValue currentDict
+                                                            Dict.insert input.field.name fieldValue currentDict
 
                                                         Nothing ->
-                                                            Dict.remove f.name currentDict
+                                                            Dict.remove input.field.name currentDict
                                     )
                             )
-                            recordFields
+                            (FormInputs.fieldInputs cfg.id recordFields currentDict)
                         )
 
-        viewField : Field -> Html (Flow Model ())
-        viewField field =
+        viewField : FormInputs.FieldInput -> Html (Flow Model ())
+        viewField input =
             let
+                field =
+                    input.field
+
                 fieldLabel =
                     Maybe.withDefault field.name field.label
 
@@ -2026,50 +2016,42 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                         Just field.help
 
                 fieldId =
-                    field.name
-                        ++ (case field.widget of
-                                WTokens _ ->
-                                    "-list-input"
+                    case field.widget of
+                        WTokens _ ->
+                            input.id ++ "-list-input"
 
-                                _ ->
-                                    "-input"
-                           )
+                        _ ->
+                            input.id
+
+                tracked =
+                    not readOnly && not field.readOnly && Maybe.isJust originalRecord
 
                 fieldHasChanged =
-                    not readOnly
-                        && not field.readOnly
-                        && fieldChanged (try (args << key field.name)) (try (argsLens << key field.name) model) originalRecord
+                    tracked && fieldChanged (try (args << key field.name)) (try (argsLens << key field.name) model) originalRecord
 
                 viewFieldNotice notice =
                     Html.div [ class "field-notice", class "field-notice-info" ]
                         [ iconCustom True "info" [ class "field-notice-icon" ]
                         , Html.div [ class "field-notice-markdown" ] <| Markdown.plain notice.message
                         ]
-
-                withFieldNotices html =
-                    case fieldNotices of
-                        [] ->
-                            html
-
-                        _ ->
-                            Html.div [ class "field-with-notices" ]
-                                [ html
-                                , Html.div [ class "field-notices" ] (List.map viewFieldNotice fieldNotices)
-                                ]
             in
-            withFieldNotices <|
-                viewValue
+            Html.div [ class "field-with-notices" ]
+                [ viewValue
                     { label = fieldLabel
                     , hint = fieldHint
                     , stateKey = tableId ++ ":" ++ field.name
                     , id = fieldId
                     , changed = fieldHasChanged
+                    , tracked = tracked
                     , readOnly = readOnly || field.readOnly
-                    , context = Dict.empty
+                    , context = Flow.pure Dict.empty
                     , widget = field.widget
                     }
-                    (\_ -> try (argsLens << key field.name << just) model)
+                    (\_ -> input.value)
                     (\mValue -> Flow.modify (set (argsLens << key field.name) mValue))
+                , Html.viewIf (not (List.isEmpty fieldNotices)) <|
+                    Html.div [ class "field-notices" ] (List.map viewFieldNotice fieldNotices)
+                ]
 
         visibleFields fields =
             List.filter
@@ -2077,45 +2059,40 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 fields
     in
     Html.div [ class "form-group" ] <|
-        case stepDef of
-            FileUpload _ ->
-                []
-
-            Derivation fields _ ->
-                List.map viewField (visibleFields fields)
-
-            Download fields ->
-                List.map viewField (visibleFields fields)
+        List.map viewField
+            (FormInputs.fieldInputs (FormInputs.argsInputId tableId mEditedId)
+                (visibleFields (FormInputs.stepTypeFields stepDef))
+                (try argsLens model |> Maybe.withDefault Dict.empty)
+            )
 
 
 viewStepNoteField : Model -> Bool -> String -> Html (Flow Model ())
 viewStepNoteField model readOnly tableId =
     let
-        noteLens =
-            Lenses.stepFormsAt tableId << edited << just << note
-
-        currentNote =
-            try noteLens model |> Maybe.withDefault ""
-
-        originalRecord =
+        mEdited =
             try (Lenses.stepFormsAt tableId << edited << just) model
+
+        editingSavedRecord =
+            mEdited
                 |> Maybe.andThen .id
                 |> Maybe.andThen (\id_ -> try (stepRecordById id_) model)
+                |> Maybe.isJust
+
+        noteInputId =
+            FormInputs.noteInputId tableId (Maybe.andThen .id mEdited)
     in
-    Html.div [ class "form-field" ]
-        [ Html.label [ class "form-label", for (tableId ++ "-note-input") ] [ Html.text "Note" ]
-        , Html.textarea
-            [ value currentNote
-            , Events.onInput (Flow.modify << set noteLens)
-            , placeholder "Notes about this step..."
-            , class "form-input"
-            , class "form-input-note"
-            , classList [ ( "field-changed", not readOnly && fieldChanged .note currentNote originalRecord ) ]
-            , readonly readOnly
-            , id (tableId ++ "-note-input")
-            ]
+    formField { label = "Note", mHint = Nothing, id = noteInputId }
+        (Html.textarea
+            ([ placeholder "Notes about this step..."
+             , class "form-input"
+             , class "form-input-note"
+             , readonly readOnly
+             , id noteInputId
+             ]
+                ++ FormInputs.uncontrolled (Maybe.unwrap "" .note mEdited) (not readOnly && editingSavedRecord)
+            )
             []
-        ]
+        )
 
 
 viewLabelWithHint : { label : String, mHint : Maybe String, htmlFor : String } -> Html msg
@@ -2133,13 +2110,39 @@ viewLabelWithHint { label, mHint, htmlFor } =
 
 formField : { r | label : String, mHint : Maybe String, id : String } -> Html (Flow Model ()) -> Html (Flow Model ())
 formField config inputEl =
-    Html.div [ class "form-field" ]
-        [ viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id }
-        , inputEl
+    Html.Keyed.node "div"
+        [ class "form-field" ]
+        [ ( "label", viewLabelWithHint { label = config.label, mHint = config.mHint, htmlFor = config.id } )
+        , ( config.id, inputEl )
         ]
 
 
 textField :
+    { label : String
+    , mHint : Maybe String
+    , placeholder : String
+    , initialValue : String
+    , tracked : Bool
+    , readOnly : Bool
+    , id : String
+    }
+    -> Html (Flow Model ())
+textField config =
+    formField config
+        (Html.input
+            ([ type_ "text"
+             , placeholder config.placeholder
+             , class "form-input"
+             , readonly config.readOnly
+             , id config.id
+             ]
+                ++ FormInputs.uncontrolled config.initialValue config.tracked
+            )
+            []
+        )
+
+
+numberField :
     { label : String
     , mHint : Maybe String
     , placeholder : String
@@ -2150,7 +2153,7 @@ textField :
     , id : String
     }
     -> Html (Flow Model ())
-textField config =
+numberField config =
     formField config
         (Html.input
             [ type_ "text"
@@ -2170,9 +2173,8 @@ commandField :
     { label : String
     , mHint : Maybe String
     , placeholder : String
-    , value : String
-    , onInput : String -> Flow Model ()
-    , hasChanged : Bool
+    , initialValue : String
+    , tracked : Bool
     , readOnly : Bool
     , id : String
     , commandPrefix : String
@@ -2182,20 +2184,20 @@ commandField config =
     formField config
         (Html.div
             [ class "command-input"
-            , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
+            , classList [ ( "disabled", config.readOnly ) ]
             ]
             [ Html.span [ class "command-input-prefix" ] [ Html.text config.commandPrefix ]
             , Html.textarea
-                [ value config.value
-                , placeholder config.placeholder
-                , class "command-input-textarea"
-                , Events.onInput config.onInput
-                , rows 1
-                , attribute "data-auto-resize" "true"
-                , spellcheck False
-                , readonly config.readOnly
-                , id config.id
-                ]
+                ([ placeholder config.placeholder
+                 , class "command-input-textarea"
+                 , rows 1
+                 , attribute "data-auto-resize" "true"
+                 , spellcheck False
+                 , readonly config.readOnly
+                 , id config.id
+                 ]
+                    ++ FormInputs.uncontrolled config.initialValue config.tracked
+                )
                 []
             ]
         )
@@ -2205,9 +2207,8 @@ textArea :
     { label : String
     , mHint : Maybe String
     , placeholder : String
-    , value : String
-    , onInput : String -> Flow Model ()
-    , hasChanged : Bool
+    , initialValue : String
+    , tracked : Bool
     , readOnly : Bool
     , id : String
     }
@@ -2215,17 +2216,16 @@ textArea :
 textArea config =
     formField config
         (Html.textarea
-            [ value config.value
-            , Events.onInput config.onInput
-            , placeholder config.placeholder
-            , class "form-input"
-            , class "form-input-textarea"
-            , classList [ ( "field-changed", config.hasChanged ) ]
-            , readonly config.readOnly
-            , id config.id
-            , rows 1
-            , attribute "data-auto-resize" "true"
-            ]
+            ([ placeholder config.placeholder
+             , class "form-input"
+             , class "form-input-textarea"
+             , readonly config.readOnly
+             , id config.id
+             , rows 1
+             , attribute "data-auto-resize" "true"
+             ]
+                ++ FormInputs.uncontrolled config.initialValue config.tracked
+            )
             []
         )
 
@@ -2233,9 +2233,8 @@ textArea config =
 codeField :
     { label : String
     , mHint : Maybe String
-    , value : String
-    , onInput : String -> Flow Model ()
-    , hasChanged : Bool
+    , initialValue : String
+    , tracked : Bool
     , readOnly : Bool
     , id : String
     , language : String
@@ -2244,15 +2243,15 @@ codeField :
 codeField config =
     formField config
         (Html.node "code-editor"
-            [ value config.value
-            , Events.onInput config.onInput
-            , class "code-input"
-            , classList [ ( "field-changed", config.hasChanged ), ( "disabled", config.readOnly ) ]
-            , readonly config.readOnly
-            , id config.id
-            , attribute "language" config.language
-            , attribute "aria-label" config.label
-            ]
+            ([ class "code-input"
+             , classList [ ( "disabled", config.readOnly ) ]
+             , readonly config.readOnly
+             , id config.id
+             , attribute "language" config.language
+             , attribute "aria-label" config.label
+             ]
+                ++ FormInputs.uncontrolled config.initialValue config.tracked
+            )
             []
         )
 

@@ -470,7 +470,6 @@ directoryItem fileView =
                                 , view = fileView
                                 , delimitedGrid = Nothing
                                 , plainLineCount = 1
-                                , editedContent = Nothing
                                 , isNew = False
                                 , isDeleted = False
                                 , cold = cold

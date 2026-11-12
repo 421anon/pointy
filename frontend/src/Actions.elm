@@ -22,6 +22,7 @@ import Extra.List as List
 import File exposing (File)
 import File.Select
 import Flow exposing (Flow)
+import FormInputs
 import Fuzzy
 import Grid
 import Http
@@ -33,7 +34,7 @@ import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildKind(..), Chi
 import Model.Lenses exposing (..)
 import Model.Lib exposing (canonicalPathTo)
 import Model.Selection as Selection
-import Model.Shadow exposing (StepArgValue)
+import Model.Shadow exposing (Field, StepArgValue(..), Widget(..))
 import Model.TableSpec as TableSpec exposing (StepSpec, TableSpec)
 import Ports
 import Route exposing (Route)
@@ -101,6 +102,24 @@ expandSidebarPath projectPath =
     Flow.over sidebarExpanded (Set.union (Set.fromList (Route.rootProjectId :: projectPath)))
 
 
+discardEditedSrcFiles : TableSpec (BaseRecord a) -> Model -> Model
+discardEditedSrcFiles spec model =
+    case ( TableSpec.getChildKind spec, try (TableSpec.getLens spec << edited << just << recordId << just) model ) of
+        ( StepChild, Just recordId_ ) ->
+            over (stepRecordById recordId_ << srcFiles) Model.discardDirectoryFileChanges model
+
+        _ ->
+            model
+
+
+discardAllEditedSrcFiles : Model -> Model
+discardAllEditedSrcFiles model =
+    all (stepForms << values << edited << just << recordId << just) model
+        |> List.foldl
+            (\recordId_ -> over (stepRecordById recordId_ << srcFiles) Model.discardDirectoryFileChanges)
+            model
+
+
 toggleAddOrEditRecordForm : TableSpec (BaseRecord a) -> Maybe Int -> Flow Model ()
 toggleAddOrEditRecordForm spec mRecordId =
     let
@@ -109,14 +128,6 @@ toggleAddOrEditRecordForm spec mRecordId =
 
         updateTable readOnly model t =
             let
-                stashed =
-                    case ( readOnly, t.edited ) of
-                        ( False, Just r ) ->
-                            set (draftAt r.id) (Just r) t
-
-                        _ ->
-                            t
-
                 mRecordToEdit =
                     mRecordId |> Maybe.andThen (\recordId -> TableSpec.getFindRecord spec recordId model)
 
@@ -143,20 +154,19 @@ toggleAddOrEditRecordForm spec mRecordId =
                         mRecordToEdit
 
                     else
-                        get (draftAt mRecordId) stashed
-                            |> Maybe.orElse mRecordToEdit
+                        mRecordToEdit
                             |> Maybe.withDefault (TableSpec.getDefaultRecord spec model)
                             |> Just
 
                 opensNewRecord =
                     (newEdited |> Maybe.map .id) == Just Nothing
             in
-            { stashed
+            { t
                 | nameEditOnly = False
                 , edited = newEdited
                 , addMode =
                     if opensNewRecord then
-                        stashed.addMode
+                        t.addMode
 
                     else
                         AddNew
@@ -165,16 +175,20 @@ toggleAddOrEditRecordForm spec mRecordId =
         scrollAction =
             Flow.attemptTask (Scroll.scrollY (Maybe.unwrap (TableSpec.formId spec) (Model.rowDomId (TableSpec.getChildKind spec)) mRecordId) 0 0)
 
-        focusAction =
-            Flow.attemptTask (Dom.focus (TableSpec.getName spec ++ "-name-input"))
+        focusNameInput editedRecord =
+            focusInput (FormInputs.nameInputId (TableSpec.getName spec) editedRecord.id)
     in
-    Flow.get
-        |> Flow.andThen (\model -> Flow.over formLens (updateTable (isReadOnlyRoute model) model))
+    Flow.modify
+        (\model ->
+            model
+                |> discardEditedSrcFiles spec
+                |> over formLens (updateTable (isReadOnlyRoute model) model)
+        )
         |> Flow.seq Flow.get
         |> Flow.map (try (formLens << edited << just))
         |> Flow.andThen
             (\mEdited ->
-                Flow.when (Maybe.isJust mEdited) (scrollAction |> Flow.seq focusAction)
+                Maybe.unwrap (Flow.pure ()) (\editedRecord -> scrollAction |> Flow.seq (focusNameInput editedRecord)) mEdited
                     |> Flow.seq
                         (case ( TableSpec.getChildKind spec, mEdited |> Maybe.andThen .id ) of
                             ( StepChild, Just stepId ) ->
@@ -186,19 +200,19 @@ toggleAddOrEditRecordForm spec mRecordId =
             )
 
 
-startInlineRecordNameEdit : TableSpec a -> a -> Flow Model ()
+startInlineRecordNameEdit : TableSpec (BaseRecord a) -> BaseRecord a -> Flow Model ()
 startInlineRecordNameEdit spec record =
-    Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True, addMode = AddNew })
+    Flow.modify
+        (\model ->
+            model
+                |> discardEditedSrcFiles spec
+                |> over (TableSpec.getLens spec) (\t -> { t | edited = Just record, nameEditOnly = True, addMode = AddNew })
+        )
 
 
 stopInlineRecordNameEdit : TableSpec a -> Flow Model ()
 stopInlineRecordNameEdit spec =
     Flow.over (TableSpec.getLens spec) (\t -> { t | edited = Nothing, nameEditOnly = False, addMode = AddNew })
-
-
-editRecordName : A_Traversal s (Table (BaseRecord a)) -> String -> Flow s ()
-editRecordName lens value =
-    Flow.over (remkT lens << edited << just) (\record -> { record | name = value })
 
 
 finishCreate : TableSpec (BaseRecord a) -> BaseRecord a -> Flow Model (BaseRecord a)
@@ -963,13 +977,19 @@ removeReview stepId =
 
 upsertRecord :
     TableSpec (BaseRecord a)
+    -> (BaseRecord a -> Flow Model (BaseRecord a))
     -> (BaseRecord a -> Flow Model ())
     -> (Model -> Int -> BaseRecord a -> Flow Model ())
     -> Flow Model ()
-upsertRecord spec createNew saveExisting =
+upsertRecord spec readExtraInputs createNew saveExisting =
     let
         lens =
             TableSpec.getLens spec
+
+        readFormInputs edited_ =
+            readInput (FormInputs.nameInputId (TableSpec.getName spec) edited_.id)
+                |> Flow.map (Maybe.unwrap edited_ (\typedName -> { edited_ | name = typedName }))
+                |> Flow.andThen readExtraInputs
     in
     Flow.get
         |> Flow.andThen
@@ -977,12 +997,13 @@ upsertRecord spec createNew saveExisting =
                 Flow.when (try (lens << isUpdating) model /= Just True) <|
                     (Flow.pure (Maybe.map2 Tuple.pair (try (lens << edited << just) model) (try (lens << addMode) model))
                         |> Flow.assertJust
-                        |> Flow.assertCondition (\( edited_, addMode_ ) -> String.trim edited_.name /= "" || addMode_ == LinkExisting)
+                        |> Flow.andThen (\( edited_, addMode_ ) -> readFormInputs edited_ |> Flow.map (\typed -> ( typed, addMode_ )))
+                        |> Flow.assertCondition (\( typed, addMode_ ) -> String.trim typed.name /= "" || addMode_ == LinkExisting)
                         |> Flow.andThen
-                            (\( edited_, addMode_ ) ->
-                                case ( edited_.id, addMode_ ) of
+                            (\( typed, addMode_ ) ->
+                                case ( typed.id, addMode_ ) of
                                     ( Nothing, AddNew ) ->
-                                        Flow.setting (lens << isUpdating) (createNew edited_)
+                                        Flow.setting (lens << isUpdating) (createNew typed)
 
                                     ( Nothing, LinkExisting ) ->
                                         Flow.forAll currentProjectId
@@ -993,7 +1014,7 @@ upsertRecord spec createNew saveExisting =
                                             )
 
                                     ( Just recordId, _ ) ->
-                                        saveExisting model recordId edited_
+                                        Flow.setting (lens << isUpdating) (saveExisting model recordId typed)
                             )
                     )
             )
@@ -1002,6 +1023,7 @@ upsertRecord spec createNew saveExisting =
 upsertProject : TableSpec ProjectRecord -> Flow Model ()
 upsertProject spec =
     upsertRecord spec
+        Flow.pure
         (\edited_ -> createProject spec edited_ |> Flow.return ())
         (\_ recordId edited_ ->
             saveExistingRecord (projectRecordById recordId)
@@ -1012,51 +1034,117 @@ upsertProject spec =
         )
 
 
+readStepFormInputs : StepSpec -> StepRecord -> Flow Model StepRecord
+readStepFormInputs spec record =
+    let
+        tableName =
+            TableSpec.getName spec
+    in
+    Flow.get
+        |> Flow.map (try (stepConfig << success << Dict.Accessors.at tableName << just) >> Maybe.unwrap [] (.stepType >> FormInputs.stepTypeFields))
+        |> Flow.andThen (\fields -> readFieldValues (FormInputs.argsInputId tableName record.id) fields record.args)
+        |> Flow.andThen
+            (\typedArgs ->
+                readInput (FormInputs.noteInputId tableName record.id)
+                    |> Flow.map (\mTypedNote -> { record | args = typedArgs, note = Maybe.withDefault record.note mTypedNote })
+            )
+
+
+readFieldValues : String -> List Field -> Dict String StepArgValue -> Flow Model (Dict String StepArgValue)
+readFieldValues parentId fields values =
+    FormInputs.fieldInputs parentId fields values
+        |> Flow.traverse
+            (\input ->
+                let
+                    initial =
+                        FormInputs.defaultArgValue input.field.widget
+                in
+                readArgValue input.id input.field.widget (Maybe.withDefault initial input.value)
+                    |> Flow.map
+                        (\typed ->
+                            if input.value == Nothing && typed == initial then
+                                Nothing
+
+                            else
+                                Just ( input.field.name, typed )
+                        )
+            )
+        |> Flow.map (\typed -> Dict.union (Dict.fromList (List.filterMap identity typed)) values)
+
+
+readArgValue : String -> Widget -> StepArgValue -> Flow Model StepArgValue
+readArgValue inputId widget value =
+    case ( widget, value ) of
+        ( WList element, TListValue items ) ->
+            FormInputs.listRows inputId items
+                |> Flow.traverse (\( rowId, item ) -> readArgValue rowId element item)
+                |> Flow.map TListValue
+
+        ( WRecord fields, TRecordValue values ) ->
+            readFieldValues inputId fields values
+                |> Flow.map TRecordValue
+
+        _ ->
+            if FormInputs.isTextWidget widget then
+                readInput inputId
+                    |> Flow.map (Maybe.unwrap value TStringValue)
+
+            else
+                Flow.pure value
+
+
 upsertStep : StepSpec -> Flow Model ()
 upsertStep spec =
     Flow.forAll currentProjectId
         (\_ ->
             upsertRecord spec
+                (readStepFormInputs spec)
                 (\edited_ -> createStep Nothing spec edited_ |> Flow.return ())
                 (\model stepId edited_ ->
-                    let
-                        srcFilePaths =
-                            try (stepRecordById stepId << srcFiles) model
-                                |> Maybe.unwrap [] (Model.srcFileChangePaths [])
+                    readSrcFileEdits (TableSpec.getName spec) stepId
+                        |> Flow.andThen
+                            (\srcFileEdits ->
+                                let
+                                    srcFilePaths =
+                                        (try (stepRecordById stepId << srcFiles) model
+                                            |> Maybe.unwrap [] (Model.srcFileChangePaths [])
+                                        )
+                                            ++ Dict.keys srcFileEdits
+                                            |> List.unique
 
-                        definitionChanged =
-                            try (stepRecordById stepId << args) model
-                                /= Just edited_.args
-                                || not (List.isEmpty srcFilePaths)
+                                    definitionChanged =
+                                        try (stepRecordById stepId << args) model
+                                            /= Just edited_.args
+                                            || not (List.isEmpty srcFilePaths)
 
-                        downstream =
-                            if definitionChanged then
-                                Model.downstreamStepIds stepId (get steps model)
-                                    |> Set.filter (\id -> try (stepRecordById id << review) model == Just Nothing)
+                                    downstream =
+                                        if definitionChanged then
+                                            Model.downstreamStepIds stepId (get steps model)
+                                                |> Set.filter (\id -> try (stepRecordById id << review) model == Just Nothing)
 
-                            else
-                                Set.empty
+                                        else
+                                            Set.empty
 
-                        mergeFn r =
-                            { edited_
-                                | runState =
-                                    if definitionChanged then
-                                        ApiData.loading Nothing
+                                    mergeFn r =
+                                        { edited_
+                                            | runState =
+                                                if definitionChanged then
+                                                    ApiData.loading Nothing
 
-                                    else
-                                        r.runState
-                                , srcFiles = Model.closeDirectoryFileViews r.srcFiles
-                                , srcFileDraft = r.srcFileDraft
-                                , srcFileWriting = r.srcFileWriting
-                            }
+                                                else
+                                                    r.runState
+                                            , srcFiles = Model.closeDirectoryFileViews r.srcFiles
+                                            , srcFileDraftOpen = r.srcFileDraftOpen
+                                            , srcFileWriting = r.srcFileWriting
+                                        }
 
-                        saveSrcFiles =
-                            saveSrcFileChanges stepId srcFilePaths
-                                |> Flow.return ()
-                    in
-                    invalidateStepStatuses downstream
-                        |> Flow.seq (saveExistingRecordWith saveSrcFiles (stepRecordById stepId) edited_ mergeFn spec)
-                        |> Flow.andThen (\saved -> Flow.when definitionChanged (recheckStepStatuses saved stepId downstream))
+                                    saveSrcFiles =
+                                        saveSrcFileChanges stepId srcFileEdits srcFilePaths
+                                in
+                                invalidateStepStatuses downstream
+                                    |> Flow.seq (saveExistingRecordWith saveSrcFiles (stepRecordById stepId) edited_ mergeFn spec)
+                                    |> Flow.andThen (\saved -> Flow.when definitionChanged (recheckStepStatuses saved stepId downstream))
+                            )
                 )
         )
 
@@ -1101,31 +1189,15 @@ recheckStepStatuses saved stepId downstream =
 
 endRecordEdit : A_Traversal Model (Table (BaseRecord a)) -> Flow Model ()
 endRecordEdit lens =
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                Flow.over (remkT lens)
-                    (\t ->
-                        let
-                            cleared =
-                                case ( isReadOnlyRoute model, t.edited ) of
-                                    ( False, Just r ) ->
-                                        set (draftAt r.id) Nothing t
-
-                                    _ ->
-                                        t
-                        in
-                        { cleared | edited = Nothing, addMode = AddNew }
-                    )
-            )
+    Flow.over (remkT lens) (\t -> { t | edited = Nothing, addMode = AddNew })
 
 
 saveExistingRecord : A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
 saveExistingRecord =
-    saveExistingRecordWith (Flow.pure ())
+    saveExistingRecordWith (Flow.pure True)
 
 
-saveExistingRecordWith : Flow Model () -> A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
+saveExistingRecordWith : Flow Model Bool -> A_Traversal Model (BaseRecord a) -> BaseRecord a -> (BaseRecord a -> BaseRecord a) -> TableSpec (BaseRecord a) -> Flow Model Bool
 saveExistingRecordWith beforeRequest storeRecord record mergeFn spec =
     let
         clearUpdating =
@@ -1135,20 +1207,31 @@ saveExistingRecordWith beforeRequest storeRecord record mergeFn spec =
                         (\r -> { r | isUpdating = False, lastModifiedAt = Just posix })
                         |> Flow.seq refreshReviews
                 )
+
+        saveRecord =
+            Flow.over storeRecord
+                (\r ->
+                    let
+                        merged =
+                            mergeFn r
+                    in
+                    { merged | isUpdating = True }
+                )
+                |> Flow.seq (endRecordEdit (TableSpec.getLens spec))
+                |> Flow.seq
+                    (callApi void (Api.saveRecord spec record)
+                        |> FlowError.foldResult (\_ -> clearUpdating |> Flow.return True) (\_ -> clearUpdating |> Flow.return False)
+                    )
     in
-    Flow.over storeRecord
-        (\r ->
-            let
-                m =
-                    mergeFn r
-            in
-            { m | isUpdating = True }
-        )
-        |> Flow.seq (endRecordEdit (TableSpec.getLens spec))
+    Flow.over storeRecord (\r -> { r | isUpdating = True })
         |> Flow.seq beforeRequest
-        |> Flow.seq
-            (callApi void (Api.saveRecord spec record)
-                |> FlowError.foldResult (\_ -> clearUpdating |> Flow.return True) (\_ -> clearUpdating |> Flow.return False)
+        |> Flow.andThen
+            (\beforeRequestSucceeded ->
+                if beforeRequestSucceeded then
+                    saveRecord
+
+                else
+                    clearUpdating |> Flow.return False
             )
 
 
@@ -1759,7 +1842,14 @@ stopStepAt id commit =
 
 setAddMode : A_Traversal s (Table (BaseRecord a)) -> BaseRecord a -> AddMode -> Flow s ()
 setAddMode lens defaultRecord mode =
-    Flow.over lens (\t -> { t | addMode = mode, edited = Just defaultRecord })
+    Flow.over lens
+        (\t ->
+            if t.addMode == mode then
+                t
+
+            else
+                { t | addMode = mode, edited = Just defaultRecord }
+        )
 
 
 addStepWithArg : StepSpec -> String -> StepArgValue -> Flow Model ()
@@ -2975,21 +3065,22 @@ toggleSrcEntry recordId mOpen path =
         )
 
 
-updateSrcFileContent : Int -> List String -> String -> Flow Model ()
-updateSrcFileContent recordId path content =
-    Flow.forAll (srcFilesFileContentAt recordId path << success) <|
-        \savedContent ->
-            Flow.setAll (srcFilesFileEditedContentAt recordId path)
-                (if content == savedContent then
-                    Nothing
-
-                 else
-                    Just content
+readSrcFileEdits : String -> Int -> Flow Model (Dict (List String) String)
+readSrcFileEdits tableName recordId =
+    Flow.get
+        |> Flow.map (try (stepRecordById recordId << srcFiles) >> Maybe.unwrap [] (Model.viewedFileContents []))
+        |> Flow.andThen
+            (Flow.traverse
+                (\( path, savedContent ) ->
+                    readInput (FormInputs.srcFileInputId tableName recordId path)
+                        |> Flow.map (Maybe.filter ((/=) savedContent) >> Maybe.map (Tuple.pair path))
                 )
+            )
+        |> Flow.map (List.filterMap identity >> Dict.fromList)
 
 
-saveSrcFileChange : Int -> List String -> Flow Model ()
-saveSrcFileChange recordId path =
+saveSrcFileChange : Int -> Maybe String -> List String -> Flow Model ()
+saveSrcFileChange recordId mTypedContent path =
     let
         fileTraversal =
             srcFilesItemAtPath recordId path << file
@@ -3003,7 +3094,6 @@ saveSrcFileChange recordId path =
                             | content = Success content
                             , size = String.length content
                             , plainLineCount = Model.countLines content
-                            , editedContent = Nothing
                             , isNew = False
                         }
                     )
@@ -3027,57 +3117,53 @@ saveSrcFileChange recordId path =
                 let
                     contentToSave =
                         if file_.isNew then
-                            Maybe.orElse file_.editedContent (ApiData.toMaybe file_.content)
+                            Maybe.orElse mTypedContent (ApiData.toMaybe file_.content)
 
                         else
-                            file_.editedContent
+                            mTypedContent
                 in
                 Maybe.unwrap (Flow.pure ()) (saveContent file_.isNew) contentToSave
 
 
-saveSrcFileChanges : Int -> List (List String) -> Flow Model Bool
-saveSrcFileChanges recordId paths =
+saveSrcFileChanges : Int -> Dict (List String) String -> List (List String) -> Flow Model Bool
+saveSrcFileChanges recordId typedContents paths =
     case paths of
         [] ->
             Flow.pure True
 
         path :: remaining ->
             let
+                mTypedContent =
+                    Dict.get path typedContents
+
+                unsaved file_ =
+                    Model.hasFileChanges file_ || Maybe.unwrap False (\typed -> file_.content /= Success typed) mTypedContent
+
                 unsavedFile =
                     srcFilesItemAtPath recordId path
                         << file
-                        << where_ Model.hasFileChanges
+                        << where_ unsaved
             in
             Flow.ifHas (stepRecordById recordId << where_ .srcFileWriting)
                 (\_ -> Flow.pure False)
-                (saveSrcFileChange recordId path
+                (saveSrcFileChange recordId mTypedContent path
                     |> Flow.seq
                         (Flow.ifHas unsavedFile
                             (\_ -> Flow.pure False)
-                            (saveSrcFileChanges recordId remaining)
+                            (saveSrcFileChanges recordId typedContents remaining)
                         )
                 )
 
 
-discardSrcFileChanges : Int -> Flow Model ()
-discardSrcFileChanges recordId =
-    let
-        stepRecord =
-            stepRecordById recordId
-    in
-    Flow.over (stepRecord << srcFiles) Model.discardDirectoryFileChanges
-        |> Flow.seq (Flow.setAll (stepRecord << srcFileDraft) Nothing)
+setSrcFileDraftOpen : StepSpec -> Bool -> Flow Model ()
+setSrcFileDraftOpen spec open =
+    Flow.setAll (TableSpec.getLens spec << edited << just << srcFileDraftOpen) open
 
 
-setSrcFileDraft : Int -> Maybe Model.SrcFileDraft -> Flow Model ()
-setSrcFileDraft recordId draft =
-    Flow.setAll (stepRecordById recordId << srcFileDraft) draft
-
-
-openSrcFileDraft : Int -> Flow Model ()
-openSrcFileDraft recordId =
-    setSrcFileDraft recordId (Just { name = "", content = "" })
-        |> Flow.seq (Flow.attemptTask (Dom.focus "src-file-name-input"))
+openSrcFileDraft : StepSpec -> Int -> Flow Model ()
+openSrcFileDraft spec recordId =
+    setSrcFileDraftOpen spec True
+        |> Flow.seq (focusInput (FormInputs.srcFileDraftNameInputId (TableSpec.getName spec) recordId))
 
 
 predictSrcFileChange : Int -> List String -> Flow Model () -> FlowError Http.Error Model a -> Flow Model ()
@@ -3111,7 +3197,6 @@ predictSrcFileChange recordId path prediction apiCall =
                     |> FlowError.foldResult (\_ -> Flow.pure ())
                         (\_ ->
                             Flow.setAll (stepRecord << srcFiles) snapshot.srcFiles
-                                |> Flow.seq (Flow.setAll (stepRecord << srcFileDraft) snapshot.srcFileDraft)
                         )
                 )
 
@@ -3125,8 +3210,18 @@ setSrcFileEntry recordId path entry =
                 (Dict.update name (always entry))
 
 
-stageSrcFile : Int -> String -> String -> Flow Model ()
-stageSrcFile recordId rawName content =
+stageSrcFile : StepSpec -> Int -> Flow Model ()
+stageSrcFile spec recordId =
+    readInput (FormInputs.srcFileDraftNameInputId (TableSpec.getName spec) recordId)
+        |> Flow.andThen
+            (\mName ->
+                readInput (FormInputs.srcFileDraftContentInputId (TableSpec.getName spec) recordId)
+                    |> Flow.andThen (stageSrcFileContent spec recordId (Maybe.withDefault "" mName) << Maybe.withDefault "")
+            )
+
+
+stageSrcFileContent : StepSpec -> Int -> String -> String -> Flow Model ()
+stageSrcFileContent spec recordId rawName content =
     case String.trim rawName of
         "" ->
             Flow.none
@@ -3147,7 +3242,6 @@ stageSrcFile recordId rawName content =
                         , view = { isViewing = False, zoom = 1.0, plainScrollTop = 0 }
                         , delimitedGrid = Nothing
                         , plainLineCount = Model.countLines content
-                        , editedContent = Nothing
                         , isNew = True
                         , isDeleted = False
                         , cold = False
@@ -3164,7 +3258,7 @@ stageSrcFile recordId rawName content =
                     Flow.ifHas stagedItem
                         (\_ -> Flow.pure ())
                         (setSrcFileEntry recordId path (Just predictedSrcFile)
-                            |> Flow.seq (setSrcFileDraft recordId Nothing)
+                            |> Flow.seq (setSrcFileDraftOpen spec False)
                         )
                 )
                 (Flow.pure ())
@@ -3434,6 +3528,24 @@ onSelectSearch projectId stepId =
 callJs : String -> (a -> Encode.Value) -> Decode.Decoder b -> a -> Flow Model b
 callJs =
     Flow.ffi Ports.ffiOut Ports.ffiIn
+
+
+readInput : String -> Flow Model (Maybe String)
+readInput =
+    callJs "readInput" Encode.string (Decode.nullable Decode.string)
+
+
+setInput : String -> String -> Flow Model ()
+setInput inputId value =
+    callJs "setInput"
+        (\_ -> Encode.object [ ( "id", Encode.string inputId ), ( "value", Encode.string value ) ])
+        (Decode.succeed ())
+        ()
+
+
+focusInput : String -> Flow Model ()
+focusInput =
+    callJs "focusInput" Encode.string (Decode.succeed ())
 
 
 hidePopover : String -> Flow Model ()
@@ -4340,19 +4452,15 @@ toggleAgentArchived =
     Flow.over agent (\s -> { s | showArchived = not s.showArchived })
 
 
-readAgentPrompt : Flow Model String
-readAgentPrompt =
-    callJs "agentPrompt" Encode.string Decode.string "read"
-
-
-clearAgentPrompt : Flow Model ()
-clearAgentPrompt =
-    callJs "agentPrompt" Encode.string (Decode.succeed ()) "clear"
+agentPromptInputId : String
+agentPromptInputId =
+    "agent-prompt"
 
 
 restoreAgentPrompt : String -> Flow Model ()
-restoreAgentPrompt =
-    callJs "restoreAgentPrompt" Encode.string (Decode.succeed ())
+restoreAgentPrompt prompt =
+    readInput agentPromptInputId
+        |> Flow.andThen (\current -> Flow.when (String.isEmpty (String.trim (Maybe.withDefault "" current))) (setInput agentPromptInputId prompt))
 
 
 attachAgentImages : List File -> Flow Model ()
@@ -4457,7 +4565,7 @@ finishAreaDrag clientPoint =
                     Model.areaDragRect (dragAreaTo clientPoint drag)
             in
             if rect.width > 0 && rect.height > 0 then
-                askAboutArea { rect = rect, overlaySize = drag.overlaySize, capturedArea = Nothing, prompt = "" }
+                askAboutArea { rect = rect, overlaySize = drag.overlaySize, capturedArea = Nothing }
 
             else
                 cancelAreaCapture
@@ -4531,22 +4639,13 @@ captureArtifactArea artifact =
         (Decode.nullable (Model.capturedAreaDecoder artifact))
 
 
-updateAreaQuestion : String -> Flow Model ()
-updateAreaQuestion prompt =
-    Flow.over (areaCapture << just << areaCaptureAsking) (\question -> { question | prompt = prompt })
-
-
-areaQuestionToSend : Model.AgentState -> Model.AreaQuestion -> Maybe ( Model.CapturedArea, String )
-areaQuestionToSend agentState question =
-    let
-        prompt =
-            String.trim question.prompt
-    in
-    if String.isEmpty prompt || Model.agentMutationPending agentState then
+areaQuestionReady : Model.AgentState -> Model.AreaQuestion -> Maybe Model.CapturedArea
+areaQuestionReady agentState question =
+    if Model.agentMutationPending agentState then
         Nothing
 
     else
-        Maybe.map (\capturedArea -> ( capturedArea, prompt )) question.capturedArea
+        question.capturedArea
 
 
 submitAreaQuestion : Flow Model ()
@@ -4554,9 +4653,18 @@ submitAreaQuestion =
     Flow.get
         |> Flow.andThen
             (\model ->
-                case try (areaCapture << just << areaCaptureAsking) model |> Maybe.andThen (areaQuestionToSend (Model.getAgent model)) of
-                    Just ( capturedArea, prompt ) ->
-                        askAgentInNewChat cancelAreaCapture [ Model.ComposerCapturedArea capturedArea ] prompt
+                case try (areaCapture << just << areaCaptureAsking) model |> Maybe.andThen (areaQuestionReady (Model.getAgent model)) of
+                    Just capturedArea ->
+                        readInput areaQuestionInputId
+                            |> Flow.andThen
+                                (\rawPrompt ->
+                                    case String.trim (Maybe.withDefault "" rawPrompt) of
+                                        "" ->
+                                            Flow.pure ()
+
+                                        prompt ->
+                                            askAgentInNewChat cancelAreaCapture [ Model.ComposerCapturedArea capturedArea ] prompt
+                                )
 
                     Nothing ->
                         Flow.pure ()
@@ -4756,33 +4864,34 @@ compactAgentSession sessionId =
 
 submitAgentPrompt : Flow Model ()
 submitAgentPrompt =
-    Flow.forAll (agent << composerAttachments) (\attachments -> submitAgentPromptFrom attachments readAgentPrompt)
+    Flow.forAll (agent << composerAttachments)
+        (\attachments ->
+            withSelectedAgentSession
+                (\view ->
+                    withAgentPrompt attachments
+                        (\prompt ->
+                            Flow.forAll agent
+                                (\agentState ->
+                                    if not (agentSessionRunning view.session.sessionId agentState) then
+                                        sendAgentTurn (Flow.pure ()) view attachments prompt
 
+                                    else if List.isEmpty attachments then
+                                        steerAgentTurn view prompt
 
-submitAgentPromptFrom : List Model.ComposerAttachment -> Flow Model String -> Flow Model ()
-submitAgentPromptFrom attachments promptSource =
-    withSelectedAgentSession
-        (\view ->
-            Flow.forAll agent
-                (\agentState ->
-                    if not (agentSessionRunning view.session.sessionId agentState) then
-                        sendAgentTurn (Flow.pure ()) view attachments promptSource
-
-                    else if List.isEmpty attachments then
-                        steerAgentTurn view promptSource
-
-                    else
-                        addToast False "Images can be sent once the agent finishes."
+                                    else
+                                        addToast False "Images can be sent once the agent finishes."
+                                )
+                        )
                 )
         )
 
 
-withAgentPrompt : List Model.ComposerAttachment -> Flow Model String -> (String -> Flow Model ()) -> Flow Model ()
-withAgentPrompt attachments promptSource send =
-    promptSource
+withAgentPrompt : List Model.ComposerAttachment -> (String -> Flow Model ()) -> Flow Model ()
+withAgentPrompt attachments send =
+    readInput agentPromptInputId
         |> Flow.andThen
             (\rawPrompt ->
-                case String.trim rawPrompt of
+                case String.trim (Maybe.withDefault "" rawPrompt) of
                     "" ->
                         if List.isEmpty attachments then
                             addToast False "Enter an agent prompt first."
@@ -4795,71 +4904,63 @@ withAgentPrompt attachments promptSource send =
             )
 
 
-sendAgentTurn : Flow Model () -> Model.AgentSessionView -> List Model.ComposerAttachment -> Flow Model String -> Flow Model ()
-sendAgentTurn whenPending view attachments promptSource =
+sendAgentTurn : Flow Model () -> Model.AgentSessionView -> List Model.ComposerAttachment -> String -> Flow Model ()
+sendAgentTurn whenPending view attachments prompt =
     let
         sessionId =
             view.session.sessionId
     in
     withAgentRequest (Model.SendingAgentPrompt sessionId)
-        (withAgentPrompt attachments
-            promptSource
-            (\prompt ->
-                requestNotificationPermission
-                    |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view)))
-                    |> Flow.seq
-                        (Flow.over (agent << liveTurnAt sessionId << just << entries)
-                            (\entriesBefore ->
-                                entriesBefore
-                                    ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", agent = Nothing, status = Model.ChatPending } ]
-                            )
-                        )
-                    |> Flow.seq whenPending
-                    |> Flow.seq clearAgentPrompt
-                    |> Flow.seq (Flow.setAll (agent << composerAttachments) [])
-                    |> Flow.seq scrollAgentChatToBottom
-                    |> Flow.seq
-                        (Flow.forAll agent
-                            (\agentState ->
-                                Flow.try currentProjectId
-                                    (AgentApi.sendTurn sessionId prompt attachments agentState >> Flow.try (route << Route.page << Route.artifact))
-                            )
-                        )
-                    |> FlowError.foldResult
-                        (\turn ->
-                            Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
-                                |> Flow.seq (trackSubmittedTurn sessionId turn.turnId)
-                                |> Flow.seq (openAgentTurnStream sessionId turn.turnId)
-                                |> Flow.seq (refreshAgentSession sessionId)
-                        )
-                        (\err ->
-                            let
-                                message =
-                                    Http.errorMessage err
-                            in
-                            Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
-                                |> Flow.seq (Flow.over (agent << liveTurnAt sessionId << just << entries) (Model.failLatestPendingChatTurn message))
-                                |> Flow.seq (addToast False message)
-                                |> Flow.seq (restoreAgentPrompt prompt)
-                                |> Flow.seq (Flow.over (agent << composerAttachments) (\current -> attachments ++ current))
-                        )
-            )
+        (requestNotificationPermission
+            |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view)))
+            |> Flow.seq
+                (Flow.over (agent << liveTurnAt sessionId << just << entries)
+                    (\entriesBefore ->
+                        entriesBefore
+                            ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", agent = Nothing, status = Model.ChatPending } ]
+                    )
+                )
+            |> Flow.seq whenPending
+            |> Flow.seq (setInput agentPromptInputId "")
+            |> Flow.seq (Flow.setAll (agent << composerAttachments) [])
+            |> Flow.seq scrollAgentChatToBottom
+            |> Flow.seq
+                (Flow.forAll agent
+                    (\agentState ->
+                        Flow.try currentProjectId
+                            (AgentApi.sendTurn sessionId prompt attachments agentState >> Flow.try (route << Route.page << Route.artifact))
+                    )
+                )
+            |> FlowError.foldResult
+                (\turn ->
+                    Flow.setAll (agent << liveTurnAt sessionId << just << turnId) turn.turnId
+                        |> Flow.seq (trackSubmittedTurn sessionId turn.turnId)
+                        |> Flow.seq (openAgentTurnStream sessionId turn.turnId)
+                        |> Flow.seq (refreshAgentSession sessionId)
+                )
+                (\err ->
+                    let
+                        message =
+                            Http.errorMessage err
+                    in
+                    Flow.setAll (agent << liveTurnAt sessionId << just << finished) True
+                        |> Flow.seq (Flow.over (agent << liveTurnAt sessionId << just << entries) (Model.failLatestPendingChatTurn message))
+                        |> Flow.seq (addToast False message)
+                        |> Flow.seq (restoreAgentPrompt prompt)
+                        |> Flow.seq (Flow.over (agent << composerAttachments) (\current -> attachments ++ current))
+                )
         )
 
 
-steerAgentTurn : Model.AgentSessionView -> Flow Model String -> Flow Model ()
-steerAgentTurn view promptSource =
+steerAgentTurn : Model.AgentSessionView -> String -> Flow Model ()
+steerAgentTurn view prompt =
     let
         sessionId =
             view.session.sessionId
     in
     withAgentRequest (Model.SteeringAgentTurn sessionId)
-        (withAgentPrompt []
-            promptSource
-            (\prompt ->
-                clearAgentPrompt
-                    |> Flow.seq (sendSteer sessionId { wire = prompt, shown = prompt } (restoreAgentPrompt prompt))
-            )
+        (setInput agentPromptInputId ""
+            |> Flow.seq (sendSteer sessionId { wire = prompt, shown = prompt } (restoreAgentPrompt prompt))
         )
 
 
@@ -4938,7 +5039,7 @@ askAgentInNewChat beforeShowing attachments prompt =
                 (\view ->
                     Flow.over agent (applyAgentSessionView view)
                         |> Flow.seq (clearRequestIfMatches Model.StartingAgentChat)
-                        |> Flow.seq (sendAgentTurn (beforeShowing |> Flow.seq (showAgentChat view.session.sessionId)) view attachments (Flow.pure prompt))
+                        |> Flow.seq (sendAgentTurn (beforeShowing |> Flow.seq (showAgentChat view.session.sessionId)) view attachments (String.trim prompt))
                 )
                 (\err -> addToast False (Http.errorMessage err))
         )

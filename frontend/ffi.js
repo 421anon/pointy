@@ -1,4 +1,3 @@
-import { agentPrompt, restoreAgentPrompt } from "./agent-prompt.js";
 import { notifyAgentTurn, requestNotificationPermission } from "./agent-notifications.js";
 import { storeAutoApply, storeLastChat, storeSubmittedTurns, syncAutoApplyAcrossTabs } from "./agent-storage.js";
 import { closeAgentTurnStream, connectAgentTurnStreams } from "./agent-turn-streams.js";
@@ -6,6 +5,7 @@ import { captureArtifactArea, prepareArtifactArea } from "./area-capture.js";
 import { connectBackendStreams } from "./backend-streams.js";
 import { installDragDropListeners } from "./drag-drop.js";
 import { installGutterDragListeners, zoomIframe } from "./file-viewer.js";
+import { focusInput, installChangeMarkers, readInput, setInput } from "./text-inputs.js";
 import { installUnsentTreeOpsFlush, setUnsentTreeOps } from "./unsent-tree-ops.js";
 
 function openDialog(id) {
@@ -51,8 +51,9 @@ export function connectPorts(app) {
     captureArtifactArea,
     prepareArtifactArea,
     toggleTheme,
-    agentPrompt,
-    restoreAgentPrompt,
+    readInput,
+    setInput,
+    focusInput,
     storeLastChat,
     storeAutoApply,
     setUnsentTreeOps,
@@ -66,6 +67,7 @@ export function connectPorts(app) {
   installGutterDragListeners(app);
   installDragDropListeners(app);
   installUnsentTreeOpsFlush();
+  installChangeMarkers();
   connectBackendStreams(app);
   connectAgentTurnStreams(app);
   syncAutoApplyAcrossTabs(app);

@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Accessors exposing (get, has, just, set, try, values)
+import Accessors exposing (get, has, just, over, set, try, values)
 import Actions
 import Api.ApiData exposing (ApiData(..), success)
 import Browser.Events
@@ -13,7 +13,7 @@ import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, draftAt, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
+import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
 import Model.Selection as Selection
 import Organize
 import Ports
@@ -143,20 +143,33 @@ applyRoute forceRevealHighlight newRoute =
                         try (Route.page << Route.viewedCommitT) route_
 
                     resetTable table =
-                        let
-                            stashed =
-                                case ( viewedCommitOf currentRoute, table.edited ) of
-                                    ( Nothing, Just draft ) ->
-                                        set (draftAt draft.id) (Just draft) table
+                        { table | edited = Nothing, nameEditOnly = False, addMode = AddNew }
 
-                                    _ ->
-                                        table
-                        in
-                        { stashed | edited = Nothing, nameEditOnly = False, addMode = AddNew }
+                    shouldResetForms =
+                        listingFolder currentRoute /= listingFolder newRoute || viewedCommitOf currentRoute /= viewedCommitOf newRoute
                 in
-                Flow.modify (set route newRoute)
+                Flow.modify
+                    (\currentModel ->
+                        let
+                            cleanedModel =
+                                if shouldResetForms then
+                                    Actions.discardAllEditedSrcFiles currentModel
+
+                                else
+                                    currentModel
+
+                            resetModel =
+                                if shouldResetForms then
+                                    cleanedModel
+                                        |> over (stepForms << values) resetTable
+                                        |> over projectForms resetTable
+
+                                else
+                                    cleanedModel
+                        in
+                        set route newRoute resetModel
+                    )
                     |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute) (Flow.modify Selection.clear))
-                    |> Flow.seq (Flow.when (listingFolder currentRoute /= listingFolder newRoute) (Flow.over (stepForms << values) resetTable |> Flow.seq (Flow.over projectForms resetTable)))
                     |> Flow.seq (Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute) (Flow.setAll projectRollups Dict.empty))
                     |> Flow.seq (Flow.when (pageTarget currentRoute /= pageTarget newRoute) Actions.resetPageScroll)
                     |> Flow.seq (Flow.when projectRoute (Actions.expandSidebarPath expandPath))
@@ -165,13 +178,9 @@ applyRoute forceRevealHighlight newRoute =
                             initializeWorkspace
 
                          else
-                            Flow.over projectForms resetTable
-                                |> Flow.seq (Flow.over (stepForms << values) resetTable)
-                                |> Flow.seq
-                                    (Flow.setAll
-                                        (steps << values << runState)
-                                        (Api.ApiData.loading Nothing)
-                                    )
+                            Flow.setAll
+                                (steps << values << runState)
+                                (Api.ApiData.loading Nothing)
                                 |> Flow.seq (Flow.over projects Api.ApiData.toLoading)
                                 |> Flow.seq (Flow.over commitHash Api.ApiData.toLoading)
                                 |> Flow.seq Actions.loadStepConfig

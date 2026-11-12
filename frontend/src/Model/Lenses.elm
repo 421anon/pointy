@@ -345,11 +345,6 @@ args =
     lens ".args" .args (\t args_ -> { t | args = args_ })
 
 
-note : Lens ls { a | note : String } String x y
-note =
-    lens "note" .note (\t note_ -> { t | note = note_ })
-
-
 name : Lens ls { a | name : String } String x y
 name =
     lens "name" .name (\t name_ -> { t | name = name_ })
@@ -378,26 +373,6 @@ isOpen =
 edited : Lens ls { a | edited : Maybe b } (Maybe b) x y
 edited =
     lens ".edited" .edited (\t record -> { t | edited = record })
-
-
-drafts : Lens ls { a | drafts : b } b x y
-drafts =
-    lens ".drafts" .drafts (\t drafts_ -> { t | drafts = drafts_ })
-
-
-newDraft : Lens ls { a | newDraft : Maybe b } (Maybe b) x y
-newDraft =
-    lens ".newDraft" .newDraft (\t record -> { t | newDraft = record })
-
-
-draftAt : Maybe Int -> Lens ls (Table a) (Maybe a) x y
-draftAt mId =
-    case mId of
-        Just rid ->
-            drafts << Dict.Accessors.at_ String.fromInt rid
-
-        Nothing ->
-            newDraft
 
 
 stepLogs : Lens ls Model (Dict String (ApiData String)) x y
@@ -460,11 +435,6 @@ fileCold =
     lens ".cold" .cold (\file_ cold_ -> { file_ | cold = cold_ })
 
 
-fileEditedContent : Lens ls { a | editedContent : b } b x y
-fileEditedContent =
-    lens ".editedContent" .editedContent (\file_ editedContent_ -> { file_ | editedContent = editedContent_ })
-
-
 fileIsViewing : Lens ls { a | view : { b | isViewing : c } } c x y
 fileIsViewing =
     lens ".view" .view (\file_ view_ -> { file_ | view = view_ })
@@ -513,9 +483,9 @@ srcFiles =
     lens ".srcFiles" .srcFiles (\record srcFiles_ -> { record | srcFiles = srcFiles_ })
 
 
-srcFileDraft : Lens ls { a | srcFileDraft : b } b x y
-srcFileDraft =
-    lens ".srcFileDraft" .srcFileDraft (\record srcFileDraft_ -> { record | srcFileDraft = srcFileDraft_ })
+srcFileDraftOpen : Lens ls { a | srcFileDraftOpen : b } b x y
+srcFileDraftOpen =
+    lens ".srcFileDraftOpen" .srcFileDraftOpen (\record srcFileDraftOpen_ -> { record | srcFileDraftOpen = srcFileDraftOpen_ })
 
 
 srcFileWriting : Lens ls { a | srcFileWriting : b } b x y
@@ -679,11 +649,6 @@ srcFilesFolderExpandedAt recordId_ path =
 srcFilesFileContentAt : Int -> List String -> Traversal Model (ApiData String) x y
 srcFilesFileContentAt recordId_ path =
     srcFilesItemAtPath recordId_ path << file << fileContent
-
-
-srcFilesFileEditedContentAt : Int -> List String -> Traversal Model (Maybe String) x y
-srcFilesFileEditedContentAt recordId_ path =
-    srcFilesItemAtPath recordId_ path << file << fileEditedContent
 
 
 srcFilesFileIsViewingAt : Int -> List String -> Traversal Model Bool x y

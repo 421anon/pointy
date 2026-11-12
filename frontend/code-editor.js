@@ -56,6 +56,7 @@ class CodeEditorElement extends HTMLElement {
   constructor() {
     super();
     this._value = "";
+    this._defaultValue = "";
     this._readOnly = false;
     this.languageCompartment = new Compartment();
     this.readOnlyCompartment = new Compartment();
@@ -112,6 +113,16 @@ class CodeEditorElement extends HTMLElement {
 
   get value() {
     return this._value;
+  }
+
+  get defaultValue() {
+    return this._defaultValue;
+  }
+
+  set defaultValue(defaultValue) {
+    const pristine = this._value === this._defaultValue;
+    this._defaultValue = defaultValue == null ? "" : String(defaultValue);
+    if (pristine) this.value = this._defaultValue;
   }
 
   set value(value) {

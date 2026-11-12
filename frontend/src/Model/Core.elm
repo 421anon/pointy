@@ -468,12 +468,6 @@ defaultListingPreferences =
     }
 
 
-type alias SrcFileDraft =
-    { name : String
-    , content : String
-    }
-
-
 type alias StepRecord =
     BaseRecord
         { type_ : String
@@ -483,7 +477,7 @@ type alias StepRecord =
         , review : Maybe Review
         , args : Dict String StepArgValue
         , srcFiles : DirectoryFolder
-        , srcFileDraft : Maybe SrcFileDraft
+        , srcFileDraftOpen : Bool
         , srcFileWriting : Bool
         }
 
@@ -530,7 +524,7 @@ blankStep type_ =
         , size = Nothing
         , mimeType = Nothing
         }
-    , srcFileDraft = Nothing
+    , srcFileDraftOpen = False
     , srcFileWriting = False
     }
 
@@ -635,8 +629,6 @@ projectAtPath projects projectPath =
 
 type alias Table a =
     { edited : Maybe a
-    , drafts : Dict Int a
-    , newDraft : Maybe a
     , addMode : AddMode
     , nameEditOnly : Bool
     , selectExistingSteps : SelectState ChildRef
@@ -1919,7 +1911,6 @@ type alias AreaQuestion =
     { rect : AreaRect
     , overlaySize : AreaPoint
     , capturedArea : Maybe CapturedArea
-    , prompt : String
     }
 
 
@@ -2466,8 +2457,6 @@ toolCallVisibleAfterMillis =
 initialTable : Table a
 initialTable =
     { edited = Nothing
-    , drafts = Dict.empty
-    , newDraft = Nothing
     , addMode = AddNew
     , nameEditOnly = False
     , selectExistingSteps = initSelectState
@@ -2726,7 +2715,6 @@ type alias DirectoryFile =
     , view : FileView
     , delimitedGrid : Maybe DelimitedGrid
     , plainLineCount : Int
-    , editedContent : Maybe String
     , isNew : Bool
     , isDeleted : Bool
     , cold : Bool
@@ -2749,7 +2737,7 @@ type DirectoryItem
 
 hasFileChanges : DirectoryFile -> Bool
 hasFileChanges file_ =
-    file_.isNew || file_.isDeleted || Maybe.isJust file_.editedContent
+    file_.isNew || file_.isDeleted
 
 
 srcFileChangePaths : List String -> DirectoryFolder -> List (List String)
@@ -2774,6 +2762,33 @@ srcFileChangePaths parent folder_ =
 
                             Folder child ->
                                 srcFileChangePaths path child
+                    )
+            )
+
+
+viewedFileContents : List String -> DirectoryFolder -> List ( List String, String )
+viewedFileContents parent folder_ =
+    folder_.children
+        |> ApiData.toMaybe
+        |> Maybe.unwrap []
+            (Dict.toList
+                >> List.concatMap
+                    (\( name, item ) ->
+                        let
+                            path =
+                                parent ++ [ name ]
+                        in
+                        case item of
+                            File file_ ->
+                                case ( file_.view.isViewing, file_.content ) of
+                                    ( True, Success content ) ->
+                                        [ ( path, content ) ]
+
+                                    _ ->
+                                        []
+
+                            Folder child ->
+                                viewedFileContents path child
                     )
             )
 
@@ -2812,7 +2827,7 @@ discardDirectoryFileChanges folder_ =
                                         Nothing
 
                                     else
-                                        Just ( name, File { file_ | editedContent = Nothing, isDeleted = False, view = closeFileView file_.view } )
+                                        Just ( name, File { file_ | isDeleted = False, view = closeFileView file_.view } )
 
                                 Folder child ->
                                     Just ( name, Folder (discardDirectoryFileChanges child) )
@@ -2836,7 +2851,6 @@ updateDirectoryChildren fetched previous =
                                 , view = old.view
                                 , delimitedGrid = old.delimitedGrid
                                 , plainLineCount = old.plainLineCount
-                                , editedContent = old.editedContent
                                 , isDeleted = old.isDeleted
                             }
 
@@ -3074,7 +3088,6 @@ mergeSteps fetched previous =
                         | runState = old.runState
                         , review = Maybe.orElse step.review old.review
                         , srcFiles = old.srcFiles
-                        , srcFileDraft = old.srcFileDraft
                         , srcFileWriting = old.srcFileWriting
                     }
 

@@ -8,10 +8,12 @@ import Dict exposing (Dict)
 import Extra.Accessors exposing (remkT)
 import Extra.Http as Http
 import Flow exposing (Flow)
+import FormInputs
 import Html exposing (Html)
 import Html.Attributes
 import Html.Events
 import Html.Extra as Html
+import Html.Keyed
 import Html.Lazy
 import Iso8601
 import Json.Decode as Decode
@@ -573,9 +575,7 @@ viewNewMenu model proj =
                     Html.viewMaybe
                         (\stepConfig ->
                             menuItem
-                                (Flow.setAll (Lenses.projectForms << Lenses.newDraft) Nothing
-                                    |> Flow.seq (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
-                                )
+                                (Actions.toggleAddOrEditRecordForm (Specs.allProjects presets) Nothing)
                                 [ iconCustom False "create_new_folder" []
                                 , Html.text "New folder"
                                 ]
@@ -654,7 +654,8 @@ viewPendingStepForm model projects_ parentId stepConfig =
                                         readOnly =
                                             stepFormReadOnly model spec record
                                     in
-                                    viewAddOrEditRecordForm model
+                                    ( typeName
+                                    , viewAddOrEditRecordForm model
                                         parentId
                                         spec
                                         (get (Lenses.stepFormsAt typeName) model)
@@ -663,11 +664,12 @@ viewPendingStepForm model projects_ parentId stepConfig =
                                         }
                                         (FileBrowser.viewSrcFilesSection model entry.stepType spec record)
                                         record
+                                    )
                                 )
                     )
     in
     Html.viewIf (not (List.isEmpty forms)) <|
-        Html.div [ Html.Attributes.class "listing-pending-form" ] forms
+        Html.Keyed.node "div" [ Html.Attributes.class "listing-pending-form" ] forms
 
 
 presentStepTypes : Model -> Dict Int ProjectRecord -> Model.ListingScope -> List String
@@ -746,8 +748,8 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                 if isEditing && nameEditOnly then
                     Maybe.map
                         (\edited ->
-                            { value = edited.name
-                            , onInput = Actions.editRecordName (remkT (TableSpec.getLens spec))
+                            { id = FormInputs.nameInputId (TableSpec.getName spec) edited.id
+                            , initialValue = edited.name
                             , onSubmit = TableSpec.getUpsertRecord spec
                             , onCancel = Actions.stopInlineRecordNameEdit spec
                             }
@@ -867,8 +869,8 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                         |> Maybe.filter (always (get (Lenses.stepFormsAt step.type_ << Lenses.nameEditOnly) model))
                         |> Maybe.map
                             (\edited ->
-                                { value = edited.name
-                                , onInput = Actions.editRecordName (remkT (TableSpec.getLens spec))
+                                { id = FormInputs.nameInputId (TableSpec.getName spec) edited.id
+                                , initialValue = edited.name
                                 , onSubmit = TableSpec.getUpsertRecord spec
                                 , onCancel = Actions.stopInlineRecordNameEdit spec
                                 }

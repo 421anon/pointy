@@ -9,19 +9,21 @@ import Dict exposing (Dict)
 import Extra.Accessors exposing (where_)
 import Filesize
 import Flow exposing (Flow)
+import FormInputs
 import Grid
 import Html exposing (Html)
-import Html.Attributes exposing (class, classList, disabled, href, id, placeholder, readonly, rel, src, target, type_)
+import Html.Attributes exposing (class, classList, disabled, href, id, placeholder, readonly, rel, required, src, target, type_)
 import Html.Events
 import Html.Extra as Html
+import Html.Keyed
 import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
 import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, StepRunState, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
-import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
+import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, edited, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
-import Model.TableSpec exposing (StepSpec)
+import Model.TableSpec as TableSpec exposing (StepSpec)
 import Route
 import View.Icons exposing (icon)
 import View.Lib exposing (viewLoading)
@@ -169,8 +171,16 @@ renderDirectoryContents : Model -> StepSpec -> Maybe Int -> Maybe DirContext -> 
 renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssClass children =
     let
         viewContents childrenDict =
-            Html.div [ class "directory-tree" ]
-                (Dict.toList childrenDict |> List.map (\( itemName, item ) -> viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item))
+            Html.Keyed.node "div"
+                [ class "directory-tree" ]
+                (Dict.toList childrenDict
+                    |> List.map
+                        (\( itemName, item ) ->
+                            ( itemName
+                            , viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item
+                            )
+                        )
+                )
     in
     Html.div [ class cssClass ]
         [ ApiData.foldVisible
@@ -271,16 +281,19 @@ viewSrcFilesSection model stepType spec step =
         writePending =
             step.srcFileWriting
 
+        draftOpen =
+            has (TableSpec.getLens spec << edited << just << where_ (\editedStep -> editedStep.id == step.id && editedStep.srcFileDraftOpen)) model
+
         createButton =
             Html.viewMaybe
                 (\recordId ->
                     let
                         ( tooltip, symbol, action ) =
-                            if Maybe.isJust step.srcFileDraft then
-                                ( "Discard new file", "close", Actions.setSrcFileDraft recordId Nothing )
+                            if draftOpen then
+                                ( "Discard new file", "close", Actions.setSrcFileDraftOpen spec False )
 
                             else
-                                ( "New file", "add", Actions.openSrcFileDraft recordId )
+                                ( "New file", "add", Actions.openSrcFileDraft spec recordId )
                     in
                     Html.button
                         [ class "dir-item-icon-btn"
@@ -293,28 +306,25 @@ viewSrcFilesSection model stepType spec step =
                 step.id
 
         createForm =
-            case ( step.id, step.srcFileDraft ) of
-                ( Just recordId, Just draft ) ->
+            case ( step.id, draftOpen ) of
+                ( Just recordId, True ) ->
                     Html.form
                         [ class "src-file-create src-file-editor"
                         , Html.Events.preventDefaultOn "submit"
-                            (Decode.succeed ( Actions.stageSrcFile recordId draft.name draft.content, True ))
+                            (Decode.succeed ( Actions.stageSrcFile spec recordId, True ))
                         ]
                         [ Html.div [ class "src-file-name-row" ]
                             [ Html.input
-                                [ id "src-file-name-input"
-                                , Html.Attributes.value draft.name
-                                , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | name = value }))
+                                [ id (FormInputs.srcFileDraftNameInputId (TableSpec.getName spec) recordId)
                                 , placeholder "File name"
+                                , required True
                                 , disabled writePending
                                 , class "form-input"
                                 ]
                                 []
                             ]
                         , Html.node "code-editor"
-                            [ Html.Attributes.value draft.content
-                            , Html.Events.onInput (\value -> Actions.setSrcFileDraft recordId (Just { draft | content = value }))
-                            , Html.Attributes.attribute "filename" draft.name
+                            [ id (FormInputs.srcFileDraftContentInputId (TableSpec.getName spec) recordId)
                             , Html.Attributes.attribute "aria-label" "New file contents"
                             , classList [ ( "disabled", writePending ) ]
                             , readonly writePending
@@ -325,14 +335,14 @@ viewSrcFilesSection model stepType spec step =
                             [ Html.button
                                 [ type_ "submit"
                                 , class "btn"
-                                , disabled (writePending || String.trim draft.name == "")
+                                , disabled writePending
                                 ]
                                 [ Html.text "Create" ]
                             , Html.button
                                 [ type_ "button"
                                 , class "btn"
                                 , disabled writePending
-                                , Html.Events.onClick (Actions.setSrcFileDraft recordId Nothing)
+                                , Html.Events.onClick (Actions.setSrcFileDraftOpen spec False)
                                 ]
                                 [ Html.text "Cancel" ]
                             ]
@@ -519,8 +529,8 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                             Html.span [ class "src-file-change-status is-deleted" ] [ Html.text "Deleted" ]
 
                           else
-                            Html.viewIf (isEditableSrcFile && Maybe.isJust file.editedContent) <|
-                                Html.span [ class "src-file-change-status" ] [ Html.text "Changed" ]
+                            Html.viewIf isEditableSrcFile <|
+                                Html.span [ class "src-file-change-status src-file-change-status--edited" ] [ Html.text "Changed" ]
                         , Html.viewIf file.cold <|
                             Html.span
                                 [ class "file-cold-icon"
@@ -727,23 +737,27 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                     viewEditor recordId text =
                                         let
-                                            changed =
-                                                Maybe.unwrap False ((/=) text) file.editedContent
-
                                             writePending =
                                                 srcWritePending model mDirCtx
+
+                                            editorId =
+                                                FormInputs.srcFileInputId (TableSpec.getName spec) recordId path
                                         in
-                                        Html.div [ class "src-file-editor" ]
-                                            [ Html.node "code-editor"
-                                                [ Html.Attributes.value (Maybe.withDefault text file.editedContent)
-                                                , Html.Events.onInput (Actions.updateSrcFileContent recordId path)
-                                                , Html.Attributes.attribute "filename" itemName
-                                                , Html.Attributes.attribute "aria-label" ("Edit " ++ itemName)
-                                                , class "code-input"
-                                                , classList [ ( "field-changed", changed ), ( "disabled", writePending ) ]
-                                                , readonly writePending
-                                                ]
-                                                []
+                                        Html.Keyed.node "div"
+                                            [ class "src-file-editor" ]
+                                            [ ( editorId
+                                              , Html.node "code-editor"
+                                                    ([ id editorId
+                                                     , Html.Attributes.attribute "filename" itemName
+                                                     , Html.Attributes.attribute "aria-label" ("Edit " ++ itemName)
+                                                     , class "code-input"
+                                                     , classList [ ( "disabled", writePending ) ]
+                                                     , readonly writePending
+                                                     ]
+                                                        ++ FormInputs.uncontrolled text True
+                                                    )
+                                                    []
+                                              )
                                             ]
                                 in
                                 Html.div [ class "file-viewer" ]
