@@ -59,6 +59,8 @@ The example enables nginx basic authentication. With `basicAuthFile = null`, the
 
 To use a cluster you manage yourself, leave out `single-node-slurm`. Point `services.pointy-backend.slurm.package` and `services.pointy-backend.slurm.confFile` at its client, if it is not the host's `services.slurm`, add `JobCompType=jobcomp/script` and `JobCompLoc=` followed by `services.pointy-backend.slurm.jobCompletionHook` to its `slurm.conf`, and order `backend` after the Slurm daemons the host runs. Set `services.pointy-backend.slurm.realiseCommand` to an executable installed on every compute node; it receives one derivation path and must make all of that derivation's outputs valid in the backend's store, with the build log readable there.
 
+The fallback job reconciler polls every 30 seconds. Set `POINTY_SLURM_RECONCILE_SECONDS` to a positive integer to change that interval; the job-completion hook remains the immediate wake-up path.
+
 After provisioning the config and secrets, restart `backend` and check its journal, `sinfo`, and a small build before inviting users. A successful HTTP response alone does not establish that Git pushes, evaluation, and scheduling work.
 
 ### Paths and ports

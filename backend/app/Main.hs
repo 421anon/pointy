@@ -58,10 +58,9 @@ main = do
         putStrLn "Starting cluster status poller..."
         startClusterPoller
         putStrLn "Starting Slurm job reconciler..."
+        reconcileText <- lookupEnv "POINTY_SLURM_RECONCILE_SECONDS"
+        let reconcileSeconds = max 1 (maybe 30 id (reconcileText >>= readMaybe)) :: Int
         _ <- forkIO $ forever $ do
-            threadDelay reconcileDelayMicros
+            threadDelay (reconcileSeconds * 1000000)
             runProduction reconcileWatchedJobs
         pure ()
-
-reconcileDelayMicros :: Int
-reconcileDelayMicros = 30000000
