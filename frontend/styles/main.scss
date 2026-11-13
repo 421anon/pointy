@@ -551,13 +551,27 @@ body {
 .listing-row-id {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: 18px;
   font-family: monospace;
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
-  border: 1px solid;
-  color: var(--color-gray-500);
-  padding: 1px var(--spacing-2xs);
+  border: 1px solid var(--text-muted);
+  background: color-mix(in srgb, var(--text-secondary) 7%, transparent);
+  color: var(--text-secondary);
+  padding: 2px var(--spacing-2xs) 0;
   margin-left: var(--spacing-sm);
+  vertical-align: middle;
+}
+
+@supports (text-box-trim: trim-both) {
+  .listing-row-id {
+    display: inline-block;
+    text-align: center;
+    padding: 2px var(--spacing-2xs);
+    text-box: trim-both cap alphabetic;
+  }
 }
 
 .listing-row-hidden-marker {
