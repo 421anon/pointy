@@ -84,7 +84,7 @@ answererRules =
         ]
 
 routingInstructions :: Text
-routingInstructions = "A user of a Pointy research notebook is chatting with its assistant. The conversation lists their messages, each with the model it was routed to and its reply, and, in context, how many images and area selections came with it and the step output file they were viewing, with that step's definition and source file names. Which model should answer the last message? Be conservative with the heavy-weight specialist: it is expensive, so choose it only when the general model would likely fall short."
+routingInstructions = "A user of a Pointy research notebook is chatting with its assistant. The conversation lists their messages, each with the model it was routed to and its reply, and, in context, how many images and area selections came with it and the step output file they were viewing, with that step's definition and source file names. Which model should answer the last message? Lean toward the general model because the heavy-weight specialist is expensive, but give the specialist the message when it plays to its strengths and the general model might fall short."
 
 data RoutingChoice = RoutingChoice
     { choiceRole :: AgentRole
@@ -95,7 +95,7 @@ data RoutingChoice = RoutingChoice
 routingChoices :: [RoutingChoice]
 routingChoices =
     [ RoutingChoice Coder "general and coder" "The general and coder model: answers most messages, including looking up or computing values from files, data and logs, reading code, and every change to steps, projects and code"
-    , RoutingChoice Answerer "heavy-weight specialist" "The heavy-weight specialist model: expensive; only for interpreting results or explaining surprising findings where the answer needs scientific judgment rather than looking something up, and it changes nothing"
+    , RoutingChoice Answerer "heavy-weight specialist" "The heavy-weight specialist model: expensive; for interpreting results, explaining surprising findings, and other questions that need scientific judgment rather than looking something up, and it changes nothing"
     ]
 
 renderCurrentProject :: Int -> Text
