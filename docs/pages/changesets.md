@@ -6,13 +6,13 @@ description: "Check the agent's changes, apply or discard them, and see what it 
 
 ## Reviewing and applying changes
 
-When the agent has made edits, a **Changeset** card appears at the end of the chat. It lists the changed files and shows what was added or removed; each file's diff is open and can be folded away. The card's colour and label show where the changes stand. A changeset is simply the group of edits you can apply or discard together.
+When the agent has made edits, a **Changeset** card appears at the end of the chat. It lists the changed files and shows what was added or removed; each file's diff is open and can be folded away. The card's color and label show where the changes stand. A changeset is simply the group of edits you can apply or discard together.
 
 **Auto-apply** in the panel header controls what happens when a turn succeeds. It is on by default. With it on, Pointy applies the turn's changes to the shared branch as the last step of a successful turn: the card shows **Applying**, then **Applied** once the branch is updated. With it off, the turn ends with a **Pending** card and buttons to apply or discard. Your choice is remembered in this browser, follows your other tabs, and also changes turns already running from this browser.
 
 A turn that fails or is stopped is not applied automatically, even with auto-apply on. Its changes wait on a **Pending** card. With auto-apply on, the next successful turn applies them; with it off, apply or discard them yourself while the agent is idle.
 
-Check that it changes the steps and parameters you intended. Read any changed scripts as well as the agent's explanation. If something is unclear, ask the agent to explain or revise it.
+Check that the edits change the steps and parameters you intended. Read any changed scripts as well as the agent's explanation. If something is unclear, ask the agent to explain or revise it.
 
 An active changeset card offers **Apply changes** and **Discard changeset** while the agent is idle, whether auto-apply is on or off.
 

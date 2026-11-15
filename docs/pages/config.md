@@ -113,7 +113,7 @@ compat = { supportsStore = false, supportsDeveloperRole = false, supportsReasoni
 # min-relevance = 0.5
 ```
 
-These settings tell the backend:
+The `[user-repo]` section tells the backend:
 
 - which Git remote to use for the user repository
 - which SSH key to use for Git operations
@@ -131,7 +131,7 @@ The optional `[slurm]` section controls how the backend submits build jobs:
 
 There is no `[nix-evaluator]` table any more; a table with that name is ignored. Evaluation memory is not configurable: each `nix repl` session is released when it has been idle above a fixed 2 GiB RSS threshold, and the next request starts a fresh session. There is no warm-up and no sharded cache.
 
-The `[agent]` section configures the embedded agent runner. When this section is absent, the backend uses the defaults shown above. Runner secrets are provisioned through the NixOS module, not through `config.toml`; see [NixOS module options](nixos.md#nixos-module-options). For the user-facing agent workflow, see the [AI Agent guide](agent.md).
+The `[agent]` section configures the embedded agent runner. When this section is absent, the backend uses the defaults shown above. Runner secrets are provisioned through the NixOS module, not through `config.toml`; see [NixOS module options](nixos.md#nixos-module-options). For the user-facing agent workflow, see [Agent](agent.md).
 
 ### Environment variables
 

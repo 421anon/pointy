@@ -4,7 +4,7 @@ description: "Find your way around Home, the folder tree, and the listing, and c
 
 # Folders
 
-A folder keeps related steps together. Folders hold steps and other folders, so you can nest an analysis as deep as you like. The listing and the organize controls call these containers folders; a few older forms and messages still say "project", such as **Edit project** and the **Project name** field.
+A folder keeps related steps together. Folders hold steps and other folders, so you can nest an analysis as deep as you like. The listing and the organize controls call these containers folders; a few older forms and messages still say “project”, such as **Edit project** and the **Project name** field.
 
 ![The Example analysis folder page: breadcrumbs, the step search box, the listing header, and rows for its steps and its nested Quality control folder.](screenshots/light/folder-view.png)
 
@@ -58,7 +58,7 @@ To create a folder, open the folder that should contain it and choose **New fold
 
 ![The folder form, titled Create new Project, with its Create new and Link existing modes and Name, Preset, and Templates fields.](screenshots/light/folder-create-form.png)
 
-For a quick rename, hover a folder's name in the listing and click the pencil that appears. Type the new name and press Enter or click outside the field to save; Escape cancels. Saving starts at once.
+For a quick rename, hover over a folder's name in the listing and click the pencil that appears. Type the new name and press Enter or click outside the field to save; Escape cancels. Saving starts at once.
 
 When you right-click an empty spot in the listing and choose **New folder**, the dialog skips the full form: it asks for a **Folder name**, prefilled **New folder**, and **Create** makes the folder here with this folder's templates.
 
@@ -76,7 +76,7 @@ A folder's preset or template list does not filter the folder's contents: every 
 
 A new folder starts with the current folder's preset or template list; a duplicated folder keeps its own.
 
-It does not decide which kinds of step you can add, and it does not control the **Create …** shortcuts some step rows offer; [Steps](steps.md) covers those. Pointy can also warn about a folder itself: if the folder's file no longer evaluates, the reasons appear in a box at the top of the folder, and the folder's row in its parent shows an error icon whose tooltip lists them.
+The selection does not decide which kinds of step you can add, and it does not control the **Create …** shortcuts some step rows offer; [Steps](steps.md) covers those. Pointy can also warn about a folder itself: if the folder's file no longer evaluates, the reasons appear in a box at the top of the folder, and the folder's row in its parent shows an error icon whose tooltip lists them.
 
 The folder form's **Preset** field shows **Custom (no preset)** once you edit the template list yourself. Choosing **Custom (no preset)** keeps the preset's templates as an editable starting list.
 

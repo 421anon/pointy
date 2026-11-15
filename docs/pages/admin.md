@@ -6,7 +6,7 @@ description: "How a Pointy instance fits together, and how to set up its host, p
 
 As the instance administrator, you make the analysis tools available and keep Pointy running. You provide the Git repository that stores the work, the machines that run it, access to the AI agent, and backups. Researchers can then create, inspect, and edit steps without managing those services themselves.
 
-The Host pages cover hosting and operations. For everyday research work, start with [Agent](agent.md), [Steps](steps.md), and [Runs](execution.md). To add analysis tools, see [Repository](user-repo-setup.md).
+The Hosting pages cover setup and operations. For everyday research work, start with [Agent](agent.md), [Steps](steps.md), and [Runs](execution.md). To add analysis tools, see [Repository](user-repo-setup.md).
 
 ## Runtime architecture
 

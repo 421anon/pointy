@@ -40,7 +40,7 @@ Pointy provides the platform behind such a UI. Templates defined in the user rep
 
 A Pointy link can open a folder read-only at a specific Git commit, deep-link to an output file or directory, and highlight selected lines in a text result. The recipient sees the state that was shared, not whatever happens to be current later.
 
-[Read the sharing documentation →](execution.md#share-links-and-read-only-views)
+[Read the sharing documentation →](sharing.md#share-links-and-read-only-views)
 
 ![Output file preview with lines 6 through 9 selected and a Share lines action visible above the highlighted text.](screenshots/light/output-file-line-range-share.png)
 

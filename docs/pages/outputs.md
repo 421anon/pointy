@@ -12,17 +12,15 @@ Use the **Browse output files** button on a step with a result, or click anywher
 
 For text files, click a line number to select one line, or drag over the line numbers to select a range. The address bar updates as you select, and the file's **Share** button becomes **Share lines a-b**. The link opens the same version of the file with those lines highlighted.
 
-Large text files are loaded a section at a time as you scroll, rather than all at once.
+![An output file preview with a selected line range and the Share lines 6-9 button shown.](screenshots/light/output-file-line-range-share.png)
 
-Download retrieves the complete file regardless of size.
+Large text files are loaded a section at a time as you scroll, rather than all at once. Download retrieves the complete file regardless of size.
 
 An open preview stays open when a new version leaves that step's build unchanged; it keeps showing the version you opened. If the build changes, the preview closes so an old result is not mistaken for the new one.
 
 If your installation keeps older outputs on cold storage, the file row shows a snowflake and explains that the file is fetched when opened. Opening or downloading a cold file fetches it first and shows progress on the row; the preview or download starts when the fetch is complete. A failed fetch shows a failure message.
 
 ![A step's Output Files with hello on cold storage, marked by a snowflake, and notes.txt being fetched at 40%.](screenshots/light/output-files-cold-storage.png)
-
-![An output file preview with a selected line range and the Share lines 6-9 button shown.](screenshots/light/output-file-line-range-share.png)
 
 HTML reports open inline; their magnifier buttons zoom in and out. Links in a report work as they would outside Pointy: clicking one can navigate the whole tab, and popups open in a new tab. Use the browser's Back button to return.
 
@@ -66,7 +64,7 @@ A step may have **Source Files**, such as a script, a configuration file, or a s
 
 To edit them in Pointy, open the step's **Edit** form:
 
-1. Open a text file with its **Edit …** button, labelled with the file name, and change its contents, or choose **New file**, enter a name and contents, and click **Create**. Closing a file's editor discards the changes made in it.
+1. Open a text file with its **Edit …** button, labeled with the file name, and change its contents, or choose **New file**, enter a name and contents, and click **Create**. Closing a file's editor discards the changes made in it.
 2. Use **Delete** to remove a file or **Restore** to cancel its planned deletion. Check the **New**, **Changed**, and **Deleted** badges before saving.
 3. Click the step form's **Save** to keep the changes. **Cancel** discards the unsaved changes.
 

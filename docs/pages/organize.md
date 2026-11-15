@@ -45,7 +45,7 @@ You can also drag rows: grip a row by its header — there is no separate handle
 
 Drop on the top or bottom edge of a row to reorder. Lines appear only in the gaps where the drop would change the order, and the drop stays within the row's folder and group. Reordering works while **Sort** is **Manual**, including inside a type group when **Group by type** is on. The order you set is kept per folder, so the same step can sit in different positions in different folders.
 
-Any folder except Home, or any step, can be linked into several folders at once. It is the same item everywhere: editing it in one folder changes it in all of them — it is one item, not a copy. The ways to link something are **Link existing**, **Move to...** or **Link to...**, **Copy** then **Paste**, and Ctrl/Cmd/Alt-drag.
+Any folder except Home, or any step, can be linked into several folders at once. It is the same item everywhere, not a copy: editing it in one folder changes it in all of them. The ways to link something are **Link existing**, **Move to...** or **Link to...**, **Copy** then **Paste**, and Ctrl/Cmd/Alt-drag.
 
 ![The Move to dialog with two rows selected, the Search folders field, folder paths as targets, and the Move and Cancel buttons.](screenshots/light/organize-move-dialog.png)
 

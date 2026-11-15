@@ -6,7 +6,7 @@ description: "Commands for inspecting the user repository with nix: building ste
 
 These commands help administrators inspect a repository, troubleshoot a step, or reproduce a result outside the browser. The user repository is a Nix flake, and the commands use the same definitions as Pointy. Run them from that repository unless a section says otherwise, replacing `42` with your step or folder id.
 
-This is also a useful way to separate a repository problem from a web or backend problem. See [Repository](user-repo-setup.md) for compatible inputs and [Types](type-reference.md) for the generated version 4 form document.
+This is also a useful way to separate a repository problem from a web or backend problem. See [Repository](user-repo-setup.md) for compatible inputs and [Forms](forms.md#the-generated-form-document) for the generated version 4 form document.
 
 ## Flake outputs
 
@@ -137,7 +137,7 @@ This shows the stdlib's exported metadata, including `type`, `id`, `requirements
 nix eval --json .#pointy.steps.42.meta.pointy.requirements
 ```
 
-Returns the resolved `{ cpu; ram; ior; iow; }` for step `42`. A step-level override takes precedence; otherwise the template's attribute set or function result is merged over the stdlib defaults.
+This returns the resolved `{ cpu; ram; ior; iow; }` for step `42`. A step-level override takes precedence; otherwise the template's attribute set or function result is merged over the stdlib defaults.
 
 ### Show a step's evaluated `srcFiles` path
 

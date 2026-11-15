@@ -22,7 +22,7 @@ Only changes to these paths can be committed and applied:
 
 Other changed paths are reported in the log and excluded. In particular, the embedded agent cannot update `flake.nix` or templates; administrators make those changes with their repository tools. Applied changes are ordinary Git commits, available to other instances using that repository after their next fetch.
 
-Applying a changeset uses a temporary worktree at the current target-branch commit. Pointy combines the agent's edits into one commit, removes changes to reviewed steps (recording the proposed changeset as discarded if nothing else remains), evaluates the result, and refuses it if it introduces evaluation failures that are not already on the shared branch. It checks that neither side has changed during preparation, then pushes it. When preparation finds conflicts, the agent resolves them in that worktree and you prepare again. The [API guide](agent-api.md#applying-changes-safely) describes the preparation and confirmation requests.
+Applying a changeset uses a temporary worktree at the current target-branch commit. Pointy combines the agent's edits into one commit, removes changes to reviewed steps (recording the proposed changeset as discarded if nothing else remains), evaluates the result, and refuses it if it introduces evaluation failures that are not already on the shared branch. It checks that neither side has changed during preparation, then pushes it. When preparation finds conflicts, the agent resolves them in that worktree and you prepare again. [Agent API](agent-api.md#applying-changes-safely) describes the preparation and confirmation requests.
 
 ### Sandbox and credential boundaries
 

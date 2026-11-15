@@ -6,7 +6,7 @@ description: "Offer named bundles of templates for folders."
 
 ## Presets
 
-A preset bundles templates under a useful name, such as "RNA-seq", so people do not have to reconstruct the same selection for each folder. Presets are read from `presets/`, one file per preset; the filename is the preset key. Add this to `presets/example.nix`:
+A preset bundles templates under a useful name, such as “RNA-seq”, so people do not have to reconstruct the same selection for each folder. Presets are read from `presets/`, one file per preset; the filename is the preset key. Add this to `presets/example.nix`:
 
 ```nix
 {

@@ -28,7 +28,7 @@ Use **Agent** in the bottom status bar. The panel is available on every workspac
 
 ## Asking for help
 
-Type your request and click **Send**, or press **Ctrl+Enter** (**Cmd+Enter** on macOS). The reply appears in the chat as the agent works. Until the first reply arrives, the chat shows **Waiting for a reply**. You can keep inspecting the folder while you wait. Each reply is labelled **Coder** or **Answerer** after the model that wrote it; without a second model, every reply is a **Coder** reply.
+Type your request and click **Send**, or press **Ctrl+Enter** (**Cmd+Enter** on macOS). The reply appears in the chat as the agent works. Until the first reply arrives, the chat shows **Waiting for a reply**. You can keep inspecting the folder while you wait. Each reply is labeled **Coder** or **Answerer** after the model that wrote it; without a second model, every reply is a **Coder** reply.
 
 The agent can also show you an image, such as a chart it drew to answer your question. The image appears inside its reply, at the point where the agent showed it.
 
@@ -78,7 +78,7 @@ When a run fails, or a step fails certification, open the step's log and choose 
 
 ### Long conversations and errors
 
-In a long chat, Pointy shows a strip under the chat title when the conversation has used about half of the context the model can consider at once. It tells you the percentage and token counts in use and offers **Compact**. While the agent is not working, **Compact** asks it to summarise the earlier conversation to free space. The strip says **Compacting the conversation to free context.** while that runs. If compaction fails, the strip shows the error and a **Try again** button. Restate important constraints after compacting if you need to, or start a new chat for a separate task.
+In a long chat, Pointy shows a strip under the chat title when the conversation has used about half of the context the model can consider at once. It tells you the percentage and token counts in use and offers **Compact**. While the agent is not working, **Compact** asks it to summarize the earlier conversation to free space. The strip says **Compacting the conversation to free context.** while that runs. If compaction fails, the strip shows the error and a **Try again** button. Restate important constraints after compacting if you need to, or start a new chat for a separate task.
 
 Pointy stops a turn that runs too long: by default a turn is limited to 30 minutes; time spent waiting for your answer does not count. Your administrator can change the limit in [the backend configuration](config.md#backend-configuration).
 

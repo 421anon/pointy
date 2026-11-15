@@ -53,7 +53,7 @@ Each `projects/<id>.nix` file is a plain attribute set:
 - `projects/0.nix` is the root folder, Home. It cannot become a child or be deleted, and folders created in the UI are linked under it; keep the file in the repository.
 - The children graph must stay acyclic; the backend refuses a change that would introduce a cycle. An id with no matching `steps/<id>.nix` or `projects/<id>.nix` is dropped and reported in `validationErrors`.
 
-A step linked in no folder is **unfiled**. It still evaluates as `pointy.steps.<id>`, but the web UI loads and searches only steps linked from folders, so an unfiled step is neither listed nor offered by **Link existing**. Keep every step you want to use in at least one folder. Organize actions rewrite these files: Pointy re-renders the file from its data, so comments are dropped, keys are sorted, and the parent's sort keys are renumbered. See [Managing Projects](organize.md#moving-linking-and-reordering) for the UI actions.
+A step linked in no folder is **unfiled**. It still evaluates as `pointy.steps.<id>`, but the web UI loads and searches only steps linked from folders, so an unfiled step is neither listed nor offered by **Link existing**. Keep every step you want to use in at least one folder. Organize actions rewrite these files: Pointy re-renders the file from its data, so comments are dropped, keys are sorted, and the parent's sort keys are renumbered. See [Moving, linking, and reordering](organize.md#moving-linking-and-reordering) for the UI actions.
 
 Add the files to Git before the first flake command. Nix does not include untracked files automatically, and a Git-backed flake with an untracked `flake.nix` is rejected. From the repository root:
 
@@ -66,7 +66,7 @@ cat result/message.txt
 nix build .#pointy.steps.1.certificate
 ```
 
-The configuration should have `version: 4`, the projects output should show `Home` and `Example analysis`, the build should write `Hello, research!`, and the certificate build should succeed. Once the repository and its inputs are available to the backend, configure its URL and branch as described in the [Hosting](admin.md).
+The configuration should have `version: 4`, the projects output should show `Home` and `Example analysis`, the build should write `Hello, research!`, and the certificate build should succeed. Once the repository and its inputs are available to the backend, configure its URL and branch as described in [Hosting](admin.md).
 
 ## The step id and metadata
 

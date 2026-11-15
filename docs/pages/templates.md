@@ -61,7 +61,7 @@ The filename gives the template its key, `hello`. `contract.interface` connects 
 
 `compile` receives `{ lib, pkgs, pointyLib }` and returns a `build` function. That function receives `{ args, public }`, where `public` is the step derivation. It returns `mkDerivation` attributes, optionally `name`, `version`, and `env`. The stdlib supplies the standard Nix build setup and Pointy metadata, including the step id, template type, arguments, and resource requirements. You do not need to repeat those in every template.
 
-## Example: file upload template
+## Example: file-upload template
 
 Add `templates/dataSource.nix` using the `DataSource` declaration from `main.pointy`:
 
@@ -84,7 +84,7 @@ Add `templates/dataSource.nix` using the `DataSource` declaration from `main.poi
 }
 ```
 
-`allowedExtensions` is required; use `null` to accept any extension. It controls the browser picker, not a server-side security boundary. An upload runs as an ingest job; when it succeeds, the backend records the payload hash in `args.uploaded`, and the stdlib resolves that value to the stored object for the builder; a missing store object fails the build. `args.uploaded` is not a language parameter or a user-entered form field. Keep uploaded store objects in your backup plan: the upload reference cannot reconstruct missing data from Git alone.
+`allowedExtensions` is required; use `null` to accept any extension. It controls the browser picker, not a server-side security boundary. An upload runs as an ingest job; when it succeeds, the backend records the payload hash in `args.uploaded`, and the stdlib resolves that value to the stored object for the builder. A missing store object fails the build. `args.uploaded` is not a language parameter or a user-entered form field. Keep uploaded store objects in your backup plan: the upload reference cannot reconstruct missing data from Git alone.
 
 ## Example: download template
 

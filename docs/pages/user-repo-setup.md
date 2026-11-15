@@ -62,8 +62,8 @@ The examples on this page, [Templates](templates.md), and [Step files](step-file
 - `pointy.nix` is required. It supplies the package set and the entry program.
 - `main.pointy` must have that exact name at the repository root. It must be a single file: only this file is copied for evaluation, so it cannot import other paths.
 - Every entry in `templates/` is loaded as a template, and the filename is the template key. Put helper Nix files in `packages/`, not here.
-- Every regular `<id>.nix` file in `steps/` is a step. Do not put a placeholder such as `.gitkeep` there; it would be read as a step named ".gitkeep" and fail evaluation.
-- `projects/` holds folders, including the root `projects/0.nix` ("Home").
+- Every regular `<id>.nix` file in `steps/` is a step. Do not put a placeholder such as `.gitkeep` there; it would be read as a step named “.gitkeep” and fail evaluation.
+- `projects/` holds folders, including the root `projects/0.nix` (“Home”).
 - `srcFiles/` and `presets/` are optional; they can be missing until you need them.
 
 `loadDir` imports every entry in `templates/`, `projects/`, and `presets/` as Nix, so do not put placeholder or unrelated files in those directories.
@@ -134,7 +134,7 @@ The tool:
 
 - refuses to run when `projects/0.nix` already exists (`... already exists; the projects are already in the children format.`) or when the checkout has no `projects/` directory;
 - rewrites each `projects/<id>.nix`: the old `steps` entries become tagged `children`, and the project-level `hidden` and `sortKey` are dropped;
-- writes `projects/0.nix` ("Home") listing every existing folder with its old placement;
+- writes `projects/0.nix` (“Home”) listing every existing folder with its old placement;
 - does not commit or push. It re-renders the files from JSON, so comments are lost and keys are sorted.
 
 Commit the lock bump and the migrated files together, then push.

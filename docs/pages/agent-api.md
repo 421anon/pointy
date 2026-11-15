@@ -6,7 +6,7 @@ description: "Drive the embedded agent from your own client."
 
 ## Embedded agent integration
 
-The `/agent/*` routes are intentionally excluded from the public OpenAPI operation list. They serve the built-in chat UI and are not a separately versioned public API. If you use them in a custom interface, keep it on a matching backend version and handle the chat's states, not just its replies. The [AI Agent guide](agent.md) explains how researchers use the chat.
+The `/agent/*` routes are intentionally excluded from the public OpenAPI operation list. They serve the built-in chat UI and are not a separately versioned public API. If you use them in a custom interface, keep it on a matching backend version and handle the chat's states, not just its replies. [Agent](agent.md) explains how researchers use the chat.
 
 All POST bodies below are JSON unless the body is shown as “none”. `sessionId` and `turnId` are opaque strings, unlike numeric project/step ids.
 
@@ -23,7 +23,7 @@ All POST bodies below are JSON unless the body is shown as “none”. `sessionI
 | `GET /agent/turn/<id>/shown-image/<file>` | — | Raw image the agent showed during the turn, named by an `[image]` log line; 404 `image not found`. |
 | `POST /agent/apply` | `{ "sessionId": "…", "autoApply": true, "clientId": "…" }` | Applies the changes that are not applied yet and returns the session view; `clientId` is optional. A refused changeset leaves `prepare_conflict` or `evaluation_failed` and starts a corrective turn. |
 | `POST /agent/auto-apply` | `{ "clientId": "…", "autoApply": false }` | Empty 204; changes the auto-apply choice of running turns this client started. |
-| `POST /agent/compact` | `{ "sessionId": "…" }` | Session view after summarising the conversation to free context; a failure is recorded in the latest turn log. |
+| `POST /agent/compact` | `{ "sessionId": "…" }` | Session view after summarizing the conversation to free context; a failure is recorded in the latest turn log. |
 | `POST /agent/discard` | `{ "sessionId": "…" }` | Session reset to the target branch; chat remains open. |
 | `POST /agent/archive` | `{ "sessionId": "…" }` | Closed session retained in history. |
 | `POST /agent/rename` | `{ "sessionId": "…", "name": "…" }` | Renamed session view; whitespace is collapsed and the name is capped at 80 characters. |

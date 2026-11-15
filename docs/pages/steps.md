@@ -16,7 +16,7 @@ Every step comes from a template. A template supplies the program and the parame
 
 Pointy has three kinds of step.
 
-### File upload steps
+### File-upload steps
 
 Use a file-upload step to bring in data from your computer, such as a sample table or sequencing reads. Choose **Upload files** and select the files. The file picker shows the formats accepted by that template.
 
@@ -56,7 +56,7 @@ Fill in the fields, choose from the dropdowns, and add list entries or sample ro
 
 ![A step's edit form, with pickers for choosing its input steps.](screenshots/light/step-edit-form.png)
 
-Step pickers list matching steps that are already in the current folder; steps from other folders are not offered. To use one of those, link it into this folder first (see [Moving, linking, and reordering](organize.md#moving-linking-and-reordering)). Pointy lists only steps whose output type fits the field, and never the step you are editing. The menu shows each candidate as its id, type, and name; a selected input shows its name, and hovering it shows its id and type. A saved input that no longer exists is listed as missing until you replace it.
+Step pickers list matching steps that are already in the current folder; steps from other folders are not offered. To use one of those, link it into this folder first (see [Moving, linking, and reordering](organize.md#moving-linking-and-reordering)). Pointy lists only steps whose output type fits the field, and never the step you are editing. The menu shows each candidate as its id, type, and name; a selected input shows its name, and hovering over it shows its id and type. A saved input that no longer exists is listed as missing until you replace it.
 
 Read any notes beside the fields: they may explain an option or point out something to check. These notes come from the template and are guidance, not a check that your analysis is correct.
 

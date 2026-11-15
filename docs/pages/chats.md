@@ -22,7 +22,7 @@ Use **Open chat history** to switch between chats. Chats are listed newest first
 
 The **not applied** label means the chat has edits waiting to be applied or discarded. **Working**, **Needs input**, **Reconnecting**, **Applying**, **Conflict**, and **Needs fix** tell you what is happening in that chat.
 
-![Chat history with the Search chats box above the chat titled Raise alignment threads, labelled not applied, with its Copy link to chat and Archive buttons.](screenshots/light/agent-chat-history.png)
+![Chat history with the Search chats box above the chat titled Raise alignment threads, labeled not applied, with its Copy link to chat and Archive buttons.](screenshots/light/agent-chat-history.png)
 
 Use **Copy link to chat** to return to a conversation or send it to a colleague. The **You** label on a message that started a request links to that point in the conversation. Your colleague needs access to the same Pointy instance; a link does not make the chat public.
 
