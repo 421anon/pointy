@@ -54,7 +54,7 @@ To create a folder, open the folder that should contain it and choose **New fold
 - **Preset** picks one of your administrator's template bundles, such as a standard analysis. **Custom (no preset)** lets you choose templates yourself; adding or removing a template switches the folder to its own list.
 - **Templates** lists the step kinds the folder puts first in its **New** menu.
 
-**Save** creates the folder inside the current one and commits it right away. **Cancel** closes the form without saving. The header's **Edit project** button, or **Edit** in a folder row's action menu, opens the same form as **Edit Project** with the folder's current settings. The folder page form appears above the listing; the row form appears under the row, and its row shows a **Saving...** spinner while the change goes through.
+**Save** creates the folder inside the current one and commits it right away. **Cancel** closes the form without saving. The header's **Edit project** button, or **Edit** in a folder row's action menu, opens the same form as **Edit Project** with the folder's current settings. Opened from the header, the form appears above the listing; opened from a row, it appears under that row, which shows a **Saving...** spinner while the change goes through.
 
 ![The folder form, titled Create new Project, with its Create new and Link existing modes and Name, Preset, and Templates fields.](screenshots/light/folder-create-form.png)
 

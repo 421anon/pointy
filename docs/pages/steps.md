@@ -8,9 +8,9 @@ An analysis is usually more than one command. You bring in data, run a program, 
 
 ![The Example analysis folder: breadcrumbs, the search box, the listing header, and the folder and step rows with their statuses.](screenshots/light/folder-view.png)
 
-The [Agent](agent.md) can create and connect steps for you. Try asking it to explain an existing step, make a copy with different parameters, or set up the same analysis for several samples. You inspect its proposed changes before applying them. The controls below let you check the resulting steps and make changes yourself.
+The [Agent](agent.md) can create and connect steps for you. Try asking it to explain an existing step, make a copy with different parameters, or set up the same analysis for several samples. With **Auto-apply** on, the default, its changes are applied when a turn succeeds; turn it off to review each changeset first. The controls below let you check the resulting steps and make changes yourself.
 
-Every step comes from a template. A template supplies the program and the parameter form. The **New** menu lists a **New …** item for each template of the current folder and keeps every other template under **Other types**, so any template can be added from any folder. See [Folder templates](projects.md#folder-templates).
+Every step comes from a template, which supplies the program and the parameter form. Any template can be used in any folder; a folder's template selection decides which ones its **New** menu lists first, not which you can add. See [Folder templates](projects.md#folder-templates).
 
 ## Step types
 
@@ -42,7 +42,7 @@ Use **Run**, **Stop**, and the output browser as you would for an analysis step.
 
 ## Creating steps
 
-Use the **New** menu in the listing header. It offers **New folder**, one **New …** item per template of the folder, and **Other types** with every other template. Choosing a step item opens its form above the listing: give the step a **Name**, fill in the fields, and choose **Save**. If the template list cannot be loaded, the folder shows **Step config failed to load**, the error, and a **Go home** link instead of waiting indefinitely.
+Use the **New** menu in the [listing header](projects.md#the-listing-header) and pick the **New …** item for the kind of step you want. Its form opens above the listing: give the step a **Name**, fill in the fields, and choose **Save**. If the template list cannot be loaded, the folder shows **Step config failed to load**, the error, and a **Go home** link instead of waiting indefinitely.
 
 Steps that can fill another step's input offer **Create …** shortcuts on their row. For example, a sample-table step may offer **Create Read QC** with the uploaded data already selected. A shortcut appears when the folder already holds a step of the target template and this step's output can fill one of its inputs. Choosing it opens the target's form with that input filled in.
 

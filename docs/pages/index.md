@@ -16,7 +16,7 @@ The sections below describe three ways to work with Pointy: through the web UI, 
 
 Pointy's web UI supports established analyses from setting up a folder through sharing results. Folders hold analysis steps (programs with their parameters, each made from a predefined analysis called a template), uploaded files, run states, and outputs. Folders nest inside other folders under Home, and the same step can appear in several folders. Results can be viewed in the browser as text, HTML, images, molecular structures, CSV, or TSV, compared with other outputs, reviewed, and shared using a read-only link to the exact state of the repository.
 
-The built-in AI agent can set up or change an analysis when you ask it to. Its edits stay separate until you inspect and apply them.
+The built-in AI agent can set up or change an analysis when you ask it to. By default its changes are applied when a turn succeeds; turn **Auto-apply** off to review each changeset first.
 
 → [Managing Folders](projects.md) · [Working with Steps](steps.md) · [Running Steps and Viewing Results](execution.md) · [AI Agent](agent.md)
 
@@ -40,7 +40,7 @@ Pointy provides the platform behind such a UI. Templates defined in the user rep
 
 A Pointy link can open a folder read-only at a specific Git commit, deep-link to an output file or directory, and highlight selected lines in a text result. The recipient sees the state that was shared, not whatever happens to be current later.
 
-[Read the sharing documentation →](sharing.md#share-links-and-read-only-views)
+[Read the sharing documentation →](sharing.md#share-links)
 
 ![Output file preview with lines 6 through 9 selected and a Share lines action visible above the highlighted text.](screenshots/light/output-file-line-range-share.png)
 
@@ -57,7 +57,7 @@ The frontend and backend are self-hosted. A NixOS module is provided for easy se
 - [Managing Folders](projects.md): organize an analysis in folders: create, nest, move, link, hide, and delete folders and steps, and jump to any step.
 - [Working with Steps](steps.md): create steps from templates, set their inputs and parameters, and edit or clone them.
 - [Running Steps and Viewing Results](execution.md): run and stop steps, upload files, inspect and compare outputs, work with source files, review results, and create share links.
-- [AI Agent](agent.md): ask the built-in agent to set up or change an analysis, then inspect and apply its changes.
+- [AI Agent](agent.md): ask the built-in agent to set up or change an analysis, and let it apply its changes or review them first.
 
 ### Defining and hosting workflows
 

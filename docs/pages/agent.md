@@ -80,6 +80,6 @@ When a run fails, or a step fails certification, open the step's log and choose 
 
 In a long chat, Pointy shows a strip under the chat title when the conversation has used about half of the context the model can consider at once. It tells you the percentage and token counts in use and offers **Compact**. While the agent is not working, **Compact** asks it to summarize the earlier conversation to free space. The strip says **Compacting the conversation to free context.** while that runs. If compaction fails, the strip shows the error and a **Try again** button. Restate important constraints after compacting if you need to, or start a new chat for a separate task.
 
-Pointy stops a turn that runs too long: by default a turn is limited to 30 minutes; time spent waiting for your answer does not count. Your administrator can change the limit in [the backend configuration](config.md#backend-configuration).
+By default, Pointy stops a turn after 30 minutes of work; time spent waiting for your answer does not count. Your administrator can change the limit in [the backend configuration](config.md#backend-configuration).
 
 If the agent reports an error, read it before sending the same request again. It may already have made some edits. Check those before deciding whether to continue or discard them.

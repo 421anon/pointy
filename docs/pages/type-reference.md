@@ -28,8 +28,6 @@ A template is an attribute set loaded from `templates/<name>.nix`. Its filename 
 
 The renderer reads `displayName`, `description`, and `sortKey` directly, so all three attributes must exist even when their value is `null`.
 
-Unlike the old typed-template API, these templates are plain attribute sets.
-
 ## Step type declarations
 
 ### `pointy.type.derivation`

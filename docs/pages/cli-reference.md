@@ -15,7 +15,7 @@ This is also a useful way to separate a repository problem from a web or backend
 | <div style="width: 220px">Attribute</div> | What it contains |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pointy.schemaVersion` | The version of the output shape, `1`. The backend uses it to detect that this repository publishes step keys and certificates; an older stdlib does not have it. |
-| `pointy.agentSchema` | Markdown reference for the embedded agent: the editable step and project shapes, dependency references, apply behavior, and the output list below. The backend does not read it; `nix eval --raw .#pointy.agentSchema` prints it. |
+| `pointy.agentSchema` | Markdown reference for the embedded agent: the editable step and folder shapes, dependency references, apply behavior, and the output list below. The backend does not read it; `nix eval --raw .#pointy.agentSchema` prints it. |
 | `pointy.stepConfig` | Version 4 form document: `{ version; templates; }`, generated from language declarations and template bindings. |
 | `pointy.presets` | Preset bundles read from `presets/`: display labels, descriptions, sort order, and template lists. |
 | `pointy.projects` | Evaluated folder definitions from `projects/`: `name`, the active preset or template list, tagged `children` with each entry's `hidden` and `sortKey`, and `validationErrors`. Includes the root `projects/0.nix` under id `0`. |
@@ -38,7 +38,7 @@ This is also a useful way to separate a repository problem from a web or backend
 
 | <div style="width: 220px">Attribute</div> | What it contains |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pointy.root` | The folder tree, one node per project record starting at the root project `0`. Each step node is `pointy.steps.<id>` plus `turtle` and `fileTurtle` documents for artifact permalinks. |
+| `pointy.root` | The folder tree, one node per folder record starting at the root folder `0`. Each step node is `pointy.steps.<id>` plus `turtle` and `fileTurtle` documents for artifact permalinks. |
 | `pointy.staleDependencies` | Dependency references whose recorded `path` no longer holds the referenced step at this commit, sorted by dependent step id. Each entry is `{ step; dependency; }`. |
 
 These attributes live directly under `pointy`, not under a system suffix. The current stdlib builds for `x86_64-linux`.
@@ -200,7 +200,7 @@ This runs `pointy check --applications` over every step record, using each templ
 
 ## Day-to-day patterns
 
-Once you are comfortable with the commands above, a few patterns make day-to-day work smoother:
+A few patterns for day-to-day work:
 
 - Use `nix eval --json ... | jq .` for readable interactive inspection.
 - `nix derivation show .#pointy.steps.42` shows the full `.drv` for a step.

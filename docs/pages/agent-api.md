@@ -8,7 +8,7 @@ description: "Drive the embedded agent from your own client."
 
 The `/agent/*` routes are intentionally excluded from the public OpenAPI operation list. They serve the built-in chat UI and are not a separately versioned public API. If you use them in a custom interface, keep it on a matching backend version and handle the chat's states, not just its replies. [Agent](agent.md) explains how researchers use the chat.
 
-All POST bodies below are JSON unless the body is shown as “none”. `sessionId` and `turnId` are opaque strings, unlike numeric project/step ids.
+All POST bodies below are JSON unless the body is shown as “none”. `sessionId` and `turnId` are opaque strings, unlike the numeric folder and step ids.
 
 | Method and route | Body | Result |
 | --- | --- | --- |

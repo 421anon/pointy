@@ -35,7 +35,7 @@ Poll `/step-files/cold` while `onloading` is true; the file listing flips an ent
 
 ### Artifacts as Turtle
 
-`GET /rdf/artifact/<project path>/<step-id>/<full-commit>` serves an artifact permalink's linked data as `text/turtle; charset=utf-8`, with `Cache-Control: public, max-age=31536000, immutable` and `Vary: Accept`. Write the project path as folder ids (omit it for Home), then the step id and a full 40-character lowercase hex commit. Without `?path` the document describes the step's output and the artifacts upstream of it; `?path=<file>` selects one output file instead, as the permalink's query does. The supplied nginx vhost rewrites `/artifact/...` requests whose `Accept` includes `text/turtle` to this route, so the HTML permalink keeps serving the frontend. A malformed route or a step that is not in that folder at the commit returns 404 with text; a commit the backend cannot find after one fetch returns 404 `Git commit <c> is unavailable after fetching the user repository`, and a revision from before the stdlib published linked data returns 404 naming the commit. Set `services.pointy-host.linkedDataBase` to an origin to prefix the response with `@base <origin/> .`.
+`GET /rdf/artifact/<folder path>/<step-id>/<full-commit>` serves an artifact permalink's linked data as `text/turtle; charset=utf-8`, with `Cache-Control: public, max-age=31536000, immutable` and `Vary: Accept`. Write the folder path as folder ids (omit it for Home), then the step id and a full 40-character lowercase hex commit. Without `?path` the document describes the step's output and the artifacts upstream of it; `?path=<file>` selects one output file instead, as the permalink's query does. The supplied nginx vhost rewrites `/artifact/...` requests whose `Accept` includes `text/turtle` to this route, so the HTML permalink keeps serving the frontend. A malformed route or a step that is not in that folder at the commit returns 404 with text; a commit the backend cannot find after one fetch returns 404 `Git commit <c> is unavailable after fetching the user repository`, and a revision from before the stdlib published linked data returns 404 naming the commit. Set `services.pointy-host.linkedDataBase` to an origin to prefix the response with `@base <origin/> .`.
 
 ### Editing source files
 
@@ -63,7 +63,7 @@ An unconfigured scratch space returns 404 `Scratch directory is not configured`.
 
 ### Extras and autocomplete
 
-`GET /step-files/extras?id=…&path=<directory>&commit=…` returns that folder's metadata object. `{}` can mean no extras, no metadata for that folder, or a scan queued in the background. Invalid JSON or evaluation errors are failures, not empty metadata. A `meta.json` over **10 MiB** is rejected with 400 `extras meta.json exceeds 10 MiB size limit`; parse failures return 500. See [Extras](extras.md#injecting-typed-column-metadata-via-extras).
+`GET /step-files/extras?id=…&path=<directory>&commit=…` returns that directory's metadata object. `{}` can mean no extras, no metadata for that directory, or a scan queued in the background. Invalid JSON or evaluation errors are failures, not empty metadata. A `meta.json` over **10 MiB** is rejected with 400 `extras meta.json exceeds 10 MiB size limit`; parse failures return 500. See [Extras](extras.md#injecting-typed-column-metadata-via-extras).
 
 `POST /autocomplete?commit=…` accepts:
 
