@@ -111,8 +111,8 @@ viewChip readOnly clickable name tooltip extraAttrs =
         ]
 
 
-viewMenuItem : Bool -> String -> List Fuzzy.Segment -> Maybe (List Fuzzy.Segment) -> String -> Html MenuAction
-viewMenuItem isActive domId label mDetail tooltip =
+viewMenuItem : Bool -> String -> Maybe String -> List Fuzzy.Segment -> Maybe (List Fuzzy.Segment) -> String -> Html MenuAction
+viewMenuItem isActive domId mId label mDetail tooltip =
     Html.div
         [ class "select-menu-item"
         , id domId
@@ -120,7 +120,13 @@ viewMenuItem isActive domId label mDetail tooltip =
         , Events.preventDefaultOn "mousedown" (Decode.succeed ( MenuSelect, True ))
         , title tooltip
         ]
-        [ Html.span [ class "select-menu-item-label" ] (List.map viewSegment label)
+        [ Html.span [ class "select-menu-item-label" ]
+            (List.map viewSegment label
+                ++ (mId
+                        |> Maybe.map (\itemId -> [ Html.text "\u{00A0}", Html.span [ class "listing-row-id", title ("id: " ++ itemId) ] [ Html.text itemId ] ])
+                        |> Maybe.withDefault []
+                   )
+            )
         , Html.viewMaybe
             (\detail -> Html.span [ class "select-menu-item-detail" ] (List.map viewSegment detail))
             mDetail
@@ -192,6 +198,7 @@ view :
     , statusNotice : Maybe String
     , emptyNotice : Maybe String
     , toMenuItemName : Item ref -> String
+    , toMenuItemId : Item ref -> Maybe String
     , toMenuItemTooltip : Item ref -> List String
     , activeAfterSelect : Bool
     , clearInputAfterSelect : Bool
@@ -203,7 +210,7 @@ view :
     , inputItemStyle : Item ref -> List (Html.Attribute Never)
     }
     -> Html (Flow s ())
-view { optic, selectState, selected_, matches, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, related, statusNotice, emptyNotice, toMenuItemName, toMenuItemTooltip, onChange, onInputChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
+view { optic, selectState, selected_, matches, readOnly, hasChanged, label, mHint, placeholder, inputIcon, toInputItemName, toInputItemTooltip, onInputItemClick, related, statusNotice, emptyNotice, toMenuItemName, toMenuItemId, toMenuItemTooltip, onChange, onInputChange, onRemove, activeAfterSelect, clearInputAfterSelect, onSelect, alignRight, inputItemStyle } =
     let
         optic_ =
             remkT optic
@@ -408,6 +415,7 @@ view { optic, selectState, selected_, matches, readOnly, hasChanged, label, mHin
                             , viewMenuItem
                                 (index == selectState.activeIndex)
                                 (menuItemId index)
+                                (toMenuItemId menuItem.item)
                                 (Fuzzy.highlight Fuzzy.Loose query (toMenuItemName menuItem.item))
                                 (menuItemDetail menuItem)
                                 (String.join "\n" (toMenuItemTooltip menuItem.item))
