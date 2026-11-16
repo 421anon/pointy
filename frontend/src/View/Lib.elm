@@ -10,13 +10,22 @@ import Fuzzy
 import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Extra as Html
+import Iso8601
 import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
 import Model.Lenses as Lenses exposing (searchBox)
 import Model.Lib as Lib
 import Route
+import Time
 import View.Icons exposing (iconCustom)
 import View.Organize
+
+
+formatUtcMinute : Time.Posix -> String
+formatUtcMinute posix =
+    Iso8601.fromTime posix
+        |> String.left 16
+        |> String.replace "T" " "
 
 
 viewLoading : Html a -> Html a

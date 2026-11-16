@@ -3823,8 +3823,13 @@ mergeSessionSummary summary agentState =
                 summary :: current
     in
     over sessions
-        (ApiData.update always (Success (List.map (applySessionRenameOverride agentState.sessionRenames) merged)))
+        (ApiData.update always (Success (List.map (applySessionRenameOverride agentState.sessionRenames) (List.sortBy latestTurnFirst merged))))
         agentState
+
+
+latestTurnFirst : Model.AgentSessionSummary -> Int
+latestTurnFirst =
+    .lastTurnAt >> Maybe.unwrap 0 (Time.posixToMillis >> negate)
 
 
 upsertSession : Model.AgentSessionSummary -> Model.AgentSessionSummary -> Model.AgentSessionSummary

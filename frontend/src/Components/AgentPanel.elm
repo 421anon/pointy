@@ -16,6 +16,7 @@ import Html.Events as Events
 import Html.Extra as Html
 import Html.Lazy
 import Http
+import Iso8601
 import Json.Decode as Decode
 import Keyboard
 import List.Extra as List
@@ -26,8 +27,9 @@ import Model.Shadow exposing (StepConfig)
 import Route
 import Set
 import Time
+import Time.Distance
 import View.Icons
-import View.Lib exposing (boolText)
+import View.Lib exposing (boolText, formatUtcMinute)
 
 
 view : Model -> Html (Flow Model ())
@@ -223,7 +225,7 @@ viewSessionBody now mentionsAwaited mentionSources agent =
             , ( "is-session-list-open", agent.isSessionListOpen )
             ]
         ]
-        [ Html.viewIfLazy agent.isSessionListOpen (\() -> viewSessionSidebar agent listed)
+        [ Html.viewIfLazy agent.isSessionListOpen (\() -> viewSessionSidebar now agent listed)
         , if agent.isRestoringChat then
             viewSessionsLoading
 
@@ -305,18 +307,18 @@ isCreatingAgentSession agent =
     agent.request == Just Model.CreatingAgentSession
 
 
-viewSessionSidebar : Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
-viewSessionSidebar agent listed =
+viewSessionSidebar : Time.Posix -> Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionSidebar now agent listed =
     let
         searchState =
             agent.chatSearch
 
         content =
             if Fuzzy.isEmpty (Fuzzy.parse searchState.input) then
-                { firstResult = Nothing, nodes = viewSessionSidebarContent agent listed }
+                { firstResult = Nothing, nodes = viewSessionSidebarContent now agent listed }
 
             else
-                viewChatSearchResults agent
+                viewChatSearchResults now agent
     in
     Html.div
         [ class "agent-panel__sidebar"
@@ -361,8 +363,8 @@ viewChatSearchInput searchState firstResult =
         ]
 
 
-viewChatSearchResults : Model.AgentState -> { firstResult : Maybe String, nodes : List (Html (Flow Model ())) }
-viewChatSearchResults agent =
+viewChatSearchResults : Time.Posix -> Model.AgentState -> { firstResult : Maybe String, nodes : List (Html (Flow Model ())) }
+viewChatSearchResults now agent =
     let
         searchState =
             agent.chatSearch
@@ -398,14 +400,14 @@ viewChatSearchResults agent =
         [ Html.div [ class "agent-panel__search-results" ]
             [ Html.ul [ class "agent-panel__session-list" ]
                 (List.map
-                    (\summary -> viewSessionRowWith agent { name = Fuzzy.highlight Fuzzy.Loose query (sessionDisplayName summary), detail = Nothing } summary)
+                    (\summary -> viewSessionRowWith now agent { name = Fuzzy.highlight Fuzzy.Loose query (sessionDisplayName summary), detail = Nothing } summary)
                     matches
                 )
             , Html.viewIf (not (List.isEmpty related))
                 (Html.div [ class "agent-panel__search-heading" ] [ Html.text "Related" ])
             , Html.ul [ class "agent-panel__session-list" ]
                 (List.map
-                    (\( summary, detail ) -> viewSessionRowWith agent { name = [ Fuzzy.Plain (sessionDisplayName summary) ], detail = Just detail } summary)
+                    (\( summary, detail ) -> viewSessionRowWith now agent { name = [ Fuzzy.Plain (sessionDisplayName summary) ], detail = Just detail } summary)
                     related
                 )
             , Html.viewMaybe (\message -> Html.p [ class "agent-panel__empty-hint", attribute "role" "status" ] [ Html.text message ]) notice
@@ -416,8 +418,8 @@ viewChatSearchResults agent =
     }
 
 
-viewSessionSidebarContent : Model.AgentState -> List Model.AgentSessionSummary -> List (Html (Flow Model ()))
-viewSessionSidebarContent agent listed =
+viewSessionSidebarContent : Time.Posix -> Model.AgentState -> List Model.AgentSessionSummary -> List (Html (Flow Model ()))
+viewSessionSidebarContent now agent listed =
     let
         firstLoad =
             case agent.sessions of
@@ -458,7 +460,7 @@ viewSessionSidebarContent agent listed =
              else
                 []
             )
-                ++ List.map (viewSessionRow agent) active
+                ++ List.map (viewSessionRow now agent) active
     in
     [ Html.viewMaybe
         (\msg ->
@@ -495,7 +497,7 @@ viewSessionSidebarContent agent listed =
                 ]
             , Html.ul [ class "agent-panel__session-list" ]
                 (if agent.showArchived then
-                    List.map (viewSessionRow agent) archived
+                    List.map (viewSessionRow now agent) archived
 
                  else
                     []
@@ -535,13 +537,13 @@ viewCreatingSessionRow =
         ]
 
 
-viewSessionRow : Model.AgentState -> Model.AgentSessionSummary -> Html (Flow Model ())
-viewSessionRow agent summary =
-    viewSessionRowWith agent { name = [ Fuzzy.Plain (sessionDisplayName summary) ], detail = Nothing } summary
+viewSessionRow : Time.Posix -> Model.AgentState -> Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionRow now agent summary =
+    viewSessionRowWith now agent { name = [ Fuzzy.Plain (sessionDisplayName summary) ], detail = Nothing } summary
 
 
-viewSessionRowWith : Model.AgentState -> { name : List Fuzzy.Segment, detail : Maybe String } -> Model.AgentSessionSummary -> Html (Flow Model ())
-viewSessionRowWith agent label summary =
+viewSessionRowWith : Time.Posix -> Model.AgentState -> { name : List Fuzzy.Segment, detail : Maybe String } -> Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionRowWith now agent label summary =
     let
         session =
             summary.session
@@ -601,6 +603,16 @@ viewSessionRowWith agent label summary =
             , Html.viewMaybe (\detail -> Html.div [ class "agent-panel__session-meta" ] [ Html.text detail ]) label.detail
             , Html.viewIf (statusLabel /= "Ready" && statusLabel /= "Archived")
                 (Html.div [ class "agent-panel__session-meta" ] [ Html.text statusLabel ])
+            , Html.viewMaybe
+                (\lastTurnAt ->
+                    Html.node "time"
+                        [ class "agent-panel__session-date"
+                        , attribute "datetime" (Iso8601.fromTime lastTurnAt)
+                        , title ("Last turn: " ++ formatUtcMinute lastTurnAt ++ " UTC")
+                        ]
+                        [ Html.text (Time.Distance.inWords lastTurnAt now) ]
+                )
+                summary.lastTurnAt
             , Html.viewIf summary.hasCommits
                 (Html.span [ class "agent-panel__pill" ] [ Html.text "not applied" ])
             ]
@@ -1583,7 +1595,6 @@ turnChatRef sessionId turn =
     }
 
 
-
 viewToolCall : Time.Posix -> Model.AgentToolCall -> Html (Flow Model ())
 viewToolCall now call =
     Html.div [ class "agent-panel__chat-message agent-panel__chat-message--agent" ]
@@ -1709,7 +1720,6 @@ agentLabel agent =
 
         _ ->
             "Agent"
-
 
 
 viewAutoApplyEcho : Bool -> Html msg

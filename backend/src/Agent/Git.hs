@@ -32,7 +32,7 @@ module Agent.Git (
 import Agent.Policy (appliedProjectId, appliedStepId, isAgentOutputPath)
 import Agent.Session (
     AgentSession (..),
-    AgentSessionSummary (AgentSessionSummary),
+    AgentSessionSummary (AgentSessionSummary, lastTurnAt),
     AgentTurn (..),
     PreparedApply (..),
     applyChangesetPrompt,
@@ -152,12 +152,12 @@ createAgentSession = do
 
 listAgentSessions :: ExceptT String IO [AgentSessionSummary]
 listAgentSessions =
-    mapM loadAgentSessionSummary . sortOn (Down . createdAt) =<< liftIO listSessions
+    fmap (sortOn (Down . lastTurnAt)) . mapM loadAgentSessionSummary . sortOn (Down . createdAt) =<< liftIO listSessions
 
 loadAgentSessionSummary :: AgentSession -> ExceptT String IO AgentSessionSummary
 loadAgentSessionSummary session_ = do
     turns_ <- liftIO $ sortOn turnStartedAtCompat <$> listTurns (sessionId session_)
-    AgentSessionSummary (deriveSessionRuntime session_ turns_) (sessionDisplayTitle session_ turns_) (length turns_)
+    AgentSessionSummary (deriveSessionRuntime session_ turns_) (sessionDisplayTitle session_ turns_) (length turns_) (turnStartedAt <$> listToMaybe (reverse turns_))
         <$> sessionHasAgentCommits session_
 
 sessionDisplayTitle :: AgentSession -> [AgentTurn] -> Text

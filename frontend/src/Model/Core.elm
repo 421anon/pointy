@@ -773,6 +773,7 @@ type alias AgentTurn =
     , turnAutomatic : Bool
     , turnStatus : String
     , turnExitCode : Maybe Int
+    , turnStartedAt : Time.Posix
     , turnLogPath : String
     , turnLog : String
     }
@@ -789,6 +790,7 @@ type alias AgentSessionSummary =
     { session : AgentSession
     , title : String
     , turnCount : Int
+    , lastTurnAt : Maybe Time.Posix
     , hasCommits : Bool
     }
 
@@ -798,6 +800,7 @@ summaryFromView view =
     { session = view.session
     , title = chatTitle view.session view.turns
     , turnCount = List.length view.turns
+    , lastTurnAt = List.last view.turns |> Maybe.map .turnStartedAt
     , hasCommits = view.gitState.hasAgentCommits
     }
 
