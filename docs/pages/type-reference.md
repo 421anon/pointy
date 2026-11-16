@@ -6,7 +6,7 @@ description: "Template metadata, step kinds, contracts, and builder helpers."
 
 This reference is for administrators writing templates. A template should not have to describe the same input twice: the language declaration sets the argument names, types, order, and defaults; the Nix template chooses form controls and runs the program. For a complete example, start with [Repository](user-repo-setup.md).
 
-This reference describes the `main` branch of [pointy-stdlib](https://github.com/421anon/pointy-stdlib) and **step-config version 4**, which the current frontend requires. It does not describe the older `compile.options` API. Keep the stdlib, language, and language-library revisions together; the setup guide explains the current input prerequisites.
+This reference describes the `main` branch of [pointy-stdlib](https://github.com/421anon/pointy-stdlib) and **step-config version 4**, which the current frontend requires. It does not describe the older `compile.options` API. Keep the stdlib, language, and language-library revisions together; [Repository](user-repo-setup.md#choose-compatible-inputs) explains the current input prerequisites.
 
 ## Top-level template metadata
 
@@ -27,8 +27,6 @@ A template is an attribute set loaded from `templates/<name>.nix`. Its filename 
 | `autocomplete` | Optional function receiving `{ pkgs, lib }` and returning named suggestion functions. |
 
 The renderer reads `displayName`, `description`, and `sortKey` directly, so all three attributes must exist even when their value is `null`.
-
-Unlike the old typed-template API, these templates are plain attribute sets.
 
 ## Step type declarations
 

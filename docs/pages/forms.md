@@ -46,7 +46,7 @@ Here `packages` is an autocomplete hook you provide. An outer list's labels belo
 
 `enumDisplayNames` changes labels, not stored values.
 
-A **step-input** picker is driven by the language, not by a binding key. It offers the steps linked directly in the folder you are editing whose template's output meets the parameter's declared type (the field's `accepts`); steps in other folders, and steps outside every folder, are not offered. The type system's outright proofs (`proven`) decide which rows get the quick-create shortcut. There is no `allowedTypes` key. A saved reference whose step is not loaded shows as `#<id> (missing)`.
+A **step-input** picker is driven by the language, not by a binding key. It offers the steps linked directly in the folder you are editing whose template's output meets the parameter's declared type (the field's `accepts`); steps in other folders, and steps outside every folder, are not offered. The type system's outright proofs (`proven`) decide which rows get the quick-create shortcut. A saved reference whose step is not loaded shows as `#<id> (missing)`.
 
 `quickCreate = true` on a step-input binding adds a **Create …** row action to steps whose template the field proves meets the parameter's type; the label names the target template. The action opens the target step's form with this input already selected. It appears only for target templates that steps in the same folder already use. For a list of step inputs, put it on the element: `bindings.dependencies.list.quickCreate = true;`.
 
@@ -84,7 +84,7 @@ The prefix is a display hint, not a command automatically prepended to the build
 
 A text, integer, or boolean binding may set `readOnly = true`. A `path` list tells the frontend where to read the value inside `args`, as with the generated download timestamp. This only changes the form: it does not add an argument or enforce an edit restriction on the backend.
 
-There is no `visible = false` option system in this API. Values supplied by Pointy, such as `args.id` and upload/download store references, are handled by the stdlib rather than declared as hidden form options.
+Values supplied by Pointy, such as `args.id` and upload/download store references, are handled by the stdlib rather than declared as hidden form options.
 
 ## Autocomplete
 

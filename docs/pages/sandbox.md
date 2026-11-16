@@ -22,7 +22,7 @@ Only changes to these paths can be committed and applied:
 
 Other changed paths are reported in the log and excluded. In particular, the embedded agent cannot update `flake.nix` or templates; administrators make those changes with their repository tools. Applied changes are ordinary Git commits, available to other instances using that repository after their next fetch.
 
-Applying a changeset uses a temporary worktree at the current target-branch commit. Pointy combines the agent's edits into one commit, removes changes to reviewed steps (recording the proposed changeset as discarded if nothing else remains), evaluates the result, and refuses it if it introduces evaluation failures that are not already on the shared branch. It checks that neither side has changed during preparation, then pushes it. When preparation finds conflicts, the agent resolves them in that worktree and you prepare again. The [API guide](agent-api.md#applying-changes-safely) describes the preparation and confirmation requests.
+Applying a changeset uses a temporary worktree at the current target-branch commit. Pointy combines the agent's edits into one commit, removes changes to reviewed steps (recording the proposed changeset as discarded if nothing else remains), evaluates the result, and refuses it if it introduces evaluation failures that are not already on the shared branch. It checks that neither side has changed during preparation, then pushes it. When preparation finds conflicts, the agent resolves them in that worktree and you prepare again. [Agent API](agent-api.md#applying-changes-safely) describes the preparation and confirmation requests.
 
 ### Sandbox and credential boundaries
 
@@ -30,7 +30,17 @@ Each turn runs two `sbox` sandboxes. The **tool sandbox** runs `pi-glovebox-serv
 
 The **runner sandbox** runs Pi in RPC mode with its own `{sessionRoot}/pi` home, Pi config, and session history. It sees an empty directory in place of the worktree, reaches the tools through the glovebox socket, and mounts the extensions directory read-only. Its binds are fixed; `runner-args` only changes Pi's arguments. Pi starts with `--no-context-files`, `--no-skills`, `--no-extensions`, `--no-prompt-templates`, `--no-themes`, `--no-mcp`, and `--no-approve`; the backend then adds the configured extensions, the `.pi/skills` and `AGENTS.md` from the session's base commit, and a system prompt containing its built-in rules. The backend's own `HOME`, SSH keys, and Git credentials are not passed to either sandbox.
 
-The runner receives `PATH`, `USER`, `LANG`, `LOCALE_ARCHIVE`, and the keys named by the `api-key-env` of the coder's and answerer's providers. It also receives `HOME`, `POINTY_AGENT_WORKTREE`, `POINTY_AGENT_OUTPUT_MARKER`, `POINTY_AGENT_SESSION_ID`, `PI_GLOVEBOX_SOCKET`, and `TMPDIR`. The tool sandbox receives `PATH`, `USER`, `LANG`, `LOCALE_ARCHIVE`, `HOME`, `POINTY_AGENT_WORKTREE`, and `POINTY_AGENT_SESSION_ID`, but no provider keys. Both receive `NIX_REMOTE` when `storeUrl` is set. Other backend environment variables are not passed through. The sandboxes do not see the host's system profile, so `LANG` resolves only through `LOCALE_ARCHIVE`; without it, programs fall back to the C locale, and some, such as gnuplot, crash. Supply provider secrets through `services.pointy-backend.agentEnvFile`, not `config.toml`.
+Each sandbox receives only these environment variables:
+
+| Variable | Runner sandbox | Tool sandbox |
+| --- | --- | --- |
+| `PATH`, `USER`, `LANG`, `LOCALE_ARCHIVE` | yes | yes |
+| `HOME`, `POINTY_AGENT_WORKTREE`, `POINTY_AGENT_SESSION_ID` | yes | yes |
+| `POINTY_AGENT_OUTPUT_MARKER`, `PI_GLOVEBOX_SOCKET`, `TMPDIR` | yes | no |
+| Keys named by the `api-key-env` of the coder's and answerer's providers | yes | no |
+| `NIX_REMOTE` | when `storeUrl` is set | when `storeUrl` is set |
+
+Other backend environment variables are not passed through. The sandboxes do not see the host's system profile, so `LANG` resolves only through `LOCALE_ARCHIVE`; without it, programs fall back to the C locale, and some, such as gnuplot, crash. Supply provider secrets through `services.pointy-backend.agentEnvFile`, not `config.toml`.
 
 The module puts an `sbox` on the backend's `PATH` that always runs with `--network isolated --history off`; it does not install `sbox` system-wide. Network isolation here is a sandbox setting, not a promise that the agent cannot contact a model provider. Check the sandbox's connectivity and any extra binds as part of your deployment policy.
 

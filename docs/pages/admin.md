@@ -6,7 +6,7 @@ description: "How a Pointy instance fits together, and how to set up its host, p
 
 As the instance administrator, you make the analysis tools available and keep Pointy running. You provide the Git repository that stores the work, the machines that run it, access to the AI agent, and backups. Researchers can then create, inspect, and edit steps without managing those services themselves.
 
-The Host pages cover hosting and operations. For everyday research work, start with [Agent](agent.md), [Steps](steps.md), and [Runs](execution.md). To add analysis tools, see [Repository](user-repo-setup.md).
+The Hosting pages cover setup and operations. For everyday research work, start with [Agent](agent.md), [Steps](steps.md), and [Runs](execution.md). To add analysis tools, see [Repository](user-repo-setup.md).
 
 ## Runtime architecture
 
@@ -20,7 +20,7 @@ A Pointy deployment has five moving parts:
 
 Optional pieces sit around that core: `pointy-hub` and `pointy-node` distribute realisation across a multi-node Slurm cluster, an external login page can issue session tokens, and a cold-storage store can hold large step outputs outside the backend's local store.
 
-When a user saves a folder or step, the backend rewrites its `.nix` file, commits the change, and pushes it to the configured remote. Organize actions are queued by the UI and sent as one `POST /projects/batch` five seconds after the last action, producing a single commit that may touch several files. Each run uses a specific Git commit, so later edits do not change what that run means. Status updates appear in every project that links the step directly; ancestors see step counts and status totals from `GET /project-rollup`.
+When a user saves a folder or step, the backend rewrites its `.nix` file, commits the change, and pushes it to the configured remote. Organize actions are queued by the UI and sent as one `POST /projects/batch` five seconds after the last action, producing a single commit that may touch several files. Each run uses a specific Git commit, so later edits do not change what that run means. Status updates appear in every folder that links the step directly; ancestor folders see step counts and status totals from `GET /project-rollup`.
 
 ## Setting up a host
 

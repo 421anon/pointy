@@ -8,9 +8,9 @@ Run a step and Pointy keeps the result together with the inputs, software, and p
 
 ## Running a step
 
-Click **Run** on the step you want to use. If it needs results from other steps, Pointy runs those first. It reuses results that are already available for the same inputs and settings.
+Click **Run** on the step you want to run. If it needs results from other steps, Pointy runs those first. It reuses results that are already available for the same inputs and settings.
 
-Run is offered on steps that are **Not Started**, **Failure**, **Not Certified**, or **Certification Failed**; it disappears while a step is running or successful. If the step's form is open, **Run** saves it first and builds the saved version.
+**Run** is offered on steps that are **Not Started**, **Failure**, **Not Certified**, or **Certification Failed**; it disappears while a step is running or successful. If the step's form is open, **Run** saves it first and builds the saved version.
 
 ![A step row with the Run button, status indicator, and other step actions.](screenshots/light/step-derivation-header.png)
 
@@ -48,7 +48,7 @@ The display updates automatically; you do not need to keep refreshing the page.
 
 The bottom status bar shows the state of the computing service and how many steps are active. It reads **Connecting** while the status loads, **Cluster OK** when the service is available, and **Degraded**, **Unavailable**, or **Cluster unknown** when there is a problem; a short reason follows the label when one is known, and hovering shows the full sentence.
 
-Beside it, the summary counts steps by state: running, queued, starting, and uploading. Click the summary to open the activity panel. Steps are grouped under **Running**, **Queued**, **Starting**, and **Uploading**, and you can collapse a group. When the scheduler gives a reason, a queued step shows why it is waiting — for upstream steps, free CPUs or memory, higher-priority jobs, a scheduled start, a hold, unavailable nodes, or the raw Slurm reason — along with how long it has waited; hover the step for the full sentence. Running and starting steps show elapsed time when there is one, and uploads show their progress. Choose any step to open it. Rows for running, queued, and starting steps have **Stop**; upload rows do not.
+Beside it, the summary counts steps by state: running, queued, starting, and uploading. Click the summary to open the activity panel. Steps are grouped under **Running**, **Queued**, **Starting**, and **Uploading**, and you can collapse a group. When the scheduler gives a reason, a queued step shows why it is waiting — for upstream steps, free CPUs or memory, higher-priority jobs, a scheduled start, a hold, unavailable nodes, or the raw Slurm reason — along with how long it has waited; hover over the step for the full sentence. Running and starting steps show elapsed time when there is one, and uploads show their progress. Choose any step to open it. Rows for running, queued, and starting steps have **Stop**; upload rows do not.
 
 The summary covers the whole instance, so a step you upload or start on this page appears in it. **Idle** appears only once status has loaded and no step is running, queued, starting, or uploading; the health label, not **Idle**, tells you whether the service is available.
 
@@ -66,7 +66,7 @@ Recent messages are kept under the **Notifications** bell: each entry shows the 
 
 ## Stopping a running step
 
-While a step is running, **Stop** appears in place of **Run**; you can also stop a queued or starting build from its row in the activity panel. Use it to cancel the run before changing the step and trying again. Pointy replaces the button with a disabled **Stopping** button until the step stops, and the cancelled run ends as **Failure**. Stop cancels only this step's own run: input steps that had already started keep running.
+While a step is running, **Stop** appears in place of **Run**; you can also stop a queued or starting build from its row in the activity panel. Use it to cancel the run before changing the step and trying again. Pointy replaces the button with a disabled **Stopping** button until the step stops, and the canceled run ends as **Failure**. **Stop** cancels only this step's own run: input steps that had already started keep running.
 
 ![A running step with the Stop button in place of Run.](screenshots/light/step-derivation-stop-header.png)
 
@@ -78,6 +78,6 @@ You can submit one or more files at a time, follow the transfer progress, and ca
 
 After the transfer, Pointy indexes the uploaded files and shows the progress on the step row. When indexing finishes, the page runs the step; keep the page open until the run starts. Each upload **replaces** the step's data rather than adding to it, so upload everything a step needs in one go.
 
-If your installation has a scratch space, file-upload steps also have **From scratch**. It opens a browser for the server-side scratch directory. Open the folder that holds your data and choose **Wrap this directory**. The whole folder becomes the step's input without passing through your browser; the scratch root itself cannot be wrapped. Indexing takes some time, but nothing is copied or moved.
+If your installation has a scratch space, file-upload steps also have **From scratch**. It opens a browser for the server-side scratch directory. Open the directory that holds your data and choose **Wrap this directory**. The whole directory becomes the step's input without passing through your browser; the scratch root itself cannot be wrapped. Indexing takes some time, but nothing is copied or moved.
 
 ![A file-upload step row showing the upload control and the shortcuts that create steps from its data.](screenshots/light/step-file-upload-header.png)

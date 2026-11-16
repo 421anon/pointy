@@ -26,11 +26,11 @@ extras = "csv";
 
 The stdlib attaches a separate scanner derivation as `meta.pointy.extras`. It mirrors output directories with `meta.json` files describing column types and nullability. This lets the [grid viewer](outputs.md#csv-and-tsv-grid-preview) sort numbers as numbers. `extras = "fastq";` instead scans FASTQ files for read counts; a line count not divisible by four fails that scan.
 
-Metadata is requested per folder. Pointy can build missing extras in the background, and a failed scan does not prevent ordinary file browsing. Each returned `meta.json` is limited to 10 MiB. CSV scans default to 2 CPUs and 2 GiB of RAM; FASTQ scans default to 1 CPU and 1 GiB.
+Metadata is requested per directory. Pointy can build missing extras in the background, and a failed scan does not prevent ordinary file browsing. Each returned `meta.json` is limited to 10 MiB. CSV scans default to 2 CPUs and 2 GiB of RAM; FASTQ scans default to 1 CPU and 1 GiB.
 
 For a custom extras builder, omit the top-level shorthand and attach your derivation under `mkDerivation.passthru.meta.pointy.extras`. It should expose `requirements = { cpu; ram; ior; iow; }` for scheduling. The public `pointyLib.csvExtras` and `pointyLib.fastqExtras` helpers accept `{ pkgs; baseDrv; requirements?; }`, where `baseDrv` can be the builder's `public` argument.
 
-A CSV folder's metadata looks like this, keyed by filename with columns in header order:
+A directory's CSV metadata looks like this, keyed by filename with columns in header order:
 
 ```json
 {

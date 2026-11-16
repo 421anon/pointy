@@ -16,7 +16,7 @@ Deploy a browser client on the same origin, or give it a same-origin reverse pro
 
 ### Session tokens
 
-The supplied host can require an EdDSA-signed JWT session token for its requests; the login page and `/docs/` stay open. Configure it with `services.pointy-host.tokenAuth` (`audience`, `publicKeyFile`, and the external `loginUrl`) or the equivalent `POINTY_TOKEN_AUDIENCE` and `POINTY_TOKEN_PUBLIC_KEY` environment variables. The token's `aud` claim must equal the configured audience, its `exp` claim must be in the future, and its `name` claim—or `sub` when there is no name—is shown as the signed-in user (null when neither is present). The backend checks the signature against the configured Ed25519 public key and stores no accounts.
+The supplied host can require an EdDSA-signed JWT session token for its requests; the login page and `/docs/` stay open. Configure it with `services.pointy-host.tokenAuth` (`audience`, `publicKeyFile`, and the external `loginUrl`) or the equivalent `POINTY_TOKEN_AUDIENCE` and `POINTY_TOKEN_PUBLIC_KEY` environment variables. The token's `aud` claim must equal the configured audience, its `exp` claim must be in the future, and its `name` claim — or `sub` when there is no name — is shown as the signed-in user (null when neither is present). The backend checks the signature against the configured Ed25519 public key and stores no accounts.
 
 The supplied nginx vhost calls `GET /token-auth` through `auth_request` for every gated request. It returns **204** when the request's `pointy-session` cookie holds a valid token and **401** otherwise, including when the backend is not configured for token auth. Unauthenticated page navigations are redirected to `loginUrl`; background requests get 401. After login, the external page POSTs a form-encoded `token` field to the host's `/token-login` (proxied to the backend route of the same name), which answers **303** with `Location: /` and sets the `pointy-session` cookie (`Path=/`, `Secure`, `HttpOnly`, `SameSite=Lax`, expiring with the token), or 401 for an invalid token. A POST to the host's `/token-logout` clears the cookie and redirects to `/` the same way; the backend route returns 404 when token auth is not configured. `GET /token-session` (under `/backend/` like the rest of the API) returns `{"account": "<aud>", "user": "<name or sub, or null>"}` for the cookie, 401 without a valid token, and 404 when token auth is not configured.
 
@@ -30,7 +30,7 @@ CORS is route-specific, not a general permission to build a cross-origin client:
 - `/agent/*`, `/ingest-stream`, `/cluster-status-stream`, `/step-files/cold`, `/step-files/prefetch`, and many ordinary resource routes allow any origin, without a credentialed cross-origin policy.
 - Review routes, `/project-status`, `/notices`, `/projects/batch`, `/project-rollup`, `/step-review-diff`, `/src-files/seek`, `/job-ended`, `/step-search`, `/rdf/artifact`, and the `/token-*` routes have no explicit CORS policy in the current backend.
 
-The ordinary policies allow `Content-Type`; the stream and agent policies also allow `Last-Event-ID`. None of them provides a general cross-origin `Authorization` header policy. CORS does not protect the backend from non-browser callers. See the [admin guide](admin.md#setting-up-a-host) before exposing an instance.
+The ordinary policies allow `Content-Type`; the stream and agent policies also allow `Last-Event-ID`. None of them provides a general cross-origin `Authorization` header policy. CORS does not protect the backend from non-browser callers. See [Hosting](admin.md#setting-up-a-host) before exposing an instance.
 
 ## Read one consistent revision
 
@@ -51,7 +51,7 @@ curl --fail --get "$BASE/step-config" --data-urlencode "commit=$COMMIT"
 
 Supply your deployment's credentials separately if required. Use full commit hashes for reproducible links, not a moving name such as `HEAD`.
 
-`GET /projects` returns an object keyed by folder id, including `"0"` (the root folder, **Home**) and any orphaned folders. Each value is a project record with `id`, `name`, `preset` (string or null), `templates` (array or null), `children`, and `validationErrors`; other attributes of the file pass through. `lastModifiedAt` and `createdAt`, when available, come from Git history as UTC timestamps.
+`GET /projects` returns an object keyed by folder id, including `"0"` (the root folder, **Home**) and any orphaned folders. Each value is a folder record with `id`, `name`, `preset` (string or null), `templates` (array or null), `children`, and `validationErrors`; other attributes of the file pass through. `lastModifiedAt` and `createdAt`, when available, come from Git history as UTC timestamps.
 
 Each entry in `children` is exactly one of:
 
@@ -60,13 +60,13 @@ Each entry in `children` is exactly one of:
 { "project": { "id": 2, "hidden": false, "sortKey": 3 } }
 ```
 
-Subfolders are never expanded. `hidden` and `sortKey` belong to the link, so the same step or folder can appear in several parents with different placement. The effective order used by writes and rollups is: entries with an integer `sortKey` first, ascending, ties broken by id; entries with a null `sortKey` follow, by id; duplicates collapse to their first occurrence. A revision still written in the former `steps` format is converted on read: each entry becomes `{ "step": … }`, project-level `hidden`/`sortKey` are dropped, and a root `projects/0.nix` is synthesized when it is missing.
+Subfolders are never expanded. `hidden` and `sortKey` belong to the link, so the same step or folder can appear in several parents with different placement. The effective order used by writes and rollups is: entries with an integer `sortKey` first, ascending, ties broken by id; entries with a null `sortKey` follow, by id; duplicates collapse to their first occurrence. A revision still written in the former `steps` format is converted on read: each entry becomes `{ "step": … }`, folder-level `hidden`/`sortKey` are dropped, and a root `projects/0.nix` is synthesized when it is missing.
 
 `validationErrors` explains references to missing presets, templates, or steps, and unknown child ids. A folder whose header fails to evaluate is served as a placeholder `{ "name": "Project <id>", "children": [], "validationErrors": ["This project does not evaluate: <error>"] }`, and failing children are dropped and reported there too.
 
 `GET /project-rollup?project_id=<id>` returns `{ "project_id": <id>, "children": [ { "id", "steps", "statuses": { "<status>": <count>, … } } ] }` for each direct child folder, counting every step reachable below it once per child and all six statuses, defaulting to 0. An unknown folder id gives an empty `children` array. A step can appear in several folders without becoming a different step. A reviewed step's status comes from its reviewed revision; reviews are read from the branch tip. There is no route that lists steps no folder links.
 
-`GET /step-config` returns `{ "version": 4, "templates": { ... } }`. Consume the fields' widgets and shapes rather than hard-coding a form per template. The [Type Reference](forms.md#the-generated-form-document) describes that document. `GET /presets` returns named template bundles; each preset has `templates`, `description` (default null), and `sortKey` (default null), and it returns `{}` when the repository defines none. These responses depend on the user repository, so their OpenAPI schemas are deliberately less specific than the JSON you will receive.
+`GET /step-config` returns `{ "version": 4, "templates": { ... } }`. Consume the fields' widgets and shapes rather than hard-coding a form per template. [Forms](forms.md#the-generated-form-document) describes that document. `GET /presets` returns named template bundles; each preset has `templates`, `description` (default null), and `sortKey` (default null), and it returns `{}` when the repository defines none. These responses depend on the user repository, so their OpenAPI schemas are deliberately less specific than the JSON you will receive.
 
 ## Creating and editing workflow records
 
@@ -98,7 +98,7 @@ These requests write and push repository commits. Try client development against
 
 Important distinctions:
 
-- **`PATCH /step?id=…` replaces the saved step record from the submitted JSON; nothing is stripped.** `PATCH /projects?id=…` replaces only `name`, `preset`, and `templates`; its `children` and every other attribute are left unchanged. Neither is JSON Merge Patch. Send all authored fields you intend to keep, and omit computed fields such as `lastModifiedAt` and `validationErrors`. The old advice to convert an evaluated folder's `steps[].def` back into references no longer applies.
+- **`PATCH /step?id=…` replaces the saved step record from the submitted JSON; nothing is stripped.** `PATCH /projects?id=…` replaces only `name`, `preset`, and `templates`; its `children` and every other attribute are left unchanged. Neither is JSON Merge Patch. Send all authored fields you intend to keep, and omit computed fields such as `lastModifiedAt` and `validationErrors`.
 - `POST /step?source_id=…` copies `srcFiles/<source_id>/` recursively when it exists. The body still supplies the new step's definition; `source_id` is not a request to infer it all for you.
 - Folders are organized with `POST /projects/batch`, an ordered JSON array of tree operations. `REF` is `{ "step": { "id": N } }` or `{ "project": { "id": N } }`:
   - `{ "op": "update", "project": P, "fields": { …ProjectFields } }` replaces name, preset, and templates.
@@ -106,9 +106,22 @@ Important distinctions:
   - `{ "op": "unlink", "parent": P, "child": REF }` removes the link; it never deletes anything.
   - `{ "op": "order", "parent": P, "children": [REF…] }` places the listed linked children first in the given order; the rest keep their effective order. It need not be a full permutation, and unknown refs are ignored.
   - `{ "op": "hide", "parent": P, "child": REF, "hidden": true|false }`.
-  - `{ "op": "delete", "child": REF }` unlinks the child from every parent and deletes it: a step removes `steps/<id>.nix` and `srcFiles/<id>`; a folder removes only its project file, orphaning its children.
-  Operations apply in order; the first error aborts the whole batch, and the result is one commit. Parents whose children changed are rewritten in effective order with dense `sortKey` values, and project statuses are broadcast to them after success.
-  Errors: 400 `Empty project tree batch` for `[]`, and a servant 400 for an unknown op. The first validation failure returns **409** with plain text: `Step <id> does not exist.`, `Project <id> does not exist.`, `projects/<id>.nix cannot be read: <reason>` (any unreadable project file blocks every delete), `projects/<id>.nix uses the legacy steps format. Run pointy-migrate-project-tree to convert it.`, `Step <id> was deleted earlier in this batch.` or `Project <id> was deleted earlier in this batch.`, `The root project 0 cannot become a child or be deleted.`, `That would introduce a project cycle: a -> b -> a.` (only newly introduced cycles are refused), `Reviewed steps cannot be edited. Remove the review first.`, `Step <a> depends on step <b>, so it cannot be deleted.`, `Failed to evaluate step dependencies: …`, `git rm failed for <path>: …`, and git or push errors.
+  - `{ "op": "delete", "child": REF }` unlinks the child from every parent and deletes it: a step removes `steps/<id>.nix` and `srcFiles/<id>`; a folder removes only its own file, orphaning its children.
+
+  Operations apply in order; the first error aborts the whole batch, and the result is one commit. Parents whose children changed are rewritten in effective order with dense `sortKey` values, and folder statuses are broadcast to them after success.
+
+  An empty array returns 400 `Empty project tree batch`, and an unknown op returns a servant 400. The first validation failure returns **409** with one of these plain-text messages:
+
+  - `Step <id> does not exist.` or `Project <id> does not exist.`
+  - `projects/<id>.nix cannot be read: <reason>`; any unreadable folder file blocks every delete.
+  - `projects/<id>.nix uses the legacy steps format. Run pointy-migrate-project-tree to convert it.`
+  - `Step <id> was deleted earlier in this batch.` or `Project <id> was deleted earlier in this batch.`
+  - `The root project 0 cannot become a child or be deleted.`
+  - `That would introduce a project cycle: a -> b -> a.`; only newly introduced cycles are refused.
+  - `Reviewed steps cannot be edited. Remove the review first.`
+  - `Step <a> depends on step <b>, so it cannot be deleted.`
+  - `Failed to evaluate step dependencies: …`
+  - `git rm failed for <path>: …`, or a git or push error.
 - Edits target the current repository branch. Appending `commit` to a write route that does not declare it does **not** make the write historical or conditional. There is no general `If-Match` or compare-and-swap edit contract. A request that changes nothing creates no commit and still reports success.
 - Status codes differ by route: `POST /projects` and `POST /step` map every transaction failure, including push conflicts, to **400**; `PATCH /projects` maps every failure to **500**; `/projects/batch` and `PATCH /step` use **409** for transaction failures, and `PATCH /step` adds 400 for invalid JSON or a bad download URL and 500 for step-config decode errors.
 
@@ -120,7 +133,7 @@ Inputs from other steps are JSON objects such as `{ "step": 42 }`; several input
 
 Listen for status snapshots, and use `GET /step-log?id=42&commit=<hash>` for a build log. On revisions whose stdlib publishes `pointy.schemaVersion`, the logged derivation is the step's certificate; a failed prerequisite appears as `Build prerequisite failed: <drv>` followed by `-----` and the log. A missing log returns 404 with `No build log available for step <id>`; it does not establish that the step succeeded.
 
-`POST /stop-step?id=42&commit=<hash>` targets the build for that revision. It raises a per-step stop flag that halts an in-flight run of that id at any commit, cancels the build target's Slurm job and the extras job with `scancel --name=`, and, when the step is not tracked as building, broadcasts its projects. It runs synchronously and always returns 200. Use the same commit you used to run or inspect it. A client displaying a reviewed step must explicitly use its reviewed revision to read or rebuild the approved output; ordinary file/build endpoints do not automatically substitute that revision for you.
+`POST /stop-step?id=42&commit=<hash>` targets the build for that revision. It raises a per-step stop flag that halts an in-flight run of that id at any commit, cancels the build target's Slurm job and the extras job with `scancel --name=`, and, when the step is not tracked as building, broadcasts the folders that link it. It runs synchronously and always returns 200. Use the same commit you used to run or inspect it. A client displaying a reviewed step must explicitly use its reviewed revision to read or rebuild the approved output; ordinary file/build endpoints do not automatically substitute that revision for you.
 
 ## Recording a review
 
@@ -156,9 +169,9 @@ These are **frontend** routes, not API endpoints:
 | `/project/<p1>/…/<pn>` | Folder page; the current folder is the last id, and `/project/1?commit=<hash>` opens it read-only at a revision. |
 | `hi=42/results.csv` | Highlight a step's output file; `hi=42` selects the step. There is no `out/` prefix here. |
 | `hi=src/42/script.py` | Highlight a source file. |
-| `lines=6-9` | Select 1-based text lines on the highlighted file; a single line can be `lines=6`. Reversed ranges are normalised, and `lines` applies only together with `hi`. |
+| `lines=6-9` | Select 1-based text lines on the highlighted file; a single line can be `lines=6`. Reversed ranges are normalized, and `lines` applies only together with `hi`. |
 | `compareLeft=out/42/a.csv` and `compareRight=src/43/b.csv` | The two comparison targets. Both sides are required. An output target also needs its `compareLeftCommit` or `compareRightCommit`; source targets may carry an optional commit. Optional `…Mime` values select MIME handling. |
-| `/artifact/<p1>/…/<pn>/<stepId>/<commit>?path=report/index.html` | Full-window output preview with a link back to Pointy; the project path may be empty, as in `/artifact/42/<hash>?path=report/index.html`, and `path` is omitted when the whole output is shown, as in `/artifact/42/<hash>`. |
+| `/artifact/<p1>/…/<pn>/<stepId>/<commit>?path=report/index.html` | Full-window output preview with a link back to Pointy; the folder path may be empty, as in `/artifact/42/<hash>?path=report/index.html`, and `path` is omitted when the whole output is shown, as in `/artifact/42/<hash>`. |
 | `chat=<session-id>&turn=<turn-id>` | Open a chat and optionally highlight a turn on the current page. Unknown query parameters are preserved. |
 
 URL-encode path segments and query values. Prefer the built-in Share and Compare controls when you are not writing a client: they select the correct revision and preserve the surrounding folder context.

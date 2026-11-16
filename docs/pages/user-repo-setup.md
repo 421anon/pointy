@@ -36,7 +36,7 @@ At minimum, the user repository needs:
 - optional `presets/`
 - optional `srcFiles/`
 
-`flake.nix` calls `pointy-stdlib.lib.mkFlake { inherit inputs; }`; `pointy.nix` supplies `pkgs` and the language `source` as `{ pkgs; source = ./main.pointy; }`. The stdlib copies `flake.nix`, `pointy.nix`, `templates/`, `packages/`, and `main.pointy` into the store as global sources, so helper files reachable from templates must live under `packages/`; changing any global source changes every step key. The current frontend requires step-config version 4. A stdlib that publishes `pointy.schemaVersion` enables key-based certificate evaluation; older locks fall back to the slower per-project evaluation. Upgrade the notebook and its user-repository inputs together rather than assuming every stdlib branch emits the same format.
+`flake.nix` calls `pointy-stdlib.lib.mkFlake { inherit inputs; }`; `pointy.nix` supplies `pkgs` and the language `source` as `{ pkgs; source = ./main.pointy; }`. A stdlib that publishes `pointy.schemaVersion` enables key-based certificate evaluation; older locks fall back to the slower per-folder evaluation. Upgrade the notebook and its user-repository inputs together rather than assuming every stdlib branch emits the same format.
 
 For the concrete flake setup, see [Minimal `flake.nix` and `pointy.nix`](#minimal-flake-nix-and-pointy-nix).
 
@@ -62,8 +62,8 @@ The examples on this page, [Templates](templates.md), and [Step files](step-file
 - `pointy.nix` is required. It supplies the package set and the entry program.
 - `main.pointy` must have that exact name at the repository root. It must be a single file: only this file is copied for evaluation, so it cannot import other paths.
 - Every entry in `templates/` is loaded as a template, and the filename is the template key. Put helper Nix files in `packages/`, not here.
-- Every regular `<id>.nix` file in `steps/` is a step. Do not put a placeholder such as `.gitkeep` there; it would be read as a step named ".gitkeep" and fail evaluation.
-- `projects/` holds folders, including the root `projects/0.nix` ("Home").
+- Every regular `<id>.nix` file in `steps/` is a step. Do not put a placeholder such as `.gitkeep` there; it would be read as a step named “.gitkeep” and fail evaluation.
+- `projects/` holds folders, including the root `projects/0.nix` (“Home”).
 - `srcFiles/` and `presets/` are optional; they can be missing until you need them.
 
 `loadDir` imports every entry in `templates/`, `projects/`, and `presets/` as Nix, so do not put placeholder or unrelated files in those directories.
@@ -97,7 +97,7 @@ You author the flake, language declarations, and templates. Pointy writes steps,
 
 `source` points to the language file that declares the template inputs. `pkgs` supplies the Nix packages used to prepare those declarations and run the steps. Both are required. Pointy generates the forms from these declarations; you do not maintain a second set of field definitions in the frontend.
 
-The stdlib copies `flake.nix`, `pointy.nix`, `templates/`, `packages/`, and `main.pointy` into one store path and reads them from there, so `pointy.nix` and your templates may reach those paths and nothing else. The steps, projects, and presets are read from the repository itself, one store path per step; a step definition holds everything it needs and cannot import a sibling file.
+The stdlib copies `flake.nix`, `pointy.nix`, `templates/`, `packages/`, and `main.pointy` into one store path as global sources and reads them from there, so `pointy.nix` and your templates may reach those paths and nothing else; helper files reachable from templates must live under `packages/`. The steps, folders, and presets are read from the repository itself, one store path per step; a step definition holds everything it needs and cannot import a sibling file.
 
 A repository that needs flake-parts configuration of its own passes it as `modules`, where the loaded `pointy.nix` result is available as `pointyRepo.cfg`:
 
@@ -133,8 +133,8 @@ nix eval --json .#pointy.projects
 The tool:
 
 - refuses to run when `projects/0.nix` already exists (`... already exists; the projects are already in the children format.`) or when the checkout has no `projects/` directory;
-- rewrites each `projects/<id>.nix`: the old `steps` entries become tagged `children`, and the project-level `hidden` and `sortKey` are dropped;
-- writes `projects/0.nix` ("Home") listing every existing folder with its old placement;
+- rewrites each `projects/<id>.nix`: the old `steps` entries become tagged `children`, and the folder-level `hidden` and `sortKey` are dropped;
+- writes `projects/0.nix` (“Home”) listing every existing folder with its old placement;
 - does not commit or push. It re-renders the files from JSON, so comments are lost and keys are sorted.
 
 Commit the lock bump and the migrated files together, then push.

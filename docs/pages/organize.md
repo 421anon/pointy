@@ -14,7 +14,7 @@ With at least one item selected, an action bar covers the listing header, showin
 - **Cut** and **Copy** put the selection on the clipboard; see [Cut, copy, paste, and duplicate](#cut-copy-paste-and-duplicate).
 - **Clear clipboard** discards the clipboard while it holds items.
 - **Hide** or **Unhide** changes visibility; see [Hidden items](#hidden-items).
-- **Remove from here** and **Delete permanently** let go of the selection; see [Removing and deleting](#removing-and-deleting).
+- **Remove from here** and **Delete permanently** remove or delete the selection; see [Removing and deleting](#removing-and-deleting).
 - **Duplicate** makes copies of the selected items without using the clipboard; see [Cut, copy, paste, and duplicate](#cut-copy-paste-and-duplicate).
 - **Clear** deselects.
 
@@ -41,11 +41,11 @@ Pasting a cut back into its own folder simply ends the cut. **Clear clipboard** 
 
 **Group into new folder** asks for a **Folder name**, prefilled **New folder**, creates that folder here with this folder's templates, and moves the selection into it; **Create** confirms.
 
-You can also drag rows: grip a row by its header — there is no separate handle — and drop it on a folder row, a breadcrumb, or a folder in the navigation drawer. Over a folder, a plain drop moves the items; hold Ctrl, Cmd, or Alt while dropping to link them instead. A dashed outline shows the target folder, and a line between rows shows a reorder position. Dragging a selected row takes the whole selection along. A folder cannot be dropped into itself or into a folder below it, and such a target does not light up. The selection clears after a drop.
+You can also drag a row by its header — there is no separate handle — and drop it on a folder row, a breadcrumb, or a folder in the navigation drawer. Over a folder, a plain drop moves the items; hold Ctrl, Cmd, or Alt while dropping to link them instead. A dashed outline shows the target folder, and a line between rows shows a reorder position. Dragging a selected row takes the whole selection along. A folder cannot be dropped into itself or into a folder below it, and such a target does not light up. The selection clears after a drop.
 
 Drop on the top or bottom edge of a row to reorder. Lines appear only in the gaps where the drop would change the order, and the drop stays within the row's folder and group. Reordering works while **Sort** is **Manual**, including inside a type group when **Group by type** is on. The order you set is kept per folder, so the same step can sit in different positions in different folders.
 
-Any folder except Home, or any step, can be linked into several folders at once. It is the same item everywhere: editing it in one folder changes it in all of them — it is one item, not a copy. The ways to link something are **Link existing**, **Move to...** or **Link to...**, **Copy** then **Paste**, and Ctrl/Cmd/Alt-drag.
+Any folder except Home, or any step, can be linked into several folders at once. It is the same item everywhere, not a copy: editing it in one folder changes it in all of them. The ways to link something are **Link existing**, **Move to...** or **Link to...**, **Copy** then **Paste**, and Ctrl/Cmd/Alt-drag.
 
 ![The Move to dialog with two rows selected, the Search folders field, folder paths as targets, and the Move and Cancel buttons.](screenshots/light/organize-move-dialog.png)
 
@@ -65,7 +65,7 @@ Most changes arrive with a toast whose **Undo** button reverts exactly that chan
 
 Two actions take items out of a folder, and they do different things:
 
-- **Remove from here** — in a row's action menu, the action bar, or Delete/Backspace — takes the items out of this folder only. The steps and folders themselves stay in Pointy and in their other folders. There is no confirmation, and the toast offers **Undo**. A step that ends up in no folder drops out of the listing, and a page load no longer shows it in search or offers it in **Link existing**; its file stays in the repository. A folder with no parent left is out of the tree until you link it somewhere again.
+- **Remove from here** — in a row's action menu, the action bar, or Delete/Backspace — takes the items out of this folder only. The steps and folders themselves stay in Pointy and in their other folders. There is no confirmation, and the toast offers **Undo**. A step that ends up in no folder drops out of the listing, and after a reload it no longer appears in search or in **Link existing**; its file stays in the repository. A folder with no parent left is out of the tree until you link it somewhere again.
 - **Delete permanently** — in the action bar and the row context menu, and in red — asks for confirmation, and cannot be undone. For a step it deletes the step and its source files from the repository and removes it from every folder. For a folder it deletes only the folder: the steps and subfolders inside are not deleted, they stay in their other folders, and a step left in no folder drops out of Pointy. Home cannot be deleted.
 
 Pointy refuses some deletes: a step under review must have its review removed first, and a step that another remaining step depends on cannot be deleted. **Delete permanently** is not offered while a reviewed step is selected, but **Remove from here** stays available in the action bar and the row's action menu. If the server refuses anyway, the toast shows the reason and the change is discarded.

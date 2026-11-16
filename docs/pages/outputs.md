@@ -6,15 +6,15 @@ description: "Browse a step's output files, preview tables, read source files, a
 
 ## Browsing output files
 
-Use the **Browse output files** button on a step with a result, or click anywhere on its row header. Expand folders, preview files, or download them. You can share a link to all the results, one folder or file, or selected lines of text.
+Use the **Browse output files** button on a step with a result, or click anywhere on its row header. Expand directories, preview files, or download them. You can share a link to all the results, one directory or file, or selected lines of text.
 
 ![The output files browser open on a script step, with a text file previewed.](screenshots/light/output-files-browser.png)
 
 For text files, click a line number to select one line, or drag over the line numbers to select a range. The address bar updates as you select, and the file's **Share** button becomes **Share lines a-b**. The link opens the same version of the file with those lines highlighted.
 
-Large text files are loaded a section at a time as you scroll, rather than all at once.
+![An output file preview with a selected line range and the Share lines 6-9 button shown.](screenshots/light/output-file-line-range-share.png)
 
-Download retrieves the complete file regardless of size.
+Large text files are loaded a section at a time as you scroll, rather than all at once. Download retrieves the complete file regardless of size.
 
 An open preview stays open when a new version leaves that step's build unchanged; it keeps showing the version you opened. If the build changes, the preview closes so an old result is not mistaken for the new one.
 
@@ -22,17 +22,15 @@ If your installation keeps older outputs on cold storage, the file row shows a s
 
 ![A step's Output Files with hello on cold storage, marked by a snowflake, and notes.txt being fetched at 40%.](screenshots/light/output-files-cold-storage.png)
 
-![An output file preview with a selected line range and the Share lines 6-9 button shown.](screenshots/light/output-file-line-range-share.png)
-
 HTML reports open inline; their magnifier buttons zoom in and out. Links in a report work as they would outside Pointy: clicking one can navigate the whole tab, and popups open in a new tab. Use the browser's Back button to return.
 
 Files with a browser-friendly type — HTML, plain text, CSS, XML, JSON, JavaScript, CSV and TSV, images, audio, and video — also have **View external**, which opens the file in a full-window view in a new tab. The view includes a **View in Pointy** link back to the step, and **Open agent** and **Ask agent** for [asking the agent about the file](agent.md#asking-about-part-of-an-artifact); CSV and TSV keep the grid viewer and its **Download** button. Other output files do not offer this view.
 
 ![An HTML output opened in the full-window view, with the Ask agent, Open agent, and View in Pointy buttons at the bottom right.](screenshots/light/output-file-external-view.png)
 
-When the step's output at the branch head differs from the one shown, the view says so, and once that output is built, **View newer revision** opens it. The chat in this view works with the step's current revision, so **Run** in a step mention builds the head, not the shown commit; when that build produces output, the view switches to it.
+When the step's current version produces a different output from the one shown, the view says so, and once that output is built, **View newer revision** opens it. The chat in this view works with the step's current version, so **Run** in a step mention builds the current version, not the one shown; when that build produces output, the view switches to it.
 
-Images open inline, and PDB output files have an interactive molecular viewer. Zip archives can be expanded like folders, so you can inspect their contents without downloading and unpacking the whole archive. The archive's download button still retrieves the zip file itself.
+Images open inline, and PDB output files have an interactive molecular viewer. Zip archives can be expanded like directories, so you can inspect their contents without downloading and unpacking the whole archive. The archive's download button still retrieves the zip file itself.
 
 ![The output files browser open on a fastqc step, showing chim_R1_fastqc.html previewed inline with its FastQC Report content visible alongside the other output files.](screenshots/light/output-files-html-preview.png)
 
@@ -56,7 +54,7 @@ How a filter is read depends on the column:
 
 An invalid filter is marked and ignored. The toolbar shows how many rows match, such as `1234 rows (filtered from 5000 rows)`, and offers **Clear filters** when any filter is set. **Summary rows** adds Mean, Median, Min, Max, or Sum rows for numeric columns, and Count or Distinct for any column. Summaries cover only the rows that pass your filters; remove one with its close button.
 
-Some templates provide the types of their columns. Without that information, Pointy treats every column as text, so values sort as text and “10” can appear before “2”. Pointy may still be preparing this information the first time you open a folder; try again once that work has finished. If sorting remains unsuitable, ask your administrator about the template.
+Some templates provide the types of their columns. Without that information, Pointy treats every column as text, so values sort as text and “10” can appear before “2”. Pointy may still be preparing this information the first time you open a directory; try again once that work has finished. If sorting remains unsuitable, ask your administrator about the template.
 
 ![A samples.csv grid filtered to gc_pct above 41.5, showing 3 of 5 rows with Mean and Max summary rows for the numeric columns.](screenshots/light/output-files-csv-grid.png)
 
@@ -66,7 +64,7 @@ A step may have **Source Files**, such as a script, a configuration file, or a s
 
 To edit them in Pointy, open the step's **Edit** form:
 
-1. Open a text file with its **Edit …** button, labelled with the file name, and change its contents, or choose **New file**, enter a name and contents, and click **Create**. Closing a file's editor discards the changes made in it.
+1. Open a text file with its **Edit …** button, labeled with the file name, and change its contents, or choose **New file**, enter a name and contents, and click **Create**. Closing a file's editor discards the changes made in it.
 2. Use **Delete** to remove a file or **Restore** to cancel its planned deletion. Check the **New**, **Changed**, and **Deleted** badges before saving.
 3. Click the step form's **Save** to keep the changes. **Cancel** discards the unsaved changes.
 
