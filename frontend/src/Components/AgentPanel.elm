@@ -603,16 +603,6 @@ viewSessionRowWith now agent label summary =
             , Html.viewMaybe (\detail -> Html.div [ class "agent-panel__session-meta" ] [ Html.text detail ]) label.detail
             , Html.viewIf (statusLabel /= "Ready" && statusLabel /= "Archived")
                 (Html.div [ class "agent-panel__session-meta" ] [ Html.text statusLabel ])
-            , Html.viewMaybe
-                (\lastTurnAt ->
-                    Html.node "time"
-                        [ class "agent-panel__session-date"
-                        , attribute "datetime" (Iso8601.fromTime lastTurnAt)
-                        , title ("Last turn: " ++ formatUtcMinute lastTurnAt ++ " UTC")
-                        ]
-                        [ Html.text (Time.Distance.inWords lastTurnAt now) ]
-                )
-                summary.lastTurnAt
             , Html.viewIf summary.hasCommits
                 (Html.span [ class "agent-panel__pill" ] [ Html.text "not applied" ])
             ]
@@ -631,6 +621,16 @@ viewSessionRowWith now agent label summary =
               else
                 Html.nothing
             ]
+        , Html.viewMaybe
+            (\lastTurnAt ->
+                Html.node "time"
+                    [ class "agent-panel__session-date"
+                    , attribute "datetime" (Iso8601.fromTime lastTurnAt)
+                    , title ("Last turn: " ++ formatUtcMinute lastTurnAt ++ " UTC")
+                    ]
+                    [ Html.text (Time.Distance.inWords lastTurnAt now) ]
+            )
+            summary.lastTurnAt
         ]
 
 
