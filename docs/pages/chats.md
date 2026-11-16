@@ -18,7 +18,7 @@ Pointy gives the chat a short title based on your request. Until that is ready, 
 
 ### Chat history and links
 
-Use **Open chat history** to switch between chats. Chats are listed newest first. **Show archived (N)** reveals the chats you have put away.
+Use **Open chat history** to switch between chats. Chats are listed by their latest message, most recent first, so a chat moves to the top as soon as you send it a message. **Show archived (N)** reveals the chats you have put away.
 
 The **not applied** label means the chat has edits waiting to be applied or discarded. **Working**, **Needs input**, **Reconnecting**, **Applying**, **Conflict**, and **Needs fix** tell you what is happening in that chat.
 

@@ -55,6 +55,7 @@ sessionSummaryDecoder =
         |> required "session" sessionDecoder
         |> required "title" Decode.string
         |> required "turnCount" Decode.int
+        |> required "lastTurnAt" (Decode.nullable (Decode.map .posix timestampDecoder))
         |> required "hasCommits" Decode.bool
 
 
@@ -265,13 +266,13 @@ sessionDecoder =
         |> required "status" Decode.string
         |> optional "activeTurnId" (Decode.maybe Decode.string) Nothing
         |> optional "lastError" (Decode.maybe Decode.string) Nothing
-        |> required "updatedAt" updatedAtDecoder
+        |> required "updatedAt" timestampDecoder
         |> optional "autoApply" Decode.bool True
         |> optional "autoApplyClient" (Decode.maybe Decode.string) Nothing
 
 
-updatedAtDecoder : Decoder Model.SessionTimestamp
-updatedAtDecoder =
+timestampDecoder : Decoder Model.SessionTimestamp
+timestampDecoder =
     Decode.string
         |> Decode.andThen
             (\raw ->
@@ -280,7 +281,7 @@ updatedAtDecoder =
                         Decode.succeed timestamp
 
                     Nothing ->
-                        Decode.fail ("Invalid session updatedAt: " ++ raw)
+                        Decode.fail ("Invalid timestamp: " ++ raw)
             )
 
 
@@ -322,6 +323,7 @@ turnDecoder =
         |> optional "turnAutomatic" Decode.bool False
         |> required "turnStatus" Decode.string
         |> optional "turnExitCode" (Decode.maybe Decode.int) Nothing
+        |> required "turnStartedAt" (Decode.map .posix timestampDecoder)
         |> required "turnLogPath" Decode.string
         |> optional "turnLog" Decode.string ""
 

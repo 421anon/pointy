@@ -139,6 +139,7 @@ data AgentSessionSummary = AgentSessionSummary
     { session :: AgentSession
     , title :: Text
     , turnCount :: Int
+    , lastTurnAt :: Maybe UTCTime
     , hasCommits :: Bool
     }
     deriving (Show, Eq, Generic, ToJSON)

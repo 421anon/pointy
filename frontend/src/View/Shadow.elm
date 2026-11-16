@@ -15,7 +15,6 @@ import Html.Events
 import Html.Extra as Html
 import Html.Keyed
 import Html.Lazy
-import Iso8601
 import Json.Decode as Decode
 import Keyboard
 import Maybe.Extra as Maybe
@@ -33,7 +32,7 @@ import Time exposing (Posix)
 import Time.Distance
 import View.FileBrowser as FileBrowser
 import View.Icons exposing (icon, iconCustom)
-import View.Lib exposing (viewPage, viewSearchBox)
+import View.Lib exposing (formatUtcMinute, viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
 import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordLogPopover, viewStepRecordStatus, viewUploadProgress)
 
@@ -281,13 +280,6 @@ reviewedAtExplanation model mReviewedAt shortRevision =
                     ++ "."
             )
             mReviewedAt
-
-
-formatUtcMinute : Posix -> String
-formatUtcMinute posix =
-    Iso8601.fromTime posix
-        |> String.left 16
-        |> String.replace "T" " "
 
 
 viewReviewPopover : Model -> TableSpec StepRecord -> Int -> StepRecord -> Maybe { trigger : Html (Flow Model ()), popover : Html (Flow Model ()) }

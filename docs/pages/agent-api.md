@@ -13,7 +13,7 @@ All POST bodies below are JSON unless the body is shown as “none”. `sessionI
 | Method and route | Body | Result |
 | --- | --- | --- |
 | `POST /agent/session` | none | New session view with status `open`. |
-| `GET /agent/sessions` | — | Array of session **summaries** `{session, title, turnCount, hasCommits}`, newest first. |
+| `GET /agent/sessions` | — | Array of session **summaries** `{session, title, turnCount, lastTurnAt, hasCommits}`, most recent `lastTurnAt` first; `lastTurnAt` is the latest turn's start time, null before the first turn, and such sessions come last, newest first. |
 | `GET /agent/session/<id>` | — | One session view, including turns and full turn logs. |
 | `POST /agent/turn` | `{ "sessionId": "…", "prompt": "…", "currentProjectId": 2, "images": […], "areaCaptures": […], "viewedArtifact": {…}, "autoApply": true, "clientId": "…" }` | Started turn; execution continues asynchronously. Everything but `sessionId` and `prompt` is optional: `currentProjectId` tells the agent which folder page is open, `autoApply` defaults to true, and `clientId` tags the client that started the turn. |
 | `POST /agent/steer` | `{ "sessionId": "…", "prompt": "…" }` | Empty 204 after accepted steering or question answer. |
