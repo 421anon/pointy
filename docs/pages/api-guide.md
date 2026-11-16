@@ -133,6 +133,8 @@ Inputs from other steps are JSON objects such as `{ "step": 42 }`; several input
 
 Listen for status snapshots, and use `GET /step-log?id=42&commit=<hash>` for a build log. On revisions whose stdlib publishes `pointy.schemaVersion`, the logged derivation is the step's certificate; a failed prerequisite appears as `Build prerequisite failed: <drv>` followed by `-----` and the log. A missing log returns 404 with `No build log available for step <id>`; it does not establish that the step succeeded.
 
+Status and log resolution follow derivation inputs even when a content-addressed output has no known store path yet. Such an output is not a malformed derivation or evidence that its build succeeded; dependency logs remain reachable through it.
+
 `POST /stop-step?id=42&commit=<hash>` targets the build for that revision. It raises a per-step stop flag that halts an in-flight run of that id at any commit, cancels the build target's Slurm job and the extras job with `scancel --name=`, and, when the step is not tracked as building, broadcasts the folders that link it. It runs synchronously and always returns 200. Use the same commit you used to run or inspect it. A client displaying a reviewed step must explicitly use its reviewed revision to read or rebuild the approved output; ordinary file/build endpoints do not automatically substitute that revision for you.
 
 ## Recording a review

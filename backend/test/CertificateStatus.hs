@@ -1,20 +1,32 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Main (main) where
 
-import BuildLog (buildStepStore, rawStatusesBatched, resolveStatusesBatched)
+import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), buildStepStore, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
 import BuildRunner (BuildKey (..), buildKeyForOutPath)
 import BuildStatus (checkStatus, resolveStepStatus)
 import Certificates (rawStatusesFor)
 import Control.Concurrent.STM (atomically, modifyTVar')
 import Control.Monad (unless)
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), encode, object, (.=))
+import qualified Data.Aeson.Key as Key
+import qualified Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import Fixture.Document (FixtureDocument (..))
 import Interpreters.Fixture (FixtureJob (..), FixtureState (..), newFixtureState, runFixture)
+import Effectful (Eff, IOE, liftIO, runEff)
+import Effectful.Dispatch.Dynamic (interpret)
+import Effects (Nix (..))
 import System.Environment (lookupEnv)
+import System.Exit (ExitCode (..))
+import System.FilePath (takeFileName)
 import System.IO (hClose, hPutStr, openTempFile)
 
 main :: IO ()
@@ -84,6 +96,50 @@ main = do
         "per-step status resolves the recorded log"
         (176, ("failure", Just (T.pack recordedLog)))
         resolved
+    mapM_ checkContentAddressedGraph [False, True]
+
+checkContentAddressedGraph :: Bool -> IO ()
+checkContentAddressedGraph version4 = do
+    resolved <- runGraphFixture (resolveBuildLog RemoteLogs rootDrv)
+    assertEqual
+        ("failure log remains reachable through unknown CA outputs, version4=" ++ show version4)
+        (Just (failedDrv, "fixture dependency failed", InputDrv failedDrv 2))
+        (fmap (\result -> (resolvedDrv result, resolvedLog result, resolvedSource result)) resolved)
+  where
+    rootDrv = "/nix/store/00000000000000000000000000000000-root.drv"
+    caDrv = "/nix/store/11111111111111111111111111111111-content-addressed.drv"
+    failedDrv = "/nix/store/22222222222222222222222222222222-failed-dependency.drv"
+    rootOutput = "/nix/store/33333333333333333333333333333333-root"
+    unknownOutput = object ["hash" .= ("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" :: Text), "method" .= ("nar" :: Text)]
+    storeName path = if version4 then takeFileName path else path
+    inputs drv
+        | drv == rootDrv = [caDrv]
+        | drv == caDrv = [failedDrv]
+        | otherwise = []
+    node drv =
+        let outputs =
+                if drv == rootDrv
+                    then object ["out" .= object ["path" .= storeName rootOutput], "floating" .= unknownOutput]
+                    else object ["out" .= unknownOutput]
+            dependencies = object [Key.fromString (storeName input) .= (["out"] :: [Text]) | input <- inputs drv]
+         in if version4
+                then object ["outputs" .= outputs, "inputs" .= object ["drvs" .= dependencies]]
+                else object ["outputs" .= outputs, "inputDrvs" .= dependencies]
+    derivations paths =
+        let entries = object [Key.fromString (storeName drv) .= node drv | drv <- paths]
+         in LBS.toStrict . encode $
+                if version4 then object ["version" .= (4 :: Int), "derivations" .= entries] else entries
+    runGraphFixture :: Eff '[Nix, IOE] a -> IO a
+    runGraphFixture = runEff . interpret (\_ -> \case
+        RunNixCli ("derivation" : "show" : paths) ->
+            pure (ExitSuccess, derivations paths, "")
+        RunNixCli ["log", _] ->
+            pure (ExitFailure 1, "", "")
+        RunNixCli ["--offline", "log", drv] ->
+            pure $ if drv == failedDrv then (ExitSuccess, "fixture dependency failed", "") else (ExitFailure 1, "", "")
+        RunNixStoreCli ("--realise" : "--dry-run" : paths) ->
+            pure (ExitSuccess, "", BC.pack (unlines (("these " ++ show (length paths) ++ " derivations will be built:") : map ("  " ++) paths)))
+        _ -> liftIO (fail "unexpected Nix operation while resolving the derivation graph"))
 
 certificates :: Map.Map Int Text
 certificates =

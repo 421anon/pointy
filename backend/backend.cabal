@@ -398,7 +398,10 @@ test-suite certificate-status
     , aeson
     , backend
     , base
+    , bytestring
     , containers
+    , effectful
+    , filepath
     , stm
     , text
 

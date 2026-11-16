@@ -219,14 +219,14 @@ parseDrvNode toStorePath inputDrvsOf = withObject "derivation" $ \obj -> do
     inputs <- inputDrvsOf obj .!= Map.empty
     return
         DrvNode
-            { dnOutputs = [toStorePath path | Just (OutputInfo path) <- Map.elems outputs]
+            { dnOutputs = [toStorePath path | Just (OutputInfo (Just path)) <- Map.elems outputs]
             , dnInputs = sort (map toStorePath (Map.keys inputs))
             }
 
-newtype OutputInfo = OutputInfo FilePath
+newtype OutputInfo = OutputInfo (Maybe FilePath)
 
 instance FromJSON OutputInfo where
-    parseJSON = withObject "derivation output" $ \obj -> OutputInfo <$> obj .: "path"
+    parseJSON = withObject "derivation output" $ \obj -> OutputInfo <$> obj .:? "path"
 
 data StorePlan = StorePlan
     { spBuild :: Set FilePath
