@@ -349,19 +349,25 @@ jobSluid jobId = do
         Right (ExitSuccess, output, _) ->
             case eitherDecodeStrict' (BL.toStrict output) of
                 Left problem -> Left ("scontrol returned invalid JSON: " <> problem)
-                Right (SluidLookup sluid) -> Right sluid
+                Right (SluidLookup found) -> case lookup (numericJobId jobId) found of
+                    Just sluid -> Right sluid
+                    Nothing -> Left "scontrol reported no Slurm job scope for the claimed job"
 
-newtype SluidLookup = SluidLookup String
+numericJobId :: String -> Int
+numericJobId = read . takeWhile isDigit
+
+newtype SluidLookup = SluidLookup [(Int, String)]
 
 instance FromJSON SluidLookup where
     parseJSON = withObject "scontrol job response" $ \response -> do
         jobs <- response .: "jobs" :: Parser [Value]
-        case jobs of
-            [] -> fail "scontrol reported no requested job"
-            (job : _) ->
-                withObject "scontrol job" (\entry -> do
-                    step <- entry .: "step_id"
-                    withObject "scontrol job step" (.: "sluid") step) job
+        SluidLookup <$> mapM parseJobScope jobs
+      where
+        parseJobScope = withObject "scontrol job" $ \entry -> do
+            jobId <- entry .: "job_id"
+            step <- entry .: "step_id"
+            sluid <- withObject "scontrol job step" (.: "sluid") step
+            pure (jobId, sluid)
 
 lastMaybe :: [a] -> Maybe a
 lastMaybe [] = Nothing
