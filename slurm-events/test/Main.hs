@@ -5,6 +5,7 @@ module Main (main) where
 import Control.Monad (forM_)
 import Data.Either (isLeft)
 import Data.List (intercalate)
+import SlurmBroker (JobScope (..), jobScopeFromCgroup)
 import SlurmEvents
 
 main :: IO ()
@@ -33,6 +34,9 @@ tests =
     , ("events cannot name another account", testAccountSpoofing)
     , ("repeated events are idempotent", testIdempotence)
     , ("a snapshot started before subscription is not delivered", testSubscriptionRace)
+    , ("systemd job cgroups yield the Slurm job scope", testSluidScope)
+    , ("legacy job cgroups yield the numeric job scope", testLegacyJobScope)
+    , ("non-job cgroups have no job scope", testForeignCgroupScope)
     ]
 
 queueLine :: String -> String -> String -> String -> String -> String -> String -> String
@@ -152,3 +156,28 @@ testSubscriptionRace = do
     assertTrue "dirty snapshot is not ready" (not (snapshotReady during required))
     assertEqual "second generation" 2 second
     assertTrue "clean later snapshot is ready" (snapshotReady fresh required)
+
+testSluidScope :: IO ()
+testSluidScope =
+    assertEqual
+        "systemd Slurm job scope"
+        (Just (SluidScope "sF61M7MS1MK300"))
+        (jobScopeFromCgroup "0::/system.slice/slurmstepd.scope/sF61M7MS1MK300/step_batch/user/task_0\n")
+
+testLegacyJobScope :: IO ()
+testLegacyJobScope =
+    assertEqual
+        "legacy cgroup job directory"
+        (Just (JobIdScope "17056"))
+        (jobScopeFromCgroup "0::/slurm/uid_1001/job_17056/step_batch\n")
+
+testForeignCgroupScope :: IO ()
+testForeignCgroupScope = do
+    assertEqual
+        "service cgroup"
+        Nothing
+        (jobScopeFromCgroup "0::/system.slice/nix-daemon.service\n")
+    assertEqual
+        "unrelated scope-like component"
+        Nothing
+        (jobScopeFromCgroup "0::/system.slice/sF61M7MS1MK300/step_batch\n")

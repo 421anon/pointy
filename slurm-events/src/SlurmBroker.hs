@@ -2,8 +2,10 @@
 
 module SlurmBroker
     ( BrokerConfig (..)
+    , JobScope (..)
     , Snapshot (..)
     , defaultSnapshotQuery
+    , jobScopeFromCgroup
     , notifyBroker
     , parseWatchArguments
     , runBrokerServer
@@ -15,9 +17,9 @@ import Control.Concurrent.MVar (MVar, newEmptyMVar, newMVar, putMVar, takeMVar, 
 import Control.Concurrent.STM
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, try)
 import Control.Monad (forever, forM, forM_, unless, void, when)
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
-import Data.Aeson.Types ((.!=))
-import Data.Char (isDigit)
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
+import Data.Aeson.Types (Parser, (.!=))
+import Data.Char (isAlphaNum, isDigit)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as BL
@@ -232,7 +234,8 @@ handleConnection runtime connection = do
                                 Right event ->
                                     do
                                         jobScope <- peerJobScope (peerPid peer)
-                                        if permittedNotify runtime peer jobScope event
+                                        allowed <- permittedNotify runtime peer jobScope event
+                                        if allowed
                                             then do
                                                 atomically $ writeTChan (rtInput runtime) (NotifyEvent event)
                                                 ignoreIO (NSB.sendAll connection "ok\n")
@@ -258,32 +261,51 @@ peerInfo connection = do
                 , peerPid = fromIntegral <$> processId
                 }
 
-peerJobScope :: Maybe Int -> IO (Maybe String)
+data JobScope
+    = JobIdScope String
+    | SluidScope String
+    deriving (Eq, Show)
+
+peerJobScope :: Maybe Int -> IO (Maybe JobScope)
 peerJobScope Nothing = pure Nothing
 peerJobScope (Just processId) = do
     contents <-
         try (BS.readFile ("/proc/" <> show processId <> "/cgroup"))
             :: IO (Either IOException BS.ByteString)
-    pure $ case contents of
-        Left _ -> Nothing
-        Right value ->
-            lastMaybe
-                ( mapMaybe scopedJob
-                    (concatMap (splitOn '/') (lines (BSC.unpack value)))
-                )
+    pure $ either (const Nothing) (jobScopeFromCgroup . BSC.unpack) contents
+
+jobScopeFromCgroup :: String -> Maybe JobScope
+jobScopeFromCgroup contents = findScope (concatMap (splitOn '/') (lines contents))
   where
-    scopedJob part =
+    findScope parts =
+        case sluidAfterScope parts of
+            Just scope -> Just scope
+            Nothing -> lastMaybe (mapMaybe legacyJobId parts)
+
+    sluidAfterScope parts =
+        case parts of
+            ("slurmstepd.scope" : scope : rest)
+                | validSluid scope -> Just (SluidScope scope)
+                | otherwise -> sluidAfterScope (scope : rest)
+            (_ : rest) -> sluidAfterScope rest
+            [] -> Nothing
+
+    legacyJobId part =
         case stripPrefix "job_" part of
             Just rest ->
                 case span isDigit rest of
                     (identifier, trailing)
                         | not (null identifier)
                         , null trailing || trailing == ".scope" ->
-                            Just identifier
+                            Just (JobIdScope identifier)
                     _ -> Nothing
             Nothing -> Nothing
 
-permittedWatch :: Runtime -> PeerInfo -> Maybe String -> WatchFilter -> Bool
+    validSluid part = case part of
+        's' : rest -> not (null rest) && all isAlphaNum rest
+        _ -> False
+
+permittedWatch :: Runtime -> PeerInfo -> Maybe JobScope -> WatchFilter -> Bool
 permittedWatch _ _ (Just _) _ = False
 permittedWatch _ _ Nothing WatchNative = True
 permittedWatch runtime peer Nothing (WatchAccount _) =
@@ -291,18 +313,55 @@ permittedWatch runtime peer Nothing (WatchAccount _) =
   where
     trusted = maybe False (`elem` rtTrustedUids runtime) (peerUid peer)
 
-permittedNotify :: Runtime -> PeerInfo -> Maybe String -> Event -> Bool
+permittedNotify :: Runtime -> PeerInfo -> Maybe JobScope -> Event -> IO Bool
 permittedNotify runtime peer jobScope event =
     case jobScope of
         Nothing ->
-            if trusted
-                then True
-                else eventKind event == SubmitEvent
-        Just scopeJob ->
-            eventKind event `elem` [StartEvent, PublishingEvent]
-                && eventJobId event == Just scopeJob
+            pure $
+                if trusted
+                    then True
+                    else eventKind event == SubmitEvent
+        Just scope ->
+            case (eventKind event, eventJobId event) of
+                (kind, Just jobId) | kind `elem` [StartEvent, PublishingEvent] ->
+                    scopeOwnsJob scope jobId
+                _ -> pure False
   where
     trusted = maybe False (`elem` rtTrustedUids runtime) (peerUid peer)
+
+scopeOwnsJob :: JobScope -> String -> IO Bool
+scopeOwnsJob (JobIdScope jobId) claimed = pure (jobId == claimed)
+scopeOwnsJob (SluidScope sluid) claimed = do
+    outcome <- jobSluid claimed
+    pure $ case outcome of
+        Right actual -> actual == sluid
+        Left _ -> False
+
+jobSluid :: String -> IO (Either String String)
+jobSluid jobId = do
+    result <-
+        try (readProcess (proc "scontrol" ["show", "job", jobId, "--json"]))
+            :: IO (Either IOException (ExitCode, BL.ByteString, BL.ByteString))
+    pure $ case result of
+        Left exception -> Left (displayException exception)
+        Right (ExitFailure status, _, errors) ->
+            Left ("scontrol exited " <> show status <> ": " <> decodeOutput errors)
+        Right (ExitSuccess, output, _) ->
+            case eitherDecodeStrict' (BL.toStrict output) of
+                Left problem -> Left ("scontrol returned invalid JSON: " <> problem)
+                Right (SluidLookup sluid) -> Right sluid
+
+newtype SluidLookup = SluidLookup String
+
+instance FromJSON SluidLookup where
+    parseJSON = withObject "scontrol job response" $ \response -> do
+        jobs <- response .: "jobs" :: Parser [Value]
+        case jobs of
+            [] -> fail "scontrol reported no requested job"
+            (job : _) ->
+                withObject "scontrol job" (\entry -> do
+                    step <- entry .: "step_id"
+                    withObject "scontrol job step" (.: "sluid") step) job
 
 lastMaybe :: [a] -> Maybe a
 lastMaybe [] = Nothing
