@@ -82,7 +82,9 @@ let
       }
 
       ready=0
-      for attempt in $(seq 1 100); do
+      attempts=0
+      while [ "$attempts" -lt 100 ]; do
+        attempts=$((attempts + 1))
         if as_slurm scontrol ping >/dev/null 2>&1; then
           ready=1
           break
