@@ -1014,14 +1014,6 @@ type alias Lightbox =
     }
 
 
-type alias AgentToolCall =
-    { id : String
-    , name : String
-    , startedAt : Time.Posix
-    , text : String
-    }
-
-
 type alias AgentLiveTurn =
     { turnId : String
     , finished : Bool
@@ -1031,7 +1023,6 @@ type alias AgentLiveTurn =
     , contextState : Maybe ContextState
     , streamError : Maybe String
     , pendingSteer : Maybe String
-    , runningCalls : List AgentToolCall
     , applying : Maybe String
     }
 
@@ -1046,7 +1037,6 @@ liveTurnFor turnId view =
     , contextState = persistedContextState view
     , streamError = Nothing
     , pendingSteer = Nothing
-    , runningCalls = []
     , applying = Nothing
     }
 
@@ -1178,7 +1168,6 @@ ingestLiveChunk chunk live =
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
         , contextState = List.foldl contextStateAfterLine live.contextState keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
-        , runningCalls = List.foldl runningCallsAfterLine live.runningCalls keptLines
         , applying = List.foldl applyingDiffAfterLine live.applying keptLines
         , streamError = Nothing
     }
@@ -1445,9 +1434,6 @@ splitLogPrefix line =
     else if String.startsWith "[context] " line then
         ( "context", String.dropLeft 10 line )
 
-    else if String.startsWith "[activity] " line then
-        ( "activity", String.dropLeft 11 line )
-
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )
 
@@ -1587,71 +1573,6 @@ pendingSteerAfterLine rawLine pending =
 
         _ ->
             pending
-
-
-runningCallsAfterLine : String -> List AgentToolCall -> List AgentToolCall
-runningCallsAfterLine rawLine calls =
-    case splitLogPrefix rawLine of
-        ( "activity", body ) ->
-            case Decode.decodeString toolActivityDecoder (String.trim body) of
-                Ok (ToolStarted call) ->
-                    if call.name == questionToolName then
-                        calls
-
-                    else
-                        List.filter (\running -> running.id /= call.id) calls ++ [ call ]
-
-                Ok (ToolFinished id) ->
-                    List.filter (\running -> running.id /= id) calls
-
-                Err _ ->
-                    calls
-
-        ( "system", body ) ->
-            if isTurnFinishedLine body then
-                []
-
-            else
-                calls
-
-        _ ->
-            calls
-
-
-questionToolName : String
-questionToolName =
-    "ask_user_question"
-
-
-type ToolActivity
-    = ToolStarted AgentToolCall
-    | ToolFinished String
-
-
-toolActivityDecoder : Decode.Decoder ToolActivity
-toolActivityDecoder =
-    Decode.field "state" Decode.string
-        |> Decode.andThen
-            (\state ->
-                case state of
-                    "started" ->
-                        Decode.map ToolStarted toolCallDecoder
-
-                    "finished" ->
-                        Decode.map ToolFinished (Decode.field "id" Decode.string)
-
-                    _ ->
-                        Decode.fail ("unknown tool activity state " ++ state)
-            )
-
-
-toolCallDecoder : Decode.Decoder AgentToolCall
-toolCallDecoder =
-    Decode.map4 AgentToolCall
-        (Decode.field "id" Decode.string)
-        (Decode.field "name" Decode.string)
-        (Decode.field "startedAt" (Decode.map (\seconds -> Time.millisToPosix (round (seconds * 1000))) Decode.float))
-        (Decode.field "text" Decode.string)
 
 
 pendingQuestionDecoder : Decode.Decoder PendingQuestion
@@ -2436,25 +2357,6 @@ getAgent (Model model) =
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
-
-
-hasRunningToolCall : Model -> Bool
-hasRunningToolCall (Model model) =
-    List.any (\live -> not live.finished && not (List.isEmpty live.runningCalls)) (Dict.values model.agent.liveTurns)
-
-
-visibleToolCalls : Time.Posix -> AgentLiveTurn -> List AgentToolCall
-visibleToolCalls now live =
-    if live.finished then
-        []
-
-    else
-        List.filter (\call -> Time.posixToMillis now - Time.posixToMillis call.startedAt >= toolCallVisibleAfterMillis) live.runningCalls
-
-
-toolCallVisibleAfterMillis : Int
-toolCallVisibleAfterMillis =
-    20000
 
 
 initialTable : Table a

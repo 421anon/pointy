@@ -237,7 +237,6 @@ subscriptions model =
         , gutterDragSubscription model
         , areaCaptureSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
-        , agentActivitySubscription model
         , statusBarClockSubscription model
         , Browser.Events.onKeyDown Organize.shortcutDecoder
         , Ports.organizeDragIn Organize.onOrganizeDragEvent
@@ -252,15 +251,6 @@ subscriptions model =
                     Flow.pure ()
             )
         ]
-
-
-agentActivitySubscription : Model -> Sub (Flow Model ())
-agentActivitySubscription model =
-    if Model.Core.hasRunningToolCall model then
-        Time.every 1000 (\time -> Flow.setAll now time)
-
-    else
-        Sub.none
 
 
 coldStatusSubscription : Model -> Sub (Flow Model ())
