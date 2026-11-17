@@ -178,7 +178,7 @@ viewHealth model =
                 clusterState (Model.getClusterStatus model) (Model.getClusterDetail model)
 
             BackendDown ->
-                { className = "unavailable"
+                { className = "unreachable"
                 , label = "Server unreachable"
                 , sentence = "Lost connection to the server. Reconnecting…"
                 , detail = Just "Reconnecting…"

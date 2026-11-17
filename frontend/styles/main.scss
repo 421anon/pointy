@@ -3505,7 +3505,8 @@ body:has(dialog[open]) {
     color: var(--state-warning);
   }
 
-  &--unavailable {
+  &--unavailable,
+  &--unreachable {
     color: var(--state-danger);
   }
 
@@ -4044,8 +4045,15 @@ body:has(dialog[open]) {
   }
 
   .status-bar__state--available .status-bar__state-label,
+  .status-bar__state--unreachable .status-bar__state-label,
   .status-bar__state-detail {
     display: none;
+  }
+
+  .status-bar__state--unreachable .status-bar__state-detail {
+    display: inline;
+    color: inherit;
+    font-weight: inherit;
   }
 }
 
