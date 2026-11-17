@@ -235,8 +235,17 @@ handleConnection runtime connection = do
                                         if permittedNotify runtime peer jobScope event
                                             then do
                                                 atomically $ writeTChan (rtInput runtime) (NotifyEvent event)
-                                                NSB.sendAll connection "ok\n"
-                                            else pure ()
+                                                ignoreIO (NSB.sendAll connection "ok\n")
+                                            else
+                                                hPutStrLn stderr $
+                                                    "pointy-cloud-slurm-broker: rejected "
+                                                        <> eventKindName (eventKind event)
+                                                        <> " notification for job "
+                                                        <> show (eventJobId event)
+                                                        <> " from uid "
+                                                        <> show (peerUid peer)
+                                                        <> " in job cgroup "
+                                                        <> show jobScope
                         _ -> pure ()
 
 peerInfo :: Socket -> IO PeerInfo
@@ -321,9 +330,11 @@ maximumRequestBytes :: Int
 maximumRequestBytes = 1024 * 1024
 
 writeFrames :: Socket -> TBQueue BrokerFrame -> IO ()
-writeFrames connection queue = forever $ do
-    frame <- atomically (readTBQueue queue)
-    NSB.sendAll connection (frameBytes frame)
+writeFrames connection queue =
+    ignoreIO $
+        forever $ do
+            frame <- atomically (readTBQueue queue)
+            NSB.sendAll connection (frameBytes frame)
 
 frameBytes :: BrokerFrame -> BS.ByteString
 frameBytes frame =
