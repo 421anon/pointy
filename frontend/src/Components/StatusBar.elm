@@ -172,7 +172,7 @@ stepOrder step =
 
 viewHealth : Model -> Html msg
 viewHealth model =
-    viewState
+    viewHealthState
         (case Model.getBackendConnection model of
             BackendUp ->
                 clusterState (Model.getClusterStatus model) (Model.getClusterDetail model)
@@ -186,8 +186,8 @@ viewHealth model =
         )
 
 
-viewState : ClusterState -> Html msg
-viewState state =
+viewHealthState : HealthState -> Html msg
+viewHealthState state =
     Html.span
         [ classList
             [ ( "status-bar__state", True )
@@ -962,7 +962,7 @@ durationWords millis =
         plural (seconds // 86400) "day" ++ " " ++ plural (modBy 24 (seconds // 3600)) "hour"
 
 
-type alias ClusterState =
+type alias HealthState =
     { className : String
     , label : String
     , sentence : String
@@ -970,7 +970,7 @@ type alias ClusterState =
     }
 
 
-clusterState : ApiData ClusterStatus -> Maybe String -> ClusterState
+clusterState : ApiData ClusterStatus -> Maybe String -> HealthState
 clusterState apiStatus detail =
     let
         ( className, label, baseSentence ) =
