@@ -857,7 +857,6 @@ type alias ChatTurn =
     , assistant : String
     , agent : Maybe String
     , status : ChatTurnStatus
-    , startedAt : Time.Posix
     }
 
 
@@ -1236,7 +1235,7 @@ appendPersistedTurn turn entries =
                     Just turn.turnPrompt
 
             seeded =
-                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, attachments = turn.turnAttachments, assistant = "", agent = Nothing, status = chatStatusFromTurn turn, startedAt = turn.turnStartedAt } ]
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, attachments = turn.turnAttachments, assistant = "", agent = Nothing, status = chatStatusFromTurn turn } ]
 
             logLines =
                 turnLogLines turn
@@ -1384,13 +1383,8 @@ appendChatLine rawLine entries =
         "steering" ->
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
-                    case lastChatTurn entries of
-                        Just steered ->
-                            mapLastChatTurn (finishPending ChatDone) entries
-                                ++ [ ChatTurnEntry { steered | turnId = "", prompt = Just prompt, attachments = [], assistant = "", status = ChatPending } ]
-
-                        Nothing ->
-                            entries
+                    mapLastChatTurn (finishPending ChatDone) entries
+                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = [], assistant = "", agent = lastChatTurnAgent entries, status = ChatPending } ]
 
                 Err _ ->
                     entries
@@ -1628,11 +1622,11 @@ mapLastChatTurn update entries =
             entries
 
 
-lastChatTurn : List ChatEntry -> Maybe ChatTurn
-lastChatTurn entries =
+lastChatTurnAgent : List ChatEntry -> Maybe String
+lastChatTurnAgent entries =
     case List.reverse entries of
         (ChatTurnEntry last) :: _ ->
-            Just last
+            last.agent
 
         _ ->
             Nothing
@@ -2363,15 +2357,6 @@ getAgent (Model model) =
 getNow : Model -> Time.Posix
 getNow (Model model) =
     model.now
-
-
-showsRunningAgentTurn : Model -> Bool
-showsRunningAgentTurn (Model model) =
-    model.agent.isPanelOpen
-        && (model.agent.selectedSessionId
-                |> Maybe.andThen (\sessionId -> Dict.get sessionId model.agent.liveTurns)
-                |> Maybe.unwrap False (not << .finished)
-           )
 
 
 initialTable : Table a

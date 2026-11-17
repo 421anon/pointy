@@ -32,8 +32,6 @@ Type your request and click **Send**, or press **Ctrl+Enter** (**Cmd+Enter** on 
 
 The agent can also show you an image, such as a chart it drew to answer your question. The image appears inside its reply, at the point where the agent showed it.
 
-While the agent works, its reply is labeled **Running** with the time the turn has taken so far, such as **Running · 1:24**. The time keeps counting through steers and while the agent waits for your answer.
-
 ### Steering a running turn
 
 You do not have to wait for the agent to finish before correcting it. While it works, **Send** becomes **Steer**. For example: “Keep the original step; make a copy for this comparison instead.” The same keyboard shortcut sends the correction. Your steer appears at once as a **You** message marked **Steering** until the agent picks it up.

@@ -238,7 +238,7 @@ viewSessionBody now mentionsAwaited mentionSources agent =
                     viewSessionsLoading
 
                 _ ->
-                    viewSessionDetail now mentionsAwaited mentionSources agent listed
+                    viewSessionDetail mentionsAwaited mentionSources agent listed
         ]
 
 
@@ -657,15 +657,15 @@ liveStatusLabel agent sessionId =
             Nothing
 
 
-viewSessionDetail : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
-viewSessionDetail now mentionsAwaited mentionSources agent listed =
+viewSessionDetail : Bool -> AgentMentions.Sources -> Model.AgentState -> List Model.AgentSessionSummary -> Html (Flow Model ())
+viewSessionDetail mentionsAwaited mentionSources agent listed =
     case ( isCreatingAgentSession agent, Model.selectedSessionSummary agent ) of
         ( True, _ ) ->
             viewCreatingSession agent
 
         ( False, Just summary ) ->
             Model.selectedSessionView agent
-                |> Maybe.map (viewSession now mentionsAwaited mentionSources agent summary)
+                |> Maybe.map (viewSession mentionsAwaited mentionSources agent summary)
                 |> Maybe.withDefault (viewSessionUnavailable agent)
 
         ( False, Nothing ) ->
@@ -768,8 +768,8 @@ viewChatBody attrs parts =
         [ parts.title, parts.context, parts.error, parts.chat, parts.composer ]
 
 
-viewSession : Time.Posix -> Bool -> AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionSummary -> Model.AgentSessionView -> Html (Flow Model ())
-viewSession now mentionsAwaited mentionSources agent summary sessionView =
+viewSession : Bool -> AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionSummary -> Model.AgentSessionView -> Html (Flow Model ())
+viewSession mentionsAwaited mentionSources agent summary sessionView =
     let
         session =
             summary.session
@@ -827,7 +827,7 @@ viewSession now mentionsAwaited mentionSources agent summary sessionView =
                         else
                             Nothing
                 in
-                viewChatTurns now mentionSources agent sessionView changeset changesetActions autoApplyEcho runnerActive closedChat
+                viewChatTurns mentionSources agent sessionView changeset changesetActions autoApplyEcho runnerActive closedChat
         , composer =
             if closedChat then
                 viewClosedChat session.status
@@ -1456,8 +1456,8 @@ submitShortcut submitBlocked =
     Events.preventDefaultOn "keydown" decoder
 
 
-viewChatTurns : Time.Posix -> AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionView -> Maybe Model.ChatChangeset -> List (Html (Flow Model ())) -> Maybe Bool -> Bool -> Bool -> Html (Flow Model ())
-viewChatTurns now mentionSources agent sessionView changeset changesetActions autoApplyEcho runnerActive closedChat =
+viewChatTurns : AgentMentions.Sources -> Model.AgentState -> Model.AgentSessionView -> Maybe Model.ChatChangeset -> List (Html (Flow Model ())) -> Maybe Bool -> Bool -> Bool -> Html (Flow Model ())
+viewChatTurns mentionSources agent sessionView changeset changesetActions autoApplyEcho runnerActive closedChat =
     let
         sessionId =
             sessionView.session.sessionId
@@ -1483,7 +1483,7 @@ viewChatTurns now mentionSources agent sessionView changeset changesetActions au
                 |> Maybe.withDefault []
 
         content =
-            List.map (viewChatEntry now mentionSources sessionId agent.highlightTurnId autoApplyEcho) (sessionEntries sessionView agent) ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
+            List.map (viewChatEntry mentionSources sessionId agent.highlightTurnId autoApplyEcho) (sessionEntries sessionView agent) ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
     in
     if List.isEmpty content then
         viewEmptyChat (EmptyMessages (not closedChat && not runnerActive))
@@ -1524,11 +1524,11 @@ viewEmptyChat state =
         ]
 
 
-viewChatEntry : Time.Posix -> AgentMentions.Sources -> String -> Maybe String -> Maybe Bool -> Model.ChatEntry -> Html (Flow Model ())
-viewChatEntry now mentionSources sessionId highlightTurnId autoApplyEcho entry =
+viewChatEntry : AgentMentions.Sources -> String -> Maybe String -> Maybe Bool -> Model.ChatEntry -> Html (Flow Model ())
+viewChatEntry mentionSources sessionId highlightTurnId autoApplyEcho entry =
     case entry of
         Model.ChatTurnEntry turn ->
-            viewChatTurn now mentionSources sessionId (highlightTurnId == Just turn.turnId) autoApplyEcho turn
+            viewChatTurn mentionSources sessionId (highlightTurnId == Just turn.turnId) autoApplyEcho turn
 
         Model.ChatChangesetEntry changeset ->
             viewChangesetBox [] changeset
@@ -1543,8 +1543,8 @@ turnIdAttribute turn =
         [ id (Actions.agentTurnId turn.turnId) ]
 
 
-viewChatTurn : Time.Posix -> AgentMentions.Sources -> String -> Bool -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
-viewChatTurn now mentionSources sessionId isHighlighted autoApplyEcho turn =
+viewChatTurn : AgentMentions.Sources -> String -> Bool -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
+viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
     Html.div
         (classList
             [ ( "agent-panel__chat-turn", True )
@@ -1574,7 +1574,7 @@ viewChatTurn now mentionSources sessionId isHighlighted autoApplyEcho turn =
                     ]
             )
             turn.prompt
-        , viewAgentMessage now mentionSources autoApplyEcho turn
+        , viewAgentMessage mentionSources autoApplyEcho turn
         ]
 
 
@@ -1590,15 +1590,6 @@ turnChatRef sessionId turn =
     }
 
 
-formatElapsed : Time.Posix -> Time.Posix -> String
-formatElapsed startedAt now =
-    let
-        seconds =
-            max 0 (Time.posixToMillis now - Time.posixToMillis startedAt) // 1000
-    in
-    String.fromInt (seconds // 60) ++ ":" ++ String.padLeft 2 '0' (String.fromInt (remainderBy 60 seconds))
-
-
 viewPendingSteer : String -> Html (Flow Model ())
 viewPendingSteer prompt =
     Html.div [ class "agent-panel__chat-turn" ]
@@ -1611,8 +1602,8 @@ viewPendingSteer prompt =
         ]
 
 
-viewAgentMessage : Time.Posix -> AgentMentions.Sources -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
-viewAgentMessage now mentionSources autoApplyEcho turn =
+viewAgentMessage : AgentMentions.Sources -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
+viewAgentMessage mentionSources autoApplyEcho turn =
     let
         isEmptyAssistant =
             String.isEmpty (String.trim turn.assistant)
@@ -1620,7 +1611,7 @@ viewAgentMessage now mentionSources autoApplyEcho turn =
         ( statusLabel, emptyBody, failedMessage ) =
             case turn.status of
                 Model.ChatPending ->
-                    ( "Running · " ++ formatElapsed turn.startedAt now
+                    ( "Running"
                     , if turn.prompt == Nothing then
                         "The changes couldn't be applied, so the agent is fixing them."
 

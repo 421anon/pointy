@@ -4919,15 +4919,11 @@ sendAgentTurn whenPending view attachments prompt =
         (requestNotificationPermission
             |> Flow.seq (Flow.setAll (agent << liveTurnAt sessionId) (Just (Model.liveTurnFor "" view)))
             |> Flow.seq
-                (Flow.performTask Time.now
-                    |> Flow.andThen
-                        (\sentAt ->
-                            Flow.over (agent << liveTurnAt sessionId << just << entries)
-                                (\entriesBefore ->
-                                    entriesBefore
-                                        ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", agent = Nothing, status = Model.ChatPending, startedAt = sentAt } ]
-                                )
-                        )
+                (Flow.over (agent << liveTurnAt sessionId << just << entries)
+                    (\entriesBefore ->
+                        entriesBefore
+                            ++ [ Model.ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = Model.sentAttachmentViews attachments, assistant = "", agent = Nothing, status = Model.ChatPending } ]
+                    )
                 )
             |> Flow.seq whenPending
             |> Flow.seq (setInput agentPromptInputId "")
