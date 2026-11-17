@@ -52,7 +52,7 @@ Beside it, the summary counts steps by state: running, queued, starting, and upl
 
 The summary covers the whole instance, so a step you upload or start on this page appears in it. **Idle** appears only once status has loaded and no step is running, queued, starting, or uploading; the health label, not **Idle**, tells you whether the service is available.
 
-While the connection to the server is down, for example during a deploy, the status bar shows **Server unreachable · Reconnecting…** in place of the computing service state, hides the step counts, and closes the activity panel, since none of them can be refreshed. Once the connection is back, they return, and the panel reopens if you had it open.
+While the connection to the server is down, for example during a deploy, the status bar shows **Server unreachable · Reconnecting…** in place of the computing service state (just **Reconnecting…** on narrow screens), hides the step counts, and closes the activity panel, since none of them can be refreshed. Once the connection is back, they return, and the panel reopens if you had it open.
 
 The bar also identifies the version you are viewing: the branch, with the commit on hover. From an older version it shows **Past · View current**, which returns you to the current version. **Agent**, **Docs**, the light/dark control, and the **Notifications** bell are here too, along with the account menu when you are signed in.
 
