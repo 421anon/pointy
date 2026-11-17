@@ -65,7 +65,6 @@ view model =
                     , Html.div [ Html.Attributes.class "app" ] [ viewCurrentPage ]
                     , AgentPanel.view model
                     ]
-                , viewToasts model
                 , Dialog.viewConfirm (Model.getModalConfirm model)
                 , View.Organize.viewOrganizeDialog model
                 , View.Organize.viewContextMenu model
@@ -73,6 +72,7 @@ view model =
                 , AgentPanel.viewLightbox model
                 , viewScratchPicker model
                 , StatusBar.view model
+                , viewToasts model
                 ]
     }
 

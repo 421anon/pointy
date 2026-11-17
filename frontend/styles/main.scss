@@ -3033,7 +3033,7 @@ body:has(dialog[open]) {
   flex-direction: column;
   align-items: flex-end;
   gap: var(--spacing-sm);
-  max-height: calc(100vh - var(--spacing-5xl));
+  max-height: calc(100vh - var(--spacing-5xl) - anchor-size(--activity-panel height, 0px));
   padding: var(--spacing-xl) var(--spacing-xl) var(--spacing-xl) var(--spacing-md);
   overflow-x: hidden;
   overflow-y: auto;
@@ -3824,6 +3824,7 @@ body:has(dialog[open]) {
 
 .status-bar__panel {
   position: absolute;
+  anchor-name: --activity-panel;
   inset-inline: 0;
   bottom: 100%;
   overflow: hidden;
