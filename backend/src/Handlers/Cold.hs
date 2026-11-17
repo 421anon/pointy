@@ -22,7 +22,7 @@ import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.List (find, isPrefixOf)
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -169,9 +169,11 @@ datasetColdStatus :: Dataset -> ColdStatus
 datasetColdStatus dataset =
     ColdStatus
         { cold = not (datasetLocal dataset)
-        , onloading = datasetPhase dataset == "onloading"
-        , files = map coldFile (datasetFiles dataset)
+        , onloading = datasetPhase dataset == "onloading" || any (isJust . datasetFileOnload) coldFiles
+        , files = map coldFile coldFiles
         }
+  where
+    coldFiles = filter (not . datasetFileLocal) (datasetFiles dataset)
 
 coldFile :: DatasetFile -> ColdFile
 coldFile file =
