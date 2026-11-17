@@ -43,8 +43,7 @@ recording requests =
     runEff . interpret (\_ -> \case
         SubmitJob request -> liftIO (modifyIORef' requests (request :)) >> pure (Right "1")
         QuerySlurm _ -> pure (Right "")
-        CancelJob _ -> pure ()
-        ClusterAvailability -> pure (Right "pointy*|up|node1|idle\n"))
+        CancelJob _ -> pure ())
 
 outPath :: FilePath
 outPath = "/nix/store/00000000000000000000000000000000-pointy-certificate-172"

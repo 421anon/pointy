@@ -23,10 +23,10 @@ module Handlers.Statuses (
 ) where
 
 import BuildLog (StepStore, resolveStatusesBatched)
-import BuildRunner (buildKeyForOutPath, waitForCompletion)
+import BuildRunner (BuildKey (..), buildKeyForOutPath, waitForCompletion)
 import BuildStatus (StepPaths (..), checkStatus, markBuiltOutputs, partitionImmediateStatuses, resolveStatuses, resolveStepStatus)
 import Bus (broadcastSnapshot)
-import Certificates (ProjectDef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate, isCertificateBuilding, rawStatusesFor, runningBuildKeys)
+import Certificates (ProjectDef (..), cachedProjectDefinitions, getProjectCertificates, getStepCertificate, isCertificateBuilding, rawStatusesFor, runningJobIdsByName)
 import ClusterBus (beginBuild, endBuild)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently)
@@ -235,7 +235,8 @@ restoreRunningStatuses = do
 
 trackRunningBuilds :: App es => Text -> [ProjectDef] -> Eff es ()
 trackRunningBuilds targetCommit projects = do
-    runningKeys <- runningBuildKeys
+    runningJobs <- runningJobIdsByName
+    let runningKeys = Map.keysSet runningJobs
     if Set.null runningKeys
         then return ()
         else do
@@ -243,8 +244,10 @@ trackRunningBuilds targetCommit projects = do
             uncertified <- filterM (fmap not . pathValid . unpack . snd) (Map.toList candidates)
             liftIO $
                 forM_ uncertified $ \(sid, certificate) ->
-                    forkReporting ("Restored build watch for step " ++ show sid) $
-                        trackBuild sid targetCommit (waitForCompletion (buildKeyForOutPath (unpack certificate)))
+                    forkReporting ("Restored build watch for step " ++ show sid) $ do
+                        let buildKey = buildKeyForOutPath (unpack certificate)
+                        trackBuild sid targetCommit $
+                            waitForCompletion buildKey (Map.findWithDefault [] (unBuildKey buildKey) runningJobs)
 
 buildingCertificates :: App es => Text -> Set String -> ProjectDef -> Eff es (Map Int Text)
 buildingCertificates targetCommit runningKeys project = do

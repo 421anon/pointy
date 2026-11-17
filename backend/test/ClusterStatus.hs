@@ -10,6 +10,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Handlers.ClusterStream (clusterStatusFromAvailability, deriveJobProgress, encodeSnapshot)
@@ -111,12 +112,39 @@ main = do
                 (Map.singleton 7 (JobProgress "41" Running earlierStart Nothing))
             )
         )
+    assertEqual
+        "a publishing job starts its phase when the snapshot first reports it"
+        (Just (JobProgress "44" Publishing now Nothing))
+        ( Map.lookup
+            7
+            ( deriveJobProgress
+                now
+                (jobs ["44|" ++ jobName ++ "|" ++ stepComment 7 commitA ++ "|PUBLISHING|0:10|None"])
+                buildsAtA
+                Map.empty
+            )
+        )
+    assertEqual
+        "a publishing phase keeps the time it was first observed"
+        (Just (JobProgress "44" Publishing earlierStart Nothing))
+        ( Map.lookup
+            7
+            ( deriveJobProgress
+                now
+                (jobs ["44|" ++ jobName ++ "|" ++ stepComment 7 commitA ++ "|PUBLISHING|0:20|None"])
+                buildsAtA
+                (Map.singleton 7 (JobProgress "44" Publishing earlierStart Nothing))
+            )
+        )
     assertBool
         "activity payload carries phase, reason and start"
         ( "\"phase\":\"queued\"" `occursIn` activityPayload
             && "\"reason\":\"Dependency\"" `occursIn` activityPayload
             && "\"since\":\"2026-10-09T12:00:00Z\"" `occursIn` activityPayload
         )
+    assertBool
+        "publishing is a distinct stream phase"
+        ("\"phase\":\"publishing\"" `occursIn` publishingPayload)
 
 now :: UTCTime
 now = timestamp "2026-10-09T13:00:00Z"
@@ -153,6 +181,16 @@ activityPayload =
                 { clusterStatus = Available
                 , clusterDetail = Nothing
                 , activeSteps = Map.singleton 7 (StepActivity Queued trackedAt (Just "Dependency") ["f1c5ec2080eeed56e424178207fd8310081de368"])
+                }
+
+publishingPayload :: BS.ByteString
+publishingPayload =
+    LBS.toStrict $
+        encodeSnapshot
+            ClusterSnapshot
+                { clusterStatus = Available
+                , clusterDetail = Nothing
+                , activeSteps = Map.singleton 7 (StepActivity Publishing earlierStart Nothing [T.pack commitA])
                 }
 
 downNodeTranscript :: String

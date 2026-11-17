@@ -27,6 +27,7 @@ import View.Table as Table
 
 type GroupKind
     = RunningGroup
+    | PublishingGroup
     | QueuedGroup
     | StartingGroup
     | TransferGroup
@@ -40,7 +41,7 @@ type alias Group =
 
 groupOrder : List GroupKind
 groupOrder =
-    [ RunningGroup, QueuedGroup, StartingGroup, TransferGroup ]
+    [ RunningGroup, PublishingGroup, QueuedGroup, StartingGroup, TransferGroup ]
 
 
 view : Model -> Html (Flow Model ())
@@ -98,6 +99,9 @@ groupKind state =
         TrayRunning _ ->
             RunningGroup
 
+        TrayPublishing _ ->
+            PublishingGroup
+
         TrayQueued _ _ ->
             QueuedGroup
 
@@ -114,6 +118,9 @@ groupKey kind =
         RunningGroup ->
             "running"
 
+        PublishingGroup ->
+            "publishing"
+
         QueuedGroup ->
             "queued"
 
@@ -129,6 +136,9 @@ groupTitle kind =
     case kind of
         RunningGroup ->
             "Running"
+
+        PublishingGroup ->
+            "Publishing"
 
         QueuedGroup ->
             "Queued"
@@ -161,6 +171,9 @@ stepOrder : TrayStep -> ( Int, Int )
 stepOrder step =
     case step.state of
         TrayRunning since ->
+            ( Time.posixToMillis since, step.stepId )
+
+        TrayPublishing since ->
             ( Time.posixToMillis since, step.stepId )
 
         TrayQueued since _ ->
@@ -290,6 +303,9 @@ summaryCount group =
     case group.kind of
         RunningGroup ->
             { kind = "running", count = count, label = "running" }
+
+        PublishingGroup ->
+            { kind = "publishing", count = count, label = "publishing" }
 
         QueuedGroup ->
             { kind = "queued", count = count, label = "queued" }
@@ -782,6 +798,9 @@ markerClass kind =
         RunningGroup ->
             "status-indicator status-running"
 
+        PublishingGroup ->
+            "status-bar__marker status-bar__marker--publishing"
+
         QueuedGroup ->
             "status-bar__marker status-bar__marker--queued"
 
@@ -808,6 +827,11 @@ stateMeta now state =
         TrayRunning started ->
             { short = durationText (since started)
             , description = "Running for " ++ durationWords (since started)
+            }
+
+        TrayPublishing started ->
+            { short = durationText (since started)
+            , description = "Publishing for " ++ durationWords (since started)
             }
 
         TrayQueued queued reason ->

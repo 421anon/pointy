@@ -158,6 +158,9 @@
         })
     // {
       nixosModules = rec {
+        slurm-events = {
+          imports = [ ./slurm-events/nixos-module.nix ];
+        };
         bootstrap = {
           key = "github:421anon/pointy#nixosModules.bootstrap";
           imports = [ pointyBootstrap ];

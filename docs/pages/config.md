@@ -139,9 +139,10 @@ The `[agent]` section configures the embedded agent runner. When this section is
 | --- | --- | --- |
 | `POINTY_CONFIG_PATH` | admin (optional) | Config file path instead of `/home/backend/config.toml`. |
 | `POINTY_LISTEN_HOST` | `services.pointy-backend.listenHost` | Address the backend HTTP listener binds; default `127.0.0.1`. |
-| `POINTY_LISTEN_PORT` | `services.pointy-backend.listenPort` | Backend listener port; default `8081`, also used by the supplied vhost and job hook. |
+| `POINTY_LISTEN_PORT` | `services.pointy-backend.listenPort` | Backend listener port; default `8081`, also used by the supplied vhost. |
 | `NIX_REMOTE` | `services.pointy-backend.storeUrl` | Store used by every backend `nix` call; read once at startup. |
 | `POINTY_REALISE_COMMAND` | `services.pointy-backend.slurm.realiseCommand` | Executable each Slurm build job runs as `<command> <derivation>`. |
+| `POINTY_SLURM_WATCH_COMMAND` | `services.pointy-backend.slurm.watchCommand` | Executable that streams Slurm snapshots and heartbeats as newline-delimited JSON; default `pointy-slurm-watch`. It is invoked without arguments. |
 | `POINTY_SCRATCH_DIR` | `services.pointy-backend.scratchDirectory` | Enables `/scratch*` and gives the agent tool sandbox a read-only bind. |
 | `POINTY_UPLOAD_DIR` | `services.pointy-backend.uploadDirectory` | Roots upload staging; when unset, the canonical system temporary directory. |
 | `POINTY_COLD_STORE_SOCKET` | `services.pointy-backend.coldStorage.ingestSocket` | Ingest socket passed to the cold-storage command for status and prefetch. |

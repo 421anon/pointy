@@ -128,12 +128,6 @@ type StepLog =
         :> QueryParam "commit" Text
         :> Get '[PlainText] Text
 
-type JobEnded =
-    "job-ended"
-        :> Description "Called by the Slurm job-completion hook when a job ends; wakes the build watchers waiting on that job name."
-        :> QueryParam' '[Required, Strict] "name" String
-        :> Post '[PlainText] NoContent
-
 type CreateAgentSession =
     "agent"
         :> "session"
@@ -577,7 +571,6 @@ type API =
         :<|> RunStep
         :<|> StopStep
         :<|> StepLog
-        :<|> JobEnded
         :<|> Upload
         :<|> GetScratchRoot
         :<|> ListScratch

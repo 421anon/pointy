@@ -28,7 +28,7 @@ CORS is route-specific, not a general permission to build a cross-origin client:
 
 - `/step-status-stream` permits only `http://localhost:3000`, with credentials.
 - `/agent/*`, `/ingest-stream`, `/cluster-status-stream`, `/step-files/cold`, `/step-files/prefetch`, and many ordinary resource routes allow any origin, without a credentialed cross-origin policy.
-- Review routes, `/project-status`, `/notices`, `/projects/batch`, `/project-rollup`, `/step-review-diff`, `/src-files/seek`, `/job-ended`, `/step-search`, `/rdf/artifact`, and the `/token-*` routes have no explicit CORS policy in the current backend.
+- Review routes, `/project-status`, `/notices`, `/projects/batch`, `/project-rollup`, `/step-review-diff`, `/src-files/seek`, `/step-search`, `/rdf/artifact`, and the `/token-*` routes have no explicit CORS policy in the current backend.
 
 The ordinary policies allow `Content-Type`; the stream and agent policies also allow `Last-Event-ID`. None of them provides a general cross-origin `Authorization` header policy. CORS does not protect the backend from non-browser callers. See [Hosting](admin.md#setting-up-a-host) before exposing an instance.
 

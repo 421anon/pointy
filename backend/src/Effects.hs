@@ -43,7 +43,6 @@ module Effects (
     submitJob,
     querySlurm,
     cancelJob,
-    clusterAvailability,
     coldStorageConfigured,
     coldStorageStatus,
     coldStoragePrefetch,
@@ -110,7 +109,6 @@ data Slurm :: Effect where
     SubmitJob :: SubmitRequest -> Slurm m (Either String String)
     QuerySlurm :: SlurmQuery -> Slurm m (Either String String)
     CancelJob :: String -> Slurm m ()
-    ClusterAvailability :: Slurm m (Either String String)
 
 type instance DispatchOf Slurm = Dynamic
 
@@ -139,6 +137,7 @@ data SubmitRequest = SubmitRequest
 data SlurmQuery
     = JobStatesByName String
     | JobIdsByName String
+    | JobsByNames [String]
     | AllJobs
     | AllAccountingJobs
 
@@ -251,9 +250,6 @@ querySlurm = send . QuerySlurm
 
 cancelJob :: (Slurm :> es) => String -> Eff es ()
 cancelJob = send . CancelJob
-
-clusterAvailability :: (Slurm :> es) => Eff es (Either String String)
-clusterAvailability = send ClusterAvailability
 
 coldStorageConfigured :: (ColdStorage :> es) => Eff es Bool
 coldStorageConfigured = send ColdStorageConfigured

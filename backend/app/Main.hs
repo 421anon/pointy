@@ -5,15 +5,13 @@ module Main (main) where
 import Agent.Git (sweepStaleRunningSessions)
 import Agent.Sandbox (prepareAgentCgroup)
 import App (runServer)
-import BuildRunner (reconcileWatchedJobs)
 import Config (loadConfig, resolveConfigPath, warnMissingProviderKeys)
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Monad (forever)
+import Control.Concurrent (forkIO)
 import Control.Monad.Except (runExceptT)
-import Handlers.ClusterStream (startClusterPoller)
 import Handlers.RunStep (restoreJobsFromSlurm)
 import Handlers.Statuses (restoreRunningStatuses)
 import Interpreters.Production (runProduction)
+import SlurmWatch (startSlurmWatch)
 import Data.Maybe (fromMaybe)
 import System.Environment (lookupEnv)
 import System.IO (BufferMode (..), hSetBuffering, stdout)
@@ -48,6 +46,8 @@ main = do
   where
     afterServerStart = do
         putStrLn "Server listening."
+        putStrLn "Starting Slurm event watcher..."
+        startSlurmWatch
         _ <- forkIO $ do
             putStrLn "Restoring slurm jobs..."
             runProduction restoreJobsFromSlurm
@@ -55,12 +55,4 @@ main = do
             putStrLn "Restoring running statuses..."
             runProduction restoreRunningStatuses
             putStrLn "Running statuses restored."
-        putStrLn "Starting cluster status poller..."
-        startClusterPoller
-        putStrLn "Starting Slurm job reconciler..."
-        reconcileText <- lookupEnv "POINTY_SLURM_RECONCILE_SECONDS"
-        let reconcileSeconds = max 1 (maybe 30 id (reconcileText >>= readMaybe)) :: Int
-        _ <- forkIO $ forever $ do
-            threadDelay (reconcileSeconds * 1000000)
-            runProduction reconcileWatchedJobs
         pure ()

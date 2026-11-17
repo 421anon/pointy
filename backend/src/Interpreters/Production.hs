@@ -183,11 +183,6 @@ runSlurmProduction = interpret $ \_ -> \case
     CancelJob key -> do
         _ <- liftIO $ cli "scancel" ["--name=" ++ key]
         pure ()
-    ClusterAvailability -> do
-        (code, stdout, stderr) <- liftIO $ cli "sinfo" ["-h", "-N", "-o", "%P|%a|%N|%T"]
-        pure $ case code of
-            ExitSuccess -> Right stdout
-            ExitFailure _ -> Left stderr
 
 submitArgs :: SubmitRequest -> [String]
 submitArgs request =
@@ -210,6 +205,7 @@ queryArgs :: SlurmQuery -> [String]
 queryArgs = \case
     JobStatesByName name -> ["-h", "-n", name, "-o", "%T"]
     JobIdsByName name -> ["-h", "-n", name, "-o", "%i"]
+    JobsByNames names -> ["-h", "-n", intercalate "," names, "-o", "%i|%j|%k|%T|%M|%r"]
     AllJobs -> ["-h", "-o", "%i|%j|%k|%T|%M|%r"]
     AllAccountingJobs -> ["-X", "-n", "-P", "-o", "JobID,JobName%128,State"]
 

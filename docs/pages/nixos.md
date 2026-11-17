@@ -18,8 +18,8 @@ Import `pointy.nixosModules.pointy-host` to install the backend service, nginx v
 | `services.pointy-host.linkedDataBase` | `null` | Origin written as the `@base` of artifact Turtle. `null` leaves IRIs relative to the requesting URL. |
 | `services.pointy-host.docsPackage` | `null` | Optional documentation package served at `/docs/`; this location disables both the basic-auth and token-auth gates. |
 | `services.pointy-backend.user`, `.group`, `.home` | `backend`, `backend`, `/home/backend` _(read-only)_ | The account the backend, agents and builds run as, and its home. Refer to these when granting the backend host resources or placing secrets such as `config.toml`. |
-| `services.pointy-backend.listenHost` | `127.0.0.1` | Address the backend HTTP listener binds. The supplied vhost and hook still use `127.0.0.1:<listenPort>`. |
-| `services.pointy-backend.listenPort` | `8081` | Backend HTTP listener port, also used by the supplied vhost and job-completion hook. |
+| `services.pointy-backend.listenHost` | `127.0.0.1` | Address the backend HTTP listener binds. The supplied vhost still uses `127.0.0.1:<listenPort>`. |
+| `services.pointy-backend.listenPort` | `8081` | Backend HTTP listener port, also used by the supplied vhost. |
 | `services.pointy-backend.agentEnvFile` | `null` | Runtime `KEY=VALUE` secret file sourced by systemd, suitable for a sops-nix or agenix path. The runner receives only the coder's and answerer's provider keys. |
 | `services.pointy-backend.piConfigDir` | Pointy's `backend/pi` | Pi configuration copied to `/home/backend/.pi` before the backend starts. Models and settings inside it are regenerated from `config.toml`. |
 | `services.pointy-backend.ingestPackage` | built-in `pointy-ingest` (`nix store add` + jq) | Package providing `bin/pointy-ingest DIR NAME`, which turns a directory into a content-addressed store path. See [Data ingest and scratch space](storage.md#data-ingest-and-scratch-space). |
@@ -32,7 +32,7 @@ Import `pointy.nixosModules.pointy-host` to install the backend service, nginx v
 | `services.pointy-backend.slurm.package` | `config.services.slurm.package` | Slurm package whose client commands the backend runs. |
 | `services.pointy-backend.slurm.confFile` | the host's `services.slurm` `slurm.conf` | Cluster configuration the backend submits to, exported as `SLURM_CONF`. |
 | `services.pointy-backend.slurm.realiseCommand` | generated `pointy-realise` | Executable on every compute node, run as `<command> <derivation>`. The default runs `nix build --no-link`, passing `--store` when `storeUrl` is set. See [Build execution and GC roots](builds.md#build-execution-and-gc-roots). |
-| `services.pointy-backend.slurm.jobCompletionHook` | _(read-only)_ | Script the cluster runs as `JobCompLoc` with `JobCompType=jobcomp/script`; `single-node-slurm` wires it. |
+| `services.pointy-backend.slurm.watchCommand` | `pointy-slurm-watch` | Executable the backend runs, without arguments, to receive account-scoped Slurm snapshots and transport heartbeats as newline-delimited JSON. It must emit a fresh snapshot on every connection. |
 
 For a plain multi-node cluster:
 

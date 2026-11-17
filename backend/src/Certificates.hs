@@ -20,6 +20,7 @@ module Certificates (
     withWriteRepoTransaction,
     rawStatusesFor,
     runningBuildKeys,
+    runningJobIdsByName,
     isCertificateBuilding,
     renderIdList,
     ProjectDef (..),
@@ -27,7 +28,7 @@ module Certificates (
 
 import Bisect (bisectBatch)
 import BuildLog (StepStore, buildStepStore, rawStatusesBatched)
-import BuildRunner (BuildKey (..), buildKeyForOutPath, querySlurmJobs, slurmJobName)
+import BuildRunner (BuildKey (..), JobId, buildKeyForOutPath, querySlurmJobs, slurmJobId, slurmJobName)
 import BuildStatus (StepPaths (..), markBuiltOutputs)
 import Bus (broadcastSnapshot)
 import CertificateStore (lookupCertificate, lookupOutput, storeCertificate, storeOutput)
@@ -701,6 +702,11 @@ runningBuildKeys :: (Slurm :> es) => Eff es (Set.Set String)
 runningBuildKeys = do
     jobs <- querySlurmJobs
     return $ Set.fromList (map slurmJobName jobs)
+
+runningJobIdsByName :: (Slurm :> es) => Eff es (Map.Map String [JobId])
+runningJobIdsByName = do
+    jobs <- querySlurmJobs
+    return $ Map.fromListWith (++) [(slurmJobName job, [slurmJobId job]) | job <- jobs]
 
 isCertificateBuilding :: Set.Set String -> Text -> Bool
 isCertificateBuilding runningKeys certificate =

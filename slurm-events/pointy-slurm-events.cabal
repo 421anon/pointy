@@ -1,0 +1,48 @@
+cabal-version: 3.0
+name:          pointy-slurm-events
+version:       0.1.0.0
+build-type:    Simple
+
+common warnings
+  ghc-options: -Wall
+
+library
+  import:           warnings
+  exposed-modules:
+    SlurmBroker
+    SlurmEvents
+  build-depends:
+    , aeson
+    , base               >=4.19.2.0 && <4.21
+    , bytestring
+    , containers
+    , directory
+    , filepath
+    , network
+    , stm
+    , text
+    , time
+    , typed-process
+    , unix
+  hs-source-dirs:   src
+  default-language: Haskell2010
+
+executable pointy-cloud-slurm-broker
+  import:           warnings
+  main-is:          BrokerMain.hs
+  ghc-options:      -threaded
+  build-depends:
+    , base
+    , pointy-slurm-events
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
+test-suite pointy-slurm-events-tests
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          Main.hs
+  hs-source-dirs:   test
+  default-language: Haskell2010
+  build-depends:
+    , base
+    , pointy-slurm-events

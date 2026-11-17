@@ -11,12 +11,14 @@ module Interpreters.Fixture (
     newFixtureState,
     resetFixture,
     runFixture,
-
-
+    startFixtureWatcher,
 ) where
 
+import BuildRunner (parseSlurmJobLine)
+import ClusterBus (ClusterStatus (..), applySnapshot, wholeSeconds)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
-import Control.Monad (filterM)
+import Control.Monad (filterM, forever, void)
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (object, (.=))
 import qualified Data.Aeson as A
@@ -30,13 +32,14 @@ import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import qualified Data.Vector.Unboxed as VU
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, ColdStorage (..), Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageDataset, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
-import JobWatch (markJobsEnded)
+import JobWatch (markJobNameEnded)
 import Processes (cli)
 import ProviderHttp (JudgeTask (..))
 import Text.Read (readMaybe)
@@ -49,6 +52,7 @@ data FixtureState = FixtureState
     { fixtureDocument :: FixtureDocument
     , fixtureJobs :: TVar (Map.Map String FixtureJob)
     , fixtureNextJob :: TVar Int
+    , fixtureJobTicks :: TVar (Map.Map String Int)
     }
 
 data FixtureJob = FixtureJob
@@ -63,6 +67,7 @@ newFixtureState document =
     FixtureState document
         <$> newTVarIO Map.empty
         <*> newTVarIO 1
+        <*> newTVarIO Map.empty
 
 resetFixture :: FixtureState -> IO ()
 resetFixture state = do
@@ -70,8 +75,40 @@ resetFixture state = do
         jobs <- readTVar (fixtureJobs state)
         writeTVar (fixtureJobs state) Map.empty
         writeTVar (fixtureNextJob state) 1
+        writeTVar (fixtureJobTicks state) Map.empty
         pure (Map.keys jobs)
-    markJobsEnded names
+    markJobNameEnded names
+
+startFixtureWatcher :: FixtureState -> IO ()
+startFixtureWatcher state = void $ forkIO $ forever $ do
+    threadDelay fixtureTickMicros
+    jobs <- atomically $ do
+        current <- readTVar (fixtureJobs state)
+        ticks <- readTVar (fixtureJobTicks state)
+        let (ticks', updated) = Map.mapAccumWithKey advance ticks current
+        writeTVar (fixtureJobTicks state) ticks'
+        writeTVar (fixtureJobs state) updated
+        pure (Map.elems updated)
+    now <- wholeSeconds <$> getCurrentTime
+    applySnapshot (Just (Available, Nothing)) now (mapMaybe parseSlurmJobLine (map formatJob jobs))
+  where
+    advance ticks name job
+        | jobState job == runningState =
+            let count = Map.findWithDefault 0 name ticks + 1
+             in if count >= fixturePublishingTicks
+                    then (Map.insert name 0 ticks, job{jobState = publishingState})
+                    else (Map.insert name count ticks, job)
+        | jobState job == publishingState = (ticks, job)
+        | otherwise = (Map.delete name ticks, job)
+
+fixtureTickMicros :: Int
+fixtureTickMicros = 250000
+
+fixturePublishingTicks :: Int
+fixturePublishingTicks = 8
+
+publishingState :: String
+publishingState = "PUBLISHING"
 
 runFixture :: FixtureState -> Eff AppEffects a -> IO a
 runFixture state action =
@@ -278,12 +315,15 @@ runSlurmFixture state = interpret $ \_ -> \case
                 case query of
                     JobStatesByName name -> unlines [jobState job | job <- jobs, jobName job == name]
                     JobIdsByName name -> unlines [jobId job | job <- jobs, jobName job == name]
-                    AllJobs -> unlines [intercalate "|" [jobId job, jobName job, jobComment job, jobState job, "0:00", waitReason job] | job <- jobs]
+                    JobsByNames names -> unlines [formatJob job | job <- jobs, jobName job `elem` names]
+                    AllJobs -> unlines [formatJob job | job <- jobs]
                     AllAccountingJobs -> unlines [intercalate "|" [jobId job, jobName job, jobState job] | job <- jobs]
     CancelJob key -> liftIO $ do
         atomically $ modifyTVar' (fixtureJobs state) (admitNextPending . Map.delete key)
-        markJobsEnded [key]
-    ClusterAvailability -> pure (Right "pointy*|up|node1|idle\n")
+        markJobNameEnded [key]
+
+formatJob :: FixtureJob -> String
+formatJob job = intercalate "|" [jobId job, jobName job, jobComment job, jobState job, "0:00", waitReason job]
 
 runningState :: String
 runningState = "RUNNING"

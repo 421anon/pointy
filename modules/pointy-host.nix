@@ -35,14 +35,6 @@ let
     ln -sfn ${pointy.packages.pi-glovebox}/share/pi-glovebox ${cfg.home}/.pi/agent/extensions/pi-glovebox
   '';
 
-  jobEndedHook = pkgs.writeShellScript "pointy-job-ended" ''
-    case "$JOBNAME" in
-      pointy-nix-build-*)
-        exec ${pkgs.curl}/bin/curl -fsS --max-time 2 -o /dev/null -X POST -G \
-          --data-urlencode "name=$JOBNAME" http://127.0.0.1:${toString cfg.listenPort}/job-ended
-        ;;
-    esac
-  '';
 
   pointyRealise = pkgs.writeShellApplication {
     name = "pointy-realise";
@@ -70,6 +62,7 @@ let
     POINTY_LISTEN_HOST = cfg.listenHost;
     POINTY_LISTEN_PORT = toString cfg.listenPort;
     POINTY_REALISE_COMMAND = cfg.slurm.realiseCommand;
+    POINTY_SLURM_WATCH_COMMAND = cfg.slurm.watchCommand;
   }
   // lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
   // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
@@ -131,7 +124,7 @@ in
       default = 8081;
       description = ''
         TCP port Warp binds the backend HTTP listener to. The bundled nginx
-        vhosts and the Slurm job-ended hook use the same value.
+        vhosts use the same value.
       '';
       example = 8081;
     };
@@ -275,15 +268,12 @@ in
         example = "/run/current-system/sw/bin/pointy-realise";
       };
 
-      jobCompletionHook = lib.mkOption {
-        type = lib.types.path;
-        default = jobEndedHook;
-        defaultText = lib.literalMD "a script that notifies the backend's `/job-ended` route";
-        readOnly = true;
+      watchCommand = lib.mkOption {
+        type = lib.types.str;
+        default = "pointy-slurm-watch";
         description = ''
-          Script the cluster must run when a job completes, so the backend wakes the waiters
-          of finished builds. Configure it in the cluster's slurm.conf as
-          `JobCompType=jobcomp/script` and `JobCompLoc=<this path>`.
+          Executable that streams account-scoped Slurm snapshots and transport heartbeats
+          as newline-delimited JSON. It must supply a fresh snapshot on every connection.
         '';
       };
     };

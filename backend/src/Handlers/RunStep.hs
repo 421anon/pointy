@@ -6,7 +6,6 @@
 
 module Handlers.RunStep (
     buildExtras,
-    jobEndedHandler,
     restoreJobsFromSlurm,
     runStepHandler,
     stepLogHandler,
@@ -15,9 +14,9 @@ module Handlers.RunStep (
 
 import Bisect (bisectBatch)
 import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog, validPaths)
-import BuildRunner (BuildKey (..), JobComment (..), JobId, SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isDerivationPath, isRunningState, notifyJobEnded, queryJobIds, querySlurmJobs, realiseCommand, runningJobNames, submitAndWait, submitJob, waitForCompletion)
+import BuildRunner (BuildKey (..), JobComment (..), JobId (..), SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isDerivationPath, isRunningState, queryJobIds, querySlurmJobs, realiseCommand, runningJobNames, submitAndWait, submitJob, waitForCompletion)
 import Certificates (renderIdList)
-import ClusterBus (buildingSteps, requestStop, stopRequested, takeStopRequest)
+import ClusterBus (buildingSteps, clearBuildRequest, markQueued, requestBuild, requestStop, stopRequested, takeStopRequest)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.STM (atomically)
@@ -47,17 +46,13 @@ import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRe
 
 runStepHandler :: Int -> Maybe T.Text -> AppM NoContent
 runStepHandler eid commit = do
-    _ <- liftIO $ forkIO $ runAppEffects $ runStepSync eid commit
+    liftIO $ requestBuild eid
+    _ <- liftIO $ forkIO $ runAppEffects $ runStepSync eid commit `finally` liftIO (clearBuildRequest eid)
     return NoContent
 
 stopStepHandler :: Int -> Maybe T.Text -> AppM NoContent
 stopStepHandler eid commit = do
     lift $ stopStepSync eid commit
-    return NoContent
-
-jobEndedHandler :: String -> AppM NoContent
-jobEndedHandler name = do
-    lift $ notifyJobEnded (BuildKey name)
     return NoContent
 
 runStepSync :: App es => Int -> Maybe T.Text -> Eff es ()
@@ -179,6 +174,7 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                     if not (null existing)
                         then do
                             (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
+                            liftIO $ markQueued sid (unJobId (head existing))
                             return $ Enqueued (stepTargetPath rootedTarget) buildKey existing root
                         else do
                             requirements <- getStepRequirements ctx sid
@@ -197,7 +193,9 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                                 Left err -> do
                                     lift $ unrootDerivationRoot root
                                     throwError err
-                                Right jobId -> return $ Enqueued certificate buildKey [jobId] root
+                                Right jobId -> do
+                                    liftIO $ markQueued sid (unJobId jobId)
+                                    return $ Enqueued certificate buildKey [jobId] root
         return $ either NotSubmitted id result
   where
     blockedOn = [d | d <- deps, isBlocked (Map.lookup d outcomes)]
@@ -269,10 +267,10 @@ finishStep ctx (sid, outcome) = case outcome of
         rootStorePath certificate
         broadcastSingleStepForProjects sid targetCommitText certificate
         buildExtras ctx sid
-    Enqueued certificate buildKey _ root -> do
+    Enqueued certificate buildKey jobIds root -> do
         trackBuild sid targetCommitText $ do
             broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
-            finally (waitForCompletion buildKey) (unrootDerivationRoot root)
+            finally (waitForCompletion buildKey jobIds) (unrootDerivationRoot root)
         certified <- isBuilt certificate
         if certified
             then do
@@ -502,7 +500,7 @@ restoreJobsFromSlurm = do
                 void $
                     forkIO $
                         runAppEffects $
-                            watchRestoredExtrasJob (slurmJobName job) (slurmJobState job)
+                            watchRestoredExtrasJob (slurmJobName job) (slurmJobState job) (slurmJobId job)
             | jobCommentKind comment /= "step" -> do
                 putStrLn $
                     "restoreJobsFromSlurm: unknown job kind on "
@@ -543,9 +541,9 @@ sweepDerivationRoots = do
             forM_ roots $ \jobName ->
                 unless (Set.member jobName names) $ unrootDerivationRootsForJob jobName
 
-watchRestoredExtrasJob :: App es => String -> String -> Eff es ()
-watchRestoredExtrasJob jobName state = do
-    when (isRunningState state) $ waitForCompletion (BuildKey jobName)
+watchRestoredExtrasJob :: App es => String -> String -> JobId -> Eff es ()
+watchRestoredExtrasJob jobName state jobId = do
+    when (isRunningState state) $ waitForCompletion (BuildKey jobName) [jobId]
     unrootDerivationRootsForJob jobName
 
 watchRestoredJob :: App es => ReadRepoContext -> JobComment -> SlurmJob -> Eff es ()
@@ -558,7 +556,7 @@ watchRestoredJob ctx comment job = do
     if isRunningState (slurmJobState job)
         then trackBuild stepId commitText $ do
             broadcastKnownStepStatus stepId commitText ("running", Nothing)
-            finally (waitForCompletion buildKey) (unrootDerivationRootsForJob jobName)
+            finally (waitForCompletion buildKey [slurmJobId job]) (unrootDerivationRootsForJob jobName)
         else unrootDerivationRootsForJob jobName
     certified <- isBuilt certificate
     if certified

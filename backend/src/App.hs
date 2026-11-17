@@ -23,7 +23,7 @@ import Handlers.IngestStream (ingestStreamHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectReads (projectRollupHandler)
 import Handlers.Projects (batchProjectOpsHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
-import Handlers.RunStep (jobEndedHandler, runStepHandler, stepLogHandler, stopStepHandler)
+import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
 import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
@@ -86,7 +86,6 @@ server =
         :<|> runStepHandler
         :<|> stopStepHandler
         :<|> stepLogHandler
-        :<|> jobEndedHandler
         :<|> uploadHandler
         :<|> scratchRootHandler
         :<|> scratchListHandler

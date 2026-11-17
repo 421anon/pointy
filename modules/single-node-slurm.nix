@@ -9,7 +9,13 @@ let
   ];
 in
 {
-  imports = [ ./pointy-host.nix ];
+  imports = [ ./pointy-host.nix ../slurm-events/nixos-module.nix ];
+
+  services.pointy-slurm-events = {
+    enable = true;
+    extraUsers = [ config.services.pointy-backend.user ];
+  };
+  services.pointy-backend.slurm.watchCommand = config.services.pointy-slurm-events.watchCommand;
 
   services.munge = {
     enable = true;
@@ -31,10 +37,6 @@ in
     controlMachine = config.networking.hostName;
     nodeName = [ "${config.networking.hostName} CPUs=${slurmCpus} RealMemory=${slurmRealMemory} State=UNKNOWN" ];
     partitionName = [ "pointy Nodes=${config.networking.hostName} Default=YES MaxTime=INFINITE State=UP" ];
-    extraConfig = ''
-      JobCompType=jobcomp/script
-      JobCompLoc=${config.services.pointy-backend.slurm.jobCompletionHook}
-    '';
   };
 
   systemd.services.backend = {

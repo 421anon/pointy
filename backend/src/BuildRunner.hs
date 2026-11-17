@@ -19,8 +19,6 @@ module BuildRunner (
     encodeJobComment,
     decodeJobComment,
     waitForCompletion,
-    notifyJobEnded,
-    reconcileWatchedJobs,
     cancel,
     isRunningState,
     runningJobNames,
@@ -30,7 +28,7 @@ module BuildRunner (
 ) where
 
 import Config (Config (..), SlurmConfig (..), loadConfig, resolveConfigPath)
-import Control.Monad (unless, when)
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), ToJSON (..), decode, encode, object, withObject, (.:), (.=))
 import Data.Bits (xor)
@@ -44,7 +42,7 @@ import Data.Word (Word64)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket)
 import Effects (Slurm, SlurmQuery (..), SubmitRequest (..), cancelJob, querySlurm)
-import JobWatch (awaitJobEnded, isJobWatched, markJobsEnded, unwatchJob, watchJob, watchedJobNames)
+import JobWatch (awaitJobEnded, unwatchJob, watchJob)
 import qualified Effects as Effects
 import Numeric (showHex)
 import System.Environment (lookupEnv)
@@ -148,7 +146,9 @@ submitAndWait :: (Slurm :> es, IOE :> es) => StepRequirements -> BuildKey -> Str
 submitAndWait requirements key comment command = do
     state <- queryState key
     case state of
-        BRunning -> ExitSuccess <$ waitForCompletion key
+        BRunning -> do
+            jobIds <- queryJobIds key
+            ExitSuccess <$ waitForCompletion key jobIds
         BSucceeded -> pure ExitSuccess
         BFailed -> pure $ ExitFailure 1
         BAbsent -> submitNewJob requirements key comment command
@@ -260,29 +260,11 @@ parseJobId out =
              in if null jobId then Nothing else Just (JobId jobId)
         [] -> Nothing
 
-waitForCompletion :: (Slurm :> es, IOE :> es) => BuildKey -> Eff es ()
-waitForCompletion (BuildKey name) =
-    bracket (liftIO $ watchJob name) (liftIO . unwatchJob name) $ \ended -> do
+waitForCompletion :: (Slurm :> es, IOE :> es) => BuildKey -> [JobId] -> Eff es ()
+waitForCompletion (BuildKey name) jobIds =
+    bracket (liftIO $ watchJob name (map unJobId jobIds)) (liftIO . unwatchJob name) $ \ended -> do
         active <- jobActive name
         when active $ liftIO $ awaitJobEnded ended
-
-notifyJobEnded :: (Slurm :> es, IOE :> es) => BuildKey -> Eff es ()
-notifyJobEnded (BuildKey name) = do
-    watched <- liftIO $ isJobWatched name
-    when watched $ do
-        active <- jobActive name
-        unless active $ liftIO $ markJobsEnded [name]
-
-reconcileWatchedJobs :: (Slurm :> es, IOE :> es) => Eff es ()
-reconcileWatchedJobs = do
-    watched <- liftIO watchedJobNames
-    unless (null watched) $ do
-        result <- querySlurm AllJobs
-        case result of
-            Left _ -> pure ()
-            Right stdout -> do
-                let active = Set.fromList [slurmJobName job | job <- mapMaybe parseSlurmJobLine (lines stdout), isRunningState (slurmJobState job)]
-                liftIO $ markJobsEnded (filter (`Set.notMember` active) watched)
 
 jobActive :: (Slurm :> es) => String -> Eff es Bool
 jobActive name = either (const True) (any isRunningState . lines) <$> querySlurm (JobStatesByName name)
@@ -341,6 +323,7 @@ isRunningState state =
                , "RESIZING"
                , "STAGE_OUT"
                , "COMPLETING"
+               , "PUBLISHING"
                ]
 
 runningJobNames :: (Slurm :> es) => Eff es (Maybe (Set.Set String))

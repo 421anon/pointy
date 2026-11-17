@@ -83,6 +83,7 @@ library
     Search.ChatCorpus
     Search.StepCorpus
     Search.Store
+    SlurmWatch
     Sse
     Storage
     UserRepo
@@ -465,6 +466,19 @@ test-suite cluster-status
     , containers
     , text
     , time
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite slurm-watch
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          SlurmWatchTest.hs
+  build-depends:
+    , backend
+    , base
+    , bytestring
+    , stm
 
   hs-source-dirs:   test
   default-language: Haskell2010
