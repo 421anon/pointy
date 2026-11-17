@@ -3026,30 +3026,23 @@ body:has(dialog[open]) {
 
 .toast-container {
   position: fixed;
-  top: var(--spacing-xl);
-  right: var(--spacing-xl);
+  top: 0;
+  right: 0;
   z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-sm);
+  max-height: calc(100vh - var(--spacing-5xl));
+  padding: var(--spacing-xl) var(--spacing-xl) var(--spacing-xl) var(--spacing-md);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
 
-  > :nth-child(1) {
-    z-index: 2;
-    top: 0;
+  &:empty {
+    display: none;
   }
-
-  > :nth-child(2) {
-    z-index: 1;
-    top: 2px;
-  }
-
-  > * {
-    position: relative;
-    z-index: 0;
-    top: 4px;
-    transition: top .2s linear;
-  }
-}
-
-.toast-wrapper {
-  height: 0;
 }
 
 .toast {

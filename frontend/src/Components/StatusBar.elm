@@ -12,7 +12,7 @@ import Html.Keyed
 import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
-import Model.Core as Model exposing (ClusterStatus(..), Model, TrayState(..), TrayStep)
+import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, TrayState(..), TrayStep)
 import Model.Lenses exposing (loadedProjects, route, toastHistory)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
@@ -72,7 +72,8 @@ view model =
                 []
              )
                 ++ [ Html.div [ class "status-bar__surface" ]
-                        [ viewHealth model
+                        [ viewBackendConnection (Model.getBackendConnection model)
+                        , viewHealth model
                         , viewSummary summary (not (List.isEmpty steps)) isOpen
                         , viewRepoContext model
                         , viewIndependentControls model
@@ -158,6 +159,23 @@ stepOrder step =
 
         _ ->
             ( 0, step.stepId )
+
+
+viewBackendConnection : BackendConnection -> Html msg
+viewBackendConnection connection =
+    case connection of
+        BackendUp ->
+            Html.nothing
+
+        BackendDown ->
+            Html.span
+                [ class "status-bar__state status-bar__state--unavailable"
+                , attribute "role" "status"
+                , title "Lost connection to the server. Reconnecting…"
+                ]
+                [ Html.span [ class "status-bar__state-indicator", attribute "aria-hidden" "true" ] []
+                , Html.span [ class "status-bar__state-label" ] [ Html.text "Server unreachable" ]
+                ]
 
 
 viewHealth : Model -> Html msg

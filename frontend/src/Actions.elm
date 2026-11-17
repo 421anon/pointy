@@ -5184,6 +5184,9 @@ onStepStatusIn value =
         Ok (SSEError err) ->
             addToast False ("SSE Error: " ++ err)
 
+        Ok (SSEConnection connection) ->
+            Flow.setAll backendConnection connection
+
         Err err ->
             addToast False ("SSE Decode Error: " ++ Decode.errorToString err)
 

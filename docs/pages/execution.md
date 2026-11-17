@@ -52,6 +52,8 @@ Beside it, the summary counts steps by state: running, queued, starting, and upl
 
 The summary covers the whole instance, so a step you upload or start on this page appears in it. **Idle** appears only once status has loaded and no step is running, queued, starting, or uploading; the health label, not **Idle**, tells you whether the service is available.
 
+While the connection to the server is down, for example during a deploy, the status bar also shows **Server unreachable** before the computing service state. Pointy keeps reconnecting, and the indicator disappears once the connection is back.
+
 The bar also identifies the version you are viewing: the branch, with the commit on hover. From an older version it shows **Past · View current**, which returns you to the current version. **Agent**, **Docs**, the light/dark control, and the **Notifications** bell are here too, along with the account menu when you are signed in.
 
 ![The status bar counting one running and one queued step, with the activity panel open on its Running and Queued groups; the queued step waits for Resources.](screenshots/light/status-bar.png)
@@ -60,7 +62,7 @@ When a run started from this page finishes, a toast names the step, for example 
 
 ![A failed step's build log, with the Investigate with agent button in its header.](screenshots/light/step-failure-log.png)
 
-Recent messages are kept under the **Notifications** bell: each entry shows the first line and how long ago it arrived, and expands to the full text. **Dismiss all** on the top toast clears the stack, but leaves the notification history in place.
+Recent messages are kept under the **Notifications** bell: each entry shows the first line and how long ago it arrived, and expands to the full text. **Dismiss all** on the top toast clears every toast on screen, but leaves the notification history in place.
 
 ![The Notifications history opened from the bell in the status bar, listing an undo, a hide, and a copied share link.](screenshots/light/status-bar-notifications.png)
 
