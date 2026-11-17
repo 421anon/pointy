@@ -1018,7 +1018,6 @@ type alias AgentToolCall =
     { id : String
     , name : String
     , startedAt : Time.Posix
-    , text : String
     }
 
 
@@ -1647,11 +1646,10 @@ toolActivityDecoder =
 
 toolCallDecoder : Decode.Decoder AgentToolCall
 toolCallDecoder =
-    Decode.map4 AgentToolCall
+    Decode.map3 AgentToolCall
         (Decode.field "id" Decode.string)
         (Decode.field "name" Decode.string)
         (Decode.field "startedAt" (Decode.map (\seconds -> Time.millisToPosix (round (seconds * 1000))) Decode.float))
-        (Decode.field "text" Decode.string)
 
 
 pendingQuestionDecoder : Decode.Decoder PendingQuestion

@@ -32,7 +32,7 @@ Type your request and click **Send**, or press **Ctrl+Enter** (**Cmd+Enter** on 
 
 The agent can also show you an image, such as a chart it drew to answer your question. The image appears inside its reply, at the point where the agent showed it.
 
-Pointy shows a tool call only when it has been running for 20 seconds. The chat then shows a line such as **Running bash · 0:24** with the command the agent is running. Calls that finish sooner never appear, and the line goes away when the call finishes. The agent's own question appears as a question card, not as a running tool.
+Pointy shows a tool call only when it has been running for 20 seconds. The chat then shows a line such as **Running bash · 0:24**. Calls that finish sooner never appear, and the line goes away when the call finishes. The agent's own question appears as a question card, not as a running tool.
 
 ### Steering a running turn
 

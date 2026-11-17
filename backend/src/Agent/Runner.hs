@@ -985,7 +985,6 @@ handleRpcEvent cfg logPath input event =
                     [ "state" Aeson..= ("started" :: Text)
                     , "id" Aeson..= callId
                     , "name" Aeson..= (event ^. key "toolName" . _String)
-                    , "text" Aeson..= toolCallText event
                     , "startedAt" Aeson..= (realToFrac (utcTimeToPOSIXSeconds now) :: Double)
                     ]
         Just "tool_execution_end"
@@ -1322,12 +1321,6 @@ summarizePaths paths =
 
 heartbeatDelayMicros :: Int
 heartbeatDelayMicros = 5 * 1000000
-
-toolCallText :: Aeson.Value -> Text
-toolCallText event = T.take 160 (T.unwords (T.words (fromMaybe argsJson command)))
-  where
-    command = event ^? key "args" . key "command" . _String
-    argsJson = jsonLine (fromMaybe Aeson.Null (event ^? key "args"))
 
 streamLoop :: AgentTurn -> Int -> TChan () -> IO (S.StepT IO BS.ByteString)
 streamLoop turn offset signal = return $ S.Effect $ do

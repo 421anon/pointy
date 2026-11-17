@@ -1604,8 +1604,6 @@ viewToolCall now call =
                 , attribute "role" "status"
                 ]
                 [ Html.text ("Running " ++ call.name ++ " · " ++ formatElapsed call.startedAt now) ]
-            , Html.text " "
-            , Html.code [] [ Html.text call.text ]
             ]
         ]
 
