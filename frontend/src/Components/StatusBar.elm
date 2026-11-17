@@ -52,11 +52,21 @@ view model =
         groups =
             groupSteps steps
 
+        isConnected =
+            Model.getBackendConnection model == BackendUp
+
         summary =
-            summarize (Model.getClusterStatus model) groups
+            if isConnected then
+                summarize (Model.getClusterStatus model) groups
+
+            else
+                SummaryDisconnected
+
+        expandable =
+            isConnected && not (List.isEmpty steps)
 
         isOpen =
-            Model.getStatusBarOpen model && not (List.isEmpty steps)
+            Model.getStatusBarOpen model && expandable
     in
     Html.div [ class "status-bar-dock" ]
         [ Html.div
@@ -73,7 +83,7 @@ view model =
              )
                 ++ [ Html.div [ class "status-bar__surface" ]
                         [ viewHealth model
-                        , viewSummary summary (not (List.isEmpty steps)) isOpen
+                        , viewSummary summary expandable isOpen
                         , viewRepoContext model
                         , viewIndependentControls model
                         ]
@@ -162,27 +172,22 @@ stepOrder step =
 
 viewHealth : Model -> Html msg
 viewHealth model =
-    case Model.getBackendConnection model of
-        BackendUp ->
-            viewClusterHealth model
+    viewState
+        (case Model.getBackendConnection model of
+            BackendUp ->
+                clusterState (Model.getClusterStatus model) (Model.getClusterDetail model)
 
-        BackendDown ->
-            Html.span
-                [ class "status-bar__state status-bar__state--unavailable"
-                , attribute "role" "status"
-                , title "Lost connection to the server. Reconnecting…"
-                ]
-                [ Html.span [ class "status-bar__state-indicator", attribute "aria-hidden" "true" ] []
-                , Html.span [ class "status-bar__state-label" ] [ Html.text "Server unreachable" ]
-                ]
+            BackendDown ->
+                { className = "unavailable"
+                , label = "Server unreachable"
+                , sentence = "Lost connection to the server. Reconnecting…"
+                , detail = Just "Reconnecting…"
+                }
+        )
 
 
-viewClusterHealth : Model -> Html msg
-viewClusterHealth model =
-    let
-        state =
-            clusterState (Model.getClusterStatus model) (Model.getClusterDetail model)
-    in
+viewState : ClusterState -> Html msg
+viewState state =
     Html.span
         [ classList
             [ ( "status-bar__state", True )
@@ -243,6 +248,9 @@ viewSummary summary expandable isOpen =
                 SummaryLoading ->
                     []
 
+                SummaryDisconnected ->
+                    []
+
                 SummaryIdle ->
                     [ Html.span [ class "status-bar__count status-bar__count--idle" ] [ Html.text "Idle" ] ]
 
@@ -295,6 +303,7 @@ summaryCount group =
 
 type Summary
     = SummaryLoading
+    | SummaryDisconnected
     | SummaryIdle
     | SummaryActive (List SummaryCount)
 
@@ -318,6 +327,9 @@ spokenSummary summary =
     case summary of
         SummaryLoading ->
             "Loading activity"
+
+        SummaryDisconnected ->
+            "Activity unavailable while reconnecting"
 
         SummaryIdle ->
             "Idle"
