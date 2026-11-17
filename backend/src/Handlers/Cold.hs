@@ -81,7 +81,6 @@ data StoreStatus = StoreStatus
 
 data Dataset = Dataset
     { datasetPhase :: Text
-    , datasetLocal :: Bool
     , datasetFiles :: [DatasetFile]
     }
 
@@ -116,7 +115,6 @@ instance FromJSON Dataset where
     parseJSON = withObject "cold storage dataset" $ \o ->
         Dataset
             <$> o .: "phase"
-            <*> o .: "local"
             <*> (fromMaybe [] <$> o .:? "files")
 
 instance FromJSON Onload where
@@ -168,7 +166,7 @@ firstDataset bytes = do
 datasetColdStatus :: Dataset -> ColdStatus
 datasetColdStatus dataset =
     ColdStatus
-        { cold = not (datasetLocal dataset)
+        { cold = not (null coldFiles)
         , onloading = datasetPhase dataset == "onloading" || any (isJust . datasetFileOnload) coldFiles
         , files = map coldFile coldFiles
         }

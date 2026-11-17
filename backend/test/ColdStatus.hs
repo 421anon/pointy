@@ -12,6 +12,7 @@ main = do
     assertEqual "onloading status lists only files that are not local" (Just onloadingStatus) (parseColdStatus onloadingJson)
     assertEqual "a fetched file of a still-evicted dataset is no longer listed" (Just partlyFetchedStatus) (parseColdStatus partlyFetched)
     assertEqual "a file fetch counts as onloading before the dataset phase says so" (Just fetchingStatus) (parseColdStatus fetchingJson)
+    assertEqual "an output the cold store does not track is not cold" (Just (ColdStatus False False [])) (parseColdStatus untracked)
     assertEqual "evicted cold files" (Set.singleton "SRR1.fastq.gz") (parseColdFiles evicted)
     assertEqual "onloading cold files skip local files" (Set.singleton "SRR1.fastq.gz") (parseColdFiles onloadingJson)
     assertEqual "failed status has no dataset" Nothing (parseColdStatus "{\"ok\":false,\"error\":\"boom\"}")
@@ -71,6 +72,9 @@ fetchingJson =
             , "{\"path\":\"b.png\",\"local\":false,\"phase\":\"verified\",\"onload\":null},"
             , "{\"path\":\"a.csv\",\"local\":false,\"phase\":\"verified\",\"onload\":{\"bytes_done\":5,\"bytes_total\":10}}]}]}}"
             ]
+
+untracked :: BS.ByteString
+untracked = "{\"ok\":true,\"status\":{\"datasets\":[{\"store_path\":\"/nix/store/abc-built\",\"phase\":\"missing\",\"local\":false,\"files\":[]}]}}"
 
 prefetch :: BS.ByteString
 prefetch = "{\"ok\":true,\"started\":[\"SRR1.fastq.gz\"],\"skipped\":[],\"unknown\":[]}"
