@@ -233,7 +233,9 @@ handleConnection runtime connection = do
                                     do
                                         jobScope <- peerJobScope (peerPid peer)
                                         if permittedNotify runtime peer jobScope event
-                                            then atomically $ writeTChan (rtInput runtime) (NotifyEvent event)
+                                            then do
+                                                atomically $ writeTChan (rtInput runtime) (NotifyEvent event)
+                                                NSB.sendAll connection "ok\n"
                                             else pure ()
                         _ -> pure ()
 
@@ -592,9 +594,10 @@ watchRequest arguments =
 
 notifyBroker :: FilePath -> Event -> IO ()
 notifyBroker path event =
-    ignoreIO $
-        bracket (connectBroker path) close $ \connection ->
+    void $ timeout 2000000 $ ignoreIO $
+        bracket (connectBroker path) close $ \connection -> do
             NSB.sendAll connection (BL.toStrict (encode payload) <> "\n")
+            void $ NSB.recv connection 3
   where
     payload =
         object

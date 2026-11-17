@@ -138,7 +138,7 @@ groupTitle kind =
             "Running"
 
         PublishingGroup ->
-            "Publishing"
+            "Saving results"
 
         QueuedGroup ->
             "Queued"
@@ -305,7 +305,7 @@ summaryCount group =
             { kind = "running", count = count, label = "running" }
 
         PublishingGroup ->
-            { kind = "publishing", count = count, label = "publishing" }
+            { kind = "publishing", count = count, label = "saving results" }
 
         QueuedGroup ->
             { kind = "queued", count = count, label = "queued" }
@@ -831,7 +831,7 @@ stateMeta now state =
 
         TrayPublishing started ->
             { short = durationText (since started)
-            , description = "Publishing for " ++ durationWords (since started)
+            , description = "Saving results for " ++ durationWords (since started)
             }
 
         TrayQueued queued reason ->
