@@ -52,7 +52,7 @@ Beside it, the summary counts steps by state: running, queued, starting, and upl
 
 The summary covers the whole instance, so a step you upload or start on this page appears in it. **Idle** appears only once status has loaded and no step is running, queued, starting, or uploading; the health label, not **Idle**, tells you whether the service is available.
 
-While the connection to the server is down, for example during a deploy, the status bar also shows **Server unreachable** before the computing service state. Pointy keeps reconnecting, and the indicator disappears once the connection is back.
+While the connection to the server is down, for example during a deploy, the status bar shows **Server unreachable** in place of the computing service state, since that state can no longer be refreshed. Pointy keeps reconnecting, and the service state returns once the connection is back.
 
 The bar also identifies the version you are viewing: the branch, with the commit on hover. From an older version it shows **Past · View current**, which returns you to the current version. **Agent**, **Docs**, the light/dark control, and the **Notifications** bell are here too, along with the account menu when you are signed in.
 

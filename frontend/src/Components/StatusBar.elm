@@ -72,8 +72,7 @@ view model =
                 []
              )
                 ++ [ Html.div [ class "status-bar__surface" ]
-                        [ viewBackendConnection (Model.getBackendConnection model)
-                        , viewHealth model
+                        [ viewHealth model
                         , viewSummary summary (not (List.isEmpty steps)) isOpen
                         , viewRepoContext model
                         , viewIndependentControls model
@@ -161,11 +160,11 @@ stepOrder step =
             ( 0, step.stepId )
 
 
-viewBackendConnection : BackendConnection -> Html msg
-viewBackendConnection connection =
-    case connection of
+viewHealth : Model -> Html msg
+viewHealth model =
+    case Model.getBackendConnection model of
         BackendUp ->
-            Html.nothing
+            viewClusterHealth model
 
         BackendDown ->
             Html.span
@@ -178,8 +177,8 @@ viewBackendConnection connection =
                 ]
 
 
-viewHealth : Model -> Html msg
-viewHealth model =
+viewClusterHealth : Model -> Html msg
+viewClusterHealth model =
     let
         state =
             clusterState (Model.getClusterStatus model) (Model.getClusterDetail model)
