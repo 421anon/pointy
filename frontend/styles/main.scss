@@ -3106,7 +3106,6 @@ body:has(dialog[open]) {
   column-gap: var(--spacing-sm);
   max-height: 50vh;
   overflow-y: auto;
-  overscroll-behavior: contain;
   scrollbar-gutter: stable;
   color: var(--text-primary);
   font-size: 14px;
