@@ -1482,13 +1482,8 @@ viewChatTurns now mentionSources agent sessionView changeset changesetActions au
                 |> Maybe.map (viewPendingSteer >> List.singleton)
                 |> Maybe.withDefault []
 
-        activityNodes =
-            get (liveTurnAt sessionId) agent
-                |> Maybe.map (Model.visibleToolCalls now >> List.map (viewToolCall now))
-                |> Maybe.withDefault []
-
         content =
-            List.map (viewChatEntry mentionSources sessionId agent.highlightTurnId autoApplyEcho) (sessionEntries sessionView agent) ++ activityNodes ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
+            List.map (viewChatEntry now mentionSources sessionId agent.highlightTurnId autoApplyEcho) (sessionEntries sessionView agent) ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
     in
     if List.isEmpty content then
         viewEmptyChat (EmptyMessages (not closedChat && not runnerActive))
@@ -1529,11 +1524,11 @@ viewEmptyChat state =
         ]
 
 
-viewChatEntry : AgentMentions.Sources -> String -> Maybe String -> Maybe Bool -> Model.ChatEntry -> Html (Flow Model ())
-viewChatEntry mentionSources sessionId highlightTurnId autoApplyEcho entry =
+viewChatEntry : Time.Posix -> AgentMentions.Sources -> String -> Maybe String -> Maybe Bool -> Model.ChatEntry -> Html (Flow Model ())
+viewChatEntry now mentionSources sessionId highlightTurnId autoApplyEcho entry =
     case entry of
         Model.ChatTurnEntry turn ->
-            viewChatTurn mentionSources sessionId (highlightTurnId == Just turn.turnId) autoApplyEcho turn
+            viewChatTurn now mentionSources sessionId (highlightTurnId == Just turn.turnId) autoApplyEcho turn
 
         Model.ChatChangesetEntry changeset ->
             viewChangesetBox [] changeset
@@ -1548,8 +1543,8 @@ turnIdAttribute turn =
         [ id (Actions.agentTurnId turn.turnId) ]
 
 
-viewChatTurn : AgentMentions.Sources -> String -> Bool -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
-viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
+viewChatTurn : Time.Posix -> AgentMentions.Sources -> String -> Bool -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
+viewChatTurn now mentionSources sessionId isHighlighted autoApplyEcho turn =
     Html.div
         (classList
             [ ( "agent-panel__chat-turn", True )
@@ -1579,7 +1574,7 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
                     ]
             )
             turn.prompt
-        , viewAgentMessage mentionSources autoApplyEcho turn
+        , viewAgentMessage now mentionSources autoApplyEcho turn
         ]
 
 
@@ -1593,19 +1588,6 @@ turnChatRef sessionId turn =
         else
             Just turn.turnId
     }
-
-
-viewToolCall : Time.Posix -> Model.AgentToolCall -> Html (Flow Model ())
-viewToolCall now call =
-    Html.div [ class "agent-panel__chat-message agent-panel__chat-message--agent" ]
-        [ Html.div [ class "agent-panel__chat-bubble agent-panel__chat-bubble--agent" ]
-            [ Html.span
-                [ class "agent-panel__chat-status is-running"
-                , attribute "role" "status"
-                ]
-                [ Html.text ("Running " ++ call.name ++ " · " ++ formatElapsed call.startedAt now) ]
-            ]
-        ]
 
 
 formatElapsed : Time.Posix -> Time.Posix -> String
@@ -1629,8 +1611,8 @@ viewPendingSteer prompt =
         ]
 
 
-viewAgentMessage : AgentMentions.Sources -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
-viewAgentMessage mentionSources autoApplyEcho turn =
+viewAgentMessage : Time.Posix -> AgentMentions.Sources -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
+viewAgentMessage now mentionSources autoApplyEcho turn =
     let
         isEmptyAssistant =
             String.isEmpty (String.trim turn.assistant)
@@ -1638,7 +1620,7 @@ viewAgentMessage mentionSources autoApplyEcho turn =
         ( statusLabel, emptyBody, failedMessage ) =
             case turn.status of
                 Model.ChatPending ->
-                    ( "Running"
+                    ( "Running · " ++ formatElapsed turn.startedAt now
                     , if turn.prompt == Nothing then
                         "The changes couldn't be applied, so the agent is fixing them."
 

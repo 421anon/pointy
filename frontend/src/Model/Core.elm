@@ -857,6 +857,7 @@ type alias ChatTurn =
     , assistant : String
     , agent : Maybe String
     , status : ChatTurnStatus
+    , startedAt : Time.Posix
     }
 
 
@@ -1014,13 +1015,6 @@ type alias Lightbox =
     }
 
 
-type alias AgentToolCall =
-    { id : String
-    , name : String
-    , startedAt : Time.Posix
-    }
-
-
 type alias AgentLiveTurn =
     { turnId : String
     , finished : Bool
@@ -1030,7 +1024,6 @@ type alias AgentLiveTurn =
     , contextState : Maybe ContextState
     , streamError : Maybe String
     , pendingSteer : Maybe String
-    , runningCalls : List AgentToolCall
     , applying : Maybe String
     }
 
@@ -1045,7 +1038,6 @@ liveTurnFor turnId view =
     , contextState = persistedContextState view
     , streamError = Nothing
     , pendingSteer = Nothing
-    , runningCalls = []
     , applying = Nothing
     }
 
@@ -1177,7 +1169,6 @@ ingestLiveChunk chunk live =
         , pendingQuestion = List.foldl pendingQuestionAfterLine live.pendingQuestion keptLines
         , contextState = List.foldl contextStateAfterLine live.contextState keptLines
         , pendingSteer = List.foldl pendingSteerAfterLine live.pendingSteer keptLines
-        , runningCalls = List.foldl runningCallsAfterLine live.runningCalls keptLines
         , applying = List.foldl applyingDiffAfterLine live.applying keptLines
         , streamError = Nothing
     }
@@ -1245,7 +1236,7 @@ appendPersistedTurn turn entries =
                     Just turn.turnPrompt
 
             seeded =
-                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, attachments = turn.turnAttachments, assistant = "", agent = Nothing, status = chatStatusFromTurn turn } ]
+                entries ++ [ ChatTurnEntry { turnId = turn.turnId, prompt = prompt, attachments = turn.turnAttachments, assistant = "", agent = Nothing, status = chatStatusFromTurn turn, startedAt = turn.turnStartedAt } ]
 
             logLines =
                 turnLogLines turn
@@ -1393,8 +1384,13 @@ appendChatLine rawLine entries =
         "steering" ->
             case Decode.decodeString Decode.string (String.trim body) of
                 Ok prompt ->
-                    mapLastChatTurn (finishPending ChatDone) entries
-                        ++ [ ChatTurnEntry { turnId = "", prompt = Just prompt, attachments = [], assistant = "", agent = lastChatTurnAgent entries, status = ChatPending } ]
+                    case lastChatTurn entries of
+                        Just steered ->
+                            mapLastChatTurn (finishPending ChatDone) entries
+                                ++ [ ChatTurnEntry { steered | turnId = "", prompt = Just prompt, attachments = [], assistant = "", status = ChatPending } ]
+
+                        Nothing ->
+                            entries
 
                 Err _ ->
                     entries
@@ -1443,9 +1439,6 @@ splitLogPrefix line =
 
     else if String.startsWith "[context] " line then
         ( "context", String.dropLeft 10 line )
-
-    else if String.startsWith "[activity] " line then
-        ( "activity", String.dropLeft 11 line )
 
     else if String.startsWith "[system] " line then
         ( "system", String.dropLeft 9 line )
@@ -1588,70 +1581,6 @@ pendingSteerAfterLine rawLine pending =
             pending
 
 
-runningCallsAfterLine : String -> List AgentToolCall -> List AgentToolCall
-runningCallsAfterLine rawLine calls =
-    case splitLogPrefix rawLine of
-        ( "activity", body ) ->
-            case Decode.decodeString toolActivityDecoder (String.trim body) of
-                Ok (ToolStarted call) ->
-                    if call.name == questionToolName then
-                        calls
-
-                    else
-                        List.filter (\running -> running.id /= call.id) calls ++ [ call ]
-
-                Ok (ToolFinished id) ->
-                    List.filter (\running -> running.id /= id) calls
-
-                Err _ ->
-                    calls
-
-        ( "system", body ) ->
-            if isTurnFinishedLine body then
-                []
-
-            else
-                calls
-
-        _ ->
-            calls
-
-
-questionToolName : String
-questionToolName =
-    "ask_user_question"
-
-
-type ToolActivity
-    = ToolStarted AgentToolCall
-    | ToolFinished String
-
-
-toolActivityDecoder : Decode.Decoder ToolActivity
-toolActivityDecoder =
-    Decode.field "state" Decode.string
-        |> Decode.andThen
-            (\state ->
-                case state of
-                    "started" ->
-                        Decode.map ToolStarted toolCallDecoder
-
-                    "finished" ->
-                        Decode.map ToolFinished (Decode.field "id" Decode.string)
-
-                    _ ->
-                        Decode.fail ("unknown tool activity state " ++ state)
-            )
-
-
-toolCallDecoder : Decode.Decoder AgentToolCall
-toolCallDecoder =
-    Decode.map3 AgentToolCall
-        (Decode.field "id" Decode.string)
-        (Decode.field "name" Decode.string)
-        (Decode.field "startedAt" (Decode.map (\seconds -> Time.millisToPosix (round (seconds * 1000))) Decode.float))
-
-
 pendingQuestionDecoder : Decode.Decoder PendingQuestion
 pendingQuestionDecoder =
     Decode.map3 PendingQuestion
@@ -1699,11 +1628,11 @@ mapLastChatTurn update entries =
             entries
 
 
-lastChatTurnAgent : List ChatEntry -> Maybe String
-lastChatTurnAgent entries =
+lastChatTurn : List ChatEntry -> Maybe ChatTurn
+lastChatTurn entries =
     case List.reverse entries of
         (ChatTurnEntry last) :: _ ->
-            last.agent
+            Just last
 
         _ ->
             Nothing
@@ -2436,23 +2365,13 @@ getNow (Model model) =
     model.now
 
 
-hasRunningToolCall : Model -> Bool
-hasRunningToolCall (Model model) =
-    List.any (\live -> not live.finished && not (List.isEmpty live.runningCalls)) (Dict.values model.agent.liveTurns)
-
-
-visibleToolCalls : Time.Posix -> AgentLiveTurn -> List AgentToolCall
-visibleToolCalls now live =
-    if live.finished then
-        []
-
-    else
-        List.filter (\call -> Time.posixToMillis now - Time.posixToMillis call.startedAt >= toolCallVisibleAfterMillis) live.runningCalls
-
-
-toolCallVisibleAfterMillis : Int
-toolCallVisibleAfterMillis =
-    20000
+showsRunningAgentTurn : Model -> Bool
+showsRunningAgentTurn (Model model) =
+    model.agent.isPanelOpen
+        && (model.agent.selectedSessionId
+                |> Maybe.andThen (\sessionId -> Dict.get sessionId model.agent.liveTurns)
+                |> Maybe.unwrap False (not << .finished)
+           )
 
 
 initialTable : Table a
