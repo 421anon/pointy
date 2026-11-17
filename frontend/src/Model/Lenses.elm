@@ -1226,6 +1226,11 @@ statusBarOpen =
     lens ".statusBarOpen" Model.getStatusBarOpen (\(Model m) open -> Model { m | statusBarOpen = open })
 
 
+backendConnection : Lens ls Model Model.BackendConnection x y
+backendConnection =
+    lens ".backendConnection" Model.getBackendConnection (\(Model m) connection -> Model { m | backendConnection = connection })
+
+
 statusBarScrollTop : Lens ls Model Float x y
 statusBarScrollTop =
     lens ".statusBarScrollTop" Model.getStatusBarScrollTop (\(Model m) scrollTop -> Model { m | statusBarScrollTop = scrollTop })

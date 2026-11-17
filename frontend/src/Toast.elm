@@ -71,9 +71,7 @@ view dismiss mDismissAll toast =
                 , Maybe.map (\dismissAll -> button [ class "toast-action", type_ "button", Events.onClick dismissAll ] [ text "Dismiss all" ]) mDismissAll
                 ]
     in
-    div
-        [ class "toast-wrapper"
-        ]
+    div []
         [ div
             [ class "toast"
             , classList

@@ -25,8 +25,28 @@ stepStatusEvent =
                     "error" ->
                         Decode.field "data" Decode.string |> Decode.map SSEError
 
+                    "connection" ->
+                        Decode.field "data" backendConnection |> Decode.map SSEConnection
+
                     _ ->
                         Decode.fail ("Unknown SSE event type: " ++ type_)
+            )
+
+
+backendConnection : Decoder Model.BackendConnection
+backendConnection =
+    Decode.string
+        |> Decode.andThen
+            (\state ->
+                case state of
+                    "up" ->
+                        Decode.succeed Model.BackendUp
+
+                    "down" ->
+                        Decode.succeed Model.BackendDown
+
+                    _ ->
+                        Decode.fail ("Unknown backend connection state: " ++ state)
             )
 
 

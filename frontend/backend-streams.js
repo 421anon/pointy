@@ -42,8 +42,12 @@ function openStepStatusStream(app) {
     } catch {}
   });
 
+  stepStatusSource.addEventListener("open", () => {
+    emitToElm("connection", "up");
+  });
+
   stepStatusSource.onerror = () => {
-    emitToElm("error", "Step status stream connection issue");
+    emitToElm("connection", "down");
   };
 }
 

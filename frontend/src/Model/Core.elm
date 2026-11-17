@@ -1794,6 +1794,7 @@ type Model
         , activeSteps : List StepActivity
         , statusBarCollapsed : Set String
         , statusBarOpen : Bool
+        , backendConnection : BackendConnection
         , statusBarScrollTop : Float
         , sidebarOpen : Bool
         , sidebarScroll : SidebarScroll
@@ -1804,6 +1805,11 @@ type Model
         , rollupInFlight : Dict Int Bool
         , tokenSession : Maybe TokenSession
         }
+
+
+type BackendConnection
+    = BackendUp
+    | BackendDown
 
 
 type alias GutterDrag =
@@ -2086,6 +2092,11 @@ getStatusBarCollapsed (Model model) =
 getStatusBarOpen : Model -> Bool
 getStatusBarOpen (Model model) =
     model.statusBarOpen
+
+
+getBackendConnection : Model -> BackendConnection
+getBackendConnection (Model model) =
+    model.backendConnection
 
 
 getStatusBarScrollTop : Model -> Float
@@ -2386,6 +2397,7 @@ type StepStatusEvent
     = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
     | SSEHeartbeat
     | SSEError String
+    | SSEConnection BackendConnection
 
 
 type AgentTurnEvent
@@ -2467,6 +2479,7 @@ initialModel key route flags =
         , activeSteps = []
         , statusBarCollapsed = Set.empty
         , statusBarOpen = False
+        , backendConnection = BackendUp
         , statusBarScrollTop = 0
         , sidebarOpen = not flags.isNarrow
         , sidebarScroll = { top = False, left = False, right = False }
