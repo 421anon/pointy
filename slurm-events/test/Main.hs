@@ -5,7 +5,7 @@ module Main (main) where
 import Control.Monad (forM_)
 import Data.Either (isLeft)
 import Data.List (intercalate)
-import SlurmBroker (JobScope (..), jobScopeFromCgroup)
+import SlurmBroker (JobScope (..), jobScopeFromCgroup, parseWatchArguments)
 import SlurmEvents
 
 main :: IO ()
@@ -26,17 +26,18 @@ tests :: [(String, IO ())]
 tests =
     [ ("account snapshots exclude foreign and native jobs", testAccountIsolation)
     , ("native snapshots exclude cloud jobs", testNativeIsolation)
-    , ("publishing marker is visible until terminal", testPublishingMarker)
+    , ("saving marker is visible until terminal", testSavingMarker)
     , ("terminal event suppresses a completing job", testTerminalSuppression)
     , ("terminal metadata is account-scoped", testTerminalMetadata)
     , ("cancelled-before-start stays terminal without a start", testCompletionBeforeStart)
-    , ("requeue clears publishing and terminal state", testRequeue)
-    , ("events cannot name another account", testAccountSpoofing)
+    , ("requeue clears saving and terminal state", testRequeue)
+    , ("account metadata must match the scope", testAccountSpoofing)
     , ("repeated events are idempotent", testIdempotence)
     , ("a snapshot started before subscription is not delivered", testSubscriptionRace)
     , ("systemd job cgroups yield the Slurm job scope", testSluidScope)
     , ("legacy job cgroups yield the numeric job scope", testLegacyJobScope)
     , ("non-job cgroups have no job scope", testForeignCgroupScope)
+    , ("account watches use the configured prefix only", testWatchPrefixConfiguration)
     ]
 
 queueLine :: String -> String -> String -> String -> String -> String -> String -> String
@@ -60,11 +61,11 @@ testAccountIsolation :: IO ()
 testAccountIsolation = do
     let input =
             unlines
-                [ queueLine "101" "mbs" "pc-mbs-own" "own" "RUNNING" "0:05" "None"
-                , queueLine "102" "mbs-lab" "pc-mbs-lab-secret" "private" "RUNNING" "0:07" "None"
+                [ queueLine "101" "mbs" "site-mbs-own" "own" "RUNNING" "0:05" "None"
+                , queueLine "102" "mbs-lab" "site-mbs-lab-secret" "private" "RUNNING" "0:07" "None"
                 , queueLine "103" "mbs" "pointy-nix-build-native" "native" "RUNNING" "0:01" "None"
                 ]
-        output = filterJobs (WatchAccount "mbs") emptyBrokerState input
+        output = filterJobs (WatchScoped "site-" "mbs") emptyBrokerState input
     assertEqual
         "only owned rows with stripped names"
         "101|own|own|RUNNING|0:05|None\n"
@@ -74,76 +75,80 @@ testNativeIsolation :: IO ()
 testNativeIsolation = do
     let input =
             unlines
-                [ queueLine "101" "mbs" "pc-mbs-own" "own" "RUNNING" "0:05" "None"
+                [ queueLine "101" "mbs" "site-mbs-own" "own" "RUNNING" "0:05" "None"
                 , queueLine "103" "mbs" "pointy-nix-build-native" "native" "RUNNING" "0:01" "None"
                 ]
         output = filterJobs WatchNative emptyBrokerState input
     assertEqual "only native rows" "103|pointy-nix-build-native|native|RUNNING|0:01|None\n" output
 
-testPublishingMarker :: IO ()
-testPublishingMarker = do
-    let input = queueLine "101" "mbs" "pc-mbs-own" "own" "RUNNING" "0:05" "None"
-    broker <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent PublishingEvent "101" "pc-mbs-own"))
+testSavingMarker :: IO ()
+testSavingMarker = do
+    let input = queueLine "101" "mbs" "site-mbs-own" "own" "RUNNING" "0:05" "None"
+    broker <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent SavingEvent "101" "site-mbs-own"))
     assertEqual
-        "publishing state"
-        "101|own|own|PUBLISHING|0:05|None\n"
-        (filterJobs (WatchAccount "mbs") broker input)
+        "saving state"
+        "101|own|own|SAVING|0:05|None\n"
+        (filterJobs (WatchScoped "site-" "mbs") broker input)
 
 testTerminalSuppression :: IO ()
 testTerminalSuppression = do
-    let input = queueLine "101" "mbs" "pc-mbs-own" "own" "COMPLETING" "0:05" "None"
-    broker <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent TerminalEvent "101" "pc-mbs-own"))
-    assertEqual "terminal id suppressed" "" (filterJobs (WatchAccount "mbs") broker input)
+    let input = queueLine "101" "mbs" "site-mbs-own" "own" "COMPLETING" "0:05" "None"
+    broker <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent TerminalEvent "101" "site-mbs-own"))
+    assertEqual "terminal id suppressed" "" (filterJobs (WatchScoped "site-" "mbs") broker input)
 
 testTerminalMetadata :: IO ()
 testTerminalMetadata = do
-    let ownedEvent = (jobEvent TerminalEvent "101" "pc-mbs-own") {eventAccount = Just "mbs"}
-        foreignEvent = (jobEvent TerminalEvent "202" "pc-other-secret") {eventAccount = Just "other"}
+    let ownedEvent = (jobEvent TerminalEvent "101" "site-mbs-own") {eventAccount = Just "mbs"}
+        foreignEvent = (jobEvent TerminalEvent "202" "site-other-secret") {eventAccount = Just "other"}
     broker <- either (ioError . userError) pure (apply emptyBrokerState ownedEvent)
     foreignTerminal <- either (ioError . userError) pure (apply broker foreignEvent)
     assertEqual
         "owned terminal metadata"
         [("101", "own")]
-        (filterTerminalJobs (WatchAccount "mbs") foreignTerminal)
+        (filterTerminalJobs (WatchScoped "site-" "mbs") foreignTerminal)
     assertEqual
         "foreign terminal metadata hidden"
         [("202", "secret")]
-        (filterTerminalJobs (WatchAccount "other") foreignTerminal)
+        (filterTerminalJobs (WatchScoped "site-" "other") foreignTerminal)
 
 testCompletionBeforeStart :: IO ()
 testCompletionBeforeStart = do
-    let input = queueLine "101" "mbs" "pc-mbs-own" "own" "RUNNING" "0:05" "None"
-    terminal <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent TerminalEvent "101" "pc-mbs-own"))
-    started <- either (ioError . userError) pure (apply terminal (jobEvent StartEvent "101" "pc-mbs-own"))
-    assertEqual "missing watched job is terminal" "" (filterJobs (WatchAccount "mbs") started input)
-    let publishAgain = apply started (jobEvent PublishingEvent "101" "pc-mbs-own")
-    assertEqual "publishing cannot revive a terminal job" (Right started) publishAgain
+    let input = queueLine "101" "mbs" "site-mbs-own" "own" "RUNNING" "0:05" "None"
+    terminal <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent TerminalEvent "101" "site-mbs-own"))
+    started <- either (ioError . userError) pure (apply terminal (jobEvent StartEvent "101" "site-mbs-own"))
+    assertEqual "missing watched job is terminal" "" (filterJobs (WatchScoped "site-" "mbs") started input)
+    let saveAgain = apply started (jobEvent SavingEvent "101" "site-mbs-own")
+    assertEqual "saving cannot revive a terminal job" (Right started) saveAgain
 
 testRequeue :: IO ()
 testRequeue = do
-    let input = queueLine "101" "mbs" "pc-mbs-own" "own" "PENDING" "0:00" "None"
-        requeue = (jobEvent TerminalEvent "101" "pc-mbs-own") {eventState = Just "REQUEUED"}
-    publishing <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent PublishingEvent "101" "pc-mbs-own"))
-    requeued <- either (ioError . userError) pure (apply publishing requeue)
-    assertEqual "requeued job is active again" "101|own|own|PENDING|0:00|None\n" (filterJobs (WatchAccount "mbs") requeued input)
+    let input = queueLine "101" "mbs" "site-mbs-own" "own" "PENDING" "0:00" "None"
+        requeue = (jobEvent TerminalEvent "101" "site-mbs-own") {eventState = Just "REQUEUED"}
+    saving <- either (ioError . userError) pure (apply emptyBrokerState (jobEvent SavingEvent "101" "site-mbs-own"))
+    requeued <- either (ioError . userError) pure (apply saving requeue)
+    assertEqual "requeued job is active again" "101|own|own|PENDING|0:00|None\n" (filterJobs (WatchScoped "site-" "mbs") requeued input)
 
 testAccountSpoofing :: IO ()
 testAccountSpoofing = do
-    let spoofed = (jobEvent TerminalEvent "101" "pc-mbs-own") {eventAccount = Just "other"}
-    assertTrue "foreign account rejected" (isLeft (apply emptyBrokerState spoofed))
-    let invalid = jobEvent TerminalEvent "101" "pc-own"
-    assertTrue "malformed scoped name rejected" (isLeft (apply emptyBrokerState invalid))
+    let mislabeled = (jobEvent TerminalEvent "101" "site-mbs-own") {eventAccount = Just "trotter-lab"}
+    broker <- either (ioError . userError) pure (apply emptyBrokerState mislabeled)
+    assertEqual
+        "scope requires a matching account"
+        []
+        (filterTerminalJobs (WatchScoped "site-" "mbs") broker)
+    let invalid = (jobEvent TerminalEvent "101" "site-mbs-own") {eventAccount = Just "Bad Name"}
+    assertTrue "invalid account rejected" (isLeft (apply emptyBrokerState invalid))
 
 testIdempotence :: IO ()
 testIdempotence = do
-    let terminal = jobEvent TerminalEvent "101" "pc-mbs-own"
+    let terminal = jobEvent TerminalEvent "101" "site-mbs-own"
     once <- either (ioError . userError) pure (apply emptyBrokerState terminal)
     twice <- either (ioError . userError) pure (apply once terminal)
     assertEqual "terminal event applied twice" once twice
-    let publishing = jobEvent PublishingEvent "101" "pc-mbs-own"
-    published <- either (ioError . userError) pure (apply emptyBrokerState publishing)
-    publishedAgain <- either (ioError . userError) pure (apply published publishing)
-    assertEqual "publishing event applied twice" published publishedAgain
+    let saving = jobEvent SavingEvent "101" "site-mbs-own"
+    published <- either (ioError . userError) pure (apply emptyBrokerState saving)
+    publishedAgain <- either (ioError . userError) pure (apply published saving)
+    assertEqual "saving event applied twice" published publishedAgain
 
 testSubscriptionRace :: IO ()
 testSubscriptionRace = do
@@ -181,3 +186,18 @@ testForeignCgroupScope = do
         "unrelated scope-like component"
         Nothing
         (jobScopeFromCgroup "0::/system.slice/sF61M7MS1MK300/step_batch\n")
+
+testWatchPrefixConfiguration :: IO ()
+testWatchPrefixConfiguration = do
+    assertEqual
+        "native watch needs no prefix"
+        (Right WatchNative)
+        (parseWatchArguments Nothing ["native"])
+    assertEqual
+        "account watch needs a configured prefix"
+        (Left "account watches are not configured")
+        (parseWatchArguments Nothing ["account", "mbs"])
+    assertEqual
+        "account watch uses the configured prefix"
+        (Right (WatchScoped "site-" "mbs"))
+        (parseWatchArguments (Just "site-") ["account", "mbs"])

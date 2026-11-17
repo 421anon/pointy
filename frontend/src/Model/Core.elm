@@ -131,7 +131,7 @@ type StepPhase
     = PhasePreparing
     | PhaseQueued
     | PhaseRunning
-    | PhasePublishing
+    | PhaseSaving
 
 
 type alias StepActivity =
@@ -3279,7 +3279,7 @@ invertTreeOps before ops =
 
 type TrayState
     = TrayRunning Time.Posix
-    | TrayPublishing Time.Posix
+    | TraySaving Time.Posix
     | TrayQueued Time.Posix (Maybe String)
     | TrayStarting (Maybe Time.Posix)
     | TrayTransferring (Maybe Float)
@@ -3331,8 +3331,8 @@ getTraySteps (Model model) =
                 PhaseRunning ->
                     TrayRunning activity.since
 
-                PhasePublishing ->
-                    TrayPublishing activity.since
+                PhaseSaving ->
+                    TraySaving activity.since
 
                 PhaseQueued ->
                     TrayQueued activity.since activity.reason

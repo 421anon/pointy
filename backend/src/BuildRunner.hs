@@ -323,7 +323,7 @@ isRunningState state =
                , "RESIZING"
                , "STAGE_OUT"
                , "COMPLETING"
-               , "PUBLISHING"
+               , "SAVING"
                ]
 
 runningJobNames :: (Slurm :> es) => Eff es (Maybe (Set.Set String))

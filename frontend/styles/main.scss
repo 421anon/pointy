@@ -3594,8 +3594,8 @@ body:has(dialog[open]) {
   border: 2px solid var(--color-yellow-400);
 }
 
-.status-bar__count--publishing .status-bar__marker,
-.status-bar__marker--publishing {
+.status-bar__count--saving .status-bar__marker,
+.status-bar__marker--saving {
   background: var(--state-info);
   animation: pulse-running 1.5s ease-in-out infinite;
 }

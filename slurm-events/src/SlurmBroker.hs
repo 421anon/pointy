@@ -49,6 +49,7 @@ data BrokerConfig = BrokerConfig
     , brokerHeartbeatMicros :: Int
     , brokerTrustedUsers :: [String]
     , brokerAccountWatchUsers :: [String]
+    , brokerScopePrefix :: Maybe String
     , brokerStateFile :: Maybe FilePath
     , brokerQuery :: IO (Either String Snapshot)
     }
@@ -210,7 +211,7 @@ handleConnection runtime connection = do
                         "watch" ->
                             do
                                 jobScope <- peerJobScope (peerPid peer)
-                                case parseWatchArguments (map T.unpack (requestArguments request)) of
+                                case parseWatchArguments (brokerScopePrefix (rtConfig runtime)) (map T.unpack (requestArguments request)) of
                                     Left _ -> pure ()
                                     Right filter ->
                                         if permittedWatch runtime peer jobScope filter
@@ -230,7 +231,7 @@ handleConnection runtime connection = do
                         "notify" ->
                             case brokerEvent request of
                                 Left problem ->
-                                    hPutStrLn stderr ("pointy-cloud-slurm-broker: " <> problem)
+                                    hPutStrLn stderr ("pointy-slurm-broker: " <> problem)
                                 Right event ->
                                     do
                                         jobScope <- peerJobScope (peerPid peer)
@@ -241,7 +242,7 @@ handleConnection runtime connection = do
                                                 ignoreIO (NSB.sendAll connection "ok\n")
                                             else
                                                 hPutStrLn stderr $
-                                                    "pointy-cloud-slurm-broker: rejected "
+                                                    "pointy-slurm-broker: rejected "
                                                         <> eventKindName (eventKind event)
                                                         <> " notification for job "
                                                         <> show (eventJobId event)
@@ -308,7 +309,7 @@ jobScopeFromCgroup contents = findScope (concatMap (splitOn '/') (lines contents
 permittedWatch :: Runtime -> PeerInfo -> Maybe JobScope -> WatchFilter -> Bool
 permittedWatch _ _ (Just _) _ = False
 permittedWatch _ _ Nothing WatchNative = True
-permittedWatch runtime peer Nothing (WatchAccount _) =
+permittedWatch runtime peer Nothing WatchScoped{} =
     trusted || maybe False (`elem` rtAccountWatchUids runtime) (peerUid peer)
   where
     trusted = maybe False (`elem` rtTrustedUids runtime) (peerUid peer)
@@ -323,7 +324,7 @@ permittedNotify runtime peer jobScope event =
                     else eventKind event == SubmitEvent
         Just scope ->
             case (eventKind event, eventJobId event) of
-                (kind, Just jobId) | kind `elem` [StartEvent, PublishingEvent] ->
+                (kind, Just jobId) | kind `elem` [StartEvent, SavingEvent] ->
                     scopeOwnsJob scope jobId
                 _ -> pure False
   where
@@ -449,10 +450,10 @@ snapshotLoop runtime = loop 0
             outcome <- try (brokerQuery (rtConfig runtime)) :: IO (Either SomeException (Either String Snapshot))
             case outcome of
                 Left exception -> do
-                    hPutStrLn stderr ("pointy-cloud-slurm-broker: snapshot failed: " <> displayException exception)
+                    hPutStrLn stderr ("pointy-slurm-broker: snapshot failed: " <> displayException exception)
                     closeAll runtime
                 Right (Left problem) -> do
-                    hPutStrLn stderr ("pointy-cloud-slurm-broker: snapshot failed: " <> problem)
+                    hPutStrLn stderr ("pointy-slurm-broker: snapshot failed: " <> problem)
                     closeAll runtime
                 Right (Right snapshot) -> do
                     window <- readTVarIO (rtWindow runtime)
@@ -593,7 +594,7 @@ loadTerminalState (Just path) = do
                                                   )
                                                 | record <- records
                                                 ]
-                                        , brokerPublishing = Map.empty
+                                        , brokerSaving = Map.empty
                                         }
 
 persistTerminalState :: Runtime -> IO ()
@@ -612,7 +613,7 @@ persistTerminalState runtime =
                         ) :: IO (Either IOException ())
                 case outcome of
                     Left exception ->
-                        hPutStrLn stderr ("pointy-cloud-slurm-broker: could not persist terminal state: " <> displayException (exception :: IOException))
+                        hPutStrLn stderr ("pointy-slurm-broker: could not persist terminal state: " <> displayException (exception :: IOException))
                     Right () -> pure ()
   where
     persisted record =
@@ -636,15 +637,16 @@ brokerEvent request = do
             , eventState = T.unpack <$> requestState request
             }
 
-parseWatchArguments :: [String] -> Either String WatchFilter
-parseWatchArguments ["native"] = Right WatchNative
-parseWatchArguments ["account", account]
-    | validAccountName account = Right (WatchAccount account)
-parseWatchArguments _ = Left "watch arguments must be native or account ACCOUNT"
+parseWatchArguments :: Maybe String -> [String] -> Either String WatchFilter
+parseWatchArguments _ ["native"] = Right WatchNative
+parseWatchArguments Nothing ["account", _] = Left "account watches are not configured"
+parseWatchArguments (Just prefix) ["account", account]
+    | validAccountName account = Right (WatchScoped prefix account)
+parseWatchArguments _ ["account", _] = Left "account watch needs a valid account"
+parseWatchArguments _ _ = Left "watch arguments must be native or account ACCOUNT"
 
 runWatchClient :: FilePath -> [String] -> IO ()
-runWatchClient path arguments = do
-    _ <- either (ioError . userError) pure (parseWatchArguments arguments)
+runWatchClient path arguments =
     bracket (connectBroker path) close $ \connection -> do
         NSB.sendAll connection (watchRequest arguments)
         copyFrames connection

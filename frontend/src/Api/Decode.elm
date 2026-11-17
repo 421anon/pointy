@@ -989,8 +989,8 @@ stepPhase =
                     "running" ->
                         Decode.succeed Model.PhaseRunning
 
-                    "publishing" ->
-                        Decode.succeed Model.PhasePublishing
+                    "saving" ->
+                        Decode.succeed Model.PhaseSaving
 
                     other ->
                         Decode.fail ("Unknown step phase: " ++ other)

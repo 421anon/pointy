@@ -27,7 +27,7 @@ import View.Table as Table
 
 type GroupKind
     = RunningGroup
-    | PublishingGroup
+    | SavingGroup
     | QueuedGroup
     | StartingGroup
     | TransferGroup
@@ -41,7 +41,7 @@ type alias Group =
 
 groupOrder : List GroupKind
 groupOrder =
-    [ RunningGroup, PublishingGroup, QueuedGroup, StartingGroup, TransferGroup ]
+    [ RunningGroup, SavingGroup, QueuedGroup, StartingGroup, TransferGroup ]
 
 
 view : Model -> Html (Flow Model ())
@@ -99,8 +99,8 @@ groupKind state =
         TrayRunning _ ->
             RunningGroup
 
-        TrayPublishing _ ->
-            PublishingGroup
+        TraySaving _ ->
+            SavingGroup
 
         TrayQueued _ _ ->
             QueuedGroup
@@ -118,8 +118,8 @@ groupKey kind =
         RunningGroup ->
             "running"
 
-        PublishingGroup ->
-            "publishing"
+        SavingGroup ->
+            "saving"
 
         QueuedGroup ->
             "queued"
@@ -137,7 +137,7 @@ groupTitle kind =
         RunningGroup ->
             "Running"
 
-        PublishingGroup ->
+        SavingGroup ->
             "Saving results"
 
         QueuedGroup ->
@@ -173,7 +173,7 @@ stepOrder step =
         TrayRunning since ->
             ( Time.posixToMillis since, step.stepId )
 
-        TrayPublishing since ->
+        TraySaving since ->
             ( Time.posixToMillis since, step.stepId )
 
         TrayQueued since _ ->
@@ -304,8 +304,8 @@ summaryCount group =
         RunningGroup ->
             { kind = "running", count = count, label = "running" }
 
-        PublishingGroup ->
-            { kind = "publishing", count = count, label = "saving results" }
+        SavingGroup ->
+            { kind = "saving", count = count, label = "saving results" }
 
         QueuedGroup ->
             { kind = "queued", count = count, label = "queued" }
@@ -798,8 +798,8 @@ markerClass kind =
         RunningGroup ->
             "status-indicator status-running"
 
-        PublishingGroup ->
-            "status-bar__marker status-bar__marker--publishing"
+        SavingGroup ->
+            "status-bar__marker status-bar__marker--saving"
 
         QueuedGroup ->
             "status-bar__marker status-bar__marker--queued"
@@ -829,7 +829,7 @@ stateMeta now state =
             , description = "Running for " ++ durationWords (since started)
             }
 
-        TrayPublishing started ->
+        TraySaving started ->
             { short = durationText (since started)
             , description = "Saving results for " ++ durationWords (since started)
             }

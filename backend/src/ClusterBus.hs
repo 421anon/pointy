@@ -38,7 +38,7 @@ import qualified Data.Set as Set
 
 data ClusterStatus = Available | Degraded | Unavailable deriving (Eq, Show)
 
-data StepPhase = Preparing | Queued | Running | Publishing deriving (Eq, Ord, Show)
+data StepPhase = Preparing | Queued | Running | Saving deriving (Eq, Ord, Show)
 
 data StepActivity = StepActivity
     { activityPhase :: StepPhase
@@ -233,13 +233,13 @@ deriveJobProgress now jobs builds previous =
                 _ -> phaseStart stepId phase job
          in JobProgress jobId phase since reason
     phaseStart _ Running job = maybe now (\seconds -> addUTCTime (negate (fromIntegral seconds)) now) (slurmJobElapsed job)
-    phaseStart _ Publishing _ = now
+    phaseStart _ Saving _ = now
     phaseStart stepId _ _ = maybe now trackedSince (Map.lookup stepId builds)
 
 jobPhase :: SlurmJob -> StepPhase
 jobPhase job = case slurmJobState job of
     "PENDING" -> Queued
-    "PUBLISHING" -> Publishing
+    "SAVING" -> Saving
     _ -> Running
 
 snapshotAndSubscribe :: IO (ClusterSnapshot, TChan ClusterSnapshot)

@@ -7,7 +7,7 @@ let
   slurmPackage = if slurmConfigured then config.services.slurm.package else pkgs.slurm;
   slurmConf = if slurmConfigured then "${config.services.slurm.etcSlurm}/slurm.conf" else "/etc/slurm/slurm.conf";
   slurmUser = if slurmConfigured then config.services.slurm.user else "slurm";
-  brokerBinary = "${cfg.package}/bin/pointy-cloud-slurm-broker";
+  brokerBinary = "${cfg.package}/bin/pointy-slurm-broker";
 
   watcher = pkgs.writeShellScriptBin "pointy-slurm-watch" ''
     exec ${brokerBinary} watch --socket ${lib.escapeShellArg cfg.socketPath} native
@@ -128,7 +128,7 @@ in
       readOnly = true;
       default = pkgs.callPackage ./package.nix { };
       defaultText = lib.literalExpression "pkgs.callPackage ./package.nix { }";
-      description = "Package providing bin/pointy-cloud-slurm-broker, the local Slurm event broker and notifier.";
+      description = "Package providing bin/pointy-slurm-broker, the local Slurm event broker and notifier.";
     };
 
     brokerCommand = lib.mkOption {
@@ -204,6 +204,13 @@ in
       description = "Users allowed to request account-filtered watches. Native watches are allowed for the socket group; the shared cluster gateway user belongs here.";
     };
 
+    scopePrefix = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Prefix placed before a Slurm account name in job names for account-filtered watches. When null, account watches are refused.";
+      example = "site-";
+    };
+
     stateFile = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/pointy-slurm-events/terminal-state.json";
@@ -214,7 +221,7 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ "root" ] ++ lib.optional slurmConfigured slurmUser;
       defaultText = lib.literalExpression ''[ "root" "slurm" ]'';
-      description = "Producer users allowed to submit terminal, start, node and reset events. Publishing events from unprivileged runners are restricted to the runner's own Slurm job cgroup.";
+      description = "Producer users allowed to submit terminal, start, node and reset events. Saving events from unprivileged runners are restricted to the runner's own Slurm job cgroup.";
     };
 
     configureSlurm = lib.mkOption {
@@ -270,6 +277,10 @@ in
               ++ lib.optionals (cfg.accountWatchUsers != [ ]) [
                 "--account-watch-users"
                 (lib.concatStringsSep "," (lib.unique cfg.accountWatchUsers))
+              ]
+              ++ lib.optionals (cfg.scopePrefix != null) [
+                "--scope-prefix"
+                (toString cfg.scopePrefix)
               ]
               ++ [
                 "--state-file"

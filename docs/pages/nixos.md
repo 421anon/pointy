@@ -32,7 +32,7 @@ Import `pointy.nixosModules.pointy-host` to install the backend service, nginx v
 | `services.pointy-backend.slurm.package` | `config.services.slurm.package` | Slurm package whose client commands the backend runs. |
 | `services.pointy-backend.slurm.confFile` | the host's `services.slurm` `slurm.conf` | Cluster configuration the backend submits to, exported as `SLURM_CONF`. |
 | `services.pointy-backend.slurm.realiseCommand` | generated `pointy-realise` | Executable on every compute node, run as `<command> <derivation>`. The default runs `nix build --no-link`, passing `--store` when `storeUrl` is set. See [Build execution and GC roots](builds.md#build-execution-and-gc-roots). |
-| `services.pointy-backend.slurm.watchCommand` | `pointy-slurm-watch` | Executable the backend runs, without arguments, to receive account-scoped Slurm snapshots and transport heartbeats as newline-delimited JSON. It must emit a fresh snapshot on every connection. |
+| `services.pointy-backend.slurm.watchCommand` | `pointy-slurm-watch` | Executable the backend runs, without arguments, to receive native Slurm snapshots and transport heartbeats as newline-delimited JSON. It must emit a fresh snapshot on every connection. `services.pointy-slurm-events.scopePrefix` enables account-filtered watches for gateways. |
 
 For a plain multi-node cluster:
 

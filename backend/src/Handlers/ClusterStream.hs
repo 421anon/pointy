@@ -90,7 +90,7 @@ phaseText :: StepPhase -> Text
 phaseText Preparing = "preparing"
 phaseText Queued = "queued"
 phaseText Running = "running"
-phaseText Publishing = "publishing"
+phaseText Saving = "saving"
 
 statusText :: ClusterStatus -> Text
 statusText Available = "available"

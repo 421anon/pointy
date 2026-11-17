@@ -113,27 +113,27 @@ main = do
             )
         )
     assertEqual
-        "a publishing job starts its phase when the snapshot first reports it"
-        (Just (JobProgress "44" Publishing now Nothing))
+        "a saving job starts its phase when the snapshot first reports it"
+        (Just (JobProgress "44" Saving now Nothing))
         ( Map.lookup
             7
             ( deriveJobProgress
                 now
-                (jobs ["44|" ++ jobName ++ "|" ++ stepComment 7 commitA ++ "|PUBLISHING|0:10|None"])
+                (jobs ["44|" ++ jobName ++ "|" ++ stepComment 7 commitA ++ "|SAVING|0:10|None"])
                 buildsAtA
                 Map.empty
             )
         )
     assertEqual
-        "a publishing phase keeps the time it was first observed"
-        (Just (JobProgress "44" Publishing earlierStart Nothing))
+        "a saving phase keeps the time it was first observed"
+        (Just (JobProgress "44" Saving earlierStart Nothing))
         ( Map.lookup
             7
             ( deriveJobProgress
                 now
-                (jobs ["44|" ++ jobName ++ "|" ++ stepComment 7 commitA ++ "|PUBLISHING|0:20|None"])
+                (jobs ["44|" ++ jobName ++ "|" ++ stepComment 7 commitA ++ "|SAVING|0:20|None"])
                 buildsAtA
-                (Map.singleton 7 (JobProgress "44" Publishing earlierStart Nothing))
+                (Map.singleton 7 (JobProgress "44" Saving earlierStart Nothing))
             )
         )
     assertBool
@@ -143,8 +143,8 @@ main = do
             && "\"since\":\"2026-10-09T12:00:00Z\"" `occursIn` activityPayload
         )
     assertBool
-        "publishing is a distinct stream phase"
-        ("\"phase\":\"publishing\"" `occursIn` publishingPayload)
+        "saving is a distinct stream phase"
+        ("\"phase\":\"saving\"" `occursIn` savingPayload)
 
 now :: UTCTime
 now = timestamp "2026-10-09T13:00:00Z"
@@ -183,14 +183,14 @@ activityPayload =
                 , activeSteps = Map.singleton 7 (StepActivity Queued trackedAt (Just "Dependency") ["f1c5ec2080eeed56e424178207fd8310081de368"])
                 }
 
-publishingPayload :: BS.ByteString
-publishingPayload =
+savingPayload :: BS.ByteString
+savingPayload =
     LBS.toStrict $
         encodeSnapshot
             ClusterSnapshot
                 { clusterStatus = Available
                 , clusterDetail = Nothing
-                , activeSteps = Map.singleton 7 (StepActivity Publishing earlierStart Nothing [T.pack commitA])
+                , activeSteps = Map.singleton 7 (StepActivity Saving earlierStart Nothing [T.pack commitA])
                 }
 
 downNodeTranscript :: String

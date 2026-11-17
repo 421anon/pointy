@@ -95,20 +95,20 @@ startFixtureWatcher state = void $ forkIO $ forever $ do
     advance ticks name job
         | jobState job == runningState =
             let count = Map.findWithDefault 0 name ticks + 1
-             in if count >= fixturePublishingTicks
-                    then (Map.insert name 0 ticks, job{jobState = publishingState})
+             in if count >= fixtureSavingTicks
+                    then (Map.insert name 0 ticks, job{jobState = savingState})
                     else (Map.insert name count ticks, job)
-        | jobState job == publishingState = (ticks, job)
+        | jobState job == savingState = (ticks, job)
         | otherwise = (Map.delete name ticks, job)
 
 fixtureTickMicros :: Int
 fixtureTickMicros = 250000
 
-fixturePublishingTicks :: Int
-fixturePublishingTicks = 8
+fixtureSavingTicks :: Int
+fixtureSavingTicks = 8
 
-publishingState :: String
-publishingState = "PUBLISHING"
+savingState :: String
+savingState = "SAVING"
 
 runFixture :: FixtureState -> Eff AppEffects a -> IO a
 runFixture state action =

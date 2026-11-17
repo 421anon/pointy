@@ -30,9 +30,9 @@ main = do
     assertBool "an unknown frame is rejected" (isLeft (parseWatchEvent "{\"type\":\"other\"}"))
     assertBool "malformed JSON is rejected" (isLeft (parseWatchEvent "not json"))
 
-    let jobs = snapshotJobs "42|pointy-nix-build-x|comment|PUBLISHING|0:10|None\n43|pointy-nix-build-y|(null)|PENDING|0:00|Resources\n"
+    let jobs = snapshotJobs "42|pointy-nix-build-x|comment|SAVING|0:10|None\n43|pointy-nix-build-y|(null)|PENDING|0:00|Resources\n"
     assertEqual "snapshot jobs use the existing AllJobs line format" 2 (length jobs)
-    assertEqual "a publishing state is active" True (any (\job -> slurmJobName job == "pointy-nix-build-x" && isRunningState (slurmJobState job)) jobs)
+    assertEqual "a saving state is active" True (any (\job -> slurmJobName job == "pointy-nix-build-x" && isRunningState (slurmJobState job)) jobs)
     assertEqual "job fields survive snapshot parsing" (Just (JobId "43")) (slurmJobId <$> lookupJob "pointy-nix-build-y" jobs)
 
     first <- watchJob "pointy-nix-build-x" ["41"]

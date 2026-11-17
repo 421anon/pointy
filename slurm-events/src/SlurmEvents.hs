@@ -4,7 +4,7 @@ module SlurmEvents
     ( BrokerState (..)
     , Event (..)
     , EventKind (..)
-    , PublishingRecord (..)
+    , SavingRecord (..)
     , SnapshotWindow (..)
     , TerminalRecord (..)
     , WatchFilter (..)
@@ -28,10 +28,15 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 
-data WatchFilter = WatchNative | WatchAccount String
+data WatchFilter
+    = WatchNative
+    | WatchScoped
+        { watchPrefix :: String
+        , watchAccount :: String
+        }
     deriving (Eq, Show)
 
-data EventKind = SubmitEvent | StartEvent | PublishingEvent | TerminalEvent | NodeEvent | ResetEvent
+data EventKind = SubmitEvent | StartEvent | SavingEvent | TerminalEvent | NodeEvent | ResetEvent
     deriving (Eq, Show)
 
 data Event = Event
@@ -51,17 +56,17 @@ data TerminalRecord = TerminalRecord
     }
     deriving (Eq, Show)
 
-data PublishingRecord = PublishingRecord
-    { publishingJobId :: String
-    , publishingJobName :: String
-    , publishingAccount :: Maybe String
-    , publishingAt :: Int
+data SavingRecord = SavingRecord
+    { savingJobId :: String
+    , savingJobName :: String
+    , savingAccount :: Maybe String
+    , savingAt :: Int
     }
     deriving (Eq, Show)
 
 data BrokerState = BrokerState
     { brokerTerminal :: Map (String, String) TerminalRecord
-    , brokerPublishing :: Map (String, String) PublishingRecord
+    , brokerSaving :: Map (String, String) SavingRecord
     }
     deriving (Eq, Show)
 
@@ -92,7 +97,7 @@ snapshotReady window required =
 eventKindName :: EventKind -> String
 eventKindName SubmitEvent = "submit"
 eventKindName StartEvent = "start"
-eventKindName PublishingEvent = "publishing"
+eventKindName SavingEvent = "saving"
 eventKindName TerminalEvent = "terminal"
 eventKindName NodeEvent = "node"
 eventKindName ResetEvent = "reset"
@@ -100,7 +105,7 @@ eventKindName ResetEvent = "reset"
 parseEventKind :: String -> Maybe EventKind
 parseEventKind "submit" = Just SubmitEvent
 parseEventKind "start" = Just StartEvent
-parseEventKind "publishing" = Just PublishingEvent
+parseEventKind "saving" = Just SavingEvent
 parseEventKind "terminal" = Just TerminalEvent
 parseEventKind "node" = Just NodeEvent
 parseEventKind "reset" = Just ResetEvent
@@ -127,28 +132,28 @@ applyEvent now event broker =
         SubmitEvent -> Right broker
         StartEvent -> Right broker
         NodeEvent -> Right broker
-        ResetEvent -> Right broker {brokerPublishing = Map.empty}
-        PublishingEvent -> publishJob now event broker
+        ResetEvent -> Right broker {brokerSaving = Map.empty}
+        SavingEvent -> markSaving now event broker
         TerminalEvent -> finishJob now event broker
 
-publishJob :: Int -> Event -> BrokerState -> Either String BrokerState
-publishJob now event broker = do
+markSaving :: Int -> Event -> BrokerState -> Either String BrokerState
+markSaving now event broker = do
     (jobId, jobName, account) <- eventIdentity event
     let key = (jobId, jobName)
     if Map.member key (brokerTerminal broker)
         then Right broker
         else
-            if Map.member key (brokerPublishing broker)
+            if Map.member key (brokerSaving broker)
                 then Right broker
                 else
                     Right $
                         pruneBrokerState now $
                             broker
-                                { brokerPublishing =
+                                { brokerSaving =
                                     Map.insert
                                         key
-                                        (PublishingRecord jobId jobName account now)
-                                        (brokerPublishing broker)
+                                        (SavingRecord jobId jobName account now)
+                                        (brokerSaving broker)
                                 }
 
 finishJob :: Int -> Event -> BrokerState -> Either String BrokerState
@@ -160,7 +165,7 @@ finishJob now event broker = do
             Right $
                 broker
                     { brokerTerminal = Map.delete key (brokerTerminal broker)
-                    , brokerPublishing = Map.delete key (brokerPublishing broker)
+                    , brokerSaving = Map.delete key (brokerSaving broker)
                     }
         else case Map.lookup key (brokerTerminal broker) of
             Just existing
@@ -174,7 +179,7 @@ finishJob now event broker = do
                                     key
                                     (TerminalRecord jobId jobName account now)
                                     (brokerTerminal broker)
-                            , brokerPublishing = Map.delete key (brokerPublishing broker)
+                            , brokerSaving = Map.delete key (brokerSaving broker)
                             }
   where
     requeued =
@@ -196,38 +201,12 @@ eventIdentity event = do
             if not (validJobName jobName)
                 then Left "job name is invalid"
                 else do
-                    account <- eventAccountFor jobName (eventAccount event)
-                    Right (jobId, jobName, account)
-
-eventAccountFor :: String -> Maybe String -> Either String (Maybe String)
-eventAccountFor jobName supplied =
-    case scopedAccount jobName of
-        Just derived ->
-            case supplied of
-                Nothing -> Right (Just derived)
-                Just account
-                    | account == derived -> Right (Just derived)
-                    | otherwise -> Left "account does not match job name"
-        Nothing
-            | "pc-" `isPrefixOf` jobName -> Left "job name has a malformed account prefix"
-            | otherwise ->
-                case supplied of
-                    Nothing -> Right Nothing
-                    Just account
-                        | validAccountName account -> Right (Just account)
-                        | otherwise -> Left "invalid account"
-
-scopedAccount :: String -> Maybe String
-scopedAccount name =
-    case stripPrefix "pc-" name of
-        Nothing -> Nothing
-        Just rest ->
-            case break (== '-') rest of
-                (account, '-' : remainder)
-                    | validAccountName account
-                    , not (null remainder) ->
+                    account <- case eventAccount event of
+                        Nothing -> Right Nothing
                         Just account
-                _ -> Nothing
+                            | validAccountName account -> Right (Just account)
+                            | otherwise -> Left "invalid account"
+                    Right (jobId, jobName, account)
 
 validJobId :: String -> Bool
 validJobId value =
@@ -255,15 +234,15 @@ pruneBrokerState now broker =
     broker
         { brokerTerminal =
             takeNewest maxRecords terminalAt (Map.filter freshTerminal (brokerTerminal broker))
-        , brokerPublishing =
-            takeNewest maxRecords publishingAt (Map.filter freshPublishing (brokerPublishing broker))
+        , brokerSaving =
+            takeNewest maxRecords savingAt (Map.filter freshSaving (brokerSaving broker))
         }
   where
     freshTerminal record = now - terminalAt record <= terminalLifetime
-    freshPublishing record = now - publishingAt record <= publishingLifetime
+    freshSaving record = now - savingAt record <= savingLifetime
     maxRecords = 4096
     terminalLifetime = 3600
-    publishingLifetime = 86400
+    savingLifetime = 86400
 
 takeNewest :: Ord key => Int -> (value -> Int) -> Map key value -> Map key value
 takeNewest count recordTime values =
@@ -283,9 +262,9 @@ filterJobs watch broker input =
                 | "pointy-nix-build-" `isPrefixOf` queueJobName visible ->
                     pure (renderQueueRow visible (queueJobName visible))
                 | otherwise -> Nothing
-            WatchAccount account
+            WatchScoped prefix account
                 | queueAccount visible == account
-                , Just remainder <- stripPrefix ("pc-" <> account <> "-") (queueJobName visible)
+                , Just remainder <- stripPrefix (prefix <> account <> "-") (queueJobName visible)
                 , not (null remainder) ->
                     pure (renderQueueRow visible remainder)
                 | otherwise -> Nothing
@@ -294,8 +273,8 @@ filterJobs watch broker input =
          in if Map.member key (brokerTerminal broker)
                 then Nothing
                 else
-                    case Map.lookup key (brokerPublishing broker) of
-                        Just _ -> Just row {queueState = "PUBLISHING"}
+                    case Map.lookup key (brokerSaving broker) of
+                        Just _ -> Just row {queueState = "SAVING"}
                         Nothing -> Just row
 
 filterTerminalJobs :: WatchFilter -> BrokerState -> [(String, String)]
@@ -308,11 +287,11 @@ filterTerminalJobs watch broker =
                 | "pointy-nix-build-" `isPrefixOf` terminalJobName record ->
                     Just (terminalJobId record, terminalJobName record)
                 | otherwise -> Nothing
-            WatchAccount account
+            WatchScoped prefix account
                 | Just recordAccount <- terminalAccount record
                 , recordAccount == account
                 , Just remainder <-
-                    stripPrefix ("pc-" <> account <> "-") (terminalJobName record)
+                    stripPrefix (prefix <> account <> "-") (terminalJobName record)
                 , not (null remainder) ->
                     Just (terminalJobId record, remainder)
                 | otherwise -> Nothing
