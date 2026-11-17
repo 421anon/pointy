@@ -36,7 +36,11 @@ timeout-seconds = 1800
 output-limit-bytes = 1048576
 # Parsed for configuration compatibility; automatic age-based pruning is not currently implemented.
 session-retention-days = 7
-title-prompt = "Name the chat that opens with the request in this message. Reply with the title only: five words at most, no quotes, no punctuation, no explanation."
+title-prompt = """Reply with exactly one line: an emoji, a space, a keyword, a colon, a space, then the title.
+- Emoji: the most specific picture of the title's subject, never a generic sparkle, rocket, wrench, gear or puzzle piece.
+- Keyword: 1-6 capital letters or digits naming the title's subject, made from one of its words: the whole word if it has at most 6 letters, otherwise its first syllable or leading consonants, e.g. PROV for provider.
+- Title: a 3-6 word imperative phrase in sentence case built from the user's own terms: the feature, component or error they name, without vague filler like "logic", "issues" or "functionality".
+No quotes, trailing punctuation or explanation."""
 
 # AI providers. Each entry names the environment variable that holds its API key,
 # so keys never live in this file. With no provider tables there is no model access.
