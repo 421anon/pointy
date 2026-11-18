@@ -307,7 +307,7 @@ in
         options = {
           loginUrl = lib.mkOption {
             type = lib.types.str;
-            description = "Login page unauthenticated visitors are redirected to. After login it must POST a form with a `token` field to /token-login on this host.";
+            description = "Login page unauthenticated visitors are redirected to, with the original request URI appended as a `redirect` query parameter. After login it must POST a form with `token` and `redirect` fields to /token-login on this host.";
             example = "https://login.example.com/";
           };
           audience = lib.mkOption {
@@ -436,7 +436,7 @@ in
       recommendedProxySettings = true;
       virtualHosts.${hostCfg.hostname} = lib.mkMerge [
         (lib.mkIf (hostCfg.tokenAuth != null) (import ./token-auth-vhost.nix {
-          inherit backendUrl;
+          inherit backendUrl lib;
           inherit (hostCfg.tokenAuth) loginUrl;
         }))
         {

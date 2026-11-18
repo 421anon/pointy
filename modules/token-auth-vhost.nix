@@ -1,4 +1,13 @@
-{ backendUrl, loginUrl }:
+{ backendUrl, loginUrl, lib }:
+let
+  redirectSeparator =
+    if !(lib.hasInfix "?" loginUrl) then
+      "?"
+    else if lib.hasSuffix "?" loginUrl || lib.hasSuffix "&" loginUrl then
+      ""
+    else
+      "&";
+in
 {
   extraConfig = ''
     auth_request /token-auth;
@@ -24,6 +33,6 @@
     if ($http_sec_fetch_mode ~ "^(cors|same-origin|no-cors)$") {
       return 401;
     }
-    return 302 ${loginUrl};
+    return 302 ${loginUrl}${redirectSeparator}redirect=$request_uri;
   '';
 }

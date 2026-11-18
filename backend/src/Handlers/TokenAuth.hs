@@ -18,6 +18,7 @@ import qualified Data.ByteString as BS
 import Data.ByteString.Builder (toLazyByteString)
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
+import Data.Char (isControl)
 import Data.Maybe (isJust, isNothing)
 import Data.PEM (pemContent, pemParseBS)
 import Data.Text (Text)
@@ -29,7 +30,7 @@ import Servant (Handler, Header, Headers, NoContent (..), addHeader, err401, err
 import System.Environment (lookupEnv)
 import System.IO.Unsafe (unsafePerformIO)
 import Web.Cookie (SetCookie (..), defaultSetCookie, parseCookies, renderSetCookie, sameSiteLax)
-import Web.FormUrlEncoded (FromForm (..), parseUnique)
+import Web.FormUrlEncoded (Form, FromForm (..), parseUnique)
 
 data TokenAuth = TokenAuth
     { tokenAudience :: Text
@@ -57,10 +58,22 @@ data TokenSession = TokenSession
 instance ToJSON TokenSession where
     toJSON session = object ["account" .= sessionAccount session, "user" .= sessionUser session]
 
-newtype TokenLoginForm = TokenLoginForm Text
+data TokenLoginForm = TokenLoginForm
+    { formToken :: Text
+    , formRedirect :: Maybe Text
+    }
 
 instance FromForm TokenLoginForm where
-    fromForm form = TokenLoginForm <$> parseUnique "token" form
+    fromForm form =
+        TokenLoginForm
+            <$> parseUnique "token" form
+            <*> redirectField form
+
+redirectField :: Form -> Either Text (Maybe Text)
+redirectField form =
+    case parseUnique "redirect" form of
+        Right redirect -> Right (Just redirect)
+        Left _ -> Right Nothing
 
 type SessionRedirect = Headers '[Header "Location" Text, Header "Set-Cookie" Text] NoContent
 
@@ -102,11 +115,25 @@ tokenSessionHandler cookies = do
         Nothing -> throwError err401
 
 tokenLoginHandler :: TokenLoginForm -> Handler SessionRedirect
-tokenLoginHandler (TokenLoginForm token) = do
+tokenLoginHandler (TokenLoginForm token redirect) = do
     now <- liftIO currentSeconds
     case validToken now (encodeUtf8 token) of
-        Just claims -> pure $ addHeader "/" $ addHeader (sessionCookie token (claimsExpires claims - now)) NoContent
+        Just claims -> pure $ addHeader (safeRedirect redirect) $ addHeader (sessionCookie token (claimsExpires claims - now)) NoContent
         Nothing -> throwError err401
+
+safeRedirect :: Maybe Text -> Text
+safeRedirect requested =
+    case requested >>= pathOnly of
+        Just path -> path
+        Nothing -> "/"
+  where
+    pathOnly path
+        | T.isPrefixOf "/" path
+        , not (T.isPrefixOf "//" path)
+        , not (T.any rejected path) =
+            Just path
+        | otherwise = Nothing
+    rejected character = isControl character || character == '\\'
 
 tokenLogoutHandler :: Handler SessionRedirect
 tokenLogoutHandler = do

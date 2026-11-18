@@ -220,7 +220,7 @@ instance ToSchema RenameSessionRequest where
 
 instance ToSchema TokenLoginForm where
     declareNamedSchema _ =
-        pure $ objectSchema "TokenLoginForm" [("token", stringField)]
+        pure $ objectSchema "TokenLoginForm" [("token", stringField), ("redirect", nullableField OpenApiString)]
 
 instance ToSchema TokenSession where
     declareNamedSchema _ =
