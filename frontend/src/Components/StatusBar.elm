@@ -445,7 +445,7 @@ viewIndependentControls model =
             ]
         , Html.a
             [ class "status-bar__control status-bar__help"
-            , href "https://pointy.cloud/"
+            , href "/docs/"
             , target "_blank"
             , rel "noopener noreferrer"
             , title "Open documentation"

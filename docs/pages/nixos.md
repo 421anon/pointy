@@ -16,7 +16,7 @@ Import `pointy.nixosModules.pointy-host` to install the backend service, nginx v
 | `services.pointy-host.basicAuthFile` | `null` | Optional htpasswd file protecting the application virtual host. |
 | `services.pointy-host.tokenAuth` | `null` | Optional session-token login gate. Its sub-options are `loginUrl` (required), `audience` (required), and `publicKeyFile` (required, an Ed25519 public key in PEM). See [Login gate](login.md#login-gate). |
 | `services.pointy-host.linkedDataBase` | `null` | Origin written as the `@base` of artifact Turtle. `null` leaves IRIs relative to the requesting URL. |
-| `services.pointy-host.docsPackage` | `null` | Optional documentation package served at `/docs/`; this location disables both the basic-auth and token-auth gates. |
+| `services.pointy-host.docsPackage` | `null` | Optional documentation package served at `/docs/`, where the status bar's **Docs** link points; this location disables both the basic-auth and token-auth gates. Build it with `lib.<system>.mkDocs`. |
 | `services.pointy-backend.user`, `.group`, `.home` | `backend`, `backend`, `/home/backend` _(read-only)_ | The account the backend, agents and builds run as, and its home. Refer to these when granting the backend host resources or placing secrets such as `config.toml`. |
 | `services.pointy-backend.listenHost` | `127.0.0.1` | Address the backend HTTP listener binds. The supplied vhost still uses `127.0.0.1:<listenPort>`. |
 | `services.pointy-backend.listenPort` | `8081` | Backend HTTP listener port, also used by the supplied vhost. |

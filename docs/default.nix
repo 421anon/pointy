@@ -16,12 +16,12 @@ stdenv.mkDerivation {
     cp ${openapi-json} site/openapi.json
 
     substituteInPlace site/index.html \
-      --replace-fail '</body>' '<script src="javascripts/posthog.js"></script><script src="javascripts/theme-screenshots.js" defer></script></body>'
+      --replace-fail '</body>' '<script src="javascripts/theme-screenshots.js" defer></script></body>'
 
     for html in site/*/index.html; do
       [ -f "$html" ] || continue
       substituteInPlace "$html" \
-        --replace-fail '</body>' '<script src="../javascripts/posthog.js"></script><script src="../javascripts/theme-screenshots.js" defer></script></body>'
+        --replace-fail '</body>' '<script src="../javascripts/theme-screenshots.js" defer></script></body>'
     done
 
     mv site $out
