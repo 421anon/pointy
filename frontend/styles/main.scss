@@ -3037,13 +3037,13 @@ body:has(dialog[open]) {
 
   > :nth-child(2) {
     z-index: 1;
-    top: 2px;
+    top: 4px;
   }
 
   > * {
     position: relative;
     z-index: 0;
-    top: 4px;
+    top: 8px;
     transition: top .2s linear;
   }
 }
