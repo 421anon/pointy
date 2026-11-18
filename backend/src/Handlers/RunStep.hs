@@ -174,7 +174,6 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                     if not (null existing)
                         then do
                             (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
-                            liftIO $ markQueued sid (unJobId (head existing))
                             return $ Enqueued (stepTargetPath rootedTarget) buildKey existing root
                         else do
                             requirements <- getStepRequirements ctx sid
@@ -193,9 +192,7 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                                 Left err -> do
                                     lift $ unrootDerivationRoot root
                                     throwError err
-                                Right jobId -> do
-                                    liftIO $ markQueued sid (unJobId jobId)
-                                    return $ Enqueued certificate buildKey [jobId] root
+                                Right jobId -> return $ Enqueued certificate buildKey [jobId] root
         return $ either NotSubmitted id result
   where
     blockedOn = [d | d <- deps, isBlocked (Map.lookup d outcomes)]
@@ -269,6 +266,9 @@ finishStep ctx (sid, outcome) = case outcome of
         buildExtras ctx sid
     Enqueued certificate buildKey jobIds root -> do
         trackBuild sid targetCommitText $ do
+            case jobIds of
+                jobId : _ -> liftIO $ markQueued sid (unJobId jobId)
+                [] -> pure ()
             broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
             finally (waitForCompletion buildKey jobIds) (unrootDerivationRoot root)
         certified <- isBuilt certificate
