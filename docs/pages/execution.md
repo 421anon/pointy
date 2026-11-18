@@ -62,7 +62,7 @@ When a run started from this page finishes, a toast names the step, for example 
 
 ![A failed step's build log, with the Investigate with agent button in its header.](screenshots/light/step-failure-log.png)
 
-Recent messages are kept under the **Notifications** bell: each entry shows the first line and how long ago it arrived, and expands to the full text. **Dismiss all** on the top toast clears every toast on screen, but leaves the notification history in place.
+Recent messages are kept under the **Notifications** bell: each entry shows the first line and how long ago it arrived, and expands to the full text. **Dismiss all** on the top toast clears the stack, but leaves the notification history in place.
 
 ![The Notifications history opened from the bell in the status bar, listing an undo, a hide, and a copied share link.](screenshots/light/status-bar-notifications.png)
 
