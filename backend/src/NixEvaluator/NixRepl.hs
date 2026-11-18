@@ -234,6 +234,7 @@ ensureFlakeBinding session installable =
                 sendCommands
                     session
                     [ varName ++ " = builtins.getFlake " ++ nixString installable
+                    , ":p builtins.seq " ++ varName ++ " null"
                     , syncCommand marker
                     ]
                 outcome <- collectUntilMarkers session marker
