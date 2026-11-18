@@ -29,7 +29,7 @@ module Agent.Git (
     sweepStaleRunningSessions,
 ) where
 
-import Agent.Policy (appliedProjectId, appliedStepId, isAgentOutputPath)
+import Agent.Policy (StepChange (..), StepChangeKind (..), appliedProjectId, appliedStepId, isAgentOutputPath, renderUpstreamAdvance)
 import Agent.Session (
     AgentSession (..),
     AgentSessionSummary (AgentSessionSummary, lastTurnAt),
@@ -72,7 +72,7 @@ import qualified Data.ByteString as BS
 import Data.Char (isControl)
 import Data.List (intercalate, nub, sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -258,7 +258,7 @@ truncateCommitSummary available summary
                     else T.stripEnd wholeWords
          in shortened <> "…"
 
-refreshSessionBase :: AgentSession -> ExceptT String IO (AgentSession, [Text])
+refreshSessionBase :: AgentSession -> ExceptT String IO (AgentSession, [Text], Maybe Text)
 refreshSessionBase session_ = do
     fetchNotes <-
         (fetchRepoStrict >> pure [])
@@ -268,10 +268,56 @@ refreshSessionBase session_ = do
     latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
     worktreeExists <- liftIO $ doesDirectoryExist (worktreePath session_)
     if latest == baseCommit session_ || not worktreeExists
-        then return (session_, fetchNotes)
+        then return (session_, fetchNotes, Nothing)
         else do
             (updated, syncNote) <- syncWorktreeToTarget session_ latest
-            return (updated, fetchNotes ++ [syncNote])
+            context <- upstreamAdvanceContext session_ repoPath (baseCommit session_) latest
+            return (updated, fetchNotes ++ [syncNote], Just context)
+
+upstreamAdvanceContext :: AgentSession -> FilePath -> Text -> Text -> ExceptT String IO Text
+upstreamAdvanceContext session_ repoPath fromCommit toCommit = do
+    changes <- upstreamStepChanges repoPath fromCommit toCommit
+    highest <- highestStepId repoPath toCommit
+    return $ renderUpstreamAdvance (targetBranch session_) (shortCommit fromCommit) (shortCommit toCommit) highest changes
+
+upstreamStepChanges :: FilePath -> Text -> Text -> ExceptT String IO [StepChange]
+upstreamStepChanges repoPath fromCommit toCommit = do
+    listing <- runGitChecked repoPath ["diff", "--name-status", "--no-renames", T.unpack fromCommit, T.unpack toCommit, "--", "steps"]
+    catMaybes <$> mapM change (T.lines listing)
+  where
+    change line =
+        case T.splitOn "\t" line of
+            [changeCode, path]
+                | Just stepId <- appliedStepId path
+                , Just kind <- changeKind changeCode -> do
+                    contents <- commitFileContents repoPath (if kind == StepDisappeared then fromCommit else toCommit) path
+                    return $ Just $ StepChange stepId kind (stepStringField "name" contents) (stepStringField "type" contents)
+            _ -> return Nothing
+    changeKind "A" = Just StepAppeared
+    changeKind "M" = Just StepChanged
+    changeKind "D" = Just StepDisappeared
+    changeKind _ = Nothing
+
+commitFileContents :: FilePath -> Text -> Text -> ExceptT String IO Text
+commitFileContents repoPath commit path = do
+    (code, stdout, _) <- liftIO $ runGitIn repoPath ["show", T.unpack commit <> ":" <> T.unpack path]
+    return $ case code of
+        ExitSuccess -> T.pack stdout
+        ExitFailure _ -> ""
+
+stepStringField :: Text -> Text -> Text
+stepStringField key contents =
+    fromMaybe "" $
+        listToMaybe
+            [ T.takeWhile (/= '"') value
+            | line <- T.lines contents
+            , Just value <- [T.stripPrefix (key <> " = \"") (T.stripStart line)]
+            ]
+
+highestStepId :: FilePath -> Text -> ExceptT String IO Int
+highestStepId repoPath commit = do
+    listing <- runGitChecked repoPath ["ls-tree", "-r", "--name-only", T.unpack commit, "--", "steps"]
+    return $ maximum (0 : mapMaybe (appliedStepId . T.strip) (T.lines listing))
 
 syncWorktreeToTarget :: AgentSession -> Text -> ExceptT String IO (AgentSession, Text)
 syncWorktreeToTarget session_ latest = do

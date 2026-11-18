@@ -11,6 +11,9 @@ module Agent.Policy (
     routingInstructions,
     RoutingChoice (..),
     routingChoices,
+    StepChange (..),
+    StepChangeKind (..),
+    renderUpstreamAdvance,
     renderCurrentProject,
     renderViewedArtifact,
     renderAreaCapture,
@@ -97,6 +100,43 @@ routingChoices =
     [ RoutingChoice Coder "general and coder" "The general and coder model: answers most messages, including looking up or computing values from files, data and logs, reading code, and every change to steps, projects and code"
     , RoutingChoice Answerer "heavy-weight specialist" "The heavy-weight specialist model: expensive; for interpreting results, explaining surprising findings, and other questions that need scientific judgment rather than looking something up, and it changes nothing"
     ]
+
+data StepChangeKind = StepAppeared | StepChanged | StepDisappeared
+    deriving (Eq, Show)
+
+data StepChange = StepChange
+    { changedStepId :: Int
+    , changedStepKind :: StepChangeKind
+    , changedStepName :: Text
+    , changedStepType :: Text
+    }
+    deriving (Eq, Show)
+
+upstreamChangeLimit :: Int
+upstreamChangeLimit = 40
+
+renderUpstreamAdvance :: Text -> Text -> Text -> Int -> [StepChange] -> Text
+renderUpstreamAdvance branch fromHead toHead highest changes =
+    T.unlines $
+        ["`" <> branch <> "` advanced from " <> fromHead <> " to " <> toHead <> " before this turn, and the worktree already holds that state. Your earlier view of the repository is stale."]
+            ++ body
+            ++ ["The highest step ID on `" <> branch <> "` is " <> shown highest <> "; allocate new step IDs above it."]
+  where
+    body
+        | null changes = ["No step file appeared, changed or disappeared in that advance."]
+        | otherwise =
+            "Steps that appeared, changed or disappeared in that advance:"
+                : map renderChange (take upstreamChangeLimit changes)
+                ++ ["…and " <> shown (length changes - upstreamChangeLimit) <> " more" | length changes > upstreamChangeLimit]
+    renderChange (StepChange stepId kind name stepType) =
+        shown stepId <> " " <> kindWord kind <> nameLabel name <> " (" <> stepType <> ")"
+    kindWord StepAppeared = "appeared"
+    kindWord StepChanged = "changed"
+    kindWord StepDisappeared = "disappeared"
+    nameLabel name
+        | T.null name = ""
+        | otherwise = " \"" <> name <> "\""
+    shown = T.pack . show
 
 renderCurrentProject :: Int -> Text
 renderCurrentProject projectId =

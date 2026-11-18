@@ -299,7 +299,7 @@ data TurnOrigin = UserTurn [TurnImage] [AreaCapture] (Maybe (ViewedArtifact, Tex
 beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
 beginAgentTurn session_ prompt mCurrentProjectId origin = do
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
-    (refreshedSession, syncNotes) <- refreshSessionBase session_
+    (refreshedSession, syncNotes, upstreamContext) <- refreshSessionBase session_
     reviewedSteps <- findReviewedSteps refreshedSession
     freshSession <- discardStaleApplyConflict refreshedSession
     let sid = sessionId session_
@@ -363,7 +363,10 @@ beginAgentTurn session_ prompt mCurrentProjectId origin = do
                 maybe id (withContext . renderCurrentProject) changedCurrentProjectId $
                     maybe id (withContext . snd) viewedArtifact $
                         withAreaCaptures $
-                            maybe prompt ($ request) refusal
+                            maybe id withContext upstreamContext $
+                                maybe prompt ($ request) refusal
+        forM_ upstreamContext $ \context ->
+            appendLogLine (configAgent cfg) logPath "system" ("Sent the upstream step changes to the agent with this message:\n" <> context)
         when (isJust evaluationFailure) $
             appendLogLine (configAgent cfg) logPath "system" "The reason the last apply was refused was sent to the agent with this message."
         when (isJust pendingApply) $
