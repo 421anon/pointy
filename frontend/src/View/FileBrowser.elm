@@ -224,49 +224,88 @@ viewDirectorySection model spec step =
                     )
 
 
-viewColdFetchProgress : Maybe (Maybe ( Int, Int )) -> Html msg
-viewColdFetchProgress mFetch =
-    case mFetch of
-        Nothing ->
-            Html.nothing
+viewColdFetchProgress : Maybe ( Int, Int ) -> Html msg
+viewColdFetchProgress progress =
+    let
+        mPercent =
+            progress
+                |> Maybe.andThen
+                    (\( done, total ) ->
+                        if total <= 0 then
+                            Nothing
 
-        Just progress ->
-            let
-                mPercent =
-                    progress
-                        |> Maybe.andThen
-                            (\( done, total ) ->
-                                if total <= 0 then
-                                    Nothing
+                        else
+                            Just (round (toFloat done / toFloat total * 100))
+                    )
 
-                                else
-                                    Just (round (toFloat done / toFloat total * 100))
-                            )
+        message =
+            case mPercent of
+                Just percent ->
+                    String.fromInt percent ++ "%"
 
-                message =
-                    case mPercent of
-                        Just percent ->
-                            String.fromInt percent ++ "%"
+                Nothing ->
+                    "fetching"
+    in
+    Html.span [ class "cold-fetch-progress" ]
+        [ Html.span [ class "upload-progress-bar cold-fetch-progress-bar" ]
+            [ Html.span
+                (class "upload-progress-fill"
+                    :: (case mPercent of
+                            Just percent ->
+                                [ Html.Attributes.style "width" (String.fromInt percent ++ "%") ]
 
-                        Nothing ->
-                            "fetching"
-            in
-            Html.span [ class "cold-fetch-progress", Html.Attributes.title "Fetching from cold storage" ]
-                [ Html.span [ class "upload-progress-bar cold-fetch-progress-bar" ]
-                    [ Html.span
-                        (class "upload-progress-fill"
-                            :: (case mPercent of
-                                    Just percent ->
-                                        [ Html.Attributes.style "width" (String.fromInt percent ++ "%") ]
+                            Nothing ->
+                                [ class "upload-progress-fill--indeterminate" ]
+                       )
+                )
+                []
+            ]
+        , Html.span [ class "cold-fetch-progress-label" ] [ Html.text message ]
+        ]
 
-                                    Nothing ->
-                                        [ class "upload-progress-fill--indeterminate" ]
-                               )
-                        )
-                        []
-                    ]
-                , Html.span [ class "cold-fetch-progress-label" ] [ Html.text message ]
+
+viewColdFile : Int -> List String -> Model.Core.Availability -> Html (Flow Model ())
+viewColdFile stepId path availability =
+    let
+        popoverId =
+            "cold-" ++ String.fromInt stepId ++ "-" ++ String.join "-" (List.map (Char.toCode >> String.fromInt) (String.toList (String.join "/" path)))
+
+        unfreezeButton label =
+            Html.button
+                [ class "btn file-cold-unfreeze-btn"
+                , type_ "button"
+                , Html.Events.onClick (Actions.unfreezeOutputFile stepId path)
                 ]
+                [ icon False "mode_heat", Html.text label ]
+
+        ( title, body ) =
+            case availability of
+                Model.Core.Unfreezing progress ->
+                    ( "Unfreezing…", [ viewColdFetchProgress progress ] )
+
+                Model.Core.UnfreezeFailed ->
+                    ( "Unfreeze failed", [ Html.p [ class "file-cold-popover-note" ] [ Html.text "The file could not be fetched from cold storage." ], unfreezeButton "Retry" ] )
+
+                _ ->
+                    ( "On cold storage", [ Html.p [ class "file-cold-popover-note" ] [ Html.text "Unfreeze this file to view, share, or download it." ], unfreezeButton "Unfreeze" ] )
+    in
+    Html.span [ class "file-cold" ]
+        [ Html.button
+            [ class "file-cold-btn"
+            , type_ "button"
+            , Html.Attributes.title "On cold storage"
+            , Html.Attributes.attribute "popovertarget" popoverId
+            , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
+            ]
+            [ icon False "ac_unit" ]
+        , Html.div
+            [ classList [ ( "file-cold-popover", True ), ( "is-failed", availability == Model.Core.UnfreezeFailed ) ]
+            , id popoverId
+            , Html.Attributes.attribute "popover" "auto"
+            , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
+            ]
+            (Html.div [ class "file-cold-popover-title" ] [ icon False "ac_unit", Html.strong [] [ Html.text title ] ] :: body)
+        ]
 
 
 viewSrcFilesSection : Model -> StepType -> StepSpec -> StepRecord -> Html (Flow Model ())
@@ -439,7 +478,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
         downloadAction =
             case mDirCtx of
                 Just (OutputDir stepId_ commit_) ->
-                    Actions.downloadOutputFile stepId_ commit_ path
+                    Actions.downloadFile stepId_ commit_ path
 
                 Just (SrcDir id) ->
                     Actions.downloadSrcFile id (recordRevision model id) path
@@ -531,83 +570,86 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                           else
                             Html.viewIf isEditableSrcFile <|
                                 Html.span [ class "src-file-change-status src-file-change-status--edited" ] [ Html.text "Changed" ]
-                        , Html.viewIf file.cold <|
-                            Html.span
-                                [ class "file-cold-icon"
-                                , Html.Attributes.title "On cold storage, fetched when opened"
-                                ]
-                                [ icon False "ac_unit" ]
-                        , viewColdFetchProgress (Maybe.andThen (\recordId -> Model.Core.coldFetchFor recordId path model) mRecordId)
-                        , Html.span [ class "directory-item-meta" ] [ Html.text (Filesize.formatBase2 file.size) ]
-                        ]
-                    , Html.div [ class "file-actions" ]
-                        [ Html.viewIf canView <|
-                            Html.button
-                                [ class "dir-item-icon-btn"
-                                , Html.Attributes.title fileActionLabel
-                                , disabled (srcWritePending model mDirCtx)
-                                , Html.Events.onClick
-                                    (case mDirCtx of
-                                        Just (OutputDir _ _) ->
-                                            Maybe.unwrap (Flow.pure ()) (flip Actions.toggleFile path) mRecordId
+                        , case ( file.availability, mDirCtx ) of
+                            ( Model.Core.Local, _ ) ->
+                                Html.nothing
 
-                                        Just (SrcDir _) ->
-                                            Maybe.unwrap (Flow.pure ()) (flip Actions.toggleSrcFile path) mRecordId
-
-                                        Nothing ->
-                                            Flow.pure ()
-                                    )
-                                ]
-                                [ icon True
-                                    (if isEditableSrcFile then
-                                        "edit"
-
-                                     else
-                                        "visibility"
-                                    )
-                                ]
-                        , externalArtifactUrl
-                            |> Html.viewMaybe
-                                (\url ->
-                                    Html.a
-                                        [ class "dir-item-icon-btn"
-                                        , Html.Attributes.title "View external"
-                                        , href url
-                                        , target "_blank"
-                                        , rel "noopener noreferrer"
-                                        ]
-                                        [ icon True "open_in_new" ]
-                                )
-                        , Html.viewIf (canView && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
-                        , Html.button
-                            [ class "dir-item-icon-btn"
-                            , Html.Events.onClick downloadAction
-                            ]
-                            [ icon True "download" ]
-                        , viewCompareButton model mCompareSelection
-                        , case ( mDirCtx, isLocked ) of
-                            ( Just (SrcDir recordId), False ) ->
-                                if file.isDeleted then
-                                    Html.button
-                                        [ class "dir-item-icon-btn"
-                                        , Html.Attributes.title "Restore"
-                                        , disabled (srcWritePending model mDirCtx)
-                                        , Html.Events.onClick (Actions.restoreSrcFile recordId path)
-                                        ]
-                                        [ icon True "restore_from_trash" ]
-
-                                else
-                                    Html.button
-                                        [ class "dir-item-icon-btn"
-                                        , Html.Attributes.title "Delete"
-                                        , disabled (srcWritePending model mDirCtx)
-                                        , Html.Events.onClick (Actions.stageSrcFileDeletion recordId path)
-                                        ]
-                                        [ icon True "delete" ]
+                            ( availability, Just (OutputDir stepId_ _) ) ->
+                                viewColdFile stepId_ path availability
 
                             _ ->
                                 Html.nothing
+                        , Html.span [ class "directory-item-meta" ] [ Html.text (Filesize.formatBase2 file.size) ]
                         ]
+                    , Html.viewIf (file.availability == Model.Core.Local) <|
+                        Html.div [ class "file-actions" ]
+                            [ Html.viewIf canView <|
+                                Html.button
+                                    [ class "dir-item-icon-btn"
+                                    , Html.Attributes.title fileActionLabel
+                                    , disabled (srcWritePending model mDirCtx)
+                                    , Html.Events.onClick
+                                        (case mDirCtx of
+                                            Just (OutputDir _ _) ->
+                                                Maybe.unwrap (Flow.pure ()) (flip Actions.toggleFile path) mRecordId
+
+                                            Just (SrcDir _) ->
+                                                Maybe.unwrap (Flow.pure ()) (flip Actions.toggleSrcFile path) mRecordId
+
+                                            Nothing ->
+                                                Flow.pure ()
+                                        )
+                                    ]
+                                    [ icon True
+                                        (if isEditableSrcFile then
+                                            "edit"
+
+                                         else
+                                            "visibility"
+                                        )
+                                    ]
+                            , externalArtifactUrl
+                                |> Html.viewMaybe
+                                    (\url ->
+                                        Html.a
+                                            [ class "dir-item-icon-btn"
+                                            , Html.Attributes.title "View external"
+                                            , href url
+                                            , target "_blank"
+                                            , rel "noopener noreferrer"
+                                            ]
+                                            [ icon True "open_in_new" ]
+                                    )
+                            , Html.viewIf (canView && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
+                            , Html.button
+                                [ class "dir-item-icon-btn"
+                                , Html.Events.onClick downloadAction
+                                ]
+                                [ icon True "download" ]
+                            , viewCompareButton model mCompareSelection
+                            , case ( mDirCtx, isLocked ) of
+                                ( Just (SrcDir recordId), False ) ->
+                                    if file.isDeleted then
+                                        Html.button
+                                            [ class "dir-item-icon-btn"
+                                            , Html.Attributes.title "Restore"
+                                            , disabled (srcWritePending model mDirCtx)
+                                            , Html.Events.onClick (Actions.restoreSrcFile recordId path)
+                                            ]
+                                            [ icon True "restore_from_trash" ]
+
+                                    else
+                                        Html.button
+                                            [ class "dir-item-icon-btn"
+                                            , Html.Attributes.title "Delete"
+                                            , disabled (srcWritePending model mDirCtx)
+                                            , Html.Events.onClick (Actions.stageSrcFileDeletion recordId path)
+                                            ]
+                                            [ icon True "delete" ]
+
+                                _ ->
+                                    Html.nothing
+                            ]
                     ]
                 , Html.viewIfLazy file.view.isViewing <|
                     \() ->

@@ -1184,18 +1184,100 @@ body {
   overflow-wrap: anywhere;
 }
 
-.file-cold-icon {
+.file-cold {
+  display: inline-flex;
+}
+
+.file-cold-btn {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1em;
-  color: var(--text-muted);
-  opacity: 0.6;
+  padding: var(--spacing-2xs);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--state-cold);
+  cursor: pointer;
 
   .material-symbols-outlined {
-    font-size: var(--font-size-sm);
+    font-size: var(--font-size-md);
   }
+
+  &:hover,
+  &:focus-visible {
+    background: var(--state-cold-outline);
+  }
+}
+
+.file-cold-popover {
+  margin: 0;
+  margin-top: var(--spacing-xs);
+  padding: var(--spacing-md);
+  width: min(260px, calc(100vw - (2 * var(--spacing-md))));
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-elevated);
+  font-size: 13px;
+}
+
+.file-cold-popover:popover-open {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  position: absolute;
+  position-area: bottom span-right;
+  position-try-fallbacks: bottom span-left, top span-right, top span-left;
+}
+
+.file-cold-popover-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+
+  .material-symbols-outlined {
+    color: var(--state-cold);
+    font-size: var(--font-size-md);
+  }
+}
+
+.file-cold-popover.is-failed .file-cold-popover-title .material-symbols-outlined {
+  color: var(--state-danger);
+}
+
+.file-cold-popover-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+}
+
+.file-cold-popover .file-cold-unfreeze-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  border-color: var(--state-cold);
+  background: var(--state-cold-outline);
+
+  .material-symbols-outlined {
+    font-size: var(--font-size-md);
+  }
+
+  &:hover {
+    border-color: var(--state-cold);
+    background: color-mix(in srgb, var(--state-cold) 26%, transparent);
+  }
+}
+
+.file-cold-popover .cold-fetch-progress {
+  display: flex;
+}
+
+.file-cold-popover .cold-fetch-progress-bar {
+  flex: 1;
 }
 
 .src-file-change-status {

@@ -18,9 +18,9 @@ Large text files are loaded a section at a time as you scroll, rather than all a
 
 An open preview stays open when a new version leaves that step's build unchanged; it keeps showing the version you opened. If the build changes, the preview closes so an old result is not mistaken for the new one.
 
-If your installation keeps older outputs on cold storage, the file row shows a snowflake and explains that the file is fetched when opened. Opening or downloading a cold file fetches it first and shows progress on the row; the preview or download starts when the fetch is complete. A failed fetch shows a failure message.
+If your installation keeps older outputs on cold storage, a cold file's row shows only a blue snowflake: it cannot be viewed, shared, compared, or downloaded until it is local. Click the snowflake and choose **Unfreeze** to fetch it; the popover shows the progress, and the row's usual buttons appear once the file is local. Nothing opens or downloads by itself. If the fetch fails, the popover offers **Retry**. A link to a cold file highlights its row without fetching it.
 
-![A step's Output Files with hello on cold storage, marked by a snowflake, and notes.txt being fetched at 40%.](screenshots/light/output-files-cold-storage.png)
+![A step's Output Files with hello on cold storage, marked by a blue snowflake.](screenshots/light/output-files-cold-storage.png)
 
 HTML reports open inline; their magnifier buttons zoom in and out. Links in a report work as they would outside Pointy: clicking one can navigate the whole tab, and popups open in a new tab. Use the browser's Back button to return.
 

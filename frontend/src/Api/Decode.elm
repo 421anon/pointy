@@ -492,7 +492,12 @@ directoryItem fileView =
                                 , plainLineCount = 1
                                 , isNew = False
                                 , isDeleted = False
-                                , cold = cold
+                                , availability =
+                                    if cold then
+                                        Model.Cold
+
+                                    else
+                                        Model.Local
                                 }
                             )
                         )
@@ -1020,7 +1025,6 @@ scratchEntry =
 coldStatus : Decoder Model.ColdStatus
 coldStatus =
     Decode.succeed Model.ColdStatus
-        |> required "cold" Decode.bool
         |> required "onloading" Decode.bool
         |> required "files" (Decode.list coldFile)
 
