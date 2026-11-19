@@ -26,7 +26,7 @@ import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, Ses
 import Handlers.TokenAuth (TokenLoginForm, TokenSession)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.Cold (ColdFile, ColdStatus, PrefetchResponse)
+import Handlers.Cold (ColdStatus)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
@@ -246,9 +246,23 @@ instance ToSchema ByteOffset where
 
 instance ToSchema DirEntry
 instance ToSchema FileChunk
-instance ToSchema ColdFile
-instance ToSchema ColdStatus
-instance ToSchema PrefetchResponse
+instance ToSchema ColdStatus where
+    declareNamedSchema _ = pure $ objectSchema "ColdStatus" [("files", arrayOf coldFileSchema)]
+      where
+        coldFileSchema =
+            Inline $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & required .~ ["path", "state"]
+                    & properties
+                        .~ fromList
+                            [ ("path", stringField)
+                            , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["offloaded", "onloading", "failed"]))
+                            , ("done", integerField)
+                            , ("total", integerField)
+                            , ("error", stringField)
+                            ]
+                    & description ?~ "A file that is not local. `done` and `total` are bytes, present while onloading; `error` is present when the last onload failed."
 instance ToSchema ScratchRootResponse where
     declareNamedSchema _ =
         pure $ objectSchema "ScratchRootResponse" [("root", nullableField OpenApiString)]

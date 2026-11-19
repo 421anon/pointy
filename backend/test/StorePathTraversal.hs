@@ -12,9 +12,9 @@ import Servant (ServerError (..))
 
 main :: IO ()
 main = do
-    expectStatus "parent of the output" 400 (listHandler Set.empty output (Just ".."))
-    expectStatus "parent reached through a subdirectory" 400 (listHandler Set.empty output (Just "sub/../.."))
-    expectStatus "parent segment that stays inside" 400 (listHandler Set.empty output (Just "sub/../other"))
+    expectStatus "parent of the output" 400 (listHandler (Just Set.empty) output (Just ".."))
+    expectStatus "parent reached through a subdirectory" 400 (listHandler (Just Set.empty) output (Just "sub/../.."))
+    expectStatus "parent segment that stays inside" 400 (listHandler (Just Set.empty) output (Just "sub/../other"))
     expectStatus "sibling store path sharing the output prefix" 400 (downloadHandler output "/nix/store/00000000000000000000000000000000-out-sibling/data.csv")
     expectStatus "missing file inside the output" 404 (downloadHandler output "sub/data.csv")
 

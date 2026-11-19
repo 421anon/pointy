@@ -145,7 +145,7 @@ The `[agent]` section configures the embedded agent runner. When this section is
 | `POINTY_SLURM_WATCH_COMMAND` | `services.pointy-backend.slurm.watchCommand` | Executable that streams Slurm snapshots and heartbeats as newline-delimited JSON; default `pointy-slurm-watch`. It is invoked without arguments. |
 | `POINTY_SCRATCH_DIR` | `services.pointy-backend.scratchDirectory` | Enables `/scratch*` and gives the agent tool sandbox a read-only bind. |
 | `POINTY_UPLOAD_DIR` | `services.pointy-backend.uploadDirectory` | Roots upload staging; when unset, the canonical system temporary directory. |
-| `POINTY_COLD_STORE_SOCKET` | `services.pointy-backend.coldStorage.ingestSocket` | Ingest socket passed to the cold-storage command for status and prefetch. |
+| `POINTY_COLD_STORAGE_COMMAND` | `services.pointy-backend.coldStorage.command` | Cold storage provider executable; see [Storage](storage.md#provider-interface). |
 | `POINTY_AGENT_MEMORY_MAX` | `services.pointy-backend.agentMemoryMax` | Memory limit shared by the agent sandboxes; default `24G`. |
 | `POINTY_TOKEN_AUDIENCE` | `services.pointy-host.tokenAuth.audience` | Required `aud` claim of session tokens. |
 | `POINTY_TOKEN_PUBLIC_KEY` | `services.pointy-host.tokenAuth.publicKeyFile` | Ed25519 public key used to verify session tokens. |

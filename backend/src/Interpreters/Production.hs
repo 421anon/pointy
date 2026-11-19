@@ -12,7 +12,6 @@ module Interpreters.Production (runProduction, submitArgs) where
 import BuildRunner (shellCommand)
 import Config (Config (..), EmbeddingConfig (..), JudgeConfig (..), ProviderConfig (..), SearchConfig (..), loadConfig, resolveConfigPath)
 import Control.Exception (IOException, displayException, try)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict, withObject, (.:), (.:?))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import Data.List (intercalate)
@@ -210,71 +209,41 @@ queryArgs = \case
     AllAccountingJobs -> ["-X", "-n", "-P", "-o", "JobID,JobName%128,State"]
 
 
-data ColdCommandError = ColdCommandError Bool (Maybe Text) [Text] [Text] [Text]
-
-instance FromJSON ColdCommandError where
-    parseJSON = withObject "cold storage command error" $ \o ->
-        ColdCommandError
-            <$> o .: "ok"
-            <*> o .:? "error"
-            <*> (fromMaybe [] <$> o .:? "started")
-            <*> (fromMaybe [] <$> o .:? "skipped")
-            <*> (fromMaybe [] <$> o .:? "unknown")
-
 runColdStorageProduction :: (IOE :> es) => Eff (ColdStorage : es) a -> Eff es a
 runColdStorageProduction = interpret $ \_ -> \case
-    ColdStorageConfigured -> liftIO (isJust <$> coldStorageSocket)
-    ColdStorageStatus storePath -> liftIO $ do
-        socket <- coldStorageSocket
-        case socket of
+    ColdStorageConfigured -> liftIO (isJust <$> coldStorageCommand)
+    ColdStorageStatus outPath -> liftIO $ do
+        command <- coldStorageCommand
+        case command of
             Nothing -> pure (Left "cold storage is not configured")
-            Just value ->
+            Just program ->
                 fromMaybe (Left "cold storage status command timed out")
-                    <$> timeout coldStatusTimeoutMicros (runColdStorage (statusCommand value storePath))
-    ColdStoragePrefetch storePath rel -> liftIO $ do
-        socket <- coldStorageSocket
-        case socket of
+                    <$> timeout coldStatusTimeoutMicros (runColdStorage program ["status", T.unpack outPath])
+    ColdStorageOnload outPath rel -> liftIO $ do
+        command <- coldStorageCommand
+        case command of
             Nothing -> pure (Left "cold storage is not configured")
-            Just value -> runColdStorage (prefetchCommand value storePath rel)
+            Just program -> fmap (const ()) <$> runColdStorage program ["onload", T.unpack outPath, rel]
 
-coldStorageSocket :: IO (Maybe String)
-coldStorageSocket = do
-    value <- lookupEnv "POINTY_COLD_STORE_SOCKET"
+coldStorageCommand :: IO (Maybe FilePath)
+coldStorageCommand = do
+    value <- lookupEnv "POINTY_COLD_STORAGE_COMMAND"
     pure $ case value of
-        Just socket | not (null socket) -> Just socket
+        Just command | not (null command) -> Just command
         _ -> Nothing
-
-coldStorageProgram :: FilePath
-coldStorageProgram = "pointy-scratch-store"
 
 coldStatusTimeoutMicros :: Int
 coldStatusTimeoutMicros = 2000000
 
-runColdStorage :: [String] -> IO (Either Text BS.ByteString)
-runColdStorage args = do
+runColdStorage :: FilePath -> [String] -> IO (Either Text BS.ByteString)
+runColdStorage program args = do
     result <-
-        try (readProcessWithExitCode coldStorageProgram args "") ::
+        try (readProcessWithExitCode program args "") ::
             IO (Either IOException (ExitCode, String, String))
     pure $ case result of
         Left err -> Left (T.pack (show err))
         Right (ExitSuccess, out, _) -> Right (TE.encodeUtf8 (T.pack out))
-        Right (ExitFailure code, out, err) -> Left (commandFailure code (TE.encodeUtf8 (T.pack out)) err)
-
-statusCommand :: String -> Text -> [String]
-statusCommand socket storePath =
-    ["status", "--ingest-socket", socket, "--store-path", T.unpack storePath]
-
-prefetchCommand :: String -> Text -> FilePath -> [String]
-prefetchCommand socket storePath rel =
-    ["prefetch", "--ingest-socket", socket, "--store-path", T.unpack storePath, "--file", rel]
-
-commandFailure :: Int -> BS.ByteString -> String -> Text
-commandFailure code out err =
-    case eitherDecodeStrict out of
-        Right (ColdCommandError _ (Just reported) _ _ _) | not (T.null reported) -> reported
-        _ -> fallback
-  where
-    stderrText = T.strip (T.pack err)
-    fallback
-        | T.null stderrText = "cold storage command exited with code " <> T.pack (show code)
-        | otherwise = stderrText
+        Right (ExitFailure code, _, err) ->
+            case filter (not . T.null) (map T.strip (T.lines (T.pack err))) of
+                firstLine : _ -> Left firstLine
+                [] -> Left ("cold storage command exited with code " <> T.pack (show code))

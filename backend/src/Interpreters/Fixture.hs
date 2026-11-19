@@ -38,7 +38,7 @@ import qualified Data.Vector.Unboxed as VU
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, ColdStorage (..), Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
-import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageDataset, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
+import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageStatus, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobNameEnded)
 import Processes (cli)
 import ProviderHttp (JudgeTask (..))
@@ -122,25 +122,8 @@ runInferenceFixture = interpret $ \_ -> \case
 runColdStorageFixture :: (IOE :> es) => FixtureState -> Eff (ColdStorage : es) a -> Eff es a
 runColdStorageFixture state = interpret $ \_ -> \case
     ColdStorageConfigured -> pure (isJust (documentColdStorage (fixtureDocument state)))
-    ColdStorageStatus storePath ->
-        let coldDatasets = maybe [] (: []) (coldStorageDataset (fixtureDocument state) storePath)
-         in pure $
-                Right $
-                    jsonBytes $
-                        object
-                            [ "ok" .= True
-                            , "status" .= object ["datasets" .= coldDatasets]
-                            ]
-    ColdStoragePrefetch _ rel ->
-        pure $
-            Right $
-                jsonBytes $
-                    object
-                        [ "ok" .= True
-                        , "started" .= [rel]
-                        , "skipped" .= ([] :: [Text])
-                        , "unknown" .= ([] :: [Text])
-                        ]
+    ColdStorageStatus outPath -> pure (Right (jsonBytes (coldStorageStatus (fixtureDocument state) outPath)))
+    ColdStorageOnload _ _ -> pure (Right ())
 
 jsonBytes :: A.Value -> BS.ByteString
 jsonBytes = LBS.toStrict . A.encode

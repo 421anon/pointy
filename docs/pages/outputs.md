@@ -18,9 +18,11 @@ Large text files are loaded a section at a time as you scroll, rather than all a
 
 An open preview stays open when a new version leaves that step's build unchanged; it keeps showing the version you opened. If the build changes, the preview closes so an old result is not mistaken for the new one.
 
-If your installation keeps older outputs on cold storage, the file row shows a snowflake and explains that the file is fetched when opened. Opening or downloading a cold file fetches it first and shows progress on the row; the preview or download starts when the fetch is complete. A failed fetch shows a failure message.
+If your installation offloads outputs to cold storage, a file that has been offloaded is no longer on the server, and its row shows only a blue snowflake: it cannot be viewed, shared, compared, or downloaded. Click the snowflake and choose **Copy back to this server** to copy it back from cold storage; larger files take longer. The file's row shows the progress next to the snowflake, the copy continues on the server even if you leave the page, and nothing opens or downloads by itself. Once the file is back, its row's usual buttons appear and it works like any other file until the output is offloaded again. If copying back fails, the snowflake's popover offers **Try again**. A link to an offloaded file highlights its row without copying it back.
 
-![A step's Output Files with hello on cold storage, marked by a snowflake, and notes.txt being fetched at 40%.](screenshots/light/output-files-cold-storage.png)
+Pointy copies a file back only when you choose **Copy back to this server**; viewing, running, or comparing never asks for it. Running a step whose inputs include offloaded files fails before the build starts, and the step's status names those files and the steps they belong to. Comparing with a review fails the same way, unless that comparison was made before. Copy the files back from their snowflakes, then run or compare again.
+
+![A step's Output Files with hello on cold storage, marked by a blue snowflake.](screenshots/light/output-files-cold-storage.png)
 
 HTML reports open inline; their magnifier buttons zoom in and out. Links in a report work as they would outside Pointy: clicking one can navigate the whole tab, and popups open in a new tab. Use the browser's Back button to return.
 

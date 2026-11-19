@@ -6,7 +6,7 @@ description: "Read, upload, and edit files, fetch cold outputs and Turtle, and s
 
 ## Files, previews, and uploads
 
-`GET /step-files?id=…` and `GET /src-files?id=…` list a directory; `path` selects a relative subdirectory and `commit` pins the revision. Path traversal rules apply to every store-backed read, source files included: a normalized `path` with any `..` component, or one that does not stay inside the base, returns 400 `Path traversal not allowed`; a base outside `/nix/store/` returns 400 `Invalid store path`. An absolute `path` inside the output is accepted, and symlinks are followed wherever they point. Entries contain `name`, `isDir`, `size`, `viewable`, `seekable`, `mimeType`, and `cold`. Listings are unsorted and include dotfiles. A cold entry is not read while listing: its MIME type comes from the file extension, and its `viewable`/`seekable` flags from the recorded size. Zip files appear as expandable directories with a size and `application/zip` MIME type; append their internal paths to browse or download entries (seek inside a zip gives 404).
+`GET /step-files?id=…` and `GET /src-files?id=…` list a directory; `path` selects a relative subdirectory and `commit` pins the revision. Path traversal rules apply to every store-backed read, source files included: a normalized `path` with any `..` component, or one that does not stay inside the base, returns 400 `Path traversal not allowed`; a base outside `/nix/store/` returns 400 `Invalid store path`. An absolute `path` inside the output is accepted, and symlinks are followed wherever they point. Entries contain `name`, `isDir`, `size`, `viewable`, `seekable`, `mimeType`, and `cold`. Listings are unsorted and include dotfiles. A cold entry is not read while listing: its MIME type comes from the file extension, and its `viewable`/`seekable` flags from the recorded size. When the cold store's status cannot be read, no entry of a step output is read while listing, and every entry is treated that way. Zip files appear as expandable directories with a size and `application/zip` MIME type; append their internal paths to browse or download entries (seek inside a zip gives 404). Listing inside a cold zip returns **409** like the reads below.
 
 Use these routes for file contents:
 
@@ -18,7 +18,7 @@ Use these routes for file contents:
 | `GET /step-files/bundle/<step-id>/<commit>/<path>` | Raw output bytes at a path that keeps relative HTML/CSS/image requests in the same pinned bundle. |
 | `GET /src-files/raw?id=…&path=…&commit=…` | Raw source bytes, without attachment disposition. This route may appear without a GET operation in the generated reference. |
 
-Raw and bundle routes are raw handlers, so any method works, and they send no sandboxing headers. An unbuilt output gives 500 `Something went wrong` when listing and 404 with an empty body from download, raw, and bundle. Reading a file that is still in cold storage — through download, seek, raw, or bundle — returns **409** `This file is in cold storage. It is being fetched; try again once it is local.` and starts a prefetch of the enclosing cold file. `GET /src-files` returns `[]` when the step has no source directory and 500 `Failed to evaluate the source files of step <id>: …` when the revision cannot be evaluated. Source files can be read at past revisions; on the current stdlib this works for `derivation` templates with `withSrcFiles` and an existing `srcFiles/<id>`.
+Raw and bundle routes are raw handlers, so any method works, and they send no sandboxing headers. An unbuilt output gives 500 `Something went wrong` when listing and 404 with an empty body from download, raw, and bundle. Reading a file that is offloaded to cold storage — through download, seek, raw, or bundle — returns **409** `This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again.` and does not fetch it; copy it back with `POST /step-files/prefetch` first. `GET /src-files` returns `[]` when the step has no source directory and 500 `Failed to evaluate the source files of step <id>: …` when the revision cannot be evaluated. Source files can be read at past revisions; on the current stdlib this works for `derivation` templates with `withSrcFiles` and an existing `srcFiles/<id>`.
 
 Encode paths and query values. Raw HTML is executable content: a custom client should sandbox its previews, as Pointy's UI does, rather than inserting it into the application's DOM.
 
@@ -26,12 +26,16 @@ For large text files, use `/step-files/seek` or `/src-files/seek`. Supply `id`, 
 
 ### Cold-stored outputs
 
-Instances can offload step outputs to a cold store. When `services.pointy-backend.coldStorage.ingestSocket` (exported as `POINTY_COLD_STORE_SOCKET`) points at a running cold store, and `services.pointy-backend.coldStorage.package` puts the cold-storage command on the backend's PATH, two routes report and drive it:
+Instances can offload step outputs to a cold storage provider, configured as described in [Storage](storage.md#cold-storage). Two routes report and drive it:
 
-- `GET /step-files/cold?id=…&commit=…` returns `{ "cold": <bool>, "onloading": <bool>, "files": [ { "path", "done", "total" } ] }`. `files` lists the output's files that are not local yet, with their fetch progress in bytes (0 when the store reports none); a fetched file leaves `files` even while other files of the output stay cold. `cold` says that `files` is not empty, and `onloading` that the output or one of its files is being fetched. Without a configured cold store, or when its status command fails, times out, or cannot be read, the answer is `{"cold": false, "onloading": false, "files": []}`.
-- `POST /step-files/prefetch?id=…&commit=…&path=<relative file>` asks the cold store to fetch one file. It returns `{ "ok": true, "started": […], "skipped": […], "unknown": […] }` naming the paths it started, skipped, and did not recognize. Without a cold store it returns **503** `cold storage is not configured`; a failing command or unreadable answer returns **502** with the reason.
+- `GET /step-files/cold?id=…&commit=…` returns `{ "files": [ … ] }`, the provider's status for the step's output: each file that is not local, with `path` and `state` (`offloaded`; `onloading` with `done` and `total` bytes; or `failed` with `error`). Without a provider it returns `{"files": []}`; when the provider's status is unknown it returns **503** `Cannot read the cold storage status. Try again when storage status is available.`
+- `POST /step-files/onload?id=…&commit=…&path=<relative file>` asks the provider to start onloading one file and returns **200** with an empty body. Without a provider it returns **503** `Cold storage is not configured.`; when the provider refuses, **502** with its message.
 
-Poll `/step-files/cold` while `onloading` is true; the file listing flips an entry's `cold` to false once the file is local. Source files are never cold.
+Poll `/step-files/cold` after an onload until the file leaves `files` or turns `failed`; the file listing then reports its `cold` as false. Source files are never cold.
+
+In the output file browser, an offloaded ZIP shows the same snowflake as any other offloaded file. Copy the ZIP back before browsing its entries. Once the folder listing confirms the archive is local, its row becomes expandable again.
+
+The 409 response depends on Pointy knowing that the file is offloaded. If the configured cold store cannot report its status, download, seek, raw, and bundle requests and listings inside a ZIP return **503** `Cannot check whether this file is offloaded to cold storage. Try again when storage status is available.` instead of reading the file.
 
 ### Artifacts as Turtle
 

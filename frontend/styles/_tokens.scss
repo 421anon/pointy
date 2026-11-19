@@ -32,6 +32,8 @@
   --state-warning-outline: rgba(226, 183, 20, 0.4);
   --state-info-outline: rgba(9, 105, 218, 0.4);
   --state-danger-outline: rgba(224, 82, 82, 0.4);
+  --state-cold: #6bb6e3;
+  --state-cold-outline: rgba(107, 182, 227, 0.16);
 
   --link: var(--color-blue-400);
 
@@ -101,6 +103,8 @@
   --state-warning-outline: rgba(154, 103, 0, 0.12);
   --state-info-outline: rgba(5, 80, 174, 0.12);
   --state-danger-outline: rgba(207, 34, 46, 0.12);
+  --state-cold: #0969da;
+  --state-cold-outline: rgba(9, 105, 218, 0.1);
 
   --link: var(--color-blue-400);
   --focus-ring: rgba(9, 105, 218, 0.4);

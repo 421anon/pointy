@@ -11,7 +11,7 @@ import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.Cold (ColdStatus, PrefetchResponse)
+import Handlers.Cold (ColdStatus)
 import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -55,19 +55,19 @@ type ListStepFiles =
 type GetStepColdStatus =
     "step-files"
         :> "cold"
-        :> Description "Reports whether a step's output lives in cold storage, how far an onload has progressed, and which files are not local yet."
+        :> Description "Lists the files of a step's output that are not local, with each one's cold storage state: offloaded, onloading with its progress, or failed with the error. Returns 503 when the cold storage provider cannot report a status."
         :> ReqId
         :> QueryParam "commit" Text
         :> Get '[JSON] ColdStatus
 
-type PrefetchStepFile =
+type OnloadStepFile =
     "step-files"
-        :> "prefetch"
-        :> Description "Starts fetching one file of a step's cold-stored output into local storage."
+        :> "onload"
+        :> Description "Asks the cold storage provider to start onloading one offloaded file of a step's output. Progress is reported by the cold status route."
         :> ReqId
         :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
-        :> Post '[JSON] PrefetchResponse
+        :> Post '[JSON] NoContent
 
 type ListSrcFiles =
     "src-files"
@@ -537,7 +537,7 @@ type API =
         :<|> GetUserRepoInfo
         :<|> ListStepFiles
         :<|> GetStepColdStatus
-        :<|> PrefetchStepFile
+        :<|> OnloadStepFile
         :<|> DownloadStepFile
         :<|> StepFileSeek
         :<|> RawStepFile

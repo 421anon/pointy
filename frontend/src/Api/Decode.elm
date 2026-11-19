@@ -451,10 +451,12 @@ notice =
 
 directoryItem : FileView -> Decoder ( String, DirectoryItem )
 directoryItem fileView =
-    Decode.field "isDir" Decode.bool
+    Decode.succeed Tuple.pair
+        |> required "isDir" Decode.bool
+        |> optional "cold" Decode.bool False
         |> Decode.andThen
-            (\isDir ->
-                if isDir then
+            (\( isDir, cold ) ->
+                if isDir && not cold then
                     Decode.succeed
                         (\name size mimeType ->
                             ( name
@@ -478,7 +480,7 @@ directoryItem fileView =
 
                 else
                     Decode.succeed
-                        (\name size viewable seekable mimeType cold ->
+                        (\name size viewable seekable mimeType ->
                             ( name
                             , File
                                 { content = NotAsked
@@ -492,7 +494,12 @@ directoryItem fileView =
                                 , plainLineCount = 1
                                 , isNew = False
                                 , isDeleted = False
-                                , cold = cold
+                                , availability =
+                                    if cold then
+                                        Model.Cold
+
+                                    else
+                                        Model.Local
                                 }
                             )
                         )
@@ -501,7 +508,6 @@ directoryItem fileView =
                         |> required "viewable" Decode.bool
                         |> optional "seekable" Decode.bool False
                         |> required "mimeType" (Decode.nullable Decode.string)
-                        |> optional "cold" Decode.bool False
             )
 
 
@@ -1020,25 +1026,32 @@ scratchEntry =
 coldStatus : Decoder Model.ColdStatus
 coldStatus =
     Decode.succeed Model.ColdStatus
-        |> required "cold" Decode.bool
-        |> required "onloading" Decode.bool
         |> required "files" (Decode.list coldFile)
 
 
 coldFile : Decoder Model.ColdFile
 coldFile =
-    Decode.succeed Model.ColdFile
-        |> required "path" coldPath
-        |> required "done" Decode.int
-        |> required "total" Decode.int
+    Decode.map2 Model.ColdFile
+        (Decode.field "path" coldPath)
+        (Decode.field "state" Decode.string |> Decode.andThen coldFileState)
+
+
+coldFileState : String -> Decoder Model.ColdFileState
+coldFileState state =
+    case state of
+        "offloaded" ->
+            Decode.succeed Model.Offloaded
+
+        "onloading" ->
+            Decode.map2 Model.Onloading (Decode.field "done" Decode.int) (Decode.field "total" Decode.int)
+
+        "failed" ->
+            Decode.map Model.OnloadFailed (Decode.field "error" Decode.string)
+
+        other ->
+            Decode.fail ("unknown cold storage file state " ++ other)
 
 
 coldPath : Decoder (List String)
 coldPath =
     Decode.map (String.split "/" >> List.filter (not << String.isEmpty)) Decode.string
-
-
-prefetchResponse : Decoder Model.PrefetchResponse
-prefetchResponse =
-    Decode.succeed Model.PrefetchResponse
-        |> required "ok" Decode.bool

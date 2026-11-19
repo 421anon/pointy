@@ -119,16 +119,6 @@ outputsCommit =
     lens "outputsCommit" .outputsCommit (\t outputsCommit_ -> { t | outputsCommit = outputsCommit_ })
 
 
-coldStatus : Lens ls { a | coldStatus : b } b x y
-coldStatus =
-    lens ".coldStatus" .coldStatus (\t coldStatus_ -> { t | coldStatus = coldStatus_ })
-
-
-coldPending : Lens ls { a | coldPending : b } b x y
-coldPending =
-    lens ".coldPending" .coldPending (\t coldPending_ -> { t | coldPending = coldPending_ })
-
-
 runState : Lens ls { a | runState : b } b x y
 runState =
     lens "runState" .runState (\t rs -> { t | runState = rs })
@@ -430,9 +420,9 @@ fileContent =
     lens ".content" .content (\file_ content_ -> { file_ | content = content_ })
 
 
-fileCold : Lens ls { a | cold : b } b x y
-fileCold =
-    lens ".cold" .cold (\file_ cold_ -> { file_ | cold = cold_ })
+fileAvailability : Lens ls { a | availability : b } b x y
+fileAvailability =
+    lens ".availability" .availability (\file_ availability_ -> { file_ | availability = availability_ })
 
 
 fileIsViewing : Lens ls { a | view : { b | isViewing : c } } c x y
@@ -591,19 +581,9 @@ fileContentAt recordId_ path =
     directoryItemAtPath recordId_ path << file << fileContent
 
 
-fileColdAt : Int -> List String -> Traversal Model Bool x y
-fileColdAt recordId_ path =
-    directoryItemAtPath recordId_ path << file << fileCold
-
-
-coldStatusAt : Int -> Traversal Model (Maybe Model.ColdStatus) x y
-coldStatusAt recordId_ =
-    stepRecordById recordId_ << runState << success << coldStatus
-
-
-coldPendingAt : Int -> Traversal Model (Maybe Model.ColdPending) x y
-coldPendingAt recordId_ =
-    stepRecordById recordId_ << runState << success << coldPending
+fileAvailabilityAt : Int -> List String -> Traversal Model Model.Availability x y
+fileAvailabilityAt recordId_ path =
+    directoryItemAtPath recordId_ path << file << fileAvailability
 
 
 fileIsViewingAt : Int -> List String -> Traversal Model Bool x y

@@ -177,39 +177,31 @@ type alias StepRunState =
     , status : ApiData Status
     , outputsCommit : String
     , directoryView : DirectoryFolder
-    , coldStatus : Maybe ColdStatus
-    , coldPending : Maybe ColdPending
     }
 
 
-type ColdIntent
-    = OpenWhenLocal
-    | DownloadWhenLocal
-
-
-type alias ColdPending =
-    { path : List String
-    , intent : ColdIntent
-    }
+type Availability
+    = Local
+    | Cold
+    | Unfreezing (Maybe ( Int, Int ))
+    | UnfreezeFailed String
 
 
 type alias ColdStatus =
-    { cold : Bool
-    , onloading : Bool
-    , files : List ColdFile
+    { files : List ColdFile
     }
 
 
 type alias ColdFile =
     { path : List String
-    , done : Int
-    , total : Int
+    , state : ColdFileState
     }
 
 
-type alias PrefetchResponse =
-    { ok : Bool
-    }
+type ColdFileState
+    = Offloaded
+    | Onloading Int Int
+    | OnloadFailed String
 
 
 type alias StatusReport =
@@ -2010,44 +2002,34 @@ getSteps (Model model) =
     model.steps
 
 
-stepsAwaitingCold : Model -> List { id : Int, commit : String }
-stepsAwaitingCold model =
+stepsUnfreezing : Model -> List { id : Int, commit : String, paths : List (List String) }
+stepsUnfreezing model =
     getSteps model
         |> Dict.values
         |> List.filterMap
             (\step ->
                 case ( step.id, ApiData.toMaybe step.runState ) of
                     ( Just id, Just runState_ ) ->
-                        if runState_.coldPending /= Nothing || Maybe.unwrap False .onloading runState_.coldStatus then
-                            Just { id = id, commit = runState_.outputsCommit }
+                        case filePathsWhere (.availability >> isUnfreezing) [] runState_.directoryView of
+                            [] ->
+                                Nothing
 
-                        else
-                            Nothing
+                            paths ->
+                                Just { id = id, commit = runState_.outputsCommit, paths = paths }
 
                     _ ->
                         Nothing
             )
 
 
-coldFetchFor : Int -> List String -> Model -> Maybe (Maybe ( Int, Int ))
-coldFetchFor recordId_ path model =
-    Dict.get recordId_ (getSteps model)
-        |> Maybe.andThen (\step -> ApiData.toMaybe step.runState)
-        |> Maybe.andThen
-            (\runState_ ->
-                if Maybe.map .path runState_.coldPending == Just path then
-                    Just Nothing
+isUnfreezing : Availability -> Bool
+isUnfreezing availability =
+    case availability of
+        Unfreezing _ ->
+            True
 
-                else
-                    Maybe.map .files runState_.coldStatus
-                        |> Maybe.andThen
-                            (\files ->
-                                files
-                                    |> List.filter (\file -> file.path == path && file.total > 0)
-                                    |> List.head
-                                    |> Maybe.map (\file -> Just ( file.done, file.total ))
-                            )
-            )
+        _ ->
+            False
 
 
 getProjectForms : Model -> Table ProjectRecord
@@ -2636,7 +2618,7 @@ type alias DirectoryFile =
     , plainLineCount : Int
     , isNew : Bool
     , isDeleted : Bool
-    , cold : Bool
+    , availability : Availability
     }
 
 
@@ -2660,7 +2642,12 @@ hasFileChanges file_ =
 
 
 srcFileChangePaths : List String -> DirectoryFolder -> List (List String)
-srcFileChangePaths parent folder_ =
+srcFileChangePaths =
+    filePathsWhere hasFileChanges
+
+
+filePathsWhere : (DirectoryFile -> Bool) -> List String -> DirectoryFolder -> List (List String)
+filePathsWhere matches parent folder_ =
     folder_.children
         |> ApiData.toMaybe
         |> Maybe.unwrap []
@@ -2673,14 +2660,14 @@ srcFileChangePaths parent folder_ =
                         in
                         case item of
                             File file_ ->
-                                if hasFileChanges file_ then
+                                if matches file_ then
                                     [ path ]
 
                                 else
                                     []
 
                             Folder child ->
-                                srcFileChangePaths path child
+                                filePathsWhere matches path child
                     )
             )
 

@@ -271,7 +271,6 @@ test-suite cold-status
     , backend
     , base
     , bytestring
-    , containers
     , text
 
   hs-source-dirs:   test
