@@ -244,7 +244,7 @@ viewColdFetchProgress progress =
                     String.fromInt percent ++ "%"
 
                 Nothing ->
-                    "fetching"
+                    "starting"
     in
     Html.span [ class "cold-fetch-progress" ]
         [ Html.span [ class "upload-progress-bar cold-fetch-progress-bar" ]
@@ -270,7 +270,7 @@ viewColdFile stepId path availability =
         popoverId =
             "cold-" ++ String.fromInt stepId ++ "-" ++ String.join "-" (List.map (Char.toCode >> String.fromInt) (String.toList (String.join "/" path)))
 
-        unfreezeButton label =
+        copyBackButton label =
             Html.button
                 [ class "btn file-cold-unfreeze-btn"
                 , type_ "button"
@@ -278,22 +278,38 @@ viewColdFile stepId path availability =
                 ]
                 [ icon False "mode_heat", Html.text label ]
 
+        note text =
+            Html.p [ class "file-cold-popover-note" ] [ Html.text text ]
+
         ( title, body ) =
             case availability of
                 Model.Core.Unfreezing progress ->
-                    ( "Unfreezing…", [ viewColdFetchProgress progress ] )
+                    ( "Copying back from cold storage…"
+                    , [ viewColdFetchProgress progress
+                      , note "The copy continues on the server even if you leave this page. The file's buttons appear when it is done."
+                      ]
+                    )
 
                 Model.Core.UnfreezeFailed ->
-                    ( "Unfreeze failed", [ Html.p [ class "file-cold-popover-note" ] [ Html.text "The file could not be fetched from cold storage." ], unfreezeButton "Retry" ] )
+                    ( "Copying back failed"
+                    , [ note "The file could not be copied back from cold storage, so it is still not on this server."
+                      , copyBackButton "Try again"
+                      ]
+                    )
 
                 _ ->
-                    ( "On cold storage", [ Html.p [ class "file-cold-popover-note" ] [ Html.text "Unfreeze this file to view, share, or download it." ], unfreezeButton "Unfreeze" ] )
+                    ( "Offloaded to cold storage"
+                    , [ note "This file was offloaded to cold storage and isn't on this server, so it can't be viewed, shared, or downloaded."
+                      , note "Copying it back takes longer for larger files; afterwards it works like any other file."
+                      , copyBackButton "Copy back to this server"
+                      ]
+                    )
     in
     Html.span [ class "file-cold" ]
         [ Html.button
             [ class "file-cold-btn"
             , type_ "button"
-            , Html.Attributes.title "On cold storage"
+            , Html.Attributes.title "Offloaded to cold storage, not on this server"
             , Html.Attributes.attribute "popovertarget" popoverId
             , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
             ]

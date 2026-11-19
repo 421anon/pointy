@@ -2853,7 +2853,7 @@ unfreezeOutputFile recordId path =
 unfreezeFailed : Int -> List String -> Flow Model ()
 unfreezeFailed recordId path =
     Flow.setAll (fileAvailabilityAt recordId path) Model.UnfreezeFailed
-        |> Flow.seq (addToast False ("Failed to unfreeze " ++ String.join "/" path))
+        |> Flow.seq (addToast False ("Failed to copy " ++ String.join "/" path ++ " back from cold storage"))
 
 
 pollUnfreezing : Flow Model ()

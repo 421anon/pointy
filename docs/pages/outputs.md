@@ -18,7 +18,7 @@ Large text files are loaded a section at a time as you scroll, rather than all a
 
 An open preview stays open when a new version leaves that step's build unchanged; it keeps showing the version you opened. If the build changes, the preview closes so an old result is not mistaken for the new one.
 
-If your installation keeps older outputs on cold storage, a cold file's row shows only a blue snowflake: it cannot be viewed, shared, compared, or downloaded until it is local. Click the snowflake and choose **Unfreeze** to fetch it; the popover shows the progress, and the row's usual buttons appear once the file is local. Nothing opens or downloads by itself. If the fetch fails, the popover offers **Retry**. A link to a cold file highlights its row without fetching it.
+If your installation offloads outputs to cold storage, a file that has been offloaded is no longer on the server, and its row shows only a blue snowflake: it cannot be viewed, shared, compared, or downloaded. Click the snowflake and choose **Copy back to this server** to copy it back from cold storage; larger files take longer. The popover shows the progress, the copy continues on the server even if you leave the page, and nothing opens or downloads by itself. Once the file is back, its row's usual buttons appear and it works like any other file until the output is offloaded again. If copying back fails, the popover offers **Try again**. A link to an offloaded file highlights its row without copying it back.
 
 ![A step's Output Files with hello on cold storage, marked by a blue snowflake.](screenshots/light/output-files-cold-storage.png)
 
