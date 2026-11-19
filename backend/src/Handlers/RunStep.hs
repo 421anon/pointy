@@ -23,11 +23,11 @@ import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, catch)
 import Control.Monad (foldM, forM, forM_, unless, void, when)
 
-import Control.Monad.Except (ExceptT (..), catchError, liftEither, runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:))
-import Data.List (isPrefixOf, nub, partition)
+import Data.List (intercalate, isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
@@ -36,11 +36,10 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
-import Effects (App, AppM, Eval, Nix, listDerivationRootJobs, pathValid, rootDerivationForJob, rootStorePath, unrootDerivationRoot, unrootDerivationRootsForJob)
+import Effects (App, AppM, Eval, Nix, coldStorageConfigured, listDerivationRootJobs, pathValid, rootDerivationForJob, rootStorePath, unrootDerivationRoot, unrootDerivationRootsForJob)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (finally, onException)
-import Handlers.Cold (offloadedFilesNamedIn, offloadedReadNote, stepIdsNamedIn, stepLabel, unreadableLines)
-import Handlers.StepOutput (resolveStepOutPath)
+import Handlers.Cold (coldFilesFor)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import Servant (NoContent (..), err404, err500, errBody)
 import System.Exit (ExitCode (..))
@@ -102,17 +101,7 @@ stepLogHandler eid commit = do
                     { errBody =
                         TLE.encodeUtf8 (TL.pack ("No build log available for step " ++ show eid))
                     }
-        Right (Just rl) -> do
-            let rendered = renderResolvedLog rl
-                unreadable = unreadableLines rendered
-            namedOutputs <- fmap concat $ forM (stepIdsNamedIn unreadable) $ \stepId ->
-                ((\outPath -> [(stepLabel stepId, outPath)]) <$> resolveStepOutPath stepId commit)
-                    `catchError` \_ -> pure []
-            offloaded <- if null unreadable then pure [] else lift (offloadedFilesNamedIn namedOutputs rendered)
-            pure $
-                if null offloaded
-                    then rendered
-                    else T.unlines (map offloadedReadNote offloaded) <> "-----\n" <> rendered
+        Right (Just rl) -> return (renderResolvedLog rl)
 
 renderResolvedLog :: ResolvedLog -> T.Text
 renderResolvedLog (ResolvedLog _ logText StepDrv) = TE.decodeUtf8Lenient logText
@@ -188,6 +177,7 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                             (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
                             return $ Enqueued (stepTargetPath rootedTarget) buildKey existing root
                         else do
+                            refuseOffloadedInputs ctx sid [dep | dep <- deps, Just AlreadyCertified{} <- [Map.lookup dep outcomes]]
                             requirements <- getStepRequirements ctx sid
                             command <- liftIO realiseCommand
                             (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
@@ -212,6 +202,26 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
     isBlocked Nothing = True
     isBlocked _ = False
     depJobIds = nub [jobId | d <- deps, Just (Enqueued _ _ jobIds _) <- [Map.lookup d outcomes], jobId <- jobIds]
+
+refuseOffloadedInputs :: App es => ReadRepoContext -> Int -> [Int] -> ExceptT String (Eff es) ()
+refuseOffloadedInputs ctx sid builtInputs = do
+    configured <- lift coldStorageConfigured
+    when configured $ do
+        inputColdFiles <- forM builtInputs $ \input -> (,) input <$> (lift . coldFilesFor =<< getStepOutPath ctx input)
+        let unknown = [input | (input, Nothing) <- inputColdFiles]
+            offloaded = [(input, Set.toList files) | (input, Just files) <- inputColdFiles, not (Set.null files)]
+        unless (null unknown) $
+            throwError $
+                "Cannot check whether " ++ stepList unknown ++ ", read by step " ++ show sid ++ ", " ++ hasOrHave unknown ++ " files offloaded to cold storage. Run again when storage status is available."
+        unless (null offloaded) $
+            throwError $
+                "Step " ++ show sid ++ " reads files offloaded to cold storage: " ++ intercalate "; " [fileList files ++ " of step " ++ show input | (input, files) <- offloaded] ++ ". Copy them back from their snowflakes in the file browser, then run again."
+  where
+    stepList inputs = "step" ++ (if length inputs == 1 then " " else "s ") ++ intercalate ", " (map show inputs)
+    hasOrHave inputs = if length inputs == 1 then "has" else "have"
+    fileList files = case splitAt 3 files of
+        (named, []) -> intercalate ", " (map T.unpack named)
+        (named, rest) -> intercalate ", " (map T.unpack named) ++ " and " ++ show (length rest) ++ " more"
 
 validateStepTarget :: Int -> StepTarget -> Either String ()
 validateStepTarget sid = validateTarget ("step " ++ show sid) . stepTargetDrv

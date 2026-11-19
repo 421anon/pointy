@@ -35,7 +35,7 @@ import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
 import Effects (AppM, Nix, probeMimeType)
 import GHC.Generics (Generic)
-import Handlers.Cold (coldFilesFor, refuseColdFile, refuseOffloadedIn)
+import Handlers.Cold (coldFilesFor, refuseColdFile, refuseOffloadedIn, requireColdFiles)
 import Handlers.RunStep (buildExtras)
 import Handlers.StepOutput (resolveStepOutPath)
 
@@ -52,7 +52,6 @@ import Servant (
     err400,
     err404,
     err500,
-    err503,
     throwError,
  )
 import qualified Servant.Types.SourceT as S
@@ -147,7 +146,7 @@ listHandler mColdFiles outPathText mRel = do
     mZipResult <- liftIO $ resolveZipPath basePath rel
     case mZipResult of
         Just (zipPath, internalPath) -> do
-            coldFiles <- maybe (throwError err503{errBody = "Cannot check whether the archive is offloaded to cold storage. Try again when storage status is available."}) pure mColdFiles
+            coldFiles <- requireColdFiles mColdFiles
             refuseOffloadedIn coldFiles rel
             map zipItemToDirEntry <$> liftZip err400 (Zip.listZipDirectory zipPath internalPath)
         Nothing -> do

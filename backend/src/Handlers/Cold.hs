@@ -8,13 +8,7 @@ module Handlers.Cold (
     ColdFile (..),
     PrefetchResponse (..),
     coldFilesFor,
-    offloadedEnclosing,
-    offloadedFilesNamedIn,
-    offloadedFilesNamed,
-    stepIdsNamedIn,
-    stepLabel,
-    unreadableLines,
-    offloadedReadNote,
+    requireColdFiles,
     refuseColdFile,
     refuseOffloadedIn,
     coldStatusHandler,
@@ -25,14 +19,13 @@ module Handlers.Cold (
 ) where
 
 import Control.Exception (IOException, catch)
-import Control.Monad (forM, forM_, guard)
+import Control.Monad (forM_, guard)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Char (isAlphaNum, isDigit)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.List (find, isPrefixOf)
 import Data.Set (Set)
@@ -50,7 +43,6 @@ import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache
 import System.Directory (getSymbolicLinkTarget, pathIsSymbolicLink)
 import System.FilePath (joinPath, normalise, splitDirectories)
 import System.IO.Unsafe (unsafePerformIO)
-import Text.Read (readMaybe)
 
 data ColdStatus = ColdStatus
     { cold :: Bool
@@ -230,70 +222,19 @@ offloadedEnclosing coldFiles rel = find (`Set.member` coldFiles) enclosing
     components = dropWhile (== "/") (splitDirectories (normalise rel))
     enclosing = [T.pack (joinPath (take n components)) | n <- [1 .. length components]]
 
+requireColdFiles :: Maybe (Set Text) -> AppM (Set Text)
+requireColdFiles =
+    maybe (throwError err503{errBody = "Cannot check whether this file is offloaded to cold storage. Try again when storage status is available."}) pure
+
 refuseColdFile :: Text -> FilePath -> AppM ()
 refuseColdFile storePath rel = do
-    coldFiles <- lift (coldFilesFor storePath)
-    refuseOffloadedIn (fromMaybe Set.empty coldFiles) rel
+    coldFiles <- requireColdFiles =<< lift (coldFilesFor storePath)
+    refuseOffloadedIn coldFiles rel
 
 refuseOffloadedIn :: Set Text -> FilePath -> AppM ()
 refuseOffloadedIn coldFiles rel =
     forM_ (offloadedEnclosing coldFiles rel) $ \_ ->
         throwError err409{errBody = "This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again."}
-
-offloadedFilesNamedIn :: (ColdStorage :> es, IOE :> es) => [(Text, Text)] -> Text -> Eff es [(Text, Text)]
-offloadedFilesNamedIn labelledOutputs output = do
-    let unreadable = unreadableLines output
-        named = labelledOutputs ++ [(storePath, storePath) | storePath <- concatMap storePathsIn unreadable]
-    coldByLabel <- forM named $ \(label, storePath) -> (,) label . fromMaybe Set.empty <$> coldFilesFor storePath
-    pure (offloadedFilesNamed unreadable coldByLabel)
-
-unreadableLines :: Text -> [Text]
-unreadableLines = filter reportsUnreadable . T.lines
-  where
-    reportsUnreadable line = any (`T.isInfixOf` line) ["Input/output error", "I/O error", "offloaded to cold storage"]
-
-storePathsIn :: Text -> [Text]
-storePathsIn line =
-    [ "/nix/store/" <> base
-    | (_, match) <- T.breakOnAll "/nix/store/" line
-    , let base = T.takeWhile (\c -> isAlphaNum c || c `elem` ("+-._?=" :: String)) (T.drop (T.length "/nix/store/") match)
-    , not (T.null base)
-    ]
-
-stepIdsNamedIn :: [Text] -> [Int]
-stepIdsNamedIn unreadable =
-    Set.toList $
-        Set.fromList
-            [ stepId
-            | line <- unreadable
-            , token <- T.split (`elem` (" '\"`:(" :: String)) line
-            , let (digits, rest) = T.span isDigit (fromMaybe token (T.stripPrefix "./" token))
-            , not (T.null digits) && "/" `T.isPrefixOf` rest
-            , Just stepId <- [readMaybe (T.unpack digits)]
-            ]
-
-stepLabel :: Int -> Text
-stepLabel stepId = "step " <> T.pack (show stepId)
-
-offloadedFilesNamed :: [Text] -> [(Text, Set Text)] -> [(Text, Text)]
-offloadedFilesNamed unreadable coldByLabel =
-    [ (label, file)
-    | (label, coldFiles) <- coldByLabel
-    , let namedByOwnedLines = Set.fromList (concat [namedIn coldFiles line | line <- unreadable, ownedBy label line])
-    , file <- Set.toList namedByOwnedLines
-    ]
-  where
-    namedIn coldFiles line =
-        let named = filter (names line) (Set.toList coldFiles)
-         in filter (\file -> not (any (\longer -> longer /= file && file `T.isSuffixOf` longer) named)) named
-    names line file = file `T.isPrefixOf` line || any (\boundary -> (boundary <> file) `T.isInfixOf` line) ["/", " ", "'", "\""]
-    ownedBy label line = case map stepLabel (stepIdsNamedIn [line]) ++ storePathsIn line of
-        [] -> True
-        owners -> label `elem` owners
-
-offloadedReadNote :: (Text, Text) -> Text
-offloadedReadNote (label, file) =
-    file <> " of " <> label <> " is offloaded to cold storage, so it could not be read. Copy it back from its snowflake in the file browser, then try again."
 
 coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus
 coldStatusHandler stepId mCommit = do
