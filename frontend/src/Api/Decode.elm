@@ -1026,24 +1026,32 @@ scratchEntry =
 coldStatus : Decoder Model.ColdStatus
 coldStatus =
     Decode.succeed Model.ColdStatus
-        |> required "onloading" Decode.bool
         |> required "files" (Decode.list coldFile)
 
 
 coldFile : Decoder Model.ColdFile
 coldFile =
-    Decode.succeed Model.ColdFile
-        |> required "path" coldPath
-        |> required "done" Decode.int
-        |> required "total" Decode.int
+    Decode.map2 Model.ColdFile
+        (Decode.field "path" coldPath)
+        (Decode.field "state" Decode.string |> Decode.andThen coldFileState)
+
+
+coldFileState : String -> Decoder Model.ColdFileState
+coldFileState state =
+    case state of
+        "offloaded" ->
+            Decode.succeed Model.Offloaded
+
+        "copying-back" ->
+            Decode.map2 Model.CopyingBack (Decode.field "done" Decode.int) (Decode.field "total" Decode.int)
+
+        "failed" ->
+            Decode.map Model.CopyBackFailed (Decode.field "error" Decode.string)
+
+        other ->
+            Decode.fail ("unknown cold storage file state " ++ other)
 
 
 coldPath : Decoder (List String)
 coldPath =
     Decode.map (String.split "/" >> List.filter (not << String.isEmpty)) Decode.string
-
-
-prefetchResponse : Decoder Model.PrefetchResponse
-prefetchResponse =
-    Decode.succeed Model.PrefetchResponse
-        |> required "ok" Decode.bool

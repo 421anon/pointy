@@ -275,6 +275,14 @@ viewColdFile stepId path availability =
         note text =
             Html.p [ class "file-cold-popover-note" ] [ Html.text text ]
 
+        isUnfreezeFailed =
+            case availability of
+                Model.Core.UnfreezeFailed _ ->
+                    True
+
+                _ ->
+                    False
+
         ( title, body ) =
             case availability of
                 Model.Core.Unfreezing _ ->
@@ -282,9 +290,10 @@ viewColdFile stepId path availability =
                     , [ note "The copy continues on the server even if you leave this page. The file's buttons appear when it is done." ]
                     )
 
-                Model.Core.UnfreezeFailed ->
+                Model.Core.UnfreezeFailed reason ->
                     ( "Copying back failed"
                     , [ note "The file could not be copied back from cold storage, so it is still not on this server."
+                      , note reason
                       , copyBackButton "Try again"
                       ]
                     )
@@ -307,7 +316,7 @@ viewColdFile stepId path availability =
             ]
             [ icon False "ac_unit" ]
         , Html.div
-            [ classList [ ( "file-cold-popover", True ), ( "is-failed", availability == Model.Core.UnfreezeFailed ) ]
+            [ classList [ ( "file-cold-popover", True ), ( "is-failed", isUnfreezeFailed ) ]
             , id popoverId
             , Html.Attributes.attribute "popover" "auto"
             , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)

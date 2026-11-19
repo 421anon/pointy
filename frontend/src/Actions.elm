@@ -2840,20 +2840,17 @@ unfreezeOutputFile recordId path =
         \commit_ ->
             Flow.setAll (fileAvailabilityAt recordId path) (Model.Unfreezing Nothing)
                 |> Flow.seq
-                    (Api.prefetchCold recordId (Just commit_) path
+                    (Api.copyBackColdFile recordId (Just commit_) path
                         |> FlowError.foldResult
-                            (\response -> Flow.when (not response.ok) (unfreezeFailed recordId path))
-                            (\err ->
-                                Flow.setAll (fileAvailabilityAt recordId path) Model.UnfreezeFailed
-                                    |> Flow.seq (addToast False (Http.errorMessage err))
-                            )
+                            (\() -> Flow.pure ())
+                            (\err -> unfreezeFailed recordId path (Http.errorMessage err))
                     )
 
 
-unfreezeFailed : Int -> List String -> Flow Model ()
-unfreezeFailed recordId path =
-    Flow.setAll (fileAvailabilityAt recordId path) Model.UnfreezeFailed
-        |> Flow.seq (addToast False ("Failed to copy " ++ String.join "/" path ++ " back from cold storage"))
+unfreezeFailed : Int -> List String -> String -> Flow Model ()
+unfreezeFailed recordId path reason =
+    Flow.setAll (fileAvailabilityAt recordId path) (Model.UnfreezeFailed reason)
+        |> Flow.seq (addToast False ("Failed to copy " ++ String.join "/" path ++ " back from cold storage: " ++ reason))
 
 
 pollUnfreezing : Flow Model ()
@@ -2882,13 +2879,16 @@ applyColdStatus recordId commit status_ path =
 
         Just coldFile ->
             Flow.forAll (fileAvailabilityAt recordId path << where_ Model.isUnfreezing)
-                (\availability ->
-                    case Model.unfreezeProgress status_.onloading coldFile availability of
-                        Model.UnfreezeFailed ->
-                            unfreezeFailed recordId path
+                (\_ ->
+                    case coldFile.state of
+                        Model.CopyingBack done total ->
+                            Flow.setAll (fileAvailabilityAt recordId path) (Model.Unfreezing (Just ( done, total )))
 
-                        next ->
-                            Flow.setAll (fileAvailabilityAt recordId path) next
+                        Model.CopyBackFailed reason ->
+                            unfreezeFailed recordId path reason
+
+                        Model.Offloaded ->
+                            Flow.pure ()
                 )
 
 

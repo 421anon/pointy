@@ -45,7 +45,7 @@ module Effects (
     cancelJob,
     coldStorageConfigured,
     coldStorageStatus,
-    coldStoragePrefetch,
+    coldStorageCopyBack,
     embedTexts,
     judgeCandidates,
 ) where
@@ -115,7 +115,7 @@ type instance DispatchOf Slurm = Dynamic
 data ColdStorage :: Effect where
     ColdStorageConfigured :: ColdStorage m Bool
     ColdStorageStatus :: Text -> ColdStorage m (Either Text ByteString)
-    ColdStoragePrefetch :: Text -> FilePath -> ColdStorage m (Either Text ByteString)
+    ColdStorageCopyBack :: Text -> FilePath -> ColdStorage m (Either Text ())
 
 type instance DispatchOf ColdStorage = Dynamic
 
@@ -257,8 +257,8 @@ coldStorageConfigured = send ColdStorageConfigured
 coldStorageStatus :: (ColdStorage :> es) => Text -> Eff es (Either Text ByteString)
 coldStorageStatus = send . ColdStorageStatus
 
-coldStoragePrefetch :: (ColdStorage :> es) => Text -> FilePath -> Eff es (Either Text ByteString)
-coldStoragePrefetch storePath = send . ColdStoragePrefetch storePath
+coldStorageCopyBack :: (ColdStorage :> es) => Text -> FilePath -> Eff es (Either Text ())
+coldStorageCopyBack outPath = send . ColdStorageCopyBack outPath
 
 embedTexts :: (Inference :> es) => [Text] -> Eff es (Either String [VU.Vector Float])
 embedTexts = send . Embed

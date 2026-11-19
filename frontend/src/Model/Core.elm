@@ -184,25 +184,24 @@ type Availability
     = Local
     | Cold
     | Unfreezing (Maybe ( Int, Int ))
-    | UnfreezeFailed
+    | UnfreezeFailed String
 
 
 type alias ColdStatus =
-    { onloading : Bool
-    , files : List ColdFile
+    { files : List ColdFile
     }
 
 
 type alias ColdFile =
     { path : List String
-    , done : Int
-    , total : Int
+    , state : ColdFileState
     }
 
 
-type alias PrefetchResponse =
-    { ok : Bool
-    }
+type ColdFileState
+    = Offloaded
+    | CopyingBack Int Int
+    | CopyBackFailed String
 
 
 type alias StatusReport =
@@ -2031,18 +2030,6 @@ isUnfreezing availability =
 
         _ ->
             False
-
-
-unfreezeProgress : Bool -> ColdFile -> Availability -> Availability
-unfreezeProgress onloading coldFile availability =
-    if coldFile.total > 0 then
-        Unfreezing (Just ( coldFile.done, coldFile.total ))
-
-    else if onloading then
-        availability
-
-    else
-        UnfreezeFailed
 
 
 getProjectForms : Model -> Table ProjectRecord

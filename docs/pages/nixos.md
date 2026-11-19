@@ -24,8 +24,7 @@ Import `pointy.nixosModules.pointy-host` to install the backend service, nginx v
 | `services.pointy-backend.piConfigDir` | Pointy's `backend/pi` | Pi configuration copied to `/home/backend/.pi` before the backend starts. Models and settings inside it are regenerated from `config.toml`. |
 | `services.pointy-backend.ingestPackage` | built-in `pointy-ingest` (`nix store add` + jq) | Package providing `bin/pointy-ingest DIR NAME`, which turns a directory into a content-addressed store path. See [Data ingest and scratch space](storage.md#data-ingest-and-scratch-space). |
 | `services.pointy-backend.storeUrl` | `null` | Nix store for the backend, its evaluators, the agent sandboxes and Slurm builds, exported as `NIX_REMOTE`. `null` uses the host store. |
-| `services.pointy-backend.coldStorage.package` | `null` | Optional package providing the cold-storage command, whose `status` and `prefetch` subcommands the backend runs for cold storage. `null` disables cold status and prefetch. |
-| `services.pointy-backend.coldStorage.ingestSocket` | `null` | Ingest socket of the cold-storage store, exported as `POINTY_COLD_STORE_SOCKET`. `null` disables cold status and prefetch. |
+| `services.pointy-backend.coldStorage.command` | `null` | Executable of a cold storage provider implementing the [provider interface](storage.md#provider-interface), exported as `POINTY_COLD_STORAGE_COMMAND`. `null` disables cold storage. |
 | `services.pointy-backend.scratchDirectory` | `null` | Directory users browse to wrap a whole subdirectory into a file-upload step. `null` hides the feature. |
 | `services.pointy-backend.uploadDirectory` | `null` | Where uploads are staged before ingest. `null` uses the system temporary directory. |
 | `services.pointy-backend.agentMemoryMax` | `24G` | Memory limit shared by every agent sandbox, including sandbox `/tmp`. `null` leaves them unlimited. See [Sandbox and credential boundaries](sandbox.md#sandbox-and-credential-boundaries). |

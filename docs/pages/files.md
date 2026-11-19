@@ -26,12 +26,12 @@ For large text files, use `/step-files/seek` or `/src-files/seek`. Supply `id`, 
 
 ### Cold-stored outputs
 
-Instances can offload step outputs to a cold store. When `services.pointy-backend.coldStorage.ingestSocket` (exported as `POINTY_COLD_STORE_SOCKET`) points at a running cold store, and `services.pointy-backend.coldStorage.package` puts the cold-storage command on the backend's PATH, two routes report and drive it:
+Instances can offload step outputs to a cold storage provider, configured as described in [Storage](storage.md#cold-storage). Two routes report and drive it:
 
-- `GET /step-files/cold?id=…&commit=…` returns `{ "cold": <bool>, "onloading": <bool>, "files": [ { "path", "done", "total" } ] }`. `files` lists the output's files that are not local yet, with their fetch progress in bytes (0 when the store reports none); a fetched file leaves `files` even while other files of the output stay cold. `cold` says that `files` is not empty, and `onloading` that the output or one of its files is being fetched. Without a configured cold store, or when its status command fails, times out, or cannot be read, the answer is `{"cold": false, "onloading": false, "files": []}`.
-- `POST /step-files/prefetch?id=…&commit=…&path=<relative file>` asks the cold store to fetch one file. It returns `{ "ok": true, "started": […], "skipped": […], "unknown": […] }` naming the paths it started, skipped, and did not recognize. Without a cold store it returns **503** `cold storage is not configured`; a failing command or unreadable answer returns **502** with the reason.
+- `GET /step-files/cold?id=…&commit=…` returns `{ "files": [ … ] }`, the provider's status for the step's output: each file that is not local, with `path` and `state` (`offloaded`; `copying-back` with `done` and `total` bytes; or `failed` with `error`). Without a provider it returns `{"files": []}`; when the provider's status is unknown it returns **503** `Cannot read the cold storage status. Try again when storage status is available.`
+- `POST /step-files/copy-back?id=…&commit=…&path=<relative file>` asks the provider to start copying one file back and returns **200** with an empty body. Without a provider it returns **503** `Cold storage is not configured.`; when the provider refuses, **502** with its message.
 
-Poll `/step-files/cold` while `onloading` is true; the file listing flips an entry's `cold` to false once the file is local. Source files are never cold.
+Poll `/step-files/cold` after a copy-back until the file leaves `files` or turns `failed`; the file listing then reports its `cold` as false. Source files are never cold.
 
 In the output file browser, an offloaded ZIP shows the same snowflake as any other offloaded file. Copy the ZIP back before browsing its entries. Once the folder listing confirms the archive is local, its row becomes expandable again.
 

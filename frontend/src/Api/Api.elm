@@ -4,6 +4,7 @@ module Api.Api exposing
     , batchProjectsUrl
     , createProject
     , createSrcFile
+    , copyBackColdFile
     , createStep
     , deleteSrcFile
     , fetchAutocomplete
@@ -30,7 +31,6 @@ module Api.Api exposing
     , fetchTokenSession
     , fetchUserRepoInfo
     , postTreeOps
-    , prefetchCold
     , refreshProjectStatus
     , removeReview
     , reviewDiffUrl
@@ -57,7 +57,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, PrefetchResponse, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
+import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -472,16 +472,13 @@ fetchColdStatus stepId commit =
             }
 
 
-prefetchCold : Int -> Maybe String -> List String -> Flow s (Result Http.Error PrefetchResponse)
-prefetchCold stepId commit path =
-    Flow.lift <|
-        Http.post
-            { url =
-                UrlBuilder.absolute [ "backend", "step-files", "prefetch" ]
-                    (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" path) ])
-            , body = Http.emptyBody
-            , expect = Http.expectJson identity Decode.prefetchResponse
-            }
+copyBackColdFile : Int -> Maybe String -> List String -> Flow s (Result Http.Error ())
+copyBackColdFile stepId commit path =
+    request "POST"
+        (UrlBuilder.absolute [ "backend", "step-files", "copy-back" ]
+            (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" path) ])
+        )
+        Http.emptyBody
 
 
 fetchExtras : Int -> Maybe String -> List String -> Flow s (Result Http.Error (Dict String Json.Decode.Value))
