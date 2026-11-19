@@ -246,7 +246,7 @@ viewColdFetchProgress progress =
                 Nothing ->
                     "starting"
     in
-    Html.span [ class "cold-fetch-progress" ]
+    Html.span [ class "cold-fetch-progress", Html.Attributes.title "Copying back from cold storage" ]
         [ Html.span [ class "upload-progress-bar cold-fetch-progress-bar" ]
             [ Html.span
                 (class "upload-progress-fill"
@@ -283,11 +283,9 @@ viewColdFile stepId path availability =
 
         ( title, body ) =
             case availability of
-                Model.Core.Unfreezing progress ->
+                Model.Core.Unfreezing _ ->
                     ( "Copying back from cold storage…"
-                    , [ viewColdFetchProgress progress
-                      , note "The copy continues on the server even if you leave this page. The file's buttons appear when it is done."
-                      ]
+                    , [ note "The copy continues on the server even if you leave this page. The file's buttons appear when it is done." ]
                     )
 
                 Model.Core.UnfreezeFailed ->
@@ -592,6 +590,12 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                             ( availability, Just (OutputDir stepId_ _) ) ->
                                 viewColdFile stepId_ path availability
+
+                            _ ->
+                                Html.nothing
+                        , case file.availability of
+                            Model.Core.Unfreezing progress ->
+                                viewColdFetchProgress progress
 
                             _ ->
                                 Html.nothing
