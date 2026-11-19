@@ -39,7 +39,7 @@ import EffectRunner (runAppEffects)
 import Effects (App, AppM, Eval, Nix, listDerivationRootJobs, pathValid, rootDerivationForJob, rootStorePath, unrootDerivationRoot, unrootDerivationRootsForJob)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (finally, onException)
-import Handlers.Cold (offloadedFilesNamedIn, offloadedReadNote, stepIdsNamedIn, unreadableLines)
+import Handlers.Cold (offloadedFilesNamedIn, offloadedReadNote, stepIdsNamedIn, stepLabel, unreadableLines)
 import Handlers.StepOutput (resolveStepOutPath)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import Servant (NoContent (..), err404, err500, errBody)
@@ -106,7 +106,7 @@ stepLogHandler eid commit = do
             let rendered = renderResolvedLog rl
                 unreadable = unreadableLines rendered
             namedOutputs <- fmap concat $ forM (stepIdsNamedIn unreadable) $ \stepId ->
-                ((\outPath -> [("step " <> T.pack (show stepId), outPath)]) <$> resolveStepOutPath stepId commit)
+                ((\outPath -> [(stepLabel stepId, outPath)]) <$> resolveStepOutPath stepId commit)
                     `catchError` \_ -> pure []
             offloaded <- if null unreadable then pure [] else lift (offloadedFilesNamedIn namedOutputs rendered)
             pure $

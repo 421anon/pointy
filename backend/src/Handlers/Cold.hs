@@ -12,6 +12,7 @@ module Handlers.Cold (
     offloadedFilesNamedIn,
     offloadedFilesNamed,
     stepIdsNamedIn,
+    stepLabel,
     unreadableLines,
     offloadedReadNote,
     refuseColdFile,
@@ -271,15 +272,24 @@ stepIdsNamedIn unreadable =
             , Just stepId <- [readMaybe (T.unpack digits)]
             ]
 
+stepLabel :: Int -> Text
+stepLabel stepId = "step " <> T.pack (show stepId)
+
 offloadedFilesNamed :: [Text] -> [(Text, Set Text)] -> [(Text, Text)]
 offloadedFilesNamed unreadable coldByLabel =
     [ (label, file)
     | (label, coldFiles) <- coldByLabel
-    , file <- Set.toList coldFiles
-    , any (names file) unreadable
+    , let namedByOwnedLines = Set.fromList (concat [namedIn coldFiles line | line <- unreadable, ownedBy label line])
+    , file <- Set.toList namedByOwnedLines
     ]
   where
-    names file line = file `T.isPrefixOf` line || any (\boundary -> (boundary <> file) `T.isInfixOf` line) ["/", " ", "'", "\""]
+    namedIn coldFiles line =
+        let named = filter (names line) (Set.toList coldFiles)
+         in filter (\file -> not (any (\longer -> longer /= file && file `T.isSuffixOf` longer) named)) named
+    names line file = file `T.isPrefixOf` line || any (\boundary -> (boundary <> file) `T.isInfixOf` line) ["/", " ", "'", "\""]
+    ownedBy label line = case map stepLabel (stepIdsNamedIn [line]) ++ storePathsIn line of
+        [] -> True
+        owners -> label `elem` owners
 
 offloadedReadNote :: (Text, Text) -> Text
 offloadedReadNote (label, file) =

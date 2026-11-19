@@ -23,11 +23,15 @@ main = do
     assertEqual
         "offloaded files named in a build log, by step-relative or store path"
         [ ("step 428", "notes.txt")
+        , ("step 428", "plain.txt")
         , ("/nix/store/bbbb-data", "nested dir/table.csv")
         , ("/nix/store/cccc-single", "cccc-single")
+        , ("/nix/store/dddd-data", "a b.csv")
+        , ("/nix/store/eeee-data", "a b.csv")
+        , ("/nix/store/eeee-data", "b.csv")
         ]
         (offloadedFilesNamed (unreadableLines buildLog) coldByLabel)
-    assertEqual "steps named by unreadable lines" [7, 428] (stepIdsNamedIn (unreadableLines buildLog))
+    assertEqual "steps named by unreadable lines" [7, 428, 429] (stepIdsNamedIn (unreadableLines buildLog))
     assertEqual "prefetch response" (Right (PrefetchResponse True ["SRR1.fastq.gz"] [] [])) (parsePrefetchResponse prefetch)
     assertEqual "prefetch error" (Left "no token") (parsePrefetchResponse "{\"ok\":false,\"error\":\"no token\"}")
 
@@ -39,13 +43,20 @@ buildLog =
         , "sh: can't open /nix/store/cccc-single: I/O error"
         , "cat: 12/summary.txt: No such file or directory"
         , "cat: ./7/my-other.txt: Input/output error"
+        , "cat: 429/shared.txt: Input/output error"
+        , "plain.txt: Input/output error"
+        , "error: /nix/store/dddd-data/a b.csv is offloaded to cold storage; reads do not copy it back, so copy it back explicitly with prefetch or onload first"
+        , "cat: '/nix/store/eeee-data/a b.csv': Input/output error"
+        , "cat: /nix/store/eeee-data/b.csv: Input/output error"
         ]
 
 coldByLabel :: [(T.Text, Set.Set T.Text)]
 coldByLabel =
-    [ ("step 428", Set.fromList ["notes.txt", "summary.txt", "other.txt"])
+    [ ("step 428", Set.fromList ["notes.txt", "summary.txt", "other.txt", "shared.txt", "plain.txt"])
     , ("/nix/store/bbbb-data", Set.fromList ["nested dir/table.csv"])
     , ("/nix/store/cccc-single", Set.fromList ["cccc-single"])
+    , ("/nix/store/dddd-data", Set.fromList ["a b.csv", "b.csv"])
+    , ("/nix/store/eeee-data", Set.fromList ["a b.csv", "b.csv"])
     ]
 
 evictedStatus :: ColdStatus
