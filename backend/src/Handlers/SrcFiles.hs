@@ -81,7 +81,7 @@ getStepSrcFilesPath mCommit stepId =
 
 listSrcFilesHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM [DirEntry]
 listSrcFilesHandler stepId mCommit mRel =
-    lift (resolveStepSrcFiles mCommit stepId) >>= either throwError (maybe (return []) (\basePath -> listHandler Set.empty (T.pack basePath) mRel))
+    lift (resolveStepSrcFiles mCommit stepId) >>= either throwError (maybe (return []) (\basePath -> listHandler (Just Set.empty) (T.pack basePath) mRel))
 
 downloadSrcFilesHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
 downloadSrcFilesHandler stepId mCommit rel = do

@@ -43,7 +43,8 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
-import Effects (AppEffects, AppM, Eval, Nix, Slurm)
+import Effects (AppEffects, AppM, ColdStorage, Eval, Nix, Slurm)
+import Handlers.Cold (coldFilesFor)
 import GHC.Generics (Generic)
 import ProjectFiles (rewriteNixFile, stepFilePath)
 import BuildStatus (StepPaths (..), checkStatus, resolveStatuses)
@@ -217,7 +218,7 @@ reviewDiffHandler stepId mCommit = Tagged $ \_ respond -> do
             ]
             (TLE.encodeUtf8 (TL.fromStrict html))
 
-renderReport :: (Nix :> es, IOE :> es) => Int -> FilePath -> FilePath -> ExceptT String (Eff es) FilePath
+renderReport :: (Nix :> es, ColdStorage :> es, IOE :> es) => Int -> FilePath -> FilePath -> ExceptT String (Eff es) FilePath
 renderReport stepId reviewed viewed = do
     hashes <- storeHashes [reviewed, viewed]
     when (Map.notMember reviewed hashes) $ throwError $ T.unpack (reviewedOutputUnbuiltDetail stepId reviewed)
@@ -227,6 +228,12 @@ renderReport stepId reviewed viewed = do
     let reportPath = dir </> "step-" ++ show stepId ++ "-" ++ storeHash reviewed ++ "-" ++ storeHash viewed ++ ".html"
     cached <- liftIO $ createDirectoryIfMissing True dir >> doesFileExist reportPath
     unless cached $ do
+        offloaded <- lift (offloadedOf [("reviewed", reviewed), ("viewed", viewed)])
+        unless (null offloaded) $
+            throwError $
+                "Comparing reads files that are offloaded to cold storage: "
+                    ++ T.unpack (T.intercalate ", " offloaded)
+                    ++ ". Copy them back from their snowflakes in the file browser, then compare again."
         reviewedSource <- liftIO $ resolveStorePath reviewed
         viewedSource <- liftIO $ resolveStorePath viewed
         let relabel = T.replace (T.pack viewedSource) (T.pack viewed) . T.replace (T.pack reviewedSource) (T.pack reviewed)
@@ -240,6 +247,11 @@ renderReport stepId reviewed viewed = do
     pure reportPath
   where
     storeHash = take 32 . takeFileName
+    offloadedOf outputs =
+        concat
+            <$> mapM
+                (\(label, output) -> maybe [] (map (\file -> file <> " of the " <> label <> " output") . Set.toList) <$> coldFilesFor (T.pack output))
+                outputs
     comparisonArgs out reviewedSource viewedSource =
         words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
             ++ ["--html", out, reviewedSource, viewedSource]

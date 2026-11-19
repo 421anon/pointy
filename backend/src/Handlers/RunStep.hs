@@ -21,9 +21,9 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, catch)
-import Control.Monad (foldM, forM_, unless, void, when)
+import Control.Monad (foldM, forM, forM_, unless, void, when)
 
-import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), catchError, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:))
@@ -39,6 +39,8 @@ import EffectRunner (runAppEffects)
 import Effects (App, AppM, Eval, Nix, listDerivationRootJobs, pathValid, rootDerivationForJob, rootStorePath, unrootDerivationRoot, unrootDerivationRootsForJob)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (finally, onException)
+import Handlers.Cold (offloadedFilesNamedIn, offloadedReadNote, stepIdsNamedIn, unreadableLines)
+import Handlers.StepOutput (resolveStepOutPath)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import Servant (NoContent (..), err404, err500, errBody)
 import System.Exit (ExitCode (..))
@@ -100,7 +102,17 @@ stepLogHandler eid commit = do
                     { errBody =
                         TLE.encodeUtf8 (TL.pack ("No build log available for step " ++ show eid))
                     }
-        Right (Just rl) -> return (renderResolvedLog rl)
+        Right (Just rl) -> do
+            let rendered = renderResolvedLog rl
+                unreadable = unreadableLines rendered
+            namedOutputs <- fmap concat $ forM (stepIdsNamedIn unreadable) $ \stepId ->
+                ((\outPath -> [("step " <> T.pack (show stepId), outPath)]) <$> resolveStepOutPath stepId commit)
+                    `catchError` \_ -> pure []
+            offloaded <- if null unreadable then pure [] else lift (offloadedFilesNamedIn namedOutputs rendered)
+            pure $
+                if null offloaded
+                    then rendered
+                    else T.unlines (map offloadedReadNote offloaded) <> "-----\n" <> rendered
 
 renderResolvedLog :: ResolvedLog -> T.Text
 renderResolvedLog (ResolvedLog _ logText StepDrv) = TE.decodeUtf8Lenient logText

@@ -4,7 +4,8 @@ module Main (main) where
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Set as Set
-import Handlers.Cold (ColdFile (..), ColdStatus (..), PrefetchResponse (..), parseColdFiles, parseColdStatus, parsePrefetchResponse)
+import qualified Data.Text as T
+import Handlers.Cold (ColdFile (..), ColdStatus (..), PrefetchResponse (..), offloadedFilesNamed, parseColdFiles, parseColdStatus, parsePrefetchResponse, stepIdsNamedIn, unreadableLines)
 
 main :: IO ()
 main = do
@@ -13,13 +14,39 @@ main = do
     assertEqual "a fetched file of a still-evicted dataset is no longer listed" (Just partlyFetchedStatus) (parseColdStatus partlyFetched)
     assertEqual "a file fetch counts as onloading before the dataset phase says so" (Just fetchingStatus) (parseColdStatus fetchingJson)
     assertEqual "an output the cold store does not track is not cold" (Just (ColdStatus False False [])) (parseColdStatus untracked)
-    assertEqual "evicted cold files" (Set.singleton "SRR1.fastq.gz") (parseColdFiles evicted)
-    assertEqual "onloading cold files skip local files" (Set.singleton "SRR1.fastq.gz") (parseColdFiles onloadingJson)
+    assertEqual "evicted cold files" (Just (Set.singleton "SRR1.fastq.gz")) (parseColdFiles evicted)
+    assertEqual "onloading cold files skip local files" (Just (Set.singleton "SRR1.fastq.gz")) (parseColdFiles onloadingJson)
     assertEqual "failed status has no dataset" Nothing (parseColdStatus "{\"ok\":false,\"error\":\"boom\"}")
+    assertEqual "failed status leaves the cold files unknown" Nothing (parseColdFiles "{\"ok\":false,\"error\":\"boom\"}")
     assertEqual "malformed status" Nothing (parseColdStatus "not json")
-    assertEqual "unknown path has no files" Set.empty (parseColdFiles "{\"ok\":true,\"status\":{\"datasets\":[]}}")
+    assertEqual "unknown path has no files" (Just Set.empty) (parseColdFiles "{\"ok\":true,\"status\":{\"datasets\":[]}}")
+    assertEqual
+        "offloaded files named in a build log, by step-relative or store path"
+        [ ("step 428", "notes.txt")
+        , ("/nix/store/bbbb-data", "nested dir/table.csv")
+        , ("/nix/store/cccc-single", "cccc-single")
+        ]
+        (offloadedFilesNamed (unreadableLines buildLog) coldByLabel)
+    assertEqual "steps named by unreadable lines" [7, 428] (stepIdsNamedIn (unreadableLines buildLog))
     assertEqual "prefetch response" (Right (PrefetchResponse True ["SRR1.fastq.gz"] [] [])) (parsePrefetchResponse prefetch)
     assertEqual "prefetch error" (Left "no token") (parsePrefetchResponse "{\"ok\":false,\"error\":\"no token\"}")
+
+buildLog :: T.Text
+buildLog =
+    T.unlines
+        [ "cat: 428/notes.txt: Input/output error"
+        , "OSError: [Errno 5] Input/output error: '/nix/store/bbbb-data/nested dir/table.csv'"
+        , "sh: can't open /nix/store/cccc-single: I/O error"
+        , "cat: 12/summary.txt: No such file or directory"
+        , "cat: ./7/my-other.txt: Input/output error"
+        ]
+
+coldByLabel :: [(T.Text, Set.Set T.Text)]
+coldByLabel =
+    [ ("step 428", Set.fromList ["notes.txt", "summary.txt", "other.txt"])
+    , ("/nix/store/bbbb-data", Set.fromList ["nested dir/table.csv"])
+    , ("/nix/store/cccc-single", Set.fromList ["cccc-single"])
+    ]
 
 evictedStatus :: ColdStatus
 evictedStatus = ColdStatus True False [ColdFile "SRR1.fastq.gz" 0 0]

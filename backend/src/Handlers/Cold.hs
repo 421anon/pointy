@@ -1,13 +1,21 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Handlers.Cold (
     ColdStatus (..),
     ColdFile (..),
     PrefetchResponse (..),
     coldFilesFor,
+    offloadedEnclosing,
+    offloadedFilesNamedIn,
+    offloadedFilesNamed,
+    stepIdsNamedIn,
+    unreadableLines,
+    offloadedReadNote,
     refuseColdFile,
+    refuseOffloadedIn,
     coldStatusHandler,
     prefetchHandler,
     parseColdStatus,
@@ -15,13 +23,15 @@ module Handlers.Cold (
     parsePrefetchResponse,
 ) where
 
-import Control.Monad (forM_, guard, when)
+import Control.Exception (IOException, catch)
+import Control.Monad (forM, forM_, guard)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.Char (isAlphaNum, isDigit)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.List (find, isPrefixOf)
 import Data.Set (Set)
@@ -29,8 +39,8 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Effectful (UnliftStrategy (SeqUnlift), withEffToIO)
-import Effects (AppM, coldStorageConfigured, coldStoragePrefetch, coldStorageStatus)
+import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), withEffToIO, (:>))
+import Effects (AppM, ColdStorage, coldStorageConfigured, coldStoragePrefetch, coldStorageStatus)
 import GHC.Generics (Generic)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixStore (rootedPath)
@@ -39,6 +49,7 @@ import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache
 import System.Directory (getSymbolicLinkTarget, pathIsSymbolicLink)
 import System.FilePath (joinPath, normalise, splitDirectories)
 import System.IO.Unsafe (unsafePerformIO)
+import Text.Read (readMaybe)
 
 data ColdStatus = ColdStatus
     { cold :: Bool
@@ -139,9 +150,12 @@ instance FromJSON PrefetchLine where
 parseColdStatus :: BS.ByteString -> Maybe ColdStatus
 parseColdStatus = fmap datasetColdStatus . firstDataset
 
-parseColdFiles :: BS.ByteString -> Set Text
-parseColdFiles bytes =
-    maybe Set.empty (Set.fromList . map (T.pack . normalise . T.unpack) . datasetColdPaths) (firstDataset bytes)
+parseColdFiles :: BS.ByteString -> Maybe (Set Text)
+parseColdFiles bytes = do
+    line <- decodeStrict bytes
+    guard (statusLineOk line)
+    let dataset = listToMaybe (maybe [] storeStatusDatasets (statusLineStatus line))
+    pure $ maybe Set.empty (Set.fromList . map (T.pack . normalise . T.unpack) . datasetColdPaths) dataset
 
 parsePrefetchResponse :: BS.ByteString -> Either Text PrefetchResponse
 parsePrefetchResponse bytes = case eitherDecodeStrict bytes of
@@ -200,28 +214,76 @@ coldOutPath stepId mCommit = case mCommit of
             withEffToIO SeqUnlift $ \unlift ->
                 cachedSuccess coldOutPaths (stepId, commit) (unlift (runExceptT (resolveStepOutPath stepId (Just commit))))
 
-coldFilesFor :: Text -> AppM (Set Text)
+coldFilesFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe (Set Text))
 coldFilesFor storePath = do
-    configured <- lift coldStorageConfigured
+    configured <- coldStorageConfigured
     if not configured
-        then pure Set.empty
+        then pure (Just Set.empty)
         else do
             datasetPath <- liftIO (coldDatasetPath storePath)
-            result <- lift (coldStorageStatus datasetPath)
-            pure $ either (const Set.empty) parseColdFiles result
+            either (const Nothing) parseColdFiles <$> coldStorageStatus datasetPath
+
+offloadedEnclosing :: Set Text -> FilePath -> Maybe Text
+offloadedEnclosing coldFiles rel = find (`Set.member` coldFiles) enclosing
+  where
+    components = dropWhile (== "/") (splitDirectories (normalise rel))
+    enclosing = [T.pack (joinPath (take n components)) | n <- [1 .. length components]]
 
 refuseColdFile :: Text -> FilePath -> AppM ()
 refuseColdFile storePath rel = do
-    configured <- lift coldStorageConfigured
-    when configured $ do
-        datasetPath <- liftIO (coldDatasetPath storePath)
-        result <- lift (coldStorageStatus datasetPath)
-        let coldFiles = either (const Set.empty) parseColdFiles result
-            components = dropWhile (== "/") (splitDirectories (normalise rel))
-            enclosing = [T.pack (joinPath (take n components)) | n <- [1 .. length components]]
-        forM_ (find (`Set.member` coldFiles) enclosing) $ \coldPath -> do
-            _ <- lift (coldStoragePrefetch datasetPath (T.unpack coldPath))
-            throwError err409{errBody = "This file is in cold storage. It is being fetched; try again once it is local."}
+    coldFiles <- lift (coldFilesFor storePath)
+    refuseOffloadedIn (fromMaybe Set.empty coldFiles) rel
+
+refuseOffloadedIn :: Set Text -> FilePath -> AppM ()
+refuseOffloadedIn coldFiles rel =
+    forM_ (offloadedEnclosing coldFiles rel) $ \_ ->
+        throwError err409{errBody = "This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again."}
+
+offloadedFilesNamedIn :: (ColdStorage :> es, IOE :> es) => [(Text, Text)] -> Text -> Eff es [(Text, Text)]
+offloadedFilesNamedIn labelledOutputs output = do
+    let unreadable = unreadableLines output
+        named = labelledOutputs ++ [(storePath, storePath) | storePath <- concatMap storePathsIn unreadable]
+    coldByLabel <- forM named $ \(label, storePath) -> (,) label . fromMaybe Set.empty <$> coldFilesFor storePath
+    pure (offloadedFilesNamed unreadable coldByLabel)
+
+unreadableLines :: Text -> [Text]
+unreadableLines = filter reportsUnreadable . T.lines
+  where
+    reportsUnreadable line = any (`T.isInfixOf` line) ["Input/output error", "I/O error", "offloaded to cold storage"]
+
+storePathsIn :: Text -> [Text]
+storePathsIn line =
+    [ "/nix/store/" <> base
+    | (_, match) <- T.breakOnAll "/nix/store/" line
+    , let base = T.takeWhile (\c -> isAlphaNum c || c `elem` ("+-._?=" :: String)) (T.drop (T.length "/nix/store/") match)
+    , not (T.null base)
+    ]
+
+stepIdsNamedIn :: [Text] -> [Int]
+stepIdsNamedIn unreadable =
+    Set.toList $
+        Set.fromList
+            [ stepId
+            | line <- unreadable
+            , token <- T.split (`elem` (" '\"`:(" :: String)) line
+            , let (digits, rest) = T.span isDigit (fromMaybe token (T.stripPrefix "./" token))
+            , not (T.null digits) && "/" `T.isPrefixOf` rest
+            , Just stepId <- [readMaybe (T.unpack digits)]
+            ]
+
+offloadedFilesNamed :: [Text] -> [(Text, Set Text)] -> [(Text, Text)]
+offloadedFilesNamed unreadable coldByLabel =
+    [ (label, file)
+    | (label, coldFiles) <- coldByLabel
+    , file <- Set.toList coldFiles
+    , any (names file) unreadable
+    ]
+  where
+    names file line = file `T.isPrefixOf` line || any (\boundary -> (boundary <> file) `T.isInfixOf` line) ["/", " ", "'", "\""]
+
+offloadedReadNote :: (Text, Text) -> Text
+offloadedReadNote (label, file) =
+    file <> " of " <> label <> " is offloaded to cold storage, so it could not be read. Copy it back from its snowflake in the file browser, then try again."
 
 coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus
 coldStatusHandler stepId mCommit = do
@@ -250,7 +312,7 @@ prefetchHandler stepId mCommit rel = do
 coldDatasetPath :: Text -> IO Text
 coldDatasetPath outPath = do
     let real = rootedPath (T.unpack outPath)
-    symlink <- pathIsSymbolicLink real
+    symlink <- pathIsSymbolicLink real `catch` \(_ :: IOException) -> pure False
     if not symlink
         then pure outPath
         else do

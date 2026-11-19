@@ -35,7 +35,7 @@ import Effectful (Eff, IOE, (:>))
 import EffectRunner (runAppEffects)
 import Effects (AppM, Nix, probeMimeType)
 import GHC.Generics (Generic)
-import Handlers.Cold (coldFilesFor, refuseColdFile)
+import Handlers.Cold (coldFilesFor, refuseColdFile, refuseOffloadedIn)
 import Handlers.RunStep (buildExtras)
 import Handlers.StepOutput (resolveStepOutPath)
 
@@ -75,7 +75,7 @@ data DirEntry = DirEntry
 stepListHandler :: Int -> Maybe Text -> Maybe FilePath -> AppM [DirEntry]
 stepListHandler stepId mCommit mRel = do
     outPath <- resolveStepOutPath stepId mCommit
-    coldFiles <- coldFilesFor outPath
+    coldFiles <- lift (coldFilesFor outPath)
     listHandler coldFiles outPath mRel
 
 stepDownloadHandler :: Int -> Maybe Text -> FilePath -> AppM (Headers '[Header "Content-Disposition" Text, Header "Content-Length" Integer] (S.SourceT IO BS.ByteString))
@@ -136,8 +136,8 @@ storeFilesHandler' segments respond = do
             let headers = [("Content-Type", TE.encodeUtf8 mime)]
             respond $ responseLBS status200 headers lbs
 
-listHandler :: Set Text -> Text -> Maybe FilePath -> AppM [DirEntry]
-listHandler coldFiles outPathText mRel = do
+listHandler :: Maybe (Set Text) -> Text -> Maybe FilePath -> AppM [DirEntry]
+listHandler mColdFiles outPathText mRel = do
     let basePath = T.unpack outPathText
     assertNixStorePath basePath
     let rel = fromMaybe "" mRel
@@ -145,16 +145,19 @@ listHandler coldFiles outPathText mRel = do
     assertInside absPath basePath
     mZipResult <- liftIO $ resolveZipPath basePath rel
     case mZipResult of
-        Just (zipPath, internalPath) ->
+        Just (zipPath, internalPath) -> do
+            refuseOffloadedIn (fromMaybe Set.empty mColdFiles) rel
             map zipItemToDirEntry <$> liftZip err400 (Zip.listZipDirectory zipPath internalPath)
         Nothing -> do
             names <- liftIO $ listDirectory =<< resolveStorePath absPath
-            liftIO $ mapConcurrently (runAppEffects . buildDirEntry coldFiles rel absPath) names
+            liftIO $ mapConcurrently (runAppEffects . buildDirEntry mColdFiles rel absPath) names
 
-buildDirEntry :: (Nix :> es, IOE :> es) => Set Text -> FilePath -> FilePath -> FilePath -> Eff es DirEntry
-buildDirEntry coldFiles rel absPath n = do
+buildDirEntry :: (Nix :> es, IOE :> es) => Maybe (Set Text) -> FilePath -> FilePath -> FilePath -> Eff es DirEntry
+buildDirEntry mColdFiles rel absPath n = do
     let logical = absPath </> n
-        isCold = T.pack (normalise (rel </> n)) `Set.member` coldFiles
+        entryPath = T.pack (normalise (rel </> n))
+        isCold = maybe False (Set.member entryPath) mColdFiles
+        mayBeOffloaded = maybe True (Set.member entryPath) mColdFiles
     p <- liftIO $ resolveStorePath logical
     isD <- liftIO $ doesDirectoryExist p
     if isD
@@ -168,7 +171,7 @@ buildDirEntry coldFiles rel absPath n = do
                 else do
                     sz <- liftIO $ getFileSize p
                     (isViewable, isSeekable, mime) <-
-                        if isCold
+                        if mayBeOffloaded
                             then pure (viewability sz (mimeTypeByExtension logical))
                             else checkViewableAndMime logical p sz
                     pure $ DirEntry (T.pack n) False sz isViewable isSeekable mime isCold

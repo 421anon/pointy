@@ -20,6 +20,8 @@ An open preview stays open when a new version leaves that step's build unchanged
 
 If your installation offloads outputs to cold storage, a file that has been offloaded is no longer on the server, and its row shows only a blue snowflake: it cannot be viewed, shared, compared, or downloaded. Click the snowflake and choose **Copy back to this server** to copy it back from cold storage; larger files take longer. The file's row shows the progress next to the snowflake, the copy continues on the server even if you leave the page, and nothing opens or downloads by itself. Once the file is back, its row's usual buttons appear and it works like any other file until the output is offloaded again. If copying back fails, the snowflake's popover offers **Try again**. A link to an offloaded file highlights its row without copying it back.
 
+A file comes back only when someone copies it back, as the snowflake does; reading it never does. A step that reads an offloaded file fails, and its build log starts with a note naming the file. Comparing with a review fails the same way, and the agent tells you which file it could not read. Copy the file back from its snowflake, then run, compare, or ask again.
+
 ![A step's Output Files with hello on cold storage, marked by a blue snowflake.](screenshots/light/output-files-cold-storage.png)
 
 HTML reports open inline; their magnifier buttons zoom in and out. Links in a report work as they would outside Pointy: clicking one can navigate the whole tab, and popups open in a new tab. Use the browser's Back button to return.
