@@ -2898,8 +2898,17 @@ refreshUnfrozenFile recordId commit path =
         |> FlowError.foldResult
             (\entries ->
                 case List.last path |> Maybe.andThen (\name -> Dict.get name entries) of
-                    Just ((Model.File fresh) as entry) ->
-                        Flow.when (fresh.availability == Model.Local)
+                    Just entry ->
+                        let
+                            local =
+                                case entry of
+                                    Model.File fresh ->
+                                        fresh.availability == Model.Local
+
+                                    Model.Folder _ ->
+                                        True
+                        in
+                        Flow.when local
                             (Flow.setAll (directoryItemAtPath recordId path << where_ (has (file << fileAvailability << where_ Model.isUnfreezing))) entry)
 
                     _ ->

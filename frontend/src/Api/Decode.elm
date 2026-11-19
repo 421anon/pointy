@@ -451,10 +451,12 @@ notice =
 
 directoryItem : FileView -> Decoder ( String, DirectoryItem )
 directoryItem fileView =
-    Decode.field "isDir" Decode.bool
+    Decode.succeed Tuple.pair
+        |> required "isDir" Decode.bool
+        |> optional "cold" Decode.bool False
         |> Decode.andThen
-            (\isDir ->
-                if isDir then
+            (\( isDir, cold ) ->
+                if isDir && not cold then
                     Decode.succeed
                         (\name size mimeType ->
                             ( name
@@ -478,7 +480,7 @@ directoryItem fileView =
 
                 else
                     Decode.succeed
-                        (\name size viewable seekable mimeType cold ->
+                        (\name size viewable seekable mimeType ->
                             ( name
                             , File
                                 { content = NotAsked
@@ -506,7 +508,6 @@ directoryItem fileView =
                         |> required "viewable" Decode.bool
                         |> optional "seekable" Decode.bool False
                         |> required "mimeType" (Decode.nullable Decode.string)
-                        |> optional "cold" Decode.bool False
             )
 
 

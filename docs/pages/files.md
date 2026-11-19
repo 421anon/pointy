@@ -33,6 +33,10 @@ Instances can offload step outputs to a cold store. When `services.pointy-backen
 
 Poll `/step-files/cold` while `onloading` is true; the file listing flips an entry's `cold` to false once the file is local. Source files are never cold.
 
+In the output file browser, an offloaded ZIP shows the same snowflake as any other offloaded file. Copy the ZIP back before browsing its entries. Once the folder listing confirms the archive is local, its row becomes expandable again.
+
+Browsing inside a ZIP needs the archive's contents. If the configured cold store cannot report its status, the listing returns **503** rather than opening the archive.
+
 ### Artifacts as Turtle
 
 `GET /rdf/artifact/<folder path>/<step-id>/<full-commit>` serves an artifact permalink's linked data as `text/turtle; charset=utf-8`, with `Cache-Control: public, max-age=31536000, immutable` and `Vary: Accept`. Write the folder path as folder ids (omit it for Home), then the step id and a full 40-character lowercase hex commit. Without `?path` the document describes the step's output and the artifacts upstream of it; `?path=<file>` selects one output file instead, as the permalink's query does. The supplied nginx vhost rewrites `/artifact/...` requests whose `Accept` includes `text/turtle` to this route, so the HTML permalink keeps serving the frontend. A malformed route or a step that is not in that folder at the commit returns 404 with text; a commit the backend cannot find after one fetch returns 404 `Git commit <c> is unavailable after fetching the user repository`, and a revision from before the stdlib published linked data returns 404 naming the commit. Set `services.pointy-host.linkedDataBase` to an origin to prefix the response with `@base <origin/> .`.
