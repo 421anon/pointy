@@ -238,29 +238,23 @@ viewColdFetchProgress progress =
                             Just (round (toFloat done / toFloat total * 100))
                     )
 
-        message =
+        ( valueAttrs, fillAttr ) =
             case mPercent of
                 Just percent ->
-                    String.fromInt percent ++ "%"
+                    ( [ Html.Attributes.attribute "aria-valuenow" (String.fromInt percent) ]
+                    , Html.Attributes.style "width" (String.fromInt percent ++ "%")
+                    )
 
                 Nothing ->
-                    "starting"
+                    ( [], class "upload-progress-fill--indeterminate" )
     in
-    Html.span [ class "cold-fetch-progress", Html.Attributes.title "Copying back from cold storage" ]
-        [ Html.span [ class "upload-progress-bar cold-fetch-progress-bar" ]
-            [ Html.span
-                (class "upload-progress-fill"
-                    :: (case mPercent of
-                            Just percent ->
-                                [ Html.Attributes.style "width" (String.fromInt percent ++ "%") ]
-
-                            Nothing ->
-                                [ class "upload-progress-fill--indeterminate" ]
-                       )
-                )
-                []
-            ]
-        , Html.span [ class "cold-fetch-progress-label" ] [ Html.text message ]
+    Html.span
+        (class "upload-progress-bar cold-fetch-progress-bar"
+            :: Html.Attributes.attribute "role" "progressbar"
+            :: Html.Attributes.attribute "aria-label" "Copying back from cold storage"
+            :: valueAttrs
+        )
+        [ Html.span [ class "upload-progress-fill", fillAttr ] []
         ]
 
 

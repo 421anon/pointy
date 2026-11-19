@@ -4180,21 +4180,9 @@ body:has(dialog[open]) {
   animation: upload-progress-indeterminate 1.2s ease-in-out infinite;
 }
 
-.cold-fetch-progress {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-}
-
 .cold-fetch-progress-bar {
   width: 80px;
   display: inline-block;
-}
-
-.cold-fetch-progress-label {
-  white-space: nowrap;
 }
 
 @keyframes upload-progress-indeterminate {
