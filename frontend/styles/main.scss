@@ -1263,8 +1263,9 @@ body {
   background: var(--state-cold-outline);
 
   .material-symbols-outlined {
-    color: var(--color-yellow-400);
+    color: color-mix(in srgb, var(--color-red-400) 85%, var(--color-yellow-400));
     font-size: var(--font-size-md);
+    transform: translateY(-0.1em);
   }
 
   &:hover {

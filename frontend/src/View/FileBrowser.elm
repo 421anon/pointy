@@ -270,7 +270,7 @@ viewColdFile stepId path availability =
                 , type_ "button"
                 , Html.Events.onClick (Actions.unfreezeOutputFile stepId path)
                 ]
-                [ icon False "mode_heat", Html.text label ]
+                [ icon True "mode_heat", Html.text label ]
 
         note text =
             Html.p [ class "file-cold-popover-note" ] [ Html.text text ]
