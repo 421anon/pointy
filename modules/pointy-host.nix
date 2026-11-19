@@ -186,7 +186,7 @@ in
       description = ''
         Executable of a cold storage provider, exported as POINTY_COLD_STORAGE_COMMAND.
         The backend runs `<command> status <output-path>` and
-        `<command> copy-back <output-path> <relative-path>` as described in the
+        `<command> onload <output-path> <relative-path>` as described in the
         storage documentation, so the provider must reach its own service from the
         backend's user. Null disables cold storage.
       '';

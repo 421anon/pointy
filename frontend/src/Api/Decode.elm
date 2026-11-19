@@ -1042,11 +1042,11 @@ coldFileState state =
         "offloaded" ->
             Decode.succeed Model.Offloaded
 
-        "copying-back" ->
-            Decode.map2 Model.CopyingBack (Decode.field "done" Decode.int) (Decode.field "total" Decode.int)
+        "onloading" ->
+            Decode.map2 Model.Onloading (Decode.field "done" Decode.int) (Decode.field "total" Decode.int)
 
         "failed" ->
-            Decode.map Model.CopyBackFailed (Decode.field "error" Decode.string)
+            Decode.map Model.OnloadFailed (Decode.field "error" Decode.string)
 
         other ->
             Decode.fail ("unknown cold storage file state " ++ other)

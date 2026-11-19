@@ -4,7 +4,6 @@ module Api.Api exposing
     , batchProjectsUrl
     , createProject
     , createSrcFile
-    , copyBackColdFile
     , createStep
     , deleteSrcFile
     , fetchAutocomplete
@@ -30,6 +29,7 @@ module Api.Api exposing
     , fetchStepLog
     , fetchTokenSession
     , fetchUserRepoInfo
+    , onloadColdFile
     , postTreeOps
     , refreshProjectStatus
     , removeReview
@@ -472,10 +472,10 @@ fetchColdStatus stepId commit =
             }
 
 
-copyBackColdFile : Int -> Maybe String -> List String -> Flow s (Result Http.Error ())
-copyBackColdFile stepId commit path =
+onloadColdFile : Int -> Maybe String -> List String -> Flow s (Result Http.Error ())
+onloadColdFile stepId commit path =
     request "POST"
-        (UrlBuilder.absolute [ "backend", "step-files", "copy-back" ]
+        (UrlBuilder.absolute [ "backend", "step-files", "onload" ]
             (stepFileQuery stepId commit ++ [ UrlBuilder.string "path" (String.join "/" path) ])
         )
         Http.emptyBody

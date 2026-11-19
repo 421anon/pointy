@@ -200,8 +200,8 @@ type alias ColdFile =
 
 type ColdFileState
     = Offloaded
-    | CopyingBack Int Int
-    | CopyBackFailed String
+    | Onloading Int Int
+    | OnloadFailed String
 
 
 type alias StatusReport =

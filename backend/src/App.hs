@@ -16,7 +16,7 @@ import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHand
 import Handlers.ArtifactRdf (artifactRdfHandler)
 import Handlers.Autocomplete (autocompleteHandler)
 import Handlers.ClusterStream (clusterStatusStreamHandler)
-import Handlers.Cold (coldStatusHandler, copyBackHandler)
+import Handlers.Cold (coldStatusHandler, onloadHandler)
 import Handlers.TokenAuth (tokenAuthHandler, tokenLoginHandler, tokenLogoutHandler, tokenSessionHandler)
 import Handlers.CommitHash (getCommitHashHandler)
 import Handlers.IngestStream (ingestStreamHandler)
@@ -52,7 +52,7 @@ server =
         :<|> getUserRepoInfoHandler
         :<|> stepListHandler
         :<|> coldStatusHandler
-        :<|> copyBackHandler
+        :<|> onloadHandler
         :<|> stepDownloadHandler
         :<|> stepSeekHandler
         :<|> stepRawHandler
@@ -182,7 +182,7 @@ corsPolicy req = case pathInfo req of
                 , corsMethods = ["GET", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
-    ["step-files", "copy-back"] ->
+    ["step-files", "onload"] ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]

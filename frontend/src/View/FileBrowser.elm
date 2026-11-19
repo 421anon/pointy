@@ -264,7 +264,7 @@ viewColdFile stepId path availability =
         popoverId =
             "cold-" ++ String.fromInt stepId ++ "-" ++ String.join "-" (List.map (Char.toCode >> String.fromInt) (String.toList (String.join "/" path)))
 
-        copyBackButton label =
+        onloadButton label =
             Html.button
                 [ class "btn file-cold-unfreeze-btn"
                 , type_ "button"
@@ -294,7 +294,7 @@ viewColdFile stepId path availability =
                     ( "Copying back failed"
                     , [ note "The file could not be copied back from cold storage, so it is still not on this server."
                       , note reason
-                      , copyBackButton "Try again"
+                      , onloadButton "Try again"
                       ]
                     )
 
@@ -302,7 +302,7 @@ viewColdFile stepId path availability =
                     ( "Offloaded to cold storage"
                     , [ note "This file was offloaded to cold storage and isn't on this server, so it can't be viewed, shared, or downloaded."
                       , note "Copying it back takes longer for larger files; afterwards it works like any other file."
-                      , copyBackButton "Copy back to this server"
+                      , onloadButton "Copy back to this server"
                       ]
                     )
     in

@@ -2840,7 +2840,7 @@ unfreezeOutputFile recordId path =
         \commit_ ->
             Flow.setAll (fileAvailabilityAt recordId path) (Model.Unfreezing Nothing)
                 |> Flow.seq
-                    (Api.copyBackColdFile recordId (Just commit_) path
+                    (Api.onloadColdFile recordId (Just commit_) path
                         |> FlowError.foldResult
                             (\() -> Flow.pure ())
                             (\err -> unfreezeFailed recordId path (Http.errorMessage err))
@@ -2881,10 +2881,10 @@ applyColdStatus recordId commit status_ path =
             Flow.forAll (fileAvailabilityAt recordId path << where_ Model.isUnfreezing)
                 (\_ ->
                     case coldFile.state of
-                        Model.CopyingBack done total ->
+                        Model.Onloading done total ->
                             Flow.setAll (fileAvailabilityAt recordId path) (Model.Unfreezing (Just ( done, total )))
 
-                        Model.CopyBackFailed reason ->
+                        Model.OnloadFailed reason ->
                             unfreezeFailed recordId path reason
 
                         Model.Offloaded ->

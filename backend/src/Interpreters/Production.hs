@@ -219,11 +219,11 @@ runColdStorageProduction = interpret $ \_ -> \case
             Just program ->
                 fromMaybe (Left "cold storage status command timed out")
                     <$> timeout coldStatusTimeoutMicros (runColdStorage program ["status", T.unpack outPath])
-    ColdStorageCopyBack outPath rel -> liftIO $ do
+    ColdStorageOnload outPath rel -> liftIO $ do
         command <- coldStorageCommand
         case command of
             Nothing -> pure (Left "cold storage is not configured")
-            Just program -> fmap (const ()) <$> runColdStorage program ["copy-back", T.unpack outPath, rel]
+            Just program -> fmap (const ()) <$> runColdStorage program ["onload", T.unpack outPath, rel]
 
 coldStorageCommand :: IO (Maybe FilePath)
 coldStorageCommand = do

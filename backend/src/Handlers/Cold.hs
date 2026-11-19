@@ -9,7 +9,7 @@ module Handlers.Cold (
     refuseColdFile,
     refuseOffloadedIn,
     coldStatusHandler,
-    copyBackHandler,
+    onloadHandler,
     parseColdStatus,
 ) where
 
@@ -26,7 +26,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Effectful (Eff, UnliftStrategy (SeqUnlift), withEffToIO, (:>))
-import Effects (AppM, ColdStorage, coldStorageConfigured, coldStorageCopyBack, coldStorageStatus)
+import Effects (AppM, ColdStorage, coldStorageConfigured, coldStorageOnload, coldStorageStatus)
 import Handlers.StepOutput (resolveStepOutPath)
 import Servant (NoContent (..), ServerError (..), err409, err502, err503, throwError)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
@@ -44,8 +44,8 @@ data ColdFile = ColdFile
 
 data ColdFileState
     = Offloaded
-    | CopyingBack Integer Integer
-    | CopyBackFailed Text
+    | Onloading Integer Integer
+    | OnloadFailed Text
     deriving (Show, Eq)
 
 instance FromJSON ColdStatus where
@@ -60,8 +60,8 @@ instance FromJSON ColdFile where
         state <- o .: "state"
         ColdFile path <$> case state :: Text of
             "offloaded" -> pure Offloaded
-            "copying-back" -> CopyingBack <$> o .: "done" <*> o .: "total"
-            "failed" -> CopyBackFailed <$> o .: "error"
+            "onloading" -> Onloading <$> o .: "done" <*> o .: "total"
+            "failed" -> OnloadFailed <$> o .: "error"
             other -> fail ("unknown cold storage file state " ++ T.unpack other)
 
 instance ToJSON ColdFile where
@@ -69,8 +69,8 @@ instance ToJSON ColdFile where
         object $
             ("path" .= coldFilePath file) : case coldFileState file of
                 Offloaded -> ["state" .= ("offloaded" :: Text)]
-                CopyingBack done total -> ["state" .= ("copying-back" :: Text), "done" .= done, "total" .= total]
-                CopyBackFailed message -> ["state" .= ("failed" :: Text), "error" .= message]
+                Onloading done total -> ["state" .= ("onloading" :: Text), "done" .= done, "total" .= total]
+                OnloadFailed message -> ["state" .= ("failed" :: Text), "error" .= message]
 
 parseColdStatus :: BS.ByteString -> Maybe ColdStatus
 parseColdStatus = decodeStrict
@@ -129,12 +129,12 @@ coldStatusHandler stepId mCommit = do
                 pure
                 (either (const Nothing) parseColdStatus result)
 
-copyBackHandler :: Int -> Maybe Text -> FilePath -> AppM NoContent
-copyBackHandler stepId mCommit rel = do
+onloadHandler :: Int -> Maybe Text -> FilePath -> AppM NoContent
+onloadHandler stepId mCommit rel = do
     configured <- lift coldStorageConfigured
     if not configured
         then throwError err503{errBody = "Cold storage is not configured."}
         else do
             outPath <- coldOutPath stepId mCommit
-            result <- lift (coldStorageCopyBack outPath rel)
+            result <- lift (coldStorageOnload outPath rel)
             either (\message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 message)}) (const (pure NoContent)) result

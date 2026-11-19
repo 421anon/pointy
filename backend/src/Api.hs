@@ -55,15 +55,15 @@ type ListStepFiles =
 type GetStepColdStatus =
     "step-files"
         :> "cold"
-        :> Description "Lists the files of a step's output that are not local, with each one's cold storage state: offloaded, copying back with its progress, or failed with the error. Returns 503 when the cold storage provider cannot report a status."
+        :> Description "Lists the files of a step's output that are not local, with each one's cold storage state: offloaded, onloading with its progress, or failed with the error. Returns 503 when the cold storage provider cannot report a status."
         :> ReqId
         :> QueryParam "commit" Text
         :> Get '[JSON] ColdStatus
 
-type CopyBackStepFile =
+type OnloadStepFile =
     "step-files"
-        :> "copy-back"
-        :> Description "Asks the cold storage provider to start copying one offloaded file of a step's output back. Progress is reported by the cold status route."
+        :> "onload"
+        :> Description "Asks the cold storage provider to start onloading one offloaded file of a step's output. Progress is reported by the cold status route."
         :> ReqId
         :> QueryParam "commit" Text
         :> QueryParam' '[Required] "path" FilePath
@@ -537,7 +537,7 @@ type API =
         :<|> GetUserRepoInfo
         :<|> ListStepFiles
         :<|> GetStepColdStatus
-        :<|> CopyBackStepFile
+        :<|> OnloadStepFile
         :<|> DownloadStepFile
         :<|> StepFileSeek
         :<|> RawStepFile

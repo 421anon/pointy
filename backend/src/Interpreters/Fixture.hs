@@ -123,7 +123,7 @@ runColdStorageFixture :: (IOE :> es) => FixtureState -> Eff (ColdStorage : es) a
 runColdStorageFixture state = interpret $ \_ -> \case
     ColdStorageConfigured -> pure (isJust (documentColdStorage (fixtureDocument state)))
     ColdStorageStatus outPath -> pure (Right (jsonBytes (coldStorageStatus (fixtureDocument state) outPath)))
-    ColdStorageCopyBack _ _ -> pure (Right ())
+    ColdStorageOnload _ _ -> pure (Right ())
 
 jsonBytes :: A.Value -> BS.ByteString
 jsonBytes = LBS.toStrict . A.encode

@@ -257,12 +257,12 @@ instance ToSchema ColdStatus where
                     & properties
                         .~ fromList
                             [ ("path", stringField)
-                            , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["offloaded", "copying-back", "failed"]))
+                            , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["offloaded", "onloading", "failed"]))
                             , ("done", integerField)
                             , ("total", integerField)
                             , ("error", stringField)
                             ]
-                    & description ?~ "A file that is not local. `done` and `total` are bytes, present while copying back; `error` is present when copying back failed."
+                    & description ?~ "A file that is not local. `done` and `total` are bytes, present while onloading; `error` is present when the last onload failed."
 instance ToSchema ScratchRootResponse where
     declareNamedSchema _ =
         pure $ objectSchema "ScratchRootResponse" [("root", nullableField OpenApiString)]
