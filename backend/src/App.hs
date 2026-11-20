@@ -96,7 +96,7 @@ server =
         :<|> (\request -> liftHandler (stopTurnHandler request))
         :<|> (\request -> liftHandler (steerTurnHandler request))
         :<|> (\request -> liftHandler (compactSessionHandler request))
-        :<|> (\turnId -> liftHandler (turnLogStreamHandler turnId))
+        :<|> (\turnId lastEventId offset -> liftHandler (turnLogStreamHandler turnId lastEventId offset))
         :<|> turnImageHandler
         :<|> turnShownImageHandler
         :<|> (\request -> liftHandler (applyChangesHandler request))

@@ -5018,9 +5018,6 @@ onAgentTurnIn value =
                 |> Flow.seq (refreshAgentSession done.sessionId)
                 |> Flow.seq (notifySubmittedTurnFinished done.sessionId done.turnId)
 
-        Ok Model.AgentTurnHeartbeat ->
-            Flow.pure ()
-
         Ok (Model.AgentTurnError { sessionId, message }) ->
             Flow.setAll (agent << liveTurnAt sessionId << just << streamError) (Just message)
                 |> Flow.seq (addToast False message)

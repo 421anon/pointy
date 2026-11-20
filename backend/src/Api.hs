@@ -455,7 +455,9 @@ type AgentTurnStream =
         :> "turn"
         :> Capture "id" Text
         :> "stream"
-        :> Description "Streams output of an agent turn as server-sent events."
+        :> Description "Streams output of an agent turn as server-sent events. Each chunk carries the log offset after it as its event id; a Last-Event-ID header, or else an offset query parameter, resumes the log from that offset."
+        :> Header "Last-Event-ID" Int
+        :> QueryParam "offset" Int
         :> SseStream
 
 type AgentTurnImage =

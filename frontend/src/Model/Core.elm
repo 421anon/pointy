@@ -2379,7 +2379,6 @@ type alias Flags =
 type AgentTurnEvent
     = AgentTurnChunk { sessionId : String, chunk : String }
     | AgentTurnDone { sessionId : String, turnId : String }
-    | AgentTurnHeartbeat
     | AgentTurnError { sessionId : String, message : String }
 
 
