@@ -2,7 +2,7 @@ import { notifyAgentTurn, requestNotificationPermission } from "./agent-notifica
 import { storeAutoApply, storeLastChat, storeSubmittedTurns, syncAutoApplyAcrossTabs } from "./agent-storage.js";
 import { closeAgentTurnStream, connectAgentTurnStreams } from "./agent-turn-streams.js";
 import { captureArtifactArea, prepareArtifactArea } from "./area-capture.js";
-import { connectBackendStreams } from "./backend-streams.js";
+import { connectBackendEvents } from "./backend-events.js";
 import { installDragDropListeners } from "./drag-drop.js";
 import { installGutterDragListeners, zoomIframe } from "./file-viewer.js";
 import { focusInput, installChangeMarkers, readInput, setInput } from "./text-inputs.js";
@@ -68,7 +68,7 @@ export function connectPorts(app) {
   installDragDropListeners(app);
   installUnsentTreeOpsFlush();
   installChangeMarkers();
-  connectBackendStreams(app);
+  connectBackendEvents(app);
   connectAgentTurnStreams(app);
   syncAutoApplyAcrossTabs(app);
 

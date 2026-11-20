@@ -1,4 +1,4 @@
-port module Ports exposing (agentAutoApplyIn, agentNotificationClickIn, agentTurnIn, clusterStatusIn, ffiIn, ffiOut, gutterDragEnd, ingestJobsIn, openAgentTurnStream, openClusterStatusStream, openIngestStream, openStepStatusStream, organizeDragIn, stepStatusIn)
+port module Ports exposing (agentAutoApplyIn, agentNotificationClickIn, agentTurnIn, backendConnectionIn, backendEventIn, ffiIn, ffiOut, gutterDragEnd, openAgentTurnStream, openBackendEvents, organizeDragIn)
 
 import Json.Decode
 import Json.Encode
@@ -10,10 +10,13 @@ port ffiOut : { key : String, fn : String, value : Json.Encode.Value } -> Cmd ms
 port ffiIn : ({ key : String, value : Json.Decode.Value } -> msg) -> Sub msg
 
 
-port openStepStatusStream : {} -> Cmd msg
+port openBackendEvents : {} -> Cmd msg
 
 
-port stepStatusIn : (Json.Decode.Value -> msg) -> Sub msg
+port backendEventIn : ({ event : String, data : String } -> msg) -> Sub msg
+
+
+port backendConnectionIn : (Bool -> msg) -> Sub msg
 
 
 port openAgentTurnStream : { sessionId : String, turnId : String } -> Cmd msg
@@ -32,15 +35,3 @@ port gutterDragEnd : (Json.Decode.Value -> msg) -> Sub msg
 
 
 port organizeDragIn : (Json.Decode.Value -> msg) -> Sub msg
-
-
-port openClusterStatusStream : {} -> Cmd msg
-
-
-port clusterStatusIn : (Json.Decode.Value -> msg) -> Sub msg
-
-
-port openIngestStream : {} -> Cmd msg
-
-
-port ingestJobsIn : (Json.Decode.Value -> msg) -> Sub msg

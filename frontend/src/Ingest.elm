@@ -21,14 +21,14 @@ import Set exposing (Set)
 import Specs
 
 
-startIngestStream : Flow Model Never
-startIngestStream =
+listenAndProcessIngestJobs : Flow Model Never
+listenAndProcessIngestJobs =
     Flow.subscribe onIngestJobsIn Channels.ingestJobs
 
 
-onIngestJobsIn : Decode.Value -> Flow Model ()
-onIngestJobsIn value =
-    case Decode.decodeValue ApiDecode.ingestJobs value of
+onIngestJobsIn : String -> Flow Model ()
+onIngestJobsIn json =
+    case Decode.decodeString ApiDecode.ingestJobs json of
         Ok jobs ->
             Flow.get
                 |> Flow.andThen

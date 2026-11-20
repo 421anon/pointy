@@ -1,12 +1,14 @@
 ---
-description: "Follow step statuses and cluster activity as they change."
+description: "Follow step statuses, cluster activity, and ingest jobs as they change."
 ---
 
 # Streams
 
-## Live status streams
+## Live event stream
 
-Open **one** `GET /step-status-stream` connection for the application. It has no folder or commit parameters. Named SSE `snapshot` events carry JSON:
+Open **one** `GET /events` connection for the application. It has no parameters and carries three named SSE events: `step-status`, `cluster-status`, and `ingest-jobs`. On connect it sends the current `cluster-status` and `ingest-jobs`, then replays recent `step-status` snapshots, then sends each event as its state changes.
+
+`step-status` events carry partial folder snapshots:
 
 ```json
 {
@@ -28,15 +30,15 @@ After subscribing, call `POST /project-status?project_id=1&commit=<hash>` to req
 A minimal browser listener is:
 
 ```js
-const statusStream = new EventSource("/backend/step-status-stream");
-statusStream.addEventListener("snapshot", event => {
+const events = new EventSource("/backend/events");
+events.addEventListener("step-status", event => {
   const snapshot = JSON.parse(event.data);
   console.log(snapshot.projectId, snapshot.commit, snapshot.steps);
 });
-// Call statusStream.close() when this application no longer needs it.
+// Call events.close() when this application no longer needs it.
 ```
 
-`GET /cluster-status-stream` immediately sends a `cluster-status` event, then updates on change:
+`cluster-status` events carry the cluster's availability and the builds in flight:
 
 ```json
 {
@@ -52,4 +54,6 @@ statusStream.addEventListener("snapshot", event => {
 
 `activeSteps` lists the builds this backend process tracks, one entry per step id, including restored jobs. The backend publishes `preparing` as soon as it accepts a run request, `queued` when `sbatch` returns the job id, and then follows the watcher's snapshots: `queued` for a Slurm PENDING job (`reason` carries Slurm's reason), `running` while the job runs, and `saving` for the runner's saving marker. `since` is the start of the current phase, using Slurm's elapsed time for a running job and the first observation time for a saving job; `commits` lists the commits with a build tracked for the step. There is no periodic Slurm poll. Ingest jobs never appear. Status is not a promise that a particular job fits the available resources.
 
-The step-status, cluster, and ingest streams (`/step-status-stream`, `/cluster-status-stream`, and `/ingest-stream`) send `heartbeat` events with `{}` after about 30 idle seconds. Ignore SSE comments, including connection padding. Responses use `Cache-Control: no-transform` and `X-Accel-Buffering: no`; preserve unbuffered, long-lived connections through your proxy. There are no SSE `id:` or `retry:` fields, and `Last-Event-ID` is not a resume cursor. Request fresh folder status after reconnecting when you need to establish current state.
+`ingest-jobs` events carry every ingest job the backend tracks; [Ingest progress](files.md#ingest-progress) describes them.
+
+The stream sends a `heartbeat` event with `{}` after about 30 idle seconds. A client that hears nothing for longer than that has lost the connection even if the browser has not noticed, and should reconnect. Ignore SSE comments, including connection padding. Responses use `Cache-Control: no-transform` and `X-Accel-Buffering: no`; preserve unbuffered, long-lived connections through your proxy. There are no SSE `id:` or `retry:` fields, and `Last-Event-ID` is not a resume cursor: a reconnect receives the current cluster status and ingest jobs and the replayed step statuses. Request fresh folder status after reconnecting when you need to establish current state beyond that replay.

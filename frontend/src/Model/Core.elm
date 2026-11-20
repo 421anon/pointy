@@ -2376,13 +2376,6 @@ type alias Flags =
     }
 
 
-type StepStatusEvent
-    = SSESnapshot { projectId : Int, commit : String, steps : List { stepId : Int, status : Status, certificate : Maybe String } }
-    | SSEHeartbeat
-    | SSEError String
-    | SSEConnection BackendConnection
-
-
 type AgentTurnEvent
     = AgentTurnChunk { sessionId : String, chunk : String }
     | AgentTurnDone { sessionId : String, turnId : String }

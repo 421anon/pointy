@@ -16,7 +16,6 @@ import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
-import Handlers.StatusStream (EventStream)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
@@ -24,6 +23,7 @@ import Handlers.Store (DirEntry, FileChunk)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
 import Servant.Types.SourceT (SourceT)
+import Sse (EventStream, SseResponse)
 
 type ReqId = QueryParam' '[Required, Strict] "id" Int
 
@@ -32,7 +32,7 @@ type ReqProjectId = QueryParam' '[Required, Strict] "project_id" Int
 type AcceptedText = Verb 'POST 202 '[PlainText] Text
 
 type SseStream =
-    StreamGet NoFraming EventStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceT IO BS.ByteString))
+    StreamGet NoFraming EventStream SseResponse
 
 type GetCommitHash =
     "commit-hash"
@@ -341,9 +341,9 @@ type BatchProjectOps =
         :> ReqBody '[JSON] [TreeOp]
         :> Post '[JSON] NoContent
 
-type StepStatusStream =
-    "step-status-stream"
-        :> Description "Streams snapshot and heartbeat SSE events for every project's steps."
+type Events =
+    "events"
+        :> Description "Streams the application's live state as server-sent events: a cluster-status and an ingest-jobs event on connect and on every change, step-status events with partial folder snapshots (the 256 most recent replayed on connect), and a heartbeat after 30 idle seconds."
         :> SseStream
 
 type ProjectStatus =
@@ -450,16 +450,6 @@ type WrapScratch =
         :> ReqBody '[JSON] ScratchWrapRequest
         :> AcceptedText
 
-type IngestStream =
-    "ingest-stream"
-        :> Description "Streams ingest job snapshots and progress updates as server-sent events."
-        :> SseStream
-
-type ClusterStatusStream =
-    "cluster-status-stream"
-        :> Description "Streams the current SLURM cluster availability, the reason for any degradation, and subsequent status changes."
-        :> SseStream
-
 type AgentTurnStream =
     "agent"
         :> "turn"
@@ -555,7 +545,7 @@ type API =
         :<|> CreateProject
         :<|> UpdateProject
         :<|> BatchProjectOps
-        :<|> StepStatusStream
+        :<|> Events
         :<|> ProjectStatus
         :<|> GetStepConfig
         :<|> GetPresets
@@ -575,8 +565,6 @@ type API =
         :<|> GetScratchRoot
         :<|> ListScratch
         :<|> WrapScratch
-        :<|> IngestStream
-        :<|> ClusterStatusStream
         :<|> CreateAgentSession
         :<|> ListAgentSessions
         :<|> GetAgentSession

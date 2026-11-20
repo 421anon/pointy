@@ -6,48 +6,8 @@ import Http
 import Iso8601
 import Json.Decode as Decode exposing (Decoder, maybe)
 import Json.Decode.Pipeline exposing (custom, optional, required)
-import Model.Core as Model exposing (DirectoryItem(..), FileView, Status(..), StepRecord, StepStatusEvent(..), TemplateSource(..), blankProject, blankStep)
+import Model.Core as Model exposing (DirectoryItem(..), FileView, Status(..), StepRecord, TemplateSource(..), blankProject, blankStep)
 import Model.Shadow exposing (Artifact, Field, Preset, Presets, StepArgValue(..), StepConfig, StepConfigEntry, StepRef, StepType(..), Widget(..), WithSrcFiles(..))
-
-
-stepStatusEvent : Decoder StepStatusEvent
-stepStatusEvent =
-    Decode.field "type" Decode.string
-        |> Decode.andThen
-            (\type_ ->
-                case type_ of
-                    "snapshot" ->
-                        Decode.field "data" snapshot |> Decode.map SSESnapshot
-
-                    "heartbeat" ->
-                        Decode.succeed SSEHeartbeat
-
-                    "error" ->
-                        Decode.field "data" Decode.string |> Decode.map SSEError
-
-                    "connection" ->
-                        Decode.field "data" backendConnection |> Decode.map SSEConnection
-
-                    _ ->
-                        Decode.fail ("Unknown SSE event type: " ++ type_)
-            )
-
-
-backendConnection : Decoder Model.BackendConnection
-backendConnection =
-    Decode.string
-        |> Decode.andThen
-            (\state ->
-                case state of
-                    "up" ->
-                        Decode.succeed Model.BackendUp
-
-                    "down" ->
-                        Decode.succeed Model.BackendDown
-
-                    _ ->
-                        Decode.fail ("Unknown backend connection state: " ++ state)
-            )
 
 
 userRepoInfo : Decoder Model.UserRepoInfo

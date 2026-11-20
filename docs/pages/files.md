@@ -63,7 +63,7 @@ An unconfigured scratch space returns 404 `Scratch directory is not configured`.
 
 ### Ingest progress
 
-`GET /ingest-stream` is a server-sent event stream. It sends an `ingest-jobs` event on connect and whenever a job changes: `{"jobs": [{"id", "stepId", "source", "path", "state", "done", "total", "hash", "error"}]}`, sorted by id. The stream keeps the latest job for each step. `source` is `upload` or `scratch`. `state` is `running`, `succeeded` or `failed`. `done` and `total` are whatever the ingest program reports, throttled to one update per second; the default program reports no progress, so both stay `null`. Jobs live in memory only, and their ids restart at 1 after a backend restart. A 30-second `heartbeat` arrives while nothing changes.
+`ingest-jobs` events on the [live event stream](streams.md#live-event-stream) report ingest jobs: one on connect and one whenever a job changes, each carrying `{"jobs": [{"id", "stepId", "source", "path", "state", "done", "total", "hash", "error"}]}`, sorted by id. The backend keeps the latest job for each step. `source` is `upload` or `scratch`. `state` is `running`, `succeeded` or `failed`. `done` and `total` are whatever the ingest program reports, throttled to one update per second; the default program reports no progress, so both stay `null`. Jobs live in memory only, and their ids restart at 1 after a backend restart.
 
 ### Extras and autocomplete
 

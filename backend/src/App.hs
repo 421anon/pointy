@@ -15,18 +15,17 @@ import EffectRunner (installRunner)
 import Handlers.Agent (applyChangesHandler, archiveSessionHandler, autoApplyHandler, compactSessionHandler, createSessionHandler, discardSessionHandler, getSessionHandler, listSessionsHandler, postTurnHandler, purgeSessionHandler, renameSessionHandler, steerTurnHandler, stopTurnHandler, turnImageHandler, turnLogStreamHandler, turnShownImageHandler, usageHandler)
 import Handlers.ArtifactRdf (artifactRdfHandler)
 import Handlers.Autocomplete (autocompleteHandler)
-import Handlers.ClusterStream (clusterStatusStreamHandler)
 import Handlers.Cold (coldStatusHandler, onloadHandler)
 import Handlers.TokenAuth (tokenAuthHandler, tokenLoginHandler, tokenLogoutHandler, tokenSessionHandler)
 import Handlers.CommitHash (getCommitHashHandler)
-import Handlers.IngestStream (ingestStreamHandler)
+import Handlers.Events (eventsHandler)
 import Handlers.Presets (getPresetsHandler)
 import Handlers.ProjectReads (projectRollupHandler)
 import Handlers.Projects (batchProjectOpsHandler, getProjectsHandler, patchProjectHandler, postProjectHandler)
 import Handlers.RunStep (runStepHandler, stepLogHandler, stopStepHandler)
 import Handlers.Scratch (scratchListHandler, scratchRootHandler, scratchWrapHandler)
 import Handlers.SrcFiles (createSrcFileHandler, deleteSrcFileHandler, downloadSrcFilesHandler, getUserRepoInfoHandler, listSrcFilesHandler, saveSrcFileHandler, seekSrcFilesHandler, srcRawHandler)
-import Handlers.StatusStream (projectStatusHandler, stepStatusStreamHandler)
+import Handlers.ProjectStatus (projectStatusHandler)
 import Handlers.StepConfig (getStepConfigHandler)
 import Handlers.StepReview (getProjectReviewHandler, removeReviewHandler, reviewDiffHandler, reviewStepHandler, stepComparisonHandler)
 import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
@@ -70,7 +69,7 @@ server =
         :<|> postProjectHandler
         :<|> patchProjectHandler
         :<|> batchProjectOpsHandler
-        :<|> stepStatusStreamHandler
+        :<|> eventsHandler
         :<|> projectStatusHandler
         :<|> getStepConfigHandler
         :<|> getPresetsHandler
@@ -90,8 +89,6 @@ server =
         :<|> scratchRootHandler
         :<|> scratchListHandler
         :<|> scratchWrapHandler
-        :<|> ingestStreamHandler
-        :<|> clusterStatusStreamHandler
         :<|> liftHandler createSessionHandler
         :<|> liftHandler listSessionsHandler
         :<|> (\sessionId -> liftHandler (getSessionHandler sessionId))
@@ -126,7 +123,7 @@ corsPolicy req = case pathInfo req of
                 , corsMethods = ["GET", "POST", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
-    ["step-status-stream"] ->
+    ["events"] ->
         Just $
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type", "Last-Event-ID"]
@@ -271,20 +268,6 @@ corsPolicy req = case pathInfo req of
             simpleCorsResourcePolicy
                 { corsRequestHeaders = ["Content-Type"]
                 , corsMethods = ["GET", "POST", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
-    ["ingest-stream"] ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type", "Last-Event-ID"]
-                , corsMethods = ["GET", "OPTIONS"]
-                , corsOrigins = Nothing
-                }
-    ["cluster-status-stream"] ->
-        Just $
-            simpleCorsResourcePolicy
-                { corsRequestHeaders = ["Content-Type", "Last-Event-ID"]
-                , corsMethods = ["GET", "OPTIONS"]
                 , corsOrigins = Nothing
                 }
     _ -> Nothing
