@@ -784,8 +784,7 @@ viewStepLog popoverId stepId stepLog =
                 Html.text "Build log is empty."
 
             else
-                Html.div [ class "step-log-sections" ]
-                    (List.map viewLogSection stepLog.sections)
+                viewLogSections stepLog.sections
 
         details =
             case stepLog.failed of
@@ -907,15 +906,22 @@ viewLogOwner failed =
         ]
 
 
-viewLogSection : LogSection -> Html msg
-viewLogSection section =
-    Html.div [ class "step-log-section" ]
-        [ Html.viewMaybe
-            (\phase -> Html.div [ class "step-log-section-header" ] [ Html.text phase ])
-            section.phase
-        , Html.div [ class "step-log-pre" ]
-            [ AnsiLog.view (AnsiLog.update section.text (AnsiLog.init AnsiLog.Cooked)) ]
-        ]
+viewLogSections : List LogSection -> Html msg
+viewLogSections sections =
+    let
+        labelled =
+            List.length sections > 1
+
+        viewSection section =
+            [ if labelled then
+                Html.viewMaybe (\phase -> Html.div [ class "step-log-phase" ] [ Html.text phase ]) section.phase
+
+              else
+                Html.nothing
+            , AnsiLog.view (AnsiLog.update section.text (AnsiLog.init AnsiLog.Cooked))
+            ]
+    in
+    Html.div [ class "step-log-pre" ] (List.concatMap viewSection sections)
 
 
 stepRecordStatus : String -> StepConfigEntry -> Bool -> StepRecord -> ApiData Status

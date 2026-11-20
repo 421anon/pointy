@@ -2914,24 +2914,6 @@ button.step-log-via-chip {
   color: var(--text-primary);
 }
 
-.step-log-sections {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-.step-log-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-}
-
-.step-log-section-header {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-}
-
 .step-review-note,
 .step-review-field {
   display: flex;
@@ -3002,6 +2984,19 @@ button.step-log-via-chip {
     font: inherit;
     color: inherit;
     background: transparent;
+  }
+
+  .step-log-phase {
+    color: var(--ansi-bright-black);
+    border-top: 1px solid #30363d;
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-xs);
+
+    &:first-child {
+      border-top: none;
+      margin-top: 0;
+      padding-top: 0;
+    }
   }
 
   .ansi-black-fg { color: var(--ansi-black); }
