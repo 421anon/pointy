@@ -10,7 +10,7 @@ import BuildLog (LogAccess (..), ResolvedLog (..), buildStepStore, rawStatusesBa
 import BuildRunner (BuildKey (..), buildKeyForOutPath)
 import BuildStatus (checkStatus, resolveStepStatus)
 import Certificates (rawStatusesFor)
-import Control.Concurrent.STM (atomically, modifyTVar')
+import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, registerDelay, writeTVar)
 import Control.Monad (unless)
 import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.Key as Key
@@ -97,6 +97,64 @@ main = do
         (176, ("failure", Just (T.pack recordedLog)))
         resolved
     mapM_ checkContentAddressedGraph [False, True]
+    checkConcurrentLevelProbes
+
+checkConcurrentLevelProbes :: IO ()
+checkConcurrentLevelProbes = do
+    started <- newTVarIO (0 :: Int)
+    expired <- registerDelay 5000000
+    stalled <- newTVarIO False
+    let resolveGraph :: Eff '[Nix, IOE] (Maybe ResolvedLog) -> IO (Maybe ResolvedLog)
+        resolveGraph =
+            runEff . interpret (\_ -> \case
+                RunNixCli ("derivation" : "show" : paths) ->
+                    pure (ExitSuccess, derivations paths, "")
+                RunNixCli ["log", _] ->
+                    pure (ExitFailure 1, "", "")
+                RunNixCli ["--offline", "log", drv] -> do
+                    liftIO $ atomically $ modifyTVar' started (+1)
+                    arrived <- liftIO $ atomically $ do
+                        probed <- readTVar started
+                        outOfTime <- readTVar expired
+                        check (probed >= levelSize || outOfTime)
+                        pure (probed >= levelSize)
+                    liftIO $ unless arrived $ atomically $ writeTVar stalled True
+                    pure $ case Map.lookup drv siblingLogs of
+                        Just logText -> (ExitSuccess, logText, "")
+                        Nothing -> (ExitFailure 1, "", "")
+                RunNixStoreCli ("--realise" : "--dry-run" : paths) ->
+                    pure (ExitSuccess, "", BC.pack (unlines (("these " ++ show (length paths) ++ " derivations will be built:") : map ("  " ++) paths)))
+                _ -> liftIO (fail "concurrent level probe test: unexpected Nix operation")
+                )
+    resolved <- resolveGraph (resolveBuildLog RemoteLogs rootDrv)
+    stalledProbes <- atomically $ readTVar stalled
+    assertEqual "search probes a level concurrently" False stalledProbes
+    assertEqual
+        "the first logged input in level order wins"
+        (Just (failedDrv, "fixture sibling two failed", []))
+        (fmap (\result -> (resolvedDrv result, resolvedLog result, resolvedVia result)) resolved)
+  where
+    levelSize = 4 :: Int
+    rootDrv = "/nix/store/00000000000000000000000000000000-root.drv"
+    siblingDrvs =
+        [ "/nix/store/1111111111111111111111111111111" ++ [name] ++ "-sibling-" ++ [name] ++ ".drv"
+        | name <- "abcd"
+        ]
+    failedDrv = siblingDrvs !! 1
+    siblingLogs =
+        Map.fromList
+            [ (siblingDrvs !! 1, "fixture sibling two failed")
+            , (siblingDrvs !! 2, "fixture sibling three failed")
+            ] :: Map.Map FilePath BC.ByteString
+    derivations paths =
+        LBS.toStrict . encode $
+            Map.fromList
+                [ (drv, object ["outputs" .= object ["out" .= object ["hash" .= ("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" :: Text), "method" .= ("nar" :: Text)]], "inputDrvs" .= object [Key.fromString input .= (["out"] :: [Text]) | input <- inputsOf drv]])
+                | drv <- paths
+                ]
+    inputsOf drv
+        | drv == rootDrv = siblingDrvs
+        | otherwise = []
 
 checkContentAddressedGraph :: Bool -> IO ()
 checkContentAddressedGraph version4 = do

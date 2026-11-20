@@ -87,20 +87,20 @@ resolveBuildLog access stepDrv = do
       where
         seen = visited <> Set.fromList (map fst level)
 
-    logOfFirstUnbuilt logCache plan = go []
-      where
-        go unbuilt [] = return (Nothing, reverse unbuilt)
-        go unbuilt ((drv, via) : rest)
-            | drv `Set.member` spBuild plan = do
-                mLog <- cachedLog (fetchInputLog access) logCache drv
-                case mLog of
-                    Just logText ->
-                        return $
-                            ( Just (ResolvedLog drv logText via)
-                            , []
-                            )
-                    Nothing -> go ((drv, via) : unbuilt) rest
-            | otherwise = go unbuilt rest
+    logOfFirstUnbuilt logCache plan level = do
+        probed <-
+            withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
+                mapConcurrently
+                    ( \(drv, via) ->
+                        fmap (\mLog -> (drv, via, mLog)) (unlift (cachedLog (fetchInputLog access) logCache drv))
+                    )
+                    [ (drv, via)
+                    | (drv, via) <- level
+                    , drv `Set.member` spBuild plan
+                    ]
+        case [(drv, via, logText) | (drv, via, Just logText) <- probed] of
+            (drv, via, logText) : _ -> return (Just (ResolvedLog drv logText via), [])
+            [] -> return (Nothing, [(drv, via) | (drv, via, Nothing) <- probed])
 
 dedupe :: Set FilePath -> [(FilePath, a)] -> [(FilePath, a)]
 dedupe _ [] = []
@@ -144,7 +144,7 @@ logArgs RemoteLogs args = args
 
 {-# NOINLINE logSemaphore #-}
 logSemaphore :: QSem
-logSemaphore = unsafePerformIO (newQSem 16)
+logSemaphore = unsafePerformIO (newQSem 64)
 
 runLog :: (Nix :> es, IOE :> es) => LogAccess -> [String] -> Eff es (Either String ByteString)
 runLog access args = bracket_ (liftIO (waitQSem logSemaphore)) (liftIO (signalQSem logSemaphore)) (runExceptT (runNix (logArgs access args)))

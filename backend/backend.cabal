@@ -396,6 +396,7 @@ test-suite certificate-status
   import:           warnings
   type:             exitcode-stdio-1.0
   main-is:          CertificateStatus.hs
+  ghc-options:      -threaded
   build-depends:
     , aeson
     , backend
