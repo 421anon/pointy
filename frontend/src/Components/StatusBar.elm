@@ -734,7 +734,7 @@ viewStepButton kind stepId stepName folderTrail folderPath offHeadRevision metaS
     Html.button
         [ class "status-bar__step"
         , type_ "button"
-        , Events.onClick (Actions.openRunningStep stepId)
+        , Events.onClick (Actions.openStep stepId)
         , title (stepName ++ " — " ++ metaDescription)
         , attribute "aria-label"
             ("Open step ["

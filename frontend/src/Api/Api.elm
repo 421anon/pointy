@@ -57,7 +57,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepRecord, TreeOp)
+import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepLog, StepRecord, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -169,6 +169,12 @@ stringResponse onSuccess response =
 
         Http.GoodStatus_ _ body ->
             Ok (onSuccess body)
+
+
+jsonResponse : Json.Decode.Decoder a -> Http.Response String -> Result Http.Error a
+jsonResponse decoder response =
+    stringResponse (Json.Decode.decodeString decoder >> Result.mapError (Json.Decode.errorToString >> Http.BadBody)) response
+        |> Result.andThen identity
 
 
 request : String -> String -> Http.Body -> Flow s (Result Http.Error ())
@@ -436,12 +442,12 @@ stopStep id commit =
     stepAction "stop-step" id commit
 
 
-fetchStepLog : Int -> Maybe String -> Flow s (Result Http.Error String)
+fetchStepLog : Int -> Maybe String -> Flow s (Result Http.Error StepLog)
 fetchStepLog id commit =
     Flow.lift <|
         Http.get
             { url = appendCommitQuery ("/backend/step-log?id=" ++ String.fromInt id) commit
-            , expect = Http.expectStringResponse identity (stringResponse identity)
+            , expect = Http.expectStringResponse identity (jsonResponse Decode.stepLog)
             }
 
 

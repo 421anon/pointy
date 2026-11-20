@@ -38,6 +38,7 @@ import Servant
 import Servant.Multipart (MultipartData, MultipartForm', Tmp)
 import Servant.OpenApi (HasOpenApi (..))
 import Servant.Types.SourceT (SourceT)
+import StepLog (StepLogView)
 
 instance ToSchema DynamicJson where
     declareNamedSchema _ = pure (NamedSchema (Just "DynamicJson") (mempty & example ?~ object []))
@@ -263,6 +264,31 @@ instance ToSchema ColdStatus where
                             , ("error", stringField)
                             ]
                     & description ?~ "A file that is not local. `done` and `total` are bytes, present while onloading; `error` is present when the last onload failed."
+instance ToSchema StepLogView where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "StepLogView"
+                [ ("failed", buildSchema)
+                , ("via", arrayOf buildSchema)
+                , ("reason", nullableField OpenApiString)
+                , ("output", stringField)
+                , ("log", stringField)
+                ]
+      where
+        buildSchema =
+            Inline $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & required .~ ["kind", "name"]
+                    & properties
+                        .~ fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["step", "package"]))
+                            , ("name", stringField)
+                            , ("stepId", integerField)
+                            , ("stage", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["build", "typeCheck"]))
+                            ]
+                    & description ?~ "A build: a step (`stepId`, `stage` is its own computation `build` or its output check `typeCheck`) or a package."
 instance ToSchema ScratchRootResponse where
     declareNamedSchema _ =
         pure $ objectSchema "ScratchRootResponse" [("root", nullableField OpenApiString)]

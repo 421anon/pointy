@@ -60,7 +60,7 @@ The bar also identifies the version you are viewing: the branch, with the commit
 
 When a run started from this page finishes, a toast names the step, for example **Step 'Read QC' completed**. Failed runs do not raise a toast; their dot turns red. For a failed step, open its log and choose **Investigate with agent**. The log is included in the chat, so you can ask what went wrong without copying the error. The log text can be selected and copied; long logs scroll in the popover. See [Agent](agent.md).
 
-When the computing service stopped a run because it used more memory than the step's RAM requirement, ran past the time limit, or lost its machine, the log starts with that reason, and hovering over the red dot shows it. For a run that ran out of memory, raise the step's `ram` requirement and run it again; see [Resources](resources.md).
+When the computing service stopped a run because it used more memory than the step's RAM requirement, ran past the time limit, or lost its machine, the log popover shows that reason above the log, and hovering over the red dot shows it. For a run that ran out of memory, raise the step's `ram` requirement and run it again; see [Resources](resources.md).
 
 ![A failed step's build log, with the Investigate with agent button in its header.](screenshots/light/step-failure-log.png)
 

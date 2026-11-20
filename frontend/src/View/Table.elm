@@ -28,7 +28,7 @@ import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildLink, ListingSort(..), Model, ProjectRecord, Status(..), StepRecord, Table, TemplateSource(..), UploadProgress)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, Build(..), ChildLink, ListingSort(..), Model, ProjectRecord, Stage(..), Status(..), StepLog, StepRecord, Table, TemplateSource(..), UploadProgress)
 import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyRoute, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
 import Model.Lib
 import Model.Selection
@@ -726,7 +726,7 @@ stepLogPopoverId tableName stepId =
     "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
 
 
-viewStepLogPopover : String -> ApiData String -> Int -> Html (Flow Model ())
+viewStepLogPopover : String -> ApiData StepLog -> Int -> Html (Flow Model ())
 viewStepLogPopover tableName logState stepId =
     let
         popoverId =
@@ -742,11 +742,11 @@ viewStepLogPopover tableName logState stepId =
             [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
             , Html.span []
                 [ Html.viewMaybe
-                    (\log ->
+                    (\stepLog ->
                         Html.button
                             [ class "icon-btn"
                             , title "Investigate with agent"
-                            , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId log))
+                            , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId stepLog))
                             ]
                             [ icon False "smart_toy" ]
                     )
@@ -767,17 +767,147 @@ viewStepLogPopover tableName logState stepId =
                 Loading _ ->
                     Html.text "Loading build log..."
 
-                Success log ->
-                    if String.isEmpty log then
-                        Html.text "Build log is empty."
-
-                    else
-                        Html.div [ class "step-log-pre" ]
-                            [ AnsiLog.view (AnsiLog.update log (AnsiLog.init AnsiLog.Cooked)) ]
+                Success stepLog ->
+                    viewStepLog popoverId stepId stepLog
 
                 Error err ->
                     Html.text (Http.errorMessage err)
             ]
+        ]
+
+
+viewStepLog : String -> Int -> StepLog -> Html (Flow Model ())
+viewStepLog popoverId stepId stepLog =
+    let
+        output =
+            if String.isEmpty (String.trim stepLog.output) then
+                Html.text "Build log is empty."
+
+            else
+                Html.div [ class "step-log-pre" ]
+                    [ AnsiLog.view (AnsiLog.update stepLog.output (AnsiLog.init AnsiLog.Cooked)) ]
+
+        details =
+            case stepLog.failed of
+                StepBuild failedId _ TypeCheckStage ->
+                    if failedId == stepId then
+                        [ Html.p [ class "step-log-note" ]
+                            [ Html.text ("Step #" ++ String.fromInt stepId ++ " ran, but its output failed the check.") ]
+                        ]
+
+                    else
+                        [ viewBuildFailure popoverId stepLog.failed stepLog.via
+                        , viewLogOwner stepLog.failed
+                        ]
+
+                StepBuild failedId _ BuildStage ->
+                    if failedId == stepId then
+                        []
+
+                    else
+                        [ viewBuildFailure popoverId stepLog.failed stepLog.via
+                        , viewLogOwner stepLog.failed
+                        ]
+
+                PackageBuild _ ->
+                    [ viewBuildFailure popoverId stepLog.failed stepLog.via
+                    , viewLogOwner stepLog.failed
+                    ]
+        reason =
+            Html.viewMaybe
+                (\message -> Html.p [ class "step-log-note" ] [ Html.text message ])
+                stepLog.reason
+    in
+    Html.div [ class "step-log-content" ] (details ++ [ reason, output ])
+
+
+viewBuildFailure : String -> Build -> List Build -> Html (Flow Model ())
+viewBuildFailure popoverId failed via =
+    Html.div [ class "step-log-failure" ]
+        [ Html.div [ class "step-log-failure-card" ]
+            [ Html.span [ class "step-log-failure-message" ]
+                [ Html.text
+                    (case failed of
+                        StepBuild failedId name stage ->
+                            "Upstream step #" ++ String.fromInt failedId ++ " · " ++ name ++ " " ++ stageFailureLabel stage
+
+                        PackageBuild name ->
+                            "Required package " ++ name ++ " failed to build"
+                    )
+                ]
+            , case failed of
+                StepBuild failedId _ _ ->
+                    Html.button
+                        [ class "step-log-open-step"
+                        , type_ "button"
+                        , Events.onClick (openStepFromPopover popoverId failedId)
+                        ]
+                        [ Html.text ("Open step #" ++ String.fromInt failedId) ]
+
+                PackageBuild _ ->
+                    Html.nothing
+            ]
+        , if List.isEmpty via then
+            Html.nothing
+
+          else
+            Html.div [ class "step-log-via" ]
+                (Html.span [ class "step-log-via-label" ] [ Html.text "needed by:" ]
+                    :: List.concat (List.indexedMap (viewViaChip popoverId) via)
+                )
+        ]
+
+
+stageFailureLabel : Stage -> String
+stageFailureLabel stage =
+    case stage of
+        BuildStage ->
+            "failed"
+
+        TypeCheckStage ->
+            "failed its output check"
+
+
+openStepFromPopover : String -> Int -> Flow Model ()
+openStepFromPopover popoverId stepId =
+    Actions.hidePopover popoverId |> Flow.seq (Actions.openStep stepId)
+
+
+viewViaChip : String -> Int -> Build -> List (Html (Flow Model ()))
+viewViaChip popoverId index build =
+    let
+        chip =
+            case build of
+                StepBuild stepId name _ ->
+                    Html.button
+                        [ class "step-log-via-chip"
+                        , type_ "button"
+                        , title ("Open step #" ++ String.fromInt stepId)
+                        , Events.onClick (openStepFromPopover popoverId stepId)
+                        ]
+                        [ Html.text ("#" ++ String.fromInt stepId ++ " " ++ name) ]
+
+                PackageBuild name ->
+                    Html.span [ class "step-log-via-chip" ] [ Html.text ("package " ++ name) ]
+    in
+    if index == 0 then
+        [ chip ]
+
+    else
+        [ Html.span [ class "step-log-via-arrow" ] [ Html.text "→" ], chip ]
+
+
+viewLogOwner : Build -> Html msg
+viewLogOwner failed =
+    Html.div [ class "step-log-owner" ]
+        [ Html.text
+            (case failed of
+                StepBuild stepId name _ ->
+                    "Log of step #" ++ String.fromInt stepId ++ " · " ++ name
+
+                PackageBuild name ->
+                    "Log of package " ++ name
+            )
         ]
 
 
@@ -795,7 +925,7 @@ viewStepRecordStatus name entry ingesting record =
     viewStatusApiData name record.id (stepRecordStatus name entry ingesting record)
 
 
-viewStepRecordLogPopover : String -> StepConfigEntry -> ApiData String -> Bool -> StepRecord -> Html (Flow Model ())
+viewStepRecordLogPopover : String -> StepConfigEntry -> ApiData StepLog -> Bool -> StepRecord -> Html (Flow Model ())
 viewStepRecordLogPopover name entry logState ingesting record =
     let
         logShown =

@@ -4955,9 +4955,9 @@ togglePicked optionNumber question =
     }
 
 
-investigateStepWithAgent : Int -> String -> Flow Model ()
-investigateStepWithAgent stepId log =
-    askAgentInNewChat (Flow.pure ()) [] (investigateStepPrompt stepId log)
+investigateStepWithAgent : Int -> Model.StepLog -> Flow Model ()
+investigateStepWithAgent stepId stepLog =
+    askAgentInNewChat (Flow.pure ()) [] (investigateStepPrompt stepId stepLog)
 
 
 askAgentInNewChat : Flow Model () -> List Model.ComposerAttachment -> String -> Flow Model ()
@@ -4985,9 +4985,77 @@ showAgentChat sessionId =
         )
 
 
-investigateStepPrompt : Int -> String -> String
-investigateStepPrompt stepId log =
-    "Investigate why step " ++ String.fromInt stepId ++ " failed:\n\n" ++ log
+investigateStepPrompt : Int -> Model.StepLog -> String
+investigateStepPrompt stepId stepLog =
+    let
+        ownFailure =
+            case stepLog.failed of
+                Model.StepBuild failedId _ _ ->
+                    failedId == stepId
+
+                Model.PackageBuild _ ->
+                    False
+
+        failure =
+            case stepLog.failed of
+                Model.StepBuild failedId name stage ->
+                    if failedId == stepId then
+                        "this step (#" ++ String.fromInt failedId ++ " " ++ name ++ ") " ++ buildFailureReason stage
+
+                    else
+                        "upstream step #" ++ String.fromInt failedId ++ " " ++ name ++ " " ++ buildFailureReason stage
+
+                Model.PackageBuild name ->
+                    "required package " ++ name ++ " failed to build"
+
+        via =
+            if List.isEmpty stepLog.via then
+                ""
+
+            else
+                "\nNeeded by: " ++ String.join " -> " (List.map buildChainLabel stepLog.via)
+
+        headline =
+            if ownFailure then
+                "Investigate why step " ++ String.fromInt stepId ++ " failed."
+
+            else
+                "Investigate why step " ++ String.fromInt stepId ++ " could not build."
+        reason =
+            case stepLog.reason of
+                Just message ->
+                    "\nReason: " ++ message
+
+                Nothing ->
+                    ""
+    in
+    headline
+        ++ "\n\nFailed build: "
+        ++ failure
+        ++ via
+        ++ reason
+        ++ "\n\nBuild log:\n"
+        ++ stepLog.log
+
+
+buildFailureReason : Model.Stage -> String
+buildFailureReason stage =
+    case stage of
+        Model.BuildStage ->
+            "failed"
+
+        Model.TypeCheckStage ->
+            "failed its output check"
+
+
+buildChainLabel : Model.Build -> String
+buildChainLabel build =
+    case build of
+        Model.StepBuild stepId name _ ->
+            "#" ++ String.fromInt stepId ++ " " ++ name
+
+        Model.PackageBuild name ->
+            "package " ++ name
 
 
 listenAndProcessAgentTurns : Flow Model Never
@@ -5408,8 +5476,8 @@ projectPageRoute projectPath_ =
     Route.fromPage (Route.projectPage projectPath_ Nothing)
 
 
-openRunningStep : Int -> Flow Model ()
-openRunningStep stepId =
+openStep : Int -> Flow Model ()
+openStep stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
