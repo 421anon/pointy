@@ -24,6 +24,7 @@ import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
 import Servant.Types.SourceT (SourceT)
 import Sse (EventStream, SseResponse)
+import StepLog (StepLogView)
 
 type ReqId = QueryParam' '[Required, Strict] "id" Int
 
@@ -123,10 +124,10 @@ type StopStep =
 
 type StepLog =
     "step-log"
-        :> Description "Returns the build log of a step."
+        :> Description "Returns the failed build behind a step's status: which build failed (the step itself, an upstream step, or a package), the builds linking it to the step, the log split into the phases its template defines, and the full raw log."
         :> ReqId
         :> QueryParam "commit" Text
-        :> Get '[PlainText] Text
+        :> Get '[JSON] StepLogView
 
 type CreateAgentSession =
     "agent"

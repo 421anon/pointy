@@ -152,6 +152,7 @@ appliedAnswer document applyExpr attr
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
+    | "genericClosure" `isInfixOf` applyExpr = Right (encodeValue (toJSON [stepBuildValue stepId path | stepId <- Map.keys (documentOutPaths document), Just path <- [statusPathOf document stepId]]))
     | "step.certificate or step" `isInfixOf` applyExpr, attr == "#pointy.steps" = maybe (Left "fixture has no build target for one of the steps") (Right . encodeValue . toJSON . map stepTarget) (traverse (statusPathOf document) (idsIn applyExpr))
     | "step.certificate or step" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
     | "srcFiles" `isInfixOf` applyExpr = Right (either (const (encodeValue Null)) id (jsonAnswer document ("#pointy.steps." ++ fromMaybe "" (listToMaybe (idsIn applyExpr)) ++ ".srcFiles")))
@@ -189,7 +190,20 @@ appliedAnswer document applyExpr attr
                 , "drv" .= maybe (path <> ".drv") T.pack (derivationAnswer document (T.unpack path))
                 ]
         _ -> Null
-    stepTarget path = object ["certified" .= certified document, "path" .= path, "drv" .= maybe (path <> ".drv") T.pack (derivationAnswer document (T.unpack path))]
+    stepTarget path = object ["certified" .= certified document, "path" .= path, "drv" .= drvOf path]
+    stepBuildValue stepId statusPath =
+        object
+            [ "id" .= stepId
+            , "name" .= fromMaybe "" (stepDefName =<< Map.lookup ("#pointy.steps." ++ stepId ++ ".def") (documentJson document))
+            , "build" .= drvOf statusPath
+            , "check" .= Null
+            , "phases" .= ["installPhase" :: Text]
+            ]
+    stepDefName (Object def) = case KeyMap.lookup "name" def of
+        Just (String name) -> Just name
+        _ -> Nothing
+    stepDefName _ = Nothing
+    drvOf path = maybe (path <> ".drv") T.pack (derivationAnswer document (T.unpack path))
 
 keyAnswer :: String -> Value
 keyAnswer applyExpr = versioned (maybe Null fixtureKey (listToMaybe (idsIn applyExpr)))

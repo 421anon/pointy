@@ -4,7 +4,6 @@
 
 module BuildLog (
     ResolvedLog (..),
-    LogSource (..),
     LogAccess (..),
     resolveBuildLog,
     validPaths,
@@ -44,11 +43,6 @@ import System.Exit (ExitCode (..))
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (runNix)
 
-data LogSource
-    = StepDrv
-    | InputDrv FilePath Int
-    deriving (Eq, Show)
-
 data LogAccess
     = LocalLogs
     | RemoteLogs
@@ -57,7 +51,7 @@ data LogAccess
 data ResolvedLog = ResolvedLog
     { resolvedDrv :: FilePath
     , resolvedLog :: ByteString
-    , resolvedSource :: LogSource
+    , resolvedVia :: [FilePath]
     }
     deriving (Eq, Show)
 
@@ -68,10 +62,10 @@ resolveBuildLog access stepDrv = do
     mOwn <- cachedLog (fetchStepLog access) logCache stepDrv
     case mOwn of
         Just logText ->
-            return (Just (ResolvedLog stepDrv logText StepDrv))
+            return (Just (ResolvedLog stepDrv logText []))
         Nothing -> do
             nodes <- fetchNodes nodeCache [stepDrv]
-            bfs nodeCache logCache (Set.singleton stepDrv) [(input, 1) | input <- maybe [] dnInputs (Map.lookup stepDrv nodes)]
+            bfs nodeCache logCache (Set.singleton stepDrv) [(input, []) | input <- maybe [] dnInputs (Map.lookup stepDrv nodes)]
   where
     bfs _ _ _ [] = return Nothing
     bfs nodeCache logCache visited level = do
@@ -84,9 +78,9 @@ resolveBuildLog access stepDrv = do
                 nodes <- fetchNodes nodeCache (map fst unbuilt)
                 bfs nodeCache logCache seen $
                     dedupe seen
-                        [ (input, depth + 1)
-                        | (drv, depth) <- unbuilt
-                        , depth < maxBfsDepth
+                        [ (input, via ++ [drv])
+                        | (drv, via) <- unbuilt
+                        , length via + 1 < maxBfsDepth
                         , Just node <- [Map.lookup drv nodes]
                         , input <- dnInputs node
                         ]
@@ -96,23 +90,23 @@ resolveBuildLog access stepDrv = do
     logOfFirstUnbuilt logCache plan = go []
       where
         go unbuilt [] = return (Nothing, reverse unbuilt)
-        go unbuilt ((drv, depth) : rest)
+        go unbuilt ((drv, via) : rest)
             | drv `Set.member` spBuild plan = do
                 mLog <- cachedLog (fetchInputLog access) logCache drv
                 case mLog of
                     Just logText ->
                         return $
-                            ( Just (ResolvedLog drv logText (InputDrv drv depth))
+                            ( Just (ResolvedLog drv logText via)
                             , []
                             )
-                    Nothing -> go ((drv, depth) : unbuilt) rest
+                    Nothing -> go ((drv, via) : unbuilt) rest
             | otherwise = go unbuilt rest
 
-dedupe :: Set FilePath -> [(FilePath, Int)] -> [(FilePath, Int)]
+dedupe :: Set FilePath -> [(FilePath, a)] -> [(FilePath, a)]
 dedupe _ [] = []
-dedupe excluded ((drv, depth) : rest)
+dedupe excluded ((drv, via) : rest)
     | drv `Set.member` excluded = dedupe excluded rest
-    | otherwise = (drv, depth) : dedupe (Set.insert drv excluded) rest
+    | otherwise = (drv, via) : dedupe (Set.insert drv excluded) rest
 
 lastMeaningfulLine :: ByteString -> Maybe Text
 lastMeaningfulLine = fmap TE.decodeUtf8Lenient . lastNonEmptyLine

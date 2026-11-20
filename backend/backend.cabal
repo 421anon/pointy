@@ -86,6 +86,7 @@ library
     Search.Store
     SlurmWatch
     Sse
+    StepLog
     Storage
     UserRepo
 
@@ -405,6 +406,18 @@ test-suite certificate-status
     , filepath
     , stm
     , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite step-log-view
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          StepLogView.hs
+  build-depends:
+    , backend
+    , base
+    , bytestring
 
   hs-source-dirs:   test
   default-language: Haskell2010

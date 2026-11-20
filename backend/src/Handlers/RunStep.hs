@@ -13,7 +13,7 @@ module Handlers.RunStep (
 ) where
 
 import Bisect (bisectBatch)
-import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), resolveBuildLog, validPaths)
+import BuildLog (LogAccess (..), resolveBuildLog, validPaths)
 import BuildRunner (BuildKey (..), JobComment (..), JobId (..), SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isDerivationPath, isRunningState, queryJobIds, querySlurmJobs, realiseCommand, runningJobNames, submitAndWait, submitJob, waitForCompletion)
 import Certificates (renderIdList)
 import ClusterBus (buildingSteps, clearBuildRequest, markQueued, requestBuild, requestStop, stopRequested, takeStopRequest)
@@ -32,7 +32,6 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import EffectRunner (runAppEffects)
@@ -43,6 +42,7 @@ import Handlers.Cold (coldFilesFor)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import JobOutcome (jobOutcome, outcomeMessage)
 import Servant (NoContent (..), err404, err500, errBody)
+import StepLog (StepBuild, StepLogView, stepLogView)
 import System.Exit (ExitCode (..))
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 
@@ -82,7 +82,7 @@ runStepSync eid commit = do
         Left err -> liftIO $ putStrLn $ "runStepAsync error: " ++ err
         Right _ -> return ()
 
-stepLogHandler :: Int -> Maybe T.Text -> AppM T.Text
+stepLogHandler :: Int -> Maybe T.Text -> AppM StepLogView
 stepLogHandler eid commit = do
     result <- lift $ runExceptT $ do
         (repoPath, targetCommit) <-
@@ -94,23 +94,48 @@ stepLogHandler eid commit = do
         target <- resolveStepTarget ctx eid
         outcome <- liftIO $ jobOutcome (unBuildKey (buildKeyForOutPath (stepTargetPath target)))
         resolved <- lift $ resolveBuildLog RemoteLogs (stepTargetDrv target)
-        pure (outcome, resolved)
+        let reason = outcomeMessage <$> outcome
+        builds <- stepBuildsUpstreamOf ctx eid
+        return $ case resolved of
+            Just resolvedLog -> Just (stepLogView eid builds reason resolvedLog)
+            Nothing -> stepLogWithoutLog eid builds <$> reason
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-        Right (Nothing, Nothing) ->
+        Right Nothing ->
             throwError $
                 err404
                     { errBody =
                         TLE.encodeUtf8 (TL.pack ("No build log available for step " ++ show eid))
                     }
-        Right (outcome, resolved) ->
-            return $ T.intercalate "\n-----\n" (map outcomeMessage (maybe [] pure outcome) ++ map renderResolvedLog (maybe [] pure resolved))
+        Right (Just view) -> return view
 
-renderResolvedLog :: ResolvedLog -> T.Text
-renderResolvedLog (ResolvedLog _ logText StepDrv) = TE.decodeUtf8Lenient logText
-renderResolvedLog (ResolvedLog drv logText (InputDrv _ _)) =
-    "Build prerequisite failed: " <> T.pack drv <> "\n-----\n" <> TE.decodeUtf8Lenient logText
+stepBuildsUpstreamOf :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) [StepBuild]
+stepBuildsUpstreamOf ctx eid = do
+    output <- runNixEvalJsonApplyInRepo ctx expression "#pointy.steps"
+    either (throwError . (("Failed to decode the builds upstream of step " ++ show eid ++ ": ") ++)) pure $
+        eitherDecode (TLE.encodeUtf8 (TL.pack output))
+  where
+    expression =
+        unlines
+            [ "steps:"
+            , "let"
+            , "  closure = builtins.genericClosure {"
+            , "    startSet = [ { key = \"" ++ show eid ++ "\"; } ];"
+            , "    operator = entry: map (id: { key = id; }) (steps.${entry.key}.dependencies or [ ]);"
+            , "  };"
+            , "  stdlibPhases = [ \"unpackPhase\" ];"
+            , "  templatePhases = step: builtins.filter (attr: builtins.match \".*Phase\" attr != null && !(builtins.elem attr stdlibPhases)) (builtins.attrNames step.drvAttrs);"
+            , "  describe = entry:"
+            , "    let step = steps.${entry.key}; in {"
+            , "      id = entry.key;"
+            , "      name = step.def.name or \"\";"
+            , "      build = step.drvPath;"
+            , "      check = if step ? certificate then step.certificate.drvPath else null;"
+            , "      phases = templatePhases step;"
+            , "    };"
+            , "in map describe closure"
+            ]
 
 stepAttr :: Int -> String
 stepAttr eid = "pointy.steps." ++ show eid

@@ -365,7 +365,7 @@ edited =
     lens ".edited" .edited (\t record -> { t | edited = record })
 
 
-stepLogs : Lens ls Model (Dict String (ApiData String)) x y
+stepLogs : Lens ls Model (Dict String (ApiData Model.StepLog)) x y
 stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
 

@@ -486,6 +486,30 @@ type alias Notice =
     }
 
 
+type Stage
+    = BuildStage
+    | TypeCheckStage
+
+
+type Build
+    = StepBuild Int String Stage
+    | PackageBuild String
+
+
+type alias LogSection =
+    { phase : Maybe String
+    , text : String
+    }
+
+
+type alias StepLog =
+    { failed : Build
+    , via : List Build
+    , sections : List LogSection
+    , log : String
+    }
+
+
 type alias ProjectRecord =
     BaseRecord
         { children : List ChildLink
@@ -1759,7 +1783,7 @@ type Model
         , ingestJobs : Dict Int IngestJob
         , pendingIngestSteps : Set Int
         , scratch : ScratchState
-        , stepLogs : Dict String (ApiData String)
+        , stepLogs : Dict String (ApiData StepLog)
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict String (Dict Int StatusReport)
@@ -2210,7 +2234,7 @@ getUserRepoInfo (Model model) =
     model.userRepoInfo
 
 
-getStepLogs : Model -> Dict String (ApiData String)
+getStepLogs : Model -> Dict String (ApiData StepLog)
 getStepLogs (Model model) =
     model.stepLogs
 

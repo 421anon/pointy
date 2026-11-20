@@ -1015,3 +1015,56 @@ coldFileState state =
 coldPath : Decoder (List String)
 coldPath =
     Decode.map (String.split "/" >> List.filter (not << String.isEmpty)) Decode.string
+
+
+stepLog : Decoder Model.StepLog
+stepLog =
+    Decode.succeed Model.StepLog
+        |> required "failed" buildRef
+        |> required "via" (Decode.list buildRef)
+        |> required "sections" (Decode.list logSection)
+        |> required "log" Decode.string
+
+
+buildRef : Decoder Model.Build
+buildRef =
+    Decode.field "kind" Decode.string
+        |> Decode.andThen
+            (\kind ->
+                case kind of
+                    "step" ->
+                        Decode.succeed Model.StepBuild
+                            |> required "stepId" Decode.int
+                            |> required "name" Decode.string
+                            |> required "stage" stage
+
+                    "package" ->
+                        Decode.map Model.PackageBuild (Decode.field "name" Decode.string)
+
+                    other ->
+                        Decode.fail ("Unknown build kind: " ++ other)
+            )
+
+
+stage : Decoder Model.Stage
+stage =
+    Decode.string
+        |> Decode.andThen
+            (\value ->
+                case value of
+                    "build" ->
+                        Decode.succeed Model.BuildStage
+
+                    "typeCheck" ->
+                        Decode.succeed Model.TypeCheckStage
+
+                    other ->
+                        Decode.fail ("Unknown build stage: " ++ other)
+            )
+
+
+logSection : Decoder Model.LogSection
+logSection =
+    Decode.succeed Model.LogSection
+        |> required "phase" (Decode.nullable Decode.string)
+        |> required "text" Decode.string

@@ -6,7 +6,7 @@
 
 module Main (main) where
 
-import BuildLog (LogAccess (..), LogSource (..), ResolvedLog (..), buildStepStore, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
+import BuildLog (LogAccess (..), ResolvedLog (..), buildStepStore, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
 import BuildRunner (BuildKey (..), buildKeyForOutPath)
 import BuildStatus (checkStatus, resolveStepStatus)
 import Certificates (rawStatusesFor)
@@ -103,8 +103,8 @@ checkContentAddressedGraph version4 = do
     resolved <- runGraphFixture (resolveBuildLog RemoteLogs rootDrv)
     assertEqual
         ("failure log remains reachable through unknown CA outputs, version4=" ++ show version4)
-        (Just (failedDrv, "fixture dependency failed", InputDrv failedDrv 2))
-        (fmap (\result -> (resolvedDrv result, resolvedLog result, resolvedSource result)) resolved)
+        (Just (failedDrv, "fixture dependency failed", [caDrv]))
+        (fmap (\result -> (resolvedDrv result, resolvedLog result, resolvedVia result)) resolved)
   where
     rootDrv = "/nix/store/00000000000000000000000000000000-root.drv"
     caDrv = "/nix/store/11111111111111111111111111111111-content-addressed.drv"
