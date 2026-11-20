@@ -14,8 +14,9 @@ module BuildStatus (
 ) where
 
 import BuildLog (LogAccess (..), ResolvedLog (..), isStorePath, lastMeaningfulLine, lookupDeriver, resolveBuildLog, validPaths)
-import BuildRunner (BuildState (..), buildKeyForOutPath, queryState)
+import BuildRunner (BuildKey (..), BuildState (..), buildKeyForOutPath, queryState)
 import Control.Monad ((<=<))
+import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), withObject, (.:))
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -23,6 +24,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Effectful (Eff, IOE, (:>))
 import Effects (Nix, Slurm, pathValid)
+import JobOutcome (jobOutcome, outcomeMessage)
 
 data StepPaths = StepPaths
     { stepCertificate :: FilePath
@@ -61,11 +63,15 @@ resolveStepStatus _ entry@(_, status_)
 resolveStepStatus Nothing entry = return entry
 resolveStepStatus (Just certificate) entry@(sid, (state, _))
     | state == "failure" || state == "not-started" = do
-        mDrv <- lookupDeriver certificate
-        mResolved <- maybe (return Nothing) (resolveBuildLog LocalLogs) mDrv
-        return $ case mResolved of
-            Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
-            Nothing -> entry
+        outcome <- liftIO $ jobOutcome (unBuildKey (buildKeyForOutPath certificate))
+        case outcome of
+            Just known -> return (sid, ("failure", Just (outcomeMessage known)))
+            Nothing -> do
+                mDrv <- lookupDeriver certificate
+                mResolved <- maybe (return Nothing) (resolveBuildLog LocalLogs) mDrv
+                return $ case mResolved of
+                    Just rl -> (sid, ("failure", lastMeaningfulLine (resolvedLog rl)))
+                    Nothing -> entry
     | otherwise = return entry
 
 markBuiltOutputs :: (Nix :> es) => Map Int StepPaths -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))

@@ -82,7 +82,7 @@ instance FromJSON BrokerRequest where
             <*> value .:? "state"
 
 data BrokerFrame
-    = FrameSnapshot String String [(String, String)]
+    = FrameSnapshot String String [TerminalRecord]
     | FrameHeartbeat
 
 data Client = Client
@@ -121,6 +121,7 @@ data PersistedTerminal = PersistedTerminal
     { persistedJobId :: String
     , persistedJobName :: String
     , persistedAccount :: Maybe String
+    , persistedState :: Maybe String
     , persistedAt :: Int
     }
     deriving (Eq, Show)
@@ -131,6 +132,7 @@ instance ToJSON PersistedTerminal where
             [ "id" .= persistedJobId record
             , "name" .= persistedJobName record
             , "account" .= persistedAccount record
+            , "state" .= persistedState record
             , "at" .= persistedAt record
             ]
 
@@ -140,6 +142,7 @@ instance FromJSON PersistedTerminal where
             <$> value .: "id"
             <*> value .: "name"
             <*> value .:? "account"
+            <*> value .:? "state"
             <*> value .: "at"
 
 newRuntime :: BrokerConfig -> IO Runtime
@@ -413,8 +416,8 @@ frameBytes frame =
                 , "jobs" .= jobs
                 , "cluster" .= cluster
                 , "terminalJobs"
-                    .= [ object ["id" .= identifier, "name" .= name]
-                       | (identifier, name) <- terminalJobs
+                    .= [ object ["id" .= terminalJobId record, "name" .= terminalJobName record, "state" .= terminalState record]
+                       | record <- terminalJobs
                        ]
                 ]
         FrameHeartbeat ->
@@ -590,6 +593,7 @@ loadTerminalState (Just path) = do
                                                         (persistedJobId record)
                                                         (persistedJobName record)
                                                         (persistedAccount record)
+                                                        (persistedState record)
                                                         (persistedAt record)
                                                   )
                                                 | record <- records
@@ -621,6 +625,7 @@ persistTerminalState runtime =
             { persistedJobId = terminalJobId record
             , persistedJobName = terminalJobName record
             , persistedAccount = terminalAccount record
+            , persistedState = terminalState record
             , persistedAt = terminalAt record
             }
 

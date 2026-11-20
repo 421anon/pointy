@@ -30,6 +30,7 @@ import qualified Data.Text as T
 import Data.Time (getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effects (SlurmQuery (..), querySlurm)
+import JobOutcome (TerminalState (..), recordTerminalStates)
 import JobWatch (markJobsEnded, markTerminalJobs, watchedJobs)
 import System.Environment (lookupEnv)
 import System.IO (Handle)
@@ -39,12 +40,13 @@ import System.Timeout (timeout)
 data TerminalJob = TerminalJob
     { terminalJobId :: Text
     , terminalJobName :: Text
+    , terminalJobState :: Maybe Text
     }
     deriving (Eq, Show)
 
 instance FromJSON TerminalJob where
     parseJSON = withObject "terminal Slurm job" $ \object ->
-        TerminalJob <$> object .: "id" <*> object .: "name"
+        TerminalJob <$> object .: "id" <*> object .: "name" <*> object .:? "state"
 
 data WatchEvent
     = WatchSnapshot
@@ -139,11 +141,17 @@ applyWatchEvent (WatchSnapshot jobsText clusterText terminalJobs) = do
     now <- wholeSeconds <$> getCurrentTime
     let jobs = snapshotJobs jobsText
         hints = [(T.unpack (terminalJobId job), T.unpack (terminalJobName job)) | job <- terminalJobs]
+        states =
+            [ TerminalState (T.unpack (terminalJobId job)) (T.unpack (terminalJobName job)) (T.unpack state)
+            | job <- terminalJobs
+            , Just state <- [terminalJobState job]
+            ]
     case clusterText of
         Nothing -> applySnapshot Nothing now jobs
         Just transcript ->
             let (status, detail) = clusterStatusFromAvailability (Right (T.unpack transcript))
              in applySnapshot (Just (status, detail)) now jobs
+    recordTerminalStates states
     markTerminalJobs hints
     reconcileCompletion jobs
 

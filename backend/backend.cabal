@@ -68,6 +68,7 @@ library
     IngestJobs
     Interpreters.Fixture
     Interpreters.Production
+    JobOutcome
     JobWatch
     NixEvaluator
     NixStore

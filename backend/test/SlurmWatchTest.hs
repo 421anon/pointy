@@ -4,6 +4,7 @@ module Main (main) where
 
 import BuildRunner (JobId (..), SlurmJob (..), isRunningState)
 import Control.Monad (unless)
+import JobOutcome (JobOutcome (..), TerminalState (..), jobOutcome, recordSubmittedJob, recordTerminalStates)
 import JobWatch (awaitJobEnded, markJobsEnded, markTerminalJobs, unwatchJob, watchJob, watchedJobs)
 import SlurmWatch (TerminalJob (..), WatchEvent (..), parseWatchEvent, snapshotJobs)
 import System.Timeout (timeout)
@@ -11,16 +12,16 @@ import System.Timeout (timeout)
 main :: IO ()
 main = do
     assertEqual
-        "a snapshot frame carries the job, cluster and terminal transcripts"
+        "a snapshot frame carries the job, cluster and terminal transcripts, with or without a terminal state"
         ( Right
             ( WatchSnapshot
                 "42|pointy-nix-build-x|comment|RUNNING|0:10|None\n"
                 (Just "pointy*|up|node1|idle\n")
-                [TerminalJob "41" "pointy-nix-build-x"]
+                [TerminalJob "41" "pointy-nix-build-x" (Just "OUT_OF_MEMORY"), TerminalJob "40" "pointy-nix-build-w" Nothing]
             )
         )
         ( parseWatchEvent
-            "{\"type\":\"snapshot\",\"jobs\":\"42|pointy-nix-build-x|comment|RUNNING|0:10|None\\n\",\"cluster\":\"pointy*|up|node1|idle\\n\",\"terminalJobs\":[{\"id\":\"41\",\"name\":\"pointy-nix-build-x\"}]}"
+            "{\"type\":\"snapshot\",\"jobs\":\"42|pointy-nix-build-x|comment|RUNNING|0:10|None\\n\",\"cluster\":\"pointy*|up|node1|idle\\n\",\"terminalJobs\":[{\"id\":\"41\",\"name\":\"pointy-nix-build-x\",\"state\":\"OUT_OF_MEMORY\"},{\"id\":\"40\",\"name\":\"pointy-nix-build-w\"}]}"
         )
     assertEqual
         "a snapshot without terminal jobs is accepted"
@@ -58,6 +59,22 @@ main = do
     newerDone <- timeout 100000 (awaitJobEnded third)
     assertEqual "a terminal hint for another job id does not end a newer retry" Nothing newerDone
     unwatchJob "pointy-nix-build-y" third
+
+    recordTerminalStates [TerminalState "51" "pointy-nix-build-oom" "OUT_OF_MEMORY"]
+    oomOutcome <- jobOutcome "pointy-nix-build-oom"
+    assertEqual "an out-of-memory terminal state is the job's outcome" (Just OutOfMemory) oomOutcome
+    recordSubmittedJob "pointy-nix-build-oom" "52"
+    recordTerminalStates [TerminalState "51" "pointy-nix-build-oom" "OUT_OF_MEMORY"]
+    retriedOutcome <- jobOutcome "pointy-nix-build-oom"
+    assertEqual "a resubmitted job hides the previous job's outcome, even when its state is resent" Nothing retriedOutcome
+    recordSubmittedJob "pointy-nix-build-late" "61"
+    recordTerminalStates [TerminalState "61" "pointy-nix-build-late" "TIMEOUT"]
+    recordSubmittedJob "pointy-nix-build-late" "61"
+    lateOutcome <- jobOutcome "pointy-nix-build-late"
+    assertEqual "a submission recorded after its own terminal state keeps that state" (Just TimeLimitReached) lateOutcome
+    recordTerminalStates [TerminalState "71" "pointy-nix-build-failed" "FAILED"]
+    failedOutcome <- jobOutcome "pointy-nix-build-failed"
+    assertEqual "an ordinary failure has no outcome beyond its build log" Nothing failedOutcome
 
 lookupJob :: String -> [SlurmJob] -> Maybe SlurmJob
 lookupJob name = findJob

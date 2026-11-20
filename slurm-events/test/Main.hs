@@ -98,18 +98,20 @@ testTerminalSuppression = do
 
 testTerminalMetadata :: IO ()
 testTerminalMetadata = do
-    let ownedEvent = (jobEvent TerminalEvent "101" "site-mbs-own") {eventAccount = Just "mbs"}
-        foreignEvent = (jobEvent TerminalEvent "202" "site-other-secret") {eventAccount = Just "other"}
+    let ownedEvent = (jobEvent TerminalEvent "101" "site-mbs-own") {eventAccount = Just "mbs", eventState = Just "OUT_OF_MEMORY"}
+        foreignEvent = (jobEvent TerminalEvent "202" "site-other-secret") {eventAccount = Just "other", eventState = Just "FAILED\nforged"}
     broker <- either (ioError . userError) pure (apply emptyBrokerState ownedEvent)
     foreignTerminal <- either (ioError . userError) pure (apply broker foreignEvent)
     assertEqual
-        "owned terminal metadata"
-        [("101", "own")]
-        (filterTerminalJobs (WatchScoped "site-" "mbs") foreignTerminal)
+        "owned terminal metadata carries the job state"
+        [("101", "own", Just "OUT_OF_MEMORY")]
+        (visibleTerminal (filterTerminalJobs (WatchScoped "site-" "mbs") foreignTerminal))
     assertEqual
-        "foreign terminal metadata hidden"
-        [("202", "secret")]
-        (filterTerminalJobs (WatchScoped "site-" "other") foreignTerminal)
+        "foreign terminal metadata hidden and a malformed state dropped"
+        [("202", "secret", Nothing)]
+        (visibleTerminal (filterTerminalJobs (WatchScoped "site-" "other") foreignTerminal))
+  where
+    visibleTerminal = map (\record -> (terminalJobId record, terminalJobName record, terminalState record))
 
 testCompletionBeforeStart :: IO ()
 testCompletionBeforeStart = do

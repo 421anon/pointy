@@ -131,7 +131,7 @@ Inputs from other steps are JSON objects such as `{ "step": 42 }`; several input
 
 `POST /run-step?id=42&commit=<hash>` starts asynchronous evaluation and scheduling. A successful empty response means the request was dispatched, **not** that scheduling or execution succeeded; it is returned before the step or commit is even read. The backend builds missing upstream dependencies too, reusing valid build targets and in-flight jobs.
 
-Listen for status snapshots, and use `GET /step-log?id=42&commit=<hash>` for a build log. On revisions whose stdlib publishes `pointy.schemaVersion`, the logged derivation is the step's certificate; a failed prerequisite appears as `Build prerequisite failed: <drv>` followed by `-----` and the log. A missing log returns 404 with `No build log available for step <id>`; it does not establish that the step succeeded.
+Listen for status snapshots, and use `GET /step-log?id=42&commit=<hash>` for a build log. On revisions whose stdlib publishes `pointy.schemaVersion`, the logged derivation is the step's certificate; a failed prerequisite appears as `Build prerequisite failed: <drv>` followed by `-----` and the log. When the step's latest Slurm job ran out of memory, reached its time limit, or lost its node, the log starts with that reason followed by `-----`, and the step's failure `error` is the reason instead of the log's last line. A missing log returns 404 with `No build log available for step <id>`; it does not establish that the step succeeded.
 
 Status and log resolution follow derivation inputs even when a content-addressed output has no known store path yet. Such an output is not a malformed derivation or evidence that its build succeeded; dependency logs remain reachable through it.
 

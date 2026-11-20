@@ -22,7 +22,7 @@ module SlurmEvents
     , validAccountName
     ) where
 
-import Data.Char (isAsciiLower, isControl, isDigit)
+import Data.Char (isAsciiLower, isAsciiUpper, isControl, isDigit)
 import Data.List (intercalate, isPrefixOf, sortOn, stripPrefix)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -52,6 +52,7 @@ data TerminalRecord = TerminalRecord
     { terminalJobId :: String
     , terminalJobName :: String
     , terminalAccount :: Maybe String
+    , terminalState :: Maybe String
     , terminalAt :: Int
     }
     deriving (Eq, Show)
@@ -177,7 +178,7 @@ finishJob now event broker = do
                             { brokerTerminal =
                                 Map.insert
                                     key
-                                    (TerminalRecord jobId jobName account now)
+                                    (TerminalRecord jobId jobName account (validJobState =<< eventState event) now)
                                     (brokerTerminal broker)
                             , brokerSaving = Map.delete key (brokerSaving broker)
                             }
@@ -229,6 +230,13 @@ validJobName name =
         not (isControl character)
             && character `notElem` ("|\n\r\0" :: String)
 
+validJobState :: String -> Maybe String
+validJobState state
+    | not (null state) && length state <= 32 && all validCharacter state = Just state
+    | otherwise = Nothing
+  where
+    validCharacter character = isAsciiUpper character || character == '_'
+
 pruneBrokerState :: Int -> BrokerState -> BrokerState
 pruneBrokerState now broker =
     broker
@@ -277,7 +285,7 @@ filterJobs watch broker input =
                         Just _ -> Just row {queueState = "SAVING"}
                         Nothing -> Just row
 
-filterTerminalJobs :: WatchFilter -> BrokerState -> [(String, String)]
+filterTerminalJobs :: WatchFilter -> BrokerState -> [TerminalRecord]
 filterTerminalJobs watch broker =
     mapMaybe render (Map.elems (brokerTerminal broker))
   where
@@ -285,7 +293,7 @@ filterTerminalJobs watch broker =
         case watch of
             WatchNative
                 | "pointy-nix-build-" `isPrefixOf` terminalJobName record ->
-                    Just (terminalJobId record, terminalJobName record)
+                    Just record
                 | otherwise -> Nothing
             WatchScoped prefix account
                 | Just recordAccount <- terminalAccount record
@@ -293,7 +301,7 @@ filterTerminalJobs watch broker =
                 , Just remainder <-
                     stripPrefix (prefix <> account <> "-") (terminalJobName record)
                 , not (null remainder) ->
-                    Just (terminalJobId record, remainder)
+                    Just record {terminalJobName = remainder}
                 | otherwise -> Nothing
 
 data QueueRow = QueueRow

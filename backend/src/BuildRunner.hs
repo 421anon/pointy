@@ -42,6 +42,7 @@ import Data.Word (Word64)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket)
 import Effects (Slurm, SlurmQuery (..), SubmitRequest (..), cancelJob, querySlurm)
+import JobOutcome (recordSubmittedJob)
 import JobWatch (awaitJobEnded, unwatchJob, watchJob)
 import qualified Effects as Effects
 import Numeric (showHex)
@@ -228,9 +229,11 @@ submitNewJob requirements (BuildKey key) comment command = do
                 , submitCommand = command
                 , submitWait = True
                 }
-    pure $ case result of
-        Right _ -> ExitSuccess
-        Left _ -> ExitFailure 1
+    case result of
+        Right stdout -> do
+            mapM_ (liftIO . recordSubmittedJob key . unJobId) (parseJobId stdout)
+            pure ExitSuccess
+        Left _ -> pure (ExitFailure 1)
 
 submitJob :: (Slurm :> es, IOE :> es) => StepRequirements -> BuildKey -> [JobId] -> String -> [String] -> Eff es (Either String JobId)
 submitJob requirements (BuildKey key) depJobIds comment command = do
@@ -245,12 +248,14 @@ submitJob requirements (BuildKey key) depJobIds comment command = do
                 , submitCommand = command
                 , submitWait = False
                 }
-    pure $ case result of
+    case result of
         Right stdout ->
             case parseJobId stdout of
-                Just jobId -> Right jobId
-                Nothing -> Left ("sbatch produced no job id: " ++ show stdout)
-        Left err -> Left err
+                Just jobId -> do
+                    liftIO (recordSubmittedJob key (unJobId jobId))
+                    pure (Right jobId)
+                Nothing -> pure (Left ("sbatch produced no job id: " ++ show stdout))
+        Left err -> pure (Left err)
 
 parseJobId :: String -> Maybe JobId
 parseJobId out =

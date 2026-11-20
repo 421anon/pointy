@@ -41,6 +41,7 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (finally, onException)
 import Handlers.Cold (coldFilesFor)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
+import JobOutcome (jobOutcome, outcomeMessage)
 import Servant (NoContent (..), err404, err500, errBody)
 import System.Exit (ExitCode (..))
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
@@ -91,17 +92,20 @@ stepLogHandler eid commit = do
 
         let ctx = ReadRepoContext repoPath targetCommit
         target <- resolveStepTarget ctx eid
-        lift $ resolveBuildLog RemoteLogs (stepTargetDrv target)
+        outcome <- liftIO $ jobOutcome (unBuildKey (buildKeyForOutPath (stepTargetPath target)))
+        resolved <- lift $ resolveBuildLog RemoteLogs (stepTargetDrv target)
+        pure (outcome, resolved)
 
     case result of
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
-        Right Nothing ->
+        Right (Nothing, Nothing) ->
             throwError $
                 err404
                     { errBody =
                         TLE.encodeUtf8 (TL.pack ("No build log available for step " ++ show eid))
                     }
-        Right (Just rl) -> return (renderResolvedLog rl)
+        Right (outcome, resolved) ->
+            return $ T.intercalate "\n-----\n" (map outcomeMessage (maybe [] pure outcome) ++ map renderResolvedLog (maybe [] pure resolved))
 
 renderResolvedLog :: ResolvedLog -> T.Text
 renderResolvedLog (ResolvedLog _ logText StepDrv) = TE.decodeUtf8Lenient logText
