@@ -1,27 +1,15 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
 
-module Handlers.ClusterStream (clusterStatusFromAvailability, clusterStatusStreamHandler, deriveJobProgress, encodeSnapshot) where
+module ClusterStatusReport (clusterStatusFromAvailability, deriveJobProgress, encodeSnapshot) where
 
-import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), StepActivity (..), StepPhase (..), deriveJobProgress, snapshotAndSubscribe)
-import Control.Concurrent.STM (TChan)
-import Control.Monad.IO.Class (liftIO)
+import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), StepActivity (..), StepPhase (..), deriveJobProgress)
 import Data.Aeson (encode, object, (.=))
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Effects (AppM)
-import Servant (Header, Headers, addHeader)
-import qualified Servant.Types.SourceT as S
-import qualified Sse
 
 data ClusterRow = ClusterRow
     { rowPartition :: Text
@@ -48,25 +36,6 @@ clusterStatusFromAvailability = \case
              in case detail of
                     Just text -> (Degraded, Just text)
                     Nothing -> (Available, Nothing)
-
-clusterStatusStreamHandler ::
-    AppM
-        ( Headers
-            '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text]
-            (S.SourceT IO BS.ByteString)
-        )
-clusterStatusStreamHandler = do
-    (initialSnapshot, busChan) <- liftIO snapshotAndSubscribe
-    let source =
-            S.fromStepT
-                ( S.Yield
-                    (Sse.sseEvent "cluster-status" (encodeSnapshot initialSnapshot))
-                    (S.Effect (streamLoop busChan))
-                )
-    pure $ addHeader "no-transform" $ addHeader "no" source
-
-streamLoop :: TChan ClusterSnapshot -> IO (S.StepT IO BS.ByteString)
-streamLoop = Sse.broadcastLoop ((,) "cluster-status" . encodeSnapshot)
 
 encodeSnapshot :: ClusterSnapshot -> LBS.ByteString
 encodeSnapshot snapshot =

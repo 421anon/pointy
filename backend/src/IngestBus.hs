@@ -8,11 +8,14 @@ module IngestBus (
     recordSuccess,
     recordFailure,
     jobsSnapshot,
+    encodeJobs,
     snapshotAndSubscribe,
 ) where
 
 import Control.Concurrent.STM (TChan, TVar, atomically, dupTChan, newBroadcastTChanIO, newTVarIO, readTVar, readTVarIO, writeTChan, writeTVar)
-import Data.Aeson (ToJSON (..), object, (.=))
+import Data.Aeson (ToJSON (..), encode, object, (.=))
+import qualified Data.ByteString.Lazy as LBS
+import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -105,6 +108,9 @@ snapshotAndSubscribe = atomically $ do
     jobs <- readTVar jobsVar
     chan <- dupTChan ingestChanVar
     pure (jobs, chan)
+
+encodeJobs :: Map Int IngestJob -> LBS.ByteString
+encodeJobs jobs = encode (object ["jobs" .= sortOn jobId (Map.elems jobs)])
 
 finish :: Int -> IngestJobState -> Maybe Text -> Maybe Text -> IO ()
 finish ident state mHash mError = atomically $ do

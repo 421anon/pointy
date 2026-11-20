@@ -30,7 +30,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildKind(..), ChildRef, CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), ListingSort(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, StepStatusEvent(..), Table, TemplateSource(..), TextContent, TreeOp(..))
+import Model.Core as Model exposing (AddMode(..), BaseRecord, ChildKind(..), ChildRef, CompareActiveData, CompareMode(..), CompareSelection, CompareSource(..), CompareState(..), ListingSort(..), Model, ProjectRecord, SeekWindow, Status(..), StepRecord, Table, TemplateSource(..), TextContent, TreeOp(..))
 import Model.Lenses exposing (..)
 import Model.Lib exposing (canonicalPathTo)
 import Model.Selection as Selection
@@ -5018,9 +5018,6 @@ onAgentTurnIn value =
                 |> Flow.seq (refreshAgentSession done.sessionId)
                 |> Flow.seq (notifySubmittedTurnFinished done.sessionId done.turnId)
 
-        Ok Model.AgentTurnHeartbeat ->
-            Flow.pure ()
-
         Ok (Model.AgentTurnError { sessionId, message }) ->
             Flow.setAll (agent << liveTurnAt sessionId << just << streamError) (Just message)
                 |> Flow.seq (addToast False message)
@@ -5085,10 +5082,10 @@ listenAndProcessStepStatus =
     Flow.subscribe onStepStatusIn Channels.stepStatus
 
 
-onStepStatusIn : Decode.Value -> Flow Model ()
-onStepStatusIn value =
-    case Decode.decodeValue ApiDecode.stepStatusEvent value of
-        Ok (SSESnapshot { commit, steps }) ->
+onStepStatusIn : String -> Flow Model ()
+onStepStatusIn json =
+    case Decode.decodeString ApiDecode.snapshot json of
+        Ok { commit, steps } ->
             let
                 statuses =
                     Dict.fromList (List.map (\step -> ( step.stepId, { commit = commit, status = step.status, certificate = step.certificate } )) steps)
@@ -5102,17 +5099,23 @@ onStepStatusIn value =
                             |> Flow.seq (Flow.when (rollupAffectedFor model statuses) (Flow.async refreshProjectRollup))
                     )
 
-        Ok SSEHeartbeat ->
-            Flow.pure ()
-
-        Ok (SSEError err) ->
-            addToast False ("SSE Error: " ++ err)
-
-        Ok (SSEConnection connection) ->
-            Flow.setAll backendConnection connection
-
         Err err ->
-            addToast False ("SSE Decode Error: " ++ Decode.errorToString err)
+            addToast False ("Step status decode error: " ++ Decode.errorToString err)
+
+
+listenAndProcessBackendConnection : Flow Model Never
+listenAndProcessBackendConnection =
+    Flow.subscribe
+        (\connected ->
+            Flow.setAll backendConnection
+                (if connected then
+                    Model.BackendUp
+
+                 else
+                    Model.BackendDown
+                )
+        )
+        Channels.backendConnection
 
 
 headMovedRemotely : Model -> String -> Bool
@@ -5312,14 +5315,14 @@ settlePendingBuild snapshotCommit stepId status_ =
             )
 
 
-startClusterStatusStream : Flow Model Never
-startClusterStatusStream =
+listenAndProcessClusterStatus : Flow Model Never
+listenAndProcessClusterStatus =
     Flow.subscribe onClusterStatusIn Channels.clusterStatus
 
 
-onClusterStatusIn : Decode.Value -> Flow Model ()
-onClusterStatusIn value =
-    case Decode.decodeValue ApiDecode.clusterSnapshot value of
+onClusterStatusIn : String -> Flow Model ()
+onClusterStatusIn json =
+    case Decode.decodeString ApiDecode.clusterSnapshot json of
         Ok snapshot ->
             Flow.setAll clusterStatus (ApiData.Success snapshot.status)
                 |> Flow.seq (Flow.setAll clusterDetail snapshot.detail)

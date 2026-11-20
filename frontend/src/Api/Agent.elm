@@ -410,9 +410,6 @@ turnEvent =
                                 |> required "turnId" Decode.string
                             )
 
-                    "heartbeat" ->
-                        Decode.succeed Model.AgentTurnHeartbeat
-
                     "error" ->
                         Decode.field "data"
                             (Decode.succeed (\sessionId message -> Model.AgentTurnError { sessionId = sessionId, message = message })

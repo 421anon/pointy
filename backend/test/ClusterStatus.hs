@@ -4,6 +4,7 @@ module Main (main) where
 
 import BuildRunner (JobComment (..), SlurmJob, encodeJobComment, parseSlurmJobLine)
 import ClusterBus (ClusterSnapshot (..), ClusterStatus (..), JobProgress (..), StepActivity (..), StepPhase (..), TrackedBuild (..))
+import ClusterStatusReport (clusterStatusFromAvailability, deriveJobProgress, encodeSnapshot)
 import Control.Monad (unless)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -13,7 +14,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Handlers.ClusterStream (clusterStatusFromAvailability, deriveJobProgress, encodeSnapshot)
 
 main :: IO ()
 main = do

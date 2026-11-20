@@ -52,7 +52,7 @@ For a plain multi-node cluster:
 | `services.pointy-node.hub.sshKeyFile` | _(required)_ | Private SSH key this node presents to the hub; the Slurm build user must be able to read it. |
 | `services.pointy-node.hub.hostPublicKey` | `null` | Base64 SSH host public key used to pin the hub. `null` uses the node's known hosts. |
 
-The nginx configuration keeps `/backend/` SSE responses unbuffered and allows hour-long reads. If you replace the supplied reverse proxy, preserve those settings for the status, ingest, cluster, and agent-turn streams.
+The nginx configuration keeps `/backend/` SSE responses unbuffered and allows hour-long reads. If you replace the supplied reverse proxy, preserve those settings for the `/events` stream and the agent-turn streams.
 
 ## NixOS integration
 

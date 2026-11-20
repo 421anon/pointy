@@ -73,6 +73,7 @@ main = withSystemTempDirectory "turn-stream-test" $ \home -> do
         Just (Just (chunkBytes, pull1)) -> do
             assertBool "chunk event name" ("event: chunk" `BS.isInfixOf` chunkBytes)
             assertBool "chunk carries log line" ("first line" `BS.isInfixOf` chunkBytes)
+            assertBool "chunk carries the log offset after it as its id" ("id: 20\n" `BS.isInfixOf` chunkBytes)
             let finished = turn{turnStatus = "succeeded", turnExitCode = Just 0, turnFinishedAt = Just now}
             saveTurn finished
             mDone <- timeout 2000000 (pullStep pull1)
@@ -86,6 +87,16 @@ main = withSystemTempDirectory "turn-stream-test" $ \home -> do
                         Just Nothing -> pure ()
                         Nothing -> fail "stream stayed open after done"
                         Just _ -> fail "stream emitted an event after done"
+
+    TIO.appendFile logPath "[stdout] second line\n"
+    resumeSignal <- registerTurnSignal logPath
+    signalTurnLog logPath
+    mResumed <- timeout 2000000 (pullStep (streamLoop turn 20 resumeSignal))
+    case mResumed of
+        Just (Just (resumedBytes, _)) -> do
+            assertBool "a stream resumed at an offset starts after it" ("second line" `BS.isInfixOf` resumedBytes && not ("first line" `BS.isInfixOf` resumedBytes))
+            assertBool "a resumed chunk carries the offset after it as its id" ("id: 41\n" `BS.isInfixOf` resumedBytes)
+        _ -> fail "a stream resumed at an offset sent no chunk"
 
 pullStep :: IO (StepT IO BS.ByteString) -> IO (Maybe (BS.ByteString, IO (StepT IO BS.ByteString)))
 pullStep mstep = do

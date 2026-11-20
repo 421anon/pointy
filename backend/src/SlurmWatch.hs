@@ -15,6 +15,7 @@ module SlurmWatch (
 
 import BuildRunner (JobId (..), SlurmJob (..), isRunningState, parseSlurmJobLine)
 import ClusterBus (ClusterStatus (..), applySnapshot, setClusterStatus, updateJobProgress, wholeSeconds)
+import ClusterStatusReport (clusterStatusFromAvailability, deriveJobProgress)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (IOException, SomeException, displayException, try)
 import Control.Monad (unless, void, when)
@@ -29,7 +30,6 @@ import qualified Data.Text as T
 import Data.Time (getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effects (SlurmQuery (..), querySlurm)
-import Handlers.ClusterStream (clusterStatusFromAvailability, deriveJobProgress)
 import JobWatch (markJobsEnded, markTerminalJobs, watchedJobs)
 import System.Environment (lookupEnv)
 import System.IO (Handle)

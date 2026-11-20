@@ -44,7 +44,7 @@ init flags url key =
     ( initialModel key initialRoute flags
     , Flow.async (Actions.applyAgentChatFromUrl True)
         |> Flow.seq initializeAgent
-        |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
+        |> Flow.seq listenToBackendEvents
         |> Flow.seq
             (case initialRoute.page of
                 Route.Artifact artifact ->
@@ -71,6 +71,14 @@ initializeAgent =
         |> Flow.seq (Flow.async Actions.loadUserRepoInfo)
 
 
+listenToBackendEvents : Flow Model ()
+listenToBackendEvents =
+    Flow.async Actions.listenAndProcessBackendConnection
+        |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
+        |> Flow.seq (Flow.async Actions.listenAndProcessClusterStatus)
+        |> Flow.seq (Flow.async Ingest.listenAndProcessIngestJobs)
+
+
 initializeWorkspace : Flow Model ()
 initializeWorkspace =
     Flow.async Actions.loadTokenSession
@@ -79,8 +87,6 @@ initializeWorkspace =
         |> Flow.seq Actions.loadPresets
         |> Flow.seq Actions.loadProjects
         |> Flow.seq Actions.anchorAgentChatUnlessHighlighting
-        |> Flow.seq (Flow.async Actions.startClusterStatusStream)
-        |> Flow.seq (Flow.async Ingest.startIngestStream)
         |> Flow.seq Ingest.loadScratch
 
 

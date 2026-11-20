@@ -89,9 +89,9 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
-import Servant (Handler, Header, Headers, addHeader, err404, errBody, throwError)
+import Servant (Handler, err404, errBody, throwError)
 import qualified Servant.Types.SourceT as S
-import Sse (sseComment, sseEvent)
+import Sse (SseResponse, sseEvent, sseEventWithId, sseResponse)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, doesPathExist, getFileSize, getHomeDirectory, getModificationTime, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeBaseName, takeDirectory, (</>))
@@ -457,21 +457,15 @@ killRunner ph = do
     mPid <- getPid ph
     mapM_ (signalProcess sigKILL) mPid
 
-turnLogStreamHandler :: Text -> Handler (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (S.SourceT IO BS.ByteString))
-turnLogStreamHandler tid = do
+turnLogStreamHandler :: Text -> Maybe Int -> Maybe Int -> Handler SseResponse
+turnLogStreamHandler tid lastEventId offsetParam = do
     mTurn <- liftIO $ findTurn tid
     turn <- case mTurn of
         Nothing -> throwError err404{errBody = "turn not found"}
         Just t -> return t
     signal <- liftIO $ registerTurnSignal (turnLogPath turn)
-    let padding = sseComment $ "padding " <> T.pack (replicate 4096 ' ')
-        source =
-            S.fromStepT
-                ( S.Yield
-                    (sseComment "connected")
-                    (S.Yield padding (S.Effect (streamLoop turn 0 signal)))
-                )
-    pure $ addHeader "no-transform" $ addHeader "no" source
+    let resumeOffset = fromMaybe 0 (lastEventId <|> offsetParam)
+    pure $ sseResponse (S.Effect (streamLoop turn resumeOffset signal))
 
 nameChat :: AgentConfig -> AgentSession -> FilePath -> Text -> IO ()
 nameChat cfg session_ logPath prompt =
@@ -1328,7 +1322,7 @@ streamLoop turn offset signal = return $ S.Effect $ do
         then
             return $
                 S.Yield
-                    (sseEvent "chunk" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn, "chunk" Aeson..= chunk])))
+                    (sseEventWithId (T.pack (show newOffset)) "chunk" (Aeson.encode (Aeson.object ["turnId" Aeson..= turnId turn, "chunk" Aeson..= chunk])))
                     (S.Effect (streamLoop turn newOffset signal))
         else do
             reloaded <- loadTurn =<< turnMetadataPath (turnSessionId turn) (turnId turn)
