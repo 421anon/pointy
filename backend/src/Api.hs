@@ -124,7 +124,7 @@ type StopStep =
 
 type StepLog =
     "step-log"
-        :> Description "Returns the failed build behind a step's status: which build failed (the step itself, an upstream step, or a package), the builds linking it to the step, the log split into the phases its template defines, and the full raw log."
+        :> Description "Returns the failed build behind a step's status: which build failed (the step itself, an upstream step, or a package), the builds linking it to the step, the output of the phases its template defines, and the full raw log."
         :> ReqId
         :> QueryParam "commit" Text
         :> Get '[JSON] StepLogView

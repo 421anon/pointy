@@ -2986,19 +2986,6 @@ button.step-log-via-chip {
     background: transparent;
   }
 
-  .step-log-phase {
-    color: var(--ansi-bright-black);
-    border-top: 1px solid #30363d;
-    margin-top: var(--spacing-sm);
-    padding-top: var(--spacing-xs);
-
-    &:first-child {
-      border-top: none;
-      margin-top: 0;
-      padding-top: 0;
-    }
-  }
-
   .ansi-black-fg { color: var(--ansi-black); }
   .ansi-red-fg { color: var(--ansi-red); }
   .ansi-green-fg { color: var(--ansi-green); }

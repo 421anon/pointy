@@ -496,16 +496,11 @@ type Build
     | PackageBuild String
 
 
-type alias LogSection =
-    { phase : Maybe String
-    , text : String
-    }
-
-
 type alias StepLog =
     { failed : Build
     , via : List Build
-    , sections : List LogSection
+    , reason : Maybe String
+    , output : String
     , log : String
     }
 

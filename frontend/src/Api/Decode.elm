@@ -1022,7 +1022,8 @@ stepLog =
     Decode.succeed Model.StepLog
         |> required "failed" buildRef
         |> required "via" (Decode.list buildRef)
-        |> required "sections" (Decode.list logSection)
+        |> required "reason" (Decode.nullable Decode.string)
+        |> required "output" Decode.string
         |> required "log" Decode.string
 
 
@@ -1061,10 +1062,3 @@ stage =
                     other ->
                         Decode.fail ("Unknown build stage: " ++ other)
             )
-
-
-logSection : Decoder Model.LogSection
-logSection =
-    Decode.succeed Model.LogSection
-        |> required "phase" (Decode.nullable Decode.string)
-        |> required "text" Decode.string

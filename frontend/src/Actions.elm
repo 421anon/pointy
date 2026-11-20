@@ -5021,11 +5021,19 @@ investigateStepPrompt stepId stepLog =
 
             else
                 "Investigate why step " ++ String.fromInt stepId ++ " could not build."
+        reason =
+            case stepLog.reason of
+                Just message ->
+                    "\nReason: " ++ message
+
+                Nothing ->
+                    ""
     in
     headline
         ++ "\n\nFailed build: "
         ++ failure
         ++ via
+        ++ reason
         ++ "\n\nBuild log:\n"
         ++ stepLog.log
 

@@ -42,7 +42,7 @@ import Handlers.Cold (coldFilesFor)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import JobOutcome (jobOutcome, outcomeMessage)
 import Servant (NoContent (..), err404, err500, errBody)
-import StepLog (StepBuild, StepLogView, stepLogView)
+import StepLog (StepBuild, StepLogView, stepLogView, stepLogWithoutLog)
 import System.Exit (ExitCode (..))
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
 

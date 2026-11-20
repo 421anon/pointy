@@ -3,10 +3,8 @@
 module StepLog (
     BuildRef (..),
     BuildStage (..),
-    LogSection (..),
     StepBuild (..),
     StepLogView (..),
-    logSections,
     stepLogView,
     stepLogWithoutLog,
 ) where
@@ -44,7 +42,7 @@ data StepLogView = StepLogView
     { viewFailed :: BuildRef
     , viewVia :: [BuildRef]
     , viewReason :: Maybe Text
-    , viewSections :: [LogSection]
+    , viewOutput :: Text
     , viewLog :: Text
     }
     deriving (Eq, Show)
@@ -72,16 +70,13 @@ instance ToJSON BuildRef where
         stageName StageTypeCheck = "typeCheck"
     toJSON (PackageRef name) = object ["kind" .= ("package" :: Text), "name" .= name]
 
-instance ToJSON LogSection where
-    toJSON section = object ["phase" .= sectionPhase section, "text" .= sectionText section]
-
 instance ToJSON StepLogView where
     toJSON view =
         object
             [ "failed" .= viewFailed view
             , "via" .= viewVia view
             , "reason" .= viewReason view
-            , "sections" .= viewSections view
+            , "output" .= viewOutput view
             , "log" .= viewLog view
             ]
 
@@ -91,7 +86,7 @@ stepLogView requested builds reason resolved =
         { viewFailed = failedRef
         , viewVia = filter (not . isRequested) (map (fst . describe) (resolvedVia resolved))
         , viewReason = reason
-        , viewSections = visibleSections failedPhases (logSections (resolvedLog resolved))
+        , viewOutput = shownOutput failedPhases (logSections (resolvedLog resolved))
         , viewLog = TE.decodeUtf8Lenient (resolvedLog resolved)
         }
   where
@@ -106,7 +101,7 @@ stepLogWithoutLog requested builds reason =
         { viewFailed = requestedRef
         , viewVia = []
         , viewReason = Just reason
-        , viewSections = []
+        , viewOutput = ""
         , viewLog = ""
         }
   where
@@ -129,16 +124,14 @@ derivationName drv =
         named = T.drop 1 (T.dropWhile (/= '-') file)
      in fromMaybe named (T.stripSuffix ".drv" named)
 
-visibleSections :: Maybe [Text] -> [LogSection] -> [LogSection]
-visibleSections shownPhases sections =
-    filter (not . T.null . T.strip . sectionText) $
-        case shownPhases of
-            Nothing -> sections
-            Just phases ->
-                [ section
-                | (index, section) <- zip [1 :: Int ..] sections
-                , maybe False (`elem` phases) (sectionPhase section) || index == length sections
-                ]
+shownOutput :: Maybe [Text] -> [LogSection] -> Text
+shownOutput templatePhases sections =
+    T.intercalate "\n" (filter (not . T.null . T.strip) (map sectionText (filter shown sections)))
+  where
+    shown section = case (templatePhases, sectionPhase section) of
+        (Nothing, _) -> True
+        (Just phases, Just phase) -> phase `elem` phases
+        (Just _, Nothing) -> all ((== Nothing) . sectionPhase) sections
 
 data LogLine
     = PhaseStart Text

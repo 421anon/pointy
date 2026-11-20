@@ -28,7 +28,7 @@ import Keyboard
 import Lib.StringColor exposing (stringToColor)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AddMode(..), BaseRecord, Build(..), ChildLink, ListingSort(..), LogSection, Model, ProjectRecord, Stage(..), Status(..), StepLog, StepRecord, Table, TemplateSource(..), UploadProgress)
+import Model.Core as Model exposing (AddMode(..), BaseRecord, Build(..), ChildLink, ListingSort(..), Model, ProjectRecord, Stage(..), Status(..), StepLog, StepRecord, Table, TemplateSource(..), UploadProgress)
 import Model.Lenses as Lenses exposing (argSelectStates, args, edited, isReadOnlyRoute, presetSelect, route, selectExistingSteps, stepRecordById, templatesSelect)
 import Model.Lib
 import Model.Selection
@@ -779,12 +779,13 @@ viewStepLogPopover tableName logState stepId =
 viewStepLog : String -> Int -> StepLog -> Html (Flow Model ())
 viewStepLog popoverId stepId stepLog =
     let
-        sections =
-            if List.isEmpty stepLog.sections then
+        output =
+            if String.isEmpty (String.trim stepLog.output) then
                 Html.text "Build log is empty."
 
             else
-                viewLogSections stepLog.sections
+                Html.div [ class "step-log-pre" ]
+                    [ AnsiLog.view (AnsiLog.update stepLog.output (AnsiLog.init AnsiLog.Cooked)) ]
 
         details =
             case stepLog.failed of
@@ -812,8 +813,12 @@ viewStepLog popoverId stepId stepLog =
                     [ viewBuildFailure popoverId stepLog.failed stepLog.via
                     , viewLogOwner stepLog.failed
                     ]
+        reason =
+            Html.viewMaybe
+                (\message -> Html.p [ class "step-log-note" ] [ Html.text message ])
+                stepLog.reason
     in
-    Html.div [ class "step-log-content" ] (details ++ [ sections ])
+    Html.div [ class "step-log-content" ] (details ++ [ reason, output ])
 
 
 viewBuildFailure : String -> Build -> List Build -> Html (Flow Model ())
@@ -904,24 +909,6 @@ viewLogOwner failed =
                     "Log of package " ++ name
             )
         ]
-
-
-viewLogSections : List LogSection -> Html msg
-viewLogSections sections =
-    let
-        labelled =
-            List.length sections > 1
-
-        viewSection section =
-            [ if labelled then
-                Html.viewMaybe (\phase -> Html.div [ class "step-log-phase" ] [ Html.text phase ]) section.phase
-
-              else
-                Html.nothing
-            , AnsiLog.view (AnsiLog.update section.text (AnsiLog.init AnsiLog.Cooked))
-            ]
-    in
-    Html.div [ class "step-log-pre" ] (List.concatMap viewSection sections)
 
 
 stepRecordStatus : String -> StepConfigEntry -> Bool -> StepRecord -> ApiData Status

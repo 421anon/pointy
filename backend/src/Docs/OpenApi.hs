@@ -271,7 +271,8 @@ instance ToSchema StepLogView where
                 "StepLogView"
                 [ ("failed", buildSchema)
                 , ("via", arrayOf buildSchema)
-                , ("sections", arrayOf sectionSchema)
+                , ("reason", nullableField OpenApiString)
+                , ("output", stringField)
                 , ("log", stringField)
                 ]
       where
@@ -288,13 +289,6 @@ instance ToSchema StepLogView where
                             , ("stage", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["build", "typeCheck"]))
                             ]
                     & description ?~ "A build: a step (`stepId`, `stage` is its own computation `build` or its output check `typeCheck`) or a package."
-        sectionSchema =
-            Inline $
-                mempty
-                    & type_ ?~ OpenApiObject
-                    & required .~ ["phase", "text"]
-                    & properties .~ fromList [("phase", nullableField OpenApiString), ("text", stringField)]
-                    & description ?~ "Log output of one build phase; `phase` is null for output before the first phase."
 instance ToSchema ScratchRootResponse where
     declareNamedSchema _ =
         pure $ objectSchema "ScratchRootResponse" [("root", nullableField OpenApiString)]
