@@ -370,6 +370,11 @@ stepLogs =
     lens ".stepLogs" Model.getStepLogs (\(Model m) stepLogs_ -> Model { m | stepLogs = stepLogs_ })
 
 
+coldInputs : Lens ls Model (Dict String Model.ColdInputEntry) x y
+coldInputs =
+    lens ".coldInputs" Model.getColdInputs (\(Model m) coldInputs_ -> Model { m | coldInputs = coldInputs_ })
+
+
 notices : Lens ls Model (Dict String (ApiData (List Model.Notice))) x y
 notices =
     lens ".notices" Model.getNotices (\(Model m) notices_ -> Model { m | notices = notices_ })

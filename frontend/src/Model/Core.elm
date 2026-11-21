@@ -27,6 +27,7 @@ type Status
     | StatusRunning
     | StatusSuccess
     | StatusFailure (Maybe String)
+    | StatusInputsCold (Maybe String)
     | StatusBuiltNotCertified
     | StatusCertificationFailed (Maybe String)
 
@@ -46,6 +47,9 @@ hasBuiltOutput status =
         StatusFailure _ ->
             False
 
+        StatusInputsCold _ ->
+            False
+
         StatusBuiltNotCertified ->
             True
 
@@ -58,6 +62,7 @@ type alias RollupStatuses =
     , running : Int
     , success : Int
     , failure : Int
+    , inputsCold : Int
     , builtNotCertified : Int
     , certificationFailed : Int
     }
@@ -85,6 +90,7 @@ rollupStatusEntries : RollupStatuses -> List ( Status, Int )
 rollupStatusEntries counts =
     [ ( StatusRunning, counts.running )
     , ( StatusFailure Nothing, counts.failure )
+    , ( StatusInputsCold Nothing, counts.inputsCold )
     , ( StatusCertificationFailed Nothing, counts.certificationFailed )
     , ( StatusBuiltNotCertified, counts.builtNotCertified )
     , ( StatusNotStarted, counts.notStarted )
@@ -202,6 +208,67 @@ type ColdFileState
     = Offloaded
     | Onloading Int Int
     | OnloadFailed String
+
+
+type alias ColdInputFile =
+    { path : String
+    , size : Int
+    , state : ColdFileState
+    }
+
+
+type alias ColdInputSource =
+    { stepId : Int
+    , files : List ColdInputFile
+    }
+
+
+type alias ColdInputs =
+    { blocked : List Int
+    , sources : List ColdInputSource
+    }
+
+
+type alias ColdInputEntry =
+    { state : ApiData ColdInputs
+    , baseline : Maybe ColdInputTotals
+    , starting : Bool
+    }
+
+
+type alias ColdInputTotals =
+    { files : Int
+    , bytes : Int
+    , sources : Int
+    }
+
+
+noColdInputs : ColdInputEntry
+noColdInputs =
+    { state = NotAsked, baseline = Nothing, starting = False }
+
+
+coldInputFiles : ColdInputs -> List ColdInputFile
+coldInputFiles inputs =
+    List.concatMap .files inputs.sources
+
+
+coldInputsTotal : ColdInputs -> ColdInputTotals
+coldInputsTotal inputs =
+    let
+        files =
+            coldInputFiles inputs
+    in
+    { files = List.length files
+    , bytes = List.sum (List.map .size files)
+    , sources = List.length inputs.sources
+    }
+
+
+coldInputsAt : Int -> Maybe String -> Model -> ColdInputEntry
+coldInputsAt id commit model =
+    Dict.get (stepLogKey id commit) (getColdInputs model)
+        |> Maybe.withDefault noColdInputs
 
 
 type alias StatusReport =
@@ -1779,6 +1846,7 @@ type Model
         , pendingIngestSteps : Set Int
         , scratch : ScratchState
         , stepLogs : Dict String (ApiData StepLog)
+        , coldInputs : Dict String ColdInputEntry
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict String (Dict Int StatusReport)
@@ -2234,6 +2302,11 @@ getStepLogs (Model model) =
     model.stepLogs
 
 
+getColdInputs : Model -> Dict String ColdInputEntry
+getColdInputs (Model model) =
+    model.coldInputs
+
+
 getNotices : Model -> Dict String (ApiData (List Notice))
 getNotices (Model model) =
     model.notices
@@ -2436,6 +2509,7 @@ initialModel key route flags =
         , commitHash = NotAsked
         , userRepoInfo = NotAsked
         , stepLogs = Dict.empty
+        , coldInputs = Dict.empty
         , notices = Dict.empty
         , uploadProgress = Dict.empty
         , ingestJobs = Dict.empty

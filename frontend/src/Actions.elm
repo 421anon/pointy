@@ -1284,9 +1284,81 @@ resetPageScroll =
     Flow.attemptTask (Dom.setViewport 0 0)
 
 
-clearStepLog : Int -> Maybe String -> Flow Model ()
-clearStepLog id commit =
-    Flow.over stepLogs (Dict.remove (Model.stepLogKey id commit))
+clearStepDetails : Int -> Maybe String -> Flow Model ()
+clearStepDetails id commit =
+    let
+        key =
+            Model.stepLogKey id commit
+    in
+    Flow.over stepLogs (Dict.remove key)
+        |> Flow.seq (Flow.over coldInputs (Dict.remove key))
+
+
+updateColdInputs : String -> (Model.ColdInputEntry -> Model.ColdInputEntry) -> Flow Model ()
+updateColdInputs key change =
+    Flow.over coldInputs (Dict.update key (Maybe.withDefault Model.noColdInputs >> change >> Just))
+
+
+stepDetailsKey : Int -> Model -> ( Maybe String, String )
+stepDetailsKey id model =
+    let
+        revision =
+            stepRevisionById id model
+    in
+    ( revision, Model.stepLogKey id revision )
+
+
+loadColdInputs : Int -> Flow Model ()
+loadColdInputs id =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    ( revision, key ) =
+                        stepDetailsKey id model
+
+                    setState state =
+                        updateColdInputs key (\entry -> { entry | state = state })
+                in
+                setState (ApiData.toLoading (Model.coldInputsAt id revision model).state)
+                    |> Flow.seq (Api.fetchStepInputsCold id revision)
+                    |> Flow.andThen (setState << ApiData.fromResult)
+            )
+
+
+onloadColdInputs : Int -> Flow Model ()
+onloadColdInputs id =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    ( revision, key ) =
+                        stepDetailsKey id model
+
+                    entry =
+                        Model.coldInputsAt id revision model
+
+                    baseline =
+                        Maybe.or entry.baseline (Maybe.map Model.coldInputsTotal (ApiData.toMaybe entry.state))
+                in
+                if entry.starting then
+                    Flow.pure ()
+
+                else
+                    updateColdInputs key (\current -> { current | baseline = baseline, starting = True })
+                        |> Flow.seq (Api.onloadStepInputs id revision)
+                        |> Flow.andThen
+                            (\result ->
+                                case result of
+                                    Ok inputs ->
+                                        updateColdInputs key (\current -> { current | state = Success inputs, starting = False })
+
+                                    Err error ->
+                                        addToast False (Http.errorMessage error)
+                                            |> Flow.seq (updateColdInputs key (\current -> { current | starting = False }))
+                                            |> Flow.seq (loadColdInputs id)
+                            )
+            )
 
 
 autocompleteDebounceDelay : Float
@@ -1726,6 +1798,16 @@ loadNotices id =
             )
 
 
+loadStepDetails : Status -> Int -> Flow Model ()
+loadStepDetails status id =
+    case status of
+        StatusInputsCold _ ->
+            loadColdInputs id
+
+        _ ->
+            loadStepLog id
+
+
 loadStepLog : Int -> Flow Model ()
 loadStepLog id =
     Flow.get
@@ -1776,7 +1858,7 @@ runStep spec id =
                 Flow.when (model |> has (table << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
                     |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
-                    |> Flow.seq (Flow.get |> Flow.andThen (clearStepLog id << stepRevisionById id))
+                    |> Flow.seq (Flow.get |> Flow.andThen (clearStepDetails id << stepRevisionById id))
                     |> Flow.seq (Flow.over pendingStops (Set.remove id))
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq (Flow.whenHas (stepArtifact id) (\_ -> addToast True ("Building step" ++ quotedName ++ "…")))
@@ -1811,7 +1893,7 @@ buildViewedRevision spec id =
                     (\revision ->
                         Flow.when (model |> has (TableSpec.getLens spec << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                             |> Flow.seq (Flow.over pendingBuilds (Dict.insert id revision))
-                            |> Flow.seq (clearStepLog id (Just revision))
+                            |> Flow.seq (clearStepDetails id (Just revision))
                             |> Flow.seq (callApi void (Api.runStep id (Just revision)))
                     )
             )
@@ -5360,6 +5442,9 @@ settlePendingBuild snapshotCommit stepId status_ =
 
                 StatusFailure Nothing ->
                     Just (addToast False "Building this revision failed.")
+
+                StatusInputsCold (Just error) ->
+                    Just (addToast False ("Inputs are in cold storage: " ++ error))
 
                 StatusCertificationFailed mError ->
                     Just

@@ -17,6 +17,7 @@ import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
+import Handlers.StepInputs (ColdInputsView)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (DirEntry, FileChunk)
@@ -128,6 +129,22 @@ type StepLog =
         :> ReqId
         :> QueryParam "commit" Text
         :> Get '[JSON] StepLogView
+
+type StepInputsCold =
+    "step-inputs"
+        :> "cold"
+        :> Description "Lists the offloaded files that the run of a step reads, grouped by the step whose output holds them, together with the steps that refuse to start because of them."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> Get '[JSON] ColdInputsView
+
+type OnloadStepInputs =
+    "step-inputs"
+        :> "onload"
+        :> Description "Starts copying back the offloaded inputs that the cold inputs route lists and returns their new status. Files already copying are skipped, so repeated calls are safe."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> Post '[JSON] ColdInputsView
 
 type CreateAgentSession =
     "agent"
@@ -564,6 +581,8 @@ type API =
         :<|> RunStep
         :<|> StopStep
         :<|> StepLog
+        :<|> StepInputsCold
+        :<|> OnloadStepInputs
         :<|> Upload
         :<|> GetScratchRoot
         :<|> ListScratch

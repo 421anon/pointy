@@ -26,10 +26,12 @@ module Api.Api exposing
     , fetchSrcFileSeek
     , fetchStepComparison
     , fetchStepConfig
+    , fetchStepInputsCold
     , fetchStepLog
     , fetchTokenSession
     , fetchUserRepoInfo
     , onloadColdFile
+    , onloadStepInputs
     , postTreeOps
     , refreshProjectStatus
     , removeReview
@@ -57,7 +59,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, ColdStatus, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepLog, StepRecord, TreeOp)
+import Model.Core exposing (BaseRecord, ColdInputs, ColdStatus, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepLog, StepRecord, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -448,6 +450,29 @@ fetchStepLog id commit =
         Http.get
             { url = appendCommitQuery ("/backend/step-log?id=" ++ String.fromInt id) commit
             , expect = Http.expectStringResponse identity (jsonResponse Decode.stepLog)
+            }
+
+
+fetchStepInputsCold : Int -> Maybe String -> Flow s (Result Http.Error ColdInputs)
+fetchStepInputsCold id commit =
+    Flow.lift <|
+        Http.get
+            { url = appendCommitQuery ("/backend/step-inputs/cold?id=" ++ String.fromInt id) commit
+            , expect = Http.expectStringResponse identity (jsonResponse Decode.coldInputs)
+            }
+
+
+onloadStepInputs : Int -> Maybe String -> Flow s (Result Http.Error ColdInputs)
+onloadStepInputs id commit =
+    Flow.lift <|
+        Http.request
+            { method = "POST"
+            , headers = []
+            , url = appendCommitQuery ("/backend/step-inputs/onload?id=" ++ String.fromInt id) commit
+            , body = Http.emptyBody
+            , expect = Http.expectStringResponse identity (jsonResponse Decode.coldInputs)
+            , timeout = Nothing
+            , tracker = Nothing
             }
 
 

@@ -34,7 +34,7 @@ import View.FileBrowser as FileBrowser
 import View.Icons exposing (icon, iconCustom)
 import View.Lib exposing (formatUtcMinute, viewPage, viewSearchBox)
 import View.Organize exposing (dropTargetAttrs)
-import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordLogPopover, viewStepRecordStatus, viewUploadProgress)
+import View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewStepRecordStatusPopover, viewUploadProgress)
 
 
 viewStepConfigUnavailable : Model -> Html msg
@@ -783,6 +783,11 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                         |> Maybe.andThen (\id -> Dict.get (Model.stepLogKey id (Model.stepRevision model step)) (Model.getStepLogs model))
                         |> Maybe.unwrap ApiData.NotAsked identity
 
+                recordColdInputs =
+                    step.id
+                        |> Maybe.map (\id -> Model.coldInputsAt id (Model.stepRevision model step) model)
+                        |> Maybe.withDefault Model.noColdInputs
+
                 uploads =
                     Model.getUploadProgress model
 
@@ -929,9 +934,10 @@ listingRow model projects_ parentId stepConfig presentTypes link =
             , expanders = expanders
             , form = formView
             , popovers =
-                [ Html.Lazy.lazy5 viewStepRecordLogPopover
+                [ Html.Lazy.lazy6 viewStepRecordStatusPopover
                     step.type_
                     entry
+                    recordColdInputs
                     recordLog
                     isIngesting
                     step

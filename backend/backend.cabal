@@ -31,6 +31,7 @@ library
     Bus
     ClusterBus
     ClusterStatusReport
+    ColdRefusal
     Config
     DependencyRefs
     Docs.OpenApi
@@ -56,6 +57,7 @@ library
     Handlers.SrcFiles
     Handlers.Statuses
     Handlers.StepConfig
+    Handlers.StepInputs
     Handlers.StepOutput
     Handlers.StepReview
     Handlers.StepSearch
@@ -273,6 +275,7 @@ test-suite cold-status
     , backend
     , base
     , bytestring
+    , containers
     , text
 
   hs-source-dirs:   test

@@ -1,0 +1,135 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
+
+module Handlers.StepInputs (
+    ColdInputSource (..),
+    ColdInputsView (..),
+    coldInputReaders,
+    coldInputsHandler,
+    coldInputsOnloadHandler,
+) where
+
+import BuildLog (validPaths)
+import Control.Monad (unless)
+import Control.Monad.Except (runExceptT, throwError)
+import Control.Monad.Trans.Class (lift)
+import Data.Aeson (ToJSON (..), object, (.=))
+import Data.Containers.ListUtils (nubOrd)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
+import Effects (AppM, coldStorageConfigured, coldStorageOnload)
+import Handlers.Cold (ColdFile (..), ColdStatus (..), coldStatusFor, mapColdProvider, onloadable)
+import Handlers.RunStep (StepTarget (..), getDependencyGraph, resolveStepTargets)
+import Handlers.StepReview (stepOutPaths)
+import Servant (ServerError (..), err500, err502, err503)
+import UserRepo (ReadRepoContext (..), commitContextEff, withReadRepoTransaction)
+
+data ColdInputSource = ColdInputSource
+    { coldInputSourceStep :: Int
+    , coldInputSourceFiles :: [ColdFile]
+    }
+
+instance ToJSON ColdInputSource where
+    toJSON source =
+        object
+            [ "step" .= coldInputSourceStep source
+            , "files" .= coldInputSourceFiles source
+            ]
+
+data ColdInputsView = ColdInputsView
+    { coldInputsBlocked :: [Int]
+    , coldInputsSources :: [ColdInputSource]
+    }
+
+instance ToJSON ColdInputsView where
+    toJSON view =
+        object
+            [ "blocked" .= coldInputsBlocked view
+            , "sources" .= coldInputsSources view
+            ]
+
+data RunInputs = RunInputs
+    { runInputsGraph :: Map Int [Int]
+    , runInputsBuilt :: Set Int
+    , runInputsOutPaths :: Map Int Text
+    }
+
+coldInputsHandler :: Int -> Maybe Text -> AppM ColdInputsView
+coldInputsHandler eid commit = coldInputsView =<< runInputsOf eid commit
+
+coldInputsOnloadHandler :: Int -> Maybe Text -> AppM ColdInputsView
+coldInputsOnloadHandler eid commit = do
+    inputs <- runInputsOf eid commit
+    view <- coldInputsView inputs
+    let requests =
+            [ (step, outPath, coldFilePath file)
+            | ColdInputSource step files <- coldInputsSources view
+            , Just outPath <- [Map.lookup step (runInputsOutPaths inputs)]
+            , file <- files
+            , onloadable file
+            ]
+    outcomes <- lift $ mapColdProvider (\(_, outPath, rel) -> coldStorageOnload outPath (T.unpack rel)) requests
+    let failures =
+            [ "step " <> T.pack (show step) <> ": " <> rel <> ": " <> message
+            | ((step, _, rel), Left message) <- zip requests outcomes
+            ]
+    unless (null failures) $
+        failWith err502 ("Could not start copying back: " ++ T.unpack (T.intercalate "; " failures))
+    coldInputsView inputs
+
+runInputsOf :: Int -> Maybe Text -> AppM RunInputs
+runInputsOf eid commit = do
+    configured <- lift coldStorageConfigured
+    if not configured
+        then pure (RunInputs Map.empty Set.empty Map.empty)
+        else do
+            context <- orFail err500 =<< lift (withReadRepoTransaction (\head_ -> maybe (pure head_) (commitContextEff (readRepoPath head_)) commit))
+            graph <- orFail err500 =<< lift (runExceptT (getDependencyGraph (pure False) context eid))
+            targets <- lift (resolveStepTargets context (Map.keys graph))
+            case [(sid, err) | (sid, Left err) <- Map.toList targets] of
+                (sid, err) : _ -> failWith err500 ("Step " ++ show sid ++ " has no build target: " ++ err)
+                [] -> do
+                    unless (Map.member eid targets) $
+                        failWith err500 ("Step " ++ show eid ++ " has no build target at " ++ readCommitHash context ++ ".")
+                    let certificates = Map.fromList [(sid, stepTargetPath target) | (sid, Right target) <- Map.toList targets]
+                    valid <- maybe (failWith err500 "Cannot tell which upstream steps are already built.") pure =<< lift (validPaths (Set.toList (Set.fromList (Map.elems certificates))))
+                    let built = Map.keysSet (Map.filter (`Set.member` valid) certificates)
+                        builtInputs = nubOrd [dep | (sid, deps) <- Map.toList graph, Set.notMember sid built, dep <- deps, Set.member dep built]
+                    evaluated <- orFail err500 =<< lift (runExceptT (stepOutPaths context builtInputs))
+                    let (unresolved, outPaths) = Map.mapEither id evaluated
+                    case Map.keys unresolved of
+                        step : _ -> failWith err503 ("The output path of step " ++ show step ++ " could not be evaluated. Try again.")
+                        [] -> pure (RunInputs graph built (Map.map T.pack outPaths))
+
+coldInputsView :: RunInputs -> AppM ColdInputsView
+coldInputsView inputs = do
+    statuses <- lift $ mapColdProvider (\(step, outPath) -> (step,) <$> coldStatusFor outPath) (Map.toList (runInputsOutPaths inputs))
+    case [step | (step, Nothing) <- statuses] of
+        step : _ -> failWith err503 ("Cold storage status is unavailable for step " ++ show step ++ ". Try again.")
+        [] -> do
+            let files = Map.fromList [(step, coldStatusFiles status) | (step, Just status) <- statuses]
+                filesOf step = Map.findWithDefault [] step files
+                readers = coldInputReaders (runInputsGraph inputs) (`Set.member` runInputsBuilt inputs) (not . null . filesOf)
+                sources = nubOrd (concat (Map.elems readers))
+            pure (ColdInputsView (Map.keys readers) [ColdInputSource step (filesOf step) | step <- sources])
+
+coldInputReaders :: Map Int [Int] -> (Int -> Bool) -> (Int -> Bool) -> Map Int [Int]
+coldInputReaders graph built holdsColdFiles = Map.mapMaybeWithKey coldInputsOfStep graph
+  where
+    coldInputsOfStep sid deps
+        | built sid = Nothing
+        | otherwise = case filter (\dep -> built dep && holdsColdFiles dep) deps of
+            [] -> Nothing
+            coldDeps -> Just coldDeps
+
+orFail :: ServerError -> Either String a -> AppM a
+orFail err = either (failWith err) pure
+
+failWith :: ServerError -> String -> AppM a
+failWith err message = throwError err{errBody = TLE.encodeUtf8 (TL.pack message)}

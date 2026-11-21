@@ -28,10 +28,12 @@ For large text files, use `/step-files/seek` or `/src-files/seek`. Supply `id`, 
 
 Instances can offload step outputs to a cold storage provider, configured as described in [Storage](storage.md#cold-storage). Two routes report and drive it:
 
-- `GET /step-files/cold?id=…&commit=…` returns `{ "files": [ … ] }`, the provider's status for the step's output: each file that is not local, with `path` and `state` (`offloaded`; `onloading` with `done` and `total` bytes; or `failed` with `error`). Without a provider it returns `{"files": []}`; when the provider's status is unknown it returns **503** `Cannot read the cold storage status. Try again when storage status is available.`
+- `GET /step-files/cold?id=…&commit=…` returns `{ "files": [ … ] }`, the provider's status for the step's output: each file that is not local, with `path`, `size` in bytes, and `state` (`offloaded`; `onloading` with `done` and `total` bytes; or `failed` with `error`). Without a provider it returns `{"files": []}`; when the provider's status is unknown it returns **503** `Cannot read the cold storage status. Try again when storage status is available.`
 - `POST /step-files/onload?id=…&commit=…&path=<relative file>` asks the provider to start onloading one file and returns **200** with an empty body. Without a provider it returns **503** `Cold storage is not configured.`; when the provider refuses, **502** with its message.
 
 Poll `/step-files/cold` after an onload until the file leaves `files` or turns `failed`; the file listing then reports its `cold` as false. Source files are never cold.
+
+To copy back every offloaded file a run needs at once, use `GET /step-inputs/cold` and `POST /step-inputs/onload`, described in the [API guide](api-guide.md#running-work).
 
 In the output file browser, an offloaded ZIP shows the same snowflake as any other offloaded file. Copy the ZIP back before browsing its entries. Once the folder listing confirms the archive is local, its row becomes expandable again.
 

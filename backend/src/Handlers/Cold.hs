@@ -5,6 +5,9 @@ module Handlers.Cold (
     ColdFile (..),
     ColdFileState (..),
     coldFilesFor,
+    coldStatusFor,
+    mapColdProvider,
+    onloadable,
     requireColdFiles,
     refuseColdFile,
     refuseOffloadedIn,
@@ -13,6 +16,9 @@ module Handlers.Cold (
     parseColdStatus,
 ) where
 
+import Control.Concurrent.Async (mapConcurrently)
+import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
+import Control.Exception (bracket_)
 import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.Trans.Class (lift)
@@ -25,7 +31,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Effectful (Eff, UnliftStrategy (SeqUnlift), withEffToIO, (:>))
+import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift, SeqUnlift), withEffToIO, (:>))
 import Effects (AppM, ColdStorage, coldStorageConfigured, coldStorageOnload, coldStorageStatus)
 import Handlers.StepOutput (resolveStepOutPath)
 import Servant (NoContent (..), ServerError (..), err409, err502, err503, throwError)
@@ -38,6 +44,7 @@ newtype ColdStatus = ColdStatus {coldStatusFiles :: [ColdFile]}
 
 data ColdFile = ColdFile
     { coldFilePath :: Text
+    , coldFileSize :: Integer
     , coldFileState :: ColdFileState
     }
     deriving (Show, Eq)
@@ -57,8 +64,9 @@ instance ToJSON ColdStatus where
 instance FromJSON ColdFile where
     parseJSON = withObject "cold storage file" $ \o -> do
         path <- o .: "path"
+        size <- o .: "size"
         state <- o .: "state"
-        ColdFile path <$> case state :: Text of
+        ColdFile path size <$> case state :: Text of
             "offloaded" -> pure Offloaded
             "onloading" -> Onloading <$> o .: "done" <*> o .: "total"
             "failed" -> OnloadFailed <$> o .: "error"
@@ -67,7 +75,7 @@ instance FromJSON ColdFile where
 instance ToJSON ColdFile where
     toJSON file =
         object $
-            ("path" .= coldFilePath file) : case coldFileState file of
+            ["path" .= coldFilePath file, "size" .= coldFileSize file] ++ case coldFileState file of
                 Offloaded -> ["state" .= ("offloaded" :: Text)]
                 Onloading done total -> ["state" .= ("onloading" :: Text), "done" .= done, "total" .= total]
                 OnloadFailed message -> ["state" .= ("failed" :: Text), "error" .= message]
@@ -88,13 +96,30 @@ coldOutPath stepId mCommit = case mCommit of
                 cachedSuccess coldOutPaths (stepId, commit) (unlift (runExceptT (resolveStepOutPath stepId (Just commit))))
 
 coldFilesFor :: (ColdStorage :> es) => Text -> Eff es (Maybe (Set Text))
-coldFilesFor outPath = do
-    configured <- coldStorageConfigured
-    if not configured
-        then pure (Just Set.empty)
-        else either (const Nothing) (fmap notLocalPaths . parseColdStatus) <$> coldStorageStatus outPath
+coldFilesFor outPath = fmap notLocalPaths <$> coldStatusFor outPath
   where
     notLocalPaths = Set.fromList . map (T.pack . normalise . T.unpack . coldFilePath) . coldStatusFiles
+
+coldStatusFor :: (ColdStorage :> es) => Text -> Eff es (Maybe ColdStatus)
+coldStatusFor outPath = do
+    configured <- coldStorageConfigured
+    if not configured
+        then pure (Just (ColdStatus []))
+        else either (const Nothing) parseColdStatus <$> coldStorageStatus outPath
+
+onloadable :: ColdFile -> Bool
+onloadable file = case coldFileState file of
+    Onloading _ _ -> False
+    _ -> True
+
+{-# NOINLINE coldProviderSemaphore #-}
+coldProviderSemaphore :: QSem
+coldProviderSemaphore = unsafePerformIO (newQSem 8)
+
+mapColdProvider :: (IOE :> es) => (a -> Eff es b) -> [a] -> Eff es [b]
+mapColdProvider action items =
+    withEffToIO (ConcUnlift Persistent Unlimited) $ \unlift ->
+        mapConcurrently (bracket_ (waitQSem coldProviderSemaphore) (signalQSem coldProviderSemaphore) . unlift . action) items
 
 offloadedEnclosing :: Set Text -> FilePath -> Maybe Text
 offloadedEnclosing coldFiles rel = find (`Set.member` coldFiles) enclosing
@@ -123,11 +148,10 @@ coldStatusHandler stepId mCommit = do
         then pure (ColdStatus [])
         else do
             outPath <- coldOutPath stepId mCommit
-            result <- lift (coldStorageStatus outPath)
             maybe
                 (throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."})
                 pure
-                (either (const Nothing) parseColdStatus result)
+                =<< lift (coldStatusFor outPath)
 
 onloadHandler :: Int -> Maybe Text -> FilePath -> AppM NoContent
 onloadHandler stepId mCommit rel = do

@@ -1,4 +1,4 @@
-module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordLogPopover, viewStepRecordStatus, viewStopButton, viewStoppingIndicator, viewUploadProgress)
+module View.Table exposing (ListingRow, actionsPopoverId, hasBrowsableOutput, stepFormReadOnly, viewAddOrEditRecordForm, viewIconButtonWithTooltip, viewIngestProgress, viewListing, viewProjectExtraFormFields, viewRecordActionsPopover, viewRowActions, viewStepExtraFormFields, viewStepNoteField, viewStepRecordActions, viewStepRecordStatus, viewStepRecordStatusPopover, viewStopButton, viewStoppingIndicator, viewUploadProgress)
 
 import Accessors exposing (has, just, key, lens, set, try)
 import Actions
@@ -12,6 +12,7 @@ import Dict exposing (Dict)
 import Extra.Accessors exposing (A_Traversal, by, remkT, where_)
 import Extra.Decode as Decode
 import Extra.Http as Http
+import Filesize
 import Flow exposing (Flow)
 import FormInputs
 import Html exposing (Html)
@@ -654,21 +655,24 @@ viewStatusApiData tableName mRecordId status =
                         StatusFailure (Just err) ->
                             "Failure: " ++ err
 
+                        StatusInputsCold (Just err) ->
+                            "Inputs in cold storage: " ++ err
+
                         _ ->
                             presentation.label
             in
-            case ( showsLog s, mRecordId ) of
+            case ( hasStatusPopover s, mRecordId ) of
                 ( True, Just stepId ) ->
                     let
                         popoverId =
-                            stepLogPopoverId tableName stepId
+                            statusPopoverId tableName stepId
                     in
                     Html.button
-                        [ class "status-indicator-wrapper status-log-trigger"
+                        [ class "status-indicator-wrapper status-popover-trigger"
                         , title statusText
                         , attribute "popovertarget" popoverId
                         , style "anchor-name" ("--anchor-" ++ popoverId)
-                        , Events.stopPropagationOn "click" (Decode.succeed ( Actions.loadStepLog stepId, True ))
+                        , Events.stopPropagationOn "click" (Decode.succeed ( Actions.loadStepDetails s stepId, True ))
                         ]
                         [ Html.span
                             [ class ("status-indicator " ++ colorClass) ]
@@ -708,10 +712,13 @@ statusFetchFailure =
     StatusFailure Nothing
 
 
-showsLog : Status -> Bool
-showsLog status =
+hasStatusPopover : Status -> Bool
+hasStatusPopover status =
     case status of
         StatusFailure _ ->
+            True
+
+        StatusInputsCold _ ->
             True
 
         StatusCertificationFailed _ ->
@@ -721,59 +728,289 @@ showsLog status =
             False
 
 
-stepLogPopoverId : String -> Int -> String
-stepLogPopoverId tableName stepId =
-    "step-log-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
+statusPopoverId : String -> Int -> String
+statusPopoverId tableName stepId =
+    "status-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
+
+
+viewStatusPopover : String -> String -> List (Html (Flow Model ())) -> List (Html (Flow Model ())) -> Html (Flow Model ())
+viewStatusPopover popoverId heading headerActions body =
+    Html.div
+        [ class "status-popover row-popover"
+        , id popoverId
+        , attribute "popover" "auto"
+        , style "position-anchor" ("--anchor-" ++ popoverId)
+        ]
+        [ Html.div [ class "status-popover-header" ]
+            [ Html.strong [] [ Html.text heading ]
+            , Html.span []
+                (headerActions
+                    ++ [ Html.button
+                            [ class "icon-btn"
+                            , title "Close"
+                            , Events.onClick (Actions.hidePopover popoverId)
+                            ]
+                            [ icon True "close" ]
+                       ]
+                )
+            ]
+        , Html.div [ class "status-popover-body" ] body
+        ]
 
 
 viewStepLogPopover : String -> ApiData StepLog -> Int -> Html (Flow Model ())
 viewStepLogPopover tableName logState stepId =
     let
         popoverId =
-            stepLogPopoverId tableName stepId
+            statusPopoverId tableName stepId
     in
-    Html.div
-        [ class "step-log-popover row-popover"
-        , id popoverId
-        , attribute "popover" "auto"
-        , style "position-anchor" ("--anchor-" ++ popoverId)
-        ]
-        [ Html.div [ class "step-log-popover-header" ]
-            [ Html.strong [] [ Html.text ("Build log for step " ++ String.fromInt stepId) ]
-            , Html.span []
-                [ Html.viewMaybe
-                    (\stepLog ->
-                        Html.button
-                            [ class "icon-btn"
-                            , title "Investigate with agent"
-                            , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId stepLog))
-                            ]
-                            [ icon False "smart_toy" ]
-                    )
-                    (ApiData.toMaybe logState)
-                , Html.button
+    viewStatusPopover popoverId
+        ("Build log for step " ++ String.fromInt stepId)
+        [ Html.viewMaybe
+            (\stepLog ->
+                Html.button
                     [ class "icon-btn"
-                    , title "Close"
-                    , Events.onClick (Actions.hidePopover popoverId)
+                    , title "Investigate with agent"
+                    , Events.onClick (Actions.hidePopover popoverId |> Flow.seq (Actions.investigateStepWithAgent stepId stepLog))
                     ]
-                    [ icon True "close" ]
+                    [ icon False "smart_toy" ]
+            )
+            (ApiData.toMaybe logState)
+        ]
+        [ case logState of
+            NotAsked ->
+                Html.text "Loading build log..."
+
+            Loading _ ->
+                Html.text "Loading build log..."
+
+            Success stepLog ->
+                viewStepLog popoverId stepId stepLog
+
+            Error err ->
+                Html.text (Http.errorMessage err)
+        ]
+
+
+viewColdInputsPopover : String -> TableSpec.StepSpec -> Model.ColdInputEntry -> Int -> Html (Flow Model ())
+viewColdInputsPopover tableName spec entry stepId =
+    let
+        viewInputs =
+            viewColdInputs spec stepId entry
+    in
+    viewStatusPopover (statusPopoverId tableName stepId)
+        ("Inputs of step " ++ String.fromInt stepId ++ " in cold storage")
+        []
+        [ ApiData.foldVisible
+            Html.nothing
+            (Maybe.unwrap (Html.p [ class "step-log-note" ] [ Html.text "Checking whether this step's inputs are in cold storage…" ]) viewInputs)
+            viewInputs
+            (\err -> Html.p [ class "step-log-note" ] [ Html.text ("Could not check the cold storage inputs: " ++ Http.errorMessage err) ])
+            entry.state
+        ]
+
+
+viewColdInputs : TableSpec.StepSpec -> Int -> Model.ColdInputEntry -> Model.ColdInputs -> Html (Flow Model ())
+viewColdInputs spec stepId entry inputs =
+    if List.isEmpty inputs.sources then
+        Html.div [ class "cold-card cold-card-done" ]
+            [ Html.div [ class "cold-title" ]
+                [ icon True "check_circle"
+                , Html.text "All inputs are back"
                 ]
+            , Html.p [ class "cold-text" ]
+                [ Html.text ("Step " ++ String.fromInt stepId ++ " can run now.") ]
+            , Html.div [ class "cold-actions" ]
+                [ coldButton (icon True "play_arrow") ("Run step " ++ String.fromInt stepId) (Actions.runStep spec stepId) ]
             ]
-        , Html.div [ class "step-log-popover-body" ]
-            [ case logState of
-                NotAsked ->
-                    Html.text "Loading build log..."
 
-                Loading _ ->
-                    Html.text "Loading build log..."
+    else
+        viewColdInputsPending stepId entry inputs
 
-                Success stepLog ->
-                    viewStepLog popoverId stepId stepLog
 
-                Error err ->
-                    Html.text (Http.errorMessage err)
+viewColdInputsPending : Int -> Model.ColdInputEntry -> Model.ColdInputs -> Html (Flow Model ())
+viewColdInputsPending stepId entry inputs =
+    let
+        files =
+            Model.coldInputFiles inputs
+
+        copying =
+            List.any isOnloading files
+
+        startable =
+            List.filter (not << isOnloading) files
+
+        failures =
+            List.concatMap (\source -> List.filterMap (viewOnloadFailure source.stepId) source.files) inputs.sources
+    in
+    Html.div [ class "cold-card" ]
+        [ Html.div [ class "cold-title" ]
+            [ icon False "ac_unit"
+            , Html.text
+                (if copying then
+                    "Copying inputs back from cold storage"
+
+                 else
+                    "Not run: inputs are in cold storage"
+                )
+            ]
+        , Html.p [ class "cold-text" ]
+            [ Html.text (coldInputsDescription stepId inputs.blocked (Maybe.withDefault (Model.coldInputsTotal inputs) entry.baseline)) ]
+        , Html.viewIf copying (viewColdProgress entry.baseline inputs)
+        , Html.viewIf (not (List.isEmpty failures)) (Html.ul [ class "cold-failures" ] failures)
+        , Html.div [ class "cold-actions" ]
+            [ Html.viewIf (not (List.isEmpty startable) && not entry.starting)
+                (coldButton
+                    (icon True "download")
+                    ("Copy back "
+                        ++ String.fromInt (List.length startable)
+                        ++ " of "
+                        ++ String.fromInt (List.length files)
+                        ++ " files ("
+                        ++ Filesize.formatBase2 (List.sum (List.map .size startable))
+                        ++ ")"
+                    )
+                    (Actions.onloadColdInputs stepId)
+                )
+            , Html.viewIf (copying && not entry.starting) (coldButton (icon False "refresh") "Check progress" (Actions.loadColdInputs stepId))
+            ]
+        , Html.viewIf entry.starting (Html.p [ class "cold-hint" ] [ Html.text "Starting copies…" ])
+        , Html.viewIf (copying && not entry.starting) (Html.p [ class "cold-hint" ] [ Html.text "Copying continues after this closes." ])
+        ]
+
+
+coldButton : Html (Flow Model ()) -> String -> Flow Model () -> Html (Flow Model ())
+coldButton buttonIcon label action =
+    Html.button
+        [ class "btn"
+        , type_ "button"
+        , Events.onClick action
+        ]
+        [ buttonIcon, Html.text label ]
+
+
+isOnloading : Model.ColdInputFile -> Bool
+isOnloading file =
+    case file.state of
+        Model.Onloading _ _ ->
+            True
+
+        _ ->
+            False
+
+
+viewOnloadFailure : Int -> Model.ColdInputFile -> Maybe (Html msg)
+viewOnloadFailure stepId file =
+    case file.state of
+        Model.OnloadFailed error ->
+            Just (Html.li [] [ Html.text ("Step " ++ String.fromInt stepId ++ ", " ++ file.path ++ ": " ++ error) ])
+
+        _ ->
+            Nothing
+
+
+viewColdProgress : Maybe Model.ColdInputTotals -> Model.ColdInputs -> Html msg
+viewColdProgress baseline inputs =
+    let
+        remaining =
+            Model.coldInputsTotal inputs
+
+        start =
+            Maybe.withDefault remaining baseline
+
+        bytesInFlight =
+            List.sum (List.map onloadedBytes (Model.coldInputFiles inputs))
+
+        bytesBack =
+            clamp 0 start.bytes (start.bytes - remaining.bytes + bytesInFlight)
+
+        percent =
+            if start.bytes > 0 then
+                round (100 * toFloat bytesBack / toFloat start.bytes)
+
+            else
+                0
+    in
+    Html.div [ class "cold-progress-block" ]
+        [ Html.div [ class "cold-progress" ]
+            [ Html.div [ class "cold-progress-bar", style "width" (String.fromInt percent ++ "%") ] [] ]
+        , Html.p [ class "cold-text" ]
+            [ Html.text
+                (String.fromInt (Basics.max 0 (start.files - remaining.files))
+                    ++ " of "
+                    ++ String.fromInt start.files
+                    ++ " files back ("
+                    ++ Filesize.formatBase2 bytesBack
+                    ++ " of "
+                    ++ Filesize.formatBase2 start.bytes
+                    ++ ")"
+                )
             ]
         ]
+
+
+onloadedBytes : Model.ColdInputFile -> Int
+onloadedBytes file =
+    case file.state of
+        Model.Onloading done _ ->
+            done
+
+        _ ->
+            0
+
+
+coldInputsDescription : Int -> List Int -> Model.ColdInputTotals -> String
+coldInputsDescription stepId readers totals =
+    let
+        subject =
+            case readers of
+                [ reader ] ->
+                    if reader == stepId then
+                        "This step reads"
+
+                    else
+                        "Step " ++ stepSpans readers ++ " reads"
+
+                _ ->
+                    "Steps " ++ stepSpans readers ++ " read"
+    in
+    subject
+        ++ " "
+        ++ String.fromInt totals.files
+        ++ " files ("
+        ++ Filesize.formatBase2 totals.bytes
+        ++ ") held in cold storage by "
+        ++ String.fromInt totals.sources
+        ++ (if totals.sources == 1 then " earlier step." else " earlier steps.")
+
+
+stepSpans : List Int -> String
+stepSpans ids =
+    let
+        addSpan id spans =
+            case spans of
+                ( start, end ) :: rest ->
+                    if id == end + 1 then
+                        ( start, id ) :: rest
+
+                    else
+                        ( id, id ) :: spans
+
+                [] ->
+                    [ ( id, id ) ]
+
+        render ( start, end ) =
+            if start == end then
+                "#" ++ String.fromInt start
+
+            else
+                "#" ++ String.fromInt start ++ "–#" ++ String.fromInt end
+    in
+    List.sort ids
+        |> List.foldl addSpan []
+        |> List.reverse
+        |> List.map render
+        |> String.join ", "
 
 
 viewStepLog : String -> Int -> StepLog -> Html (Flow Model ())
@@ -925,17 +1162,19 @@ viewStepRecordStatus name entry ingesting record =
     viewStatusApiData name record.id (stepRecordStatus name entry ingesting record)
 
 
-viewStepRecordLogPopover : String -> StepConfigEntry -> ApiData StepLog -> Bool -> StepRecord -> Html (Flow Model ())
-viewStepRecordLogPopover name entry logState ingesting record =
+viewStepRecordStatusPopover : String -> StepConfigEntry -> Model.ColdInputEntry -> ApiData StepLog -> Bool -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatusPopover name entry coldInputs_ logState ingesting record =
     let
-        logShown =
+        status =
             stepRecordStatus name entry ingesting record
                 |> ApiData.foldVisible Nothing identity Just (always (Just statusFetchFailure))
-                |> Maybe.unwrap False showsLog
     in
-    case ( logShown, record.id ) of
-        ( True, Just stepId ) ->
-            viewStepLogPopover name logState stepId
+    case ( status, record.id ) of
+        ( Just (StatusInputsCold _), Just stepId ) ->
+            viewColdInputsPopover name (Specs.steps name entry) coldInputs_ stepId
+
+        ( Just status_, Just stepId ) ->
+            Html.viewIf (hasStatusPopover status_) (viewStepLogPopover name logState stepId)
 
         _ ->
             Html.nothing

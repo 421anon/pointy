@@ -79,6 +79,9 @@ applyError st mErr =
         StatusFailure _ ->
             StatusFailure mErr
 
+        StatusInputsCold _ ->
+            StatusInputsCold mErr
+
         StatusCertificationFailed _ ->
             StatusCertificationFailed mErr
 
@@ -103,6 +106,9 @@ status =
 
                     "failure" ->
                         Decode.succeed (StatusFailure Nothing)
+
+                    "inputs-cold" ->
+                        Decode.succeed (StatusInputsCold Nothing)
 
                     "built-not-certified" ->
                         Decode.succeed StatusBuiltNotCertified
@@ -292,6 +298,7 @@ rollupStatuses =
         |> required "running" Decode.int
         |> required "success" Decode.int
         |> required "failure" Decode.int
+        |> required "inputs-cold" Decode.int
         |> required "built-not-certified" Decode.int
         |> required "certification-failed" Decode.int
 
@@ -1015,6 +1022,28 @@ coldFileState state =
 coldPath : Decoder (List String)
 coldPath =
     Decode.map (String.split "/" >> List.filter (not << String.isEmpty)) Decode.string
+
+
+coldInputs : Decoder Model.ColdInputs
+coldInputs =
+    Decode.succeed Model.ColdInputs
+        |> required "blocked" (Decode.list Decode.int)
+        |> required "sources" (Decode.list coldInputSource)
+
+
+coldInputSource : Decoder Model.ColdInputSource
+coldInputSource =
+    Decode.succeed Model.ColdInputSource
+        |> required "step" Decode.int
+        |> required "files" (Decode.list coldInputFile)
+
+
+coldInputFile : Decoder Model.ColdInputFile
+coldInputFile =
+    Decode.succeed Model.ColdInputFile
+        |> required "path" Decode.string
+        |> required "size" Decode.int
+        |> custom (Decode.field "state" Decode.string |> Decode.andThen coldFileState)
 
 
 stepLog : Decoder Model.StepLog

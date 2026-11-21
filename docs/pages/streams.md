@@ -21,7 +21,7 @@ Open **one** `GET /events` connection for the application. It has no parameters 
 }
 ```
 
-Status strings are `not-started`, `running`, `success`, `failure`, `built-not-certified`, and `certification-failed`. `built-not-certified` means the output is valid but the certificate is not; `certification-failed` is the same with a failure log, kept in `error`. Slurm PENDING jobs count as `running`; there is no queued status. Loading is a client-side state.
+Status strings are `not-started`, `running`, `success`, `failure`, `inputs-cold`, `built-not-certified`, and `certification-failed`. `built-not-certified` means the output is valid but the certificate is not; `certification-failed` is the same with a failure log, kept in `error`. `inputs-cold` means the run was refused because an already-built input step has files offloaded to cold storage; `error` names them. Slurm PENDING jobs count as `running`; there is no queued status. Loading is a client-side state.
 
 Snapshots are **partial**: a folder broadcast carries one snapshot with the `success` and `running` steps, then, when other statuses still need resolving, one further snapshot with all of those resolved steps; step-level broadcasts carry exactly one step. Merge each snapshot per `stepId` instead of replacing a folder's whole status map. A step entry may also carry `certificate`, the step's certificate store path. A snapshot's `projectId` names a folder that links the step **directly**, so a step linked from several folders produces several snapshots; ancestors never receive their descendants' steps, and steps that no folder links never appear on the stream. While a build of a step at a commit is tracked, only its `running` and `success` statuses are broadcast or replayed.
 

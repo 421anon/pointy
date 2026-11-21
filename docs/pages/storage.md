@@ -31,21 +31,23 @@ The backend runs the command as its own user with one of two subcommands. `<outp
 ```json
 {
   "files": [
-    { "path": "reads_R1.fastq.gz", "state": "offloaded" },
-    { "path": "reads_R2.fastq.gz", "state": "onloading", "done": 1048576, "total": 52428800 },
-    { "path": "notes.txt", "state": "failed", "error": "storage box unreachable" }
+    { "path": "reads_R1.fastq.gz", "size": 52428800, "state": "offloaded" },
+    { "path": "reads_R2.fastq.gz", "size": 52428800, "state": "onloading", "done": 1048576, "total": 52428800 },
+    { "path": "notes.txt", "size": 4096, "state": "failed", "error": "storage box unreachable" }
   ]
 }
 ```
 
-`files` lists only the files that are not local: `offloaded`, `onloading` with `done` and `total` bytes, or `failed` with the error of the last onload. An output the provider does not track, or one that is entirely local, gives `{"files": []}`. A non-zero exit, output that does not parse, or no answer within two seconds means the status is unknown.
+`files` lists only the files that are not local: `offloaded`, `onloading` with `done` and `total` bytes, or `failed` with the error of the last onload. Every entry carries `size`, the file's bytes; Pointy sums it for the copy-back totals. An output the provider does not track, or one that is entirely local, gives `{"files": []}`. A non-zero exit, output that does not parse, or no answer within two seconds means the status is unknown.
 
-`<command> onload <output-path> <relative-path>` starts onloading one file and exits without waiting for it; exit 0 means the onload started or the file is already local. On a non-zero exit, the first line of stderr is shown to the user. The onload continues without Pointy, and later `status` calls report its progress, its failure, or the file's absence once it is local.
+`<command> onload <output-path> <relative-path>` starts onloading one file and exits without waiting for it; exit 0 means the onload started, is already running, or the file is already local. Pointy does not deduplicate concurrent requests for the same file, so a second `onload` while one runs must also exit 0 and must not copy the file twice. On a non-zero exit, the first line of stderr is shown to the user. The onload continues without Pointy, and later `status` calls report its progress, its failure, or the file's absence once it is local.
 
 The interface says nothing about what reading an offloaded file through the store does; Pointy never reads a file the provider reports as not local.
 
 ### What Pointy does with it
 
-Listings mark files that are not local and do not read them; when the status is unknown, a listing reads no file of that output. A download, seek, raw, or bundle request for such a file returns 409 with `This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again.`, and 503 when the status is unknown. Pointy asks for an onload only when someone requests one, through the UI's snowflake (**Copy back to this server**) or `POST /step-files/onload`; the UI polls the status until the file is local and then shows its usual actions, or shows the provider's error.
+Listings mark files that are not local and do not read them; when the status is unknown, a listing reads no file of that output. A download, seek, raw, or bundle request for such a file returns 409 with `This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again.`, and 503 when the status is unknown. Pointy asks for an onload only when someone requests one, through the UI's snowflake (**Copy back to this server**), `POST /step-files/onload`, or `POST /step-inputs/onload`; the file browser polls that file's status until it is local and then shows its usual actions, or shows the provider's error.
 
-Before submitting a step's build, Pointy asks for the status of each input step that is already built. If any of them has files that are not local, the step is not submitted: its status names the files and their steps and says to copy them back from their snowflakes, and the steps that depend on it are not scheduled either. If a status is unknown, the step is not submitted and its status says so. Comparing with a reviewed output fails with a message naming its files that are not local, unless the comparison is already cached.
+Before submitting a step's build, Pointy asks for the status of each input step that is already built. If any of them has files that are not local, the step is not submitted: its status is `inputs-cold` and names the files and the steps holding them. A step that depends on a refused step gets that status too, naming the steps that read the files, itself included when it also reads offloaded files directly. If a status is unknown, the step is not submitted and its status says so. Comparing with a reviewed output fails with a message naming its files that are not local, unless the comparison is already cached.
+
+`GET /step-inputs/cold?id=<id>&commit=<hash>` lists what the run of that step needs copied back: the steps that cannot start because of offloaded inputs, and the files grouped by the upstream step whose output holds them, with each file's size and onload state. `POST /step-inputs/onload` on the same parameters starts copying those files back and returns the new status; files already copying are skipped, so repeating it is safe. The UI shows this as a card in the step's status popover: the totals, a **Copy back** button, a **Check progress** button while copies run, and a **Run step** button once everything is local. Nothing copies back without that request, and nothing polls the status.

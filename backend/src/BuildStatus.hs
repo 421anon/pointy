@@ -33,7 +33,7 @@ data StepPaths = StepPaths
     deriving (Eq, Show)
 
 stepStatusNames :: [Text]
-stepStatusNames = ["not-started", "running", "success", "failure", "built-not-certified", "certification-failed"]
+stepStatusNames = ["not-started", "running", "success", "failure", "inputs-cold", "built-not-certified", "certification-failed"]
 
 instance FromJSON StepPaths where
     parseJSON = withObject "StepPaths" $ \o -> StepPaths <$> o .: "certificate" <*> o .: "output"

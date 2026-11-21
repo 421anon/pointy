@@ -60,7 +60,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
 import System.IO.Temp (withTempDirectory)
 import System.Process (readProcessWithExitCode)
-import UserRepo (ReadRepoContext (..), RepoContext, WriteRepoContext (..), commitAndPushChanges, commitContext, runNix, runNixEvalJsonApplyInRepo, userRepoPath, withReadRepoTransaction)
+import UserRepo (ReadRepoContext (..), RepoContext, WriteRepoContext (..), commitAndPushChanges, commitContextEff, runNix, runNixEvalJsonApplyInRepo, userRepoPath, withReadRepoTransaction)
 
 data ReviewComparison
     = NoReview
@@ -552,7 +552,7 @@ reviewedPaths repoPath resolve reviews = Map.unions <$> mapM revisionPaths (Map.
   where
     grouped = Map.fromListWith (++) [(reviewedRevision review, [stepId]) | (stepId, Just review) <- Map.toList reviews]
     revisionPaths (revision, stepIds) = do
-        viewedEither <- liftIO $ runExceptT $ commitContext repoPath revision
+        viewedEither <- lift $ runExceptT $ commitContextEff repoPath revision
         result <- case viewedEither of
             Left err -> pure (Left err)
             Right viewed -> lift $ runExceptT $ resolve viewed stepIds
@@ -607,9 +607,6 @@ decodeNix label output = liftEither $ either (Left . ((label ++ ": ") ++)) Right
 
 decodeNixText :: (FromJSON a) => String -> String -> ExceptT String (Eff es) a
 decodeNixText label = decodeNix label . TE.encodeUtf8 . T.pack
-
-commitContextEff :: (IOE :> es) => FilePath -> Text -> ExceptT String (Eff es) ReadRepoContext
-commitContextEff repoPath commit = ExceptT $ liftIO $ runExceptT $ commitContext repoPath commit
 
 orFail :: ServerError -> Either String a -> AppM a
 orFail status = either (\message -> throwError status{errBody = TLE.encodeUtf8 (TL.pack message)}) pure

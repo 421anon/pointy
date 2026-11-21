@@ -3,6 +3,7 @@
 module Bus (ProjectSnapshot (..), broadcastSnapshot, subscribe) where
 
 import ClusterBus (buildingStepsAt)
+import ColdRefusal (applyColdRefusals)
 import Control.Concurrent.STM
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString.Lazy as LBS
@@ -29,10 +30,11 @@ replayLimit :: Int
 replayLimit = 256
 
 broadcastSnapshot :: Int -> Text -> Map Int Text -> Map Int (Text, Maybe Text) -> IO ()
-broadcastSnapshot pid c certified reported =
+broadcastSnapshot pid c certified reported = do
+    retained <- applyColdRefusals c reported
     atomically $ do
         building <- buildingStepsAt c
-        let stats = Map.filterWithKey (\sid (st, _) -> Set.notMember sid building || st `elem` map pack ["running", "success"]) reported
+        let stats = Map.filterWithKey (\sid (st, _) -> Set.notMember sid building || st `elem` map pack ["running", "success"]) retained
             certifiedStats = Map.intersection certified stats
             snapshot = ProjectSnapshot (encodeSnapshot pid c certifiedStats stats)
         writeTChan statusBus snapshot

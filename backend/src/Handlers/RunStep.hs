@@ -5,7 +5,10 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Handlers.RunStep (
+    StepTarget (..),
     buildExtras,
+    getDependencyGraph,
+    resolveStepTargets,
     restoreJobsFromSlurm,
     runStepHandler,
     stepLogHandler,
@@ -17,11 +20,12 @@ import BuildLog (LogAccess (..), resolveBuildLog, validPaths)
 import BuildRunner (BuildKey (..), JobComment (..), JobId (..), SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isDerivationPath, isRunningState, queryJobIds, querySlurmJobs, realiseCommand, runningJobNames, submitAndWait, submitJob, waitForCompletion)
 import Certificates (renderIdList)
 import ClusterBus (buildingSteps, clearBuildRequest, markQueued, requestBuild, requestStop, stopRequested, takeStopRequest)
+import ColdRefusal (clearColdRefusals, recordColdRefusal)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (mapConcurrently_)
 import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, catch)
-import Control.Monad (foldM, forM, forM_, unless, void, when)
+import Control.Monad (foldM, forM_, unless, void, when)
 
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -38,7 +42,7 @@ import EffectRunner (runAppEffects)
 import Effects (App, AppM, Eval, Nix, coldStorageConfigured, listDerivationRootJobs, pathValid, rootDerivationForJob, rootStorePath, unrootDerivationRoot, unrootDerivationRootsForJob)
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (finally, onException)
-import Handlers.Cold (coldFilesFor)
+import Handlers.Cold (coldFilesFor, mapColdProvider)
 import Handlers.Statuses (broadcastFailedStepForProjects, broadcastKnownStepStatus, broadcastSingleStepForProjects, broadcastStatusForStepProjects, broadcastStepCertificateAtMovedHead, trackBuild)
 import JobOutcome (jobOutcome, outcomeMessage)
 import Servant (NoContent (..), err404, err500, errBody)
@@ -71,6 +75,7 @@ runStepSync eid commit = do
             _ <- liftIO $ takeStopRequest eid
             graph <- getDependencyGraph halted ctx eid
             stepIds <- liftEither $ topoOrder graph
+            liftIO $ clearColdRefusals (T.pack targetCommit) stepIds
             submitted <- lift $ submitGraph halted ctx graph stepIds
             stopped <- liftIO $ takeStopRequest eid
             when stopped $ lift $ mapM_ cancel [buildKey | Just (Enqueued _ buildKey _ _) <- [Map.lookup eid submitted]]
@@ -171,6 +176,9 @@ data SubmitOutcome
     = AlreadyCertified FilePath
     | Enqueued FilePath BuildKey [JobId] FilePath
     | NotSubmitted String
+    | NotSubmittedCold [Int] String
+
+data InputCheck = InputsLocal | InputsCold String
 
 submitGraph :: App es => IO Bool -> ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
 submitGraph halted ctx graph stepIds = do
@@ -188,8 +196,8 @@ submitGraph halted ctx graph stepIds = do
 
 submitStep :: App es => ReadRepoContext -> (FilePath -> Eff es Bool) -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Either String StepTarget -> Eff es SubmitOutcome
 submitStep ctx isCertified outcomes deps sid resolvedTarget
-    | not (null blockedOn) =
-        return $ NotSubmitted $ "dependency step(s) " ++ show blockedOn ++ " could not be scheduled"
+    | not (null failedOn) =
+        return $ NotSubmitted $ "dependency step(s) " ++ show failedOn ++ " could not be scheduled"
     | otherwise = do
         result <- runExceptT $ do
             target <- liftEither resolvedTarget
@@ -206,51 +214,75 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                             (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
                             return $ Enqueued (stepTargetPath rootedTarget) buildKey existing root
                         else do
-                            refuseOffloadedInputs ctx sid [dep | dep <- deps, Just AlreadyCertified{} <- [Map.lookup dep outcomes]]
-                            requirements <- getStepRequirements ctx sid
-                            command <- liftIO realiseCommand
-                            (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
-                            submitted <-
-                                lift $
-                                    submitJob
-                                        requirements
-                                        buildKey
-                                        depJobIds
-                                        (encodeJobComment (JobComment "step" sid (readCommitHash ctx) certificate))
-                                        [command, stepTargetDrv rootedTarget]
-                                        `onException` unrootDerivationRoot root
-                            case submitted of
-                                Left err -> do
-                                    lift $ unrootDerivationRoot root
-                                    throwError err
-                                Right jobId -> return $ Enqueued certificate buildKey [jobId] root
+                            check <- checkOffloadedInputs ctx sid builtInputs
+                            case (check, coldRoots) of
+                                (InputsLocal, []) -> submitBuild ctx sid depJobIds certificate target buildKey
+                                (InputsLocal, _) -> return (coldRefusal coldRoots [])
+                                (InputsCold ownReads, _) -> return (coldRefusal (sid : coldRoots) [ownReads])
         return $ either NotSubmitted id result
   where
-    blockedOn = [d | d <- deps, isBlocked (Map.lookup d outcomes)]
-    isBlocked (Just NotSubmitted{}) = True
-    isBlocked Nothing = True
-    isBlocked _ = False
+    builtInputs = [dep | dep <- deps, Just AlreadyCertified{} <- [Map.lookup dep outcomes]]
+    failedOn = [d | d <- deps, depFailed (Map.lookup d outcomes)]
+    depFailed (Just NotSubmitted{}) = True
+    depFailed Nothing = True
+    depFailed _ = False
+    coldRoots = nub (concat [readers | d <- deps, Just (NotSubmittedCold readers _) <- [Map.lookup d outcomes]])
+    coldRefusal readers ownReads =
+        NotSubmittedCold readers $
+            unwords (ownReads ++ [dependsOnColdReaders | not (null coldRoots)] ++ ["Copy them back from the step's status, then run again."])
+    dependsOnColdReaders =
+        "Step " ++ show sid ++ " depends on " ++ stepList coldRoots ++ ", which " ++ (if length coldRoots == 1 then "reads" else "read") ++ " files offloaded to cold storage."
     depJobIds = nub [jobId | d <- deps, Just (Enqueued _ _ jobIds _) <- [Map.lookup d outcomes], jobId <- jobIds]
 
-refuseOffloadedInputs :: App es => ReadRepoContext -> Int -> [Int] -> ExceptT String (Eff es) ()
-refuseOffloadedInputs ctx sid builtInputs = do
+submitBuild :: App es => ReadRepoContext -> Int -> [JobId] -> FilePath -> StepTarget -> BuildKey -> ExceptT String (Eff es) SubmitOutcome
+submitBuild ctx sid depJobIds certificate target buildKey = do
+    requirements <- getStepRequirements ctx sid
+    command <- liftIO realiseCommand
+    (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
+    submitted <-
+        lift $
+            submitJob
+                requirements
+                buildKey
+                depJobIds
+                (encodeJobComment (JobComment "step" sid (readCommitHash ctx) certificate))
+                [command, stepTargetDrv rootedTarget]
+                `onException` unrootDerivationRoot root
+    case submitted of
+        Left err -> do
+            lift $ unrootDerivationRoot root
+            throwError err
+        Right jobId -> return $ Enqueued certificate buildKey [jobId] root
+
+checkOffloadedInputs :: App es => ReadRepoContext -> Int -> [Int] -> ExceptT String (Eff es) InputCheck
+checkOffloadedInputs ctx sid builtInputs = do
     configured <- lift coldStorageConfigured
-    when configured $ do
-        inputColdFiles <- forM builtInputs $ \input -> (,) input <$> (lift . coldFilesFor =<< getStepOutPath ctx input)
-        let unknown = [input | (input, Nothing) <- inputColdFiles]
-            offloaded = [(input, Set.toList files) | (input, Just files) <- inputColdFiles, not (Set.null files)]
-        unless (null unknown) $
-            throwError $
-                "Cannot check whether " ++ stepList unknown ++ ", read by step " ++ show sid ++ ", " ++ hasOrHave unknown ++ " files offloaded to cold storage. Run again when storage status is available."
-        unless (null offloaded) $
-            throwError $
-                "Step " ++ show sid ++ " reads files offloaded to cold storage: " ++ intercalate "; " [fileList files ++ " of step " ++ show input | (input, files) <- offloaded] ++ ". Copy them back from their snowflakes in the file browser, then run again."
+    if not configured
+        then pure InputsLocal
+        else do
+            outPaths <- mapM (getStepOutPath ctx) builtInputs
+            inputColdFiles <- lift $ zip builtInputs <$> mapColdProvider coldFilesFor outPaths
+            let unknown = [input | (input, Nothing) <- inputColdFiles]
+                offloaded = [(input, Set.toList files) | (input, Just files) <- inputColdFiles, not (Set.null files)]
+            unless (null unknown) $
+                throwError $
+                    "Cannot check whether " ++ stepList unknown ++ ", read by step " ++ show sid ++ ", " ++ hasOrHave unknown ++ " files offloaded to cold storage. Run again when storage status is available."
+            pure $
+                if null offloaded
+                    then InputsLocal
+                    else
+                        InputsCold $
+                            "Step " ++ show sid ++ " reads files offloaded to cold storage: "
+                                ++ intercalate "; " [fileList files ++ " of step " ++ show input | (input, files) <- offloaded]
+                                ++ "."
   where
-    stepList inputs = "step" ++ (if length inputs == 1 then " " else "s ") ++ intercalate ", " (map show inputs)
     hasOrHave inputs = if length inputs == 1 then "has" else "have"
     fileList files = case splitAt 3 files of
         (named, []) -> intercalate ", " (map T.unpack named)
         (named, rest) -> intercalate ", " (map T.unpack named) ++ " and " ++ show (length rest) ++ " more"
+
+stepList :: [Int] -> String
+stepList steps = "step" ++ (if length steps == 1 then " " else "s ") ++ intercalate ", " (map show steps)
 
 validateStepTarget :: Int -> StepTarget -> Either String ()
 validateStepTarget sid = validateTarget ("step " ++ show sid) . stepTargetDrv
@@ -333,6 +365,10 @@ finishStep ctx (sid, outcome) = case outcome of
     NotSubmitted err -> do
         liftIO $ putStrLn $ "buildStep error: " ++ err
         broadcastKnownStepStatus sid targetCommitText ("failure", Just (T.pack err))
+    NotSubmittedCold _ err -> do
+        liftIO $ recordColdRefusal sid targetCommitText (T.pack err)
+        liftIO $ putStrLn $ "buildStep inputs in cold storage: " ++ err
+        broadcastKnownStepStatus sid targetCommitText ("inputs-cold", Just (T.pack err))
   where
     targetCommitText = T.pack (readCommitHash ctx)
 

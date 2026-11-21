@@ -27,6 +27,7 @@ import Handlers.TokenAuth (TokenLoginForm, TokenSession)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
 import Handlers.Cold (ColdStatus)
+import Handlers.StepInputs (ColdInputsView)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
@@ -247,23 +248,48 @@ instance ToSchema ByteOffset where
 
 instance ToSchema DirEntry
 instance ToSchema FileChunk
+
+coldFileSchema :: Referenced Schema
+coldFileSchema =
+    Inline $
+        mempty
+            & type_ ?~ OpenApiObject
+            & required .~ ["path", "size", "state"]
+            & properties
+                .~ fromList
+                    [ ("path", stringField)
+                    , ("size", integerField)
+                    , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["offloaded", "onloading", "failed"]))
+                    , ("done", integerField)
+                    , ("total", integerField)
+                    , ("error", stringField)
+                    ]
+            & description ?~ "A file that is not local. `size` is the file's bytes; `done` and `total` are bytes, present while onloading; `error` is present when the last onload failed."
+
 instance ToSchema ColdStatus where
     declareNamedSchema _ = pure $ objectSchema "ColdStatus" [("files", arrayOf coldFileSchema)]
+
+instance ToSchema ColdInputsView where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "ColdInputsView"
+                [ ("blocked", arrayOf integerField)
+                , ("sources", arrayOf sourceSchema)
+                ]
       where
-        coldFileSchema =
+        sourceSchema =
             Inline $
                 mempty
                     & type_ ?~ OpenApiObject
-                    & required .~ ["path", "state"]
+                    & required .~ ["step", "files"]
                     & properties
                         .~ fromList
-                            [ ("path", stringField)
-                            , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["offloaded", "onloading", "failed"]))
-                            , ("done", integerField)
-                            , ("total", integerField)
-                            , ("error", stringField)
+                            [ ("step", integerField)
+                            , ("files", arrayOf coldFileSchema)
                             ]
-                    & description ?~ "A file that is not local. `done` and `total` are bytes, present while onloading; `error` is present when the last onload failed."
+                    & description ?~ "An upstream step whose output holds offloaded files read by the run."
+
 instance ToSchema StepLogView where
     declareNamedSchema _ =
         pure $

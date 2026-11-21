@@ -8,7 +8,9 @@ import ApiTypes (DynamicJson (..))
 import BuildLog (resolveStatusesBatched)
 import BuildStatus (StepPaths (..), markBuiltOutputs, stepStatusNames)
 import Certificates (evalProjectDefinitions, getProjectCertificates, getStepCertificates, projectSchemaVersion, rawStatusesFor, schemaVersionWithKeys)
+import ColdRefusal (applyColdRefusals)
 import Control.Monad.Except (ExceptT (..), runExceptT)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (Object, Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
@@ -40,7 +42,8 @@ projectRollup headContext ctx projectId = do
             withEffToIO SeqUnlift $ \unlift ->
                 cachedSuccess rollupBases (readCommitHash ctx, readCommitHash headContext, projectId) (unlift (runExceptT (rollupBasis headContext ctx projectId)))
     statuses <- lift $ rollupStatuses basis
-    let rows = [rollupRow statuses (basisCertificates basis) child (Map.findWithDefault Set.empty child (basisSubtrees basis)) | child <- basisChildren basis]
+    retained <- liftIO $ applyColdRefusals (T.pack (readCommitHash ctx)) statuses
+    let rows = [rollupRow retained (basisCertificates basis) child (Map.findWithDefault Set.empty child (basisSubtrees basis)) | child <- basisChildren basis]
     pure $ object ["project_id" .= projectId, "children" .= rows]
 
 data RollupBasis = RollupBasis

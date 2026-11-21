@@ -27,6 +27,7 @@ module UserRepo (
     commitRepoChanges,
     pushRepoChanges,
     commitContext,
+    commitContextEff,
     fetchRepo,
     fetchRepoStrict,
     ensureRepoCommit,
@@ -253,6 +254,9 @@ commitContext repoPath hash = do
     (exitCode, resolved, _) <- liftIO $ runGitIn repoPath ["rev-parse", "--verify", "--end-of-options", commit ++ "^{commit}"]
     when (exitCode /= ExitSuccess) $ throwError ("Commit " ++ commit ++ " is not in the local user repository.")
     pure $ ReadRepoContext repoPath (T.unpack (T.strip (T.pack resolved)))
+
+commitContextEff :: (IOE :> es) => FilePath -> Text -> ExceptT String (Eff es) ReadRepoContext
+commitContextEff repoPath commit = ExceptT $ liftIO $ runExceptT $ commitContext repoPath commit
 
 ensureRepoCommit :: String -> ExceptT String IO ()
 ensureRepoCommit commit = do
