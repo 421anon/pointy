@@ -152,6 +152,7 @@ appliedAnswer document applyExpr attr
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
+    | "stepRefsIn" `isInfixOf` applyExpr = Right (encodeValue (toJSON [(stepId, [] :: [Int]) | stepId <- map stepIdNumber (take 1 (idsIn applyExpr))]))
     | "genericClosure" `isInfixOf` applyExpr = Right (encodeValue (toJSON [stepBuildValue stepId path | stepId <- Map.keys (documentOutPaths document), Just path <- [statusPathOf document stepId]]))
     | "step.certificate or step" `isInfixOf` applyExpr, attr == "#pointy.steps" = maybe (Left "fixture has no build target for one of the steps") (Right . encodeValue . toJSON . map stepTarget) (traverse (statusPathOf document) (idsIn applyExpr))
     | "step.certificate or step" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)

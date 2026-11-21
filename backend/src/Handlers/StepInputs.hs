@@ -27,7 +27,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Effects (AppM, coldStorageConfigured, coldStorageOnload)
 import Handlers.Cold (ColdFile (..), ColdStatus (..), coldStatusFor, mapColdProvider, onloadable)
-import Handlers.RunStep (StepTarget (..), getDependencyGraph, resolveStepTargets)
+import Handlers.RunStep (StepTarget (..), getInputGraph, resolveStepTargets)
 import Handlers.StepReview (stepOutPaths)
 import Servant (ServerError (..), err500, err502, err503)
 import System.IO.Unsafe (unsafePerformIO)
@@ -118,7 +118,7 @@ runInputsOf eid commit = do
         then pure (RunInputs Map.empty Set.empty Map.empty)
         else do
             context <- orFail err500 =<< lift (withReadRepoTransaction (\head_ -> maybe (pure head_) (commitContextEff (readRepoPath head_)) commit))
-            graph <- orFail err500 =<< lift (runExceptT (getDependencyGraph (pure False) context eid))
+            graph <- orFail err500 =<< lift (runExceptT (getInputGraph (pure False) context eid))
             targets <- lift (resolveStepTargets context (Map.keys graph))
             case [(sid, err) | (sid, Left err) <- Map.toList targets] of
                 (sid, err) : _ -> failWith err500 ("Step " ++ show sid ++ " has no build target: " ++ err)

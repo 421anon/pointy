@@ -7,7 +7,7 @@
 module Handlers.RunStep (
     StepTarget (..),
     buildExtras,
-    getDependencyGraph,
+    getInputGraph,
     resolveStepTargets,
     restoreJobsFromSlurm,
     runStepHandler,
@@ -73,7 +73,7 @@ runStepSync eid commit = do
             halted = stopRequested eid
         outcomes <- ExceptT $ trackBuild eid (T.pack targetCommit) $ runExceptT $ do
             _ <- liftIO $ takeStopRequest eid
-            graph <- getDependencyGraph halted ctx eid
+            graph <- getInputGraph halted ctx eid
             stepIds <- liftEither $ topoOrder graph
             liftIO $ clearColdRefusals (T.pack targetCommit) stepIds
             submitted <- lift $ submitGraph halted ctx graph stepIds
@@ -486,19 +486,37 @@ validateStepRequirements requirements
   where
     hasExportDelimiter = T.any (\c -> c == ',' || c == '\n' || c == '\r' || c == '\0')
 
-getDependencyGraph :: (Eval :> es, IOE :> es) => IO Bool -> ReadRepoContext -> Int -> ExceptT String (Eff es) (Map.Map Int [Int])
-getDependencyGraph halted ctx root = go Map.empty [root]
+getInputGraph :: (Eval :> es, IOE :> es) => IO Bool -> ReadRepoContext -> Int -> ExceptT String (Eff es) (Map.Map Int [Int])
+getInputGraph halted ctx root = do
+    stop <- liftIO halted
+    if stop
+        then return Map.empty
+        else do
+            output <- runNixEvalJsonApplyInRepo ctx expression "#pointy.steps"
+            entries <-
+                either (throwError . (("Failed to decode the steps upstream of step " ++ show root ++ ": ") ++)) pure $
+                    eitherDecode (TLE.encodeUtf8 (TL.pack output))
+            return $ Map.fromList [(sid, nub inputs) | (sid, inputs) <- entries :: [(Int, [Int])]]
   where
-    go acc [] = return acc
-    go acc (sid : rest)
-        | Map.member sid acc = go acc rest
-        | otherwise = do
-            stop <- liftIO halted
-            if stop
-                then return Map.empty
-                else do
-                    deps <- nub <$> getDependencies ctx sid
-                    go (Map.insert sid deps acc) (rest ++ deps)
+    expression =
+        unlines
+            [ "steps:"
+            , "let"
+            , "  stepRefsIn = value:"
+            , "    if builtins.isAttrs value && (value.type or null) != \"derivation\" then"
+            , "      (if value ? step && (builtins.isInt value.step || builtins.isString value.step) then [ (toString value.step) ] else [ ])"
+            , "      ++ builtins.concatMap stepRefsIn (builtins.attrValues value)"
+            , "    else if builtins.isList value then builtins.concatMap stepRefsIn value"
+            , "    else [ ];"
+            , "  inputsOf = id:"
+            , "    let upstream = steps.${id}.dependencies or [ ];"
+            , "    in builtins.filter (ref: builtins.elem ref upstream) (stepRefsIn (steps.${id}.def.args or { }));"
+            , "  closure = builtins.genericClosure {"
+            , "    startSet = [ { key = \"" ++ show root ++ "\"; } ];"
+            , "    operator = entry: map (id: { key = id; }) (inputsOf entry.key);"
+            , "  };"
+            , "in map (entry: [ (builtins.fromJSON entry.key) (map builtins.fromJSON (inputsOf entry.key)) ]) closure"
+            ]
 
 topoOrder :: Map.Map Int [Int] -> Either String [Int]
 topoOrder graph = go Set.empty [] (Map.keys graph)
@@ -510,16 +528,6 @@ topoOrder graph = go Set.empty [] (Map.keys graph)
       where
         (ready, blocked) = partition (all (`Set.member` done) . depsOf) pending
         depsOf sid = Map.findWithDefault [] sid graph
-
-getDependencies :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) [Int]
-getDependencies ctx stepId = do
-    result <- lift $ runExceptT $ runNixEvalJsonInRepo ctx ('#' : stepAttr stepId ++ ".dependencies")
-    case result of
-        Left _ -> return []
-        Right stdout ->
-            case eitherDecode (TLE.encodeUtf8 (TL.pack stdout)) :: Either String [String] of
-                Left _ -> return []
-                Right ids -> return $ map read ids
 
 isBuilt :: (Nix :> es) => FilePath -> Eff es Bool
 isBuilt = pathValid
