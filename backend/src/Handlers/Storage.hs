@@ -14,31 +14,34 @@ import BuildRunner (JobComment (..), SlurmJob (..), decodeJobComment, isRunningS
 import ClusterBus (latestSlurmJobs)
 import ColdProvider (ColdStatus, OffloadProgress (..))
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
+import Control.Concurrent.Async (replicateConcurrently_)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, retry, writeTVar)
 import Control.Exception (SomeException, catch, displayException, try)
-import Control.Monad (forM, forM_, join, unless, void, when)
+import Control.Monad (join, unless, void, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict', encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.Types (Parser)
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as LBS
+import Data.IORef (atomicModifyIORef', newIORef)
 import Data.List (isPrefixOf, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isNothing, mapMaybe)
+import Data.Maybe (isNothing, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.Time.Clock (UTCTime, getCurrentTime)
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, querySlurm, runNixCli)
 import Handlers.Cold (coldStatusFor, mapColdProvider)
 import Handlers.StepOutput (resolveStepOutPath)
+import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err503)
@@ -46,10 +49,10 @@ import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), Stora
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeBaseName, takeExtension, (</>))
+import System.FilePath ((</>))
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
-import UserRepo (commitContextEff, runGitIn, runNixEvalJsonApplyInRepo, userRepoPath)
+import UserRepo (commitContext, commitContextEff, runGitIn, runHistoryEvalJsonApplyInRepo, runNixEvalJsonApplyInRepo, userRepoPath)
 
 data HeadStep = HeadStep
     { headStepName :: Text
@@ -89,8 +92,7 @@ instance FromJSON EvaluationFile where
 instance ToJSON EvaluationFile where
     toJSON (EvaluationFile commits) =
         object
-            [ "version" .= (1 :: Int)
-            , "commits" .= Map.map (Map.mapKeys (T.pack . show)) commits
+            [ "commits" .= Map.map (Map.mapKeys (T.pack . show)) commits
             ]
 
 data OffloadRequestError = OffloadBlocked Text | OffloadUnavailable Text
@@ -106,8 +108,8 @@ data Caches = Caches
 storageHistoryLimit :: Int
 storageHistoryLimit = 5000
 
-evaluationChunkSize :: Int
-evaluationChunkSize = 40
+scanRetryDelaySeconds :: Int
+scanRetryDelaySeconds = 60
 
 persistEvery :: Int
 persistEvery = 50
@@ -129,9 +131,19 @@ cachesVar = unsafePerformIO (newTVarIO (Caches Nothing [] (Left "The repository 
 evaluationsRef :: MVar (Maybe (Map Text (Map Int CachedStep)))
 evaluationsRef = unsafePerformIO (newMVar Nothing)
 
-{-# NOINLINE scanRef #-}
-scanRef :: MVar Bool
-scanRef = unsafePerformIO (newMVar False)
+data ScanState = ScanState
+    { scanRunning :: Bool
+    , scanUnavailable :: Maybe (UTCTime, Text)
+    }
+
+data ScanQueue = ScanQueue
+    { queuePending :: [Text]
+    , queueFailure :: Maybe (UTCTime, Text)
+    }
+
+{-# NOINLINE scanStateRef #-}
+scanStateRef :: MVar ScanState
+scanStateRef = unsafePerformIO (newMVar (ScanState False Nothing))
 
 storageHandler :: AppM StorageView
 storageHandler = liftIO $ do
@@ -251,6 +263,7 @@ refresh work running = do
     offloads <- liftIO offloadStates
     (free, diskTotal) <- liftIO diskUsage
     now <- liftIO getCurrentTime
+    scanFailure <- liftIO (fmap (fmap snd . scanUnavailable) (readMVar scanStateRef))
     let blockedReason = case cachedHeadSteps caches of
             Right headSteps -> runningRefusal headSteps running
             Left _ -> const (Just "Cannot tell which steps read this output until the current revision evaluates.")
@@ -275,7 +288,15 @@ refresh work running = do
                 , storageTruncated = null toScan && not (null pending)
                 , storageRevisionCount = length revisions
                 , storageRevisions = take maxShownRevisions revisions
-                , storageError = firstError [cachedHistoryError caches, either Just (const Nothing) sizeOutcome, either Just (const Nothing) (cachedHeadSteps caches)]
+                , storageError =
+                    firstError
+                        [ cachedHistoryError caches
+                        , either Just (const Nothing) sizeOutcome
+                        , either Just (const Nothing) (cachedHeadSteps caches)
+                        , if null toScan
+                            then Nothing
+                            else fmap (\reason -> "Some revisions could not be evaluated yet and will be retried: " <> reason) scanFailure
+                        ]
                 , storageUpdatedAt = now
                 }
   where
@@ -404,89 +425,157 @@ commitAffectsOutputs files =
 startScan :: FilePath -> [Text] -> IO ()
 startScan _ [] = pure ()
 startScan repoPath pending = do
-    shouldStart <- modifyMVar scanRef $ \running -> pure (True, not running)
+    now <- getCurrentTime
+    shouldStart <- modifyMVar scanStateRef $ \state ->
+        let retryBlocked = case scanUnavailable state of
+                Just (failedAt, _) -> diffUTCTime now failedAt < fromIntegral scanRetryDelaySeconds
+                Nothing -> False
+         in if scanRunning state || retryBlocked
+                then pure (state, False)
+                else pure (state{scanRunning = True}, True)
     when shouldStart $
         void $
             forkIO $ do
                 outcome <- try (scanCommits repoPath pending)
-                modifyMVar_ scanRef (const (pure False))
+                unavailable <- case outcome of
+                    Right unavailable -> pure unavailable
+                    Left (err :: SomeException) -> do
+                        failedAt <- getCurrentTime
+                        pure (Just (failedAt, T.pack (displayException err)))
+                modifyMVar_ scanStateRef $ \state -> pure state{scanRunning = False, scanUnavailable = unavailable}
+                mapM_
+                    ( \(_, reason) -> do
+                        putStrLn ("Storage history scan paused: " ++ T.unpack reason)
+                        void $ forkIO (threadDelay (scanRetryDelaySeconds * 1000000) >> viewInputsChanged)
+                    )
+                    unavailable
+                viewInputsChanged
+
+scanCommits :: FilePath -> [Text] -> IO (Maybe (UTCTime, Text))
+scanCommits repoPath pending = do
+    queue <- newMVar (ScanQueue pending Nothing)
+    persistLock <- newMVar ()
+    completed <- newIORef 0
+    replicateConcurrently_ historyEvaluatorWorkers (scanWorker queue persistLock completed)
+    persistEvaluations persistLock
+    queueFailure <$> readMVar queue
+  where
+    scanWorker queue persistLock completed = do
+        next <- takeScanCommit queue
+        case next of
+            Nothing -> pure ()
+            Just commit -> do
+                outcome <- try @SomeException (evaluateCommit repoPath commit)
                 case outcome of
-                    Right () -> viewInputsChanged
-                    Left (err :: SomeException) -> putStrLn ("Storage history scan failed: " ++ displayException err)
+                    Left err -> stopScanQueue queue (T.pack (displayException err))
+                    Right (Left failure) -> stopScanQueue queue (evalFailureMessage failure)
+                    Right (Right steps) -> do
+                        insertEvaluation commit steps
+                        viewInputsChanged
+                        count <- atomicModifyIORef' completed (\done -> let total = succ done in (total, total))
+                        when (count `mod` persistEvery == 0) (persistEvaluations persistLock)
+                        scanWorker queue persistLock completed
 
-scanCommits :: FilePath -> [Text] -> IO ()
-scanCommits repoPath pending = forM_ (chunksOf persistEvery pending) $ \batch -> do
-    forM_ batch $ \commit -> do
-        steps <- evaluateCommit repoPath commit
-        modifyMVar_ evaluationsRef $ \cached -> do
-            current <- maybe loadEvaluations pure cached
-            pure (Just (Map.insert commit steps current))
-        viewInputsChanged
-    storeEvaluations =<< readEvaluations
+takeScanCommit :: MVar ScanQueue -> IO (Maybe Text)
+takeScanCommit queue =
+    modifyMVar queue $ \state ->
+        case (queueFailure state, queuePending state) of
+            (Nothing, commit : rest) -> pure (state{queuePending = rest}, Just commit)
+            _ -> pure (state, Nothing)
 
-evaluateCommit :: FilePath -> Text -> IO (Map Int CachedStep)
+stopScanQueue :: MVar ScanQueue -> Text -> IO ()
+stopScanQueue queue reason = do
+    now <- getCurrentTime
+    modifyMVar_ queue $ \state -> pure state{queueFailure = Just (now, reason)}
+
+insertEvaluation :: Text -> Map Int CachedStep -> IO ()
+insertEvaluation commit steps =
+    modifyMVar_ evaluationsRef $ \cached -> do
+        current <- maybe loadEvaluations pure cached
+        pure (Just (Map.insert commit steps current))
+
+persistEvaluations :: MVar () -> IO ()
+persistEvaluations lock =
+    modifyMVar_ lock $ \_ -> do
+        evaluations <- readEvaluations
+        storeEvaluations evaluations
+
+evalFailureMessage :: EvalFailure -> Text
+evalFailureMessage failure = case failure of
+    EvalError message -> "Evaluation error: " <> T.pack message
+    EvalUnavailable message -> T.pack message
+
+evaluateCommit :: FilePath -> Text -> IO (Either EvalFailure (Map Int CachedStep))
 evaluateCommit repoPath commit = do
-    stepIds <- stepIdsAt repoPath commit
-    if null stepIds
-        then pure Map.empty
-        else Map.fromList . concat <$> mapM (evaluateChunk repoPath commit) (chunksOf evaluationChunkSize stepIds)
-
-stepIdsAt :: FilePath -> Text -> IO [Int]
-stepIdsAt repoPath commit = do
-    (code, output, _) <- runGitIn repoPath ["ls-tree", "--name-only", "--end-of-options", T.unpack commit, "--", "steps"]
-    pure $ case code of
-        ExitFailure _ -> []
-        ExitSuccess -> mapMaybe stepIdFromPath (lines output)
+    context <- runExceptT (commitContext repoPath commit)
+    case context of
+        Left message -> pure (Left (EvalUnavailable message))
+        Right ctx -> do
+            outcome <- applyHistoryEval ctx stepEvaluationsExpression
+            case outcome of
+                Left (EvalUnavailable message) -> pure (Left (EvalUnavailable message))
+                Left (EvalError _) -> evaluateFallback ctx
+                Right output -> pure (decodeStepEvaluations output)
   where
-    stepIdFromPath path
-        | takeExtension path == ".nix" = readMaybe (takeBaseName path)
-        | otherwise = Nothing
+    applyHistoryEval ctx expression = runAppEffects (runHistoryEvalJsonApplyInRepo ctx expression "#pointy.steps")
+    evaluateFallback ctx = do
+        names <- applyHistoryEval ctx stepNamesExpression
+        case names of
+            Left (EvalUnavailable message) -> pure (Left (EvalUnavailable message))
+            Left (EvalError _) -> pure (Right Map.empty)
+            Right output ->
+                case decodeStepNames output of
+                    Left failure -> pure (Left failure)
+                    Right stepIds -> evaluateStepIds ctx stepIds Map.empty
+    evaluateStepIds _ [] steps = pure (Right steps)
+    evaluateStepIds ctx (stepId : rest) steps = do
+        outcome <- applyHistoryEval ctx (stepEvaluationExpression [stepId])
+        case outcome of
+            Left (EvalUnavailable message) -> pure (Left (EvalUnavailable message))
+            Left (EvalError _) -> evaluateStepIds ctx rest (Map.insert stepId (CachedStep "" Nothing) steps)
+            Right output ->
+                case decodeStepEvaluations output of
+                    Left failure -> pure (Left failure)
+                    Right evaluated ->
+                        let step = Map.findWithDefault (CachedStep "" Nothing) stepId evaluated
+                         in evaluateStepIds ctx rest (Map.insert stepId step steps)
 
-evaluateChunk :: FilePath -> Text -> [Int] -> IO [(Int, CachedStep)]
-evaluateChunk repoPath commit stepIds = do
-    outcome <- attemptEval (evalAtCommit repoPath commit stepIds)
-    case outcome of
-        Just entries -> pure entries
-        Nothing -> do
-            putStrLn ("Storage history scan could not evaluate the steps at " ++ T.unpack commit ++ ".")
-            stepsEvaluate <- attemptEval (stepNamesAtCommit repoPath commit)
-            case stepsEvaluate of
-                Just _ -> concat <$> forM stepIds evaluateOne
-                Nothing -> pure (map unevaluated stepIds)
-  where
-    evaluateOne stepId = fromMaybe [unevaluated stepId] <$> attemptEval (evalAtCommit repoPath commit [stepId])
-    unevaluated stepId = (stepId, CachedStep "" Nothing)
+decodeStepEvaluations :: String -> Either EvalFailure (Map Int CachedStep)
+decodeStepEvaluations output =
+    case eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)) :: Either String [EvalEntry] of
+        Left message -> Left (EvalUnavailable ("Cannot decode step evaluations: " ++ message))
+        Right entries -> Right (Map.fromList (map (\(EvalEntry entry) -> entry) entries))
 
-attemptEval :: ExceptT String (Eff AppEffects) a -> IO (Maybe a)
-attemptEval action = do
-    outcome <- try @SomeException (runAppEffects (runExceptT action))
-    pure $ case outcome of
-        Right (Right value) -> Just value
-        _ -> Nothing
+decodeStepNames :: String -> Either EvalFailure [Int]
+decodeStepNames output =
+    case eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)) :: Either String [Text] of
+        Left message -> Left (EvalUnavailable ("Cannot decode step identifiers: " ++ message))
+        Right names -> Right (mapMaybe (readMaybe . T.unpack) names)
 
-stepNamesAtCommit :: (Eval :> es, IOE :> es) => FilePath -> Text -> ExceptT String (Eff es) String
-stepNamesAtCommit repoPath commit = do
-    ctx <- commitContextEff repoPath commit
-    runNixEvalJsonApplyInRepo ctx "steps: builtins.attrNames steps" "#pointy.steps"
+stepEvaluationsExpression :: String
+stepEvaluationsExpression =
+    "steps: map " ++ stepEvaluationMapper ++ " (builtins.attrNames steps)"
 
-evalAtCommit :: (Eval :> es, IOE :> es) => FilePath -> Text -> [Int] -> ExceptT String (Eff es) [(Int, CachedStep)]
-evalAtCommit repoPath commit stepIds = do
-    ctx <- commitContextEff repoPath commit
-    output <- runNixEvalJsonApplyInRepo ctx (stepEvaluationExpression stepIds) "#pointy.steps"
-    either (throwError . ("Cannot decode step evaluations: " ++)) (pure . map (\(EvalEntry entry) -> entry)) (eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)))
+stepNamesExpression :: String
+stepNamesExpression = "steps: builtins.attrNames steps"
 
 stepEvaluationExpression :: [Int] -> String
 stepEvaluationExpression stepIds =
-    "steps: map (id:"
+    "steps: map "
+        ++ stepEvaluationMapper
+        ++ " [ "
+        ++ unwords (map (show . show) stepIds)
+        ++ " ]"
+
+stepEvaluationMapper :: String
+stepEvaluationMapper =
+    "(id:"
         ++ " let s = steps.${id};"
         ++ " path = builtins.tryEval (toString s.outPath);"
         ++ " name = builtins.tryEval (s.def.name or (s.name or \"\"));"
         ++ " in { id = builtins.fromJSON id;"
         ++ " name = if name.success && builtins.isString name.value then name.value else \"\";"
-        ++ " path = if path.success then path.value else null; }) "
-        ++ "[ "
-        ++ unwords (map (show . show) stepIds)
-        ++ " ]"
+        ++ " path = if path.success then path.value else null; })"
 
 readEvaluations :: IO (Map Text (Map Int CachedStep))
 readEvaluations = modifyMVar evaluationsRef $ \cached -> do
@@ -522,7 +611,3 @@ storageDirectory :: IO FilePath
 storageDirectory = do
     home <- getHomeDirectory
     pure (home </> ".local" </> "state" </> "pointy" </> "storage")
-
-chunksOf :: Int -> [a] -> [[a]]
-chunksOf _ [] = []
-chunksOf size items = let (chunk, rest) = splitAt size items in chunk : chunksOf size rest

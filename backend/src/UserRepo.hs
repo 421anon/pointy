@@ -10,6 +10,7 @@ module UserRepo (
     runNixEvalJsonInRepo,
     runNixEvalRawInRepo,
     runNixEvalJsonApplyInRepo,
+    runHistoryEvalJsonApplyInRepo,
     runNixEvalImpureJsonExpr,
     runGit,
     runGitIn,
@@ -45,8 +46,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket, finally)
-import Effects (Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, runNixCli)
-import NixEvaluator (RepoSource (..))
+import Effects (Eval (..), Nix (..), evalHistoryJsonApply, evalJson, evalJsonApply, evalImpure, evalRaw, runNixCli)
+import NixEvaluator (EvalFailure, RepoSource (..))
 import StorageBus (headMoved)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
@@ -96,6 +97,9 @@ runNixEvalRawInRepo ctx attr = ExceptT $ evalRaw (evaluatorSource ctx) attr
 
 runNixEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) String
 runNixEvalJsonApplyInRepo ctx applyExpr attr = ExceptT $ evalJsonApply (evaluatorSource ctx) applyExpr attr
+
+runHistoryEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> Eff es (Either EvalFailure String)
+runHistoryEvalJsonApplyInRepo ctx applyExpr attr = evalHistoryJsonApply (evaluatorSource ctx) applyExpr attr
 
 runNixEvalImpureJsonExpr :: (Eval :> es) => String -> ExceptT String (Eff es) String
 runNixEvalImpureJsonExpr = ExceptT . evalImpure

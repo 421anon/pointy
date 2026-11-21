@@ -26,6 +26,7 @@ module Effects (
     evalJson,
     evalRaw,
     evalJsonApply,
+    evalHistoryJsonApply,
     evalImpure,
     runNixCli,
     runNixStoreCli,
@@ -67,7 +68,7 @@ import System.IO (hClose, openTempFile)
 import Effectful (Dispatch (Dynamic), DispatchOf, Eff, Effect, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (send)
 import Ingest (IngestResult)
-import NixEvaluator (RepoSource)
+import NixEvaluator (EvalFailure, RepoSource)
 import ProviderHttp (JudgeTask)
 import Servant.Server (ServerError)
 import Servant.Server.Internal.Handler (Handler (..))
@@ -85,6 +86,7 @@ data Eval :: Effect where
     EvalJson :: RepoSource -> String -> Eval m (Either String String)
     EvalRaw :: RepoSource -> String -> Eval m (Either String String)
     EvalJsonApply :: RepoSource -> String -> String -> Eval m (Either String String)
+    EvalHistoryJsonApply :: RepoSource -> String -> String -> Eval m (Either EvalFailure String)
     EvalImpure :: String -> Eval m (Either String String)
 
 type instance DispatchOf Eval = Dynamic
@@ -152,6 +154,9 @@ evalRaw source attr = send (EvalRaw source attr)
 
 evalJsonApply :: (Eval :> es) => RepoSource -> String -> String -> Eff es (Either String String)
 evalJsonApply source applyExpr attr = send (EvalJsonApply source applyExpr attr)
+
+evalHistoryJsonApply :: (Eval :> es) => RepoSource -> String -> String -> Eff es (Either EvalFailure String)
+evalHistoryJsonApply source applyExpr attr = send (EvalHistoryJsonApply source applyExpr attr)
 
 evalImpure :: (Eval :> es) => String -> Eff es (Either String String)
 evalImpure = send . EvalImpure

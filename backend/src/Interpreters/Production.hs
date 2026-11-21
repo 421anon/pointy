@@ -28,7 +28,7 @@ import Effects (AppEffects, ColdStorage (..), Eval (..), Inference (..), LogStam
 import Ingest (runIngest)
 import Network.HTTP.Types.URI (Query, parseQuery)
 import Processes (cli, cliBytes)
-import NixEvaluator (defaultNixEvaluator, evaluate, evaluateImpure, jsonAppliedExpression, jsonExpression, rawExpression)
+import NixEvaluator (defaultNixEvaluator, evaluate, evaluateHistory, evaluateImpure, historyNixEvaluator, jsonAppliedExpression, jsonExpression, rawExpression)
 import ProviderHttp (embedRequest, judgeRequest)
 import System.Directory (doesFileExist, getFileSize, getModificationTime, renameFile)
 import System.Environment (lookupEnv)
@@ -82,6 +82,7 @@ runEvalProduction = interpret $ \_ -> \case
     EvalJson source attr -> liftIO $ evaluate defaultNixEvaluator source (jsonExpression attr)
     EvalRaw source attr -> liftIO $ evaluate defaultNixEvaluator source (rawExpression attr)
     EvalJsonApply source applyExpr attr -> liftIO $ evaluate defaultNixEvaluator source (jsonAppliedExpression applyExpr attr)
+    EvalHistoryJsonApply source applyExpr attr -> liftIO $ evaluateHistory historyNixEvaluator source (jsonAppliedExpression applyExpr attr)
     EvalImpure expression -> liftIO $ evaluateImpure defaultNixEvaluator expression
 
 runNixProduction :: (IOE :> es) => Eff (Nix : es) a -> Eff es a

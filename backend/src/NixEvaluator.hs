@@ -3,21 +3,28 @@
 
 module NixEvaluator (
     NixEvaluator,
+    HistoryEvaluator,
     RepoSource (..),
     RepoExpression,
+    EvalFailure (..),
     defaultNixEvaluator,
+    historyEvaluatorWorkers,
+    historyNixEvaluator,
     jsonExpression,
     rawExpression,
     jsonAppliedExpression,
     evaluate,
+    evaluateHistory,
     evaluateImpure,
 ) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
-import Control.Concurrent.STM (TQueue, TMVar, atomically, isEmptyTQueue, newEmptyTMVarIO, newTQueueIO, putTMVar, readTQueue, takeTMVar, writeTQueue)
+import Control.Concurrent.STM (TQueue, TMVar, atomically, check, isEmptyTQueue, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, readTVar, registerDelay, takeTMVar, writeTQueue)
 import Control.Exception (SomeException, catch, try)
-import Control.Monad (forever, void, when)
+import Control.Monad (forever, replicateM_, void, when)
+import Data.Char (toLower)
+import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
 import NixEvaluator.NixRepl (NixEvalOutput (..), NixEvalRequest (..), NixEvalTarget (..), ReplKind (..), ReplOutcome (..), ReplSession, closeSession, openSession, readSessionMemoryBytes, runRequest)
 import System.IO.Unsafe (unsafePerformIO)
@@ -33,31 +40,74 @@ data RepoExpression = RepoExpression
     , expressionAttr :: String
     }
 
+data EvalFailure
+    = EvalError String
+    | EvalUnavailable String
+    deriving (Eq, Show)
+
 data NixEvaluator = NixEvaluator
     { pureWorker :: ReplWorker
     , impureWorker :: ReplWorker
     }
 
+newtype HistoryEvaluator = HistoryEvaluator (TQueue QueuedEval)
+
 data ReplWorker = ReplWorker
     { replWorkerKind :: ReplKind
     , replWorkerSession :: MVar (Maybe ReplSession)
     , replWorkerQueue :: TQueue QueuedEval
+    , replWorkerRelease :: ReleasePolicy
     }
 
-data QueuedEval = QueuedEval NixEvalRequest (TMVar (Either String String))
+data ReleasePolicy = ReleaseWhenIdle | ReleaseAfterRequest
+
+data QueuedEval = QueuedEval NixEvalRequest (TMVar (Either EvalFailure String))
 
 replMemoryLimitBytes :: Integer
 replMemoryLimitBytes = 2 * 1024 * 1024 * 1024
+
+historyEvaluatorWorkers :: Int
+historyEvaluatorWorkers = 4
+
+historySessionIdleSeconds :: Int
+historySessionIdleSeconds = 60
+
+unavailableFailureMarkers :: [String]
+unavailableFailureMarkers =
+    [ "while fetching the input"
+    , "unable to download"
+    , "could not resolve host"
+    , "couldn't resolve host"
+    , "connection refused"
+    , "timed out"
+    , "http error"
+    , "cannot connect to socket"
+    , "no space left on device"
+    , "out of memory"
+    , "unable to fork"
+    ]
 
 {-# NOINLINE defaultNixEvaluator #-}
 defaultNixEvaluator :: NixEvaluator
 defaultNixEvaluator = unsafePerformIO newNixEvaluator
 
 newNixEvaluator :: IO NixEvaluator
-newNixEvaluator =
+newNixEvaluator = do
+    pureQueue <- newTQueueIO
+    impureQueue <- newTQueueIO
     NixEvaluator
-        <$> newWorker PureRepl
-        <*> newWorker ImpureRepl
+        <$> newWorker PureRepl pureQueue ReleaseWhenIdle
+        <*> newWorker ImpureRepl impureQueue ReleaseWhenIdle
+
+{-# NOINLINE historyNixEvaluator #-}
+historyNixEvaluator :: HistoryEvaluator
+historyNixEvaluator = unsafePerformIO newHistoryEvaluator
+
+newHistoryEvaluator :: IO HistoryEvaluator
+newHistoryEvaluator = do
+    queue <- newTQueueIO
+    replicateM_ historyEvaluatorWorkers $ newWorker PureRepl queue ReleaseAfterRequest
+    pure $ HistoryEvaluator queue
 
 jsonExpression :: String -> RepoExpression
 jsonExpression = expression EvalJson Nothing
@@ -73,13 +123,20 @@ expression output applyExpr attr = RepoExpression output applyExpr attr
 
 evaluate :: NixEvaluator -> RepoSource -> RepoExpression -> IO (Either String String)
 evaluate evaluator source repoExpr =
-    evaluateRequest evaluator $
-        NixEvalRequest
-            { evalImpure = sourceImpure source
-            , evalOutput = expressionOutput repoExpr
-            , evalApply = expressionApply repoExpr
-            , evalTarget = EvalInstallable (sourceInstallable source) (expressionAttr repoExpr)
-            }
+    eitherFailureMessage <$> evaluateRequest evaluator (requestForSource source repoExpr)
+
+evaluateHistory :: HistoryEvaluator -> RepoSource -> RepoExpression -> IO (Either EvalFailure String)
+evaluateHistory (HistoryEvaluator queue) source repoExpr =
+    enqueueEval queue (requestForSource source repoExpr)
+
+requestForSource :: RepoSource -> RepoExpression -> NixEvalRequest
+requestForSource source repoExpr =
+    NixEvalRequest
+        { evalImpure = sourceImpure source
+        , evalOutput = expressionOutput repoExpr
+        , evalApply = expressionApply repoExpr
+        , evalTarget = EvalInstallable (sourceInstallable source) (expressionAttr repoExpr)
+        }
 
 sourceInstallable :: RepoSource -> String
 sourceInstallable = \case
@@ -93,13 +150,16 @@ sourceImpure = \case
 
 evaluateImpure :: NixEvaluator -> String -> IO (Either String String)
 evaluateImpure evaluator expr =
-    evaluateRequest evaluator $
-        NixEvalRequest True EvalJson Nothing $ EvalExpr expr
+    eitherFailureMessage <$> evaluateRequest evaluator (NixEvalRequest True EvalJson Nothing $ EvalExpr expr)
 
-evaluateRequest :: NixEvaluator -> NixEvalRequest -> IO (Either String String)
-evaluateRequest evaluator request = do
+evaluateRequest :: NixEvaluator -> NixEvalRequest -> IO (Either EvalFailure String)
+evaluateRequest evaluator request =
+    enqueueEval (replWorkerQueue $ workerForRequest evaluator request) request
+
+enqueueEval :: TQueue QueuedEval -> NixEvalRequest -> IO (Either EvalFailure String)
+enqueueEval queue request = do
     response <- newEmptyTMVarIO
-    atomically $ writeTQueue (replWorkerQueue $ workerForRequest evaluator request) (QueuedEval request response)
+    atomically $ writeTQueue queue (QueuedEval request response)
     atomically $ takeTMVar response
 
 workerForRequest :: NixEvaluator -> NixEvalRequest -> ReplWorker
@@ -107,24 +167,35 @@ workerForRequest evaluator request
     | evalImpure request = impureWorker evaluator
     | otherwise = pureWorker evaluator
 
-newWorker :: ReplKind -> IO ReplWorker
-newWorker kind = do
+newWorker :: ReplKind -> TQueue QueuedEval -> ReleasePolicy -> IO ReplWorker
+newWorker kind queue release = do
     session <- newMVar Nothing
-    queue <- newTQueueIO
-    let worker = ReplWorker kind session queue
+    let worker = ReplWorker kind session queue release
     void $ forkIO $ replWorkerLoop worker
     pure worker
 
 replWorkerLoop :: ReplWorker -> IO ()
 replWorkerLoop worker = forever $ do
-    QueuedEval request response <- atomically $ readTQueue (replWorkerQueue worker)
+    QueuedEval request response <- nextQueuedEval worker
     result <-
         runRequestWithSession True worker request
-            `catch` \(err :: SomeException) -> pure $ Left $ "nix repl request failed: " ++ show err
+            `catch` \(err :: SomeException) -> pure $ Left $ EvalUnavailable $ "nix repl request failed: " ++ show err
     atomically $ putTMVar response result
-    releaseIdleSession worker
+    releaseWorkerSession worker
 
-runRequestWithSession :: Bool -> ReplWorker -> NixEvalRequest -> IO (Either String String)
+nextQueuedEval :: ReplWorker -> IO QueuedEval
+nextQueuedEval worker = case replWorkerRelease worker of
+    ReleaseWhenIdle -> atomically $ readTQueue (replWorkerQueue worker)
+    ReleaseAfterRequest -> do
+        idleTimeout <- registerDelay (historySessionIdleSeconds * 1000000)
+        next <- atomically $ (Just <$> readTQueue (replWorkerQueue worker)) `orElse` (readTVar idleTimeout >>= check >> pure Nothing)
+        case next of
+            Just queued -> pure queued
+            Nothing -> do
+                modifyMVar_ (replWorkerSession worker) $ \session -> mapM_ closeQuietly session >> pure Nothing
+                nextQueuedEval worker
+
+runRequestWithSession :: Bool -> ReplWorker -> NixEvalRequest -> IO (Either EvalFailure String)
 runRequestWithSession mayRetry worker request = do
     outcome <- modifyMVar (replWorkerSession worker) $ \mSession -> do
         eSession <- maybe openActiveSession (pure . Right) mSession
@@ -143,31 +214,50 @@ runRequestWithSession mayRetry worker request = do
                     ReplFailed err -> pure (Just session, ReplFailed err)
     case outcome of
         ReplSucceeded output -> pure $ Right output
-        ReplFailed err -> pure $ Left err
+        ReplFailed err -> pure $ Left (classifyFailure err)
         ReplDied err
             | mayRetry -> runRequestWithSession False worker request
-            | otherwise -> pure $ Left err
+            | otherwise -> pure $ Left $ EvalUnavailable err
   where
     openActiveSession = try $ openSession $ replWorkerKind worker
 
-releaseIdleSession :: ReplWorker -> IO ()
-releaseIdleSession worker = do
-    idle <- atomically $ isEmptyTQueue (replWorkerQueue worker)
-    when idle $
-        modifyMVar_ (replWorkerSession worker) $ \case
-            Nothing -> pure Nothing
-            Just session -> do
-                memoryBytes <- readSessionMemoryBytes session
-                if maybe False (> replMemoryLimitBytes) memoryBytes
-                    then do
-                        closeQuietly session
-                        logWarning $
-                            show (replWorkerKind worker)
-                                ++ " nix repl released at "
-                                ++ formatMiB (fromMaybe 0 memoryBytes)
-                                ++ " RSS"
-                        pure Nothing
-                    else pure $ Just session
+classifyFailure :: String -> EvalFailure
+classifyFailure message
+    | any (`isInfixOf` map toLower message) unavailableFailureMarkers = EvalUnavailable message
+    | otherwise = EvalError message
+
+eitherFailureMessage :: Either EvalFailure String -> Either String String
+eitherFailureMessage = either (Left . failureMessage) Right
+
+failureMessage :: EvalFailure -> String
+failureMessage = \case
+    EvalError message -> message
+    EvalUnavailable message -> message
+
+releaseWorkerSession :: ReplWorker -> IO ()
+releaseWorkerSession worker =
+    case replWorkerRelease worker of
+        ReleaseWhenIdle -> do
+            idle <- atomically $ isEmptyTQueue (replWorkerQueue worker)
+            when idle $ releaseOverMemory worker
+        ReleaseAfterRequest -> releaseOverMemory worker
+
+releaseOverMemory :: ReplWorker -> IO ()
+releaseOverMemory worker =
+    modifyMVar_ (replWorkerSession worker) $ \case
+        Nothing -> pure Nothing
+        Just session -> do
+            memoryBytes <- readSessionMemoryBytes session
+            if maybe False (> replMemoryLimitBytes) memoryBytes
+                then do
+                    closeQuietly session
+                    logWarning $
+                        show (replWorkerKind worker)
+                            ++ " nix repl released at "
+                            ++ formatMiB (fromMaybe 0 memoryBytes)
+                            ++ " RSS"
+                    pure Nothing
+                else pure $ Just session
 
 closeQuietly :: ReplSession -> IO ()
 closeQuietly session = closeSession session `catch` \(_ :: SomeException) -> pure ()

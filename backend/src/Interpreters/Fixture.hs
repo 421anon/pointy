@@ -24,6 +24,7 @@ import Data.Aeson (object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as Key
 import Data.ByteArray (convert)
+import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (intercalate, sortOn)
@@ -40,6 +41,7 @@ import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, ColdStorage (..), Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
 import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageStatus, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
 import JobWatch (markJobNameEnded)
+import NixEvaluator (EvalFailure (..))
 import Processes (cli)
 import ProviderHttp (JudgeTask (..))
 import Text.Read (readMaybe)
@@ -163,6 +165,7 @@ runEvalFixture state = interpret $ \_ -> \case
     EvalJson _ attr -> pure (jsonAnswer (fixtureDocument state) attr)
     EvalRaw _ attr -> pure (rawAnswer (fixtureDocument state) attr)
     EvalJsonApply _ applyExpr attr -> pure (appliedAnswer (fixtureDocument state) applyExpr attr)
+    EvalHistoryJsonApply _ applyExpr attr -> pure (first EvalError (appliedAnswer (fixtureDocument state) applyExpr attr))
     EvalImpure expression -> liftIO $ evalNixJson state expression
 
 
