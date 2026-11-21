@@ -5106,7 +5106,7 @@ body:has(dialog[open]) {
 .storage-panel__list--cold .storage-panel__columns,
 .storage-panel__list--cold .storage-panel__step-row,
 .storage-panel__list--cold .storage-panel__row {
-  grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem auto;
+  grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem 9.5rem;
 }
 
 .storage-panel__columns {

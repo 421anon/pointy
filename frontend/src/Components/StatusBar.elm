@@ -1333,7 +1333,7 @@ viewStorageUsage snapshot =
                 , Html.strong [] [ Html.text (Model.formatStorageSize snapshot.cold) ]
                 , Html.text " in cold storage"
                 , partial
-                , Html.span [ class "storage-panel__cold-note" ] [ Html.text "not counted in the on-server total" ]
+                , Html.span [ class "storage-panel__cold-note" ] [ Html.text "· not included above" ]
                 ]
         ]
 
@@ -1444,9 +1444,12 @@ viewStorageFooter snapshot =
         listed =
             List.length snapshot.revisions
 
-        cap =
+        order =
             if snapshot.revisionCount > listed && listed > 0 then
-                " · largest " ++ String.fromInt listed ++ " listed"
+                " · " ++ String.fromInt listed ++ " largest listed"
+
+            else if snapshot.revisionCount > 1 then
+                " · largest first"
 
             else
                 ""
@@ -1456,13 +1459,7 @@ viewStorageFooter snapshot =
             (storageCount (List.length snapshot.steps) "step" "steps"
                 ++ " · "
                 ++ storageCount snapshot.revisionCount "revision" "revisions"
-                ++ cap
-                ++ (if snapshot.revisionCount > 1 then
-                        " · largest first"
-
-                    else
-                        ""
-                   )
+                ++ order
             )
         ]
 
