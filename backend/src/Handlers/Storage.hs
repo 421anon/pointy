@@ -621,12 +621,12 @@ evaluateCommit repoPath commit = do
         outcome <- applyHistoryEval ctx (stepEvaluationExpression [stepId])
         case outcome of
             Left (EvalUnavailable message) -> pure (Left (EvalUnavailable message))
-            Left (EvalError _) -> evaluateStepIds ctx rest (Map.insert stepId (CachedStep "" Nothing) steps)
+            Left (EvalError _) -> evaluateStepIds ctx rest (Map.insert stepId (CachedStep "" Nothing "derived") steps)
             Right output ->
                 case decodeStepEvaluations output of
                     Left failure -> pure (Left failure)
                     Right evaluated ->
-                        let step = Map.findWithDefault (CachedStep "" Nothing) stepId evaluated
+                        let step = Map.findWithDefault (CachedStep "" Nothing "derived") stepId evaluated
                          in evaluateStepIds ctx rest (Map.insert stepId step steps)
 
 decodeStepEvaluations :: String -> Either EvalFailure (Map Int CachedStep)
