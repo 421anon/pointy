@@ -5731,6 +5731,9 @@ armStorageDelete revision =
 storageDeleteErrorMessage : Http.Error -> String
 storageDeleteErrorMessage error =
     case error of
+        Http.BadBody body ->
+            body
+
         Http.BadStatus 409 ->
             "The output was not deleted. It may be running, in use, or have files in cold storage; the cold storage provider's copy is not deleted."
 

@@ -207,8 +207,7 @@ deleteRevisionHandler stepId mCommit = do
         case code of
             ExitSuccess -> pure ()
             ExitFailure _ ->
-                let stderr = T.strip (TE.decodeUtf8Lenient err)
-                    message = if T.null stderr then "The store refused to delete this output." else "The store refused to delete this output: " <> stderr
+                let message = "The store refused to delete this output: " <> storeErrorLine (TE.decodeUtf8Lenient err)
                  in throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
     liftIO (invalidate mempty{invalidOutputs = True})
     pure NoContent
@@ -217,6 +216,12 @@ deleteRevisionHandler stepId mCommit = do
         "This output has "
             <> T.pack (show (Set.size files))
             <> " file(s) in cold storage; Pointy does not delete the provider's copy. Delete it with the cold storage provider first."
+
+storeErrorLine :: Text -> Text
+storeErrorLine stderr =
+    case [T.strip line | line <- T.lines stderr, "error:" `T.isInfixOf` line] of
+        [] -> T.strip stderr
+        errors -> last errors
 
 offloadRefusal :: Int -> AppM (Maybe OffloadRequestError)
 offloadRefusal stepId = do
