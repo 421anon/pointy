@@ -3,6 +3,7 @@
 module StorageBus (
     StorageView (..),
     StorageRevision (..),
+    StorageStep (..),
     Invalidation (..),
     ColdRecheck (..),
     OffloadState (..),
@@ -24,6 +25,8 @@ module StorageBus (
     currentView,
     viewAndSubscribe,
     encodeView,
+    stepSummaries,
+    revisionMovable,
 ) where
 
 import ColdProvider (ColdStatus, OffloadProgress (..))
@@ -31,11 +34,14 @@ import Control.Concurrent.STM (STM, TChan, TVar, atomically, dupTChan, modifyTVa
 import Control.Monad (when)
 import Data.Aeson (ToJSON (..), encode, object, (.=))
 import qualified Data.ByteString.Lazy as LBS
+import Data.List (maximumBy, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Ord (comparing)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -70,6 +76,60 @@ instance ToJSON StorageRevision where
             , "blocked" .= revisionBlocked revision
             ]
 
+data StorageStep = StorageStep
+    { storageStepId :: Int
+    , storageStepName :: Text
+    , storageStepLocal :: Integer
+    , storageStepCold :: Integer
+    , storageStepRevisionCount :: Int
+    , storageStepLocalRevisionCount :: Int
+    , storageStepBlocked :: Maybe Text
+    }
+    deriving (Eq, Show)
+
+instance ToJSON StorageStep where
+    toJSON step =
+        object
+            [ "step" .= storageStepId step
+            , "name" .= storageStepName step
+            , "local" .= storageStepLocal step
+            , "cold" .= storageStepCold step
+            , "revisionCount" .= storageStepRevisionCount step
+            , "localRevisionCount" .= storageStepLocalRevisionCount step
+            , "blocked" .= storageStepBlocked step
+            ]
+
+stepSummaries :: [StorageRevision] -> [StorageStep]
+stepSummaries revisions = sortOn summaryOrder (map summarize (Map.elems grouped))
+  where
+    grouped = Map.fromListWith (<>) [(revisionStep revision, [revision]) | revision <- revisions]
+    summarize group =
+        StorageStep
+            { storageStepId = stepId
+            , storageStepName = name
+            , storageStepLocal = sum (map revisionLocal group)
+            , storageStepCold = sum (map revisionCold group)
+            , storageStepRevisionCount = length group
+            , storageStepLocalRevisionCount = length (filter revisionMovable group)
+            , storageStepBlocked = blocked
+            }
+      where
+        newest = maximumBy (comparing (\revision -> (revisionCommittedAt revision, revisionCommit revision))) group
+        stepId = revisionStep newest
+        newestName = revisionName newest
+        name = if T.null newestName then "Step " <> T.pack (show stepId) else newestName
+        blocked = case [reason | revision <- group, Just reason <- [revisionBlocked revision]] of
+            reason : _ -> Just reason
+            [] -> Nothing
+    summaryOrder summary =
+        ( negate (storageStepLocal summary)
+        , negate (storageStepCold summary)
+        , storageStepId summary
+        )
+
+revisionMovable :: StorageRevision -> Bool
+revisionMovable revision = revisionState revision `elem` ["local", "failed"]
+
 data StorageView = StorageView
     { storageColdConfigured :: Bool
     , storageLocal :: Integer
@@ -82,6 +142,7 @@ data StorageView = StorageView
     , storageTruncated :: Bool
     , storageRevisionCount :: Int
     , storageRevisions :: [StorageRevision]
+    , storageSteps :: [StorageStep]
     , storageError :: Maybe Text
     , storageUpdatedAt :: UTCTime
     }
@@ -101,6 +162,7 @@ instance ToJSON StorageView where
             , "truncated" .= storageTruncated view
             , "revisionCount" .= storageRevisionCount view
             , "revisions" .= storageRevisions view
+            , "steps" .= storageSteps view
             , "error" .= storageError view
             , "updatedAt" .= storageUpdatedAt view
             ]
@@ -123,15 +185,16 @@ data Invalidation = Invalidation
     , invalidOutputs :: Bool
     , invalidCold :: ColdRecheck
     , invalidView :: Bool
+    , invalidBroadcast :: Bool
     }
     deriving (Eq, Show)
 
 instance Semigroup Invalidation where
-    Invalidation headA outputsA coldA viewA <> Invalidation headB outputsB coldB viewB =
-        Invalidation (headA || headB) (outputsA || outputsB) (coldA <> coldB) (viewA || viewB)
+    Invalidation headA outputsA coldA viewA broadcastA <> Invalidation headB outputsB coldB viewB broadcastB =
+        Invalidation (headA || headB) (outputsA || outputsB) (coldA <> coldB) (viewA || viewB) (broadcastA || broadcastB)
 
 instance Monoid Invalidation where
-    mempty = Invalidation False False RecheckNone False
+    mempty = Invalidation False False RecheckNone False False
 
 data OffloadState = OffloadRunning OffloadProgress | OffloadFailed Text
     deriving (Eq, Show)
@@ -176,7 +239,7 @@ outputsBuilt :: IO ()
 outputsBuilt = invalidate mempty{invalidOutputs = True}
 
 revalidateAll :: IO ()
-revalidateAll = invalidate (Invalidation True True RecheckAll False)
+revalidateAll = invalidate mempty{invalidHead = True, invalidOutputs = True, invalidCold = RecheckAll, invalidBroadcast = True}
 
 recheckCold :: Text -> IO ()
 recheckCold path = invalidate mempty{invalidCold = RecheckPaths (Set.singleton path)}
@@ -223,12 +286,12 @@ endOffload path outcome = atomically $ do
 offloadStates :: IO (Map Text OffloadState)
 offloadStates = readTVarIO offloadsVar
 
-publishView :: StorageView -> IO ()
-publishView view = atomically $ do
+publishView :: Bool -> StorageView -> IO ()
+publishView broadcast view = atomically $ do
     previous <- readTVar viewVar
-    when (fmap withoutTime previous /= Just (withoutTime view)) $ do
-        writeTVar viewVar (Just view)
-        writeTChan viewChan view
+    let changed = fmap withoutTime previous /= Just (withoutTime view)
+    writeTVar viewVar (Just view)
+    when (broadcast || changed) (writeTChan viewChan view)
   where
     withoutTime snapshot = snapshot{storageUpdatedAt = storageUpdatedAt view}
 

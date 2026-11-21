@@ -1111,14 +1111,28 @@ storageView =
         |> required "local" Decode.int
         |> required "cold" Decode.int
         |> required "free" Decode.int
+        |> required "diskTotal" Decode.int
         |> required "scanning" Decode.bool
         |> required "scanned" Decode.int
         |> required "history" Decode.int
         |> required "truncated" Decode.bool
         |> required "revisionCount" Decode.int
         |> required "revisions" (Decode.list storageRevision)
+        |> required "steps" (Decode.list storageStep)
         |> optional "error" (maybe Decode.string) Nothing
         |> required "updatedAt" Iso8601.decoder
+
+
+storageStep : Decoder Model.StorageStep
+storageStep =
+    Decode.succeed Model.StorageStep
+        |> required "step" Decode.int
+        |> required "name" Decode.string
+        |> required "local" Decode.int
+        |> required "cold" Decode.int
+        |> required "revisionCount" Decode.int
+        |> required "localRevisionCount" Decode.int
+        |> optional "blocked" (maybe Decode.string) Nothing
 
 
 storageRevision : Decoder Model.StorageRevision

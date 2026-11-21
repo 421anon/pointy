@@ -6,6 +6,7 @@
 
 module Handlers.Storage (
     offloadHandler,
+    offloadStepHandler,
     runStorageCenter,
     storageHandler,
 ) where
@@ -45,7 +46,7 @@ import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err503)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, publishView, recordOffloadProgress, revalidateAll, takeInvalidation, trackPaths, viewInputsChanged)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, publishView, recordOffloadProgress, revalidateAll, revisionMovable, stepSummaries, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Exit (ExitCode (..))
@@ -131,6 +132,10 @@ cachesVar = unsafePerformIO (newTVarIO (Caches Nothing [] (Left "The repository 
 evaluationsRef :: MVar (Maybe (Map Text (Map Int CachedStep)))
 evaluationsRef = unsafePerformIO (newMVar Nothing)
 
+{-# NOINLINE movablePathsVar #-}
+movablePathsVar :: TVar (Map Int (Set Text))
+movablePathsVar = unsafePerformIO (newTVarIO Map.empty)
+
 data ScanState = ScanState
     { scanRunning :: Bool
     , scanUnavailable :: Maybe (UTCTime, Text)
@@ -165,6 +170,26 @@ offloadHandler stepId mCommit = do
         outcome <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
         endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id outcome)
     pure NoContent
+
+offloadStepHandler :: Int -> AppM NoContent
+offloadStepHandler stepId = do
+    configured <- lift coldStorageConfigured
+    unless configured $ throwError err400{errBody = "Cold storage is not configured."}
+    refusal <- offloadRefusal stepId
+    case refusal of
+        Just (OffloadBlocked reason) -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
+        Just (OffloadUnavailable reason) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
+        Nothing -> pure ()
+    paths <- liftIO (Map.findWithDefault Set.empty stepId <$> readTVarIO movablePathsVar)
+    unless (Set.null paths) $
+        liftIO $ void $ forkIO $ mapM_ offloadPath (Set.toList paths)
+    pure NoContent
+  where
+    offloadPath outPath = do
+        started <- beginOffload outPath
+        when started $ do
+            outcome <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
+            endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id outcome)
 
 offloadRefusal :: Int -> AppM (Maybe OffloadRequestError)
 offloadRefusal stepId = do
@@ -227,7 +252,25 @@ runStorageCenter = do
         now <- getCurrentTime
         published <- atomically currentView
         when (isNothing published) $
-            publishView (StorageView False 0 0 0 0 False 0 0 False 0 [] (Just "Storage usage is unavailable. The server could not read it.") now)
+            publishView
+                False
+                ( StorageView
+                    { storageColdConfigured = False
+                    , storageLocal = 0
+                    , storageCold = 0
+                    , storageFree = 0
+                    , storageDiskTotal = 0
+                    , storageScanning = False
+                    , storageScanned = 0
+                    , storageHistory = 0
+                    , storageTruncated = False
+                    , storageRevisionCount = 0
+                    , storageRevisions = []
+                    , storageSteps = []
+                    , storageError = Just "Storage usage is unavailable. The server could not read it."
+                    , storageUpdatedAt = now
+                    }
+                )
 
 refresh :: Invalidation -> Map Int Text -> Eff AppEffects ()
 refresh work running = do
@@ -267,15 +310,26 @@ refresh work running = do
     let blockedReason = case cachedHeadSteps caches of
             Right headSteps -> runningRefusal headSteps running
             Left _ -> const (Just "Cannot tell which steps read this output until the current revision evaluates.")
+        revisionsWithSeeds =
+            [ (seed, storageRevision coldConfigured (Map.lookup (seedPath seed) colds) (Map.lookup (seedPath seed) offloads) (blockedReason (seedStep seed)) seed narSize)
+            | seed <- seeds
+            , Just narSize <- [Map.lookup (seedPath seed) present]
+            ]
         revisions =
             sortOn
                 (\revision -> (negate (revisionLocal revision), negate (revisionCold revision)))
-                [ storageRevision coldConfigured (Map.lookup (seedPath seed) colds) (Map.lookup (seedPath seed) offloads) (blockedReason (seedStep seed)) seed narSize
-                | seed <- seeds
-                , Just narSize <- [Map.lookup (seedPath seed) present]
+                (map snd revisionsWithSeeds)
+        movablePaths =
+            Map.fromListWith Set.union
+                [ (seedStep seed, Set.singleton (seedPath seed))
+                | (seed, revision) <- revisionsWithSeeds
+                , revisionMovable revision
                 ]
+        steps = stepSummaries revisions
+    liftIO $ atomically $ writeTVar movablePathsVar movablePaths
     liftIO $
         publishView
+            (invalidBroadcast work)
             StorageView
                 { storageColdConfigured = coldConfigured
                 , storageLocal = sum (map revisionLocal revisions)
@@ -288,6 +342,7 @@ refresh work running = do
                 , storageTruncated = null toScan && not (null pending)
                 , storageRevisionCount = length revisions
                 , storageRevisions = take maxShownRevisions revisions
+                , storageSteps = steps
                 , storageError =
                     firstError
                         [ cachedHistoryError caches

@@ -1231,6 +1231,16 @@ storageMoving =
     lens ".storageMoving" Model.getStorageMoving (\(Model m) moving -> Model { m | storageMoving = moving })
 
 
+storageExpandedSteps : Lens ls Model (Set Int) x y
+storageExpandedSteps =
+    lens ".storageExpandedSteps" Model.getStorageExpandedSteps (\(Model m) expanded -> Model { m | storageExpandedSteps = expanded })
+
+
+storageFilter : Lens ls Model String x y
+storageFilter =
+    lens ".storageFilter" Model.getStorageFilter (\(Model m) filter -> Model { m | storageFilter = filter })
+
+
 backendConnection : Lens ls Model Model.BackendConnection x y
 backendConnection =
     lens ".backendConnection" Model.getBackendConnection (\(Model m) connection -> Model { m | backendConnection = connection })

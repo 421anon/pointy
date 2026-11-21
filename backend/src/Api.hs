@@ -514,7 +514,7 @@ type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 
 type GetStorage =
     "storage"
-        :> Description "Returns the storage center's view from the backend's cache: the bytes that step output revisions keep on this server, the bytes they have offloaded to cold storage, the disk space left beside them, and one row per step revision that is still in the store. Asks the backend to re-read the branch, store sizes and cold storage statuses; the refreshed view arrives as a storage event on /events."
+        :> Description "Returns the storage center's view from the backend's cache: the bytes that step output revisions keep on this server, the bytes they have offloaded to cold storage, the disk space left beside them, one summary per step covering every revision in the store, and the 200 largest revisions. Asks the backend to re-read the branch, store sizes and cold storage statuses; the refreshed view arrives as a storage event on /events."
         :> Get '[JSON] StorageView
 
 type OffloadStorage =
@@ -523,6 +523,13 @@ type OffloadStorage =
         :> Description "Starts moving every local file of a step revision's output to cold storage and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while a step that reads this output is running or queued."
         :> ReqId
         :> QueryParam "commit" Text
+        :> Post '[JSON] NoContent
+
+type OffloadStorageStep =
+    "storage"
+        :> "offload-step"
+        :> Description "Starts moving every local or failed revision of a step's outputs to cold storage, one output after another in a single background thread, and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while the step, or a step that reads its output, is running or queued."
+        :> ReqId
         :> Post '[JSON] NoContent
 
 type ArtifactRdf =
@@ -627,3 +634,4 @@ type API =
         :<|> ArtifactRdf
         :<|> GetStorage
         :<|> OffloadStorage
+        :<|> OffloadStorageStep

@@ -20,6 +20,16 @@ function closeDialog(id) {
   dialog.close();
 }
 
+function installModalDialogKeydownMarker() {
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      event.pointyModalDialogOpen = document.querySelector("dialog[open]") !== null;
+    },
+    true,
+  );
+}
+
 function hidePopover(id) {
   document.getElementById(id)?.hidePopover();
 }
@@ -68,6 +78,7 @@ export function connectPorts(app) {
   installDragDropListeners(app);
   installUnsentTreeOpsFlush();
   installChangeMarkers();
+  installModalDialogKeydownMarker();
   connectBackendEvents(app);
   connectAgentTurnStreams(app);
   syncAutoApplyAcrossTabs(app);

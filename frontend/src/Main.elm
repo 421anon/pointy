@@ -244,6 +244,7 @@ subscriptions model =
         , coldInputsSubscription model
         , gutterDragSubscription model
         , areaCaptureSubscription model
+        , storagePanelEscapeSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
         , statusBarClockSubscription model
         , Browser.Events.onKeyDown Organize.shortcutDecoder
@@ -317,6 +318,39 @@ areaCaptureSubscription model =
           else
             Sub.none
         ]
+
+
+storagePanelEscapeSubscription : Model -> Sub (Flow Model ())
+storagePanelEscapeSubscription model =
+    if Model.Core.getStorageOpen model && not (has (areaCapture << just) model) then
+        Browser.Events.onKeyDown storagePanelEscapeDecoder
+
+    else
+        Sub.none
+
+
+storagePanelEscapeDecoder : Decode.Decoder (Flow Model ())
+storagePanelEscapeDecoder =
+    Decode.field "key" Decode.string
+        |> Decode.andThen
+            (\key ->
+                if key /= "Escape" then
+                    Decode.fail "Not Escape"
+
+                else
+                    Decode.oneOf
+                        [ Decode.field "pointyModalDialogOpen" Decode.bool
+                        , Decode.succeed False
+                        ]
+                        |> Decode.andThen
+                            (\modalDialogOpen ->
+                                if modalDialogOpen then
+                                    Decode.fail "A modal dialog is open"
+
+                                else
+                                    Decode.succeed Actions.closeStoragePanel
+                            )
+            )
 
 
 uploadProgressSubscription : Model -> Sub (Flow Model ())

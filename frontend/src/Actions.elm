@@ -5535,18 +5535,43 @@ toggleStatusBar =
         |> Flow.seq (Flow.setAll storageOpen False)
 
 
+storagePanelId : String
+storagePanelId =
+    "storage-panel"
+
+
+storageTriggerId : String
+storageTriggerId =
+    "storage-trigger"
+
+
 toggleStoragePanel : Flow Model ()
 toggleStoragePanel =
     Flow.get
         |> Flow.andThen
             (\model ->
                 if Model.getStorageOpen model then
-                    Flow.setAll storageOpen False
+                    closeStoragePanel
 
                 else
                     Flow.setAll statusBarOpen False
                         |> Flow.seq (Flow.setAll storageOpen True)
-                        |> Flow.seq loadStorage
+                        |> Flow.seq (Flow.async loadStorage)
+                        |> Flow.seq (Flow.attemptTask (Dom.focus storagePanelId))
+            )
+
+
+closeStoragePanel : Flow Model ()
+closeStoragePanel =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if Model.getStorageOpen model then
+                    Flow.setAll storageOpen False
+                        |> Flow.seq (Flow.attemptTask (Dom.focus storageTriggerId))
+
+                else
+                    Flow.pure ()
             )
 
 
@@ -5571,6 +5596,23 @@ loadStorage =
             )
 
 
+toggleStorageStepExpanded : Int -> Flow Model ()
+toggleStorageStepExpanded stepId =
+    Flow.over storageExpandedSteps
+        (\expanded ->
+            if Set.member stepId expanded then
+                Set.remove stepId expanded
+
+            else
+                Set.insert stepId expanded
+        )
+
+
+setStorageFilter : String -> Flow Model ()
+setStorageFilter =
+    Flow.setAll storageFilter
+
+
 confirmOffload : Model.StorageRevision -> Flow Model ()
 confirmOffload revision =
     let
@@ -5579,10 +5621,45 @@ confirmOffload revision =
             , title = "Move to cold storage"
             , subtitle = Just (revision.name ++ " · " ++ String.left 7 revision.revision)
             , bodyLines =
-                [ "Pointy asks the cold storage provider to move this revision's files off this server."
+                [ "This moves " ++ Model.formatStorageSize revision.local ++ " off this server."
+                , "Pointy asks the cold storage provider to move this revision's files off this server."
                 , "The files stay available: reading one copies it back first, so larger files take longer to open."
                 ]
             , onConfirm = offloadStorageRevision revision
+            }
+    in
+    Flow.modify (\(Model.Model m) -> Model.Model { m | modalConfirm = config })
+        |> Flow.seq (openDialog "modal-confirm")
+
+
+confirmStorageStepOffload : Model.StorageStep -> Flow Model ()
+confirmStorageStepOffload step =
+    let
+        revisionCount =
+            String.fromInt step.localRevisionCount
+
+        revisionWord =
+            if step.localRevisionCount == 1 then
+                " revision"
+
+            else
+                " revisions"
+
+        config =
+            { id = "modal-confirm"
+            , title = "Move step outputs to cold storage"
+            , subtitle = Just (step.name ++ " · #" ++ String.fromInt step.step)
+            , bodyLines =
+                [ "This moves "
+                    ++ revisionCount
+                    ++ revisionWord
+                    ++ " totalling "
+                    ++ Model.formatStorageSize step.local
+                    ++ " off this server."
+                , "Pointy asks the cold storage provider to move these revisions' files off this server."
+                , "The files stay available: reading one copies it back first, so larger files take longer to open."
+                ]
+            , onConfirm = offloadStorageStepRevisions step
             }
     in
     Flow.modify (\(Model.Model m) -> Model.Model { m | modalConfirm = config })
@@ -5604,6 +5681,36 @@ offloadStorageRevision revision =
                 else
                     Flow.over storageMoving (Set.insert key)
                         |> Flow.seq (Api.offloadStorage revision.step revision.revision)
+                        |> Flow.andThen
+                            (\result ->
+                                Flow.over storageMoving (Set.remove key)
+                                    |> Flow.seq
+                                        (case result of
+                                            Ok () ->
+                                                Flow.pure ()
+
+                                            Err error ->
+                                                addToast False (Http.errorMessage error)
+                                        )
+                            )
+            )
+
+
+offloadStorageStepRevisions : Model.StorageStep -> Flow Model ()
+offloadStorageStepRevisions step =
+    let
+        key =
+            Model.storageStepKey step.step
+    in
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if Set.member key (Model.getStorageMoving model) then
+                    Flow.pure ()
+
+                else
+                    Flow.over storageMoving (Set.insert key)
+                        |> Flow.seq (Api.offloadStorageStep step.step)
                         |> Flow.andThen
                             (\result ->
                                 Flow.over storageMoving (Set.remove key)

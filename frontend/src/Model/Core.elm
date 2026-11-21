@@ -216,14 +216,27 @@ type alias StorageView =
     , local : Int
     , cold : Int
     , free : Int
+    , diskTotal : Int
     , scanning : Bool
     , scanned : Int
     , history : Int
     , truncated : Bool
     , revisionCount : Int
     , revisions : List StorageRevision
+    , steps : List StorageStep
     , error : Maybe String
     , updatedAt : Time.Posix
+    }
+
+
+type alias StorageStep =
+    { step : Int
+    , name : String
+    , local : Int
+    , cold : Int
+    , revisionCount : Int
+    , localRevisionCount : Int
+    , blocked : Maybe String
     }
 
 
@@ -256,6 +269,38 @@ storageRevisionKey revision =
     String.fromInt revision.step ++ "@" ++ revision.revision
 
 
+storageStepKey : Int -> String
+storageStepKey stepId =
+    "step#" ++ String.fromInt stepId
+
+
+formatStorageSize : Int -> String
+formatStorageSize bytes =
+    if bytes < 1024 then
+        String.fromInt (max 0 bytes) ++ " B"
+
+    else
+        formatStorageUnit (round (toFloat bytes / 1024 * 10)) [ "KiB", "MiB", "GiB", "TiB", "PiB" ]
+
+
+formatStorageUnit : Int -> List String -> String
+formatStorageUnit tenths units =
+    case units of
+        unit :: rest ->
+            if tenths >= 10240 && rest /= [] then
+                formatStorageUnit (tenths // 1024) rest
+
+            else
+                String.fromInt (tenths // 10)
+                    ++ "."
+                    ++ String.fromInt (modBy 10 tenths)
+                    ++ " "
+                    ++ unit
+
+        [] ->
+            String.fromInt tenths ++ " B"
+
+
 getStorageOpen : Model -> Bool
 getStorageOpen (Model model) =
     model.storageOpen
@@ -269,6 +314,16 @@ getStorageView (Model model) =
 getStorageMoving : Model -> Set String
 getStorageMoving (Model model) =
     model.storageMoving
+
+
+getStorageExpandedSteps : Model -> Set Int
+getStorageExpandedSteps (Model model) =
+    model.storageExpandedSteps
+
+
+getStorageFilter : Model -> String
+getStorageFilter (Model model) =
+    model.storageFilter
 
 
 type alias ColdInputFile =
@@ -1968,6 +2023,8 @@ type Model
         , storageOpen : Bool
         , storageView : ApiData StorageView
         , storageMoving : Set String
+        , storageExpandedSteps : Set Int
+        , storageFilter : String
         , backendConnection : BackendConnection
         , statusBarScrollTop : Float
         , sidebarOpen : Bool
@@ -2650,6 +2707,8 @@ initialModel key route flags =
         , storageOpen = False
         , storageView = ApiData.NotAsked
         , storageMoving = Set.empty
+        , storageExpandedSteps = Set.empty
+        , storageFilter = ""
         , backendConnection = BackendUp
         , statusBarScrollTop = 0
         , sidebarOpen = not flags.isNarrow

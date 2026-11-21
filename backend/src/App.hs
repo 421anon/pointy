@@ -33,7 +33,7 @@ import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.ChatSearch (chatSearchHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Control.Concurrent (forkIO)
-import Handlers.Storage (offloadHandler, runStorageCenter, storageHandler)
+import Handlers.Storage (offloadHandler, offloadStepHandler, runStorageCenter, storageHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
 import Data.String (fromString)
@@ -120,6 +120,7 @@ server =
         :<|> artifactRdfHandler
         :<|> storageHandler
         :<|> offloadHandler
+        :<|> offloadStepHandler
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy
 corsPolicy req = case pathInfo req of
