@@ -11,7 +11,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import StorageBus (StorageRevision (..), StorageStep (..), revisionMovable, stepSummaries)
+import StorageBus (StorageRevision (..), revisionMovable)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 
 main :: IO ()
@@ -20,7 +20,7 @@ main = do
     checkRevisions
     checkDependents
     checkCold
-    checkStepSummaries
+    checkRevisionMovable
 
 checkHistoryParsing :: IO ()
 checkHistoryParsing = do
@@ -37,16 +37,16 @@ checkRevisions :: IO ()
 checkRevisions = do
     assertEqual
         "one row per output path, dated at the commit that first produced it, even when it reappears"
-        [ RevisionSeed 1 "First" (commit 1) (time 1) "/nix/store/a"
-        , RevisionSeed 1 "First" (commit 4) (time 4) "/nix/store/b"
-        , RevisionSeed 2 "Extract" (commit 1) (time 1) "/nix/store/x"
-        , RevisionSeed 2 "Second" (commit 2) (time 2) "/nix/store/y"
+        [ RevisionSeed 1 "First" "derived" (commit 1) (time 1) "/nix/store/a"
+        , RevisionSeed 1 "First" "derived" (commit 4) (time 4) "/nix/store/b"
+        , RevisionSeed 2 "Extract" "download" (commit 1) (time 1) "/nix/store/x"
+        , RevisionSeed 2 "Second" "upload" (commit 2) (time 2) "/nix/store/y"
         ]
         (revisionsFromHistory sampleHistory)
     assertEqual
         "a missing step starts a fresh revision when it comes back with another output"
-        [RevisionSeed 1 "N" (commit 1) (time 1) "/nix/store/a", RevisionSeed 1 "N" (commit 3) (time 3) "/nix/store/b"]
-        (revisionsFromHistory [atCommit 3 [(1, "N", Just "/nix/store/b")], atCommit 2 [(1, "N", Nothing)], atCommit 1 [(1, "N", Just "/nix/store/a")]])
+        [RevisionSeed 1 "N" "upload" (commit 1) (time 1) "/nix/store/a", RevisionSeed 1 "N" "derived" (commit 3) (time 3) "/nix/store/b"]
+        (revisionsFromHistory [atCommit 3 [(1, "N", "derived", Just "/nix/store/b")], atCommit 2 [(1, "N", "derived", Nothing)], atCommit 1 [(1, "N", "upload", Just "/nix/store/a")]])
 
 checkDependents :: IO ()
 checkDependents = do
@@ -72,26 +72,8 @@ checkCold = do
   where
     file path size state = ColdFile path size state
 
-checkStepSummaries :: IO ()
-checkStepSummaries = do
-    let revisions =
-            [ revision 1 "Older name" 1 300 100 "local" Nothing
-            , revision 1 "Newest name" 4 200 50 "failed" (Just "Step 2 (Extract) is running and reads this output.")
-            , revision 2 "Extract" 2 500 0 "cold" Nothing
-            , revision 5 "Fifth" 6 500 0 "cold" Nothing
-            , revision 3 "Move" 3 400 0 "offloading" Nothing
-            , revision 7 "" 5 50 0 "local" Nothing
-            ]
-    assertEqual
-        "steps aggregate every revision, take the newest name, count movable revisions, and sort by local, cold, then step id"
-        [ StorageStep 1 "Newest name" 500 150 2 2 (Just "Step 2 (Extract) is running and reads this output.")
-        , StorageStep 2 "Extract" 500 0 1 0 Nothing
-        , StorageStep 5 "Fifth" 500 0 1 0 Nothing
-        , StorageStep 3 "Move" 400 0 1 0 Nothing
-        , StorageStep 7 "Step 7" 50 0 1 1 Nothing
-        ]
-        (stepSummaries revisions)
-    assertEqual "no revisions makes no steps" [] (stepSummaries [])
+checkRevisionMovable :: IO ()
+checkRevisionMovable = do
     assertEqual "a local revision is movable" True (revisionMovable (revision 1 "Name" 1 10 0 "local" Nothing))
     assertEqual "a failed revision is movable" True (revisionMovable (revision 1 "Name" 1 10 0 "failed" Nothing))
     assertEqual "an offloading revision is not movable" False (revisionMovable (revision 1 "Name" 1 10 0 "offloading" Nothing))
@@ -101,6 +83,7 @@ checkStepSummaries = do
         StorageRevision
             { revisionStep = stepId
             , revisionName = name
+            , revisionKind = "derived"
             , revisionCommit = commit seconds
             , revisionCommittedAt = time seconds
             , revisionLocal = local
@@ -131,18 +114,18 @@ sampleLog =
 
 sampleHistory :: [HistoryCommit]
 sampleHistory =
-    [ atCommit 4 [(1, "First", Just "/nix/store/b"), (2, "Second", Just "/nix/store/y")]
-    , atCommit 3 [(1, "First", Just "/nix/store/a")]
-    , atCommit 2 [(1, "First", Just "/nix/store/a"), (2, "Second", Just "/nix/store/y")]
-    , atCommit 1 [(1, "First", Just "/nix/store/a"), (2, "Extract", Just "/nix/store/x")]
+    [ atCommit 4 [(1, "First", "derived", Just "/nix/store/b"), (2, "Second", "upload", Just "/nix/store/y")]
+    , atCommit 3 [(1, "First", "derived", Just "/nix/store/a")]
+    , atCommit 2 [(1, "First", "derived", Just "/nix/store/a"), (2, "Second", "upload", Just "/nix/store/y")]
+    , atCommit 1 [(1, "First", "derived", Just "/nix/store/a"), (2, "Extract", "download", Just "/nix/store/x")]
     ]
 
-atCommit :: Integer -> [(Int, Text, Maybe Text)] -> HistoryCommit
+atCommit :: Integer -> [(Int, Text, Text, Maybe Text)] -> HistoryCommit
 atCommit seconds steps =
     HistoryCommit
         (commit seconds)
         (time seconds)
-        (Map.fromList [(stepId, CachedStep name path) | (stepId, name, path) <- steps])
+        (Map.fromList [(stepId, CachedStep name path kind) | (stepId, name, kind, path) <- steps])
 
 commit :: Integer -> Text
 commit seconds = T.pack (take 40 (cycle (show seconds)))

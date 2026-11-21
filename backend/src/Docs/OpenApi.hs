@@ -33,7 +33,7 @@ import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
-import StorageBus (StorageRevision, StorageStep, StorageView)
+import StorageBus (StorageRevision, StorageView)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
@@ -305,6 +305,7 @@ instance ToSchema StorageRevision where
                 "StorageRevision"
                 [ ("step", integerField)
                 , ("name", stringField)
+                , ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["derived", "download", "upload"]))
                 , ("revision", stringField)
                 , ("committedAt", stringField)
                 , ("local", integerField)
@@ -316,24 +317,9 @@ instance ToSchema StorageRevision where
                 , ("blocked", nullableField OpenApiString)
                 ]
 
-instance ToSchema StorageStep where
-    declareNamedSchema _ =
-        pure $
-            objectSchema
-                "StorageStep"
-                [ ("step", integerField)
-                , ("name", stringField)
-                , ("local", integerField)
-                , ("cold", integerField)
-                , ("revisionCount", integerField)
-                , ("localRevisionCount", integerField)
-                , ("blocked", nullableField OpenApiString)
-                ]
-
 instance ToSchema StorageView where
     declareNamedSchema _ = do
         revisionSchema <- declareSchemaRef (Proxy :: Proxy StorageRevision)
-        stepSchema <- declareSchemaRef (Proxy :: Proxy StorageStep)
         pure $
             objectSchema
                 "StorageView"
@@ -348,7 +334,6 @@ instance ToSchema StorageView where
                 , ("truncated", boolField)
                 , ("revisionCount", integerField)
                 , ("revisions", arrayOf revisionSchema)
-                , ("steps", arrayOf stepSchema)
                 , ("error", nullableField OpenApiString)
                 , ("updatedAt", stringField)
                 ]

@@ -13,7 +13,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareContent, ComparePane, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, Table, TemplateSource, TextContent, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareContent, ComparePane, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, StorageDeleteUpload, Table, TemplateSource, TextContent, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -1236,9 +1236,39 @@ storageExpandedSteps =
     lens ".storageExpandedSteps" Model.getStorageExpandedSteps (\(Model m) expanded -> Model { m | storageExpandedSteps = expanded })
 
 
-storageFilter : Lens ls Model String x y
-storageFilter =
-    lens ".storageFilter" Model.getStorageFilter (\(Model m) filter -> Model { m | storageFilter = filter })
+storageDeleteArmed : Lens ls Model (Set String) x y
+storageDeleteArmed =
+    lens ".storageDeleteArmed" Model.getStorageDeleteArmed (\(Model m) armed -> Model { m | storageDeleteArmed = armed })
+
+
+storageDeleteUpload : Lens ls Model (Maybe StorageDeleteUpload) x y
+storageDeleteUpload =
+    lens ".storageDeleteUpload" Model.getStorageDeleteUpload (\(Model m) upload -> Model { m | storageDeleteUpload = upload })
+
+
+storageDeleteDirectory : Lens ls StorageDeleteUpload DirectoryFolder x y
+storageDeleteDirectory =
+    lens ".directory" .directory (\upload directory -> { upload | directory = directory })
+
+
+storageDeleteItemAtPath : List String -> Traversal Model DirectoryItem x y
+storageDeleteItemAtPath path =
+    storageDeleteUpload << just << storageDeleteDirectory << entryAtPath path
+
+
+storageDeleteChildrenAt : List String -> Traversal Model (ApiData (Dict String DirectoryItem)) x y
+storageDeleteChildrenAt path =
+    storageDeleteItemAtPath path << folder << children
+
+
+storageDeleteFolderExpandedAt : List String -> Traversal Model Bool x y
+storageDeleteFolderExpandedAt path =
+    storageDeleteItemAtPath path << folder << folderExpanded
+
+
+storageDeleteFileAvailabilityAt : List String -> Traversal Model Model.Availability x y
+storageDeleteFileAvailabilityAt path =
+    storageDeleteItemAtPath path << file << fileAvailability
 
 
 backendConnection : Lens ls Model Model.BackendConnection x y

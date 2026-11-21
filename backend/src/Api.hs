@@ -514,7 +514,7 @@ type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 
 type GetStorage =
     "storage"
-        :> Description "Returns the storage center's view from the backend's cache: the bytes that step output revisions keep on this server, the bytes they have offloaded to cold storage, the disk space left beside them, one summary per step covering every revision in the store, and the 200 largest revisions. Asks the backend to re-read the branch, store sizes and cold storage statuses; the refreshed view arrives as a storage event on /events."
+        :> Description "Returns the storage center's view from the backend's cache: the bytes that step output revisions keep on this server, the bytes they have offloaded to cold storage, the disk space left beside them, and every revision still in the store with its step, kind, and cold storage state. Asks the backend to re-read the branch, store sizes and cold storage statuses; the refreshed view arrives as a storage event on /events."
         :> Get '[JSON] StorageView
 
 type OffloadStorage =
@@ -530,6 +530,14 @@ type OffloadStorageStep =
         :> "offload-step"
         :> Description "Starts moving every local or failed revision of a step's outputs to cold storage, one output after another in a single background thread, and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while the step, or a step that reads its output, is running or queued."
         :> ReqId
+        :> Post '[JSON] NoContent
+
+type DeleteStorageRevision =
+    "storage"
+        :> "delete"
+        :> Description "Deletes one revision's step output from this server's store and returns 200 with an empty body. Removes Pointy's GC root before deleting, so repeating it is safe. Refuses with 409 while the step, or a step that reads its output, is running or queued, while an offload of the output is running, when the output still has files in cold storage (Pointy does not delete the provider's copy), or when the store will not delete a rooted or alive path; 503 when the backend cannot tell which steps are running or cannot read the cold storage status."
+        :> ReqId
+        :> QueryParam "commit" Text
         :> Post '[JSON] NoContent
 
 type ArtifactRdf =
@@ -635,3 +643,4 @@ type API =
         :<|> GetStorage
         :<|> OffloadStorage
         :<|> OffloadStorageStep
+        :<|> DeleteStorageRevision

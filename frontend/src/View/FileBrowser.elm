@@ -1,4 +1,4 @@
-module View.FileBrowser exposing (viewDirectorySection, viewHtmlFrame, viewSrcFilesSection)
+module View.FileBrowser exposing (viewDirectorySection, viewHtmlFrame, viewOutputDirectory, viewSrcFilesSection)
 
 import Accessors exposing (Prism, has, just, prism, snd, try)
 import Actions
@@ -20,7 +20,7 @@ import Html.Lazy
 import Json.Decode as Decode
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryItem(..), Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, StepRunState, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
+import Model.Core exposing (CompareSelection, CompareSource(..), DirectoryFolder, DirectoryItem(..), Model, ScrollMetrics, SeekDirection(..), SeekWindow, StepRecord, StepRunState, hasBuiltOutput, stepRevision, windowLineCount, windowStartLine)
 import Model.Lenses exposing (compareSelecting, compareState, currentProjectPath, edited, fileZoomAt, gutterDrag, mHighlight, mimeType, route, srcFileWriting, stepRecordById)
 import Model.Shadow as Shadow exposing (StepType, WithSrcFiles(..))
 import Model.TableSpec as TableSpec exposing (StepSpec)
@@ -33,6 +33,7 @@ import View.PlainText as PlainText
 type DirContext
     = OutputDir Int String
     | SrcDir Int
+    | StorageDeleteDir Int String
 
 
 viewHtmlFrame : { id : String, src : String, zoom : Float -> Flow Model (), fitContent : Bool } -> Html (Flow Model ())
@@ -119,14 +120,27 @@ recordRevision model recordId =
         |> Maybe.andThen (stepRevision model)
 
 
-compareSelectionFor : Model -> List Int -> String -> Maybe String -> List String -> DirContext -> CompareSelection
+compareSelectionFor : Model -> List Int -> String -> Maybe String -> List String -> DirContext -> Maybe CompareSelection
 compareSelectionFor model projectPath_ fileName mime path ctx =
     case ctx of
         OutputDir recordId commit_ ->
-            { projectPath = projectPath_, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
+            Just { projectPath = projectPath_, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromOutput commit_ }
 
         SrcDir recordId ->
-            { projectPath = projectPath_, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc (recordRevision model recordId) }
+            Just { projectPath = projectPath_, recordId = recordId, path = path, fileName = fileName, mimeType = mime, source = FromSrc (recordRevision model recordId) }
+
+        StorageDeleteDir _ _ ->
+            Nothing
+
+
+isStorageDeleteContext : Maybe DirContext -> Bool
+isStorageDeleteContext mDirCtx =
+    case mDirCtx of
+        Just (StorageDeleteDir _ _) ->
+            True
+
+        _ ->
+            False
 
 
 viewCompareButton : Model -> Maybe CompareSelection -> Html (Flow Model ())
@@ -167,8 +181,8 @@ viewCompareButton model =
                 [ icon True iconName ]
 
 
-renderDirectoryContents : Model -> StepSpec -> Maybe Int -> Maybe DirContext -> Bool -> List String -> String -> ApiData (Dict String DirectoryItem) -> Html (Flow Model ())
-renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssClass children =
+renderDirectoryContents : Model -> String -> Maybe Int -> Maybe DirContext -> Bool -> List String -> String -> ApiData (Dict String DirectoryItem) -> Html (Flow Model ())
+renderDirectoryContents model specName mRecordId mDirCtx isLocked directoryPath cssClass children =
     let
         viewContents childrenDict =
             Html.Keyed.node "div"
@@ -177,7 +191,7 @@ renderDirectoryContents model spec mRecordId mDirCtx isLocked directoryPath cssC
                     |> List.map
                         (\( itemName, item ) ->
                             ( itemName
-                            , viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item
+                            , viewDirectoryItemWithPath model specName mRecordId mDirCtx isLocked directoryPath itemName item
                             )
                         )
                 )
@@ -213,7 +227,7 @@ viewDirectorySection model spec step =
                         Html.div [ class "output-files-section" ]
                             [ Html.h3 [] [ Html.text "Output Files" ]
                             , renderDirectoryContents model
-                                spec
+                                (TableSpec.getName spec)
                                 (Just stepId)
                                 (Just (OutputDir stepId rs.outputsCommit))
                                 (has (success << where_ hasBuiltOutput) rs.status)
@@ -222,6 +236,18 @@ viewDirectorySection model spec step =
                                 rs.directoryView.children
                             ]
                     )
+
+
+viewOutputDirectory : Model -> Int -> String -> DirectoryFolder -> Html (Flow Model ())
+viewOutputDirectory model stepId commit directory =
+    renderDirectoryContents model
+        "storage-delete-output"
+        (Just stepId)
+        (Just (StorageDeleteDir stepId commit))
+        False
+        []
+        "directory-view storage-delete-dialog__tree"
+        directory.children
 
 
 viewColdFetchProgress : Maybe ( Int, Int ) -> Html msg
@@ -258,17 +284,17 @@ viewColdFetchProgress progress =
         ]
 
 
-viewColdFile : Int -> List String -> Model.Core.Availability -> Html (Flow Model ())
-viewColdFile stepId path availability =
+viewColdFile : String -> (List String -> Flow Model ()) -> List String -> Model.Core.Availability -> Html (Flow Model ())
+viewColdFile contextKey onload path availability =
     let
         popoverId =
-            "cold-" ++ String.fromInt stepId ++ "-" ++ String.join "-" (List.map (Char.toCode >> String.fromInt) (String.toList (String.join "/" path)))
+            contextKey ++ "-" ++ String.join "-" (List.map (Char.toCode >> String.fromInt) (String.toList (String.join "/" path)))
 
         onloadButton label =
             Html.button
                 [ class "btn file-cold-unfreeze-btn"
                 , type_ "button"
-                , Html.Events.onClick (Actions.unfreezeOutputFile stepId path)
+                , Html.Events.onClick (onload path)
                 ]
                 [ icon True "mode_heat", Html.text label ]
 
@@ -415,7 +441,7 @@ viewSrcFilesSection model stepType spec step =
                     ]
                 , Html.viewIf (not isLocked) createForm
                 , renderDirectoryContents model
-                    spec
+                    (TableSpec.getName spec)
                     step.id
                     (Maybe.map SrcDir step.id)
                     isLocked
@@ -435,7 +461,7 @@ viewSrcFilesSection model stepType spec step =
 
 viewDirectoryItemWithPath :
     Model
-    -> StepSpec
+    -> String
     -> Maybe Int
     -> Maybe DirContext
     -> Bool
@@ -443,7 +469,7 @@ viewDirectoryItemWithPath :
     -> String
     -> DirectoryItem
     -> Html (Flow Model ())
-viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath itemName item =
+viewDirectoryItemWithPath model specName mRecordId mDirCtx isLocked directoryPath itemName item =
     let
         path =
             directoryPath ++ [ itemName ]
@@ -500,6 +526,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                 Just (SrcDir id) ->
                     Actions.downloadSrcFile id (recordRevision model id) path
 
+                Just (StorageDeleteDir stepId_ commit_) ->
+                    Actions.downloadFile stepId_ commit_ path
+
                 Nothing ->
                     Flow.pure ()
     in
@@ -519,10 +548,12 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                     has (mimeType << just << where_ ((==) "chemical/x-pdb")) file
 
                 mCompareSelection =
-                    if not file.isDeleted && (file.viewable || file.seekable || isImage) then
-                        Maybe.map2 (\projectPath_ -> compareSelectionFor model projectPath_ itemName file.mimeType path)
-                            (try currentProjectPath model)
-                            mDirCtx
+                    if not file.isDeleted && (file.viewable || file.seekable || isImage) && not (isStorageDeleteContext mDirCtx) then
+                        Maybe.andThen identity
+                            (Maybe.map2 (\projectPath_ -> compareSelectionFor model projectPath_ itemName file.mimeType path)
+                                (try currentProjectPath model)
+                                mDirCtx
+                            )
 
                     else
                         Nothing
@@ -591,8 +622,11 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                             ( Model.Core.Local, _ ) ->
                                 Html.nothing
 
-                            ( availability, Just (OutputDir stepId_ _) ) ->
-                                viewColdFile stepId_ path availability
+                            ( availability, Just (OutputDir stepId_ commit_) ) ->
+                                viewColdFile ("cold-" ++ String.fromInt stepId_ ++ "-" ++ String.left 7 commit_) (Actions.unfreezeOutputFile stepId_) path availability
+
+                            ( availability, Just (StorageDeleteDir stepId_ commit_) ) ->
+                                viewColdFile ("cold-delete-" ++ String.fromInt stepId_ ++ "-" ++ String.left 7 commit_) Actions.unfreezeStorageDeleteFile path availability
 
                             _ ->
                                 Html.nothing
@@ -606,7 +640,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         ]
                     , Html.viewIf (file.availability == Model.Core.Local) <|
                         Html.div [ class "file-actions" ]
-                            [ Html.viewIf canView <|
+                            [ Html.viewIf (canView && not (isStorageDeleteContext mDirCtx)) <|
                                 Html.button
                                     [ class "dir-item-icon-btn"
                                     , Html.Attributes.title fileActionLabel
@@ -618,6 +652,9 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
 
                                             Just (SrcDir _) ->
                                                 Maybe.unwrap (Flow.pure ()) (flip Actions.toggleSrcFile path) mRecordId
+
+                                            Just (StorageDeleteDir _ _) ->
+                                                Flow.pure ()
 
                                             Nothing ->
                                                 Flow.pure ()
@@ -643,7 +680,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             ]
                                             [ icon True "open_in_new" ]
                                     )
-                            , Html.viewIf (canView && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
+                            , Html.viewIf (canView && not (isStorageDeleteContext mDirCtx) && (not (has (just << srcDir) mDirCtx) || Maybe.isJust mSelectedRange)) shareButton
                             , Html.button
                                 [ class "dir-item-icon-btn"
                                 , Html.Events.onClick downloadAction
@@ -711,7 +748,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                             Just (SrcDir recordId) ->
                                                 Just (Api.srcFileRawUrl recordId (recordRevision model recordId) path)
 
-                                            Nothing ->
+                                            _ ->
                                                 Nothing
 
                                     iframeId =
@@ -806,7 +843,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                                                 srcWritePending model mDirCtx
 
                                             editorId =
-                                                FormInputs.srcFileInputId (TableSpec.getName spec) recordId path
+                                                FormInputs.srcFileInputId specName recordId path
                                         in
                                         Html.Keyed.node "div"
                                             [ class "src-file-editor" ]
@@ -852,21 +889,30 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         [ class "folder-header"
                         , Html.Events.stopPropagationOn "click" <|
                             Decode.succeed
-                                ( mRecordId
-                                    |> Maybe.unwrap (Flow.pure ())
-                                        (\recordId ->
-                                            case mDirCtx of
-                                                Just (OutputDir _ _) ->
-                                                    Actions.toggleOutputEntry recordId Nothing path
-                                                        |> Flow.return ()
+                                ( (case mDirCtx of
+                                    Just (OutputDir _ _) ->
+                                        Maybe.unwrap (Flow.pure ())
+                                            (\recordId ->
+                                                Actions.toggleOutputEntry recordId Nothing path
+                                                    |> Flow.return ()
+                                            )
+                                            mRecordId
 
-                                                Just (SrcDir _) ->
-                                                    Actions.toggleSrcEntry recordId Nothing path
-                                                        |> Flow.return ()
+                                    Just (SrcDir _) ->
+                                        Maybe.unwrap (Flow.pure ())
+                                            (\recordId ->
+                                                Actions.toggleSrcEntry recordId Nothing path
+                                                    |> Flow.return ()
+                                            )
+                                            mRecordId
 
-                                                Nothing ->
-                                                    Flow.pure ()
-                                        )
+                                    Just (StorageDeleteDir _ _) ->
+                                        Actions.toggleStorageDeleteEntry Nothing path
+                                            |> Flow.return ()
+
+                                    Nothing ->
+                                        Flow.pure ()
+                                  )
                                 , True
                                 )
                         ]
@@ -904,7 +950,7 @@ viewDirectoryItemWithPath model spec mRecordId mDirCtx isLocked directoryPath it
                         , Html.viewIf (isLocked && not isSrcDir) shareButton
                         ]
                 , Html.viewIf folder.expanded <|
-                    renderDirectoryContents model spec mRecordId mDirCtx isLocked path "folder-contents" folder.children
+                    renderDirectoryContents model specName mRecordId mDirCtx isLocked path "folder-contents" folder.children
                 ]
 
 

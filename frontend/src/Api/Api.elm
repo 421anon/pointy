@@ -6,6 +6,7 @@ module Api.Api exposing
     , createSrcFile
     , createStep
     , deleteSrcFile
+    , deleteStorageRevision
     , fetchAutocomplete
     , fetchColdStatus
     , fetchCommitHash
@@ -657,4 +658,11 @@ offloadStorageStep : Int -> Flow s (Result Http.Error ())
 offloadStorageStep stepId =
     request "POST"
         ("/backend/storage/offload-step?id=" ++ String.fromInt stepId)
+        Http.emptyBody
+
+
+deleteStorageRevision : Int -> String -> Flow s (Result Http.Error ())
+deleteStorageRevision stepId revision =
+    request "POST"
+        ("/backend/storage/delete?id=" ++ String.fromInt stepId ++ "&commit=" ++ revision)
         Http.emptyBody

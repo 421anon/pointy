@@ -5,6 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 module Handlers.Storage (
+    deleteRevisionHandler,
     offloadHandler,
     offloadStepHandler,
     runStorageCenter,
@@ -39,14 +40,14 @@ import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, liftIO, (:>))
-import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, querySlurm, runNixCli)
-import Handlers.Cold (coldStatusFor, mapColdProvider)
+import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, pathValid, querySlurm, runNixCli, runNixStoreCli, unrootStorePath)
+import Handlers.Cold (coldFilesFor, coldStatusFor, mapColdProvider)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err503)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, publishView, recordOffloadProgress, revalidateAll, revisionMovable, stepSummaries, takeInvalidation, trackPaths, viewInputsChanged)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, publishView, recordOffloadProgress, revalidateAll, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Environment (lookupEnv)
@@ -80,7 +81,8 @@ instance FromJSON EvalEntry where
         stepId <- fields .: "id"
         name <- fields .:? "name" .!= ""
         path <- fields .:? "path"
-        pure (EvalEntry (stepId, CachedStep name path))
+        kind <- fields .: "kind"
+        pure (EvalEntry (stepId, CachedStep name path kind))
 
 newtype EvaluationFile = EvaluationFile (Map Text (Map Int CachedStep))
 
@@ -118,9 +120,6 @@ persistEvery = 50
 
 pathInfoChunkSize :: Int
 pathInfoChunkSize = 200
-
-maxShownRevisions :: Int
-maxShownRevisions = 200
 
 coalesceMicros :: Int
 coalesceMicros = 500000
@@ -160,11 +159,7 @@ offloadHandler :: Int -> Maybe Text -> AppM NoContent
 offloadHandler stepId mCommit = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
-    refusal <- offloadRefusal stepId
-    case refusal of
-        Just (OffloadBlocked reason) -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
-        Just (OffloadUnavailable reason) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
-        Nothing -> pure ()
+    refuseStepBusy stepId
     outPath <- resolveStepOutPath stepId mCommit
     started <- liftIO (beginOffload outPath)
     when started $ liftIO $ void $ forkIO $ do
@@ -176,11 +171,7 @@ offloadStepHandler :: Int -> AppM NoContent
 offloadStepHandler stepId = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
-    refusal <- offloadRefusal stepId
-    case refusal of
-        Just (OffloadBlocked reason) -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
-        Just (OffloadUnavailable reason) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
-        Nothing -> pure ()
+    refuseStepBusy stepId
     paths <- liftIO (Map.findWithDefault Set.empty stepId <$> readTVarIO movablePathsVar)
     unless (Set.null paths) $
         liftIO $ void $ forkIO $ mapM_ offloadPath (Set.toList paths)
@@ -192,6 +183,41 @@ offloadStepHandler stepId = do
             outcome <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
             endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id outcome)
 
+deleteRevisionHandler :: Int -> Maybe Text -> AppM NoContent
+deleteRevisionHandler stepId mCommit = do
+    refuseStepBusy stepId
+    outPath <- resolveStepOutPath stepId mCommit
+    offloads <- liftIO offloadStates
+    case Map.lookup outPath offloads of
+        Just (OffloadRunning _) ->
+            throwError err409{errBody = "This output is being moved to cold storage. Wait for the move to finish, then delete the revision."}
+        _ -> pure ()
+    cold <- lift (coldFilesFor outPath)
+    case cold of
+        Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
+        Just files
+            | not (Set.null files) ->
+                throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 (coldRefusal files))}
+            | otherwise -> pure ()
+    let path = T.unpack outPath
+    lift (unrootStorePath path)
+    valid <- lift (pathValid path)
+    when valid $ do
+        (code, _, err) <- lift (runNixStoreCli ["--delete", path])
+        case code of
+            ExitSuccess -> pure ()
+            ExitFailure _ ->
+                let stderr = T.strip (TE.decodeUtf8Lenient err)
+                    message = if T.null stderr then "The store refused to delete this output." else "The store refused to delete this output: " <> stderr
+                 in throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
+    liftIO (invalidate mempty{invalidOutputs = True})
+    pure NoContent
+  where
+    coldRefusal files =
+        "This output has "
+            <> T.pack (show (Set.size files))
+            <> " file(s) in cold storage; Pointy does not delete the provider's copy. Delete it with the cold storage provider first."
+
 offloadRefusal :: Int -> AppM (Maybe OffloadRequestError)
 offloadRefusal stepId = do
     headSteps <- cachedHeadSteps <$> liftIO (readTVarIO cachesVar)
@@ -200,6 +226,14 @@ offloadRefusal stepId = do
         (Left err, _) -> Just (OffloadUnavailable err)
         (_, Left err) -> Just (OffloadUnavailable err)
         (Right steps, Right states) -> OffloadBlocked <$> runningRefusal steps states stepId
+
+refuseStepBusy :: Int -> AppM ()
+refuseStepBusy stepId = do
+    refusal <- offloadRefusal stepId
+    case refusal of
+        Just (OffloadBlocked reason) -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
+        Just (OffloadUnavailable reason) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
+        Nothing -> pure ()
 
 runningSteps :: AppM (Either Text (Map Int Text))
 runningSteps = do
@@ -267,7 +301,6 @@ runStorageCenter = do
                     , storageTruncated = False
                     , storageRevisionCount = 0
                     , storageRevisions = []
-                    , storageSteps = []
                     , storageError = Just "Storage usage is unavailable. The server could not read it."
                     , storageUpdatedAt = now
                     }
@@ -326,7 +359,6 @@ refresh work running = do
                 | (seed, revision) <- revisionsWithSeeds
                 , revisionMovable revision
                 ]
-        steps = stepSummaries revisions
     liftIO $ atomically $ writeTVar movablePathsVar movablePaths
     liftIO $
         publishView
@@ -342,8 +374,7 @@ refresh work running = do
                 , storageHistory = length relevant
                 , storageTruncated = null toScan && not (null pending)
                 , storageRevisionCount = length revisions
-                , storageRevisions = take maxShownRevisions revisions
-                , storageSteps = steps
+                , storageRevisions = revisions
                 , storageError =
                     firstError
                         [ cachedHistoryError caches
@@ -368,6 +399,7 @@ storageRevision coldConfigured status offload blocked seed narSize =
     StorageRevision
         { revisionStep = seedStep seed
         , revisionName = if T.null (seedName seed) then "Step " <> T.pack (show (seedStep seed)) else seedName seed
+        , revisionKind = seedKind seed
         , revisionCommit = seedCommit seed
         , revisionCommittedAt = seedCommitTime seed
         , revisionLocal = coldSummaryLocal summary
@@ -630,8 +662,12 @@ stepEvaluationMapper =
         ++ " let s = steps.${id};"
         ++ " path = builtins.tryEval (toString s.outPath);"
         ++ " name = builtins.tryEval (s.def.name or (s.name or \"\"));"
+        ++ " uploaded = builtins.tryEval (s.def.args.uploaded.hash or null);"
+        ++ " downloaded = builtins.tryEval (s.def.args.downloaded.hash or null);"
+        ++ " kind = if uploaded.success && uploaded.value != null then \"upload\" else if downloaded.success && downloaded.value != null then \"download\" else \"derived\";"
         ++ " in { id = builtins.fromJSON id;"
         ++ " name = if name.success && builtins.isString name.value then name.value else \"\";"
+        ++ " kind = kind;"
         ++ " path = if path.success then path.value else null; })"
 
 readEvaluations :: IO (Map Text (Map Int CachedStep))
@@ -662,7 +698,7 @@ storeEvaluations evaluations = do
 evaluationsPath :: IO FilePath
 evaluationsPath = do
     directory <- storageDirectory
-    pure (directory </> "evaluations.json")
+    pure (directory </> "evaluations-v2.json")
 
 storageDirectory :: IO FilePath
 storageDirectory = do

@@ -1118,21 +1118,8 @@ storageView =
         |> required "truncated" Decode.bool
         |> required "revisionCount" Decode.int
         |> required "revisions" (Decode.list storageRevision)
-        |> required "steps" (Decode.list storageStep)
         |> optional "error" (maybe Decode.string) Nothing
         |> required "updatedAt" Iso8601.decoder
-
-
-storageStep : Decoder Model.StorageStep
-storageStep =
-    Decode.succeed Model.StorageStep
-        |> required "step" Decode.int
-        |> required "name" Decode.string
-        |> required "local" Decode.int
-        |> required "cold" Decode.int
-        |> required "revisionCount" Decode.int
-        |> required "localRevisionCount" Decode.int
-        |> optional "blocked" (maybe Decode.string) Nothing
 
 
 storageRevision : Decoder Model.StorageRevision
@@ -1141,6 +1128,7 @@ storageRevision =
         |> required "step" Decode.int
         |> required "name" Decode.string
         |> required "revision" Decode.string
+        |> required "kind" (Decode.string |> Decode.andThen storageKind)
         |> required "committedAt" Iso8601.decoder
         |> required "local" Decode.int
         |> required "cold" Decode.int
@@ -1149,6 +1137,22 @@ storageRevision =
         |> required "total" Decode.int
         |> optional "error" (maybe Decode.string) Nothing
         |> optional "blocked" (maybe Decode.string) Nothing
+
+
+storageKind : String -> Decoder Model.StorageKind
+storageKind kind =
+    case kind of
+        "derived" ->
+            Decode.succeed Model.StorageDerived
+
+        "download" ->
+            Decode.succeed Model.StorageDownload
+
+        "upload" ->
+            Decode.succeed Model.StorageUpload
+
+        other ->
+            Decode.fail ("unknown storage kind " ++ other)
 
 
 storageState : String -> Decoder Model.StorageState

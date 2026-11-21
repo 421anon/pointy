@@ -223,20 +223,8 @@ type alias StorageView =
     , truncated : Bool
     , revisionCount : Int
     , revisions : List StorageRevision
-    , steps : List StorageStep
     , error : Maybe String
     , updatedAt : Time.Posix
-    }
-
-
-type alias StorageStep =
-    { step : Int
-    , name : String
-    , local : Int
-    , cold : Int
-    , revisionCount : Int
-    , localRevisionCount : Int
-    , blocked : Maybe String
     }
 
 
@@ -244,6 +232,7 @@ type alias StorageRevision =
     { step : Int
     , name : String
     , revision : String
+    , kind : StorageKind
     , committedAt : Time.Posix
     , local : Int
     , cold : Int
@@ -255,6 +244,12 @@ type alias StorageRevision =
     }
 
 
+type StorageKind
+    = StorageDerived
+    | StorageDownload
+    | StorageUpload
+
+
 type StorageState
     = StorageLocal
     | StorageOffloading
@@ -262,6 +257,24 @@ type StorageState
     | StorageFailed
     | StorageCold
     | StorageUnknown
+
+
+type alias StorageDeleteUpload =
+    { stepId : Int
+    , name : String
+    , revision : String
+    , directory : DirectoryFolder
+    }
+
+
+blankStorageDirectory : DirectoryFolder
+blankStorageDirectory =
+    { children = ApiData.NotAsked
+    , expanded = True
+    , extras = ApiData.NotAsked
+    , size = Nothing
+    , mimeType = Nothing
+    }
 
 
 storageRevisionKey : StorageRevision -> String
@@ -321,9 +334,14 @@ getStorageExpandedSteps (Model model) =
     model.storageExpandedSteps
 
 
-getStorageFilter : Model -> String
-getStorageFilter (Model model) =
-    model.storageFilter
+getStorageDeleteArmed : Model -> Set String
+getStorageDeleteArmed (Model model) =
+    model.storageDeleteArmed
+
+
+getStorageDeleteUpload : Model -> Maybe StorageDeleteUpload
+getStorageDeleteUpload (Model model) =
+    model.storageDeleteUpload
 
 
 type alias ColdInputFile =
@@ -2024,7 +2042,8 @@ type Model
         , storageView : ApiData StorageView
         , storageMoving : Set String
         , storageExpandedSteps : Set Int
-        , storageFilter : String
+        , storageDeleteArmed : Set String
+        , storageDeleteUpload : Maybe StorageDeleteUpload
         , backendConnection : BackendConnection
         , statusBarScrollTop : Float
         , sidebarOpen : Bool
@@ -2708,7 +2727,8 @@ initialModel key route flags =
         , storageView = ApiData.NotAsked
         , storageMoving = Set.empty
         , storageExpandedSteps = Set.empty
-        , storageFilter = ""
+        , storageDeleteArmed = Set.empty
+        , storageDeleteUpload = Nothing
         , backendConnection = BackendUp
         , statusBarScrollTop = 0
         , sidebarOpen = not flags.isNarrow

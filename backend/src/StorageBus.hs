@@ -3,7 +3,6 @@
 module StorageBus (
     StorageView (..),
     StorageRevision (..),
-    StorageStep (..),
     Invalidation (..),
     ColdRecheck (..),
     OffloadState (..),
@@ -25,7 +24,6 @@ module StorageBus (
     currentView,
     viewAndSubscribe,
     encodeView,
-    stepSummaries,
     revisionMovable,
 ) where
 
@@ -34,20 +32,18 @@ import Control.Concurrent.STM (STM, TChan, TVar, atomically, dupTChan, modifyTVa
 import Control.Monad (when)
 import Data.Aeson (ToJSON (..), encode, object, (.=))
 import qualified Data.ByteString.Lazy as LBS
-import Data.List (maximumBy, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Ord (comparing)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
-import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import System.IO.Unsafe (unsafePerformIO)
 
 data StorageRevision = StorageRevision
     { revisionStep :: Int
     , revisionName :: Text
+    , revisionKind :: Text
     , revisionCommit :: Text
     , revisionCommittedAt :: UTCTime
     , revisionLocal :: Integer
@@ -65,6 +61,7 @@ instance ToJSON StorageRevision where
         object
             [ "step" .= revisionStep revision
             , "name" .= revisionName revision
+            , "kind" .= revisionKind revision
             , "revision" .= revisionCommit revision
             , "committedAt" .= revisionCommittedAt revision
             , "local" .= revisionLocal revision
@@ -75,57 +72,6 @@ instance ToJSON StorageRevision where
             , "error" .= revisionError revision
             , "blocked" .= revisionBlocked revision
             ]
-
-data StorageStep = StorageStep
-    { storageStepId :: Int
-    , storageStepName :: Text
-    , storageStepLocal :: Integer
-    , storageStepCold :: Integer
-    , storageStepRevisionCount :: Int
-    , storageStepLocalRevisionCount :: Int
-    , storageStepBlocked :: Maybe Text
-    }
-    deriving (Eq, Show)
-
-instance ToJSON StorageStep where
-    toJSON step =
-        object
-            [ "step" .= storageStepId step
-            , "name" .= storageStepName step
-            , "local" .= storageStepLocal step
-            , "cold" .= storageStepCold step
-            , "revisionCount" .= storageStepRevisionCount step
-            , "localRevisionCount" .= storageStepLocalRevisionCount step
-            , "blocked" .= storageStepBlocked step
-            ]
-
-stepSummaries :: [StorageRevision] -> [StorageStep]
-stepSummaries revisions = sortOn summaryOrder (map summarize (Map.elems grouped))
-  where
-    grouped = Map.fromListWith (<>) [(revisionStep revision, [revision]) | revision <- revisions]
-    summarize group =
-        StorageStep
-            { storageStepId = stepId
-            , storageStepName = name
-            , storageStepLocal = sum (map revisionLocal group)
-            , storageStepCold = sum (map revisionCold group)
-            , storageStepRevisionCount = length group
-            , storageStepLocalRevisionCount = length (filter revisionMovable group)
-            , storageStepBlocked = blocked
-            }
-      where
-        newest = maximumBy (comparing (\revision -> (revisionCommittedAt revision, revisionCommit revision))) group
-        stepId = revisionStep newest
-        newestName = revisionName newest
-        name = if T.null newestName then "Step " <> T.pack (show stepId) else newestName
-        blocked = case [reason | revision <- group, Just reason <- [revisionBlocked revision]] of
-            reason : _ -> Just reason
-            [] -> Nothing
-    summaryOrder summary =
-        ( negate (storageStepLocal summary)
-        , negate (storageStepCold summary)
-        , storageStepId summary
-        )
 
 revisionMovable :: StorageRevision -> Bool
 revisionMovable revision = revisionState revision `elem` ["local", "failed"]
@@ -142,7 +88,6 @@ data StorageView = StorageView
     , storageTruncated :: Bool
     , storageRevisionCount :: Int
     , storageRevisions :: [StorageRevision]
-    , storageSteps :: [StorageStep]
     , storageError :: Maybe Text
     , storageUpdatedAt :: UTCTime
     }
@@ -162,7 +107,6 @@ instance ToJSON StorageView where
             , "truncated" .= storageTruncated view
             , "revisionCount" .= storageRevisionCount view
             , "revisions" .= storageRevisions view
-            , "steps" .= storageSteps view
             , "error" .= storageError view
             , "updatedAt" .= storageUpdatedAt view
             ]

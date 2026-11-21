@@ -1,4 +1,4 @@
-module Components.StatusBar exposing (view)
+module Components.StatusBar exposing (view, viewStorageDeleteDialog)
 
 import Accessors exposing (get, try)
 import Actions
@@ -6,7 +6,7 @@ import Api.ApiData as ApiData exposing (ApiData)
 import Dict exposing (Dict)
 import Flow exposing (Flow)
 import Html exposing (Html)
-import Html.Attributes exposing (action, attribute, class, classList, disabled, href, id, method, placeholder, rel, style, target, title, type_, value)
+import Html.Attributes exposing (action, attribute, autofocus, class, classList, disabled, href, id, method, rel, style, target, title, type_)
 import Html.Events as Events
 import Html.Extra as Html
 import Html.Keyed
@@ -14,7 +14,7 @@ import Html.Lazy
 import Iso8601
 import Json.Decode as Decode
 import List.Extra as List
-import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, StorageRevision, StorageState(..), StorageStep, StorageView, TrayState(..), TrayStep)
+import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, StorageKind(..), StorageRevision, StorageState(..), StorageView, TrayState(..), TrayStep)
 import Model.Lenses exposing (loadedProjects, route, toastHistory)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
@@ -22,6 +22,7 @@ import Set exposing (Set)
 import Time
 import Time.Distance
 import Toast
+import View.FileBrowser as FileBrowser
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
 import View.Organize as Organize
@@ -1177,11 +1178,8 @@ viewStoragePanel model =
 viewStorageContent : Model -> StorageView -> Html (Flow Model ())
 viewStorageContent model snapshot =
     let
-        filter =
-            String.trim (Model.getStorageFilter model)
-
         groups =
-            storageGroups (String.toLower filter) snapshot
+            storageGroups snapshot
 
         expandedSteps =
             Model.getStorageExpandedSteps model
@@ -1202,7 +1200,7 @@ viewStorageContent model snapshot =
             , attribute "aria-atomic" "true"
             ]
             [ Html.text (storageLiveStatus snapshot (Model.getStorageMoving model)) ]
-        , if List.isEmpty snapshot.steps then
+        , if List.isEmpty snapshot.revisions then
             Html.div [ class "storage-panel__empty" ]
                 [ Html.text
                     (if snapshot.scanning then
@@ -1220,32 +1218,25 @@ viewStorageContent model snapshot =
                     , ( "storage-panel__list--cold", snapshot.coldConfigured )
                     ]
                 ]
-                [ viewStorageToolbar model
-                , Html.div [ class "storage-panel__columns" ]
+                [ Html.div [ class "storage-panel__columns" ]
                     ([ Html.span [] [ Html.text "Step / revision" ]
                      , Html.span [ class "storage-panel__size" ] [ Html.text "Local" ]
                      ]
                         ++ (if snapshot.coldConfigured then
-                                [ Html.span [ class "storage-panel__size" ] [ Html.text "Cold" ]
-                                , Html.span [] []
-                                ]
+                                [ Html.span [ class "storage-panel__size" ] [ Html.text "Cold" ] ]
 
                             else
                                 []
                            )
+                        ++ [ Html.span [] [] ]
                     )
-                , if List.isEmpty groups then
-                    Html.div [ class "storage-panel__empty" ]
-                        [ Html.text "No steps or revisions match this filter." ]
-
-                  else
-                    Html.div [ class "storage-panel__rows", attribute "role" "list" ]
-                        (List.map
-                            (viewStorageGroup model snapshot.coldConfigured expandedSteps filter)
-                            groups
-                        )
+                , Html.div [ class "storage-panel__rows", attribute "role" "list" ]
+                    (List.map
+                        (viewStorageGroup model snapshot.coldConfigured expandedSteps)
+                        groups
+                    )
                 ]
-        , viewStorageFooter snapshot
+        , viewStorageFooter snapshot (List.length groups)
         ]
 
 
@@ -1261,10 +1252,6 @@ viewStorageUsage snapshot =
         low =
             diskTotal > 0 && free * 10 < diskTotal
 
-        partial =
-            Html.viewIf snapshot.scanning <|
-                Html.span [ class "storage-panel__partial" ] [ Html.text "so far" ]
-
         ofDisk =
             Html.viewIf (diskTotal > 0) <|
                 Html.span [ class "storage-panel__of" ]
@@ -1274,11 +1261,7 @@ viewStorageUsage snapshot =
                     ]
     in
     Html.div [ class "storage-panel__usage" ]
-        [ Html.div [ class "storage-panel__scope-title" ]
-            [ Html.text "On this server"
-            , partial
-            ]
-        , Html.div [ class "storage-panel__totals" ]
+        [ Html.div [ class "storage-panel__totals" ]
             [ storageTotal (max 0 snapshot.local) "step outputs"
             , storageTotal free "free"
             , ofDisk
@@ -1300,10 +1283,8 @@ viewStorageUsage snapshot =
         , Html.viewIf snapshot.coldConfigured <|
             Html.div [ class "storage-panel__cold-line" ]
                 [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
-                , Html.span [ class "storage-panel__cold-scope" ] [ Html.text "Off this server:" ]
                 , Html.strong [] [ Html.text (Model.formatStorageSize snapshot.cold) ]
                 , Html.text " in cold storage"
-                , partial
                 , Html.span [ class "storage-panel__cold-note" ] [ Html.text "· not included above" ]
                 ]
         ]
@@ -1342,23 +1323,6 @@ viewStorageScan snapshot =
             , Html.div [ class "storage-panel__scan-bar", attribute "aria-hidden" "true" ]
                 [ Html.span [ style "width" (String.fromInt (ratioPercent snapshot.scanned snapshot.history) ++ "%") ] [] ]
             ]
-
-
-viewStorageToolbar : Model -> Html (Flow Model ())
-viewStorageToolbar model =
-    Html.div [ class "storage-panel__toolbar" ]
-        [ Html.input
-            [ class "storage-panel__filter"
-            , type_ "search"
-            , placeholder "Filter by step, name, or hash"
-            , attribute "aria-label" "Filter step outputs by step, name, or revision hash"
-            , attribute "autocomplete" "off"
-            , attribute "spellcheck" "false"
-            , value (Model.getStorageFilter model)
-            , Events.onInput Actions.setStorageFilter
-            ]
-            []
-        ]
 
 
 storageLiveStatus : StorageView -> Set String -> String
@@ -1409,28 +1373,13 @@ storageLiveStatus snapshot moving =
     String.trim (scan ++ moveStatus)
 
 
-viewStorageFooter : StorageView -> Html msg
-viewStorageFooter snapshot =
-    let
-        listed =
-            List.length snapshot.revisions
-
-        order =
-            if snapshot.revisionCount > listed && listed > 0 then
-                " · " ++ String.fromInt listed ++ " largest listed"
-
-            else if snapshot.revisionCount > 1 then
-                " · largest first"
-
-            else
-                ""
-    in
+viewStorageFooter : StorageView -> Int -> Html msg
+viewStorageFooter snapshot stepCount =
     Html.div [ class "storage-panel__foot" ]
         [ Html.text
-            (storageCount (List.length snapshot.steps) "step" "steps"
+            (storageCount stepCount "step" "steps"
                 ++ " · "
                 ++ storageCount snapshot.revisionCount "revision" "revisions"
-                ++ order
             )
         ]
 
@@ -1441,14 +1390,19 @@ storageCount count singular plural =
 
 
 type alias StorageGroup =
-    { step : StorageStep
-    , listedRevisions : List StorageRevision
+    { stepId : Int
+    , name : String
+    , local : Int
+    , cold : Int
+    , revisionCount : Int
+    , localRevisionCount : Int
+    , blocked : Maybe String
     , revisions : List StorageRevision
     }
 
 
-storageGroups : String -> StorageView -> List StorageGroup
-storageGroups filter snapshot =
+storageGroups : StorageView -> List StorageGroup
+storageGroups snapshot =
     let
         revisionsByStep =
             List.foldr
@@ -1461,67 +1415,66 @@ storageGroups filter snapshot =
                 )
                 Dict.empty
                 snapshot.revisions
-
-        groups =
-            List.map
-                (\step ->
-                    let
-                        listedRevisions =
-                            Maybe.withDefault [] (Dict.get step.step revisionsByStep)
-                    in
-                    { step = step
-                    , listedRevisions = listedRevisions
-                    , revisions = listedRevisions
-                    }
-                )
-                snapshot.steps
     in
-    if String.isEmpty filter then
-        groups
-
-    else
-        List.filterMap (filterStorageGroup filter) groups
+    Dict.toList revisionsByStep
+        |> List.map (\( stepId, revisions ) -> summarizeStorageGroup stepId revisions)
+        |> List.sortWith compareStorageGroups
 
 
-filterStorageGroup : String -> StorageGroup -> Maybe StorageGroup
-filterStorageGroup filter group =
+summarizeStorageGroup : Int -> List StorageRevision -> StorageGroup
+summarizeStorageGroup stepId revisions =
     let
-        stepMatches =
-            String.contains filter (String.toLower group.step.name)
-                || String.contains filter (String.fromInt group.step.step)
+        name =
+            case List.maximumBy (\revision -> ( Time.posixToMillis revision.committedAt, revision.revision )) revisions of
+                Just newest ->
+                    if String.isEmpty (String.trim newest.name) then
+                        "Step " ++ String.fromInt stepId
 
-        matchingRevisions =
-            List.filter (revisionMatchesStorageFilter filter) group.listedRevisions
+                    else
+                        newest.name
 
-        revisions =
-            if stepMatches then
-                group.listedRevisions
-
-            else
-                matchingRevisions
+                Nothing ->
+                    "Step " ++ String.fromInt stepId
     in
-    if stepMatches || not (List.isEmpty matchingRevisions) then
-        Just { group | revisions = revisions }
-
-    else
-        Nothing
-
-
-revisionMatchesStorageFilter : String -> StorageRevision -> Bool
-revisionMatchesStorageFilter filter revision =
-    String.startsWith filter (String.toLower revision.revision)
-        || String.contains filter (String.toLower revision.name)
+    { stepId = stepId
+    , name = name
+    , local = List.sum (List.map .local revisions)
+    , cold = List.sum (List.map .cold revisions)
+    , revisionCount = List.length revisions
+    , localRevisionCount = List.length (List.filter storageRevisionMovable revisions)
+    , blocked = List.filterMap .blocked revisions |> List.head
+    , revisions = revisions
+    }
 
 
-viewStorageGroup : Model -> Bool -> Set Int -> String -> StorageGroup -> Html (Flow Model ())
-viewStorageGroup model coldConfigured expandedSteps filter group =
+storageRevisionMovable : StorageRevision -> Bool
+storageRevisionMovable revision =
+    revision.state == StorageLocal || revision.state == StorageFailed
+
+
+compareStorageGroups : StorageGroup -> StorageGroup -> Order
+compareStorageGroups first second =
+    case compare second.local first.local of
+        EQ ->
+            case compare second.cold first.cold of
+                EQ ->
+                    compare first.stepId second.stepId
+
+                order ->
+                    order
+
+        order ->
+            order
+
+
+viewStorageGroup : Model -> Bool -> Set Int -> StorageGroup -> Html (Flow Model ())
+viewStorageGroup model coldConfigured expandedSteps group =
     let
         expanded =
-            not (List.isEmpty group.listedRevisions)
-                && (not (String.isEmpty filter) || Set.member group.step.step expandedSteps)
+            Set.member group.stepId expandedSteps
 
         childrenId =
-            "storage-step-children-" ++ String.fromInt group.step.step
+            "storage-step-children-" ++ String.fromInt group.stepId
     in
     Html.div [ class "storage-panel__group", attribute "role" "listitem" ]
         [ viewStorageStepRow model coldConfigured childrenId expanded group
@@ -1531,7 +1484,7 @@ viewStorageGroup model coldConfigured expandedSteps filter group =
             , attribute "role" "list"
             ]
             (if expanded then
-                List.map (viewStorageRow model coldConfigured group.step) group.revisions
+                List.map (viewStorageRow model coldConfigured group.name) group.revisions
 
              else
                 []
@@ -1542,25 +1495,19 @@ viewStorageGroup model coldConfigured expandedSteps filter group =
 viewStorageStepRow : Model -> Bool -> String -> Bool -> StorageGroup -> Html (Flow Model ())
 viewStorageStepRow model coldConfigured childrenId expanded group =
     let
-        step =
-            group.step
-
         starting =
-            Set.member (Model.storageStepKey step.step) (Model.getStorageMoving model)
+            Set.member (Model.storageStepKey group.stepId) (Model.getStorageMoving model)
 
         blockedId =
-            "storage-step-blocked-" ++ String.fromInt step.step
-
-        unlisted =
-            max 0 (step.revisionCount - List.length group.listedRevisions)
+            "storage-step-blocked-" ++ String.fromInt group.stepId
 
         moveButton =
-            Html.viewIf (coldConfigured && step.localRevisionCount > 0) <|
+            Html.viewIf (coldConfigured && group.localRevisionCount > 0) <|
                 Html.button
                     [ class "small-btn storage-panel__step-move"
                     , type_ "button"
-                    , disabled (starting || step.blocked /= Nothing)
-                    , Events.onClick (Actions.confirmStorageStepOffload step)
+                    , disabled (starting || group.blocked /= Nothing)
+                    , Events.onClick (Actions.confirmStorageStepOffload group.stepId group.name group.local group.localRevisionCount)
                     , attribute "aria-describedby" blockedId
                     ]
                     [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
@@ -1569,7 +1516,7 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
                             "Starting…"
 
                          else
-                            "Move " ++ storageCount step.localRevisionCount "revision" "revisions"
+                            "Move " ++ storageCount group.localRevisionCount "revision" "revisions"
                         )
                     ]
     in
@@ -1578,8 +1525,7 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
             [ Html.button
                 [ class "storage-panel__step-toggle"
                 , type_ "button"
-                , disabled (List.isEmpty group.listedRevisions)
-                , Events.onClick (Actions.toggleStorageStepExpanded step.step)
+                , Events.onClick (Actions.toggleStorageStepExpanded group.stepId)
                 , attribute "aria-expanded" (boolText expanded)
                 , attribute "aria-controls" childrenId
                 ]
@@ -1591,37 +1537,27 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
                         "chevron_right"
                     )
                     [ class "storage-panel__chevron", attribute "aria-hidden" "true" ]
-                , Html.span [ class "storage-panel__step-name", title step.name ] [ Html.text step.name ]
-                , Html.span [ class "storage-panel__step-id" ] [ Html.text ("#" ++ String.fromInt step.step) ]
+                , Html.span [ class "storage-panel__step-name", title group.name ] [ Html.text group.name ]
+                , Html.span [ class "storage-panel__step-id" ] [ Html.text ("#" ++ String.fromInt group.stepId) ]
                 ]
             , Html.div [ class "storage-panel__meta" ]
-                [ Html.text
-                    (storageCount step.revisionCount "revision" "revisions"
-                        ++ (if unlisted > 0 then
-                                " · " ++ storageCount unlisted "smaller revision not listed" "smaller revisions not listed"
-
-                            else
-                                ""
-                           )
-                    )
-                ]
-            , storageBlockedReason blockedId step.blocked
+                [ Html.text (storageCount group.revisionCount "revision" "revisions") ]
+            , storageBlockedReason blockedId group.blocked
             ]
-         , Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize step.local) ]
+         , Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.local) ]
          ]
             ++ (if coldConfigured then
-                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize step.cold) ]
-                    , Html.div [ class "storage-panel__action" ] [ moveButton ]
-                    ]
+                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.cold) ] ]
 
                 else
                     []
                )
+            ++ [ Html.div [ class "storage-panel__action" ] [ moveButton ] ]
         )
 
 
-viewStorageRow : Model -> Bool -> StorageStep -> StorageRevision -> Html (Flow Model ())
-viewStorageRow model coldConfigured parent revision =
+viewStorageRow : Model -> Bool -> String -> StorageRevision -> Html (Flow Model ())
+viewStorageRow model coldConfigured parentName revision =
     let
         blockedId =
             "storage-blocked-" ++ String.fromInt revision.step ++ "-" ++ revision.revision
@@ -1640,7 +1576,7 @@ viewStorageRow model coldConfigured parent revision =
                     , title ("Revision " ++ revision.revision ++ ", committed " ++ Iso8601.fromTime revision.committedAt)
                     ]
                     [ Html.span [ class "step-review-revision-hash" ] [ Html.text (String.left 7 revision.revision) ] ]
-                , Html.viewIf (revision.name /= parent.name) <|
+                , Html.viewIf (revision.name /= parentName) <|
                     Html.span [ class "storage-panel__revision-step", title revision.name ] [ Html.text revision.name ]
                 , Html.span [ class "storage-panel__age" ]
                     [ Html.text (Time.Distance.inWords revision.committedAt (Model.getNow model)) ]
@@ -1653,14 +1589,14 @@ viewStorageRow model coldConfigured parent revision =
          , Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize revision.local) ]
          ]
             ++ (if coldConfigured then
-                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize revision.cold) ]
-                    , Html.div [ class "storage-panel__action" ]
-                        [ viewStorageRevisionAction model revision blockedId ]
-                    ]
+                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize revision.cold) ] ]
 
                 else
                     []
                )
+            ++ [ Html.div [ class "storage-panel__action" ]
+                    [ viewStorageRevisionAction model coldConfigured revision blockedId ]
+               ]
         )
 
 
@@ -1676,8 +1612,8 @@ storageBlockedReason blockedId blocked =
         )
 
 
-viewStorageRevisionAction : Model -> StorageRevision -> String -> Html (Flow Model ())
-viewStorageRevisionAction model revision blockedId =
+viewStorageRevisionAction : Model -> Bool -> StorageRevision -> String -> Html (Flow Model ())
+viewStorageRevisionAction model coldConfigured revision blockedId =
     case revision.state of
         StorageCold ->
             Html.span [ class "storage-panel__badge" ]
@@ -1695,10 +1631,72 @@ viewStorageRevisionAction model revision blockedId =
             Html.span [ class "storage-panel__unavailable" ] [ Html.text "Status unavailable" ]
 
         StorageFailed ->
-            storageRevisionMoveButton model revision blockedId
+            storageRevisionActions model coldConfigured revision blockedId
 
         StorageLocal ->
-            storageRevisionMoveButton model revision blockedId
+            storageRevisionActions model coldConfigured revision blockedId
+
+
+storageRevisionActions : Model -> Bool -> StorageRevision -> String -> Html (Flow Model ())
+storageRevisionActions model coldConfigured revision blockedId =
+    Html.div [ class "storage-panel__rev-actions" ]
+        ((if coldConfigured then
+            [ storageRevisionMoveButton model revision blockedId ]
+
+          else
+            []
+         )
+            ++ [ storageRevisionDeleteButton model revision ]
+        )
+
+
+storageRevisionDeleteButton : Model -> StorageRevision -> Html (Flow Model ())
+storageRevisionDeleteButton model revision =
+    let
+        armed =
+            Set.member (Model.storageRevisionKey revision) (Model.getStorageDeleteArmed model)
+
+        tooltip =
+            if armed then
+                "Click again to delete"
+
+            else
+                storageDeleteTooltip revision.kind
+
+        label =
+            if armed then
+                "Click again to delete revision " ++ String.left 7 revision.revision
+
+            else
+                "Delete revision " ++ String.left 7 revision.revision ++ ". " ++ tooltip
+    in
+    Html.button
+        [ class "icon-btn storage-panel__rev-action"
+        , classList [ ( "storage-panel__rev-action--armed", armed ) ]
+        , type_ "button"
+        , Events.onClick (Actions.storageDeleteRevision revision)
+        , title tooltip
+        , attribute "aria-label" label
+        ]
+        (if armed then
+            [ Html.text "Delete?" ]
+
+         else
+            [ iconCustom False "delete" [ attribute "aria-hidden" "true" ] ]
+        )
+
+
+storageDeleteTooltip : StorageKind -> String
+storageDeleteTooltip kind =
+    case kind of
+        StorageDerived ->
+            "Delete this output. This data can be re-derived as long as its inputs still exist."
+
+        StorageDownload ->
+            "Delete this output. This data can be re-downloaded as long as it still exists at its original source."
+
+        StorageUpload ->
+            "Delete this uploaded output. There is no undeleting it."
 
 
 storageRevisionMoveButton : Model -> StorageRevision -> String -> Html (Flow Model ())
@@ -1759,3 +1757,48 @@ ratioPercent part total =
 
     else
         clamp 0 100 (round (100 * toFloat part / toFloat total))
+
+
+viewStorageDeleteDialog : Model -> Html (Flow Model ())
+viewStorageDeleteDialog model =
+    Html.node "dialog"
+        [ id Actions.storageUploadDeleteDialogId
+        , class "dialog storage-delete-dialog"
+        , Events.on "close" (Decode.succeed Actions.clearStorageDeleteUpload)
+        ]
+        [ Html.viewMaybe (viewStorageDeleteDialogContent model) (Model.getStorageDeleteUpload model) ]
+
+
+viewStorageDeleteDialogContent : Model -> Model.StorageDeleteUpload -> Html (Flow Model ())
+viewStorageDeleteDialogContent model upload =
+    Html.div [ class "dialog-content storage-delete-dialog-content" ]
+        [ Html.span [ class "dialog-title" ] [ Html.text "Delete uploaded data" ]
+        , Html.span [ class "dialog-subtitle" ]
+            [ Html.text
+                (upload.name
+                    ++ " · #"
+                    ++ String.fromInt upload.stepId
+                    ++ " · "
+                    ++ String.left 7 upload.revision
+                )
+            ]
+        , Html.node "p" [ class "storage-delete-dialog-warning" ]
+            [ Html.text "This data was uploaded directly. Make sure you have an alternate copy or that you really want to delete it. There is no undeleting it. You can download it here if you wish to." ]
+        , Html.div [ class "storage-delete-dialog-explorer" ]
+            [ FileBrowser.viewOutputDirectory model upload.stepId upload.revision upload.directory ]
+        , Html.div [ class "dialog-actions" ]
+            [ Html.button
+                [ class "btn btn-danger"
+                , type_ "button"
+                , Events.onClick Actions.confirmStorageDeleteUpload
+                ]
+                [ Html.text "Delete" ]
+            , Html.button
+                [ class "btn"
+                , type_ "button"
+                , autofocus True
+                , Events.onClick Actions.closeStorageDeleteUpload
+                ]
+                [ Html.text "Cancel" ]
+            ]
+        ]

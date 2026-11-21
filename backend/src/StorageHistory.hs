@@ -12,7 +12,7 @@ module StorageHistory (
 ) where
 
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..))
-import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.!=), (.:?), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Char (isDigit, isHexDigit)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
@@ -28,6 +28,7 @@ import Text.Read (readMaybe)
 data CachedStep = CachedStep
     { cachedStepName :: Text
     , cachedStepPath :: Maybe Text
+    , cachedStepKind :: Text
     }
     deriving (Eq, Show)
 
@@ -36,9 +37,10 @@ instance FromJSON CachedStep where
         CachedStep
             <$> fields .:? "name" .!= ""
             <*> fields .:? "path"
+            <*> fields .: "kind"
 
 instance ToJSON CachedStep where
-    toJSON step = object ["name" .= cachedStepName step, "path" .= cachedStepPath step]
+    toJSON step = object ["name" .= cachedStepName step, "path" .= cachedStepPath step, "kind" .= cachedStepKind step]
 
 data HistoryCommit = HistoryCommit
     { historyCommit :: Text
@@ -50,6 +52,7 @@ data HistoryCommit = HistoryCommit
 data RevisionSeed = RevisionSeed
     { seedStep :: Int
     , seedName :: Text
+    , seedKind :: Text
     , seedCommit :: Text
     , seedCommitTime :: UTCTime
     , seedPath :: Text
@@ -98,11 +101,11 @@ revisionsFromHistory history = sortOn seedOrder (Map.elems seeds)
                 , Map.insertWith
                     ( \later earlier ->
                         if T.null (seedName earlier) && not (T.null (seedName later))
-                            then earlier{seedName = seedName later}
+                            then earlier{seedName = seedName later, seedKind = seedKind later}
                             else earlier
                     )
                     path
-                    (RevisionSeed stepId (cachedStepName cached) (historyCommit commit) (historyTime commit) path)
+                    (RevisionSeed stepId (cachedStepName cached) (cachedStepKind cached) (historyCommit commit) (historyTime commit) path)
                     found
                 )
     seedOrder seed = (seedStep seed, seedCommitTime seed, seedPath seed)

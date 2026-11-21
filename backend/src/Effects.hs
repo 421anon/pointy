@@ -34,6 +34,7 @@ module Effects (
     pathValid,
     registerGcRoot,
     rootStorePath,
+    unrootStorePath,
     rootDerivationForJob,
     unrootDerivationRoot,
     unrootDerivationRootsForJob,
@@ -180,6 +181,11 @@ rootStorePath :: (Nix :> es, IOE :> es) => FilePath -> Eff es ()
 rootStorePath path = do
     gcRootPath <- liftIO $ gcRootPathFor path
     registerGcRoot gcRootPath path
+
+unrootStorePath :: (IOE :> es) => FilePath -> Eff es ()
+unrootStorePath path = do
+    gcRootPath <- liftIO $ gcRootPathFor path
+    liftIO $ ignoreMissing $ removeFile gcRootPath
 
 rootDerivationForJob :: (Nix :> es, IOE :> es) => String -> FilePath -> Eff es (Either String FilePath)
 rootDerivationForJob jobName drvPath = do

@@ -72,6 +72,7 @@ view model =
                 , Compare.viewCompareDialog model
                 , AgentPanel.viewLightbox model
                 , viewScratchPicker model
+                , StatusBar.viewStorageDeleteDialog model
                 , StatusBar.view model
                 ]
     }
