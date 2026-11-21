@@ -2796,8 +2796,22 @@ textarea[data-changed],
   display: flex;
   flex-direction: column;
   position: absolute;
+}
+.status-popover:popover-open {
+  top: anchor(bottom);
+  left: anchor(left);
+}
+.step-review-popover:popover-open {
   position-area: bottom span-right;
   position-try-fallbacks: top span-right, bottom span-left, top span-left;
+}
+
+@media (max-width: 600px) {
+  .status-popover:popover-open {
+    right: var(--spacing-md);
+    width: auto;
+    max-width: none;
+  }
 }
 .status-popover-header,
 .step-review-popover-header {
