@@ -733,14 +733,16 @@ statusPopoverId tableName stepId =
     "status-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
 
 
-viewStatusPopover : String -> String -> List (Html (Flow Model ())) -> List (Html (Flow Model ())) -> Html (Flow Model ())
-viewStatusPopover popoverId heading headerActions body =
+viewStatusPopover : String -> List (Html.Attribute (Flow Model ())) -> String -> List (Html (Flow Model ())) -> List (Html (Flow Model ())) -> Html (Flow Model ())
+viewStatusPopover popoverId attributes heading headerActions body =
     Html.div
-        [ class "status-popover row-popover"
-        , id popoverId
-        , attribute "popover" "auto"
-        , style "position-anchor" ("--anchor-" ++ popoverId)
-        ]
+        ([ class "status-popover row-popover"
+         , id popoverId
+         , attribute "popover" "auto"
+         , style "position-anchor" ("--anchor-" ++ popoverId)
+         ]
+            ++ attributes
+        )
         [ Html.div [ class "status-popover-header" ]
             [ Html.strong [] [ Html.text heading ]
             , Html.span []
@@ -765,6 +767,7 @@ viewStepLogPopover tableName logState stepId =
             statusPopoverId tableName stepId
     in
     viewStatusPopover popoverId
+        []
         ("Build log for step " ++ String.fromInt stepId)
         [ Html.viewMaybe
             (\stepLog ->
@@ -799,6 +802,7 @@ viewColdInputsPopover tableName spec entry stepId =
             viewColdInputs spec stepId entry
     in
     viewStatusPopover (statusPopoverId tableName stepId)
+        [ Events.on "toggle" (Decode.field "newState" Decode.string |> Decode.map (\state -> Actions.setColdInputsOpen stepId (state == "open"))) ]
         ("Inputs of step " ++ String.fromInt stepId ++ " in cold storage")
         []
         [ ApiData.foldVisible
@@ -812,7 +816,7 @@ viewColdInputsPopover tableName spec entry stepId =
 
 viewColdInputs : TableSpec.StepSpec -> Int -> Model.ColdInputEntry -> Model.ColdInputs -> Html (Flow Model ())
 viewColdInputs spec stepId entry inputs =
-    if List.isEmpty inputs.sources then
+    if List.isEmpty (Model.coldInputFiles inputs) then
         Html.div [ class "cold-card cold-card-done" ]
             [ Html.div [ class "cold-title" ]
                 [ icon True "check_circle"
@@ -835,10 +839,10 @@ viewColdInputsPending stepId entry inputs =
             Model.coldInputFiles inputs
 
         copying =
-            List.any isOnloading files
+            List.any (.state >> Model.isOnloading) files
 
         startable =
-            List.filter (not << isOnloading) files
+            List.filter (not << Model.isOnloading << .state) files
 
         failures =
             List.concatMap (\source -> List.filterMap (viewOnloadFailure source.stepId) source.files) inputs.sources
@@ -855,8 +859,8 @@ viewColdInputsPending stepId entry inputs =
                 )
             ]
         , Html.p [ class "cold-text" ]
-            [ Html.text (coldInputsDescription stepId inputs.blocked (Maybe.withDefault (Model.coldInputsTotal inputs) entry.baseline)) ]
-        , Html.viewIf copying (viewColdProgress entry.baseline inputs)
+            [ Html.text (coldInputsDescription stepId inputs.blocked (Model.coldInputsTotal inputs)) ]
+        , Html.viewIf (copying || not (List.isEmpty (Model.coldInputsReturned inputs))) (viewColdProgress inputs)
         , Html.viewIf (not (List.isEmpty failures)) (Html.ul [ class "cold-failures" ] failures)
         , Html.div [ class "cold-actions" ]
             [ Html.viewIf (not (List.isEmpty startable) && not entry.starting)
@@ -872,10 +876,8 @@ viewColdInputsPending stepId entry inputs =
                     )
                     (Actions.onloadColdInputs stepId)
                 )
-            , Html.viewIf (copying && not entry.starting) (coldButton (icon False "refresh") "Check progress" (Actions.loadColdInputs stepId))
             ]
         , Html.viewIf entry.starting (Html.p [ class "cold-hint" ] [ Html.text "Starting copies…" ])
-        , Html.viewIf (copying && not entry.starting) (Html.p [ class "cold-hint" ] [ Html.text "Copying continues after this closes." ])
         ]
 
 
@@ -889,16 +891,6 @@ coldButton buttonIcon label action =
         [ buttonIcon, Html.text label ]
 
 
-isOnloading : Model.ColdInputFile -> Bool
-isOnloading file =
-    case file.state of
-        Model.Onloading _ _ ->
-            True
-
-        _ ->
-            False
-
-
 viewOnloadFailure : Int -> Model.ColdInputFile -> Maybe (Html msg)
 viewOnloadFailure stepId file =
     case file.state of
@@ -909,24 +901,21 @@ viewOnloadFailure stepId file =
             Nothing
 
 
-viewColdProgress : Maybe Model.ColdInputTotals -> Model.ColdInputs -> Html msg
-viewColdProgress baseline inputs =
+viewColdProgress : Model.ColdInputs -> Html msg
+viewColdProgress inputs =
     let
-        remaining =
+        total =
             Model.coldInputsTotal inputs
 
-        start =
-            Maybe.withDefault remaining baseline
-
-        bytesInFlight =
-            List.sum (List.map onloadedBytes (Model.coldInputFiles inputs))
+        returned =
+            Model.coldInputsReturned inputs
 
         bytesBack =
-            clamp 0 start.bytes (start.bytes - remaining.bytes + bytesInFlight)
+            clamp 0 total.bytes (List.sum (List.map .size returned) + List.sum (List.map onloadedBytes (Model.coldInputFiles inputs)))
 
         percent =
-            if start.bytes > 0 then
-                round (100 * toFloat bytesBack / toFloat start.bytes)
+            if total.bytes > 0 then
+                round (100 * toFloat bytesBack / toFloat total.bytes)
 
             else
                 0
@@ -936,13 +925,13 @@ viewColdProgress baseline inputs =
             [ Html.div [ class "cold-progress-bar", style "width" (String.fromInt percent ++ "%") ] [] ]
         , Html.p [ class "cold-text" ]
             [ Html.text
-                (String.fromInt (Basics.max 0 (start.files - remaining.files))
+                (String.fromInt (List.length returned)
                     ++ " of "
-                    ++ String.fromInt start.files
+                    ++ String.fromInt total.files
                     ++ " files back ("
                     ++ Filesize.formatBase2 bytesBack
                     ++ " of "
-                    ++ Filesize.formatBase2 start.bytes
+                    ++ Filesize.formatBase2 total.bytes
                     ++ ")"
                 )
             ]

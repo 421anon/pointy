@@ -282,13 +282,20 @@ instance ToSchema ColdInputsView where
             Inline $
                 mempty
                     & type_ ?~ OpenApiObject
-                    & required .~ ["step", "files"]
+                    & required .~ ["step", "files", "back"]
                     & properties
                         .~ fromList
                             [ ("step", integerField)
                             , ("files", arrayOf coldFileSchema)
+                            , ("back", arrayOf returnedFileSchema)
                             ]
-                    & description ?~ "An upstream step whose output holds offloaded files read by the run."
+                    & description ?~ "An upstream step whose output holds files read by the run: `files` are still offloaded, `back` were asked to be copied back since the backend started and are local again."
+        returnedFileSchema =
+            Inline $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & required .~ ["path", "size"]
+                    & properties .~ fromList [("path", stringField), ("size", integerField)]
 
 instance ToSchema StepLogView where
     declareNamedSchema _ =

@@ -240,6 +240,7 @@ subscriptions model =
     Sub.batch
         [ uploadProgressSubscription model
         , unfreezeSubscription model
+        , coldInputsSubscription model
         , gutterDragSubscription model
         , areaCaptureSubscription model
         , Time.every (60 * 1000) (\time -> Flow.setAll now time |> Flow.seq Actions.refreshVisibleAgentSession)
@@ -266,6 +267,15 @@ unfreezeSubscription model =
 
     else
         Time.every 1000 (\_ -> Actions.pollUnfreezing)
+
+
+coldInputsSubscription : Model -> Sub (Flow Model ())
+coldInputsSubscription model =
+    if List.isEmpty (Actions.coldInputsToPoll model) then
+        Sub.none
+
+    else
+        Time.every 3000 (\_ -> Actions.pollColdInputs)
 
 
 statusBarClockSubscription : Model -> Sub (Flow Model ())

@@ -375,6 +375,11 @@ coldInputs =
     lens ".coldInputs" Model.getColdInputs (\(Model m) coldInputs_ -> Model { m | coldInputs = coldInputs_ })
 
 
+openColdInputs : Lens ls Model (Set Int) x y
+openColdInputs =
+    lens ".openColdInputs" Model.getOpenColdInputs (\(Model m) open -> Model { m | openColdInputs = open })
+
+
 notices : Lens ls Model (Dict String (ApiData (List Model.Notice))) x y
 notices =
     lens ".notices" Model.getNotices (\(Model m) notices_ -> Model { m | notices = notices_ })

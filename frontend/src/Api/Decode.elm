@@ -1036,6 +1036,14 @@ coldInputSource =
     Decode.succeed Model.ColdInputSource
         |> required "step" Decode.int
         |> required "files" (Decode.list coldInputFile)
+        |> required "back" (Decode.list coldInputReturned)
+
+
+coldInputReturned : Decoder Model.ColdInputReturned
+coldInputReturned =
+    Decode.succeed Model.ColdInputReturned
+        |> required "path" Decode.string
+        |> required "size" Decode.int
 
 
 coldInputFile : Decoder Model.ColdInputFile

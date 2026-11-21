@@ -220,6 +220,13 @@ type alias ColdInputFile =
 type alias ColdInputSource =
     { stepId : Int
     , files : List ColdInputFile
+    , back : List ColdInputReturned
+    }
+
+
+type alias ColdInputReturned =
+    { path : String
+    , size : Int
     }
 
 
@@ -231,7 +238,6 @@ type alias ColdInputs =
 
 type alias ColdInputEntry =
     { state : ApiData ColdInputs
-    , baseline : Maybe ColdInputTotals
     , starting : Bool
     }
 
@@ -245,7 +251,7 @@ type alias ColdInputTotals =
 
 noColdInputs : ColdInputEntry
 noColdInputs =
-    { state = NotAsked, baseline = Nothing, starting = False }
+    { state = NotAsked, starting = False }
 
 
 coldInputFiles : ColdInputs -> List ColdInputFile
@@ -253,16 +259,39 @@ coldInputFiles inputs =
     List.concatMap .files inputs.sources
 
 
+coldInputsReturned : ColdInputs -> List ColdInputReturned
+coldInputsReturned inputs =
+    List.concatMap .back inputs.sources
+
+
 coldInputsTotal : ColdInputs -> ColdInputTotals
 coldInputsTotal inputs =
     let
-        files =
-            coldInputFiles inputs
+        sizes =
+            List.map .size (coldInputFiles inputs) ++ List.map .size (coldInputsReturned inputs)
     in
-    { files = List.length files
-    , bytes = List.sum (List.map .size files)
+    { files = List.length sizes
+    , bytes = List.sum sizes
     , sources = List.length inputs.sources
     }
+
+
+isOnloading : ColdFileState -> Bool
+isOnloading state =
+    case state of
+        Onloading _ _ ->
+            True
+
+        _ ->
+            False
+
+
+coldInputsCopying : ColdInputEntry -> Bool
+coldInputsCopying entry =
+    entry.starting
+        || (ApiData.toMaybe entry.state
+                |> Maybe.unwrap False (coldInputFiles >> List.any (.state >> isOnloading))
+           )
 
 
 coldInputsAt : Int -> Maybe String -> Model -> ColdInputEntry
@@ -1847,6 +1876,7 @@ type Model
         , scratch : ScratchState
         , stepLogs : Dict String (ApiData StepLog)
         , coldInputs : Dict String ColdInputEntry
+        , openColdInputs : Set Int
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict String (Dict Int StatusReport)
@@ -2307,6 +2337,11 @@ getColdInputs (Model model) =
     model.coldInputs
 
 
+getOpenColdInputs : Model -> Set Int
+getOpenColdInputs (Model model) =
+    model.openColdInputs
+
+
 getNotices : Model -> Dict String (ApiData (List Notice))
 getNotices (Model model) =
     model.notices
@@ -2510,6 +2545,7 @@ initialModel key route flags =
         , userRepoInfo = NotAsked
         , stepLogs = Dict.empty
         , coldInputs = Dict.empty
+        , openColdInputs = Set.empty
         , notices = Dict.empty
         , uploadProgress = Dict.empty
         , ingestJobs = Dict.empty

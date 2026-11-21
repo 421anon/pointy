@@ -1334,18 +1334,12 @@ onloadColdInputs id =
                 let
                     ( revision, key ) =
                         stepDetailsKey id model
-
-                    entry =
-                        Model.coldInputsAt id revision model
-
-                    baseline =
-                        Maybe.or entry.baseline (Maybe.map Model.coldInputsTotal (ApiData.toMaybe entry.state))
                 in
-                if entry.starting then
+                if (Model.coldInputsAt id revision model).starting then
                     Flow.pure ()
 
                 else
-                    updateColdInputs key (\current -> { current | baseline = baseline, starting = True })
+                    updateColdInputs key (\current -> { current | starting = True })
                         |> Flow.seq (Api.onloadStepInputs id revision)
                         |> Flow.andThen
                             (\result ->
@@ -1359,6 +1353,37 @@ onloadColdInputs id =
                                             |> Flow.seq (loadColdInputs id)
                             )
             )
+
+
+setColdInputsOpen : Int -> Bool -> Flow Model ()
+setColdInputsOpen id open =
+    Flow.over openColdInputs
+        (if open then
+            Set.insert id
+
+         else
+            Set.remove id
+        )
+
+
+coldInputsToPoll : Model -> List Int
+coldInputsToPoll model =
+    Model.getOpenColdInputs model
+        |> Set.toList
+        |> List.filter
+            (\id ->
+                let
+                    entry =
+                        Model.coldInputsAt id (stepRevisionById id model) model
+                in
+                Model.coldInputsCopying entry && not entry.starting && ApiData.settled entry.state
+            )
+
+
+pollColdInputs : Flow Model ()
+pollColdInputs =
+    Flow.get
+        |> Flow.andThen (\model -> Flow.batchM (List.map loadColdInputs (coldInputsToPoll model)))
 
 
 autocompleteDebounceDelay : Float
