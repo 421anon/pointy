@@ -1,4 +1,4 @@
-module Channels exposing (agentTurns, backendConnection, clusterStatus, ingestJobs, stepStatus)
+module Channels exposing (agentTurns, backendConnection, clusterStatus, ingestJobs, stepStatus, storage)
 
 import Flow exposing (ChannelSpec)
 import Json.Decode
@@ -18,6 +18,11 @@ clusterStatus =
 ingestJobs : ChannelSpec String
 ingestJobs =
     backendEvent "ingest-jobs"
+
+
+storage : ChannelSpec String
+storage =
+    backendEvent "storage"
 
 
 backendConnection : ChannelSpec Bool

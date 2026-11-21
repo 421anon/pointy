@@ -88,6 +88,7 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileE
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import UserRepo (ReadRepoContext (..), fetchRepoStrict, runGitIn, runGitWithSshKey, runNixEvalJsonApplyInRepo, userRepoPath)
+import StorageBus (headMoved)
 
 data AgentGitState = AgentGitState
     { headCommit :: Text
@@ -548,6 +549,7 @@ pushCandidate repoPath session_ origin dropped candidate = do
                     throwError $ "git push failed with exit code " ++ show code ++ formatGitOutput stdout stderr
                 (ExitSuccess, _, _) -> do
                     _ <- runGitChecked repoPath ["update-ref", "refs/heads/" ++ branchName, candidateSha]
+                    liftIO headMoved
                     resetWorktree (worktreePath session_) (candidateHead rewritten)
                     liftIO $ removeWorktreeIfExists repoPath (candidateWorktree rewritten)
                     liftIO $ void $ forkIO $ broadcastAppliedStatuses (candidateHead rewritten) (nub (mapMaybe appliedProjectId changedPaths)) stepIds

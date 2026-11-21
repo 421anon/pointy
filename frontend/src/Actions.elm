@@ -2991,6 +2991,9 @@ applyColdStatus recordId commit status_ path =
                         Model.Onloading done total ->
                             Flow.setAll (fileAvailabilityAt recordId path) (Model.Unfreezing (Just ( done, total )))
 
+                        Model.Offloading _ _ ->
+                            Flow.pure ()
+
                         Model.OnloadFailed reason ->
                             unfreezeFailed recordId path reason
 
@@ -5510,10 +5513,110 @@ onClusterStatusIn json =
             Flow.pure ()
 
 
+listenAndProcessStorage : Flow Model Never
+listenAndProcessStorage =
+    Flow.subscribe onStorageIn Channels.storage
+
+
+onStorageIn : String -> Flow Model ()
+onStorageIn json =
+    case Decode.decodeString ApiDecode.storageView json of
+        Ok view ->
+            Flow.setAll storageView (ApiData.Success view)
+
+        Err _ ->
+            Flow.pure ()
+
+
 toggleStatusBar : Flow Model ()
 toggleStatusBar =
     Flow.over statusBarOpen not
         |> Flow.seq (Flow.setAll statusBarScrollTop 0)
+        |> Flow.seq (Flow.setAll storageOpen False)
+
+
+toggleStoragePanel : Flow Model ()
+toggleStoragePanel =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if Model.getStorageOpen model then
+                    Flow.setAll storageOpen False
+
+                else
+                    Flow.setAll statusBarOpen False
+                        |> Flow.seq (Flow.setAll storageOpen True)
+                        |> Flow.seq loadStorage
+            )
+
+
+loadStorage : Flow Model ()
+loadStorage =
+    Flow.over storageView ApiData.toLoading
+        |> Flow.seq Api.fetchStorage
+        |> Flow.andThen
+            (\result ->
+                Flow.over storageView
+                    (\current ->
+                        case ( result, ApiData.toMaybe current ) of
+                            ( Ok view, _ ) ->
+                                ApiData.Success view
+
+                            ( Err _, Just view ) ->
+                                ApiData.Success view
+
+                            ( Err error, Nothing ) ->
+                                ApiData.Error error
+                    )
+            )
+
+
+confirmOffload : Model.StorageRevision -> Flow Model ()
+confirmOffload revision =
+    let
+        config =
+            { id = "modal-confirm"
+            , title = "Move to cold storage"
+            , subtitle = Just (revision.name ++ " · " ++ String.left 7 revision.revision)
+            , bodyLines =
+                [ "Pointy asks the cold storage provider to move this revision's files off this server."
+                , "The files stay available: reading one copies it back first, so larger files take longer to open."
+                ]
+            , onConfirm = offloadStorageRevision revision
+            }
+    in
+    Flow.modify (\(Model.Model m) -> Model.Model { m | modalConfirm = config })
+        |> Flow.seq (openDialog "modal-confirm")
+
+
+offloadStorageRevision : Model.StorageRevision -> Flow Model ()
+offloadStorageRevision revision =
+    let
+        key =
+            Model.storageRevisionKey revision
+    in
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if Set.member key (Model.getStorageMoving model) then
+                    Flow.pure ()
+
+                else
+                    Flow.over storageMoving (Set.insert key)
+                        |> Flow.seq (Api.offloadStorage revision.step revision.revision)
+                        |> Flow.andThen
+                            (\result ->
+                                Flow.over storageMoving (Set.remove key)
+                                    |> Flow.seq
+                                        (case result of
+                                            Ok () ->
+                                                Flow.pure ()
+
+                                            Err error ->
+                                                addToast False (Http.errorMessage error)
+                                        )
+                            )
+            )
 
 
 setStatusBarScrollTop : Float -> Flow Model ()

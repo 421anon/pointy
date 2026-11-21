@@ -32,6 +32,8 @@ import Handlers.StepReview (getProjectReviewHandler, removeReviewHandler, review
 import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.ChatSearch (chatSearchHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
+import Control.Concurrent (forkIO)
+import Handlers.Storage (offloadHandler, runStorageCenter, storageHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
 import Data.String (fromString)
@@ -116,6 +118,8 @@ server =
         :<|> liftHandler tokenLogoutHandler
         :<|> (stepSearchInfoHandler :<|> (\commit request -> stepSearchHandler commit request))
         :<|> artifactRdfHandler
+        :<|> storageHandler
+        :<|> offloadHandler
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy
 corsPolicy req = case pathInfo req of
@@ -304,4 +308,5 @@ serveApp runEffects middleware =
 runServer :: (forall x. Eff AppEffects x -> IO x) -> (Application -> Application) -> String -> Int -> IO () -> IO ()
 runServer runEffects middleware host port warm = do
     installRunner (EffectRunner.Runner runEffects)
+    _ <- forkIO runStorageCenter
     runSettings (setHost (fromString host) (setPort port (setBeforeMainLoop warm defaultSettings))) (serveApp runEffects middleware)

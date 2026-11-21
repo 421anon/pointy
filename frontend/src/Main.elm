@@ -77,6 +77,7 @@ listenToBackendEvents =
         |> Flow.seq (Flow.async Actions.listenAndProcessStepStatus)
         |> Flow.seq (Flow.async Actions.listenAndProcessClusterStatus)
         |> Flow.seq (Flow.async Ingest.listenAndProcessIngestJobs)
+        |> Flow.seq (Flow.async Actions.listenAndProcessStorage)
 
 
 initializeWorkspace : Flow Model ()

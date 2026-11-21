@@ -206,8 +206,69 @@ type alias ColdFile =
 
 type ColdFileState
     = Offloaded
+    | Offloading Int Int
     | Onloading Int Int
     | OnloadFailed String
+
+
+type alias StorageView =
+    { coldConfigured : Bool
+    , local : Int
+    , cold : Int
+    , free : Int
+    , scanning : Bool
+    , scanned : Int
+    , history : Int
+    , truncated : Bool
+    , revisionCount : Int
+    , revisions : List StorageRevision
+    , error : Maybe String
+    , updatedAt : Time.Posix
+    }
+
+
+type alias StorageRevision =
+    { step : Int
+    , name : String
+    , revision : String
+    , committedAt : Time.Posix
+    , local : Int
+    , cold : Int
+    , state : StorageState
+    , done : Int
+    , total : Int
+    , error : Maybe String
+    , blocked : Maybe String
+    }
+
+
+type StorageState
+    = StorageLocal
+    | StorageOffloading
+    | StorageOnloading
+    | StorageFailed
+    | StorageCold
+    | StorageUnknown
+
+
+storageRevisionKey : StorageRevision -> String
+storageRevisionKey revision =
+    String.fromInt revision.step ++ "@" ++ revision.revision
+
+
+getStorageOpen : Model -> Bool
+getStorageOpen (Model model) =
+    model.storageOpen
+
+
+getStorageView : Model -> ApiData StorageView
+getStorageView (Model model) =
+    model.storageView
+
+
+getStorageMoving : Model -> Set String
+getStorageMoving (Model model) =
+    model.storageMoving
 
 
 type alias ColdInputFile =
@@ -1904,6 +1965,9 @@ type Model
         , activeSteps : List StepActivity
         , statusBarCollapsed : Set String
         , statusBarOpen : Bool
+        , storageOpen : Bool
+        , storageView : ApiData StorageView
+        , storageMoving : Set String
         , backendConnection : BackendConnection
         , statusBarScrollTop : Float
         , sidebarOpen : Bool
@@ -2583,6 +2647,9 @@ initialModel key route flags =
         , activeSteps = []
         , statusBarCollapsed = Set.empty
         , statusBarOpen = False
+        , storageOpen = False
+        , storageView = ApiData.NotAsked
+        , storageMoving = Set.empty
         , backendConnection = BackendUp
         , statusBarScrollTop = 0
         , sidebarOpen = not flags.isNarrow

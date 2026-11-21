@@ -47,6 +47,7 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Exception (bracket, finally)
 import Effects (Eval (..), Nix (..), evalJson, evalJsonApply, evalImpure, evalRaw, runNixCli)
 import NixEvaluator (RepoSource (..))
+import StorageBus (headMoved)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, removeDirectoryRecursive, removeFile, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -308,7 +309,9 @@ fetchRepo = ExceptT $ do
                         ExitSuccess -> return $ Right ()
                         ExitFailure code2 -> return $ Left $ "git fetch failed with exit code " ++ show code2 ++ ": " ++ fetchErr2
                 ExitFailure code -> return $ Left $ "git fetch failed with exit code " ++ show code ++ ": " ++ fetchErr
-    retry 3 action
+    result <- retry 3 action
+    headMoved
+    pure result
 
 fetchRepoStrict :: ExceptT String IO ()
 fetchRepoStrict = ExceptT $ do
@@ -324,7 +327,9 @@ fetchRepoStrict = ExceptT $ do
             case fetchCode of
                 ExitSuccess -> return $ Right ()
                 ExitFailure code -> return $ Left $ "git fetch failed with exit code " ++ show code ++ formatGitOutput fetchOut fetchErr
-    retry 3 action
+    result <- retry 3 action
+    headMoved
+    pure result
   where
     formatGitOutput stdout stderr =
         (if null stdout then "" else "\nstdout:\n" ++ stdout)
@@ -446,7 +451,9 @@ pushRepoChanges (WriteRepoContext worktreePath) = ExceptT $ liftIO $ do
     cfg <- resolveConfigPath >>= loadConfig
     let keyfile = userRepoKeyfile (configUserRepo cfg)
         branch = T.unpack $ userRepoBranch (configUserRepo cfg)
-    pushWithRetry worktreePath keyfile branch
+    result <- pushWithRetry worktreePath keyfile branch
+    headMoved
+    pure result
   where
     pushWithRetry wp kf br = do
         (exitCode, _, stderr) <- runGitWithSshKey kf wp ["push", "origin", "HEAD:" ++ br]

@@ -1,6 +1,6 @@
 import { keepEventSourceOpen } from "./event-source.js";
 
-const BACKEND_EVENT_NAMES = ["step-status", "cluster-status", "ingest-jobs"];
+const BACKEND_EVENT_NAMES = ["step-status", "cluster-status", "ingest-jobs", "storage"];
 const BACKEND_HEARTBEAT_SECONDS = 30;
 
 let backendEvents = null;

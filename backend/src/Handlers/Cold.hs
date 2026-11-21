@@ -1,9 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Handlers.Cold (
-    ColdStatus (..),
-    ColdFile (..),
-    ColdFileState (..),
     coldFilesFor,
     coldStatusFor,
     mapColdProvider,
@@ -13,17 +10,16 @@ module Handlers.Cold (
     refuseOffloadedIn,
     coldStatusHandler,
     onloadHandler,
-    parseColdStatus,
+    startOnload,
 ) where
 
+import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), parseColdStatus)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Exception (bracket_)
 import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, object, withObject, (.:), (.=))
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (find)
 import Data.Set (Set)
@@ -31,57 +27,14 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift, SeqUnlift), withEffToIO, (:>))
+import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift, SeqUnlift), liftIO, withEffToIO, (:>))
 import Effects (AppM, ColdStorage, coldStorageConfigured, coldStorageOnload, coldStorageStatus)
 import Handlers.StepOutput (resolveStepOutPath)
 import Servant (NoContent (..), ServerError (..), err409, err502, err503, throwError)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
+import StorageBus (recheckCold, recordColdStatus)
 import System.FilePath (joinPath, normalise, splitDirectories)
 import System.IO.Unsafe (unsafePerformIO)
-
-newtype ColdStatus = ColdStatus {coldStatusFiles :: [ColdFile]}
-    deriving (Show, Eq)
-
-data ColdFile = ColdFile
-    { coldFilePath :: Text
-    , coldFileSize :: Integer
-    , coldFileState :: ColdFileState
-    }
-    deriving (Show, Eq)
-
-data ColdFileState
-    = Offloaded
-    | Onloading Integer Integer
-    | OnloadFailed Text
-    deriving (Show, Eq)
-
-instance FromJSON ColdStatus where
-    parseJSON = withObject "cold storage status" $ \o -> ColdStatus <$> o .: "files"
-
-instance ToJSON ColdStatus where
-    toJSON status = object ["files" .= coldStatusFiles status]
-
-instance FromJSON ColdFile where
-    parseJSON = withObject "cold storage file" $ \o -> do
-        path <- o .: "path"
-        size <- o .: "size"
-        state <- o .: "state"
-        ColdFile path size <$> case state :: Text of
-            "offloaded" -> pure Offloaded
-            "onloading" -> Onloading <$> o .: "done" <*> o .: "total"
-            "failed" -> OnloadFailed <$> o .: "error"
-            other -> fail ("unknown cold storage file state " ++ T.unpack other)
-
-instance ToJSON ColdFile where
-    toJSON file =
-        object $
-            ["path" .= coldFilePath file, "size" .= coldFileSize file] ++ case coldFileState file of
-                Offloaded -> ["state" .= ("offloaded" :: Text)]
-                Onloading done total -> ["state" .= ("onloading" :: Text), "done" .= done, "total" .= total]
-                OnloadFailed message -> ["state" .= ("failed" :: Text), "error" .= message]
-
-parseColdStatus :: BS.ByteString -> Maybe ColdStatus
-parseColdStatus = decodeStrict
 
 {-# NOINLINE coldOutPaths #-}
 coldOutPaths :: SingleFlightCache (Int, Text) Text
@@ -95,20 +48,30 @@ coldOutPath stepId mCommit = case mCommit of
             withEffToIO SeqUnlift $ \unlift ->
                 cachedSuccess coldOutPaths (stepId, commit) (unlift (runExceptT (resolveStepOutPath stepId (Just commit))))
 
-coldFilesFor :: (ColdStorage :> es) => Text -> Eff es (Maybe (Set Text))
+coldFilesFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe (Set Text))
 coldFilesFor outPath = fmap notLocalPaths <$> coldStatusFor outPath
   where
     notLocalPaths = Set.fromList . map (T.pack . normalise . T.unpack . coldFilePath) . coldStatusFiles
 
-coldStatusFor :: (ColdStorage :> es) => Text -> Eff es (Maybe ColdStatus)
+coldStatusFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe ColdStatus)
 coldStatusFor outPath = do
     configured <- coldStorageConfigured
     if not configured
         then pure (Just (ColdStatus []))
-        else either (const Nothing) parseColdStatus <$> coldStorageStatus outPath
+        else do
+            status <- either (const Nothing) parseColdStatus <$> coldStorageStatus outPath
+            liftIO (recordColdStatus outPath status)
+            pure status
+
+startOnload :: (ColdStorage :> es, IOE :> es) => Text -> FilePath -> Eff es (Either Text ())
+startOnload outPath rel = do
+    result <- coldStorageOnload outPath rel
+    liftIO (recheckCold outPath)
+    pure result
 
 onloadable :: ColdFile -> Bool
 onloadable file = case coldFileState file of
+    Offloading _ _ -> False
     Onloading _ _ -> False
     _ -> True
 
@@ -160,5 +123,5 @@ onloadHandler stepId mCommit rel = do
         then throwError err503{errBody = "Cold storage is not configured."}
         else do
             outPath <- coldOutPath stepId mCommit
-            result <- lift (coldStorageOnload outPath rel)
+            result <- lift (startOnload outPath rel)
             either (\message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 message)}) (const (pure NoContent)) result

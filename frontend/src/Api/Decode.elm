@@ -1009,6 +1009,9 @@ coldFileState state =
         "offloaded" ->
             Decode.succeed Model.Offloaded
 
+        "offloading" ->
+            Decode.map2 Model.Offloading (Decode.field "done" Decode.int) (Decode.field "total" Decode.int)
+
         "onloading" ->
             Decode.map2 Model.Onloading (Decode.field "done" Decode.int) (Decode.field "total" Decode.int)
 
@@ -1099,3 +1102,61 @@ stage =
                     other ->
                         Decode.fail ("Unknown build stage: " ++ other)
             )
+
+
+storageView : Decoder Model.StorageView
+storageView =
+    Decode.succeed Model.StorageView
+        |> required "coldConfigured" Decode.bool
+        |> required "local" Decode.int
+        |> required "cold" Decode.int
+        |> required "free" Decode.int
+        |> required "scanning" Decode.bool
+        |> required "scanned" Decode.int
+        |> required "history" Decode.int
+        |> required "truncated" Decode.bool
+        |> required "revisionCount" Decode.int
+        |> required "revisions" (Decode.list storageRevision)
+        |> optional "error" (maybe Decode.string) Nothing
+        |> required "updatedAt" Iso8601.decoder
+
+
+storageRevision : Decoder Model.StorageRevision
+storageRevision =
+    Decode.succeed Model.StorageRevision
+        |> required "step" Decode.int
+        |> required "name" Decode.string
+        |> required "revision" Decode.string
+        |> required "committedAt" Iso8601.decoder
+        |> required "local" Decode.int
+        |> required "cold" Decode.int
+        |> required "state" (Decode.string |> Decode.andThen storageState)
+        |> required "done" Decode.int
+        |> required "total" Decode.int
+        |> optional "error" (maybe Decode.string) Nothing
+        |> optional "blocked" (maybe Decode.string) Nothing
+
+
+storageState : String -> Decoder Model.StorageState
+storageState state =
+    case state of
+        "local" ->
+            Decode.succeed Model.StorageLocal
+
+        "offloading" ->
+            Decode.succeed Model.StorageOffloading
+
+        "onloading" ->
+            Decode.succeed Model.StorageOnloading
+
+        "failed" ->
+            Decode.succeed Model.StorageFailed
+
+        "cold" ->
+            Decode.succeed Model.StorageCold
+
+        "unknown" ->
+            Decode.succeed Model.StorageUnknown
+
+        other ->
+            Decode.fail ("unknown storage state " ++ other)

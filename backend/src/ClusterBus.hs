@@ -21,6 +21,7 @@ module ClusterBus
     , stopRequested
     , takeStopRequest
     , snapshotAndSubscribe
+    , latestSlurmJobs
     ) where
 import BuildRunner (JobComment (..), JobId (..), SlurmJob (..), decodeJobComment, isRunningState)
 import Control.Concurrent.STM
@@ -247,3 +248,6 @@ snapshotAndSubscribe = atomically $ do
     snap <- readTVar snapshotVar
     chan <- dupTChan broadcastChan
     return (snap, chan)
+
+latestSlurmJobs :: STM [SlurmJob]
+latestSlurmJobs = readTVar latestJobs

@@ -11,7 +11,7 @@ import Data.Map (Map)
 import Data.Text (Text)
 import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, SessionRequest, TurnRequest)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.Cold (ColdStatus)
+import ColdProvider (ColdStatus)
 import Handlers.TokenAuth (SessionRedirect, TokenLoginForm, TokenSession)
 import ProjectTree (ProjectFields, TreeOp)
 import Handlers.Scratch (ScratchListing, ScratchRootResponse, ScratchWrapRequest)
@@ -21,6 +21,7 @@ import Handlers.StepInputs (ColdInputsView)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
 import Handlers.Store (DirEntry, FileChunk)
+import StorageBus (StorageView)
 import Servant
 import Servant.Multipart (MultipartData, MultipartForm, Tmp)
 import Servant.Types.SourceT (SourceT)
@@ -511,6 +512,19 @@ type StepSearchEndpoint =
 
 type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 
+type GetStorage =
+    "storage"
+        :> Description "Returns the storage center's view from the backend's cache: the bytes that step output revisions keep on this server, the bytes they have offloaded to cold storage, the disk space left beside them, and one row per step revision that is still in the store. Asks the backend to re-read the branch, store sizes and cold storage statuses; the refreshed view arrives as a storage event on /events."
+        :> Get '[JSON] StorageView
+
+type OffloadStorage =
+    "storage"
+        :> "offload"
+        :> Description "Starts moving every local file of a step revision's output to cold storage and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while a step that reads this output is running or queued."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> Post '[JSON] NoContent
+
 type ArtifactRdf =
     "rdf"
         :> "artifact"
@@ -611,3 +625,5 @@ type API =
         :<|> TokenLogout
         :<|> StepSearch
         :<|> ArtifactRdf
+        :<|> GetStorage
+        :<|> OffloadStorage

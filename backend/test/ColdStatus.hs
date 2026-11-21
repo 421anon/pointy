@@ -4,7 +4,7 @@ module Main (main) where
 
 import ColdRefusal (applyColdRefusals, clearColdRefusals, recordColdRefusal)
 import qualified Data.Map.Strict as Map
-import Handlers.Cold (ColdFile (..), ColdFileState (..), ColdStatus (..), parseColdStatus)
+import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), parseColdStatus)
 import Handlers.StepInputs (coldInputReaders)
 
 main :: IO ()
@@ -17,6 +17,10 @@ main = do
         )
     assertEqual "a status without a size is not a status" Nothing (parseColdStatus "{\"files\":[{\"path\":\"a.csv\",\"state\":\"offloaded\"}]}")
     assertEqual "a local or untracked output" (Just (ColdStatus [])) (parseColdStatus "{\"files\":[]}")
+    assertEqual
+        "an offloading file carries its progress"
+        (Just (ColdStatus [ColdFile "a.csv" 3 (Offloading 1 3)]))
+        (parseColdStatus "{\"files\":[{\"path\":\"a.csv\",\"size\":3,\"state\":\"offloading\",\"done\":1,\"total\":3}]}")
     assertEqual "onloading without progress is not a status" Nothing (parseColdStatus "{\"files\":[{\"path\":\"b.png\",\"state\":\"onloading\"}]}")
     assertEqual "a failure without its error is not a status" Nothing (parseColdStatus "{\"files\":[{\"path\":\"c.bam\",\"state\":\"failed\"}]}")
     assertEqual "an unknown state is not a status" Nothing (parseColdStatus "{\"files\":[{\"path\":\"a.csv\",\"state\":\"frozen\"}]}")

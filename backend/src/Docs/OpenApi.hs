@@ -26,13 +26,14 @@ import Handlers.Agent (ApplyRequest, AutoApplyRequest, RenameSessionRequest, Ses
 import Handlers.TokenAuth (TokenLoginForm, TokenSession)
 import ProjectTree (ChildRef, ProjectFields, TreeOp)
 import Handlers.Autocomplete (AutocompleteRequest)
-import Handlers.Cold (ColdStatus)
+import ColdProvider (ColdStatus)
 import Handlers.StepInputs (ColdInputsView)
 import Handlers.Scratch (ScratchEntry, ScratchListing, ScratchRootResponse, ScratchWrapRequest)
 import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
+import StorageBus (StorageRevision, StorageView)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
@@ -259,12 +260,12 @@ coldFileSchema =
                 .~ fromList
                     [ ("path", stringField)
                     , ("size", integerField)
-                    , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["offloaded", "onloading", "failed"]))
+                    , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["offloaded", "offloading", "onloading", "failed"]))
                     , ("done", integerField)
                     , ("total", integerField)
                     , ("error", stringField)
                     ]
-            & description ?~ "A file that is not local. `size` is the file's bytes; `done` and `total` are bytes, present while onloading; `error` is present when the last onload failed."
+            & description ?~ "A file that is not local. `size` is the file's bytes; `done` and `total` are bytes, present while offloading or onloading; `error` is present when the last onload failed."
 
 instance ToSchema ColdStatus where
     declareNamedSchema _ = pure $ objectSchema "ColdStatus" [("files", arrayOf coldFileSchema)]
@@ -296,6 +297,45 @@ instance ToSchema ColdInputsView where
                     & type_ ?~ OpenApiObject
                     & required .~ ["path", "size"]
                     & properties .~ fromList [("path", stringField), ("size", integerField)]
+
+instance ToSchema StorageRevision where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "StorageRevision"
+                [ ("step", integerField)
+                , ("name", stringField)
+                , ("revision", stringField)
+                , ("committedAt", stringField)
+                , ("local", integerField)
+                , ("cold", integerField)
+                , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["local", "offloading", "onloading", "failed", "cold", "unknown"]))
+                , ("done", integerField)
+                , ("total", integerField)
+                , ("error", nullableField OpenApiString)
+                , ("blocked", nullableField OpenApiString)
+                ]
+
+instance ToSchema StorageView where
+    declareNamedSchema _ = do
+        revisionSchema <- declareSchemaRef (Proxy :: Proxy StorageRevision)
+        pure $
+            objectSchema
+                "StorageView"
+                [ ("coldConfigured", boolField)
+                , ("local", integerField)
+                , ("cold", integerField)
+                , ("free", integerField)
+                , ("diskTotal", integerField)
+                , ("scanning", boolField)
+                , ("scanned", integerField)
+                , ("history", integerField)
+                , ("truncated", boolField)
+                , ("revisionCount", integerField)
+                , ("revisions", arrayOf revisionSchema)
+                , ("error", nullableField OpenApiString)
+                , ("updatedAt", stringField)
+                ]
 
 instance ToSchema StepLogView where
     declareNamedSchema _ =

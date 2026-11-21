@@ -6,7 +6,7 @@ description: "Follow step statuses, cluster activity, and ingest jobs as they ch
 
 ## Live event stream
 
-Open **one** `GET /events` connection for the application. It has no parameters and carries three named SSE events: `step-status`, `cluster-status`, and `ingest-jobs`. On connect it sends the current `cluster-status` and `ingest-jobs`, then replays recent `step-status` snapshots, then sends each event as its state changes.
+Open **one** `GET /events` connection for the application. It has no parameters and carries four named SSE events: `step-status`, `cluster-status`, `ingest-jobs`, and `storage`. On connect it sends the current `cluster-status`, `ingest-jobs`, and `storage` (once the backend has built its first storage view), then replays recent `step-status` snapshots, then sends each event as its state changes.
 
 `step-status` events carry partial folder snapshots:
 
@@ -56,4 +56,6 @@ events.addEventListener("step-status", event => {
 
 `ingest-jobs` events carry every ingest job the backend tracks; [Ingest progress](files.md#ingest-progress) describes them.
 
-The stream sends a `heartbeat` event with `{}` after about 30 idle seconds. A client that hears nothing for longer than that has lost the connection even if the browser has not noticed, and should reconnect. Ignore SSE comments, including connection padding. Responses use `Cache-Control: no-transform` and `X-Accel-Buffering: no`; preserve unbuffered, long-lived connections through your proxy. There are no SSE `id:` or `retry:` fields, and `Last-Event-ID` is not a resume cursor: a reconnect receives the current cluster status and ingest jobs and the replayed step statuses. Request fresh folder status after reconnecting when you need to establish current state beyond that replay.
+`storage` events carry the Storage center's whole view, the same object `GET /storage` returns; [Cold storage](storage.md#cold-storage) says when it changes.
+
+The stream sends a `heartbeat` event with `{}` after about 30 idle seconds. A client that hears nothing for longer than that has lost the connection even if the browser has not noticed, and should reconnect. Ignore SSE comments, including connection padding. Responses use `Cache-Control: no-transform` and `X-Accel-Buffering: no`; preserve unbuffered, long-lived connections through your proxy. There are no SSE `id:` or `retry:` fields, and `Last-Event-ID` is not a resume cursor: a reconnect receives the current cluster status, ingest jobs, and storage view, and the replayed step statuses. Request fresh folder status after reconnecting when you need to establish current state beyond that replay.

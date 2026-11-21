@@ -1216,6 +1216,21 @@ statusBarOpen =
     lens ".statusBarOpen" Model.getStatusBarOpen (\(Model m) open -> Model { m | statusBarOpen = open })
 
 
+storageOpen : Lens ls Model Bool x y
+storageOpen =
+    lens ".storageOpen" Model.getStorageOpen (\(Model m) open -> Model { m | storageOpen = open })
+
+
+storageView : Lens ls Model (ApiData Model.StorageView) x y
+storageView =
+    lens ".storageView" Model.getStorageView (\(Model m) view -> Model { m | storageView = view })
+
+
+storageMoving : Lens ls Model (Set String) x y
+storageMoving =
+    lens ".storageMoving" Model.getStorageMoving (\(Model m) moving -> Model { m | storageMoving = moving })
+
+
 backendConnection : Lens ls Model Model.BackendConnection x y
 backendConnection =
     lens ".backendConnection" Model.getBackendConnection (\(Model m) connection -> Model { m | backendConnection = connection })

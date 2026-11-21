@@ -20,11 +20,11 @@ Ingested store paths get no GC root of their own; only a later successful run of
 
 ## Cold storage
 
-A deployment can keep large step outputs outside the backend's local Nix store with a cold storage provider: any program that implements the interface below. Set `services.pointy-backend.coldStorage.command` to its executable, which the backend sees as `POINTY_COLD_STORAGE_COMMAND`. Unset, the feature is off. Pointy never moves cold bytes itself; it asks the provider for status and for onloads.
+A deployment can keep large step outputs outside the backend's local Nix store with a cold storage provider: any program that implements the interface below. Set `services.pointy-backend.coldStorage.command` to its executable, which the backend sees as `POINTY_COLD_STORAGE_COMMAND`. Unset, the feature is off. Pointy never moves cold bytes itself; it asks the provider for status, for offloads, and for onloads.
 
 ### Provider interface
 
-The backend runs the command as its own user with one of two subcommands. `<output-path>` is a step output's store path; the provider resolves it to whatever it keeps, and reports paths relative to it with `/` separators.
+The backend runs the command as its own user with one of three subcommands. `<output-path>` is a step output's store path; the provider resolves it to whatever it keeps, and reports paths relative to it with `/` separators.
 
 `<command> status <output-path>` prints one JSON object and exits 0:
 
@@ -32,13 +32,16 @@ The backend runs the command as its own user with one of two subcommands. `<outp
 {
   "files": [
     { "path": "reads_R1.fastq.gz", "size": 52428800, "state": "offloaded" },
-    { "path": "reads_R2.fastq.gz", "size": 52428800, "state": "onloading", "done": 1048576, "total": 52428800 },
-    { "path": "notes.txt", "size": 4096, "state": "failed", "error": "storage box unreachable" }
+    { "path": "reads_R2.fastq.gz", "size": 52428800, "state": "offloading", "done": 10485760, "total": 52428800 },
+    { "path": "notes.txt", "size": 4096, "state": "onloading", "done": 1024, "total": 4096 },
+    { "path": "aligned.bam", "size": 2097152, "state": "failed", "error": "storage box unreachable" }
   ]
 }
 ```
 
-`files` lists only the files that are not local: `offloaded`, `onloading` with `done` and `total` bytes, or `failed` with the error of the last onload. Every entry carries `size`, the file's bytes; Pointy sums it for the copy-back totals. An output the provider does not track, or one that is entirely local, gives `{"files": []}`. A non-zero exit, output that does not parse, or no answer within two seconds means the status is unknown.
+`files` lists only the files that are not local: `offloaded`, `offloading` or `onloading` with `done` and `total` bytes, or `failed` with the error of the last onload. Every entry carries `size`, the file's bytes; Pointy sums it for the copy-back and cold-storage totals. An output the provider does not track, or one that is entirely local, gives `{"files": []}`. A non-zero exit, output that does not parse, or no answer within two seconds means the status is unknown.
+
+`<command> offload <output-path>` moves every local file of the output to cold storage and stays attached until it is done. While it moves files it writes one JSON object per line to stdout, `{"done": 10485760, "total": 52428800}`, counting bytes; `total` is what this run moves and stays fixed, and a run with nothing left to move may write no lines. It exits 0 once every file of the output is offloaded, including when it already was, so repeating it is safe; on failure it exits non-zero and the first line of stderr is shown to the user. If Pointy stops waiting, for example because the backend restarts, the offload continues in the provider, and later `status` calls report each file as `offloading` with its progress while it moves and then as `offloaded`. An `offloading` file is still local. A provider must keep an offloaded file's bytes out of the backend's local store, so `status` returning `offloaded` means the bytes are really gone.
 
 `<command> onload <output-path> <relative-path>` starts onloading one file and exits without waiting for it; exit 0 means the onload started, is already running, or the file is already local. Pointy does not deduplicate concurrent requests for the same file, so a second `onload` while one runs must also exit 0 and must not copy the file twice. On a non-zero exit, the first line of stderr is shown to the user. The onload continues without Pointy, and later `status` calls report its progress, its failure, or the file's absence once it is local.
 
@@ -47,6 +50,12 @@ The interface says nothing about what reading an offloaded file through the stor
 ### What Pointy does with it
 
 Listings mark files that are not local and do not read them; when the status is unknown, a listing reads no file of that output. A download, seek, raw, or bundle request for such a file returns 409 with `This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again.`, and 503 when the status is unknown. Pointy asks for an onload only when someone requests one, through the UI's snowflake (**Copy back to this server**), `POST /step-files/onload`, or `POST /step-inputs/onload`; the file browser polls that file's status until it is local and then shows its usual actions, or shows the provider's error.
+
+The **Storage center** in the status bar (its drive icon) shows the bytes that step outputs keep on this server, the space left on the store's filesystem, and the bytes that are in cold storage. It lists one row per step revision still present in the store: the step's name at that revision, its short Git hash, how long ago it was committed, and its local bytes. The largest local revisions come first. With a cold storage provider configured, each row also has **Move to cold storage**, which asks the provider to offload that revision's output (`POST /storage/offload?id=<id>&commit=<hash>`); without one, the panel shows no cold storage column or buttons. The button is disabled while the step, or a step that reads its output, is running or queued, with the reason in the tooltip; the backend checks again when the request arrives and answers 409. Rows being moved or copied back show progress, a fully offloaded row shows **In cold storage** instead of the button, and a move that failed shows the provider's reason on its row.
+
+The panel never polls. The backend keeps the view in memory and pushes it as a `storage` event on the [live event stream](streams.md#live-event-stream) whenever it changes: when the branch moves, when a build finishes, when the Slurm watcher reports a step starting or stopping, on every progress line of an offload Pointy started, and whenever another part of Pointy reads a provider status, such as a file browser following a copy-back. Opening the panel asks the provider once more for the status of every listed output, which picks up offloads and copy-backs started outside Pointy; a move started elsewhere does not update the open panel until it is reopened.
+
+The backend builds this view from its Git history. It scans the commits that change step definitions, source files, templates, packages, or the flake, evaluates each step's output path at those commits, and caches the results under `~/.local/state/pointy/storage/evaluations.json`, so later views are cheap. The first view of a large repository can take a while: it scans at most 5000 changes, newest first, pushes its progress to the panel, and the scan continues in the background. Sizes are the NAR sizes Nix records for the output paths, not the sum of what the files would weigh after unpacking. The backend reads a path's size once and again only after a build finishes or the panel is opened.
 
 Before submitting a step's build, Pointy asks for the status of each input step that is already built: the steps its parameters name, not the steps further upstream, whose files the build never reads. If any of them has files that are not local, the step is not submitted: its status is `inputs-cold` and names the files and the steps holding them. A step that depends on a refused step gets that status too, naming the steps that read the files, itself included when it also reads offloaded files directly. If a status is unknown, the step is not submitted and its status says so. Comparing with a reviewed output fails with a message naming its files that are not local, unless the comparison is already cached.
 

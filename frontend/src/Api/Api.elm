@@ -28,8 +28,10 @@ module Api.Api exposing
     , fetchStepConfig
     , fetchStepInputsCold
     , fetchStepLog
+    , fetchStorage
     , fetchTokenSession
     , fetchUserRepoInfo
+    , offloadStorage
     , onloadColdFile
     , onloadStepInputs
     , postTreeOps
@@ -59,7 +61,7 @@ import Http
 import Json.Decode
 import Json.Encode
 import Maybe.Extra as Maybe
-import Model.Core exposing (BaseRecord, ColdInputs, ColdStatus, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepLog, StepRecord, TreeOp)
+import Model.Core exposing (BaseRecord, ColdInputs, ColdStatus, DirectoryItem, FileChunk, Notice, ProjectRecord, ProjectRollup, ReviewComparison, ReviewDraft, ReviewReport, ScratchListing, StepLog, StepRecord, StorageView, TreeOp)
 import Model.Shadow exposing (Presets, StepConfig, StepType)
 import Model.TableSpec as TableSpec exposing (TableSpec)
 import Url.Builder as UrlBuilder
@@ -632,3 +634,19 @@ createSrcFile id filePath content =
 deleteSrcFile : Int -> List String -> Flow s (Result Http.Error ())
 deleteSrcFile id filePath =
     srcFileRequest "DELETE" id filePath Http.emptyBody
+
+
+fetchStorage : Flow s (Result Http.Error StorageView)
+fetchStorage =
+    Flow.lift <|
+        Http.get
+            { url = "/backend/storage"
+            , expect = Http.expectJson identity Decode.storageView
+            }
+
+
+offloadStorage : Int -> String -> Flow s (Result Http.Error ())
+offloadStorage stepId revision =
+    request "POST"
+        ("/backend/storage/offload?id=" ++ String.fromInt stepId ++ "&commit=" ++ revision)
+        Http.emptyBody

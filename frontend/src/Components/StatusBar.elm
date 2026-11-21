@@ -3,6 +3,7 @@ module Components.StatusBar exposing (view)
 import Accessors exposing (get, try)
 import Actions
 import Api.ApiData as ApiData exposing (ApiData)
+import Filesize
 import Flow exposing (Flow)
 import Html exposing (Html)
 import Html.Attributes exposing (action, attribute, class, classList, disabled, href, id, method, rel, style, target, title, type_)
@@ -10,14 +11,16 @@ import Html.Events as Events
 import Html.Extra as Html
 import Html.Keyed
 import Html.Lazy
+import Iso8601
 import Json.Decode as Decode
 import List.Extra as List
-import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, TrayState(..), TrayStep)
+import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, StorageRevision, StorageState(..), StorageView, TrayState(..), TrayStep)
 import Model.Lenses exposing (loadedProjects, route, toastHistory)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
 import Set exposing (Set)
 import Time
+import Time.Distance
 import Toast
 import View.Icons exposing (iconCustom)
 import View.Lib exposing (boolText)
@@ -68,15 +71,21 @@ view model =
 
         isOpen =
             Model.getStatusBarOpen model && expandable
+
+        isStorageOpen =
+            Model.getStorageOpen model
     in
     Html.div [ class "status-bar-dock" ]
         [ Html.div
             [ classList
                 [ ( "status-bar", True )
-                , ( "status-bar--open", isOpen )
+                , ( "status-bar--open", isOpen || isStorageOpen )
                 ]
             ]
-            ((if isOpen then
+            ((if isStorageOpen then
+                [ viewStoragePanel model ]
+
+              else if isOpen then
                 [ viewPanel model groups ]
 
               else
@@ -414,7 +423,8 @@ viewIndependentControls model =
             Model.getAgent model
     in
     Html.div [ class "status-bar__actions" ]
-        [ viewToastHistory model
+        [ viewStorageControl model
+        , viewToastHistory model
         , Html.button
             [ classList
                 [ ( "status-bar__control", True )
@@ -1045,3 +1055,318 @@ nonEmptyDetail detail =
 
     else
         Just detail
+
+
+viewStorageControl : Model -> Html (Flow Model ())
+viewStorageControl model =
+    let
+        current =
+            ApiData.toMaybe (Model.getStorageView model)
+
+        used =
+            Maybe.map .local current
+
+        meterPercent =
+            Maybe.map2
+                (\used_ free_ -> ratioPercent used_ (used_ + free_))
+                used
+                (Maybe.map .free current)
+    in
+    Html.button
+        [ class "status-bar__control status-bar__storage-control"
+        , classList [ ( "status-bar__control--active", Model.getStorageOpen model ) ]
+        , type_ "button"
+        , Events.onClick Actions.toggleStoragePanel
+        , title "Storage center"
+        , attribute "aria-label" "Storage center"
+        , attribute "aria-controls" "storage-panel"
+        , attribute "aria-expanded" (boolText (Model.getStorageOpen model))
+        ]
+        [ iconCustom False "hard_drive" [ attribute "aria-hidden" "true" ]
+        , Html.viewMaybe
+            (\size -> Html.span [ class "status-bar__storage-size" ] [ Html.text size ])
+            (Maybe.map Filesize.formatBase2 used)
+        , Html.viewMaybe
+            (\percent ->
+                Html.span [ class "status-bar__storage-meter", attribute "aria-hidden" "true" ]
+                    [ Html.span [ style "width" (String.fromInt percent ++ "%") ] [] ]
+            )
+            meterPercent
+        ]
+
+
+viewStoragePanel : Model -> Html (Flow Model ())
+viewStoragePanel model =
+    Html.section
+        [ class "status-bar__panel storage-panel"
+        , id "storage-panel"
+        ]
+        [ Html.div [ class "storage-panel__header" ]
+            [ iconCustom False "hard_drive" [ attribute "aria-hidden" "true" ]
+            , Html.strong [] [ Html.text "Storage center" ]
+            , Html.span [ class "storage-panel__updated" ]
+                [ Html.viewMaybe
+                    (\snapshot ->
+                        Html.node "time"
+                            [ attribute "datetime" (Iso8601.fromTime snapshot.updatedAt)
+                            , title ("Updated " ++ Iso8601.fromTime snapshot.updatedAt)
+                            ]
+                            [ Html.text ("Updated " ++ Time.Distance.inWords snapshot.updatedAt (Model.getNow model)) ]
+                    )
+                    (ApiData.toMaybe (Model.getStorageView model))
+                ]
+            , Html.button
+                [ class "icon-btn"
+                , type_ "button"
+                , Events.onClick Actions.toggleStoragePanel
+                , title "Close storage center"
+                , attribute "aria-label" "Close storage center"
+                ]
+                [ iconCustom False "close" [ attribute "aria-hidden" "true" ] ]
+            ]
+        , case Model.getStorageView model of
+            ApiData.Success snapshot ->
+                viewStorageContent model snapshot
+
+            ApiData.Loading (Just snapshot) ->
+                viewStorageContent model snapshot
+
+            ApiData.Loading Nothing ->
+                Html.div [ class "storage-panel__empty" ] [ Html.text "Reading storage usage…" ]
+
+            ApiData.NotAsked ->
+                Html.div [ class "storage-panel__empty" ] [ Html.text "Reading storage usage…" ]
+
+            ApiData.Error _ ->
+                Html.div [ class "storage-panel__empty storage-panel__empty--error" ] [ Html.text "Storage usage is unavailable. Try again in a moment." ]
+        ]
+
+
+viewStorageContent : Model -> StorageView -> Html (Flow Model ())
+viewStorageContent model snapshot =
+    Html.div [ class "storage-panel__content" ]
+        [ Html.div [ class "storage-panel__usage" ]
+            [ Html.div [ class "storage-panel__totals" ]
+                [ Html.span []
+                    [ Html.strong [] [ Html.text (Filesize.formatBase2 snapshot.local) ], Html.text " in step outputs" ]
+                , Html.viewIf (snapshot.free > 0) <|
+                    Html.span []
+                        [ Html.strong [] [ Html.text (Filesize.formatBase2 snapshot.free) ], Html.text " free" ]
+                , Html.viewIf (snapshot.coldConfigured && snapshot.cold > 0) <|
+                    Html.span [ class "storage-panel__cold-total" ]
+                        [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
+                        , Html.strong [] [ Html.text (Filesize.formatBase2 snapshot.cold) ]
+                        , Html.text " in cold storage"
+                        ]
+                ]
+            , Html.viewIf (snapshot.free > 0) <|
+                Html.div
+                    [ class "storage-panel__bar"
+                    , attribute "role" "img"
+                    , attribute "aria-label"
+                        (Filesize.formatBase2 snapshot.local ++ " of step outputs and " ++ Filesize.formatBase2 snapshot.free ++ " free")
+                    ]
+                    [ Html.span
+                        [ class "storage-panel__bar-used"
+                        , style "width" (String.fromInt (ratioPercent snapshot.local (snapshot.local + snapshot.free)) ++ "%")
+                        ]
+                        []
+                    ]
+            ]
+        , Html.viewIf snapshot.scanning <|
+            Html.div [ class "storage-panel__notice" ]
+                [ Html.text
+                    ("Scanning the repository history… "
+                        ++ String.fromInt snapshot.scanned
+                        ++ " of "
+                        ++ String.fromInt snapshot.history
+                        ++ " changes"
+                    )
+                ]
+        , Html.viewIf snapshot.truncated <|
+            Html.div [ class "storage-panel__notice" ]
+                [ Html.text "Older history is not scanned; the scan stops after 5000 changes." ]
+        , Html.viewMaybe
+            (\message -> Html.div [ class "storage-panel__notice storage-panel__notice--error" ] [ Html.text message ])
+            snapshot.error
+        , if List.isEmpty snapshot.revisions then
+            Html.div [ class "storage-panel__empty" ]
+                [ Html.text
+                    (if snapshot.scanning then
+                        "Looking for step outputs…"
+
+                     else
+                        "No step outputs are on this server."
+                    )
+                ]
+
+          else
+            Html.div
+                [ classList
+                    [ ( "storage-panel__list", True )
+                    , ( "storage-panel__list--cold", snapshot.coldConfigured )
+                    ]
+                ]
+                [ Html.div [ class "storage-panel__columns" ]
+                    [ Html.span [] [ Html.text "Revision" ]
+                    , Html.span [ class "storage-panel__size" ] [ Html.text "On this server" ]
+                    , Html.viewIf snapshot.coldConfigured (Html.span [] [])
+                    ]
+                , Html.div [ class "storage-panel__rows", attribute "role" "list" ]
+                    (List.map (viewStorageRow model snapshot.coldConfigured) snapshot.revisions)
+                ]
+        , Html.div [ class "storage-panel__foot" ]
+            [ Html.text
+                (String.fromInt (List.length snapshot.revisions)
+                    ++ " of "
+                    ++ String.fromInt snapshot.revisionCount
+                    ++ " revisions · sizes are store-path bytes on this server"
+                )
+            ]
+        ]
+
+
+viewStorageRow : Model -> Bool -> StorageRevision -> Html (Flow Model ())
+viewStorageRow model coldConfigured revision =
+    Html.div
+        [ classList
+            [ ( "storage-panel__row", True )
+            , ( "storage-panel__row--cold", revisionIsCold revision )
+            ]
+        , attribute "role" "listitem"
+        ]
+        [ Html.div [ class "storage-panel__step" ]
+            [ Html.div [ class "storage-panel__name-row" ]
+                [ Html.span [ class "storage-panel__name", title revision.name ] [ Html.text revision.name ]
+                , Html.span
+                    [ class "step-review-revision storage-panel__revision"
+                    , title ("Revision " ++ revision.revision ++ ", committed " ++ Iso8601.fromTime revision.committedAt)
+                    ]
+                    [ Html.span [ class "step-review-revision-hash" ] [ Html.text (String.left 7 revision.revision) ] ]
+                ]
+            , Html.div [ class "storage-panel__meta" ]
+                [ Html.text
+                    ("Step "
+                        ++ String.fromInt revision.step
+                        ++ " · "
+                        ++ Time.Distance.inWords revision.committedAt (Model.getNow model)
+                    )
+                ]
+            , Html.viewMaybe
+                (\message -> Html.div [ class "storage-panel__error", title message ] [ Html.text message ])
+                revision.error
+            ]
+        , Html.span [ class "storage-panel__size" ]
+            [ Html.text
+                (if revisionIsCold revision then
+                    Filesize.formatBase2 revision.cold
+
+                 else
+                    Filesize.formatBase2 revision.local
+                )
+            ]
+        , Html.viewIf coldConfigured <|
+            Html.div [ class "storage-panel__action" ] [ viewStorageAction model revision ]
+        ]
+
+
+viewStorageAction : Model -> StorageRevision -> Html (Flow Model ())
+viewStorageAction model revision =
+    let
+        starting =
+            Set.member (Model.storageRevisionKey revision) (Model.getStorageMoving model)
+    in
+    case revision.state of
+        StorageCold ->
+            Html.span [ class "storage-panel__badge" ]
+                [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
+                , Html.text "In cold storage"
+                ]
+
+        StorageOffloading ->
+            storageProgress "Moving" revision.done revision.total
+
+        StorageOnloading ->
+            storageProgress "Copying back" revision.done revision.total
+
+        StorageUnknown ->
+            Html.span [ class "storage-panel__unavailable" ] [ Html.text "Status unavailable" ]
+
+        StorageFailed ->
+            storageMoveButton starting revision
+
+        StorageLocal ->
+            storageMoveButton starting revision
+
+
+storageMoveButton : Bool -> StorageRevision -> Html (Flow Model ())
+storageMoveButton starting revision =
+    Html.span
+        [ class "storage-panel__move-wrap"
+        , title
+            (Maybe.withDefault
+                (if starting then
+                    "Starting the move…"
+
+                 else
+                    "Move this revision's files off this server"
+                )
+                revision.blocked
+            )
+        ]
+        [ Html.button
+            [ class "btn storage-panel__move"
+            , type_ "button"
+            , disabled (starting || revision.blocked /= Nothing)
+            , Events.onClick (Actions.confirmOffload revision)
+            ]
+            [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
+            , Html.text
+                (if starting then
+                    "Starting…"
+
+                 else
+                    "Move to cold storage"
+                )
+            ]
+        ]
+
+
+storageProgress : String -> Int -> Int -> Html msg
+storageProgress label done total =
+    let
+        percent =
+            ratioPercent done total
+    in
+    Html.span [ class "storage-panel__progress" ]
+        [ Html.span [ class "storage-panel__progress-label" ]
+            [ Html.text
+                (if total <= 0 then
+                    label ++ "…"
+
+                 else
+                    label ++ " " ++ String.fromInt percent ++ "%"
+                )
+            ]
+        , Html.span [ class "storage-panel__progress-bar", attribute "aria-hidden" "true" ]
+            [ Html.span [ style "width" (String.fromInt percent ++ "%") ] [] ]
+        ]
+
+
+revisionIsCold : StorageRevision -> Bool
+revisionIsCold revision =
+    case revision.state of
+        StorageCold ->
+            True
+
+        _ ->
+            False
+
+
+ratioPercent : Int -> Int -> Int
+ratioPercent part total =
+    if total <= 0 then
+        0
+
+    else
+        clamp 0 100 (round (100 * toFloat part / toFloat total))

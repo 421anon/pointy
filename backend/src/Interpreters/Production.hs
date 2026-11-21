@@ -10,7 +10,9 @@
 module Interpreters.Production (runProduction, submitArgs) where
 
 import BuildRunner (shellCommand)
+import ColdProvider (OffloadProgress, parseOffloadProgress)
 import Config (Config (..), EmbeddingConfig (..), JudgeConfig (..), ProviderConfig (..), SearchConfig (..), loadConfig, resolveConfigPath)
+import Control.Concurrent.Async (async, wait)
 import Control.Exception (IOException, displayException, try)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
@@ -34,7 +36,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Files (createSymbolicLink)
-import System.Process (readProcessWithExitCode)
+import System.Process (CreateProcess (..), StdStream (..), proc, readProcessWithExitCode, waitForProcess, withCreateProcess)
 import System.Timeout (timeout)
 
 
@@ -224,6 +226,11 @@ runColdStorageProduction = interpret $ \_ -> \case
         case command of
             Nothing -> pure (Left "cold storage is not configured")
             Just program -> fmap (const ()) <$> runColdStorage program ["onload", T.unpack outPath, rel]
+    ColdStorageOffload outPath report -> liftIO $ do
+        command <- coldStorageCommand
+        case command of
+            Nothing -> pure (Left "cold storage is not configured")
+            Just program -> runColdOffload program outPath report
 
 coldStorageCommand :: IO (Maybe FilePath)
 coldStorageCommand = do
@@ -243,7 +250,30 @@ runColdStorage program args = do
     pure $ case result of
         Left err -> Left (T.pack (show err))
         Right (ExitSuccess, out, _) -> Right (TE.encodeUtf8 (T.pack out))
-        Right (ExitFailure code, _, err) ->
-            case filter (not . T.null) (map T.strip (T.lines (T.pack err))) of
-                firstLine : _ -> Left firstLine
-                [] -> Left ("cold storage command exited with code " <> T.pack (show code))
+        Right (ExitFailure code, _, err) -> Left (coldStorageFailure code (T.pack err))
+
+runColdOffload :: FilePath -> Text -> (OffloadProgress -> IO ()) -> IO (Either Text ())
+runColdOffload program outPath report = do
+    result <- try $ withCreateProcess (proc program ["offload", T.unpack outPath]){std_in = NoStream, std_out = CreatePipe, std_err = CreatePipe} $ \_ mOut mErr process ->
+        case (mOut, mErr) of
+            (Just out, Just err) -> do
+                errors <- async (BS.hGetContents err)
+                reportLines out
+                code <- waitForProcess process
+                stderrText <- TE.decodeUtf8Lenient <$> wait errors
+                pure $ case code of
+                    ExitSuccess -> Right ()
+                    ExitFailure failure -> Left (coldStorageFailure failure stderrText)
+            _ -> Left "cold storage offload command has no output pipes" <$ waitForProcess process
+    pure (either (\(err :: IOException) -> Left (T.pack (show err))) id result)
+  where
+    reportLines handle = do
+        line <- try (BC.hGetLine handle)
+        case line of
+            Left (_ :: IOException) -> pure ()
+            Right bytes -> mapM_ report (parseOffloadProgress bytes) >> reportLines handle
+
+coldStorageFailure :: Int -> Text -> Text
+coldStorageFailure code err = case filter (not . T.null) (map T.strip (T.lines err)) of
+    firstLine : _ -> firstLine
+    [] -> "cold storage command exited with code " <> T.pack (show code)

@@ -49,6 +49,7 @@ import Servant (NoContent (..), err404, err500, errBody)
 import StepLog (StepBuild, StepLogView, stepLogView, stepLogWithoutLog)
 import System.Exit (ExitCode (..))
 import UserRepo (ReadRepoContext (..), ensureRepoCommit, runNixEvalJsonApplyInRepo, runNixEvalJsonInRepo, runNixEvalRawInRepo, withReadRepoTransaction)
+import StorageBus (outputsBuilt)
 
 runStepHandler :: Int -> Maybe T.Text -> AppM NoContent
 runStepHandler eid commit = do
@@ -345,6 +346,7 @@ finishStep :: App es => ReadRepoContext -> (Int, SubmitOutcome) -> Eff es ()
 finishStep ctx (sid, outcome) = case outcome of
     AlreadyCertified certificate -> do
         rootStorePath certificate
+        liftIO outputsBuilt
         broadcastSingleStepForProjects sid targetCommitText certificate
         buildExtras ctx sid
     Enqueued certificate buildKey jobIds root -> do
@@ -358,6 +360,7 @@ finishStep ctx (sid, outcome) = case outcome of
         if certified
             then do
                 registerCertificationRoots ctx sid certificate
+                liftIO outputsBuilt
                 broadcastSingleStepForProjects sid targetCommitText certificate
             else broadcastFailedStepForProjects sid targetCommitText
         broadcastStepCertificateAtMovedHead sid targetCommitText

@@ -25,8 +25,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import Effects (AppM, coldStorageConfigured, coldStorageOnload)
-import Handlers.Cold (ColdFile (..), ColdStatus (..), coldStatusFor, mapColdProvider, onloadable)
+import ColdProvider (ColdFile (..), ColdStatus (..))
+import Effects (AppM, coldStorageConfigured)
+import Handlers.Cold (coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.RunStep (StepTarget (..), getInputGraph, resolveStepTargets)
 import Handlers.StepReview (stepOutPaths)
 import Servant (ServerError (..), err500, err502, err503)
@@ -102,7 +103,7 @@ coldInputsOnloadHandler eid commit = do
             ]
         requests = [(step, outPath, coldFilePath file) | (step, outPath, file) <- cold, onloadable file]
     liftIO $ recordCopyBackRequests [(outPath, file) | (_, outPath, file) <- cold]
-    outcomes <- lift $ mapColdProvider (\(_, outPath, rel) -> coldStorageOnload outPath (T.unpack rel)) requests
+    outcomes <- lift $ mapColdProvider (\(_, outPath, rel) -> startOnload outPath (T.unpack rel)) requests
     let failures =
             [ "step " <> T.pack (show step) <> ": " <> rel <> ": " <> message
             | ((step, _, rel), Left message) <- zip requests outcomes

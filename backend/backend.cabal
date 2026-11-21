@@ -32,6 +32,7 @@ library
     ClusterBus
     ClusterStatusReport
     ColdRefusal
+    ColdProvider
     Config
     DependencyRefs
     Docs.OpenApi
@@ -62,6 +63,7 @@ library
     Handlers.StepReview
     Handlers.StepSearch
     Handlers.Steps
+    Handlers.Storage
     Handlers.Store
     Handlers.Upload
     Handlers.Zip
@@ -90,6 +92,8 @@ library
     Sse
     StepLog
     Storage
+    StorageBus
+    StorageHistory
     UserRepo
 
   other-modules:
@@ -547,6 +551,20 @@ test-suite artifact-rdf
     , backend
     , base
     , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite storage-center
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          StorageCenter.hs
+  build-depends:
+    , backend
+    , base
+    , containers
+    , text
+    , time
 
   hs-source-dirs:   test
   default-language: Haskell2010

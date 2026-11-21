@@ -46,10 +46,12 @@ module Effects (
     coldStorageConfigured,
     coldStorageStatus,
     coldStorageOnload,
+    coldStorageOffload,
     embedTexts,
     judgeCandidates,
 ) where
 
+import ColdProvider (OffloadProgress)
 import Control.Exception (IOException, displayException, try)
 import Control.Monad.Except (ExceptT, mapExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -116,6 +118,7 @@ data ColdStorage :: Effect where
     ColdStorageConfigured :: ColdStorage m Bool
     ColdStorageStatus :: Text -> ColdStorage m (Either Text ByteString)
     ColdStorageOnload :: Text -> FilePath -> ColdStorage m (Either Text ())
+    ColdStorageOffload :: Text -> (OffloadProgress -> IO ()) -> ColdStorage m (Either Text ())
 
 type instance DispatchOf ColdStorage = Dynamic
 
@@ -259,6 +262,9 @@ coldStorageStatus = send . ColdStorageStatus
 
 coldStorageOnload :: (ColdStorage :> es) => Text -> FilePath -> Eff es (Either Text ())
 coldStorageOnload outPath = send . ColdStorageOnload outPath
+
+coldStorageOffload :: (ColdStorage :> es) => Text -> (OffloadProgress -> IO ()) -> Eff es (Either Text ())
+coldStorageOffload outPath = send . ColdStorageOffload outPath
 
 embedTexts :: (Inference :> es) => [Text] -> Eff es (Either String [VU.Vector Float])
 embedTexts = send . Embed
