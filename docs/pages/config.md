@@ -146,6 +146,7 @@ The `[agent]` section configures the embedded agent runner. When this section is
 | `POINTY_SCRATCH_DIR` | `services.pointy-backend.scratchDirectory` | Enables `/scratch*` and gives the agent tool sandbox a read-only bind. |
 | `POINTY_UPLOAD_DIR` | `services.pointy-backend.uploadDirectory` | Roots upload staging; when unset, the canonical system temporary directory. |
 | `POINTY_COLD_STORAGE_COMMAND` | `services.pointy-backend.coldStorage.command` | Cold storage provider executable; see [Storage](storage.md#provider-interface). |
+| `POINTY_STORAGE_DISK_PATH` | `services.pointy-backend.storageDiskPath` | Path whose filesystem the Storage center reports as free and total disk space; when unset, the store directory. |
 | `POINTY_AGENT_MEMORY_MAX` | `services.pointy-backend.agentMemoryMax` | Memory limit shared by the agent sandboxes; default `24G`. |
 | `POINTY_TOKEN_AUDIENCE` | `services.pointy-host.tokenAuth.audience` | Required `aud` claim of session tokens. |
 | `POINTY_TOKEN_PUBLIC_KEY` | `services.pointy-host.tokenAuth.publicKeyFile` | Ed25519 public key used to verify session tokens. |

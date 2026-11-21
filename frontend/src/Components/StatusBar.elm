@@ -1252,26 +1252,11 @@ viewStorageContent model snapshot =
 viewStorageUsage : StorageView -> Html msg
 viewStorageUsage snapshot =
     let
-        reportedDiskTotal =
-            max 0 snapshot.diskTotal
-
         diskTotal =
-            storageDiskTotal snapshot
+            max 0 snapshot.diskTotal
 
         free =
             clamp 0 diskTotal snapshot.free
-
-        used =
-            max 0 (diskTotal - free)
-
-        stepBytes =
-            max 0 snapshot.local
-
-        otherBytes =
-            max 0 (used - stepBytes)
-
-        barOutputs =
-            clamp 0 used stepBytes
 
         low =
             diskTotal > 0 && free * 10 < diskTotal
@@ -1281,10 +1266,10 @@ viewStorageUsage snapshot =
                 Html.span [ class "storage-panel__partial" ] [ Html.text "so far" ]
 
         ofDisk =
-            Html.viewIf (reportedDiskTotal > 0) <|
+            Html.viewIf (diskTotal > 0) <|
                 Html.span [ class "storage-panel__of" ]
                     [ Html.text "of "
-                    , Html.strong [] [ Html.text (Model.formatStorageSize reportedDiskTotal) ]
+                    , Html.strong [] [ Html.text (Model.formatStorageSize diskTotal) ]
                     , Html.text " disk"
                     ]
     in
@@ -1294,8 +1279,7 @@ viewStorageUsage snapshot =
             , partial
             ]
         , Html.div [ class "storage-panel__totals" ]
-            [ storageTotal stepBytes "step outputs"
-            , storageTotal otherBytes "other data"
+            [ storageTotal (max 0 snapshot.local) "step outputs"
             , storageTotal free "free"
             , ofDisk
             ]
@@ -1305,24 +1289,11 @@ viewStorageUsage snapshot =
                 , classList [ ( "storage-panel__bar--low", low ) ]
                 , attribute "role" "img"
                 , attribute "aria-label"
-                    ("On this server: "
-                        ++ Model.formatStorageSize stepBytes
-                        ++ " in step outputs, "
-                        ++ Model.formatStorageSize otherBytes
-                        ++ " other data, "
-                        ++ Model.formatStorageSize free
-                        ++ " free of "
-                        ++ Model.formatStorageSize diskTotal
-                    )
+                    (Model.formatStorageSize free ++ " free of " ++ Model.formatStorageSize diskTotal ++ " disk")
                 ]
                 [ Html.span
-                    [ class "storage-panel__bar-outputs"
-                    , style "width" (String.fromInt (ratioPercent barOutputs diskTotal) ++ "%")
-                    ]
-                    []
-                , Html.span
-                    [ class "storage-panel__bar-other"
-                    , style "width" (String.fromInt (ratioPercent otherBytes diskTotal) ++ "%")
+                    [ class "storage-panel__bar-used"
+                    , style "width" (String.fromInt (ratioPercent (diskTotal - free) diskTotal) ++ "%")
                     ]
                     []
                 ]
@@ -1462,15 +1433,6 @@ viewStorageFooter snapshot =
                 ++ order
             )
         ]
-
-
-storageDiskTotal : StorageView -> Int
-storageDiskTotal snapshot =
-    if snapshot.diskTotal > 0 then
-        snapshot.diskTotal
-
-    else
-        max 0 (snapshot.local + snapshot.free)
 
 
 storageCount : Int -> String -> String -> String

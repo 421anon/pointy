@@ -30,7 +30,7 @@ import Data.IORef (atomicModifyIORef', newIORef)
 import Data.List (isPrefixOf, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -49,6 +49,7 @@ import Servant (NoContent (..), ServerError (..), err400, err409, err503)
 import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, publishView, recordOffloadProgress, revalidateAll, revisionMovable, stepSummaries, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Unsafe (unsafePerformIO)
@@ -441,7 +442,8 @@ pathSizes paths = go paths
 
 diskUsage :: IO (Integer, Integer)
 diskUsage = do
-    (code, output, _) <- cli "df" ["-B1", "--output=avail,size", rootedPath "/nix/store"]
+    diskPath <- fromMaybe (rootedPath "/nix/store") <$> lookupEnv "POINTY_STORAGE_DISK_PATH"
+    (code, output, _) <- cli "df" ["-B1", "--output=avail,size", diskPath]
     pure $ case code of
         ExitFailure _ -> (0, 0)
         ExitSuccess -> case reverse (lines output) of

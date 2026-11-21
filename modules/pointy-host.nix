@@ -68,6 +68,7 @@ let
   // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
   // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; }
   // lib.optionalAttrs (cfg.coldStorage.command != null) { POINTY_COLD_STORAGE_COMMAND = cfg.coldStorage.command; }
+  // lib.optionalAttrs (cfg.storageDiskPath != null) { POINTY_STORAGE_DISK_PATH = cfg.storageDiskPath; }
   // lib.optionalAttrs (cfg.agentMemoryMax != null) { POINTY_AGENT_MEMORY_MAX = cfg.agentMemoryMax; }
   // lib.optionalAttrs (hostCfg.tokenAuth != null) {
     POINTY_TOKEN_AUDIENCE = hostCfg.tokenAuth.audience;
@@ -178,6 +179,18 @@ in
         the host store.
       '';
       example = "unix:///nix/var/nix/daemon-socket/socket?root=/var/lib/pointy-scratch-store/root&real=/var/lib/pointy-scratch-store/root/nix/store";
+    };
+
+    storageDiskPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Path whose filesystem the Storage center reports as free and total disk space,
+        exported as POINTY_STORAGE_DISK_PATH. Set it to the directory new store paths are
+        written to when the store is a union of several directories on one disk, because
+        the union reports their sizes summed. Null measures the store itself.
+      '';
+      example = "/var/lib/pointy-cloud-account/upper";
     };
 
     coldStorage.command = lib.mkOption {

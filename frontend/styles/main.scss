@@ -4999,17 +4999,12 @@ body:has(dialog[open]) {
   border-radius: var(--radius-xs);
 }
 
-.storage-panel__bar-outputs {
+.storage-panel__bar-used {
   height: 100%;
   background: var(--state-info);
 }
 
-.storage-panel__bar-other {
-  height: 100%;
-  background: color-mix(in srgb, var(--text-muted) 65%, transparent);
-}
-
-.storage-panel__bar--low .storage-panel__bar-outputs {
+.storage-panel__bar--low .storage-panel__bar-used {
   background: var(--state-warning);
 }
 
