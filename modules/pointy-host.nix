@@ -69,6 +69,7 @@ let
   // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; }
   // lib.optionalAttrs (cfg.coldStorage.command != null) { POINTY_COLD_STORAGE_COMMAND = cfg.coldStorage.command; }
   // lib.optionalAttrs (cfg.storageDiskPath != null) { POINTY_STORAGE_DISK_PATH = cfg.storageDiskPath; }
+  // lib.optionalAttrs (cfg.storageCapacityCommand != null) { POINTY_STORAGE_CAPACITY_COMMAND = cfg.storageCapacityCommand; }
   // lib.optionalAttrs (cfg.agentMemoryMax != null) { POINTY_AGENT_MEMORY_MAX = cfg.agentMemoryMax; }
   // lib.optionalAttrs (hostCfg.tokenAuth != null) {
     POINTY_TOKEN_AUDIENCE = hostCfg.tokenAuth.audience;
@@ -185,12 +186,28 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Path whose filesystem the Storage center reports as free and total disk space,
-        exported as POINTY_STORAGE_DISK_PATH. Set it to the directory new store paths are
-        written to when the store is a union of several directories on one disk, because
-        the union reports their sizes summed. Null measures the store itself.
+        Path whose filesystem the Storage panel reports as its capacity when
+        storageCapacityCommand is null, exported as POINTY_STORAGE_DISK_PATH.
+        Set it to the directory new store paths are written to when the store is a
+        union of several directories on one disk, because the union reports their
+        sizes summed. Null measures the store itself.
       '';
       example = "/var/lib/pointy-cloud-account/upper";
+    };
+
+    storageCapacityCommand = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Executable of a storage capacity provider, exported as
+        POINTY_STORAGE_CAPACITY_COMMAND. The backend runs it without arguments and
+        reads one JSON object with kind ("filesystem" or "quota"), totalBytes,
+        exactly one of usedBytes or availableBytes, and an optional label
+        (default "disk" for filesystem, "quota" for quota). The result is
+        reused for up to 30 seconds, and a Storage request refreshes it.
+        Null measures the filesystem at storageDiskPath instead.
+      '';
+      example = "/usr/local/bin/storage-capacity";
     };
 
     coldStorage.command = lib.mkOption {

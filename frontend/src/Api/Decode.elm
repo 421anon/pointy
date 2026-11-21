@@ -1110,8 +1110,7 @@ storageView =
         |> required "coldConfigured" Decode.bool
         |> required "local" Decode.int
         |> required "cold" Decode.int
-        |> required "free" Decode.int
-        |> required "diskTotal" Decode.int
+        |> required "capacity" (Decode.nullable storageCapacity)
         |> required "scanning" Decode.bool
         |> required "scanned" Decode.int
         |> required "history" Decode.int
@@ -1120,6 +1119,29 @@ storageView =
         |> required "revisions" (Decode.list storageRevision)
         |> optional "error" (maybe Decode.string) Nothing
         |> required "updatedAt" Iso8601.decoder
+
+
+storageCapacity : Decoder Model.StorageCapacity
+storageCapacity =
+    Decode.succeed Model.StorageCapacity
+        |> required "kind" (Decode.string |> Decode.andThen storageCapacityKind)
+        |> required "label" Decode.string
+        |> required "totalBytes" Decode.int
+        |> required "usedBytes" Decode.int
+        |> required "availableBytes" Decode.int
+
+
+storageCapacityKind : String -> Decoder Model.StorageCapacityKind
+storageCapacityKind kind =
+    case kind of
+        "filesystem" ->
+            Decode.succeed Model.CapacityFilesystem
+
+        "quota" ->
+            Decode.succeed Model.CapacityQuota
+
+        other ->
+            Decode.fail ("unknown storage capacity kind " ++ other)
 
 
 storageRevision : Decoder Model.StorageRevision

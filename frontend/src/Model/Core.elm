@@ -211,12 +211,25 @@ type ColdFileState
     | OnloadFailed String
 
 
+type alias StorageCapacity =
+    { kind : StorageCapacityKind
+    , label : String
+    , totalBytes : Int
+    , usedBytes : Int
+    , availableBytes : Int
+    }
+
+
+type StorageCapacityKind
+    = CapacityFilesystem
+    | CapacityQuota
+
+
 type alias StorageView =
     { coldConfigured : Bool
     , local : Int
     , cold : Int
-    , free : Int
-    , diskTotal : Int
+    , capacity : Maybe StorageCapacity
     , scanning : Bool
     , scanned : Int
     , history : Int

@@ -56,6 +56,6 @@ events.addEventListener("step-status", event => {
 
 `ingest-jobs` events carry every ingest job the backend tracks; [Ingest progress](files.md#ingest-progress) describes them.
 
-`storage` events carry the Storage center's whole view, the same object `GET /storage` returns; [Cold storage](storage.md#cold-storage) says when it changes. A refresh requested by `GET /storage` is always sent, even when nothing but `updatedAt` changed, so an open panel sees the time of the last check.
+`storage` events carry the Storage panel's whole view, the same object `GET /storage` returns; [Cold storage](storage.md#cold-storage) says when it changes. A refresh requested by `GET /storage` is always sent, even when nothing but `updatedAt` changed, so an open panel sees the time of the last check.
 
 The stream sends a `heartbeat` event with `{}` after about 30 idle seconds. A client that hears nothing for longer than that has lost the connection even if the browser has not noticed, and should reconnect. Ignore SSE comments, including connection padding. Responses use `Cache-Control: no-transform` and `X-Accel-Buffering: no`; preserve unbuffered, long-lived connections through your proxy. There are no SSE `id:` or `retry:` fields, and `Last-Event-ID` is not a resume cursor: a reconnect receives the current cluster status, ingest jobs, and storage view, and the replayed step statuses. Request fresh folder status after reconnecting when you need to establish current state beyond that replay.

@@ -14,7 +14,7 @@ import Html.Lazy
 import Iso8601
 import Json.Decode as Decode
 import List.Extra as List
-import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, StorageKind(..), StorageRevision, StorageState(..), StorageView, TrayState(..), TrayStep)
+import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, StorageCapacity, StorageKind(..), StorageRevision, StorageState(..), StorageView, TrayState(..), TrayStep)
 import Model.Lenses exposing (loadedProjects, route, toastHistory)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
@@ -1067,9 +1067,16 @@ viewStorageControl model =
             Maybe.andThen storageMeter current
 
         label =
-            Maybe.withDefault "Storage center" <|
+            Maybe.withDefault "Storage" <|
                 Maybe.map
-                    (\snapshot -> "Storage center · " ++ Model.formatStorageSize snapshot.local ++ " in step outputs")
+                    (\snapshot ->
+                        "Storage · "
+                            ++ Model.formatStorageSize snapshot.local
+                            ++ " in step outputs"
+                            ++ (Maybe.map (\capacity -> " · " ++ capacitySummary capacity) snapshot.capacity
+                                    |> Maybe.withDefault ""
+                               )
+                    )
                     current
     in
     Html.button
@@ -1078,7 +1085,7 @@ viewStorageControl model =
         , classList [ ( "status-bar__control--active", Model.getStorageOpen model ) ]
         , type_ "button"
         , Events.onClick Actions.toggleStoragePanel
-        , title "Storage center"
+        , title "Storage"
         , attribute "aria-label" label
         , attribute "aria-controls" Actions.storagePanelId
         , attribute "aria-expanded" (boolText (Model.getStorageOpen model))
@@ -1108,21 +1115,24 @@ type alias StorageMeter =
 
 storageMeter : StorageView -> Maybe StorageMeter
 storageMeter snapshot =
-    if snapshot.diskTotal <= 0 then
+    Maybe.andThen capacityMeter snapshot.capacity
+
+
+capacityMeter : Model.StorageCapacity -> Maybe StorageMeter
+capacityMeter capacity =
+    if capacity.totalBytes <= 0 then
         Nothing
 
     else
-        let
-            free =
-                clamp 0 snapshot.diskTotal snapshot.free
-
-            used =
-                snapshot.diskTotal - free
-        in
         Just
-            { usedPercent = ratioPercent used snapshot.diskTotal
-            , low = free * 10 < snapshot.diskTotal
+            { usedPercent = ratioPercent capacity.usedBytes capacity.totalBytes
+            , low = capacityLow capacity
             }
+
+
+capacityLow : Model.StorageCapacity -> Bool
+capacityLow capacity =
+    capacity.totalBytes > 0 && capacity.availableBytes * 10 < capacity.totalBytes
 
 
 viewStoragePanel : Model -> Html (Flow Model ())
@@ -1136,7 +1146,7 @@ viewStoragePanel model =
         ]
         [ Html.div [ class "storage-panel__header" ]
             [ iconCustom False "hard_drive" [ attribute "aria-hidden" "true" ]
-            , Html.strong [ id "storage-panel-title" ] [ Html.text "Storage center" ]
+            , Html.strong [ id "storage-panel-title" ] [ Html.text "Storage" ]
             , Html.span [ class "storage-panel__updated" ]
                 [ Html.viewMaybe
                     (\snapshot ->
@@ -1152,8 +1162,8 @@ viewStoragePanel model =
                 [ class "icon-btn"
                 , type_ "button"
                 , Events.onClick Actions.toggleStoragePanel
-                , title "Close storage center"
-                , attribute "aria-label" "Close storage center"
+                , title "Close storage"
+                , attribute "aria-label" "Close storage"
                 ]
                 [ iconCustom False "close" [ attribute "aria-hidden" "true" ] ]
             ]
@@ -1223,12 +1233,13 @@ viewStorageContent model snapshot =
                      , Html.span [ class "storage-panel__size" ] [ Html.text "Local" ]
                      ]
                         ++ (if snapshot.coldConfigured then
-                                [ Html.span [ class "storage-panel__size" ] [ Html.text "Cold" ] ]
+                                [ Html.span [ class "storage-panel__size" ] [ Html.text "Cold" ]
+                                , Html.span [] []
+                                ]
 
                             else
                                 []
                            )
-                        ++ [ Html.span [] [] ]
                     )
                 , Html.div [ class "storage-panel__rows", attribute "role" "list" ]
                     (List.map
@@ -1242,52 +1253,80 @@ viewStorageContent model snapshot =
 
 viewStorageUsage : StorageView -> Html msg
 viewStorageUsage snapshot =
-    let
-        diskTotal =
-            max 0 snapshot.diskTotal
-
-        free =
-            clamp 0 diskTotal snapshot.free
-
-        low =
-            diskTotal > 0 && free * 10 < diskTotal
-
-        ofDisk =
-            Html.viewIf (diskTotal > 0) <|
-                Html.span [ class "storage-panel__of" ]
-                    [ Html.text "of "
-                    , Html.strong [] [ Html.text (Model.formatStorageSize diskTotal) ]
-                    , Html.text " disk"
-                    ]
-    in
     Html.div [ class "storage-panel__usage" ]
         [ Html.div [ class "storage-panel__totals" ]
-            [ storageTotal (max 0 snapshot.local) "step outputs"
-            , storageTotal free "free"
-            , ofDisk
-            ]
-        , Html.viewIf (diskTotal > 0) <|
-            Html.div
-                [ class "storage-panel__bar"
-                , classList [ ( "storage-panel__bar--low", low ) ]
-                , attribute "role" "img"
-                , attribute "aria-label"
-                    (Model.formatStorageSize free ++ " free of " ++ Model.formatStorageSize diskTotal ++ " disk")
-                ]
-                [ Html.span
-                    [ class "storage-panel__bar-used"
-                    , style "width" (String.fromInt (ratioPercent (diskTotal - free) diskTotal) ++ "%")
-                    ]
-                    []
-                ]
+            ([ storageTotal (max 0 snapshot.local) "step outputs" ]
+                ++ (case snapshot.capacity of
+                        Just capacity ->
+                            [ storageTotal (capacityShownBytes capacity) (capacityVerb capacity)
+                            , Html.span [ class "storage-panel__of" ]
+                                [ Html.text "of "
+                                , Html.strong [] [ Html.text (Model.formatStorageSize capacity.totalBytes) ]
+                                , Html.text (" " ++ capacity.label)
+                                ]
+                            ]
+
+                        Nothing ->
+                            []
+                   )
+            )
+        , Html.viewMaybe viewStorageCapacityBar snapshot.capacity
         , Html.viewIf snapshot.coldConfigured <|
             Html.div [ class "storage-panel__cold-line" ]
                 [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
                 , Html.strong [] [ Html.text (Model.formatStorageSize snapshot.cold) ]
                 , Html.text " in cold storage"
-                , Html.span [ class "storage-panel__cold-note" ] [ Html.text "· not included above" ]
+                , Html.span [ class "storage-panel__cold-note" ] [ Html.text "· not counted in the local total above" ]
                 ]
         ]
+
+
+viewStorageCapacityBar : StorageCapacity -> Html msg
+viewStorageCapacityBar capacity =
+    Html.viewIf (capacity.totalBytes > 0) <|
+        Html.div
+            [ class "storage-panel__bar"
+            , classList [ ( "storage-panel__bar--low", capacityLow capacity ) ]
+            , attribute "role" "img"
+            , attribute "aria-label" (capacitySummary capacity)
+            ]
+            [ Html.span
+                [ class "storage-panel__bar-used"
+                , style "width" (String.fromInt (ratioPercent capacity.usedBytes capacity.totalBytes) ++ "%")
+                ]
+                []
+            ]
+
+
+capacityVerb : StorageCapacity -> String
+capacityVerb capacity =
+    case capacity.kind of
+        Model.CapacityQuota ->
+            "used"
+
+        Model.CapacityFilesystem ->
+            "free"
+
+
+capacityShownBytes : StorageCapacity -> Int
+capacityShownBytes capacity =
+    case capacity.kind of
+        Model.CapacityQuota ->
+            capacity.usedBytes
+
+        Model.CapacityFilesystem ->
+            capacity.availableBytes
+
+
+capacitySummary : StorageCapacity -> String
+capacitySummary capacity =
+    Model.formatStorageSize (capacityShownBytes capacity)
+        ++ " "
+        ++ capacityVerb capacity
+        ++ " of "
+        ++ Model.formatStorageSize capacity.totalBytes
+        ++ " "
+        ++ capacity.label
 
 
 storageTotal : Int -> String -> Html msg
@@ -1547,12 +1586,13 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
          , Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.local) ]
          ]
             ++ (if coldConfigured then
-                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.cold) ] ]
+                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.cold) ]
+                    , Html.div [ class "storage-panel__action" ] [ moveButton ]
+                    ]
 
                 else
                     []
                )
-            ++ [ Html.div [ class "storage-panel__action" ] [ moveButton ] ]
         )
 
 
@@ -1561,6 +1601,11 @@ viewStorageRow model coldConfigured parentName revision =
     let
         blockedId =
             "storage-blocked-" ++ String.fromInt revision.step ++ "-" ++ revision.revision
+
+        inlineAction =
+            Html.viewIf (not coldConfigured) <|
+                Html.div [ class "storage-panel__inline-action" ]
+                    [ viewStorageRevisionAction model coldConfigured revision blockedId ]
     in
     Html.div
         [ classList
@@ -1580,6 +1625,7 @@ viewStorageRow model coldConfigured parentName revision =
                     Html.span [ class "storage-panel__revision-step", title revision.name ] [ Html.text revision.name ]
                 , Html.span [ class "storage-panel__age" ]
                     [ Html.text (Time.Distance.inWords revision.committedAt (Model.getNow model)) ]
+                , inlineAction
                 ]
             , storageBlockedReason blockedId revision.blocked
             , Html.viewMaybe
@@ -1589,14 +1635,14 @@ viewStorageRow model coldConfigured parentName revision =
          , Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize revision.local) ]
          ]
             ++ (if coldConfigured then
-                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize revision.cold) ] ]
+                    [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize revision.cold) ]
+                    , Html.div [ class "storage-panel__action" ]
+                        [ viewStorageRevisionAction model coldConfigured revision blockedId ]
+                    ]
 
                 else
                     []
                )
-            ++ [ Html.div [ class "storage-panel__action" ]
-                    [ viewStorageRevisionAction model coldConfigured revision blockedId ]
-               ]
         )
 
 

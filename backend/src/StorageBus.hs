@@ -2,6 +2,8 @@
 
 module StorageBus (
     StorageView (..),
+    StorageCapacity (..),
+    parseStorageCapacity,
     StorageRevision (..),
     Invalidation (..),
     ColdRecheck (..),
@@ -29,8 +31,9 @@ module StorageBus (
 
 import ColdProvider (ColdStatus, OffloadProgress (..))
 import Control.Concurrent.STM (STM, TChan, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newTVarIO, readTVar, readTVarIO, stateTVar, writeTChan, writeTVar)
-import Control.Monad (when)
-import Data.Aeson (ToJSON (..), encode, object, (.=))
+import Control.Monad (unless, when)
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.:), (.:?), (.!=), (.=))
+import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -76,12 +79,59 @@ instance ToJSON StorageRevision where
 revisionMovable :: StorageRevision -> Bool
 revisionMovable revision = revisionState revision `elem` ["local", "failed"]
 
+data StorageCapacity = StorageCapacity
+    { capacityKind :: Text
+    , capacityLabel :: Text
+    , capacityTotalBytes :: Integer
+    , capacityUsedBytes :: Integer
+    , capacityAvailableBytes :: Integer
+    }
+    deriving (Eq, Show)
+
+instance ToJSON StorageCapacity where
+    toJSON capacity =
+        object
+            [ "kind" .= capacityKind capacity
+            , "label" .= capacityLabel capacity
+            , "totalBytes" .= capacityTotalBytes capacity
+            , "usedBytes" .= capacityUsedBytes capacity
+            , "availableBytes" .= capacityAvailableBytes capacity
+            ]
+
+instance FromJSON StorageCapacity where
+    parseJSON = withObject "storage capacity" $ \fields -> do
+        totalBytes <- fields .: "totalBytes"
+        unless (totalBytes > 0) $ fail "totalBytes must be positive"
+        kind <- fields .: "kind"
+        unless (kind `elem` (["filesystem", "quota"] :: [Text])) $ fail "kind must be filesystem or quota"
+        used <- fields .:? "usedBytes" :: Parser (Maybe Integer)
+        available <- fields .:? "availableBytes" :: Parser (Maybe Integer)
+        (usedBytes, availableBytes) <- case (used, available) of
+            (Just value, Nothing) ->
+                let usedValue = max 0 value
+                 in pure (usedValue, max 0 (totalBytes - usedValue))
+            (Nothing, Just value) ->
+                let availableValue = max 0 (min totalBytes value)
+                 in pure (totalBytes - availableValue, availableValue)
+            _ -> fail "requires exactly one of usedBytes and availableBytes"
+        label <- fields .:? "label" .!= (if kind == "filesystem" then "disk" else "quota")
+        pure
+            StorageCapacity
+                { capacityKind = kind
+                , capacityLabel = label
+                , capacityTotalBytes = totalBytes
+                , capacityUsedBytes = usedBytes
+                , capacityAvailableBytes = availableBytes
+                }
+
+parseStorageCapacity :: LBS.ByteString -> Either String StorageCapacity
+parseStorageCapacity = eitherDecode
+
 data StorageView = StorageView
     { storageColdConfigured :: Bool
     , storageLocal :: Integer
     , storageCold :: Integer
-    , storageFree :: Integer
-    , storageDiskTotal :: Integer
+    , storageCapacity :: Maybe StorageCapacity
     , storageScanning :: Bool
     , storageScanned :: Int
     , storageHistory :: Int
@@ -99,8 +149,7 @@ instance ToJSON StorageView where
             [ "coldConfigured" .= storageColdConfigured view
             , "local" .= storageLocal view
             , "cold" .= storageCold view
-            , "free" .= storageFree view
-            , "diskTotal" .= storageDiskTotal view
+            , "capacity" .= storageCapacity view
             , "scanning" .= storageScanning view
             , "scanned" .= storageScanned view
             , "history" .= storageHistory view

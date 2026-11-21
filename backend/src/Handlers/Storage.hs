@@ -37,7 +37,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, pathValid, querySlurm, runNixCli, runNixStoreCli, unrootStorePath)
@@ -47,13 +47,14 @@ import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err503)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, publishView, recordOffloadProgress, revalidateAll, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, revalidateAll, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Unsafe (unsafePerformIO)
+import System.Timeout (timeout)
 import Text.Read (readMaybe)
 import UserRepo (commitContext, commitContextEff, runGitIn, runHistoryEvalJsonApplyInRepo, runNixEvalJsonApplyInRepo, userRepoPath)
 
@@ -124,6 +125,12 @@ pathInfoChunkSize = 200
 coalesceMicros :: Int
 coalesceMicros = 500000
 
+capacityCacheSeconds :: NominalDiffTime
+capacityCacheSeconds = 30
+
+capacityCommandTimeout :: Int
+capacityCommandTimeout = 5000000
+
 {-# NOINLINE cachesVar #-}
 cachesVar :: TVar Caches
 cachesVar = unsafePerformIO (newTVarIO (Caches Nothing [] (Left "The repository has not been read yet.") Map.empty Nothing))
@@ -149,6 +156,10 @@ data ScanQueue = ScanQueue
 {-# NOINLINE scanStateRef #-}
 scanStateRef :: MVar ScanState
 scanStateRef = unsafePerformIO (newMVar (ScanState False Nothing))
+
+{-# NOINLINE capacityCacheRef #-}
+capacityCacheRef :: MVar (Maybe (UTCTime, Maybe StorageCapacity))
+capacityCacheRef = unsafePerformIO (newMVar Nothing)
 
 storageHandler :: AppM StorageView
 storageHandler = liftIO $ do
@@ -288,7 +299,7 @@ runStorageCenter = do
         threadDelay coalesceMicros
         loop running
     reportFailure (err :: SomeException) = do
-        putStrLn ("Storage center refresh failed: " ++ displayException err)
+        putStrLn ("Storage refresh failed: " ++ displayException err)
         now <- getCurrentTime
         published <- atomically currentView
         when (isNothing published) $
@@ -298,8 +309,7 @@ runStorageCenter = do
                     { storageColdConfigured = False
                     , storageLocal = 0
                     , storageCold = 0
-                    , storageFree = 0
-                    , storageDiskTotal = 0
+                    , storageCapacity = Nothing
                     , storageScanning = False
                     , storageScanned = 0
                     , storageHistory = 0
@@ -343,7 +353,7 @@ refresh work running = do
     when coldConfigured $ void $ mapColdProvider coldStatusFor (Set.toList toCheck)
     colds <- liftIO knownColdStatuses
     offloads <- liftIO offloadStates
-    (free, diskTotal) <- liftIO diskUsage
+    capacity <- liftIO (capacityUsage (invalidBroadcast work))
     now <- liftIO getCurrentTime
     scanFailure <- liftIO (fmap (fmap snd . scanUnavailable) (readMVar scanStateRef))
     let blockedReason = case cachedHeadSteps caches of
@@ -372,8 +382,7 @@ refresh work running = do
                 { storageColdConfigured = coldConfigured
                 , storageLocal = sum (map revisionLocal revisions)
                 , storageCold = sum (map revisionCold revisions)
-                , storageFree = free
-                , storageDiskTotal = diskTotal
+                , storageCapacity = capacity
                 , storageScanning = not (null toScan)
                 , storageScanned = scannedCount
                 , storageHistory = length relevant
@@ -477,17 +486,56 @@ pathSizes paths = go paths
                     restSizes <- go rest
                     pure $ Map.union (Map.mapMaybe (fmap pathNarSize) (infos :: Map Text (Maybe PathInfo))) <$> restSizes
 
-diskUsage :: IO (Integer, Integer)
-diskUsage = do
+capacityUsage :: Bool -> IO (Maybe StorageCapacity)
+capacityUsage force = do
+    command <- lookupEnv "POINTY_STORAGE_CAPACITY_COMMAND"
+    case command of
+        Just executable -> cachedCommandCapacity executable force
+        Nothing -> filesystemCapacity
+
+cachedCommandCapacity :: FilePath -> Bool -> IO (Maybe StorageCapacity)
+cachedCommandCapacity executable force = do
+    now <- getCurrentTime
+    modifyMVar capacityCacheRef $ \cached ->
+        case cached of
+            Just (measuredAt, capacity)
+                | not force && diffUTCTime now measuredAt < capacityCacheSeconds -> pure (cached, capacity)
+            _ -> do
+                capacity <- commandCapacity executable
+                pure (Just (now, capacity), capacity)
+
+commandCapacity :: FilePath -> IO (Maybe StorageCapacity)
+commandCapacity executable = do
+    outcome <- timeout capacityCommandTimeout (cli executable [])
+    pure $ case outcome of
+        Nothing -> Nothing
+        Just (ExitSuccess, output, _) -> either (const Nothing) Just (parseStorageCapacity (LBS.fromStrict (TE.encodeUtf8 (T.pack output))))
+        Just (ExitFailure _, _, _) -> Nothing
+
+filesystemCapacity :: IO (Maybe StorageCapacity)
+filesystemCapacity = do
     diskPath <- fromMaybe (rootedPath "/nix/store") <$> lookupEnv "POINTY_STORAGE_DISK_PATH"
-    (code, output, _) <- cli "df" ["-B1", "--output=avail,size", diskPath]
-    pure $ case code of
-        ExitFailure _ -> (0, 0)
-        ExitSuccess -> case reverse (lines output) of
+    outcome <- timeout capacityCommandTimeout (cli "df" ["-B1", "--output=avail,size", diskPath])
+    pure $ case outcome of
+        Nothing -> Nothing
+        Just (ExitFailure _, _, _) -> Nothing
+        Just (ExitSuccess, output, _) -> case reverse (lines output) of
             line : _ -> case words line of
-                [free, total] | Just freeBytes <- readInteger free, Just totalBytes <- readInteger total -> (freeBytes, totalBytes)
-                _ -> (0, 0)
-            [] -> (0, 0)
+                [available, total]
+                    | Just totalBytes <- readInteger total
+                    , Just availableBytes <- readInteger available
+                    , totalBytes > 0 ->
+                        let clamped = max 0 (min totalBytes availableBytes)
+                         in Just
+                                StorageCapacity
+                                    { capacityKind = "filesystem"
+                                    , capacityLabel = "disk"
+                                    , capacityTotalBytes = totalBytes
+                                    , capacityUsedBytes = totalBytes - clamped
+                                    , capacityAvailableBytes = clamped
+                                    }
+                _ -> Nothing
+            [] -> Nothing
   where
     readInteger text = case reads text of
         [(value, "")] -> Just value

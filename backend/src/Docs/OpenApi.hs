@@ -33,7 +33,7 @@ import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
-import StorageBus (StorageRevision, StorageView)
+import StorageBus (StorageCapacity, StorageRevision, StorageView)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
@@ -317,17 +317,29 @@ instance ToSchema StorageRevision where
                 , ("blocked", nullableField OpenApiString)
                 ]
 
+instance ToSchema StorageCapacity where
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "StorageCapacity"
+                [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["filesystem", "quota"]))
+                , ("label", stringField)
+                , ("totalBytes", integerField)
+                , ("usedBytes", integerField)
+                , ("availableBytes", integerField)
+                ]
+
 instance ToSchema StorageView where
     declareNamedSchema _ = do
         revisionSchema <- declareSchemaRef (Proxy :: Proxy StorageRevision)
+        capacitySchema <- declareSchemaRef (Proxy :: Proxy StorageCapacity)
         pure $
             objectSchema
                 "StorageView"
                 [ ("coldConfigured", boolField)
                 , ("local", integerField)
                 , ("cold", integerField)
-                , ("free", integerField)
-                , ("diskTotal", integerField)
+                , ("capacity", Inline (mempty & type_ ?~ OpenApiObject & nullable ?~ True & allOf ?~ [capacitySchema]))
                 , ("scanning", boolField)
                 , ("scanned", integerField)
                 , ("history", integerField)
