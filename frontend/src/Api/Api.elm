@@ -34,6 +34,7 @@ module Api.Api exposing
     , fetchUserRepoInfo
     , offloadStorage
     , offloadStorageStep
+    , onloadStorageRevision
     , onloadColdFile
     , onloadStepInputs
     , postTreeOps
@@ -658,6 +659,13 @@ offloadStorageStep : Int -> Flow s (Result Http.Error ())
 offloadStorageStep stepId =
     request "POST"
         ("/backend/storage/offload-step?id=" ++ String.fromInt stepId)
+        Http.emptyBody
+
+
+onloadStorageRevision : Int -> String -> Flow s (Result Http.Error ())
+onloadStorageRevision stepId revision =
+    request "POST"
+        ("/backend/storage/onload?id=" ++ String.fromInt stepId ++ "&commit=" ++ revision)
         Http.emptyBody
 
 

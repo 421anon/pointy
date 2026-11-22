@@ -11,15 +11,19 @@ main :: IO ()
 main = do
     assertEqual
         "each provider state"
-        (Just (ColdStatus [ColdFile "a.csv" 3 Offloaded, ColdFile "b.png" 10 (Onloading 5 10), ColdFile "c.bam" 7 (OnloadFailed "box unreachable")]))
+        (Just (ColdStatus [ColdFile "a.csv" 3 Offloaded, ColdFile "b.png" 10 (Onloading 5 10), ColdFile "c.bam" 7 (OnloadFailed "box unreachable")] Nothing))
         ( parseColdStatus
             "{\"files\":[{\"path\":\"a.csv\",\"size\":3,\"state\":\"offloaded\"},{\"path\":\"b.png\",\"size\":10,\"state\":\"onloading\",\"done\":5,\"total\":10},{\"path\":\"c.bam\",\"size\":7,\"state\":\"failed\",\"error\":\"box unreachable\"}]}"
         )
     assertEqual "a status without a size is not a status" Nothing (parseColdStatus "{\"files\":[{\"path\":\"a.csv\",\"state\":\"offloaded\"}]}")
-    assertEqual "a local or untracked output" (Just (ColdStatus [])) (parseColdStatus "{\"files\":[]}")
+    assertEqual "a local or untracked output" (Just (ColdStatus [] Nothing)) (parseColdStatus "{\"files\":[]}")
+    assertEqual
+        "a provider reports its cold capacity"
+        (Just (ColdStatus [] (Just 5497558138880)))
+        (parseColdStatus "{\"files\":[],\"capacityBytes\":5497558138880}")
     assertEqual
         "an offloading file carries its progress"
-        (Just (ColdStatus [ColdFile "a.csv" 3 (Offloading 1 3)]))
+        (Just (ColdStatus [ColdFile "a.csv" 3 (Offloading 1 3)] Nothing))
         (parseColdStatus "{\"files\":[{\"path\":\"a.csv\",\"size\":3,\"state\":\"offloading\",\"done\":1,\"total\":3}]}")
     assertEqual "onloading without progress is not a status" Nothing (parseColdStatus "{\"files\":[{\"path\":\"b.png\",\"state\":\"onloading\"}]}")
     assertEqual "a failure without its error is not a status" Nothing (parseColdStatus "{\"files\":[{\"path\":\"c.bam\",\"state\":\"failed\"}]}")

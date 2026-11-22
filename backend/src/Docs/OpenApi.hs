@@ -268,7 +268,13 @@ coldFileSchema =
             & description ?~ "A file that is not local. `size` is the file's bytes; `done` and `total` are bytes, present while offloading or onloading; `error` is present when the last onload failed."
 
 instance ToSchema ColdStatus where
-    declareNamedSchema _ = pure $ objectSchema "ColdStatus" [("files", arrayOf coldFileSchema)]
+    declareNamedSchema _ =
+        pure $
+            objectSchema
+                "ColdStatus"
+                [ ("files", arrayOf coldFileSchema)
+                , ("capacityBytes", integerField)
+                ]
 
 instance ToSchema ColdInputsView where
     declareNamedSchema _ =
@@ -333,13 +339,16 @@ instance ToSchema StorageView where
     declareNamedSchema _ = do
         revisionSchema <- declareSchemaRef (Proxy :: Proxy StorageRevision)
         capacitySchema <- declareSchemaRef (Proxy :: Proxy StorageCapacity)
+        let nullableCapacity =
+                Inline (mempty & type_ ?~ OpenApiObject & nullable ?~ True & allOf ?~ [capacitySchema])
         pure $
             objectSchema
                 "StorageView"
                 [ ("coldConfigured", boolField)
                 , ("local", integerField)
                 , ("cold", integerField)
-                , ("capacity", Inline (mempty & type_ ?~ OpenApiObject & nullable ?~ True & allOf ?~ [capacitySchema]))
+                , ("capacity", nullableCapacity)
+                , ("coldCapacity", nullableCapacity)
                 , ("scanning", boolField)
                 , ("scanned", integerField)
                 , ("history", integerField)

@@ -1115,19 +1115,19 @@ type alias StorageMeter =
 
 storageMeter : StorageView -> Maybe StorageMeter
 storageMeter snapshot =
-    Maybe.andThen capacityMeter snapshot.capacity
+    case snapshot.capacity of
+        Just capacity ->
+            if capacity.totalBytes > 0 then
+                Just
+                    { usedPercent = ratioPercent (max 0 snapshot.local) capacity.totalBytes
+                    , low = capacityLow capacity
+                    }
 
+            else
+                Nothing
 
-capacityMeter : Model.StorageCapacity -> Maybe StorageMeter
-capacityMeter capacity =
-    if capacity.totalBytes <= 0 then
-        Nothing
-
-    else
-        Just
-            { usedPercent = ratioPercent capacity.usedBytes capacity.totalBytes
-            , low = capacityLow capacity
-            }
+        Nothing ->
+            Nothing
 
 
 capacityLow : Model.StorageCapacity -> Bool
@@ -1254,79 +1254,127 @@ viewStorageContent model snapshot =
 viewStorageUsage : StorageView -> Html msg
 viewStorageUsage snapshot =
     Html.div [ class "storage-panel__usage" ]
+        [ viewStorageWarmTier snapshot
+        , Html.viewIf snapshot.coldConfigured <|
+            viewStorageColdTier snapshot
+        ]
+
+
+viewStorageWarmTier : StorageView -> Html msg
+viewStorageWarmTier snapshot =
+    Html.div [ class "storage-panel__tier" ]
         [ Html.div [ class "storage-panel__totals" ]
             ([ storageTotal (max 0 snapshot.local) "step outputs" ]
                 ++ (case snapshot.capacity of
                         Just capacity ->
-                            [ storageTotal (capacityShownBytes capacity) (capacityVerb capacity)
-                            , Html.span [ class "storage-panel__of" ]
-                                [ Html.text "of "
-                                , Html.strong [] [ Html.text (Model.formatStorageSize capacity.totalBytes) ]
-                                , Html.text (" " ++ capacity.label)
-                                ]
-                            ]
+                            [ capacityRemainder capacity ]
 
                         Nothing ->
                             []
                    )
             )
-        , Html.viewMaybe viewStorageCapacityBar snapshot.capacity
-        , Html.viewIf snapshot.coldConfigured <|
-            Html.div [ class "storage-panel__cold-line" ]
-                [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
-                , Html.strong [] [ Html.text (Model.formatStorageSize snapshot.cold) ]
-                , Html.text " in cold storage"
-                , Html.span [ class "storage-panel__cold-note" ] [ Html.text "· not counted in the local total above" ]
-                ]
+        , Html.viewMaybe
+            (\capacity -> viewStorageCapacityBar False capacity (max 0 snapshot.local))
+            snapshot.capacity
         ]
 
 
-viewStorageCapacityBar : StorageCapacity -> Html msg
-viewStorageCapacityBar capacity =
+viewStorageColdTier : StorageView -> Html msg
+viewStorageColdTier snapshot =
+    Html.div [ class "storage-panel__tier storage-panel__tier--cold" ]
+        ([ Html.div [ class "storage-panel__cold-line" ]
+            ([ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
+             , Html.strong [] [ Html.text (Model.formatStorageSize snapshot.cold) ]
+             , Html.text " in cold storage"
+             ]
+                ++ case snapshot.coldCapacity of
+                    Just capacity ->
+                        [ Html.span [ class "storage-panel__cold-note" ]
+                            [ Html.text "· "
+                            , Html.strong [] [ Html.text (Model.formatStorageSize capacity.availableBytes) ]
+                            , Html.text " left of "
+                            , Html.strong [] [ Html.text (Model.formatStorageSize capacity.totalBytes) ]
+                            ]
+                        ]
+
+                    Nothing ->
+                        [ Html.span [ class "storage-panel__cold-note" ]
+                            [ Html.text "· not counted in the local total above" ]
+                        ]
+            )
+         ]
+            ++ [ Html.viewMaybe
+                    (\capacity -> viewStorageCapacityBar True capacity snapshot.cold)
+                    snapshot.coldCapacity
+               ]
+        )
+
+
+viewStorageCapacityBar : Bool -> StorageCapacity -> Int -> Html msg
+viewStorageCapacityBar cold capacity used =
     Html.viewIf (capacity.totalBytes > 0) <|
         Html.div
             [ class "storage-panel__bar"
-            , classList [ ( "storage-panel__bar--low", capacityLow capacity ) ]
+            , classList
+                [ ( "storage-panel__bar--low", not cold && capacityLow capacity )
+                , ( "storage-panel__bar--cold", cold )
+                ]
             , attribute "role" "img"
-            , attribute "aria-label" (capacitySummary capacity)
+            , attribute "aria-label"
+                (Model.formatStorageSize used
+                    ++ (if cold then
+                            " cold"
+
+                        else
+                            " step outputs"
+                       )
+                    ++ "; "
+                    ++ capacityRemainderString capacity
+                )
             ]
             [ Html.span
                 [ class "storage-panel__bar-used"
-                , style "width" (String.fromInt (ratioPercent capacity.usedBytes capacity.totalBytes) ++ "%")
+                , style "width" (String.fromInt (ratioPercent used capacity.totalBytes) ++ "%")
                 ]
                 []
             ]
 
 
-capacityVerb : StorageCapacity -> String
-capacityVerb capacity =
+capacityRemainder : StorageCapacity -> Html msg
+capacityRemainder capacity =
     case capacity.kind of
         Model.CapacityQuota ->
-            "used"
+            Html.span [ class "storage-panel__of" ]
+                [ Html.strong [] [ Html.text (Model.formatStorageSize capacity.availableBytes) ]
+                , Html.text " left of "
+                , Html.strong [] [ Html.text (Model.formatStorageSize capacity.totalBytes) ]
+                , Html.text (" " ++ capacity.label)
+                ]
 
         Model.CapacityFilesystem ->
-            "free"
+            Html.span [ class "storage-panel__of" ]
+                [ Html.strong [] [ Html.text (Model.formatStorageSize capacity.availableBytes) ]
+                , Html.text " free"
+                ]
 
 
-capacityShownBytes : StorageCapacity -> Int
-capacityShownBytes capacity =
-    case capacity.kind of
-        Model.CapacityQuota ->
-            capacity.usedBytes
+capacityRemainderString : StorageCapacity -> String
+capacityRemainderString capacity =
+    Model.formatStorageSize capacity.availableBytes
+        ++ (if capacity.kind == Model.CapacityQuota then
+                " left of "
+                    ++ Model.formatStorageSize capacity.totalBytes
+                    ++ " "
+                    ++ capacity.label
 
-        Model.CapacityFilesystem ->
-            capacity.availableBytes
+            else
+                " free"
+           )
 
 
 capacitySummary : StorageCapacity -> String
 capacitySummary capacity =
-    Model.formatStorageSize (capacityShownBytes capacity)
-        ++ " "
-        ++ capacityVerb capacity
-        ++ " of "
-        ++ Model.formatStorageSize capacity.totalBytes
-        ++ " "
-        ++ capacity.label
+    capacityRemainderString capacity
 
 
 storageTotal : Int -> String -> Html msg
@@ -1493,9 +1541,9 @@ storageRevisionMovable revision =
 
 compareStorageGroups : StorageGroup -> StorageGroup -> Order
 compareStorageGroups first second =
-    case compare second.local first.local of
+    case compare (largerTier second) (largerTier first) of
         EQ ->
-            case compare second.cold first.cold of
+            case compare (second.local + second.cold) (first.local + first.cold) of
                 EQ ->
                     compare first.stepId second.stepId
 
@@ -1504,6 +1552,11 @@ compareStorageGroups first second =
 
         order ->
             order
+
+
+largerTier : StorageGroup -> Int
+largerTier group =
+    max group.local group.cold
 
 
 viewStorageGroup : Model -> Bool -> Set Int -> StorageGroup -> Html (Flow Model ())
@@ -1577,7 +1630,7 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
                     )
                     [ class "storage-panel__chevron", attribute "aria-hidden" "true" ]
                 , Html.span [ class "storage-panel__step-name", title group.name ] [ Html.text group.name ]
-                , Html.span [ class "storage-panel__step-id" ] [ Html.text ("#" ++ String.fromInt group.stepId) ]
+                , viewStorageStepId model group.stepId
                 ]
             , Html.div [ class "storage-panel__meta" ]
                 [ Html.text (storageCount group.revisionCount "revision" "revisions") ]
@@ -1594,6 +1647,40 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
                     []
                )
         )
+
+
+viewStorageStepId : Model -> Int -> Html (Flow Model ())
+viewStorageStepId model stepId =
+    case storageStepRoute model stepId of
+        Just route_ ->
+            Html.a
+                [ href (Route.toString route_)
+                , class "storage-panel__step-id"
+                , title ("Open step " ++ String.fromInt stepId)
+                ]
+                [ Html.text ("#" ++ String.fromInt stepId) ]
+
+        Nothing ->
+            Html.span [ class "storage-panel__step-id" ] [ Html.text ("#" ++ String.fromInt stepId) ]
+
+
+storageStepRoute : Model -> Int -> Maybe Route.Route
+storageStepRoute model stepId =
+    let
+        currentPath =
+            try (Route.page << Model.Lenses.projectRoute << Model.Lenses.projectPath) (Model.getRoute model)
+
+        openProjectId =
+            Maybe.map Route.pathProjectId currentPath
+
+        canonicalPath =
+            Model.canonicalProjectPath (Maybe.withDefault [] currentPath) (Model.getProjectIndex model)
+
+        locations =
+            Actions.stepLocations ((==) stepId) (Model.getProjectIndex model) (Model.getSteps model)
+    in
+    Actions.stepOutputLocation openProjectId locations stepId
+        |> Maybe.map (\location -> Actions.stepOutputRoute (canonicalPath location.projectId) stepId)
 
 
 viewStorageRow : Model -> Bool -> String -> StorageRevision -> Html (Flow Model ())
@@ -1662,9 +1749,12 @@ viewStorageRevisionAction : Model -> Bool -> StorageRevision -> String -> Html (
 viewStorageRevisionAction model coldConfigured revision blockedId =
     case revision.state of
         StorageCold ->
-            Html.span [ class "storage-panel__badge" ]
-                [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
-                , Html.text "In cold storage"
+            Html.div [ class "storage-panel__rev-actions" ]
+                [ Html.span [ class "storage-panel__badge" ]
+                    [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
+                    , Html.text "In cold storage"
+                    ]
+                , storageRevisionRewarmButton revision
                 ]
 
         StorageOffloading ->
@@ -1686,14 +1776,34 @@ viewStorageRevisionAction model coldConfigured revision blockedId =
 storageRevisionActions : Model -> Bool -> StorageRevision -> String -> Html (Flow Model ())
 storageRevisionActions model coldConfigured revision blockedId =
     Html.div [ class "storage-panel__rev-actions" ]
-        ((if coldConfigured then
-            [ storageRevisionMoveButton model revision blockedId ]
+        ((if revision.cold > 0 then
+            [ storageRevisionRewarmButton revision ]
 
           else
             []
          )
+            ++ (if coldConfigured then
+                    [ storageRevisionMoveButton model revision blockedId ]
+
+                else
+                    []
+               )
             ++ [ storageRevisionDeleteButton model revision ]
         )
+
+
+storageRevisionRewarmButton : StorageRevision -> Html (Flow Model ())
+storageRevisionRewarmButton revision =
+    Html.button
+        [ class "small-btn storage-panel__step-move storage-panel__rewarm"
+        , type_ "button"
+        , Events.onClick (Actions.storageRewarmRevision revision)
+        , title "Copy this revision back to this server."
+        , attribute "aria-label" ("Copy revision " ++ String.left 7 revision.revision ++ " back to this server")
+        ]
+        [ iconCustom False "mode_heat" [ attribute "aria-hidden" "true" ]
+        , Html.text "Rewarm"
+        ]
 
 
 storageRevisionDeleteButton : Model -> StorageRevision -> Html (Flow Model ())

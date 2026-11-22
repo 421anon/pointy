@@ -4918,6 +4918,18 @@ body:has(dialog[open]) {
   border-block-end: 1px solid var(--border-color);
 }
 
+.storage-panel__tier + .storage-panel__tier {
+  margin-block-start: var(--spacing-sm);
+  padding-block-start: var(--spacing-sm);
+  border-block-start: 1px solid var(--line-color);
+}
+
+.storage-panel__tier--cold .storage-panel__cold-line {
+  margin-block-start: 0;
+  padding-block-start: 0;
+  border-block-start: 0;
+}
+
 .storage-panel__totals {
   display: flex;
   flex-wrap: wrap;
@@ -4987,6 +4999,10 @@ body:has(dialog[open]) {
 
 .storage-panel__bar--low .storage-panel__bar-used {
   background: var(--state-warning);
+}
+
+.storage-panel__bar--cold .storage-panel__bar-used {
+  background: var(--state-cold);
 }
 
 .storage-panel__scan {
@@ -5071,7 +5087,7 @@ body:has(dialog[open]) {
 .storage-panel__list--cold .storage-panel__columns,
 .storage-panel__list--cold .storage-panel__step-row,
 .storage-panel__list--cold .storage-panel__row {
-  grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem 9.5rem;
+  grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem 12rem;
 }
 
 .storage-panel__columns {
@@ -5128,7 +5144,8 @@ body:has(dialog[open]) {
 .storage-panel__step-toggle {
   @include mixins.button-base;
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: baseline;
   gap: var(--spacing-xs);
   max-width: 100%;
   padding: 0;
@@ -5150,11 +5167,10 @@ body:has(dialog[open]) {
 }
 
 .storage-panel__step-name {
-  overflow: hidden;
+  min-width: 0;
   font-weight: 600;
   color: var(--text-primary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .storage-panel__step-id {
@@ -5162,6 +5178,17 @@ body:has(dialog[open]) {
   font-size: var(--font-size-sm);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+a.storage-panel__step-id {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+a.storage-panel__step-id:hover,
+a.storage-panel__step-id:focus-visible {
+  color: var(--state-info);
+  text-decoration: underline;
 }
 
 .storage-panel__meta {
@@ -5195,12 +5222,10 @@ body:has(dialog[open]) {
 }
 
 .storage-panel__revision-step {
-  overflow: hidden;
-  max-width: 14rem;
+  min-width: 0;
   font-size: var(--font-size-sm);
   color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .storage-panel__age {
@@ -5215,12 +5240,10 @@ body:has(dialog[open]) {
 }
 
 .storage-panel__error {
-  overflow: hidden;
   margin-block-start: var(--spacing-2xs);
   font-size: var(--font-size-sm);
   color: var(--state-danger);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .storage-panel__size {
@@ -5292,8 +5315,13 @@ body:has(dialog[open]) {
 
 .storage-panel__rev-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-xs);
   justify-content: flex-end;
+}
+
+.storage-panel__rewarm > .material-symbols-outlined {
+  color: var(--state-warning);
 }
 
 .storage-panel__rev-action--armed {

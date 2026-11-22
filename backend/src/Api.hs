@@ -532,6 +532,14 @@ type OffloadStorageStep =
         :> ReqId
         :> Post '[JSON] NoContent
 
+type OnloadStorageRevision =
+    "storage"
+        :> "onload"
+        :> Description "Starts copying every offloaded file of one revision's output back to this server and returns before the bytes arrive. Each file already local or already copying is skipped, so repeating it is safe. Progress arrives as storage events on /events. Refuses with 409 while the step, or a step that reads its output, is running or queued; 503 when the cold status is unavailable."
+        :> ReqId
+        :> QueryParam "commit" Text
+        :> Post '[JSON] NoContent
+
 type DeleteStorageRevision =
     "storage"
         :> "delete"
@@ -643,4 +651,5 @@ type API =
         :<|> GetStorage
         :<|> OffloadStorage
         :<|> OffloadStorageStep
+        :<|> OnloadStorageRevision
         :<|> DeleteStorageRevision

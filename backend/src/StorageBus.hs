@@ -113,7 +113,9 @@ instance FromJSON StorageCapacity where
             (Nothing, Just value) ->
                 let availableValue = max 0 (min totalBytes value)
                  in pure (totalBytes - availableValue, availableValue)
-            _ -> fail "requires exactly one of usedBytes and availableBytes"
+            (Nothing, Nothing)
+                | kind == "quota" -> pure (0, totalBytes)
+            _ -> fail "requires exactly one of usedBytes and availableBytes, or only totalBytes for a quota"
         label <- fields .:? "label" .!= (if kind == "filesystem" then "disk" else "quota")
         pure
             StorageCapacity
@@ -132,6 +134,7 @@ data StorageView = StorageView
     , storageLocal :: Integer
     , storageCold :: Integer
     , storageCapacity :: Maybe StorageCapacity
+    , storageColdCapacity :: Maybe StorageCapacity
     , storageScanning :: Bool
     , storageScanned :: Int
     , storageHistory :: Int
@@ -150,6 +153,7 @@ instance ToJSON StorageView where
             , "local" .= storageLocal view
             , "cold" .= storageCold view
             , "capacity" .= storageCapacity view
+            , "coldCapacity" .= storageColdCapacity view
             , "scanning" .= storageScanning view
             , "scanned" .= storageScanned view
             , "history" .= storageHistory view

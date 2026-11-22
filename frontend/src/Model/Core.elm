@@ -230,6 +230,7 @@ type alias StorageView =
     , local : Int
     , cold : Int
     , capacity : Maybe StorageCapacity
+    , coldCapacity : Maybe StorageCapacity
     , scanning : Bool
     , scanned : Int
     , history : Int

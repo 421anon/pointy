@@ -5744,6 +5744,36 @@ storageDeleteErrorMessage error =
             Http.errorMessage error
 
 
+storageRewarmRevision : Model.StorageRevision -> Flow Model ()
+storageRewarmRevision revision =
+    Api.onloadStorageRevision revision.step revision.revision
+        |> Flow.andThen
+            (\result ->
+                case result of
+                    Ok () ->
+                        Flow.pure ()
+
+                    Err error ->
+                        addToast False (storageRewarmErrorMessage error)
+            )
+
+
+storageRewarmErrorMessage : Http.Error -> String
+storageRewarmErrorMessage error =
+    case error of
+        Http.BadBody body ->
+            body
+
+        Http.BadStatus 409 ->
+            "The revision cannot be copied back while the step or a step that reads it is running."
+
+        Http.BadStatus 503 ->
+            "Cold storage status is unavailable. Try again in a moment."
+
+        _ ->
+            Http.errorMessage error
+
+
 openStorageDeleteUpload : Model.StorageRevision -> Flow Model ()
 openStorageDeleteUpload revision =
     let

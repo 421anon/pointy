@@ -8,13 +8,14 @@ module Handlers.Storage (
     deleteRevisionHandler,
     offloadHandler,
     offloadStepHandler,
+    onloadRevisionHandler,
     runStorageCenter,
     storageHandler,
 ) where
 
 import BuildRunner (JobComment (..), SlurmJob (..), decodeJobComment, isRunningState, parseSlurmJobLine)
 import ClusterBus (latestSlurmJobs)
-import ColdProvider (ColdStatus, OffloadProgress (..))
+import ColdProvider (ColdFile (..), ColdStatus (..), OffloadProgress (..))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (replicateConcurrently_)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
@@ -31,7 +32,7 @@ import Data.IORef (atomicModifyIORef', newIORef)
 import Data.List (isPrefixOf, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -41,12 +42,12 @@ import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, pathValid, querySlurm, runNixCli, runNixStoreCli, unrootStorePath)
-import Handlers.Cold (coldFilesFor, coldStatusFor, mapColdProvider)
+import Handlers.Cold (coldFilesFor, coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
-import Servant (NoContent (..), ServerError (..), err400, err409, err503)
+import Servant (NoContent (..), ServerError (..), err400, err409, err502, err503)
 import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, revalidateAll, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
@@ -194,6 +195,26 @@ offloadStepHandler stepId = do
             outcome <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
             endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id outcome)
 
+onloadRevisionHandler :: Int -> Maybe Text -> AppM NoContent
+onloadRevisionHandler stepId mCommit = do
+    configured <- lift coldStorageConfigured
+    unless configured $ throwError err400{errBody = "Cold storage is not configured."}
+    refuseStepBusy stepId
+    outPath <- resolveStepOutPath stepId mCommit
+    status <- lift (coldStatusFor outPath)
+    case status of
+        Nothing -> throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
+        Just cold -> do
+            let files = filter onloadable (coldStatusFiles cold)
+            outcomes <- lift $ mapColdProvider (startOnload outPath . T.unpack . coldFilePath) files
+            let failures =
+                    [ coldFilePath file <> ": " <> message
+                    | (file, Left message) <- zip files outcomes
+                    ]
+            unless (null failures) $
+                throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start copying back: " <> T.intercalate "; " failures))}
+            pure NoContent
+
 deleteRevisionHandler :: Int -> Maybe Text -> AppM NoContent
 deleteRevisionHandler stepId mCommit = do
     refuseStepBusy stepId
@@ -310,6 +331,7 @@ runStorageCenter = do
                     , storageLocal = 0
                     , storageCold = 0
                     , storageCapacity = Nothing
+                    , storageColdCapacity = Nothing
                     , storageScanning = False
                     , storageScanned = 0
                     , storageHistory = 0
@@ -374,15 +396,18 @@ refresh work running = do
                 | (seed, revision) <- revisionsWithSeeds
                 , revisionMovable revision
                 ]
+        localBytes = sum (map revisionLocal revisions)
+        coldBytes = sum (map revisionCold revisions)
     liftIO $ atomically $ writeTVar movablePathsVar movablePaths
     liftIO $
         publishView
             (invalidBroadcast work)
             StorageView
                 { storageColdConfigured = coldConfigured
-                , storageLocal = sum (map revisionLocal revisions)
-                , storageCold = sum (map revisionCold revisions)
-                , storageCapacity = capacity
+                , storageLocal = localBytes
+                , storageCold = coldBytes
+                , storageCapacity = stepOutputCapacity localBytes capacity
+                , storageColdCapacity = coldOutputCapacity coldBytes colds
                 , storageScanning = not (null toScan)
                 , storageScanned = scannedCount
                 , storageHistory = length relevant
@@ -407,6 +432,32 @@ refresh work running = do
 
 unknownSize :: Bool -> Map Text (Maybe Integer) -> Text -> Bool
 unknownSize recheckAll sizes path = recheckAll || Map.notMember path sizes
+
+stepOutputCapacity :: Integer -> Maybe StorageCapacity -> Maybe StorageCapacity
+stepOutputCapacity used capacity =
+    fmap
+        ( \reported ->
+            if capacityKind reported == "quota"
+                then
+                    reported
+                        { capacityUsedBytes = used
+                        , capacityAvailableBytes = max 0 (capacityTotalBytes reported - used)
+                        }
+                else reported
+        )
+        capacity
+
+coldOutputCapacity :: Integer -> Map Text (Maybe ColdStatus) -> Maybe StorageCapacity
+coldOutputCapacity used colds = do
+    total <- listToMaybe [total | Just status <- Map.elems colds, Just total <- [coldStatusCapacityBytes status], total > 0]
+    pure
+        StorageCapacity
+            { capacityKind = "quota"
+            , capacityLabel = "cold storage"
+            , capacityTotalBytes = total
+            , capacityUsedBytes = used
+            , capacityAvailableBytes = max 0 (total - used)
+            }
 
 storageRevision :: Bool -> Maybe (Maybe ColdStatus) -> Maybe OffloadState -> Maybe Text -> RevisionSeed -> Integer -> StorageRevision
 storageRevision coldConfigured status offload blocked seed narSize =

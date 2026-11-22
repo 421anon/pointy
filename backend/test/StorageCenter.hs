@@ -63,15 +63,15 @@ checkDependents = do
 checkCold :: IO ()
 checkCold = do
     assertEqual "unknown status keeps the output local and unmovable" (ColdSummary "unknown" 1000 0 0 0 (Just "Cold storage status is unavailable.")) (summarizeCold 1000 Nothing)
-    assertEqual "an untracked output is local" (ColdSummary "local" 1000 0 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [])))
-    assertEqual "an offloading output reports its progress" (ColdSummary "offloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Offloading 400 900)])))
-    assertEqual "an onloading output still counts as cold and reports its progress" (ColdSummary "onloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Onloading 400 900)])))
-    assertEqual "a failed onload leaves the file cold and names the error" (ColdSummary "failed" 100 900 0 0 (Just "box down")) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (OnloadFailed "box down")])))
-    assertEqual "an offloaded output is cold and uses no local bytes" (ColdSummary "cold" 0 900 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 Offloaded])))
+    assertEqual "an untracked output is local" (ColdSummary "local" 1000 0 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [] Nothing)))
+    assertEqual "an offloading output reports its progress" (ColdSummary "offloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Offloading 400 900)] Nothing)))
+    assertEqual "an onloading output still counts as cold and reports its progress" (ColdSummary "onloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Onloading 400 900)] Nothing)))
+    assertEqual "a failed onload leaves the file cold and names the error" (ColdSummary "failed" 100 900 0 0 (Just "box down")) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (OnloadFailed "box down")] Nothing)))
+    assertEqual "an offloaded output is cold and uses no local bytes" (ColdSummary "cold" 0 900 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 Offloaded] Nothing)))
     assertEqual
         "a failed onload keeps the file's bytes cold beside an offloaded one"
         (ColdSummary "failed" 200 800 0 0 (Just "box down"))
-        (summarizeCold 1000 (Just (ColdStatus [file "a.bin" 300 Offloaded, file "b.bin" 500 (OnloadFailed "box down")])))
+        (summarizeCold 1000 (Just (ColdStatus [file "a.bin" 300 Offloaded, file "b.bin" 500 (OnloadFailed "box down")] Nothing)))
   where
     file path size state = ColdFile path size state
 
@@ -121,7 +121,11 @@ checkCapacity = do
         (Right (StorageCapacity "quota" "quota" 1000 1000 0))
         (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"availableBytes\":-5}"))
     assertEqual "both byte counts are rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"usedBytes\":400,\"availableBytes\":600}")))
-    assertEqual "a missing byte count is rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000}")))
+    assertEqual
+        "a quota may report only its total"
+        (Right (StorageCapacity "quota" "quota" 1000 0 1000))
+        (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000}"))
+    assertEqual "a filesystem still needs a byte count" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"filesystem\",\"totalBytes\":1000}")))
     assertEqual "a missing kind is rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"totalBytes\":1000,\"usedBytes\":400}")))
     assertEqual "a non-positive total is rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":0,\"usedBytes\":0}")))
     assertEqual "an unknown kind is rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"other\",\"totalBytes\":1000,\"usedBytes\":400}")))

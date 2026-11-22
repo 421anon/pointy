@@ -33,7 +33,7 @@ import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.ChatSearch (chatSearchHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Control.Concurrent (forkIO)
-import Handlers.Storage (deleteRevisionHandler, offloadHandler, offloadStepHandler, runStorageCenter, storageHandler)
+import Handlers.Storage (deleteRevisionHandler, offloadHandler, offloadStepHandler, onloadRevisionHandler, runStorageCenter, storageHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
 import Data.String (fromString)
@@ -121,6 +121,7 @@ server =
         :<|> storageHandler
         :<|> offloadHandler
         :<|> offloadStepHandler
+        :<|> onloadRevisionHandler
         :<|> deleteRevisionHandler
 
 corsPolicy :: Request -> Maybe CorsResourcePolicy

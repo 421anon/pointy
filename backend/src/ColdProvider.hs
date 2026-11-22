@@ -9,12 +9,15 @@ module ColdProvider (
     parseOffloadProgress,
 ) where
 
-import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text as T
 
-newtype ColdStatus = ColdStatus {coldStatusFiles :: [ColdFile]}
+data ColdStatus = ColdStatus
+    { coldStatusFiles :: [ColdFile]
+    , coldStatusCapacityBytes :: Maybe Integer
+    }
     deriving (Show, Eq)
 
 data ColdFile = ColdFile
@@ -38,10 +41,14 @@ data OffloadProgress = OffloadProgress
     deriving (Show, Eq)
 
 instance FromJSON ColdStatus where
-    parseJSON = withObject "cold storage status" $ \o -> ColdStatus <$> o .: "files"
+    parseJSON = withObject "cold storage status" $ \o ->
+        ColdStatus <$> o .: "files" <*> o .:? "capacityBytes"
 
 instance ToJSON ColdStatus where
-    toJSON status = object ["files" .= coldStatusFiles status]
+    toJSON status =
+        object $
+            ["files" .= coldStatusFiles status]
+                ++ maybe [] (\total -> ["capacityBytes" .= total]) (coldStatusCapacityBytes status)
 
 instance FromJSON ColdFile where
     parseJSON = withObject "cold storage file" $ \o -> do
