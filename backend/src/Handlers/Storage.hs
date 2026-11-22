@@ -574,19 +574,21 @@ evalHeadSteps :: (Eval :> es, IOE :> es) => FilePath -> Text -> ExceptT String (
 evalHeadSteps repoPath headHash = do
     ctx <- commitContextEff repoPath headHash
     output <- runNixEvalJsonApplyInRepo ctx headStepsExpression "#pointy.steps"
-    either (throwError . ("Cannot decode step information: " ++)) pure (eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)))
+    either (throwError . ("Cannot decode step information: " ++)) (pure . Map.mapMaybe id) (eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)) :: Either String (Map Int (Maybe HeadStep)))
 
 headStepsExpression :: String
 headStepsExpression =
     unlines
         [ "steps: builtins.mapAttrs (id: s:"
         , "  let name = builtins.tryEval (s.def.name or (s.name or \"\"));"
-        , "  in {"
+        , "      output = builtins.tryEval s.outPath;"
+        , "      certificate = builtins.tryEval ((s.certificate or s).outPath);"
+        , "  in if output.success && certificate.success then {"
         , "    name = if name.success && builtins.isString name.value then name.value else \"\";"
         , "    deps = builtins.map builtins.fromJSON (s.dependencies or [ ]);"
-        , "    output = s.outPath;"
-        , "    certificate = (s.certificate or s).outPath;"
-        , "  }) steps"
+        , "    output = output.value;"
+        , "    certificate = certificate.value;"
+        , "  } else null) steps"
         ]
 
 pathSizes :: (Nix :> es) => [Text] -> Eff es (Either Text (Map Text Integer))
