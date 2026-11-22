@@ -5758,6 +5758,14 @@ storageRewarmRevision revision =
             )
 
 
+storageRewarmRevisions : List Model.StorageRevision -> Flow Model ()
+storageRewarmRevisions revisions =
+    List.foldl
+        (\revision flow -> Flow.seq flow (storageRewarmRevision revision))
+        (Flow.pure ())
+        revisions
+
+
 storageRewarmErrorMessage : Http.Error -> String
 storageRewarmErrorMessage error =
     case error of

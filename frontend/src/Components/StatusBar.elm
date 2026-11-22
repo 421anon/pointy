@@ -1298,9 +1298,7 @@ viewStorageColdTier snapshot =
                         ]
 
                     Nothing ->
-                        [ Html.span [ class "storage-panel__cold-note" ]
-                            [ Html.text "· not counted in the local total above" ]
-                        ]
+                        []
             )
          ]
             ++ [ Html.viewMaybe
@@ -1483,6 +1481,7 @@ type alias StorageGroup =
     , cold : Int
     , revisionCount : Int
     , localRevisionCount : Int
+    , rewarmRevisionCount : Int
     , blocked : Maybe String
     , revisions : List StorageRevision
     }
@@ -1529,9 +1528,15 @@ summarizeStorageGroup stepId revisions =
     , cold = List.sum (List.map .cold revisions)
     , revisionCount = List.length revisions
     , localRevisionCount = List.length (List.filter storageRevisionMovable revisions)
+    , rewarmRevisionCount = List.length (List.filter storageRevisionRewarmable revisions)
     , blocked = List.filterMap .blocked revisions |> List.head
     , revisions = revisions
     }
+
+
+storageRevisionRewarmable : StorageRevision -> Bool
+storageRevisionRewarmable revision =
+    revision.cold > 0 && (revision.state == StorageCold || revision.state == StorageFailed)
 
 
 storageRevisionMovable : StorageRevision -> Bool
@@ -1593,6 +1598,23 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
         blockedId =
             "storage-step-blocked-" ++ String.fromInt group.stepId
 
+        rewarmRevisions =
+            List.filter storageRevisionRewarmable group.revisions
+
+        rewarmButton =
+            Html.viewIf (coldConfigured && not (List.isEmpty rewarmRevisions)) <|
+                Html.button
+                    [ class "small-btn storage-panel__step-move storage-panel__rewarm"
+                    , type_ "button"
+                    , disabled (group.blocked /= Nothing)
+                    , Events.onClick (Actions.storageRewarmRevisions rewarmRevisions)
+                    , attribute "aria-describedby" blockedId
+                    ]
+                    [ iconCustom False "mode_heat" [ attribute "aria-hidden" "true" ]
+                    , Html.text
+                        ("Rewarm " ++ storageCount (List.length rewarmRevisions) "revision" "revisions")
+                    ]
+
         moveButton =
             Html.viewIf (coldConfigured && group.localRevisionCount > 0) <|
                 Html.button
@@ -1640,7 +1662,10 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
          ]
             ++ (if coldConfigured then
                     [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.cold) ]
-                    , Html.div [ class "storage-panel__action" ] [ moveButton ]
+                    , Html.div [ class "storage-panel__action" ]
+                        [ Html.div [ class "storage-panel__rev-actions" ]
+                            [ rewarmButton, moveButton ]
+                        ]
                     ]
 
                 else
