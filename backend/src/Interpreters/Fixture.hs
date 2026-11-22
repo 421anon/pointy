@@ -217,9 +217,9 @@ answerNix document args = case args of
         Just drv -> (ExitSuccess, bytes (drv ++ "\n"), BS.empty)
         Nothing -> (ExitFailure 1, BS.empty, bytes ("fixture: no derivation recorded for " ++ path))
     ("path-info" : "--offline" : "--json" : paths) | not (null paths) ->
-        pure (pathInfoAnswer document paths)
+        pathInfoAnswer document paths
     ("--offline" : "path-info" : "--json" : paths) | not (null paths) ->
-        pure (pathInfoAnswer document paths)
+        pathInfoAnswer document paths
     ("derivation" : "show" : paths) | not (null paths) ->
         pure (ExitSuccess, bytes (derivationShowJson document paths), BS.empty)
     _ -> pure (ExitFailure 1, BS.empty, bytes ("fixture: unsupported nix invocation: " ++ unwords args))
@@ -270,19 +270,21 @@ derivationShowJson document paths =
     outputsOf drv = object [Key.fromText name .= object ["path" .= takeFileName output] | (name, output) <- zip outputNames (derivationOutputs document drv)]
     outputNames = "out" : ["out" <> T.pack (show n) | n <- [2 :: Int ..]]
 
-pathInfoAnswer :: FixtureDocument -> [FilePath] -> (ExitCode, BS.ByteString, BS.ByteString)
+pathInfoAnswer :: FixtureDocument -> [FilePath] -> IO (ExitCode, BS.ByteString, BS.ByteString)
 pathInfoAnswer document paths
-    | any (not . isStorePath) paths = (ExitFailure 1, BS.empty, bytes "error: path is not in the Nix store")
-    | otherwise = (ExitSuccess, bytes (pathInfoJson document paths), BS.empty)
+    | any (not . isStorePath) paths = pure (ExitFailure 1, BS.empty, bytes "error: path is not in the Nix store")
+    | otherwise = do
+        validity <- traverse (fixturePathValid document) paths
+        pure (ExitSuccess, bytes (pathInfoJson (zip paths validity)), BS.empty)
 
-pathInfoJson :: FixtureDocument -> [FilePath] -> String
-pathInfoJson document paths =
+pathInfoJson :: [(FilePath, Bool)] -> String
+pathInfoJson entries =
     T.unpack . TE.decodeUtf8 . LBS.toStrict . A.encode $
-        object [Key.fromText (T.pack path) .= validity path | path <- paths]
-  where
-    validity path
-        | path `elem` documentValidPaths document = object ["narHash" .= pseudoHash path, "valid" .= True]
-        | otherwise = A.Null
+        object
+            [ Key.fromText (T.pack path)
+                .= if valid then object ["narHash" .= pseudoHash path, "valid" .= True] else A.Null
+            | (path, valid) <- entries
+            ]
 
 
 runSlurmFixture :: (IOE :> es) => FixtureState -> Eff (Slurm : es) a -> Eff es a
