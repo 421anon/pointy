@@ -180,7 +180,7 @@ evalNixJson _state expression = do
 
 runNixFixture :: (IOE :> es) => FixtureState -> Eff (Nix : es) a -> Eff es a
 runNixFixture state = interpret $ \_ -> \case
-    PathValid path -> liftIO (fixturePathValid (fixtureDocument state) path)
+    PathValid path -> Right <$> liftIO (fixturePathValid (fixtureDocument state) path)
     RunNixCli args -> liftIO $ answerNix (fixtureDocument state) args
     RunNixStoreCli args -> case args of
         ("--realise" : "--dry-run" : paths) -> liftIO (dryRunAnswer (fixtureDocument state) paths)

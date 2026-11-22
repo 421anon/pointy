@@ -2981,9 +2981,28 @@ pollUnfreezing =
 
 storageDeleteUnfreezing : Model -> List (Flow Model ())
 storageDeleteUnfreezing model =
-    case Model.getStorageDeleteUpload model of
+    case storageDeleteUnfreezingPaths model of
         Nothing ->
             []
+
+        Just { stepId, revision, paths } ->
+            [ Api.fetchColdStatus stepId (Just revision)
+                |> FlowError.foldResult
+                    (\status_ -> Flow.batchM (List.map (applyStorageDeleteColdStatus stepId revision status_) paths))
+                    (\_ -> Flow.pure ())
+            ]
+
+
+storageDeleteHasUnfreezing : Model -> Bool
+storageDeleteHasUnfreezing model =
+    storageDeleteUnfreezingPaths model /= Nothing
+
+
+storageDeleteUnfreezingPaths : Model -> Maybe { stepId : Int, revision : String, paths : List (List String) }
+storageDeleteUnfreezingPaths model =
+    case Model.getStorageDeleteUpload model of
+        Nothing ->
+            Nothing
 
         Just target ->
             let
@@ -2991,14 +3010,10 @@ storageDeleteUnfreezing model =
                     Model.filePathsWhere (.availability >> Model.isUnfreezing) [] target.directory
             in
             if List.isEmpty paths then
-                []
+                Nothing
 
             else
-                [ Api.fetchColdStatus target.stepId (Just target.revision)
-                    |> FlowError.foldResult
-                        (\status_ -> Flow.batchM (List.map (applyStorageDeleteColdStatus target.stepId target.revision status_) paths))
-                        (\_ -> Flow.pure ())
-                ]
+                Just { stepId = target.stepId, revision = target.revision, paths = paths }
 
 
 applyColdStatus : Int -> String -> Model.ColdStatus -> List String -> Flow Model ()
@@ -3051,51 +3066,67 @@ refreshUnfrozenFile recordId commit path =
 
 
 applyStorageDeleteColdStatus : Int -> String -> Model.ColdStatus -> List String -> Flow Model ()
-applyStorageDeleteColdStatus stepId commit status_ path =
-    case List.find (\coldFile -> coldFile.path == path) status_.files of
-        Nothing ->
-            refreshStorageDeleteFile stepId commit path
+applyStorageDeleteColdStatus stepId revision status_ path =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if not (storageDeleteTargetCurrent stepId revision model) then
+                    Flow.pure ()
 
-        Just coldFile ->
-            Flow.forAll (storageDeleteFileAvailabilityAt path << where_ Model.isUnfreezing)
-                (\_ ->
-                    case coldFile.state of
-                        Model.Onloading done total ->
-                            Flow.setAll (storageDeleteFileAvailabilityAt path) (Model.Unfreezing (Just ( done, total )))
+                else
+                    case List.find (\coldFile -> coldFile.path == path) status_.files of
+                        Nothing ->
+                            refreshStorageDeleteFile stepId revision path
 
-                        Model.Offloading _ _ ->
-                            Flow.pure ()
+                        Just coldFile ->
+                            Flow.forAll (storageDeleteFileAvailabilityAt path << where_ Model.isUnfreezing)
+                                (\_ ->
+                                    case coldFile.state of
+                                        Model.Onloading done total ->
+                                            Flow.setAll (storageDeleteFileAvailabilityAt path) (Model.Unfreezing (Just ( done, total )))
 
-                        Model.OnloadFailed reason ->
-                            Flow.setAll (storageDeleteFileAvailabilityAt path) (Model.UnfreezeFailed reason)
-                                |> Flow.seq (addToast False ("Failed to copy " ++ String.join "/" path ++ " back from cold storage: " ++ reason))
+                                        Model.Offloading _ _ ->
+                                            Flow.pure ()
 
-                        Model.Offloaded ->
-                            Flow.pure ()
-                )
+                                        Model.OnloadFailed reason ->
+                                            Flow.setAll (storageDeleteFileAvailabilityAt path) (Model.UnfreezeFailed reason)
+                                                |> Flow.seq (addToast False ("Failed to copy " ++ String.join "/" path ++ " back from cold storage: " ++ reason))
+
+                                        Model.Offloaded ->
+                                            Flow.pure ()
+                                )
+            )
 
 
 refreshStorageDeleteFile : Int -> String -> List String -> Flow Model ()
-refreshStorageDeleteFile stepId commit path =
-    Api.fetchDirectoryContents ApiDecode.directoryItemGeneric stepId (Just commit) (List.take (List.length path - 1) path)
+refreshStorageDeleteFile stepId revision path =
+    Api.fetchDirectoryContents ApiDecode.directoryItemGeneric stepId (Just revision) (List.take (List.length path - 1) path)
         |> FlowError.foldResult
             (\entries ->
-                case List.last path |> Maybe.andThen (\name -> Dict.get name entries) of
-                    Just entry ->
-                        let
-                            local =
-                                case entry of
-                                    Model.File fresh ->
-                                        fresh.availability == Model.Local
+                Flow.get
+                    |> Flow.andThen
+                        (\model ->
+                            if not (storageDeleteTargetCurrent stepId revision model) then
+                                Flow.pure ()
 
-                                    Model.Folder _ ->
-                                        True
-                        in
-                        Flow.when local
-                            (Flow.setAll (storageDeleteItemAtPath path << where_ (has (file << fileAvailability << where_ Model.isUnfreezing))) entry)
+                            else
+                                case List.last path |> Maybe.andThen (\name -> Dict.get name entries) of
+                                    Just entry ->
+                                        let
+                                            local =
+                                                case entry of
+                                                    Model.File fresh ->
+                                                        fresh.availability == Model.Local
 
-                    _ ->
-                        Flow.pure ()
+                                                    Model.Folder _ ->
+                                                        True
+                                        in
+                                        Flow.when local
+                                            (Flow.setAll (storageDeleteItemAtPath path << where_ (has (file << fileAvailability << where_ Model.isUnfreezing))) entry)
+
+                                    _ ->
+                                        Flow.pure ()
+                        )
             )
             (\_ -> Flow.pure ())
 
@@ -5688,6 +5719,50 @@ toggleStorageStepExpanded stepId =
         )
 
 
+storageRewarmKey : Model.StorageRevision -> String
+storageRewarmKey revision =
+    "rewarm:" ++ Model.storageRevisionKey revision
+
+
+storageDeleteRequestKey : Model.StorageRevision -> String
+storageDeleteRequestKey revision =
+    storageDeleteTargetRequestKey revision.step revision.revision
+
+
+storageDeleteTargetRequestKey : Int -> String -> String
+storageDeleteTargetRequestKey stepId revision =
+    "delete:" ++ String.fromInt stepId ++ "@" ++ revision
+
+
+storageRevisionActionPending : Model -> Model.StorageRevision -> Bool
+storageRevisionActionPending model revision =
+    let
+        pending =
+            Model.getStorageMoving model
+    in
+    Set.member (Model.storageRevisionKey revision) pending
+        || Set.member (storageRewarmKey revision) pending
+        || Set.member (storageDeleteRequestKey revision) pending
+        || Set.member (Model.storageStepKey revision.step) pending
+
+
+storageStepRevisionsPending : Model -> Int -> Bool
+storageStepRevisionsPending model stepId =
+    case ApiData.toMaybe (Model.getStorageView model) of
+        Just view ->
+            List.any (storageRevisionActionPending model) (List.filter (.step >> (==) stepId) view.revisions)
+
+        Nothing ->
+            False
+
+
+storageMoveInFlight : Set String -> Bool
+storageMoveInFlight pending =
+    List.any
+        (\key -> not (String.startsWith "rewarm:" key) && not (String.startsWith "delete:" key))
+        (Set.toList pending)
+
+
 storageDeleteRevision : Model.StorageRevision -> Flow Model ()
 storageDeleteRevision revision =
     case revision.kind of
@@ -5704,27 +5779,37 @@ storageDeleteRevision revision =
 armStorageDelete : Model.StorageRevision -> Flow Model ()
 armStorageDelete revision =
     let
-        key =
+        armedKey =
             Model.storageRevisionKey revision
+
+        requestKey =
+            storageDeleteRequestKey revision
     in
     Flow.get
         |> Flow.andThen
             (\model ->
-                if Set.member key (Model.getStorageDeleteArmed model) then
-                    Flow.over storageDeleteArmed (Set.remove key)
+                if storageRevisionActionPending model revision then
+                    Flow.over storageDeleteArmed (Set.remove armedKey)
+
+                else if Set.member armedKey (Model.getStorageDeleteArmed model) then
+                    Flow.over storageDeleteArmed (Set.remove armedKey)
+                        |> Flow.seq (Flow.over storageMoving (Set.insert requestKey))
                         |> Flow.seq (Api.deleteStorageRevision revision.step revision.revision)
                         |> Flow.andThen
                             (\result ->
-                                case result of
-                                    Ok () ->
-                                        Flow.pure ()
+                                Flow.over storageMoving (Set.remove requestKey)
+                                    |> Flow.seq
+                                        (case result of
+                                            Ok () ->
+                                                Flow.pure ()
 
-                                    Err error ->
-                                        addToast False (storageDeleteErrorMessage error)
+                                            Err error ->
+                                                addToast False (storageDeleteErrorMessage error)
+                                        )
                             )
 
                 else
-                    Flow.over storageDeleteArmed (Set.insert key)
+                    Flow.over storageDeleteArmed (Set.insert armedKey)
             )
 
 
@@ -5746,15 +5831,31 @@ storageDeleteErrorMessage error =
 
 storageRewarmRevision : Model.StorageRevision -> Flow Model ()
 storageRewarmRevision revision =
-    Api.onloadStorageRevision revision.step revision.revision
+    let
+        key =
+            storageRewarmKey revision
+    in
+    Flow.get
         |> Flow.andThen
-            (\result ->
-                case result of
-                    Ok () ->
-                        Flow.pure ()
+            (\model ->
+                if storageRevisionActionPending model revision then
+                    Flow.pure ()
 
-                    Err error ->
-                        addToast False (storageRewarmErrorMessage error)
+                else
+                    Flow.over storageMoving (Set.insert key)
+                        |> Flow.seq (Api.onloadStorageRevision revision.step revision.revision)
+                        |> Flow.andThen
+                            (\result ->
+                                Flow.over storageMoving (Set.remove key)
+                                    |> Flow.seq
+                                        (case result of
+                                            Ok () ->
+                                                Flow.pure ()
+
+                                            Err error ->
+                                                addToast False (storageRewarmErrorMessage error)
+                                        )
+                            )
             )
 
 
@@ -5797,12 +5898,58 @@ openStorageDeleteUpload revision =
         |> Flow.seq (loadStorageDeleteDirectory target)
 
 
+storageDeleteTargetCurrent : Int -> String -> Model -> Bool
+storageDeleteTargetCurrent stepId revision model =
+    case Model.getStorageDeleteUpload model of
+        Just target ->
+            target.stepId == stepId && target.revision == revision
+
+        Nothing ->
+            False
+
+
 loadStorageDeleteDirectory : Model.StorageDeleteUpload -> Flow Model ()
 loadStorageDeleteDirectory target =
-    callApi
-        (storageDeleteUpload << just << storageDeleteDirectory << children)
-        (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric target.stepId (Just target.revision) [])
-        |> FlowError.foldResult (\_ -> Flow.pure ()) (\_ -> Flow.pure ())
+    loadStorageDeleteChildren target.stepId target.revision []
+
+
+loadStorageDeleteChildren : Int -> String -> List String -> Flow Model ()
+loadStorageDeleteChildren stepId revision path =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if storageDeleteTargetCurrent stepId revision model then
+                    Flow.setAll (storageDeleteChildrenAt path) (ApiData.Loading Nothing)
+                        |> Flow.seq (fetchStorageDeleteChildren stepId revision path)
+
+                else
+                    Flow.pure ()
+            )
+
+
+fetchStorageDeleteChildren : Int -> String -> List String -> Flow Model ()
+fetchStorageDeleteChildren stepId revision path =
+    Api.fetchDirectoryContents ApiDecode.directoryItemGeneric stepId (Just revision) path
+        |> Flow.andThen
+            (\result ->
+                Flow.get
+                    |> Flow.andThen
+                        (\model ->
+                            if storageDeleteTargetCurrent stepId revision model then
+                                Flow.setAll (storageDeleteChildrenAt path) (ApiData.fromResult result)
+                                    |> Flow.seq
+                                        (case result of
+                                            Ok _ ->
+                                                Flow.pure ()
+
+                                            Err error ->
+                                                addToast False (Http.errorMessage error)
+                                        )
+
+                            else
+                                Flow.pure ()
+                        )
+            )
 
 
 closeStorageDeleteUpload : Flow Model ()
@@ -5826,17 +5973,29 @@ confirmStorageDeleteUpload =
                         Flow.pure ()
 
                     Just target ->
-                        closeStorageDeleteUpload
-                            |> Flow.seq (Api.deleteStorageRevision target.stepId target.revision)
-                            |> Flow.andThen
-                                (\result ->
-                                    case result of
-                                        Ok () ->
-                                            Flow.pure ()
+                        let
+                            key =
+                                storageDeleteTargetRequestKey target.stepId target.revision
+                        in
+                        if Set.member key (Model.getStorageMoving model) then
+                            Flow.pure ()
 
-                                        Err error ->
-                                            addToast False (storageDeleteErrorMessage error)
-                                )
+                        else
+                            Flow.over storageMoving (Set.insert key)
+                                |> Flow.seq closeStorageDeleteUpload
+                                |> Flow.seq (Api.deleteStorageRevision target.stepId target.revision)
+                                |> Flow.andThen
+                                    (\result ->
+                                        Flow.over storageMoving (Set.remove key)
+                                            |> Flow.seq
+                                                (case result of
+                                                    Ok () ->
+                                                        Flow.pure ()
+
+                                                    Err error ->
+                                                        addToast False (storageDeleteErrorMessage error)
+                                                )
+                                    )
             )
 
 
@@ -5854,11 +6013,7 @@ toggleStorageDeleteEntry mOpen path =
                         |> Flow.seq (Flow.setAll (storageDeleteFolderExpandedAt path) newlyExpanded)
                         |> Flow.seq
                             (Flow.when newlyExpanded
-                                (callApi
-                                    (storageDeleteChildrenAt path)
-                                    (Api.fetchDirectoryContents ApiDecode.directoryItemGeneric target.stepId (Just target.revision) path)
-                                    |> FlowError.foldResult (\_ -> Flow.pure ()) (\_ -> Flow.pure ())
-                                )
+                                (loadStorageDeleteChildren target.stepId target.revision path)
                             )
                         |> Flow.return newlyExpanded
                 )
@@ -5875,8 +6030,16 @@ unfreezeStorageDeleteFile path =
                         |> FlowError.foldResult
                             (\() -> Flow.pure ())
                             (\error ->
-                                Flow.setAll (storageDeleteFileAvailabilityAt path) (Model.UnfreezeFailed (Http.errorMessage error))
-                                    |> Flow.seq (addToast False ("Failed to copy " ++ String.join "/" path ++ " back from cold storage: " ++ Http.errorMessage error))
+                                Flow.get
+                                    |> Flow.andThen
+                                        (\model ->
+                                            if storageDeleteTargetCurrent target.stepId target.revision model then
+                                                Flow.setAll (storageDeleteFileAvailabilityAt path) (Model.UnfreezeFailed (Http.errorMessage error))
+                                                    |> Flow.seq (addToast False ("Failed to copy " ++ String.join "/" path ++ " back from cold storage: " ++ Http.errorMessage error))
+
+                                            else
+                                                Flow.pure ()
+                                        )
                             )
                     )
         )
@@ -5891,8 +6054,8 @@ confirmOffload revision =
             , subtitle = Just (revision.name ++ " · " ++ String.left 7 revision.revision)
             , bodyLines =
                 [ "This moves " ++ Model.formatStorageSize revision.local ++ " off this server."
-                , "Pointy asks the cold storage provider to move this revision's files off this server."
-                , "The files stay available: reading one copies it back first, so larger files take longer to open."
+                , "Pointy copies this revision's files to the cold storage provider, then removes the server copy."
+                , "Reading does not copy it back automatically. Rewarm the revision explicitly to restore its files; larger revisions take longer."
                 ]
             , onConfirm = offloadStorageRevision revision
             }
@@ -5902,7 +6065,7 @@ confirmOffload revision =
 
 
 confirmStorageStepOffload : Int -> String -> Int -> Int -> Flow Model ()
-confirmStorageStepOffload stepId name local localRevisionCount =
+confirmStorageStepOffload stepId name movableLocal localRevisionCount =
     let
         revisionCount =
             String.fromInt localRevisionCount
@@ -5923,10 +6086,10 @@ confirmStorageStepOffload stepId name local localRevisionCount =
                     ++ revisionCount
                     ++ revisionWord
                     ++ " totalling "
-                    ++ Model.formatStorageSize local
+                    ++ Model.formatStorageSize movableLocal
                     ++ " off this server."
-                , "Pointy asks the cold storage provider to move these revisions' files off this server."
-                , "The files stay available: reading one copies it back first, so larger files take longer to open."
+                , "Pointy copies these revisions' files to the cold storage provider, then removes the server copies."
+                , "Reading does not copy them back automatically. Rewarm a revision explicitly to restore its files; larger revisions take longer."
                 ]
             , onConfirm = offloadStorageStepRevisions stepId
             }
@@ -5944,7 +6107,7 @@ offloadStorageRevision revision =
     Flow.get
         |> Flow.andThen
             (\model ->
-                if Set.member key (Model.getStorageMoving model) then
+                if storageRevisionActionPending model revision then
                     Flow.pure ()
 
                 else
@@ -5974,7 +6137,7 @@ offloadStorageStepRevisions stepId =
     Flow.get
         |> Flow.andThen
             (\model ->
-                if Set.member key (Model.getStorageMoving model) then
+                if Set.member key (Model.getStorageMoving model) || storageStepRevisionsPending model stepId then
                     Flow.pure ()
 
                 else

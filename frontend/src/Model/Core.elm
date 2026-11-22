@@ -229,6 +229,7 @@ type alias StorageView =
     , local : Int
     , cold : Int
     , capacity : Maybe StorageCapacity
+    , capacityFreeBytes : Maybe Int
     , coldCapacity : Maybe StorageCapacity
     , scanning : Bool
     , scanned : Int
@@ -244,6 +245,7 @@ type alias StorageView =
 type alias StorageRevision =
     { step : Int
     , name : String
+    , currentName : Maybe String
     , revision : String
     , kind : StorageKind
     , committedAt : Time.Posix
@@ -298,6 +300,34 @@ storageRevisionKey revision =
 storageStepKey : Int -> String
 storageStepKey stepId =
     "step#" ++ String.fromInt stepId
+
+
+storageCapacityFraction : Int -> Maybe StorageCapacity -> Maybe Int -> Maybe Int
+storageCapacityFraction used capacity freeBytes =
+    let
+        denominator =
+            case capacity of
+                Just { kind, totalBytes } ->
+                    case kind of
+                        CapacityQuota ->
+                            Just totalBytes
+
+                        CapacityFilesystem ->
+                            Maybe.map ((+) used) freeBytes
+
+                Nothing ->
+                    Maybe.map ((+) used) freeBytes
+    in
+    case denominator of
+        Just total ->
+            if total > 0 then
+                Just (clamp 0 100 (used * 100 // total))
+
+            else
+                Nothing
+
+        Nothing ->
+            Nothing
 
 
 formatStorageSize : Int -> String

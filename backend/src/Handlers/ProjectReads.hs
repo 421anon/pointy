@@ -94,7 +94,7 @@ rollupBasis headContext ctx projectId = do
 rollupStatuses :: App es => RollupBasis -> Eff es (Map Int (Text, Maybe Text))
 rollupStatuses basis = do
     let unreviewed = basisUnreviewed basis
-    (rawStatuses, store) <- rawStatusesFor (Map.map (T.pack . stepCertificate) unreviewed)
+    (rawStatuses, store) <- rawStatusesFor unreviewed
     unreviewedStatuses <- markBuiltOutputs unreviewed =<< resolveStatusesBatched store rawStatuses
     reviewed <- reviewedStatuses (basisReviewedCertificates basis) (basisReviewedOutputs basis)
     pure (Map.union reviewed unreviewedStatuses)

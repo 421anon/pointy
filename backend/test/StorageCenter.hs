@@ -2,8 +2,12 @@
 
 module Main (main) where
 
+import BuildLog (buildStepStore, rawStatusesBatched)
+import BuildStatus (StepPaths (..), checkStatus)
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..))
 import qualified Data.ByteString.Lazy.Char8 as LBS
+import Data.Aeson (eitherDecode)
+import Fixture.Document (FixtureDocument (..))
 import Data.Either (isLeft)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -13,6 +17,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Interpreters.Fixture (newFixtureState, runFixture)
+import Handlers.Storage (HeadStep (..), pathOwners)
 import StorageBus (StorageCapacity (..), StorageRevision (..), parseStorageCapacity, revisionMovable)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 
@@ -24,6 +30,8 @@ main = do
     checkCold
     checkRevisionMovable
     checkCapacity
+    checkCertificationRequiresOutput
+    checkSharedOutputOwners
 
 checkHistoryParsing :: IO ()
 checkHistoryParsing = do
@@ -63,15 +71,15 @@ checkDependents = do
 checkCold :: IO ()
 checkCold = do
     assertEqual "unknown status keeps the output local and unmovable" (ColdSummary "unknown" 1000 0 0 0 (Just "Cold storage status is unavailable.")) (summarizeCold 1000 Nothing)
-    assertEqual "an untracked output is local" (ColdSummary "local" 1000 0 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [] Nothing)))
-    assertEqual "an offloading output reports its progress" (ColdSummary "offloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Offloading 400 900)] Nothing)))
-    assertEqual "an onloading output still counts as cold and reports its progress" (ColdSummary "onloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Onloading 400 900)] Nothing)))
-    assertEqual "a failed onload leaves the file cold and names the error" (ColdSummary "failed" 100 900 0 0 (Just "box down")) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (OnloadFailed "box down")] Nothing)))
-    assertEqual "an offloaded output is cold and uses no local bytes" (ColdSummary "cold" 0 900 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 Offloaded] Nothing)))
+    assertEqual "an untracked output is local" (ColdSummary "local" 1000 0 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [] Nothing Nothing)))
+    assertEqual "an offloading output reports its progress" (ColdSummary "offloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Offloading 400 900)] Nothing Nothing)))
+    assertEqual "an onloading output counts its returned bytes as local" (ColdSummary "onloading" 500 500 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Onloading 400 900)] Nothing Nothing)))
+    assertEqual "a failed onload leaves the file cold and names the error" (ColdSummary "failed" 100 900 0 0 (Just "box down")) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (OnloadFailed "box down")] Nothing Nothing)))
+    assertEqual "an offloaded output is cold and uses no local bytes" (ColdSummary "cold" 0 900 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 Offloaded] Nothing Nothing)))
     assertEqual
         "a failed onload keeps the file's bytes cold beside an offloaded one"
         (ColdSummary "failed" 200 800 0 0 (Just "box down"))
-        (summarizeCold 1000 (Just (ColdStatus [file "a.bin" 300 Offloaded, file "b.bin" 500 (OnloadFailed "box down")] Nothing)))
+        (summarizeCold 1000 (Just (ColdStatus [file "a.bin" 300 Offloaded, file "b.bin" 500 (OnloadFailed "box down")] Nothing Nothing)))
   where
     file path size state = ColdFile path size state
 
@@ -86,6 +94,7 @@ checkRevisionMovable = do
         StorageRevision
             { revisionStep = stepId
             , revisionName = name
+            , revisionCurrentName = Just name
             , revisionKind = "derived"
             , revisionCommit = commit seconds
             , revisionCommittedAt = time seconds
@@ -125,6 +134,22 @@ checkCapacity = do
     assertEqual "a missing kind is rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"totalBytes\":1000,\"usedBytes\":400}")))
     assertEqual "a non-positive total is rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":0,\"usedBytes\":0}")))
     assertEqual "an unknown kind is rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"other\",\"totalBytes\":1000,\"usedBytes\":400}")))
+
+checkCertificationRequiresOutput :: IO ()
+checkCertificationRequiresOutput = do
+    document <- either fail pure (eitherDecode "{\"valid\":[\"/nix/store/cert\"]}" :: Either String FixtureDocument)
+    state <- newFixtureState document
+    single <- runFixture state (checkStatus (StepPaths "/nix/store/cert" "/nix/store/output"))
+    assertEqual "a certificate does not make a missing output successful" ("not-started", Nothing) single
+    batched <- runFixture state $ do
+        store <- buildStepStore (Map.singleton 1 "cert") (Map.singleton 1 "/nix/store/output")
+        rawStatusesBatched store (const False) (Map.singleton 1 "cert")
+    assertEqual "batched status also checks output presence" (Map.singleton 1 ("not-started", Nothing)) batched
+
+checkSharedOutputOwners :: IO ()
+checkSharedOutputOwners = do
+    let owners = Map.fromList [(1, HeadStep "one" Set.empty "/nix/store/shared" "/nix/store/cert1"), (2, HeadStep "two" Set.empty "/nix/store/other" "/nix/store/cert2"), (3, HeadStep "three" Set.empty "/nix/store/shared" "/nix/store/cert3")]
+    assertEqual "all owners of a shared output are protected" [1, 3] (pathOwners owners "/nix/store/shared")
 
 sampleLog :: String
 sampleLog =

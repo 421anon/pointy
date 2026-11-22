@@ -237,6 +237,7 @@ instance Monoid StorePlan where
 data StepStore = StepStore
     { ssDrvOf :: Map Int FilePath
     , ssBuilt :: Maybe (Set FilePath)
+    , ssOutputs :: Map Int FilePath
     , ssCache :: IORef (Map FilePath DrvNode)
     }
 
@@ -259,10 +260,11 @@ validPaths paths = do
 decodeValidity :: ByteString -> Maybe (Map Text Value)
 decodeValidity = either (const Nothing) Just . eitherDecodeStrict
 
-buildStepStore :: (Nix :> es, IOE :> es) => Map Int Text -> Eff es StepStore
-buildStepStore certificates = do
-    let storeCertificates = Map.filter isStorePath (Map.map unpack certificates)
-    built <- validPaths (Set.toList (Set.fromList (Map.elems storeCertificates)))
+buildStepStore :: (Nix :> es, IOE :> es) => Map Int Text -> Map Int FilePath -> Eff es StepStore
+buildStepStore certificates outputs = do
+    let
+        storeCertificates = Map.filter isStorePath (Map.map unpack certificates)
+    built <- validPaths (Set.toList (Set.fromList (Map.elems storeCertificates ++ Map.elems outputs)))
     let unbuilt = maybe storeCertificates (\valid -> Map.filter (`Set.notMember` valid) storeCertificates) built
     nodes <- queryDerivations (Set.toList (Set.fromList (Map.elems unbuilt)))
     let byOutput =
@@ -273,13 +275,13 @@ buildStepStore certificates = do
                 ]
         drvOf = Map.mapMaybe (`Map.lookup` byOutput) unbuilt
     cache <- liftIO $ newIORef nodes
-    return StepStore{ssDrvOf = drvOf, ssBuilt = built, ssCache = cache}
+    return StepStore{ssDrvOf = drvOf, ssBuilt = built, ssOutputs = outputs, ssCache = cache}
 
 rawStatusesBatched :: (Nix :> es) => StepStore -> (Text -> Bool) -> Map Int Text -> Eff es (Map Int (Text, Maybe Text))
-rawStatusesBatched store isRunning = traverse classify
+rawStatusesBatched store isRunning = Map.traverseWithKey classify
   where
-    classify certificate = do
-        certified <- isBuilt (unpack certificate)
+    classify sid certificate = do
+        certified <- isBuilt sid (unpack certificate)
         return $
             if certified
                 then ("success", Nothing)
@@ -288,9 +290,15 @@ rawStatusesBatched store isRunning = traverse classify
                         then ("running", Nothing)
                         else ("not-started", Nothing)
 
-    isBuilt certificate
+    isBuilt sid certificate
         | not (isStorePath certificate) = return False
-        | otherwise = maybe (pathValid certificate) (return . Set.member certificate) (ssBuilt store)
+        | otherwise = case ssBuilt store of
+            Just valid -> pure (Set.member certificate valid && maybe True (`Set.member` valid) (Map.lookup sid (ssOutputs store)))
+            Nothing -> do
+                certificateValid <- pathValid certificate
+                case Map.lookup sid (ssOutputs store) of
+                    Just output | output /= certificate -> (certificateValid &&) <$> pathValid output
+                    _ -> pure certificateValid
 
 resolveStatusesBatched :: (Nix :> es, IOE :> es) => StepStore -> Map Int (Text, Maybe Text) -> Eff es (Map Int (Text, Maybe Text))
 resolveStatusesBatched store statuses = do

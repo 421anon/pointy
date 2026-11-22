@@ -122,13 +122,13 @@ dependentsOf dependencies stepId = go Set.empty [stepId]
 summarizeCold :: Integer -> Maybe ColdStatus -> ColdSummary
 summarizeCold narSize status = case status of
     Nothing -> ColdSummary "unknown" narSize 0 0 0 (Just "Cold storage status is unavailable.")
-    Just (ColdStatus files _) ->
+    Just (ColdStatus files _ _) ->
         ColdSummary state local coldBytes done total firstError
       where
         offloading = filter isOffloading files
         onloading = filter isOnloading files
         failed = filter isFailed files
-        coldBytes = sum (map coldFileSize files)
+        coldBytes = sum (map coldBytesFor files)
         moving = if null offloading then onloading else offloading
         done = sum (map progressDone moving)
         total = sum (map progressTotal moving)
@@ -144,6 +144,11 @@ summarizeCold narSize status = case status of
         local
             | state == "cold" = 0
             | otherwise = max 0 (narSize - coldBytes)
+
+coldBytesFor :: ColdFile -> Integer
+coldBytesFor file = case coldFileState file of
+    Onloading done _ -> max 0 (coldFileSize file - done)
+    _ -> coldFileSize file
 
 isOffloading :: ColdFile -> Bool
 isOffloading file = case coldFileState file of

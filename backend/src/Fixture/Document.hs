@@ -191,7 +191,8 @@ appliedAnswer document applyExpr attr
                 , "drv" .= maybe (path <> ".drv") T.pack (derivationAnswer document (T.unpack path))
                 ]
         _ -> Null
-    stepTarget path = object ["certified" .= certified document, "path" .= path, "drv" .= drvOf path]
+    stepTarget path = object ["certified" .= certified document, "path" .= path, "drv" .= drvOf path, "output" .= outputOf path]
+    outputOf path = Map.findWithDefault path path (Map.fromList [(certificate, output) | (stepId, output) <- Map.toList (documentOutPaths document), Just certificate <- [statusPathOf document stepId]])
     stepBuildValue stepId statusPath =
         object
             [ "id" .= stepId

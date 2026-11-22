@@ -560,6 +560,7 @@ test-suite storage-center
   type:             exitcode-stdio-1.0
   main-is:          StorageCenter.hs
   build-depends:
+    , aeson
     , backend
     , base
     , bytestring

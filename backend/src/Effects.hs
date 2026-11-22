@@ -32,6 +32,7 @@ module Effects (
     runNixStoreCli,
     localLogStamp,
     pathValid,
+    pathValidity,
     registerGcRoot,
     rootStorePath,
     unrootStorePath,
@@ -58,6 +59,7 @@ import Control.Exception (IOException, displayException, try)
 import Control.Monad.Except (ExceptT, mapExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
@@ -95,7 +97,7 @@ type instance DispatchOf Eval = Dynamic
 data Nix :: Effect where
     RunNixCli :: [String] -> Nix m (ExitCode, ByteString, ByteString)
     RunNixStoreCli :: [String] -> Nix m (ExitCode, ByteString, ByteString)
-    PathValid :: FilePath -> Nix m Bool
+    PathValid :: FilePath -> Nix m (Either LBS.ByteString Bool)
     RegisterGcRoot :: FilePath -> FilePath -> Nix m ()
     RegisterDerivationRoot :: FilePath -> FilePath -> Nix m (Either String ())
     IngestDirectory :: FilePath -> String -> (Integer -> Integer -> IO ()) -> Nix m (Either String IngestResult)
@@ -172,7 +174,10 @@ localLogStamp :: (Nix :> es) => FilePath -> Eff es (Maybe LogStamp)
 localLogStamp = send . LocalLogStamp
 
 pathValid :: (Nix :> es) => FilePath -> Eff es Bool
-pathValid = send . PathValid
+pathValid path = send (PathValid path) >>= either (const (pure False)) pure
+
+pathValidity :: (Nix :> es) => FilePath -> Eff es (Either LBS.ByteString Bool)
+pathValidity = send . PathValid
 
 registerGcRoot :: (Nix :> es) => FilePath -> FilePath -> Eff es ()
 registerGcRoot gcRootPath outPath = send (RegisterGcRoot gcRootPath outPath)

@@ -63,7 +63,7 @@ getBatchedStatuses pid targetCommit = do
         Left err -> return $ Left err
         Right certificates -> do
             batched <-
-                (Right <$> rawStatusesFor (Map.map (pack . stepCertificate) certificates))
+                (Right <$> rawStatusesFor certificates)
                     `catch` \(err :: SomeException) -> do
                         liftIO $ putStrLn $ "Batched status probe failed, falling back to per-step probes: " ++ show err
                         statuses <- Map.fromList <$> liftIO (mapConcurrently (runAppEffects . getStatusForStep) (Map.toList certificates))
@@ -75,7 +75,7 @@ getBatchedStatuses pid targetCommit = do
     getStatusForStep :: (Int, StepPaths) -> Eff AppEffects (Int, (Text, Maybe Text))
     getStatusForStep (sid, paths) = do
         status_ <-
-            checkStatus (stepCertificate paths)
+            checkStatus paths
                 `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
         pure (sid, status_)
 
@@ -129,7 +129,7 @@ broadcastStepCertificateForProjects sid targetCommit = do
         Left err -> liftIO $ putStrLn $ "Step certificate probe skipped for step " ++ show sid ++ ": " ++ err
         Right certificate -> do
             rawStatus <- case certificate of
-                Just paths -> checkStatus (stepCertificate paths) `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
+                Just paths -> checkStatus paths `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
                 Nothing -> pure ("not-started", Nothing)
             withStepProjects sid targetCommit $ \pid ->
                 broadcastStepStatusResolved pid targetCommit sid certificate rawStatus
@@ -151,7 +151,7 @@ broadcastStatusForStepProjects sid targetCommit mStatusOverride =
 
 broadcastSingleStepForProjects :: App es => Int -> Text -> FilePath -> Eff es ()
 broadcastSingleStepForProjects sid targetCommit certificate = do
-    rawStatus <- checkStatus certificate `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
+    rawStatus <- checkStatus (StepPaths certificate certificate) `catch` \(_ :: SomeException) -> pure ("not-started", Nothing)
     withStepProjects sid targetCommit $ \pid ->
         broadcastStepStatusResolved pid targetCommit sid (Just (StepPaths certificate certificate)) rawStatus
 

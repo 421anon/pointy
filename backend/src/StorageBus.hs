@@ -37,6 +37,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, wit
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
+import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -47,6 +48,7 @@ import System.IO.Unsafe (unsafePerformIO)
 data StorageRevision = StorageRevision
     { revisionStep :: Int
     , revisionName :: Text
+    , revisionCurrentName :: Maybe Text
     , revisionKind :: Text
     , revisionCommit :: Text
     , revisionCommittedAt :: UTCTime
@@ -65,6 +67,7 @@ instance ToJSON StorageRevision where
         object
             [ "step" .= revisionStep revision
             , "name" .= revisionName revision
+            , "currentName" .= revisionCurrentName revision
             , "kind" .= revisionKind revision
             , "revision" .= revisionCommit revision
             , "committedAt" .= revisionCommittedAt revision
@@ -137,6 +140,7 @@ data StorageView = StorageView
     , storageLocal :: Integer
     , storageCold :: Integer
     , storageCapacity :: Maybe StorageCapacity
+    , storageCapacityFreeBytes :: Maybe Integer
     , storageColdCapacity :: Maybe StorageCapacity
     , storageScanning :: Bool
     , storageScanned :: Int
@@ -156,6 +160,7 @@ instance ToJSON StorageView where
             , "local" .= storageLocal view
             , "cold" .= storageCold view
             , "capacity" .= storageCapacity view
+            , "capacityFreeBytes" .= storageCapacityFreeBytes view
             , "coldCapacity" .= storageColdCapacity view
             , "scanning" .= storageScanning view
             , "scanned" .= storageScanned view
@@ -212,7 +217,7 @@ coldVar :: TVar (Map Text (Maybe ColdStatus))
 coldVar = unsafePerformIO (newTVarIO Map.empty)
 
 {-# NOINLINE coldCapacityVar #-}
-coldCapacityVar :: TVar (Maybe Integer)
+coldCapacityVar :: TVar (Maybe StorageCapacity)
 coldCapacityVar = unsafePerformIO (newTVarIO Nothing)
 
 {-# NOINLINE offloadsVar #-}
@@ -263,10 +268,17 @@ recordColdStatus path status = atomically $ do
     previousCapacity <- readTVar coldCapacityVar
     let nextCapacity = case status of
             Just cold
-                | Just total <- coldStatusCapacityBytes cold
-                , total > 0 ->
-                    Just total
-            _ -> Nothing
+                | Just available <- coldStatusAvailableBytes cold
+                , available >= 0 ->
+                    Just
+                        StorageCapacity
+                            { capacityKind = "filesystem"
+                            , capacityLabel = "cold storage"
+                            , capacityTotalBytes = fromMaybe 0 (coldStatusCapacityBytes cold)
+                            , capacityUsedBytes = 0
+                            , capacityAvailableBytes = available
+                            }
+            _ -> previousCapacity
         capacityChanged = nextCapacity /= previousCapacity
     when capacityChanged $ writeTVar coldCapacityVar nextCapacity
     when (tracked && known /= Just status) $
@@ -277,7 +289,7 @@ recordColdStatus path status = atomically $ do
 knownColdStatuses :: IO (Map Text (Maybe ColdStatus))
 knownColdStatuses = readTVarIO coldVar
 
-knownColdCapacity :: IO (Maybe Integer)
+knownColdCapacity :: IO (Maybe StorageCapacity)
 knownColdCapacity = readTVarIO coldCapacityVar
 
 beginOffload :: Text -> IO Bool

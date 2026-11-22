@@ -9,20 +9,23 @@ module Handlers.Storage (
     offloadHandler,
     offloadStepHandler,
     onloadRevisionHandler,
+    pathOwners,
+    HeadStep (..),
     runStorageCenter,
     storageHandler,
 ) where
 
 import BuildRunner (JobComment (..), SlurmJob (..), decodeJobComment, isRunningState, parseSlurmJobLine)
 import ClusterBus (latestSlurmJobs)
-import ColdProvider (ColdFile (..), ColdStatus (..), OffloadProgress (..))
+import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), OffloadProgress (..))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (replicateConcurrently_)
+import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, retry, writeTVar)
-import Control.Exception (SomeException, catch, displayException, try)
+import Control.Exception (SomeException, bracket_, catch, displayException, try)
 import Control.Monad (join, unless, void, when)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict', encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.Types (Parser)
@@ -40,15 +43,15 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
-import Effectful (Eff, IOE, liftIO, (:>))
-import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, pathValid, querySlurm, runNixCli, runNixStoreCli, unrootStorePath)
+import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), liftIO, withEffToIO, (:>))
+import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
 import Handlers.Cold (coldFilesFor, coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
-import Servant (NoContent (..), ServerError (..), err400, err409, err502, err503)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, revalidateAll, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
+import Servant (NoContent (..), ServerError (..), err400, err409, err500, err502, err503)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, revalidateAll, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Environment (lookupEnv)
@@ -57,11 +60,13 @@ import System.FilePath ((</>))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
-import UserRepo (commitContext, commitContextEff, runGitIn, runHistoryEvalJsonApplyInRepo, runNixEvalJsonApplyInRepo, userRepoPath)
+import UserRepo (commitContext, commitContextEff, runGitIn, runHistoryEvalJsonApplyInRepo, runNixEvalJsonApplyInRepo, runNixEvalRawInRepo, userRepoPath)
 
 data HeadStep = HeadStep
     { headStepName :: Text
     , headStepDeps :: Set Int
+    , headStepOutput :: Text
+    , headStepCertificate :: Text
     }
     deriving (Eq, Show)
 
@@ -70,6 +75,8 @@ instance FromJSON HeadStep where
         HeadStep
             <$> fields .:? "name" .!= ""
             <*> (Set.fromList <$> fields .:? "deps" .!= [])
+            <*> fields .: "output"
+            <*> fields .: "certificate"
 
 newtype PathInfo = PathInfo {pathNarSize :: Integer}
 
@@ -100,8 +107,6 @@ instance ToJSON EvaluationFile where
         object
             [ "commits" .= Map.map (Map.mapKeys (T.pack . show)) commits
             ]
-
-data OffloadRequestError = OffloadBlocked Text | OffloadUnavailable Text
 
 data Caches = Caches
     { cachedHead :: Maybe Text
@@ -171,80 +176,122 @@ offloadHandler :: Int -> Maybe Text -> AppM NoContent
 offloadHandler stepId mCommit = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
-    refuseStepBusy stepId
     outPath <- resolveStepOutPath stepId mCommit
-    started <- liftIO (beginOffload outPath)
-    when started $ liftIO $ void $ forkIO $ do
-        outcome <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
-        endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id outcome)
-    pure NoContent
+    withPathLock outPath $ do
+        refusePathBusy outPath
+        started <- liftIO (beginOffload outPath)
+        when started $ liftIO $ void $ forkIO $ do
+            outcome <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
+            endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id outcome)
+        pure NoContent
 
 offloadStepHandler :: Int -> AppM NoContent
 offloadStepHandler stepId = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
-    refuseStepBusy stepId
-    paths <- liftIO (Map.findWithDefault Set.empty stepId <$> readTVarIO movablePathsVar)
-    unless (Set.null paths) $
-        liftIO $ void $ forkIO $ mapM_ offloadPath (Set.toList paths)
-    pure NoContent
+    withPathLock (T.pack (show stepId)) $ do
+        paths <- liftIO (Map.findWithDefault Set.empty stepId <$> readTVarIO movablePathsVar)
+        mapM_ refusePathBusy (Set.toList paths)
+        unless (Set.null paths) $
+            liftIO $ void $ forkIO $ mapM_ offloadPath (Set.toList paths)
+        pure NoContent
   where
     offloadPath outPath = do
-        started <- beginOffload outPath
-        when started $ do
-            outcome <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
-            endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id outcome)
+        outcome <- runAppEffects (runExceptT (withPathLock outPath $ do
+            refusePathBusy outPath
+            liftIO (beginOffload outPath)))
+        case outcome of
+            Left refused -> endOffload outPath (Left (TE.decodeUtf8Lenient (LBS.toStrict (errBody refused))))
+            Right started -> when started $ do
+                result <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
+                endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id result)
 
 onloadRevisionHandler :: Int -> Maybe Text -> AppM NoContent
 onloadRevisionHandler stepId mCommit = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
-    refuseStepBusy stepId
     outPath <- resolveStepOutPath stepId mCommit
-    refuseOffloadRunning outPath
-    status <- lift (coldStatusFor outPath)
-    case status of
-        Nothing -> throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
-        Just cold -> do
-            let files = filter onloadable (coldStatusFiles cold)
-            outcomes <- lift $ mapColdProvider (startOnload outPath . T.unpack . coldFilePath) files
-            let failures =
-                    [ coldFilePath file <> ": " <> message
-                    | (file, Left message) <- zip files outcomes
-                    ]
-            unless (null failures) $
-                throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start copying back: " <> T.intercalate "; " failures))}
-            pure NoContent
+    withPathLock outPath $ do
+        refusePathBusy outPath
+        refuseOffloadRunning outPath
+        status <- lift (coldStatusFor outPath)
+        case status of
+            Nothing -> throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
+            Just cold -> do
+                let files = filter onloadable (coldStatusFiles cold)
+                outcomes <- lift $ mapColdProvider (startOnload outPath . T.unpack . coldFilePath) files
+                liftIO (followOnloads outPath)
+                let failures =
+                        [ coldFilePath file <> ": " <> message
+                        | (file, Left message) <- zip files outcomes
+                        ]
+                unless (null failures) $
+                    throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start copying back: " <> T.intercalate "; " failures))}
+                pure NoContent
+
+{-# NOINLINE onloadWatchersRef #-}
+onloadWatchersRef :: MVar (Set Text)
+onloadWatchersRef = unsafePerformIO (newMVar Set.empty)
+
+followOnloads :: Text -> IO ()
+followOnloads outPath = do
+    start <- modifyMVar onloadWatchersRef (\watchers -> pure (Set.insert outPath watchers, Set.notMember outPath watchers))
+    when start $ void $ forkIO $ do
+        threadDelay 1000000
+        settled <- runAppEffects $ do
+            status <- coldStatusFor outPath
+            pure $ maybe False (all (notOnloading . coldFileState) . coldStatusFiles) status
+        modifyMVar_ onloadWatchersRef (pure . Set.delete outPath)
+        if settled then recheckCold outPath else followOnloads outPath
+  where
+    notOnloading Onloading{} = False
+    notOnloading _ = True
 
 deleteRevisionHandler :: Int -> Maybe Text -> AppM NoContent
 deleteRevisionHandler stepId mCommit = do
-    refuseStepBusy stepId
     outPath <- resolveStepOutPath stepId mCommit
-    refuseOffloadRunning outPath
-    cold <- lift (coldFilesFor outPath)
-    case cold of
-        Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
-        Just files
-            | not (Set.null files) ->
-                throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 (coldRefusal files))}
-            | otherwise -> pure ()
-    let path = T.unpack outPath
-    lift (unrootStorePath path)
-    valid <- lift (pathValid path)
-    when valid $ do
-        (code, _, err) <- lift (runNixStoreCli ["--delete", path])
-        case code of
-            ExitSuccess -> pure ()
-            ExitFailure _ ->
-                let message = "The store refused to delete this output: " <> storeErrorLine (TE.decodeUtf8Lenient err)
-                 in throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
-    liftIO (invalidate mempty{invalidOutputs = True})
-    pure NoContent
+    withPathLock outPath $ do
+        refusePathBusy outPath
+        refuseOffloadRunning outPath
+        cold <- lift (coldFilesFor outPath)
+        case cold of
+            Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
+            Just files
+                | not (Set.null files) ->
+                    throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 (coldRefusal files))}
+                | otherwise -> pure ()
+        certificate <- certificateForPath stepId mCommit outPath
+        let path = T.unpack outPath
+            certificatePath = T.unpack certificate
+        validity <- lift (pathValidity path)
+        case validity of
+            Left err -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 ("Cannot check whether the output exists: " <> TE.decodeUtf8Lenient (LBS.toStrict err)))}
+            Right False -> pure ()
+            Right True -> do
+                lift (removeCertificationEvidence path certificatePath)
+                (code, _, err) <- lift (runNixStoreCli ["--delete", path])
+                case code of
+                    ExitSuccess -> pure ()
+                    ExitFailure _ -> do
+                        lift (rootStorePath path)
+                        lift (rootStorePath certificatePath)
+                        let message = "The store refused to delete this output: " <> storeErrorLine (TE.decodeUtf8Lenient err)
+                        throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
+        liftIO (invalidate mempty{invalidOutputs = True})
+        pure NoContent
   where
     coldRefusal files =
         "This output has "
             <> T.pack (show (Set.size files))
             <> " file(s) in cold storage; Pointy does not delete the provider's copy. Delete it with the cold storage provider first."
+
+{-# NOINLINE pathMutationSemaphore #-}
+pathMutationSemaphore :: QSem
+pathMutationSemaphore = unsafePerformIO (newQSem 1)
+
+withPathLock :: Text -> AppM a -> AppM a
+withPathLock _ action = ExceptT $ withEffToIO SeqUnlift $ \unlift ->
+    bracket_ (waitQSem pathMutationSemaphore) (signalQSem pathMutationSemaphore) (unlift (runExceptT action))
 
 storeErrorLine :: Text -> Text
 storeErrorLine stderr =
@@ -252,23 +299,43 @@ storeErrorLine stderr =
         [] -> T.strip stderr
         errors -> last errors
 
-offloadRefusal :: Int -> AppM (Maybe OffloadRequestError)
-offloadRefusal stepId = do
-    headSteps <- cachedHeadSteps <$> liftIO (readTVarIO cachesVar)
+removeCertificationEvidence :: IOE :> es => FilePath -> FilePath -> Eff es ()
+removeCertificationEvidence outPath certificate = do
+    unrootStorePath outPath
+    unrootStorePath certificate
+
+certificatePreparationError :: String -> ServerError
+certificatePreparationError reason = err500{errBody = LBS.fromStrict (TE.encodeUtf8 ("Cannot prepare the output's certificate revision: " <> T.pack reason))}
+
+certificateForPath :: Int -> Maybe Text -> Text -> AppM Text
+certificateForPath stepId mCommit outPath = case mCommit of
+    Just commit -> do
+        repoPath <- liftIO userRepoPath
+        ctx <- ExceptT $ either (Left . certificatePreparationError) Right <$> runExceptT (commitContextEff repoPath commit)
+        result <- lift $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".certificate.outPath")
+        either (const (pure outPath)) (pure . T.pack) result
+    Nothing -> do
+        caches <- liftIO (readTVarIO cachesVar)
+        case cachedHeadSteps caches of
+            Left err -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 err)}
+            Right steps -> case headStepCertificate <$> Map.lookup stepId steps of
+                Just certificate -> pure certificate
+                Nothing -> throwError err503{errBody = "Cannot resolve the output's certificate."}
+
+refusePathBusy :: Text -> AppM ()
+refusePathBusy outPath = do
+    caches <- liftIO (readTVarIO cachesVar)
     running <- runningSteps
-    pure $ case (headSteps, running) of
-        (Left err, _) -> Just (OffloadUnavailable err)
-        (_, Left err) -> Just (OffloadUnavailable err)
-        (Right steps, Right states) -> OffloadBlocked <$> runningRefusal steps states stepId
+    case (cachedHeadSteps caches, running) of
+        (Left err, _) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 err)}
+        (_, Left err) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 err)}
+        (Right steps, Right states) ->
+            case mapMaybe (\stepId -> runningRefusal steps states stepId) (pathOwners steps outPath) of
+                firstRefusal : _ -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 firstRefusal)}
+                [] -> pure ()
 
-refuseStepBusy :: Int -> AppM ()
-refuseStepBusy stepId = do
-    refusal <- offloadRefusal stepId
-    case refusal of
-        Just (OffloadBlocked reason) -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
-        Just (OffloadUnavailable reason) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
-        Nothing -> pure ()
-
+pathOwners :: Map Int HeadStep -> Text -> [Int]
+pathOwners steps outPath = Map.keys (Map.filter ((== outPath) . headStepOutput) steps)
 
 refuseOffloadRunning :: Text -> AppM ()
 refuseOffloadRunning outPath = do
@@ -337,6 +404,7 @@ runStorageCenter = do
                     , storageLocal = 0
                     , storageCold = 0
                     , storageCapacity = Nothing
+                    , storageCapacityFreeBytes = Nothing
                     , storageColdCapacity = Nothing
                     , storageScanning = False
                     , storageScanned = 0
@@ -389,7 +457,7 @@ refresh work running = do
             Right headSteps -> runningRefusal headSteps running
             Left _ -> const (Just "Cannot tell which steps read this output until the current revision evaluates.")
         revisionsWithSeeds =
-            [ (seed, storageRevision coldConfigured (Map.lookup (seedPath seed) colds) (Map.lookup (seedPath seed) offloads) (blockedReason (seedStep seed)) seed narSize)
+            [ (seed, storageRevision coldConfigured (Map.lookup (seedPath seed) colds) (Map.lookup (seedPath seed) offloads) (blockedReason (seedStep seed)) (headStepName <$> either (const Nothing) (Map.lookup (seedStep seed)) (cachedHeadSteps caches)) seed narSize)
             | seed <- seeds
             , Just narSize <- [Map.lookup (seedPath seed) present]
             ]
@@ -414,7 +482,8 @@ refresh work running = do
                 , storageLocal = localBytes
                 , storageCold = coldBytes
                 , storageCapacity = stepOutputCapacity localBytes capacity
-                , storageColdCapacity = if coldConfigured then coldOutputCapacity coldBytes coldCapacityBytes else Nothing
+                , storageCapacityFreeBytes = if maybe False ((== "filesystem") . capacityKind) capacity then capacityAvailableBytes <$> capacity else Nothing
+                , storageColdCapacity = if coldConfigured then coldCapacityBytes else Nothing
                 , storageScanning = not (null toScan)
                 , storageScanned = scannedCount
                 , storageHistory = length relevant
@@ -454,22 +523,11 @@ stepOutputCapacity used capacity =
         )
         capacity
 
-coldOutputCapacity :: Integer -> Maybe Integer -> Maybe StorageCapacity
-coldOutputCapacity used capacity = do
-    total <- capacity
-    pure
-        StorageCapacity
-            { capacityKind = "quota"
-            , capacityLabel = "cold storage"
-            , capacityTotalBytes = total
-            , capacityUsedBytes = used
-            , capacityAvailableBytes = max 0 (total - used)
-            }
-
-storageRevision :: Bool -> Maybe (Maybe ColdStatus) -> Maybe OffloadState -> Maybe Text -> RevisionSeed -> Integer -> StorageRevision
-storageRevision coldConfigured status offload blocked seed narSize =
+storageRevision :: Bool -> Maybe (Maybe ColdStatus) -> Maybe OffloadState -> Maybe Text -> Maybe Text -> RevisionSeed -> Integer -> StorageRevision
+storageRevision coldConfigured status offload blocked currentName seed narSize =
     StorageRevision
         { revisionStep = seedStep seed
+        , revisionCurrentName = currentName
         , revisionName = if T.null (seedName seed) then "Step " <> T.pack (show (seedStep seed)) else seedName seed
         , revisionKind = seedKind seed
         , revisionCommit = seedCommit seed
@@ -526,6 +584,8 @@ headStepsExpression =
         , "  in {"
         , "    name = if name.success && builtins.isString name.value then name.value else \"\";"
         , "    deps = builtins.map builtins.fromJSON (s.dependencies or [ ]);"
+        , "    output = s.outPath;"
+        , "    certificate = (s.certificate or s).outPath;"
         , "  }) steps"
         ]
 

@@ -149,10 +149,11 @@ stepAttr eid = "pointy.steps." ++ show eid
 data StepTarget = StepTarget
     { stepTargetPath :: FilePath
     , stepTargetDrv :: FilePath
+    , stepTargetOutput :: FilePath
     }
 
 instance FromJSON StepTarget where
-    parseJSON = withObject "StepTarget" $ \o -> StepTarget <$> o .: "path" <*> o .: "drv"
+    parseJSON = withObject "StepTarget" $ \o -> StepTarget <$> o .: "path" <*> o .: "drv" <*> o .: "output"
 
 resolveStepTarget :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) StepTarget
 resolveStepTarget ctx eid = do
@@ -171,7 +172,7 @@ resolveStepTargets ctx = bisectBatch evaluateTargets (\_ single -> Map.singleton
     certificatesOrLegacySteps ids = "steps: map (id: (" ++ certificateOrLegacyStep ++ ") steps.${id}) " ++ renderIdList ids
 
 certificateOrLegacyStep :: String
-certificateOrLegacyStep = "step: { path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; }"
+certificateOrLegacyStep = "step: { path = (step.certificate or step).outPath; drv = (step.certificate or step).drvPath; output = step.outPath; }"
 
 data SubmitOutcome
     = AlreadyCertified FilePath
@@ -184,8 +185,8 @@ data InputCheck = InputsLocal | InputsCold String
 submitGraph :: App es => IO Bool -> ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
 submitGraph halted ctx graph stepIds = do
     targets <- resolveStepTargets ctx stepIds
-    built <- validPaths (Set.toList (Set.fromList [stepTargetPath target | Right target <- Map.elems targets]))
-    let isCertified certificate = maybe (isBuilt certificate) (return . Set.member certificate) built
+    built <- validPaths (Set.toList (Set.fromList [path | Right target <- Map.elems targets, path <- [stepTargetPath target, stepTargetOutput target]]))
+    let isCertified certificate output = maybe ((&&) <$> isBuilt certificate <*> pathValid output) (return . Set.isSubsetOf (Set.fromList [certificate, output])) built
         submitOne outcomes (sid, target) = do
             stop <- liftIO halted
             if stop
@@ -195,7 +196,7 @@ submitGraph halted ctx graph stepIds = do
                     return $ Map.insert sid outcome outcomes
     foldM submitOne Map.empty [(sid, target) | sid <- stepIds, Just target <- [Map.lookup sid targets]]
 
-submitStep :: App es => ReadRepoContext -> (FilePath -> Eff es Bool) -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Either String StepTarget -> Eff es SubmitOutcome
+submitStep :: App es => ReadRepoContext -> (FilePath -> FilePath -> Eff es Bool) -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Either String StepTarget -> Eff es SubmitOutcome
 submitStep ctx isCertified outcomes deps sid resolvedTarget
     | not (null failedOn) =
         return $ NotSubmitted $ "dependency step(s) " ++ show failedOn ++ " could not be scheduled"
@@ -204,7 +205,7 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
             target <- liftEither resolvedTarget
             liftEither $ validateStepTarget sid target
             let certificate = stepTargetPath target
-            certified <- lift $ isCertified certificate
+            certified <- lift $ isCertified certificate (stepTargetOutput target)
             let buildKey = buildKeyForOutPath certificate
             if certified
                 then return $ AlreadyCertified certificate
@@ -356,7 +357,7 @@ finishStep ctx (sid, outcome) = case outcome of
                 [] -> pure ()
             broadcastKnownStepStatus sid targetCommitText ("running", Nothing)
             finally (waitForCompletion buildKey jobIds) (unrootDerivationRoot root)
-        certified <- isBuilt certificate
+        certified <- isBuilt certificate >>= \valid -> if valid then restoredOutputValid ctx sid else pure False
         if certified
             then do
                 registerCertificationRoots ctx sid certificate
@@ -656,7 +657,7 @@ watchRestoredJob ctx comment job = do
             broadcastKnownStepStatus stepId commitText ("running", Nothing)
             finally (waitForCompletion buildKey [slurmJobId job]) (unrootDerivationRootsForJob jobName)
         else unrootDerivationRootsForJob jobName
-    certified <- isBuilt certificate
+    certified <- isBuilt certificate >>= \valid -> if valid then restoredOutputValid ctx stepId else pure False
     if certified
         then do
             registerCertificationRoots ctx stepId certificate
@@ -664,6 +665,9 @@ watchRestoredJob ctx comment job = do
         else broadcastFailedStepForProjects stepId commitText
     broadcastStepCertificateAtMovedHead stepId commitText
     when certified $ buildExtras ctx stepId
+
+restoredOutputValid :: App es => ReadRepoContext -> Int -> Eff es Bool
+restoredOutputValid ctx stepId = runExceptT (getStepOutPath ctx stepId) >>= either (const (pure False)) (isBuilt . T.unpack)
 
 isPointyJob :: String -> Bool
 isPointyJob name = "pointy-nix-build-" `isPrefixOf` name

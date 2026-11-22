@@ -1111,6 +1111,7 @@ storageView =
         |> required "local" Decode.int
         |> required "cold" Decode.int
         |> required "capacity" (Decode.nullable storageCapacity)
+        |> optional "capacityFreeBytes" (Decode.nullable Decode.int) Nothing
         |> required "coldCapacity" (Decode.nullable storageCapacity)
         |> required "scanning" Decode.bool
         |> required "scanned" Decode.int
@@ -1149,6 +1150,7 @@ storageRevision =
     Decode.succeed Model.StorageRevision
         |> required "step" Decode.int
         |> required "name" Decode.string
+        |> optional "currentName" (Decode.nullable Decode.string) Nothing
         |> required "revision" Decode.string
         |> required "kind" (Decode.string |> Decode.andThen storageKind)
         |> required "committedAt" Iso8601.decoder

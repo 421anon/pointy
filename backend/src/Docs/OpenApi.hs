@@ -314,6 +314,7 @@ instance ToSchema StorageRevision where
                 "StorageRevision"
                 [ ("step", integerField)
                 , ("name", stringField)
+                , ("currentName", nullableField OpenApiString)
                 , ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["derived", "download", "upload"]))
                 , ("revision", stringField)
                 , ("committedAt", stringField)
@@ -351,6 +352,7 @@ instance ToSchema StorageView where
                 , ("local", integerField)
                 , ("cold", integerField)
                 , ("capacity", nullableCapacity)
+                , ("capacityFreeBytes", nullableField OpenApiInteger)
                 , ("coldCapacity", nullableCapacity)
                 , ("scanning", boolField)
                 , ("scanned", integerField)

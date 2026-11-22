@@ -8,7 +8,7 @@ module Main (main) where
 
 import BuildLog (LogAccess (..), ResolvedLog (..), buildStepStore, rawStatusesBatched, resolveBuildLog, resolveStatusesBatched)
 import BuildRunner (BuildKey (..), buildKeyForOutPath)
-import BuildStatus (checkStatus, resolveStepStatus)
+import BuildStatus (StepPaths (..), checkStatus, resolveStepStatus)
 import Certificates (rawStatusesFor)
 import Control.Concurrent.STM (atomically, check, modifyTVar', newTVarIO, readTVar, registerDelay, writeTVar)
 import Control.Monad (unless)
@@ -29,23 +29,26 @@ import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName)
 import System.IO (hClose, hPutStr, openTempFile)
 
+legacyPath :: Text -> StepPaths
+legacyPath path = StepPaths (T.unpack path) (T.unpack path)
+
 main :: IO ()
 main = do
     state <- newFixtureState document
     (certified, unbuilt, invalid) <- runFixture state $ do
-        certified_ <- checkStatus (T.unpack certifiedCertificate)
-        unbuilt_ <- checkStatus (T.unpack unbuiltCertificate)
-        invalid_ <- checkStatus "/invalid"
+        certified_ <- checkStatus (legacyPath certifiedCertificate)
+        unbuilt_ <- checkStatus (legacyPath unbuiltCertificate)
+        invalid_ <- checkStatus (legacyPath "/invalid")
         pure (certified_, unbuilt_, invalid_)
     assertEqual "certified certificate is success" ("success", Nothing) certified
     assertEqual "unbuilt certificate is not-started" ("not-started", Nothing) unbuilt
     assertEqual "unevaluated certificate is not-started" ("not-started", Nothing) invalid
 
     addJob state (buildKeyForOutPath (T.unpack unbuiltCertificate))
-    running <- runFixture state (checkStatus (T.unpack unbuiltCertificate))
+    running <- runFixture state (checkStatus (legacyPath unbuiltCertificate))
     assertEqual "certificate build in flight is running" ("running", Nothing) running
 
-    store <- runFixture state (buildStepStore certificates)
+    store <- runFixture state (buildStepStore certificates Map.empty)
     statuses <-
         runFixture state $
             rawStatusesBatched store (\certificate -> certificate == unbuiltCertificate) certificates
@@ -65,7 +68,7 @@ main = do
     hPutStr logHandle recordedLog
     hClose logHandle
     refreshState <- newFixtureState (refreshDocument logPath)
-    (refreshStatuses, refreshStore) <- runFixture refreshState (rawStatusesFor refreshCertificates)
+    (refreshStatuses, refreshStore) <- runFixture refreshState (rawStatusesFor (Map.map legacyPath refreshCertificates))
     assertEqual
         "refresh probe reports raw statuses"
         ( Map.fromList

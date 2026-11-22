@@ -38,17 +38,19 @@ stepStatusNames = ["not-started", "running", "success", "failure", "inputs-cold"
 instance FromJSON StepPaths where
     parseJSON = withObject "StepPaths" $ \o -> StepPaths <$> o .: "certificate" <*> o .: "output"
 
-checkStatus :: (Nix :> es, Slurm :> es) => FilePath -> Eff es (Text, Maybe Text)
-checkStatus certificate = do
-    valid <- pathValid certificate
-    if valid
+checkStatus :: (Nix :> es, Slurm :> es) => StepPaths -> Eff es (Text, Maybe Text)
+checkStatus paths = do
+    certificateValid <- pathValid (stepCertificate paths)
+    outputValid <- if certificateValid && stepOutput paths /= stepCertificate paths then pathValid (stepOutput paths) else pure certificateValid
+    if certificateValid && outputValid
         then return ("success", Nothing)
         else do
-            state <- queryState $ buildKeyForOutPath certificate
+            state <- queryState $ buildKeyForOutPath (stepCertificate paths)
             return $ case state of
                 BRunning -> ("running", Nothing)
                 BAbsent -> ("not-started", Nothing)
-                BSucceeded -> ("success", Nothing)
+                BSucceeded | not certificateValid || stepOutput paths == stepCertificate paths -> ("success", Nothing)
+                BSucceeded -> ("not-started", Nothing)
                 BFailed -> ("failure", Nothing)
 
 isImmediateStatus :: (Text, Maybe Text) -> Bool

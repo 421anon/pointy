@@ -15,6 +15,7 @@ import Config (Config (..), EmbeddingConfig (..), JudgeConfig (..), ProviderConf
 import Control.Concurrent.Async (async, wait)
 import Control.Exception (IOException, displayException, try)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BC
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
@@ -90,8 +91,11 @@ runNixProduction = interpret $ \_ -> \case
     RunNixCli args -> liftIO $ cliBytes "nix" args
     RunNixStoreCli args -> liftIO $ cliBytes "nix-store" args
     PathValid path -> do
-        (code, _, _) <- liftIO $ cli "nix" ["--offline", "path-info", path]
-        pure (code == ExitSuccess)
+        (code, _, err) <- liftIO $ cli "nix" ["--offline", "path-info", path]
+        pure $ case code of
+            ExitSuccess -> Right True
+            ExitFailure _ | T.isInfixOf "does not exist in the store" (T.pack err) || T.isInfixOf "is not valid" (T.pack err) -> Right False
+            ExitFailure _ -> Left (LBS.fromStrict (TE.encodeUtf8 (T.pack err)))
     RegisterGcRoot gcRootPath outPath -> do
         _ <- liftIO $ cli "nix-store" ["--add-root", gcRootPath, "--realise", outPath]
         pure ()

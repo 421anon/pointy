@@ -543,8 +543,9 @@ readableStepReviews ctx stepIds =
 
 reviewedStatuses :: (IOE :> es, Nix :> es, Slurm :> es) => StepOutPaths -> StepOutPaths -> Eff es (Map Int (Text, Maybe Text))
 reviewedStatuses reviewedCertificates reviewedOutputs =
-    resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) checkStatus) reviewedCertificates
+    resolveStatuses reviewedStepPaths =<< mapM (either (\err -> pure ("failure", Just (T.pack err))) checkStatus) reviewedPathResults
   where
+    reviewedPathResults = Map.mapWithKey (\sid _ -> maybe (Left "The reviewed output does not evaluate.") Right (Map.lookup sid reviewedStepPaths)) reviewedOutputs
     reviewedStepPaths = Map.mapMaybe (either (const Nothing) Just) (Map.intersectionWith (liftA2 StepPaths) reviewedCertificates reviewedOutputs)
 
 reviewedPaths :: (IOE :> es, Eval :> es) => FilePath -> (ReadRepoContext -> [Int] -> ExceptT String (Eff es) StepOutPaths) -> StepReviews -> ExceptT String (Eff es) StepOutPaths

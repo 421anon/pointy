@@ -57,7 +57,7 @@ coldStatusFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe ColdSta
 coldStatusFor outPath = do
     configured <- coldStorageConfigured
     if not configured
-        then pure (Just (ColdStatus [] Nothing))
+        then pure (Just (ColdStatus [] Nothing Nothing))
         else do
             status <- either (const Nothing) parseColdStatus <$> coldStorageStatus outPath
             liftIO (recordColdStatus outPath status)
@@ -108,7 +108,7 @@ coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus
 coldStatusHandler stepId mCommit = do
     configured <- lift coldStorageConfigured
     if not configured
-        then pure (ColdStatus [] Nothing)
+        then pure (ColdStatus [] Nothing Nothing)
         else do
             outPath <- coldOutPath stepId mCommit
             maybe

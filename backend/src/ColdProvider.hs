@@ -17,6 +17,7 @@ import qualified Data.Text as T
 data ColdStatus = ColdStatus
     { coldStatusFiles :: [ColdFile]
     , coldStatusCapacityBytes :: Maybe Integer
+    , coldStatusAvailableBytes :: Maybe Integer
     }
     deriving (Show, Eq)
 
@@ -42,13 +43,14 @@ data OffloadProgress = OffloadProgress
 
 instance FromJSON ColdStatus where
     parseJSON = withObject "cold storage status" $ \o ->
-        ColdStatus <$> o .: "files" <*> o .:? "capacityBytes"
+        ColdStatus <$> o .: "files" <*> o .:? "capacityBytes" <*> o .:? "availableBytes"
 
 instance ToJSON ColdStatus where
     toJSON status =
         object $
             ["files" .= coldStatusFiles status]
                 ++ maybe [] (\total -> ["capacityBytes" .= total]) (coldStatusCapacityBytes status)
+                ++ maybe [] (\available -> ["availableBytes" .= available]) (coldStatusAvailableBytes status)
 
 instance FromJSON ColdFile where
     parseJSON = withObject "cold storage file" $ \o -> do
