@@ -215,7 +215,6 @@ type alias StorageCapacity =
     { kind : StorageCapacityKind
     , label : String
     , totalBytes : Int
-    , usedBytes : Int
     , availableBytes : Int
     }
 

@@ -514,7 +514,7 @@ type StepSearch = StepSearchInfoEndpoint :<|> StepSearchEndpoint
 
 type GetStorage =
     "storage"
-        :> Description "Returns the Storage panel's view from the backend's cache: the bytes that step output revisions keep on this server, the bytes they have offloaded to cold storage, the capacity of the filesystem or account quota that holds them, and every revision still in the store with its step, kind, and cold storage state. Asks the backend to re-read the branch, store sizes and cold storage statuses; the refreshed view arrives as a storage event on /events."
+        :> Description "Returns the Storage panel's view from the backend's cache: the bytes that step output revisions keep on this server, the bytes they have offloaded to cold storage, the warm capacity that holds the local bytes, the cold tier's optional capacity, and every revision still in the store with its step, kind, and cold storage state. Asks the backend to re-read the branch, store sizes and cold storage statuses; the refreshed view arrives as a storage event on /events."
         :> Get '[JSON] StorageView
 
 type OffloadStorage =

@@ -1128,7 +1128,6 @@ storageCapacity =
         |> required "kind" (Decode.string |> Decode.andThen storageCapacityKind)
         |> required "label" Decode.string
         |> required "totalBytes" Decode.int
-        |> required "usedBytes" Decode.int
         |> required "availableBytes" Decode.int
 
 

@@ -269,12 +269,15 @@ coldFileSchema =
 
 instance ToSchema ColdStatus where
     declareNamedSchema _ =
-        pure $
-            objectSchema
-                "ColdStatus"
-                [ ("files", arrayOf coldFileSchema)
-                , ("capacityBytes", integerField)
-                ]
+        pure . NamedSchema (Just "ColdStatus") $
+            mempty
+                & type_ ?~ OpenApiObject
+                & required .~ ["files"]
+                & properties
+                    .~ fromList
+                        [ ("files", arrayOf coldFileSchema)
+                        , ("capacityBytes", integerField)
+                        ]
 
 instance ToSchema ColdInputsView where
     declareNamedSchema _ =

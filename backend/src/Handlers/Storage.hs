@@ -32,7 +32,7 @@ import Data.IORef (atomicModifyIORef', newIORef)
 import Data.List (isPrefixOf, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -48,7 +48,7 @@ import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err502, err503)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, revalidateAll, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, revalidateAll, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Environment (lookupEnv)
@@ -201,6 +201,7 @@ onloadRevisionHandler stepId mCommit = do
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
     refuseStepBusy stepId
     outPath <- resolveStepOutPath stepId mCommit
+    refuseOffloadRunning outPath
     status <- lift (coldStatusFor outPath)
     case status of
         Nothing -> throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
@@ -219,11 +220,7 @@ deleteRevisionHandler :: Int -> Maybe Text -> AppM NoContent
 deleteRevisionHandler stepId mCommit = do
     refuseStepBusy stepId
     outPath <- resolveStepOutPath stepId mCommit
-    offloads <- liftIO offloadStates
-    case Map.lookup outPath offloads of
-        Just (OffloadRunning _) ->
-            throwError err409{errBody = "This output is being moved to cold storage. Wait for the move to finish, then delete the revision."}
-        _ -> pure ()
+    refuseOffloadRunning outPath
     cold <- lift (coldFilesFor outPath)
     case cold of
         Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
@@ -271,6 +268,15 @@ refuseStepBusy stepId = do
         Just (OffloadBlocked reason) -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
         Just (OffloadUnavailable reason) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 reason)}
         Nothing -> pure ()
+
+
+refuseOffloadRunning :: Text -> AppM ()
+refuseOffloadRunning outPath = do
+    offloads <- liftIO offloadStates
+    case Map.lookup outPath offloads of
+        Just (OffloadRunning _) ->
+            throwError err409{errBody = "This output is being moved to cold storage. Wait for the move to finish, then try again."}
+        _ -> pure ()
 
 runningSteps :: AppM (Either Text (Map Int Text))
 runningSteps = do
@@ -374,6 +380,7 @@ refresh work running = do
         toCheck = Set.union recheck (Map.keysSet (Map.difference present known))
     when coldConfigured $ void $ mapColdProvider coldStatusFor (Set.toList toCheck)
     colds <- liftIO knownColdStatuses
+    coldCapacityBytes <- liftIO knownColdCapacity
     offloads <- liftIO offloadStates
     capacity <- liftIO (capacityUsage (invalidBroadcast work))
     now <- liftIO getCurrentTime
@@ -407,7 +414,7 @@ refresh work running = do
                 , storageLocal = localBytes
                 , storageCold = coldBytes
                 , storageCapacity = stepOutputCapacity localBytes capacity
-                , storageColdCapacity = coldOutputCapacity coldBytes colds
+                , storageColdCapacity = if coldConfigured then coldOutputCapacity coldBytes coldCapacityBytes else Nothing
                 , storageScanning = not (null toScan)
                 , storageScanned = scannedCount
                 , storageHistory = length relevant
@@ -447,9 +454,9 @@ stepOutputCapacity used capacity =
         )
         capacity
 
-coldOutputCapacity :: Integer -> Map Text (Maybe ColdStatus) -> Maybe StorageCapacity
-coldOutputCapacity used colds = do
-    total <- listToMaybe [total | Just status <- Map.elems colds, Just total <- [coldStatusCapacityBytes status], total > 0]
+coldOutputCapacity :: Integer -> Maybe Integer -> Maybe StorageCapacity
+coldOutputCapacity used capacity = do
+    total <- capacity
     pure
         StorageCapacity
             { capacityKind = "quota"

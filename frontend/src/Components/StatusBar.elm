@@ -1073,7 +1073,7 @@ viewStorageControl model =
                         "Storage · "
                             ++ Model.formatStorageSize snapshot.local
                             ++ " in step outputs"
-                            ++ (Maybe.map (\capacity -> " · " ++ capacitySummary capacity) snapshot.capacity
+                            ++ (Maybe.map (\capacity -> " · " ++ capacityRemainderString capacity) snapshot.capacity
                                     |> Maybe.withDefault ""
                                )
                     )
@@ -1193,6 +1193,9 @@ viewStorageContent model snapshot =
 
         expandedSteps =
             Model.getStorageExpandedSteps model
+
+        stepRoutes =
+            storageStepRoutes model
     in
     Html.div [ class "storage-panel__content" ]
         [ viewStorageUsage snapshot
@@ -1243,7 +1246,7 @@ viewStorageContent model snapshot =
                     )
                 , Html.div [ class "storage-panel__rows", attribute "role" "list" ]
                     (List.map
-                        (viewStorageGroup model snapshot.coldConfigured expandedSteps)
+                        (viewStorageGroup model snapshot.coldConfigured stepRoutes expandedSteps)
                         groups
                     )
                 ]
@@ -1370,11 +1373,6 @@ capacityRemainderString capacity =
            )
 
 
-capacitySummary : StorageCapacity -> String
-capacitySummary capacity =
-    capacityRemainderString capacity
-
-
 storageTotal : Int -> String -> Html msg
 storageTotal bytes label =
     Html.span [ class "storage-panel__total" ]
@@ -1481,7 +1479,6 @@ type alias StorageGroup =
     , cold : Int
     , revisionCount : Int
     , localRevisionCount : Int
-    , rewarmRevisionCount : Int
     , blocked : Maybe String
     , revisions : List StorageRevision
     }
@@ -1528,7 +1525,6 @@ summarizeStorageGroup stepId revisions =
     , cold = List.sum (List.map .cold revisions)
     , revisionCount = List.length revisions
     , localRevisionCount = List.length (List.filter storageRevisionMovable revisions)
-    , rewarmRevisionCount = List.length (List.filter storageRevisionRewarmable revisions)
     , blocked = List.filterMap .blocked revisions |> List.head
     , revisions = revisions
     }
@@ -1564,8 +1560,8 @@ largerTier group =
     max group.local group.cold
 
 
-viewStorageGroup : Model -> Bool -> Set Int -> StorageGroup -> Html (Flow Model ())
-viewStorageGroup model coldConfigured expandedSteps group =
+viewStorageGroup : Model -> Bool -> Dict Int Route.Route -> Set Int -> StorageGroup -> Html (Flow Model ())
+viewStorageGroup model coldConfigured stepRoutes expandedSteps group =
     let
         expanded =
             Set.member group.stepId expandedSteps
@@ -1574,7 +1570,7 @@ viewStorageGroup model coldConfigured expandedSteps group =
             "storage-step-children-" ++ String.fromInt group.stepId
     in
     Html.div [ class "storage-panel__group", attribute "role" "listitem" ]
-        [ viewStorageStepRow model coldConfigured childrenId expanded group
+        [ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group
         , Html.div
             [ id childrenId
             , class "storage-panel__children"
@@ -1589,8 +1585,8 @@ viewStorageGroup model coldConfigured expandedSteps group =
         ]
 
 
-viewStorageStepRow : Model -> Bool -> String -> Bool -> StorageGroup -> Html (Flow Model ())
-viewStorageStepRow model coldConfigured childrenId expanded group =
+viewStorageStepRow : Model -> Bool -> Dict Int Route.Route -> String -> Bool -> StorageGroup -> Html (Flow Model ())
+viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
     let
         starting =
             Set.member (Model.storageStepKey group.stepId) (Model.getStorageMoving model)
@@ -1608,6 +1604,7 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
                     , type_ "button"
                     , disabled (group.blocked /= Nothing)
                     , Events.onClick (Actions.storageRewarmRevisions rewarmRevisions)
+                    , title "Copy the group's cold revisions back to this server."
                     , attribute "aria-describedby" blockedId
                     ]
                     [ iconCustom False "mode_heat" [ attribute "aria-hidden" "true" ]
@@ -1636,23 +1633,25 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
     in
     Html.div [ class "storage-panel__step-row" ]
         ([ Html.div [ class "storage-panel__step-main" ]
-            [ Html.button
-                [ class "storage-panel__step-toggle"
-                , type_ "button"
-                , Events.onClick (Actions.toggleStorageStepExpanded group.stepId)
-                , attribute "aria-expanded" (boolText expanded)
-                , attribute "aria-controls" childrenId
-                ]
-                [ iconCustom False
-                    (if expanded then
-                        "expand_more"
+            [ Html.div [ class "storage-panel__step-heading" ]
+                [ Html.button
+                    [ class "storage-panel__step-toggle"
+                    , type_ "button"
+                    , Events.onClick (Actions.toggleStorageStepExpanded group.stepId)
+                    , attribute "aria-expanded" (boolText expanded)
+                    , attribute "aria-controls" childrenId
+                    ]
+                    [ iconCustom False
+                        (if expanded then
+                            "expand_more"
 
-                     else
-                        "chevron_right"
-                    )
-                    [ class "storage-panel__chevron", attribute "aria-hidden" "true" ]
-                , Html.span [ class "storage-panel__step-name", title group.name ] [ Html.text group.name ]
-                , viewStorageStepId model group.stepId
+                         else
+                            "chevron_right"
+                        )
+                        [ class "storage-panel__chevron", attribute "aria-hidden" "true" ]
+                    , Html.span [ class "storage-panel__step-name", title group.name ] [ Html.text group.name ]
+                    ]
+                , viewStorageStepId stepRoutes group.stepId
                 ]
             , Html.div [ class "storage-panel__meta" ]
                 [ Html.text (storageCount group.revisionCount "revision" "revisions") ]
@@ -1674,9 +1673,9 @@ viewStorageStepRow model coldConfigured childrenId expanded group =
         )
 
 
-viewStorageStepId : Model -> Int -> Html (Flow Model ())
-viewStorageStepId model stepId =
-    case storageStepRoute model stepId of
+viewStorageStepId : Dict Int Route.Route -> Int -> Html (Flow Model ())
+viewStorageStepId stepRoutes stepId =
+    case Dict.get stepId stepRoutes of
         Just route_ ->
             Html.a
                 [ href (Route.toString route_)
@@ -1689,8 +1688,8 @@ viewStorageStepId model stepId =
             Html.span [ class "storage-panel__step-id" ] [ Html.text ("#" ++ String.fromInt stepId) ]
 
 
-storageStepRoute : Model -> Int -> Maybe Route.Route
-storageStepRoute model stepId =
+storageStepRoutes : Model -> Dict Int Route.Route
+storageStepRoutes model =
     let
         currentPath =
             try (Route.page << Model.Lenses.projectRoute << Model.Lenses.projectPath) (Model.getRoute model)
@@ -1702,10 +1701,16 @@ storageStepRoute model stepId =
             Model.canonicalProjectPath (Maybe.withDefault [] currentPath) (Model.getProjectIndex model)
 
         locations =
-            Actions.stepLocations ((==) stepId) (Model.getProjectIndex model) (Model.getSteps model)
+            Actions.stepLocations (always True) (Model.getProjectIndex model) (Model.getSteps model)
     in
-    Actions.stepOutputLocation openProjectId locations stepId
-        |> Maybe.map (\location -> Actions.stepOutputRoute (canonicalPath location.projectId) stepId)
+    locations
+        |> Dict.toList
+        |> List.filterMap
+            (\( stepId, candidates ) ->
+                Actions.stepOutputLocation openProjectId (Dict.singleton stepId candidates) stepId
+                    |> Maybe.map (\location -> ( stepId, Actions.stepOutputRoute (canonicalPath location.projectId) stepId ))
+            )
+        |> Dict.fromList
 
 
 viewStorageRow : Model -> Bool -> String -> StorageRevision -> Html (Flow Model ())
@@ -1779,7 +1784,7 @@ viewStorageRevisionAction model coldConfigured revision blockedId =
                     [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
                     , Html.text "In cold storage"
                     ]
-                , storageRevisionRewarmButton revision
+                , storageRevisionRewarmButton revision blockedId
                 ]
 
         StorageOffloading ->
@@ -1801,8 +1806,8 @@ viewStorageRevisionAction model coldConfigured revision blockedId =
 storageRevisionActions : Model -> Bool -> StorageRevision -> String -> Html (Flow Model ())
 storageRevisionActions model coldConfigured revision blockedId =
     Html.div [ class "storage-panel__rev-actions" ]
-        ((if revision.cold > 0 then
-            [ storageRevisionRewarmButton revision ]
+        ((if storageRevisionRewarmable revision then
+            [ storageRevisionRewarmButton revision blockedId ]
 
           else
             []
@@ -1817,14 +1822,16 @@ storageRevisionActions model coldConfigured revision blockedId =
         )
 
 
-storageRevisionRewarmButton : StorageRevision -> Html (Flow Model ())
-storageRevisionRewarmButton revision =
+storageRevisionRewarmButton : StorageRevision -> String -> Html (Flow Model ())
+storageRevisionRewarmButton revision blockedId =
     Html.button
         [ class "small-btn storage-panel__step-move storage-panel__rewarm"
         , type_ "button"
+        , disabled (revision.blocked /= Nothing)
         , Events.onClick (Actions.storageRewarmRevision revision)
         , title "Copy this revision back to this server."
         , attribute "aria-label" ("Copy revision " ++ String.left 7 revision.revision ++ " back to this server")
+        , attribute "aria-describedby" blockedId
         ]
         [ iconCustom False "mode_heat" [ attribute "aria-hidden" "true" ]
         , Html.text "Rewarm"

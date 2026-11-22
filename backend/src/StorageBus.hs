@@ -18,6 +18,7 @@ module StorageBus (
     trackPaths,
     recordColdStatus,
     knownColdStatuses,
+    knownColdCapacity,
     beginOffload,
     recordOffloadProgress,
     endOffload,
@@ -29,7 +30,7 @@ module StorageBus (
     revisionMovable,
 ) where
 
-import ColdProvider (ColdStatus, OffloadProgress (..))
+import ColdProvider (ColdStatus (..), OffloadProgress (..))
 import Control.Concurrent.STM (STM, TChan, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newTVarIO, readTVar, readTVarIO, stateTVar, writeTChan, writeTVar)
 import Control.Monad (unless, when)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.:), (.:?), (.!=), (.=))
@@ -106,16 +107,18 @@ instance FromJSON StorageCapacity where
         unless (kind `elem` (["filesystem", "quota"] :: [Text])) $ fail "kind must be filesystem or quota"
         used <- fields .:? "usedBytes" :: Parser (Maybe Integer)
         available <- fields .:? "availableBytes" :: Parser (Maybe Integer)
-        (usedBytes, availableBytes) <- case (used, available) of
-            (Just value, Nothing) ->
-                let usedValue = max 0 value
-                 in pure (usedValue, max 0 (totalBytes - usedValue))
-            (Nothing, Just value) ->
-                let availableValue = max 0 (min totalBytes value)
-                 in pure (totalBytes - availableValue, availableValue)
-            (Nothing, Nothing)
-                | kind == "quota" -> pure (0, totalBytes)
-            _ -> fail "requires exactly one of usedBytes and availableBytes, or only totalBytes for a quota"
+        (usedBytes, availableBytes) <- case kind of
+            "quota" -> case (used, available) of
+                (Nothing, Nothing) -> pure (0, totalBytes)
+                _ -> fail "a quota reports only totalBytes; Pointy measures its step-output usage"
+            _ -> case (used, available) of
+                (Just value, Nothing) ->
+                    let usedValue = max 0 value
+                     in pure (usedValue, max 0 (totalBytes - usedValue))
+                (Nothing, Just value) ->
+                    let availableValue = max 0 (min totalBytes value)
+                     in pure (totalBytes - availableValue, availableValue)
+                _ -> fail "a filesystem requires exactly one of usedBytes and availableBytes"
         label <- fields .:? "label" .!= (if kind == "filesystem" then "disk" else "quota")
         pure
             StorageCapacity
@@ -208,6 +211,10 @@ trackedVar = unsafePerformIO (newTVarIO Set.empty)
 coldVar :: TVar (Map Text (Maybe ColdStatus))
 coldVar = unsafePerformIO (newTVarIO Map.empty)
 
+{-# NOINLINE coldCapacityVar #-}
+coldCapacityVar :: TVar (Maybe Integer)
+coldCapacityVar = unsafePerformIO (newTVarIO Nothing)
+
 {-# NOINLINE offloadsVar #-}
 offloadsVar :: TVar (Map Text OffloadState)
 offloadsVar = unsafePerformIO (newTVarIO Map.empty)
@@ -253,12 +260,25 @@ recordColdStatus :: Text -> Maybe ColdStatus -> IO ()
 recordColdStatus path status = atomically $ do
     tracked <- Set.member path <$> readTVar trackedVar
     known <- Map.lookup path <$> readTVar coldVar
-    when (tracked && known /= Just status) $ do
+    previousCapacity <- readTVar coldCapacityVar
+    let nextCapacity = case status of
+            Just cold
+                | Just total <- coldStatusCapacityBytes cold
+                , total > 0 ->
+                    Just total
+            _ -> Nothing
+        capacityChanged = nextCapacity /= previousCapacity
+    when capacityChanged $ writeTVar coldCapacityVar nextCapacity
+    when (tracked && known /= Just status) $
         modifyTVar' coldVar (Map.insert path status)
+    when (capacityChanged || (tracked && known /= Just status)) $
         invalidateSTM mempty{invalidView = True}
 
 knownColdStatuses :: IO (Map Text (Maybe ColdStatus))
 knownColdStatuses = readTVarIO coldVar
+
+knownColdCapacity :: IO (Maybe Integer)
+knownColdCapacity = readTVarIO coldCapacityVar
 
 beginOffload :: Text -> IO Bool
 beginOffload path = atomically $ do

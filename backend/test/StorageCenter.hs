@@ -101,26 +101,22 @@ checkRevisionMovable = do
 checkCapacity :: IO ()
 checkCapacity = do
     assertEqual
-        "used bytes derive available bytes"
-        (Right (StorageCapacity "quota" "quota" 1000 400 600))
-        (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"usedBytes\":400}"))
+        "a quota usage is rejected so Pointy can use step-output bytes"
+        True
+        (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"usedBytes\":400}")))
     assertEqual
         "available bytes derive used bytes and a filesystem defaults to a disk label"
         (Right (StorageCapacity "filesystem" "disk" 1000 250 750))
         (parseStorageCapacity (LBS.pack "{\"totalBytes\":1000,\"availableBytes\":750,\"kind\":\"filesystem\"}"))
     assertEqual
         "a provider label names the capacity"
-        (Right (StorageCapacity "quota" "account quota" 1000 900 100))
-        (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"usedBytes\":900,\"label\":\"account quota\"}"))
-    assertEqual
-        "over-quota usage is preserved"
-        (Right (StorageCapacity "quota" "quota" 1000 5000 0))
-        (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"usedBytes\":5000}"))
+        (Right (StorageCapacity "quota" "account quota" 1000 0 1000))
+        (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"label\":\"account quota\"}"))
     assertEqual
         "available bytes clamp below zero"
-        (Right (StorageCapacity "quota" "quota" 1000 1000 0))
-        (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"availableBytes\":-5}"))
-    assertEqual "both byte counts are rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"quota\",\"totalBytes\":1000,\"usedBytes\":400,\"availableBytes\":600}")))
+        (Right (StorageCapacity "filesystem" "disk" 1000 1000 0))
+        (parseStorageCapacity (LBS.pack "{\"kind\":\"filesystem\",\"totalBytes\":1000,\"availableBytes\":-5}"))
+    assertEqual "both byte counts are rejected" True (isLeft (parseStorageCapacity (LBS.pack "{\"kind\":\"filesystem\",\"totalBytes\":1000,\"usedBytes\":400,\"availableBytes\":600}")))
     assertEqual
         "a quota may report only its total"
         (Right (StorageCapacity "quota" "quota" 1000 0 1000))
