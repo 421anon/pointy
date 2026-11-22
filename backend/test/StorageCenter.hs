@@ -2,7 +2,7 @@
 
 module Main (main) where
 
-import BuildLog (buildStepStore, rawStatusesBatched)
+import BuildLog (buildStepStore, rawStatusesBatched, validPaths)
 import BuildStatus (StepPaths (..), checkStatus)
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..))
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -31,6 +31,7 @@ main = do
     checkRevisionMovable
     checkCapacity
     checkCertificationRequiresOutput
+    checkValidityBatchSkipsNonStorePaths
     checkSharedOutputOwners
 
 checkHistoryParsing :: IO ()
@@ -145,6 +146,13 @@ checkCertificationRequiresOutput = do
         store <- buildStepStore (Map.singleton 1 "cert") (Map.singleton 1 "/nix/store/output")
         rawStatusesBatched store (const False) (Map.singleton 1 "cert")
     assertEqual "batched status also checks output presence" (Map.singleton 1 ("not-started", Nothing)) batched
+
+checkValidityBatchSkipsNonStorePaths :: IO ()
+checkValidityBatchSkipsNonStorePaths = do
+    document <- either fail pure (eitherDecode "{\"valid\":[\"/nix/store/present\"]}" :: Either String FixtureDocument)
+    state <- newFixtureState document
+    validity <- runFixture state (validPaths ["/nix/store/present", "/invalid"])
+    assertEqual "a non-store path does not poison the validity batch" (Just (Set.singleton "/nix/store/present")) validity
 
 checkSharedOutputOwners :: IO ()
 checkSharedOutputOwners = do

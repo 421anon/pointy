@@ -245,16 +245,18 @@ isStorePath :: FilePath -> Bool
 isStorePath path = "/nix/store/" `isPrefixOf` path
 
 validPaths :: (Nix :> es) => [FilePath] -> Eff es (Maybe (Set FilePath))
-validPaths [] = return (Just Set.empty)
-validPaths paths = do
-    result <- runExceptT $ runNix (["path-info", "--offline", "--json"] ++ paths)
-    return $ case result of
-        Right output -> parsedValidity output
-        Left _ -> Nothing
+validPaths paths
+    | null storePaths = return (Just Set.empty)
+    | otherwise = do
+        result <- runExceptT $ runNix (["path-info", "--offline", "--json"] ++ storePaths)
+        return $ case result of
+            Right output -> parsedValidity output
+            Left _ -> Nothing
   where
+    storePaths = filter isStorePath paths
     parsedValidity output = do
         validity <- decodeValidity output
-        guard (Set.fromList (map pack paths) `Set.isSubsetOf` Map.keysSet validity)
+        guard (Set.fromList (map pack storePaths) `Set.isSubsetOf` Map.keysSet validity)
         return $ Set.fromList (map unpack (Map.keys (Map.filter (/= Null) validity)))
 
 decodeValidity :: ByteString -> Maybe (Map Text Value)
