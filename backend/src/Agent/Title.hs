@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Exit (ExitCode (..))
-import System.IO (Handle)
+import System.IO (Handle, hSetEncoding, utf8)
 import System.Process (CreateProcess (..), StdStream (..), createProcess, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
 
@@ -23,7 +23,7 @@ titleTimeoutSeconds :: Int
 titleTimeoutSeconds = 60
 
 titleMaxLength :: Int
-titleMaxLength = 60
+titleMaxLength = 80
 
 titleMaxWords :: Int
 titleMaxWords = 10
@@ -80,7 +80,7 @@ generateSessionTitle cfg session_ request = do
 
 readHandleText :: Handle -> IO Text
 readHandleText handle =
-    fromRight "" <$> (try (TIO.hGetContents handle) :: IO (Either IOException Text))
+    fromRight "" <$> (try (hSetEncoding handle utf8 >> TIO.hGetContents handle) :: IO (Either IOException Text))
 
 titleFromOutput :: Text -> Maybe Text
 titleFromOutput output = do
