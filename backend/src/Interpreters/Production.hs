@@ -236,6 +236,11 @@ runColdStorageProduction = interpret $ \_ -> \case
         case command of
             Nothing -> pure (Left "cold storage is not configured")
             Just program -> runColdOffload program outPath report
+    ColdStorageDelete outPath -> liftIO $ do
+        command <- coldStorageCommand
+        case command of
+            Nothing -> pure (Left "cold storage is not configured")
+            Just program -> fmap (const ()) <$> runColdStorage program ["delete", T.unpack outPath]
 
 coldStorageCommand :: IO (Maybe FilePath)
 coldStorageCommand = do

@@ -5820,7 +5820,7 @@ storageDeleteErrorMessage error =
             body
 
         Http.BadStatus 409 ->
-            "The output was not deleted. It may be running, in use, or have files in cold storage; the cold storage provider's copy is not deleted."
+            "The output was not deleted. It may be running, in use, or changing between local and cold storage."
 
         Http.BadStatus 503 ->
             "Storage status is unavailable. Try again in a moment."
@@ -6050,10 +6050,10 @@ confirmOffload revision =
     let
         config =
             { id = "modal-confirm"
-            , title = "Move to cold storage"
+            , title = "Freeze revision"
             , subtitle = Just (revision.name ++ " · " ++ String.left 7 revision.revision)
             , bodyLines =
-                [ "This moves " ++ Model.formatStorageSize revision.local ++ " off this server."
+                [ "This freezes " ++ Model.formatStorageSize revision.local ++ ", moving it off this server."
                 , "Pointy copies this revision's files to the cold storage provider, then removes the server copy."
                 , "Reading does not copy it back automatically. Rewarm the revision explicitly to restore its files; larger revisions take longer."
                 ]
@@ -6079,10 +6079,10 @@ confirmStorageStepOffload stepId name movableLocal localRevisionCount =
 
         config =
             { id = "modal-confirm"
-            , title = "Move step outputs to cold storage"
+            , title = "Freeze step outputs"
             , subtitle = Just (name ++ " · #" ++ String.fromInt stepId)
             , bodyLines =
-                [ "This moves "
+                [ "This freezes "
                     ++ revisionCount
                     ++ revisionWord
                     ++ " totalling "

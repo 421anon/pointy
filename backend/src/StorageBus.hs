@@ -12,7 +12,6 @@ module StorageBus (
     takeInvalidation,
     headMoved,
     outputsBuilt,
-    revalidateAll,
     recheckCold,
     viewInputsChanged,
     trackPaths,
@@ -246,9 +245,6 @@ headMoved = invalidate mempty{invalidHead = True}
 
 outputsBuilt :: IO ()
 outputsBuilt = invalidate mempty{invalidOutputs = True}
-
-revalidateAll :: IO ()
-revalidateAll = invalidate mempty{invalidHead = True, invalidOutputs = True, invalidCold = RecheckAll, invalidBroadcast = True}
 
 recheckCold :: Text -> IO ()
 recheckCold path = invalidate mempty{invalidCold = RecheckPaths (Set.singleton path)}

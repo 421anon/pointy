@@ -44,14 +44,14 @@ import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), liftIO, withEffToIO, (:>))
-import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
+import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageDelete, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
 import Handlers.Cold (coldFilesFor, coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err500, err502, err503)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, revalidateAll, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Environment (lookupEnv)
@@ -169,7 +169,7 @@ capacityCacheRef = unsafePerformIO (newMVar Nothing)
 
 storageHandler :: AppM StorageView
 storageHandler = liftIO $ do
-    revalidateAll
+    invalidate mempty{invalidView = True, invalidBroadcast = True}
     atomically (currentView >>= maybe retry pure)
 
 offloadHandler :: Int -> Maybe Text -> AppM NoContent
@@ -253,13 +253,6 @@ deleteRevisionHandler stepId mCommit = do
     withPathLock outPath $ do
         refusePathBusy outPath
         refuseOffloadRunning outPath
-        cold <- lift (coldFilesFor outPath)
-        case cold of
-            Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
-            Just files
-                | not (Set.null files) ->
-                    throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 (coldRefusal files))}
-                | otherwise -> pure ()
         certificate <- certificateForPath stepId mCommit outPath
         let path = T.unpack outPath
             certificatePath = T.unpack certificate
@@ -268,6 +261,16 @@ deleteRevisionHandler stepId mCommit = do
             Left err -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 ("Cannot check whether the output exists: " <> TE.decodeUtf8Lenient (LBS.toStrict err)))}
             Right False -> pure ()
             Right True -> do
+                cold <- lift (coldFilesFor outPath)
+                case cold of
+                    Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
+                    Just files
+                        | Set.null files -> pure ()
+                        | otherwise -> do
+                            deleted <- lift (coldStorageDelete outPath)
+                            case deleted of
+                                Left message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not delete the output from cold storage: " <> message))}
+                                Right () -> liftIO (recheckCold outPath)
                 lift (removeCertificationEvidence path certificatePath)
                 (code, _, err) <- lift (runNixStoreCli ["--delete", path])
                 case code of
@@ -277,13 +280,10 @@ deleteRevisionHandler stepId mCommit = do
                         lift (rootStorePath certificatePath)
                         let message = "The store refused to delete this output: " <> storeErrorLine (TE.decodeUtf8Lenient err)
                         throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
-        liftIO (invalidate mempty{invalidOutputs = True})
+        liftIO $ do
+            recheckCold outPath
+            invalidate mempty{invalidOutputs = True}
         pure NoContent
-  where
-    coldRefusal files =
-        "This output has "
-            <> T.pack (show (Set.size files))
-            <> " file(s) in cold storage; Pointy does not delete the provider's copy. Delete it with the cold storage provider first."
 
 {-# NOINLINE pathMutationSemaphore #-}
 pathMutationSemaphore :: QSem
