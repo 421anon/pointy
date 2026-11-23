@@ -9,7 +9,8 @@ module Search.StepCorpus (
 import Certificates (evalProjectDefinitions)
 import Config (EmbeddingConfig (..), JudgeConfig (..))
 import Control.Monad.Except (ExceptT, throwError)
-import Data.Aeson (Object, Value (..), eitherDecode)
+import Data.Aeson (Object, Value (..), eitherDecodeStrict')
+import Data.ByteString (ByteString)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString.Lazy as BL
@@ -73,8 +74,8 @@ buildDocuments ctx = do
         | entry <- entries
         ]
 
-decodeJson :: String -> Either String Value
-decodeJson = eitherDecode . BL.fromStrict . TE.encodeUtf8 . T.pack
+decodeJson :: ByteString -> Either String Value
+decodeJson = eitherDecodeStrict'
 
 folderPaths :: Value -> Map Int Text
 folderPaths projects = Map.fromListWith (\_ first -> first) (concatMap (walk Set.empty []) roots)

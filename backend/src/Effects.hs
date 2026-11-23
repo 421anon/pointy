@@ -87,11 +87,11 @@ toHandler :: (forall x. Eff AppEffects x -> IO x) -> AppM a -> Handler a
 toHandler runEffects = Handler . mapExceptT runEffects
 
 data Eval :: Effect where
-    EvalJson :: RepoSource -> String -> Eval m (Either String String)
-    EvalRaw :: RepoSource -> String -> Eval m (Either String String)
-    EvalJsonApply :: RepoSource -> String -> String -> Eval m (Either String String)
-    EvalHistoryJsonApply :: RepoSource -> String -> String -> Eval m (Either EvalFailure String)
-    EvalImpure :: String -> Eval m (Either String String)
+    EvalJson :: RepoSource -> String -> Eval m (Either String ByteString)
+    EvalRaw :: RepoSource -> String -> Eval m (Either String ByteString)
+    EvalJsonApply :: RepoSource -> String -> String -> Eval m (Either String ByteString)
+    EvalHistoryJsonApply :: RepoSource -> String -> String -> Eval m (Either EvalFailure ByteString)
+    EvalImpure :: String -> Eval m (Either String ByteString)
 
 type instance DispatchOf Eval = Dynamic
 
@@ -151,19 +151,19 @@ data SlurmQuery
     | AllJobs
     | AllAccountingJobs
 
-evalJson :: (Eval :> es) => RepoSource -> String -> Eff es (Either String String)
+evalJson :: (Eval :> es) => RepoSource -> String -> Eff es (Either String ByteString)
 evalJson source attr = send (EvalJson source attr)
 
-evalRaw :: (Eval :> es) => RepoSource -> String -> Eff es (Either String String)
+evalRaw :: (Eval :> es) => RepoSource -> String -> Eff es (Either String ByteString)
 evalRaw source attr = send (EvalRaw source attr)
 
-evalJsonApply :: (Eval :> es) => RepoSource -> String -> String -> Eff es (Either String String)
+evalJsonApply :: (Eval :> es) => RepoSource -> String -> String -> Eff es (Either String ByteString)
 evalJsonApply source applyExpr attr = send (EvalJsonApply source applyExpr attr)
 
-evalHistoryJsonApply :: (Eval :> es) => RepoSource -> String -> String -> Eff es (Either EvalFailure String)
+evalHistoryJsonApply :: (Eval :> es) => RepoSource -> String -> String -> Eff es (Either EvalFailure ByteString)
 evalHistoryJsonApply source applyExpr attr = send (EvalHistoryJsonApply source applyExpr attr)
 
-evalImpure :: (Eval :> es) => String -> Eff es (Either String String)
+evalImpure :: (Eval :> es) => String -> Eff es (Either String ByteString)
 evalImpure = send . EvalImpure
 
 runNixCli :: (Nix :> es) => [String] -> Eff es (ExitCode, ByteString, ByteString)

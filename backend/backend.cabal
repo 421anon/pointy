@@ -75,6 +75,7 @@ library
     JobOutcome
     JobWatch
     NixEvaluator
+    NixEvaluator.NixRepl
     NixStore
     NixUtils
     BuildStatus
@@ -91,14 +92,12 @@ library
     SlurmWatch
     Sse
     StepEvaluations
+    EvalOutput
     StepLog
     Storage
     StorageBus
     StorageHistory
     UserRepo
-
-  other-modules:
-    NixEvaluator.NixRepl
 
   build-depends:
     , aeson
@@ -583,6 +582,18 @@ test-suite storage-center
     , containers
     , text
     , time
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite repl-lines
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          ReplLines.hs
+  build-depends:
+    , backend
+    , base
+    , bytestring
 
   hs-source-dirs:   test
   default-language: Haskell2010

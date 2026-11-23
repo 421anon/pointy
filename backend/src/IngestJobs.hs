@@ -18,6 +18,7 @@ import Control.Monad.Except (ExceptT, liftEither)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Text (Text)
@@ -95,5 +96,5 @@ updateStepNixFile (WriteRepoContext worktreePath) stepId hash = do
         nixExpr = "let orig = import " <> T.pack nixFilePath <> "; in orig // { args = orig.args // { uploaded = (orig.args.uploaded or {}) // { hash = \"" <> hash <> "\"; }; }; }"
 
     output <- runNixEvalImpureJsonExpr (T.unpack nixExpr)
-    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
+    nixResult <- liftEither $ jsonToNix (LBS.fromStrict output)
     liftIO $ TIO.writeFile nixFilePath nixResult

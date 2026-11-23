@@ -606,8 +606,8 @@ nixString text = "\"" <> T.concatMap escape text <> "\""
 decodeNix :: (FromJSON a) => String -> ByteString -> ExceptT String (Eff es) a
 decodeNix label output = liftEither $ either (Left . ((label ++ ": ") ++)) Right $ eitherDecodeStrict output
 
-decodeNixText :: (FromJSON a) => String -> String -> ExceptT String (Eff es) a
-decodeNixText label = decodeNix label . TE.encodeUtf8 . T.pack
+decodeNixText :: (FromJSON a) => String -> ByteString -> ExceptT String (Eff es) a
+decodeNixText label = decodeNix label
 
 orFail :: ServerError -> Either String a -> AppM a
 orFail status = either (\message -> throwError status{errBody = TLE.encodeUtf8 (TL.pack message)}) pure

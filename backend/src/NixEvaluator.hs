@@ -23,6 +23,7 @@ import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Concurrent.STM (TQueue, TMVar, atomically, check, isEmptyTQueue, newEmptyTMVarIO, newTQueueIO, orElse, putTMVar, readTQueue, readTVar, registerDelay, takeTMVar, writeTQueue)
 import Control.Exception (SomeException, catch, try)
 import Control.Monad (forever, replicateM_, void, when)
+import Data.ByteString (ByteString)
 import Data.Char (toLower)
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
@@ -61,7 +62,7 @@ data ReplWorker = ReplWorker
 
 data ReleasePolicy = ReleaseWhenIdle | ReleaseAfterRequest
 
-data QueuedEval = QueuedEval NixEvalRequest (TMVar (Either EvalFailure String))
+data QueuedEval = QueuedEval NixEvalRequest (TMVar (Either EvalFailure ByteString))
 
 replMemoryLimitBytes :: Integer
 replMemoryLimitBytes = 2 * 1024 * 1024 * 1024
@@ -121,11 +122,11 @@ jsonAppliedExpression applyExpr = expression EvalJson $ Just applyExpr
 expression :: NixEvalOutput -> Maybe String -> String -> RepoExpression
 expression output applyExpr attr = RepoExpression output applyExpr attr
 
-evaluate :: NixEvaluator -> RepoSource -> RepoExpression -> IO (Either String String)
+evaluate :: NixEvaluator -> RepoSource -> RepoExpression -> IO (Either String ByteString)
 evaluate evaluator source repoExpr =
     eitherFailureMessage <$> evaluateRequest evaluator (requestForSource source repoExpr)
 
-evaluateHistory :: HistoryEvaluator -> RepoSource -> RepoExpression -> IO (Either EvalFailure String)
+evaluateHistory :: HistoryEvaluator -> RepoSource -> RepoExpression -> IO (Either EvalFailure ByteString)
 evaluateHistory (HistoryEvaluator queue) source repoExpr =
     enqueueEval queue (requestForSource source repoExpr)
 
@@ -148,15 +149,15 @@ sourceImpure = \case
     RepoRef _ -> False
     RepoWorktree _ -> True
 
-evaluateImpure :: NixEvaluator -> String -> IO (Either String String)
+evaluateImpure :: NixEvaluator -> String -> IO (Either String ByteString)
 evaluateImpure evaluator expr =
     eitherFailureMessage <$> evaluateRequest evaluator (NixEvalRequest True EvalJson Nothing $ EvalExpr expr)
 
-evaluateRequest :: NixEvaluator -> NixEvalRequest -> IO (Either EvalFailure String)
+evaluateRequest :: NixEvaluator -> NixEvalRequest -> IO (Either EvalFailure ByteString)
 evaluateRequest evaluator request =
     enqueueEval (replWorkerQueue $ workerForRequest evaluator request) request
 
-enqueueEval :: TQueue QueuedEval -> NixEvalRequest -> IO (Either EvalFailure String)
+enqueueEval :: TQueue QueuedEval -> NixEvalRequest -> IO (Either EvalFailure ByteString)
 enqueueEval queue request = do
     response <- newEmptyTMVarIO
     atomically $ writeTQueue queue (QueuedEval request response)
@@ -195,7 +196,7 @@ nextQueuedEval worker = case replWorkerRelease worker of
                 modifyMVar_ (replWorkerSession worker) $ \session -> mapM_ closeQuietly session >> pure Nothing
                 nextQueuedEval worker
 
-runRequestWithSession :: Bool -> ReplWorker -> NixEvalRequest -> IO (Either EvalFailure String)
+runRequestWithSession :: Bool -> ReplWorker -> NixEvalRequest -> IO (Either EvalFailure ByteString)
 runRequestWithSession mayRetry worker request = do
     outcome <- modifyMVar (replWorkerSession worker) $ \mSession -> do
         eSession <- maybe openActiveSession (pure . Right) mSession
@@ -226,7 +227,7 @@ classifyFailure message
     | any (`isInfixOf` map toLower message) unavailableFailureMarkers = EvalUnavailable message
     | otherwise = EvalError message
 
-eitherFailureMessage :: Either EvalFailure String -> Either String String
+eitherFailureMessage :: Either EvalFailure ByteString -> Either String ByteString
 eitherFailureMessage = either (Left . failureMessage) Right
 
 failureMessage :: EvalFailure -> String

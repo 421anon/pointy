@@ -9,9 +9,10 @@ import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Monad.Except (ExceptT, liftEither, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Object, Result (..), ToJSON, Value (..), eitherDecode, encode, fromJSON, toJSON, withObject, (.:))
+import Data.Aeson (FromJSON (..), Object, Result (..), ToJSON, Value (..), eitherDecode, eitherDecodeStrict', encode, fromJSON, toJSON, withObject, (.:))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
@@ -193,7 +194,7 @@ ensureDeletedStepsUnused ctx state deleted = do
 evaluatedStepDependencies :: (Eval :> es) => WriteRepoContext -> [Int] -> ExceptT String (Eff es) (Map.Map Int [Int])
 evaluatedStepDependencies ctx remaining = do
     output <- runNixEvalJsonApplyInRepo ctx (stepDependenciesExpression remaining) "#pointy.steps"
-    entries <- liftEither $ either (Left . ("Failed to evaluate step dependencies: " ++)) Right $ eitherDecode (TLE.encodeUtf8 (TL.pack output))
+    entries <- liftEither $ either (Left . ("Failed to evaluate step dependencies: " ++)) Right $ eitherDecodeStrict' output
     return $ Map.fromList [(dependencyStepId entry, dependencyStepIds entry) | entry <- entries]
 
 stepDependenciesExpression :: [Int] -> String
@@ -224,11 +225,11 @@ postProjectHandler maybeParentId fields = do
         liftIO $ TIO.writeFile (projectFilePath worktreePath projectId) (valueToNix (newProject fields) <> "\n")
         _ <- liftIO $ runGitIn worktreePath ["add", "--intent-to-add", "-A"]
         _ <- applyTreeOpsIn worktreePath [TreeLink parentId (ProjectChild projectId)]
-        output <- TLE.encodeUtf8 . TL.pack <$> evalProjectDefinition ctx projectId
+        output <- evalProjectDefinition ctx projectId
         commitAndPushChanges ctx $ "Create project " ++ show projectId ++ " in project " ++ show parentId
         return output
     case result of
-        Right output -> return (DynamicJson output)
+        Right output -> return (DynamicJson (LBS.fromStrict output))
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 rewriteProjectFile :: (Eval :> es, IOE :> es) => WriteRepoContext -> Int -> T.Text -> ExceptT String (Eff es) ()

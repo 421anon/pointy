@@ -7,7 +7,7 @@ import Control.Monad (unless)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON, eitherDecode)
+import Data.Aeson (FromJSON, eitherDecode, eitherDecodeStrict')
 import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -16,6 +16,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Effectful (Eff)
+import Data.ByteString (ByteString)
 import Effects (AppM)
 import GHC.Generics (Generic)
 import Servant (throwError)
@@ -106,10 +107,10 @@ buildApplyExpr req clampedLimit =
 renderAttr :: (Text, Text) -> String
 renderAttr (key, value) = unpack key <> " = \"" <> unpack value <> "\"; "
 
-decodeOutput :: String -> ExceptT String (Eff es) [Text]
+decodeOutput :: ByteString -> ExceptT String (Eff es) [Text]
 decodeOutput output =
     ExceptT $
         return $
-            case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
+            case eitherDecodeStrict' output of
                 Left err -> Left $ "decoding autocomplete output failed: " ++ err
                 Right values -> Right values

@@ -16,7 +16,7 @@ module StepEvaluations (
 ) where
 
 import Control.Exception (onException)
-import Control.Monad (replicateM, unless)
+import Control.Monad (unless)
 import Data.Binary.Get (Get, getByteString, getInt32le, getWord32le, getWord8, runGetOrFail)
 import Data.Binary.Put (Put, putByteString, putInt32le, putWord32le, putWord8, runPut)
 import qualified Data.ByteString as BS
@@ -49,8 +49,8 @@ data StepEvaluations = StepEvaluations
     deriving (Eq, Show)
 
 data EvaluationRecord
-    = InternedStep CachedStep
-    | EvaluatedCommit Text (VU.Vector (Int32, Int32))
+    = InternedStep !CachedStep
+    | EvaluatedCommit !Text !(VU.Vector (Int32, Int32))
     deriving (Eq, Show)
 
 emptyStepEvaluations :: StepEvaluations
@@ -127,7 +127,8 @@ getRecord = do
         1 -> do
             commit <- getText
             count <- fromIntegral <$> getWord32le
-            EvaluatedCommit commit . VU.fromListN count <$> replicateM count ((,) <$> getInt32le <*> getInt32le)
+            entries <- VU.replicateM count ((,) <$> getInt32le <*> getInt32le)
+            pure $! EvaluatedCommit commit entries
         _ -> fail "invalid record tag"
 
 getText :: Get Text
@@ -142,7 +143,9 @@ decodeEvaluationLog = go emptyStepEvaluations 0
         | BL.null remaining = (evaluations, consumed)
         | otherwise = case runGetOrFail getRecord remaining of
             Left _ -> (evaluations, consumed)
-            Right (rest, used, record) -> go (applyRecord evaluations record) (consumed + used) rest
+            Right (rest, used, record) ->
+                let next = applyRecord evaluations record
+                 in next `seq` go next (consumed + used) rest
 
 stepEvaluationsPath :: IO FilePath
 stepEvaluationsPath = do

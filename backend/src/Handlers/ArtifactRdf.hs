@@ -7,7 +7,7 @@ import ArtifactRdf (ArtifactFile (..), ArtifactRef (..), parseArtifactFile, pars
 import Control.Monad.Except (runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), Value (String), eitherDecode, withObject, (.:?))
+import Data.Aeson (FromJSON (..), Value (String), eitherDecodeStrict', withObject, (.:?))
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -41,7 +41,7 @@ artifactRdfHandler segments mPath = do
     ctx <- either (\err -> throwError err404{errBody = utf8 err}) pure resolved
     evaluated <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (linkedDataExpression ref mFile) "#pointy"
     output <- either (\err -> throwError err500{errBody = utf8 ("Failed to evaluate the linked data: " ++ err)}) pure evaluated
-    answer <- either (const (throwError err500{errBody = "Unexpected linked data answer"})) pure $ eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack output)))
+    answer <- either (const (throwError err500{errBody = "Unexpected linked data answer"})) pure $ eitherDecodeStrict' output
     turtle <- case answer of
         LinkedDataAnswer (Just turtle) _ -> pure turtle
         LinkedDataAnswer Nothing (Just "linked-data") ->

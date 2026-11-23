@@ -9,7 +9,7 @@ import Control.Monad (void, when)
 import Control.Monad.Except (catchError, liftEither)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (eitherDecode, encode)
+import Data.Aeson (eitherDecode, eitherDecodeStrict', encode)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -62,7 +62,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
                     Just newUrl -> do
                         existingResult <- lift $ withReadRepoTransaction $ \ctx -> do
                             existingJson <- runNixEvalJsonInRepo ctx (stepDefAttr stepId)
-                            case eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack existingJson))) of
+                            case eitherDecodeStrict' existingJson of
                                 Left err -> throwError $ "Failed to decode existing step: " ++ err
                                 Right v -> return v
                         existingVal <- case existingResult of
@@ -100,7 +100,7 @@ patchStepHandler stepId (DynamicJson jsonBody) = do
         case mExistingVal of
             Just existingVal -> do
                 currentJson <- runNixEvalJsonInRepo headCtx (stepDefAttr stepId)
-                currentVal <- case eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack currentJson))) of
+                currentVal <- case eitherDecodeStrict' currentJson of
                     Left err -> throwError $ "Failed to decode current step: " ++ err
                     Right v -> return v
                 when
@@ -175,7 +175,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
             Just projectId ->
                 void (applyTreeOpsIn worktreePath [TreeLink projectId (StepChild stepId)])
             Nothing -> return ()
-        output <- catchError (TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonInRepo ctx (stepDefAttr stepId)) $ \err -> do
+        output <- catchError (runNixEvalJsonInRepo ctx (stepDefAttr stepId)) $ \err -> do
             _ <- liftIO $ readProcessWithExitCode "git" ["-C", worktreePath, "rm", "-f", stepFilePath worktreePath stepId] ""
             throwError err
         let cloneNote = maybe "" (\srcId -> " (clone of " ++ show srcId ++ ")") maybeSourceId
@@ -190,7 +190,7 @@ postStepHandler maybeProjectId maybeSourceId (DynamicJson jsonBody) = do
             case maybeProjectId of
                 Just projectId -> liftIO $ forkBroadcastProjectStatusAtHead projectId
                 Nothing -> return ()
-            return (DynamicJson output)
+            return (DynamicJson (LBS.fromStrict output))
         Left err -> throwError $ err400{errBody = TLE.encodeUtf8 (TL.pack err)}
 
 noticesHandler :: Int -> Maybe T.Text -> AppM DynamicJson
@@ -200,8 +200,8 @@ noticesHandler stepId mCommit = do
             ctx = ReadRepoContext repoPath targetCommit
             attr = "#pointy.steps." ++ show stepId
             applyExpr = "s: if s ? meta && s.meta ? pointy && s.meta.pointy ? notices then s.meta.pointy.notices else []"
-        TLE.encodeUtf8 . TL.pack <$> runNixEvalJsonApplyInRepo ctx applyExpr attr
+        runNixEvalJsonApplyInRepo ctx applyExpr attr
     case result of
-        Right output -> return (DynamicJson output)
+        Right output -> return (DynamicJson (LBS.fromStrict output))
         Left err -> throwError $ err500{errBody = TLE.encodeUtf8 (TL.pack err)}
 

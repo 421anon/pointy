@@ -30,7 +30,9 @@ import Control.Monad (foldM, forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:))
+import Data.Aeson (FromJSON (..), eitherDecode, eitherDecodeStrict', withObject, (.:))
+import Data.ByteString (ByteString)
+import EvalOutput (evalOutputText)
 import Data.List (intercalate, isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
@@ -120,7 +122,7 @@ stepBuildsUpstreamOf :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String
 stepBuildsUpstreamOf ctx eid = do
     output <- runNixEvalJsonApplyInRepo ctx expression "#pointy.steps"
     either (throwError . (("Failed to decode the builds upstream of step " ++ show eid ++ ": ") ++)) pure $
-        eitherDecode (TLE.encodeUtf8 (TL.pack output))
+        eitherDecodeStrict' output
   where
     expression =
         unlines
@@ -159,14 +161,14 @@ resolveStepTarget :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (E
 resolveStepTarget ctx eid = do
     output <- runNixEvalJsonApplyInRepo ctx certificateOrLegacyStep ('#' : stepAttr eid)
     either (throwError . (("Failed to decode the build target of step " ++ show eid ++ ": ") ++)) pure $
-        eitherDecode (TLE.encodeUtf8 (TL.pack output))
+        eitherDecodeStrict' output
 
 resolveStepTargets :: (Eval :> es) => ReadRepoContext -> [Int] -> Eff es (Map.Map Int (Either String StepTarget))
 resolveStepTargets ctx = bisectBatch evaluateTargets (\_ single -> Map.singleton single <$> runExceptT (resolveStepTarget ctx single))
   where
     evaluateTargets ids = do
         outcome <- runExceptT $ runNixEvalJsonApplyInRepo ctx (certificatesOrLegacySteps ids) "#pointy.steps"
-        pure $ case eitherDecode . TLE.encodeUtf8 . TL.pack <$> outcome of
+        pure $ case fmap eitherDecodeStrict' outcome of
             Right (Right targets) | length targets == length ids -> Right (Map.fromList (zip ids (map Right targets)))
             _ -> Left ()
     certificatesOrLegacySteps ids = "steps: map (id: (" ++ certificateOrLegacyStep ++ ") steps.${id}) " ++ renderIdList ids
@@ -428,7 +430,7 @@ buildExtras ctx eid = do
 getStepOutPath :: (Eval :> es) => ReadRepoContext -> Int -> ExceptT String (Eff es) T.Text
 getStepOutPath ctx eid = do
     output <- runNixEvalRawInRepo ctx ("#pointy.steps." ++ show eid ++ ".outPath")
-    return $ T.pack output
+    return (evalOutputText output)
 
 data ExtrasTarget = ExtrasTarget
     { extrasTargetPath :: FilePath
@@ -450,7 +452,7 @@ getExtrasTarget ctx eid = do
     case result of
         Left _ -> return Nothing
         Right output ->
-            case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
+            case eitherDecodeStrict' output of
                 Left _ -> return Nothing
                 Right target -> return (Just target)
 
@@ -470,10 +472,10 @@ getStepRequirements ctx eid = do
     output <- runNixEvalJsonInRepo ctx attr
     decodeAndValidateRequirements attr output
 
-decodeAndValidateRequirements :: String -> String -> ExceptT String (Eff es) StepRequirements
+decodeAndValidateRequirements :: String -> ByteString -> ExceptT String (Eff es) StepRequirements
 decodeAndValidateRequirements attr output = do
     requirements <-
-        case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
+        case eitherDecodeStrict' output of
             Left err -> throwError $ "Failed to decode " ++ attr ++ ": " ++ err
             Right decoded -> return decoded
     case validateStepRequirements requirements of
@@ -499,7 +501,7 @@ getInputGraph halted ctx root = do
             output <- runNixEvalJsonApplyInRepo ctx expression "#pointy.steps"
             entries <-
                 either (throwError . (("Failed to decode the steps upstream of step " ++ show root ++ ": ") ++)) pure $
-                    eitherDecode (TLE.encodeUtf8 (TL.pack output))
+                    eitherDecodeStrict' output
             return $ Map.fromList [(sid, nub inputs) | (sid, inputs) <- entries :: [(Int, [Int])]]
   where
     expression =

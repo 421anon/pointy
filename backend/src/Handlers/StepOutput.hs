@@ -9,6 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import EvalOutput (evalOutputText)
 import Effects (AppM)
 import Servant (ServerError (..), err500, throwError)
 import UserRepo (ReadRepoContext (..), runNixEvalRawInRepo, userRepoPath, withReadRepoTransaction)
@@ -27,4 +28,4 @@ resolveStepOutPath stepId mCommit = do
     result <- lift $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".outPath")
     case result of
         Left err -> throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to resolve step outPath: " ++ err))}
-        Right path -> return (T.pack path)
+        Right path -> return (evalOutputText path)

@@ -13,6 +13,7 @@ module NixEvaluator.NixRepl (
     runRequest,
     readSessionMemoryBytes,
     closeSession,
+    readLines,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -20,14 +21,15 @@ import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
 import Control.Exception (SomeException, catch, evaluate, try)
 import Control.Monad (void)
-import Data.Aeson (Value (..), eitherDecode)
-import qualified Data.ByteString.Lazy as LBS
-import Data.Char (isAlphaNum, isSpace)
+import Data.Aeson (Value (..), eitherDecodeStrict')
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import Data.Char (isAlphaNum)
 import Data.List (isInfixOf)
 import Data.Maybe (listToMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import System.IO (BufferMode (..), Handle, hClose, hFlush, hGetLine, hIsClosed, hPutStrLn, hSetBuffering)
+import System.IO (BufferMode (..), Handle, hClose, hFlush, hIsClosed, hPutStrLn, hSetBuffering)
 import System.IO.Error (isEOFError)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (CreatePipe), createProcess, getPid, proc, terminateProcess, waitForProcess)
 import Text.Read (readMaybe)
@@ -71,12 +73,12 @@ data ReplStream = ReplStdout | ReplStderr
     deriving (Eq, Show)
 
 data ReplEvent
-    = ReplLine ReplStream String
+    = ReplLine ReplStream ByteString
     | ReplClosed ReplStream String
     deriving (Eq, Show)
 
 data ReplOutcome
-    = ReplSucceeded String
+    = ReplSucceeded ByteString
     | ReplFailed String
     | ReplDied String
     deriving (Eq, Show)
@@ -172,46 +174,42 @@ collectUntilMarkers session marker = go False False []
         event <- atomically $ readTQueue (replEvents session)
         case event of
             ReplLine ReplStdout line
-                | line == marker -> go True sawStderr acc
+                | line == utf8 marker -> go True sawStderr acc
             ReplLine ReplStderr line
-                | line == "trace: " ++ marker -> go sawStdout True acc
+                | line == utf8 ("trace: " ++ marker) -> go sawStdout True acc
             ReplClosed stream err -> pure $ ReplDied $ replName session ++ " closed " ++ show stream ++ " before marker " ++ marker ++ formatClosed err
             _ -> go sawStdout sawStderr (event : acc)
 
 parseReplOutput :: String -> NixEvalRequest -> String -> IO ReplOutcome
 parseReplOutput begin req raw = do
-    let events = parseFormattedEvents raw
-        (preBegin, atBegin) = break isBegin events
+    let output = lines raw
+        (preBegin, atBegin) = break (== begin) output
     case atBegin of
         [] -> pure $ ReplDied $ "nix repl response did not include begin marker " ++ begin ++ ":\n" ++ raw
         (_ : body) ->
             pure $
                 if hasNixError preBegin
-                    then ReplFailed $ stripTrailingNewlines $ formatEvents preBegin
+                    then ReplFailed $ stripTrailingNewlines $ unlines preBegin
                     else parseBody req body
   where
-    isBegin (ReplLine ReplStdout line) = line == begin
-    isBegin _ = False
+    keepOutput line = not (all (`elem` (" \t\r" :: String)) line)
+    parseBody request body = case [(line, value) | line <- body, keepOutput line, Right value <- [eitherDecodeStrict' (utf8 line)]] of
+        [(line, value)] -> renderOutput request value line
+        [] -> ReplFailed $ stripTrailingNewlines $ unlines body
+        _ -> ReplFailed $ "nix repl returned multiple JSON values:\n" ++ stripTrailingNewlines (unlines body)
+    utf8 = TE.encodeUtf8 . T.pack
 
-parseBody :: NixEvalRequest -> [ReplEvent] -> ReplOutcome
-parseBody req body =
-    case validJsonLines of
-        [(line, value)] -> renderOutput value line
-        [] -> ReplFailed $ stripTrailingNewlines $ formatEvents body
-        _ -> ReplFailed $ "nix repl returned multiple JSON values:\n" ++ stripTrailingNewlines (formatEvents body)
+utf8 :: String -> ByteString
+utf8 = TE.encodeUtf8 . T.pack
+
+renderOutput :: NixEvalRequest -> Value -> String -> ReplOutcome
+renderOutput req value line = case evalOutput req of
+    EvalJson -> ReplSucceeded (utf8 (line ++ "\n"))
+    EvalRaw -> case value of
+        String txt -> ReplSucceeded (TE.encodeUtf8 txt)
+        _ -> ReplFailed $ "nix repl --raw emulation expected a string result, got JSON: " ++ line
   where
-    stdoutLines = [line | ReplLine ReplStdout line <- body, not (all isSpace line)]
-    validJsonLines =
-        [ (line, value)
-        | line <- stdoutLines
-        , Right value <- [eitherDecode (LBS.fromStrict (TE.encodeUtf8 (T.pack line)))]
-        ]
-
-    renderOutput value line = case evalOutput req of
-        EvalJson -> ReplSucceeded (line ++ "\n")
-        EvalRaw -> case value of
-            String txt -> ReplSucceeded (T.unpack txt)
-            _ -> ReplFailed $ "nix repl --raw emulation expected a string result, got JSON: " ++ line
+    utf8 = TE.encodeUtf8 . T.pack
 
 renderRequestExpression :: ReplSession -> NixEvalRequest -> IO (Either ReplOutcome String)
 renderRequestExpression session req =
@@ -242,7 +240,7 @@ ensureFlakeBinding session installable =
                     ReplSucceeded _ -> pure (bindings, Left $ ReplDied "internal protocol error while binding flake")
                     ReplDied err -> pure (bindings, Left $ ReplDied err)
                     ReplFailed raw ->
-                        if hasNixError (parseFormattedEvents raw)
+                        if hasNixError (lines raw)
                             then pure (bindings, Left $ ReplFailed $ stripTrailingNewlines raw)
                             else pure ((installable, varName) : bindings, Right varName)
 
@@ -297,17 +295,33 @@ sendCommands session commands = do
     hFlush (replInput session)
 
 readLoop :: ReplStream -> Handle -> TQueue ReplEvent -> IO ()
-readLoop stream handle events = loop
+readLoop stream handle events = do
+    outcome <- try (readLines handle (\line -> atomically (writeTQueue events (ReplLine stream line))))
+    case outcome of
+        Right () -> atomically $ writeTQueue events (ReplClosed stream "")
+        Left err
+            | isEOFError err -> atomically $ writeTQueue events (ReplClosed stream "")
+            | otherwise -> atomically $ writeTQueue events (ReplClosed stream (show err))
+
+readLines :: Handle -> (ByteString -> IO ()) -> IO ()
+readLines handle emit = go BS.empty
   where
-    loop = do
-        eLine <- try (hGetLine handle) :: IO (Either IOError String)
-        case eLine of
-            Right line -> do
-                atomically $ writeTQueue events (ReplLine stream line)
-                loop
-            Left err
-                | isEOFError err -> atomically $ writeTQueue events (ReplClosed stream "")
-                | otherwise -> atomically $ writeTQueue events (ReplClosed stream (show err))
+    go leftover = do
+        next <- nextLine handle leftover
+        case next of
+            Nothing -> pure ()
+            Just (line, rest) -> emit line >> go rest
+
+nextLine :: Handle -> ByteString -> IO (Maybe (ByteString, ByteString))
+nextLine handle leftover = do
+    let (before, rest) = BS.break (== 10) leftover
+    case BS.uncons rest of
+        Just (_, after) -> pure (Just (before, after))
+        Nothing -> do
+            chunk <- BS.hGet handle 65536
+            if BS.null chunk
+                then pure $ if BS.null leftover then Nothing else Just (leftover, BS.empty)
+                else nextLine handle (leftover <> chunk)
 
 closeSession :: ReplSession -> IO ()
 closeSession session = replClose session `catch` \(_ :: SomeException) -> pure ()
@@ -332,22 +346,15 @@ formatClosed err = ": " ++ err
 formatEvents :: [ReplEvent] -> String
 formatEvents = unlines . map formatEvent
   where
-    formatEvent (ReplLine ReplStdout line) = line
-    formatEvent (ReplLine ReplStderr line) = "stderr: " ++ line
+    formatEvent (ReplLine ReplStdout line) = T.unpack (decodeLineBytes line)
+    formatEvent (ReplLine ReplStderr line) = "stderr: " ++ T.unpack (decodeLineBytes line)
     formatEvent (ReplClosed stream err) = show stream ++ " closed" ++ formatClosed err
 
-parseFormattedEvents :: String -> [ReplEvent]
-parseFormattedEvents = map parseLine . lines
-  where
-    parseLine line = case stripPrefix "stderr: " line of
-        Just stderrLine -> ReplLine ReplStderr stderrLine
-        Nothing -> ReplLine ReplStdout line
+decodeLineBytes :: ByteString -> T.Text
+decodeLineBytes = TE.decodeUtf8With (\_ _ -> Just '\xFFFD')
 
-hasNixError :: [ReplEvent] -> Bool
-hasNixError = any hasErrorLine
-  where
-    hasErrorLine (ReplLine _ line) = "error:" `isInfixOf` line
-    hasErrorLine _ = False
+hasNixError :: [String] -> Bool
+hasNixError = any ("error:" `isInfixOf`)
 
 nixString :: String -> String
 nixString s = '"' : concatMap escape s ++ "\""

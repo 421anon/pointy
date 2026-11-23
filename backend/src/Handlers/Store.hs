@@ -16,7 +16,7 @@ import Control.Monad (unless, void, when)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (ToJSON (..), Value (Object), eitherDecode)
+import Data.Aeson (ToJSON (..), Value (Object), eitherDecode, eitherDecodeStrict')
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (toLower)
@@ -357,7 +357,7 @@ stepExtrasHandler stepId mCommit mDirPath = do
         Left err ->
             throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate extras outPath: " ++ err))}
         Right output ->
-            case eitherDecode (TLE.encodeUtf8 (TL.pack output)) :: Either String (Maybe FilePath) of
+            case eitherDecodeStrict' output :: Either String (Maybe FilePath) of
                 Left err ->
                     throwError err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to decode extras outPath: " ++ err))}
                 Right Nothing ->

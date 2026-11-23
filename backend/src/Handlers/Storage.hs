@@ -29,6 +29,7 @@ import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.!=), (.:), (.:?))
 import Data.Bifunctor (first)
+import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (isPrefixOf, sortOn)
 import Data.Map.Strict (Map)
@@ -42,6 +43,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), liftIO, withEffToIO, (:>))
+import EvalOutput (evalOutputText)
 import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageDelete, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
 import Handlers.Cold (coldFilesFor, coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.StepOutput (resolveStepOutPath)
@@ -292,7 +294,7 @@ certificateForPath stepId mCommit outPath = case mCommit of
         repoPath <- liftIO userRepoPath
         ctx <- ExceptT $ either (Left . certificatePreparationError) Right <$> runExceptT (commitContextEff repoPath commit)
         result <- lift $ runExceptT $ runNixEvalRawInRepo ctx ("#pointy.steps." ++ show stepId ++ ".certificate.outPath")
-        either (const (pure outPath)) (pure . T.pack) result
+        either (const (pure outPath)) (pure . evalOutputText) result
     Nothing -> do
         caches <- liftIO (readTVarIO cachesVar)
         case cachedHeadSteps caches of
@@ -565,7 +567,7 @@ evalHeadSteps :: (Eval :> es, IOE :> es) => FilePath -> Text -> ExceptT String (
 evalHeadSteps repoPath headHash = do
     ctx <- commitContextEff repoPath headHash
     output <- runNixEvalJsonApplyInRepo ctx headStepsExpression "#pointy.steps"
-    either (throwError . ("Cannot decode step information: " ++)) (pure . Map.mapMaybe id) (eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)) :: Either String (Map Int (Maybe HeadStep)))
+    either (throwError . ("Cannot decode step information: " ++)) (pure . Map.mapMaybe id) (eitherDecodeStrict' output :: Either String (Map Int (Maybe HeadStep)))
 
 headStepsExpression :: String
 headStepsExpression =
@@ -795,15 +797,15 @@ evaluateCommit repoPath commit = do
                         let step = Map.findWithDefault (CachedStep "" Nothing "derived") stepId evaluated
                          in evaluateStepIds ctx rest (Map.insert stepId step steps)
 
-decodeStepEvaluations :: String -> Either EvalFailure (Map Int CachedStep)
+decodeStepEvaluations :: ByteString -> Either EvalFailure (Map Int CachedStep)
 decodeStepEvaluations output =
-    case eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)) :: Either String [EvalEntry] of
+    case eitherDecodeStrict' output :: Either String [EvalEntry] of
         Left message -> Left (EvalUnavailable ("Cannot decode step evaluations: " ++ message))
         Right entries -> Right (Map.fromList (map (\(EvalEntry entry) -> entry) entries))
 
-decodeStepNames :: String -> Either EvalFailure [Int]
+decodeStepNames :: ByteString -> Either EvalFailure [Int]
 decodeStepNames output =
-    case eitherDecodeStrict' (TE.encodeUtf8 (T.pack output)) :: Either String [Text] of
+    case eitherDecodeStrict' output :: Either String [Text] of
         Left message -> Left (EvalUnavailable ("Cannot decode step identifiers: " ++ message))
         Right names -> Right (mapMaybe (readMaybe . T.unpack) names)
 

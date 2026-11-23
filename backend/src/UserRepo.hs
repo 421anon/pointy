@@ -89,19 +89,19 @@ runNix args = ExceptT $ do
         ExitSuccess -> Right stdout
         ExitFailure _ -> Left (T.unpack (TE.decodeUtf8Lenient stderr))
 
-runNixEvalJsonInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
+runNixEvalJsonInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) ByteString
 runNixEvalJsonInRepo ctx attr = ExceptT $ evalJson (evaluatorSource ctx) attr
 
-runNixEvalRawInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) String
+runNixEvalRawInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> ExceptT String (Eff es) ByteString
 runNixEvalRawInRepo ctx attr = ExceptT $ evalRaw (evaluatorSource ctx) attr
 
-runNixEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) String
+runNixEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> ExceptT String (Eff es) ByteString
 runNixEvalJsonApplyInRepo ctx applyExpr attr = ExceptT $ evalJsonApply (evaluatorSource ctx) applyExpr attr
 
-runHistoryEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> Eff es (Either EvalFailure String)
+runHistoryEvalJsonApplyInRepo :: (RepoContext ctx, Eval :> es) => ctx -> String -> String -> Eff es (Either EvalFailure ByteString)
 runHistoryEvalJsonApplyInRepo ctx applyExpr attr = evalHistoryJsonApply (evaluatorSource ctx) applyExpr attr
 
-runNixEvalImpureJsonExpr :: (Eval :> es) => String -> ExceptT String (Eff es) String
+runNixEvalImpureJsonExpr :: (Eval :> es) => String -> ExceptT String (Eff es) ByteString
 runNixEvalImpureJsonExpr = ExceptT . evalImpure
 
 userRepoPath :: IO FilePath

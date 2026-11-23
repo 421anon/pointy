@@ -16,9 +16,10 @@ where
 
 import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), throwError)
-import Data.Aeson (FromJSON (..), Value (..), eitherDecode, withObject, (.:))
+import Data.Aeson (FromJSON (..), Value (..), eitherDecode, eitherDecodeStrict', withObject, (.:))
 import qualified Data.Aeson.Key as AK
 import qualified Data.Aeson.KeyMap as KM
+import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LB
 import Data.Char (isSpace, toLower)
 import Data.Set (Set)
@@ -88,7 +89,7 @@ prefetchFile url = do
 discoverDownloadTemplates :: (RepoContext ctx, Eval :> es) => ctx -> ExceptT String (Eff es) (Set Text)
 discoverDownloadTemplates ctx = do
     output <- runNixEvalJsonInRepo ctx "#pointy.stepConfig"
-    case eitherDecode (LB.fromStrict (TE.encodeUtf8 (T.pack output))) of
+    case eitherDecodeStrict' output of
         Left err -> throwError $ "Failed to decode stepConfig JSON: " ++ err
         Right (Object km) ->
             case KM.lookup "templates" km of

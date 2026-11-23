@@ -127,7 +127,7 @@ resolveKeys ctx = bisectBatch evaluateKeys reportMissingKey
         outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepKeysExpression ids) "#pointy"
         pure $ case outcome of
             Right output
-                | Just keys <- decodeJsonText output
+                | Just keys <- decodeJson output
                 , Map.size (versionedValue keys) == Set.size (Set.fromList ids) ->
                     Right (versionedValue keys)
             Right _ -> Left "the evaluation returned the wrong number of keys"
@@ -188,7 +188,7 @@ resolveCertificatePaths ctx = bisectBatch evaluatePaths reportMissingCertificate
     evaluatePaths ids = do
         outcome <- lift $ runExceptT $ runNixEvalJsonApplyInRepo ctx (stepCertificatesExpression ids) "#pointy.steps"
         case outcome of
-            Right output -> case decodeJsonText output of
+            Right output -> case decodeJson output of
                 Just paths | length paths == length ids -> pure (Right (zip ids paths))
                 _ -> throwError "Failed to parse the certificate evaluation"
             Left err -> pure (Left err)
@@ -234,7 +234,7 @@ prepareCommit targetCommit = do
 runJson :: (RepoContext ctx, Eval :> es, FromJSON a) => ctx -> String -> String -> ExceptT String (Eff es) a
 runJson ctx attr applyExpr = do
     output <- withExceptT errorSummary (runNixEvalJsonApplyInRepo ctx applyExpr attr)
-    maybe (throwError $ "Failed to parse the evaluation of " ++ attr) pure (decodeJsonText output)
+    maybe (throwError $ "Failed to parse the evaluation of " ++ attr) pure (decodeJson output)
 
 data ProjectsEvaluation = ProjectsEvaluation
     { projectsValue :: Value
@@ -462,7 +462,7 @@ staleDependencyFailures :: (Eval :> es) => ReadRepoContext -> Eff es [Evaluation
 staleDependencyFailures ctx =
     runExceptT (runNixEvalJsonApplyInRepo ctx "pointy: pointy.staleDependencies or [ ]" "#pointy") >>= \case
         Left _ -> pure []
-        Right output -> case eitherDecodeStrict (TE.encodeUtf8 (pack output)) of
+        Right output -> case eitherDecodeStrict output of
             Left _ -> pure []
             Right stale -> pure (map staleFailure (sortOn staleDependentStep stale))
   where
@@ -524,7 +524,7 @@ stepDefinitionExpression sid =
 cachedProjectDefinitions :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) (Map String ProjectDef)
 cachedProjectDefinitions ctx = projectsEntry ctx >>= either throwError pure . projectsEntryDefinitions
 
-evalProjectDefinition :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) String
+evalProjectDefinition :: (RepoContext ctx, Eval :> es) => ctx -> Int -> ExceptT String (Eff es) ByteString
 evalProjectDefinition ctx pid = runNixEvalJsonApplyInRepo ctx projectDefinition (projectAttr pid)
 
 decodeProjectDefinitions :: Value -> Either String (Map String ProjectDef)
@@ -824,6 +824,3 @@ scheduleHeadRefresh =
 
 decodeJson :: (FromJSON a) => ByteString -> Maybe a
 decodeJson = either (const Nothing) Just . eitherDecodeStrict
-
-decodeJsonText :: (FromJSON a) => String -> Maybe a
-decodeJsonText = decodeJson . TE.encodeUtf8 . pack

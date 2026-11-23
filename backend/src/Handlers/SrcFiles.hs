@@ -12,7 +12,7 @@ import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (ToJSON, eitherDecode)
+import Data.Aeson (ToJSON, eitherDecode, eitherDecodeStrict')
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Set as Set
@@ -55,7 +55,7 @@ resolveStepSrcFiles mCommit stepId = do
             target <- maybe (pure ctx) (\commit -> ExceptT $ liftIO $ runExceptT $ commitContext (readRepoPath ctx) commit) mCommit
             output <- runNixEvalJsonApplyInRepo target (srcFilesExpression stepId) "#pointy"
             either (throwError . ("Failed to decode the source files path: " ++)) pure $
-                eitherDecode (TLE.encodeUtf8 (TL.pack output))
+                eitherDecodeStrict' output
     pure $ either (Left . srcFilesError) Right result
   where
     srcFilesError err = err500{errBody = TLE.encodeUtf8 (TL.pack ("Failed to evaluate the source files of step " ++ show stepId ++ ": " ++ err))}

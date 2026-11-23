@@ -164,21 +164,20 @@ cosine a b = realToFrac (VU.sum (VU.zipWith (*) a b))
 
 runEvalFixture :: (IOE :> es) => FixtureState -> Eff (Eval : es) a -> Eff es a
 runEvalFixture state = interpret $ \_ -> \case
-    EvalJson _ attr -> pure (jsonAnswer (fixtureDocument state) attr)
-    EvalRaw _ attr -> pure (rawAnswer (fixtureDocument state) attr)
-    EvalJsonApply _ applyExpr attr -> pure (appliedAnswer (fixtureDocument state) applyExpr attr)
-    EvalHistoryJsonApply _ applyExpr attr -> pure (first EvalError (appliedAnswer (fixtureDocument state) applyExpr attr))
+    EvalJson _ attr -> pure (fmap bytes (jsonAnswer (fixtureDocument state) attr))
+    EvalRaw _ attr -> pure (fmap bytes (rawAnswer (fixtureDocument state) attr))
+    EvalJsonApply _ applyExpr attr -> pure (fmap bytes (appliedAnswer (fixtureDocument state) applyExpr attr))
+    EvalHistoryJsonApply _ applyExpr attr -> pure (first EvalError (fmap bytes (appliedAnswer (fixtureDocument state) applyExpr attr)))
     EvalImpure expression -> liftIO $ evalNixJson state expression
 
 
-evalNixJson :: FixtureState -> String -> IO (Either String String)
+evalNixJson :: FixtureState -> String -> IO (Either String BS.ByteString)
 evalNixJson _state expression = do
     (code, stdout, stderr) <- cli "nix" ["--extra-experimental-features", "nix-command", "eval", "--impure", "--json", "--expr", expression]
     pure $ case code of
-        ExitSuccess -> Right stdout
-        ExitFailure _ -> Left (trim stderr)
+        ExitSuccess -> Right (bytes stdout)
+        ExitFailure _ -> Left (T.unpack (T.strip (TE.decodeUtf8With (\_ _ -> Just '\xFFFD') (bytes stderr))))
   where
-    trim = T.unpack . T.strip . T.pack
 
 runNixFixture :: (IOE :> es) => FixtureState -> Eff (Nix : es) a -> Eff es a
 runNixFixture state = interpret $ \_ -> \case

@@ -10,7 +10,8 @@ module DependencyRefs (
     decodeStepDefinitions,
 ) where
 
-import Data.Aeson (Object, Value (..), eitherDecode)
+import Data.Aeson (Object, Value (..), eitherDecode, eitherDecodeStrict')
+import Data.ByteString (ByteString)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Containers.ListUtils (nubOrd)
@@ -141,14 +142,14 @@ flakeStepDefinitionsExpression stepIds =
         ++ unwords (map show stepIds)
         ++ " ])"
 
-decodeStepDefinition :: String -> Either String (Maybe Value)
-decodeStepDefinition output = case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
+decodeStepDefinition :: ByteString -> Either String (Maybe Value)
+decodeStepDefinition output = case eitherDecodeStrict' output of
     Left err -> Left ("Failed to decode a step definition: " ++ err)
     Right Null -> Right Nothing
     Right definition -> Right (Just definition)
 
-decodeStepDefinitions :: String -> Either String (Map Int (Maybe Value))
-decodeStepDefinitions output = case eitherDecode (TLE.encodeUtf8 (TL.pack output)) of
+decodeStepDefinitions :: ByteString -> Either String (Map Int (Maybe Value))
+decodeStepDefinitions output = case eitherDecodeStrict' output of
     Left err -> Left ("Failed to decode step definitions: " ++ err)
     Right (Object entries) -> Map.fromList <$> traverse entry (KeyMap.toList entries)
     Right _ -> Left "The step definitions are not an object."

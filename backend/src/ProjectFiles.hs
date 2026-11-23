@@ -25,6 +25,7 @@ import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), Object, Value (..), eitherDecode, eitherDecodeStrict', encode, withObject, (.:))
+import Data.ByteString (ByteString)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString.Lazy as LB
@@ -69,7 +70,7 @@ stepDefinitionNix definition = jsonToNix (encode (withoutEvaluatorId definition)
 rewriteNixFile :: (Eval :> es, IOE :> es) => FilePath -> T.Text -> ExceptT String (Eff es) ()
 rewriteNixFile path transformation = do
     output <- runNixEvalImpureJsonExpr $ T.unpack $ "let orig = import " <> T.pack path <> "; in " <> transformation
-    nixResult <- liftEither $ jsonToNix (TLE.encodeUtf8 (TL.pack output))
+    nixResult <- liftEither $ jsonToNix (LB.fromStrict output)
     liftIO $ TIO.writeFile path (nixResult <> "\n")
 
 projectFilePath :: FilePath -> Int -> FilePath
@@ -185,11 +186,11 @@ loadRawProjectEntry worktreePath projectId = do
         Right entry -> entry
         Left _ -> RawProjectFile projectId Nothing
 
-decodeRawProjectFiles :: String -> Either String [RawProjectFile]
-decodeRawProjectFiles output = eitherDecode (TLE.encodeUtf8 (TL.pack output))
+decodeRawProjectFiles :: ByteString -> Either String [RawProjectFile]
+decodeRawProjectFiles = eitherDecodeStrict'
 
-decodeRawProjectFile :: String -> Either String RawProjectFile
-decodeRawProjectFile output = eitherDecode (TLE.encodeUtf8 (TL.pack output))
+decodeRawProjectFile :: ByteString -> Either String RawProjectFile
+decodeRawProjectFile = eitherDecodeStrict'
 
 loadRawProjectFilesAt :: (Eval :> es, IOE :> es) => ReadRepoContext -> ExceptT String (Eff es) [RawProjectFile]
 loadRawProjectFilesAt ctx = do
