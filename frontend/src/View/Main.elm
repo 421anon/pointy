@@ -3,10 +3,11 @@ module View.Main exposing (view)
 import Accessors exposing (get, has, just, try)
 import Actions
 import Api.Api as Api
-import Api.ApiData exposing (ApiData(..), success)
+import Api.ApiData as ApiData exposing (ApiData(..), success)
 import Browser
 import Components.AgentPanel as AgentPanel
 import Components.StatusBar as StatusBar
+import Dict
 import Extra.Accessors exposing (orElseT, where_)
 import Flow exposing (Flow)
 import Html exposing (Html)
@@ -15,11 +16,15 @@ import Html.Events
 import Html.Extra as Html
 import Html.Keyed
 import Json.Decode as Decode
+import Maybe.Extra as Maybe
 import Model.Core as Model exposing (Model)
-import Model.Lenses exposing (areaCapture, artifactComparison, artifactTableContent, artifactTableFor, currentProject, name, shownArtifactTitle, toasts)
+import Model.Lenses exposing (areaCapture, artifactComparison, artifactTableContent, artifactTableFor, currentProject, name, shownArtifactTitle, stepRecordById, toasts)
 import Model.Lib as Lib
+import Model.Shadow exposing (StepConfigEntry)
+import Model.TableSpec as TableSpec
 import Organize
 import Route
+import Specs
 import Toast
 import View.AreaCapture as AreaCapture
 import View.Compare as Compare
@@ -31,6 +36,7 @@ import View.Project exposing (viewCurrentProject)
 import View.Scratch exposing (viewScratchPicker)
 import View.Shadow
 import View.Sidebar
+import View.Table
 import View.TextContent as TextContent
 
 
@@ -140,7 +146,7 @@ viewArtifact model artifact =
                     []
             , Html.viewIf (not isTable) (Html.viewMaybe (AreaCapture.view (Model.getAgent model)) (Model.getAreaCapture model))
             , Html.div [ Html.Attributes.class "artifact-viewer-actions" ]
-                [ Html.viewMaybe viewNewerRevisionNotice (newerArtifactRevision model artifact)
+                [ Html.viewMaybe (viewNewerRevisionNotice model artifact.stepId) (newerArtifactRevision model artifact)
                 , Html.viewIf (not isTable)
                     (Html.button
                         [ Html.Attributes.class "artifact-viewer-action artifact-viewer-action--agent"
@@ -188,11 +194,15 @@ newerArtifactRevision model artifact =
             )
 
 
-viewNewerRevisionNotice : { revision : String, built : Bool } -> Html (Flow Model ())
-viewNewerRevisionNotice { revision, built } =
+viewNewerRevisionNotice : Model -> Int -> { revision : String, built : Bool } -> Html (Flow Model ())
+viewNewerRevisionNotice model stepId { revision, built } =
+    let
+        shortRevision =
+            String.left 12 revision
+    in
     Html.div [ Html.Attributes.class "artifact-viewer-revision-notice", Html.Attributes.attribute "role" "status" ]
         (if built then
-            [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is built.")
+            [ Html.text ("Newer revision " ++ shortRevision ++ " is built.")
             , Html.button
                 [ Html.Attributes.class "artifact-viewer-revision-action"
                 , Html.Attributes.type_ "button"
@@ -202,8 +212,78 @@ viewNewerRevisionNotice { revision, built } =
             ]
 
          else
-            [ Html.text ("Newer revision " ++ String.left 12 revision ++ " is not built yet.") ]
+            Maybe.unwrap [ Html.text ("Newer revision " ++ shortRevision ++ " is not built yet.") ]
+                (viewUnbuiltRevisionStatus model stepId shortRevision)
+                (stepAtRevision model stepId revision)
         )
+
+
+stepAtRevision : Model -> Int -> String -> Maybe ( Model.StepRecord, StepConfigEntry )
+stepAtRevision model stepId revision =
+    try (stepRecordById stepId) model
+        |> Maybe.filter (\step -> Maybe.map .commit (ApiData.toMaybe step.runState) == Just revision)
+        |> Maybe.andThen
+            (\step ->
+                ApiData.toMaybe (Model.getStepConfig model)
+                    |> Maybe.andThen (Dict.get step.type_)
+                    |> Maybe.map (Tuple.pair step)
+            )
+
+
+viewUnbuiltRevisionStatus : Model -> Int -> String -> ( Model.StepRecord, StepConfigEntry ) -> List (Html (Flow Model ()))
+viewUnbuiltRevisionStatus model stepId shortRevision ( step, entry ) =
+    let
+        spec =
+            Specs.steps step.type_ entry
+
+        status =
+            TableSpec.getStatus spec step
+
+        stepRevision =
+            Model.stepRevision model step
+
+        log =
+            Dict.get (Model.stepLogKey stepId stepRevision) (Model.getStepLogs model)
+                |> Maybe.withDefault NotAsked
+
+        isBuilding =
+            ApiData.toMaybe status == Just Model.StatusRunning
+
+        canRun =
+            case status of
+                Loading _ ->
+                    False
+
+                Success Model.StatusSuccess ->
+                    False
+
+                Success Model.StatusRunning ->
+                    False
+
+                _ ->
+                    True
+    in
+    [ View.Table.viewStepRecordStatus step.type_ entry False step
+    , View.Table.viewStepRecordStatusPopover step.type_ entry (Model.coldInputsAt stepId stepRevision model) log False step
+    , Html.text
+        ("Newer revision "
+            ++ shortRevision
+            ++ (if isBuilding then
+                    " is building."
+
+                else
+                    " is not built yet."
+               )
+        )
+    , Html.viewIf canRun
+        (Html.button
+            [ Html.Attributes.class "artifact-viewer-revision-action"
+            , Html.Attributes.type_ "button"
+            , Html.Events.onClick (Actions.runStep spec stepId)
+            ]
+            [ iconCustom True "play_arrow" [ Html.Attributes.attribute "aria-hidden" "true" ], Html.text "Run" ]
+        )
+    ]
 
 
 view404 : Html (Flow Model ())

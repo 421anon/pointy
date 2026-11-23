@@ -2043,17 +2043,40 @@ $delimited-grid-row-height: 28px;
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
   opacity: 0.88;
+
+  &:has(> .artifact-viewer-revision-action:last-child) {
+    padding-right: var(--spacing-xs);
+  }
+
+  .status-indicator-wrapper {
+    padding: var(--spacing-xs);
+  }
 }
 
 .artifact-viewer-revision-action {
-  padding: 0;
-  border: none;
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: var(--spacing-xs);
+  padding: 2px var(--spacing-sm);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-elevated);
   color: var(--text-primary);
   font: inherit;
   font-weight: 600;
-  text-decoration: underline;
+  line-height: 1.4;
   cursor: pointer;
+
+  .material-symbols-outlined {
+    font-size: 16px;
+    margin-left: -2px;
+  }
+
+  &:hover,
+  &:focus-visible {
+    background: var(--bg-hover);
+  }
 }
 
 @media (max-width: 600px) {
