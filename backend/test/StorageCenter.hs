@@ -19,13 +19,15 @@ import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Interpreters.Fixture (newFixtureState, runFixture)
 import Handlers.Storage (HeadStep (..), pathOwners)
+import StepEvaluations (CachedStep (..), EvaluationRecord, StepEvaluations, decodeEvaluationLog, emptyStepEvaluations, encodeEvaluationRecords, recordEvaluation)
 import StorageBus (StorageBlocker (..), StorageCapacity (..), StorageRevision (..), parseStorageCapacity, revisionMovable)
-import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
+import StorageHistory (ColdSummary (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
 
 main :: IO ()
 main = do
     checkHistoryParsing
     checkRevisions
+    checkEvaluationLog
     checkDirectReaders
     checkHeadStepInputs
     checkBlockerShape
@@ -56,11 +58,23 @@ checkRevisions = do
         , RevisionSeed 2 "Extract" "download" (commit 1) (time 1) "/nix/store/x"
         , RevisionSeed 2 "Second" "upload" (commit 2) (time 2) "/nix/store/y"
         ]
-        (revisionsFromHistory sampleHistory)
+        (seedsOf sampleHistory)
     assertEqual
         "a missing step starts a fresh revision when it comes back with another output"
         [RevisionSeed 1 "N" "upload" (commit 1) (time 1) "/nix/store/a", RevisionSeed 1 "N" "derived" (commit 3) (time 3) "/nix/store/b"]
-        (revisionsFromHistory [atCommit 3 [(1, "N", "derived", Just "/nix/store/b")], atCommit 2 [(1, "N", "derived", Nothing)], atCommit 1 [(1, "N", "upload", Just "/nix/store/a")]])
+        (seedsOf [atCommit 3 [(1, "N", "derived", Just "/nix/store/b")], atCommit 2 [(1, "N", "derived", Nothing)], atCommit 1 [(1, "N", "upload", Just "/nix/store/a")]])
+    assertEqual
+        "a commit not yet scanned leaves the history around it intact"
+        [RevisionSeed 1 "First" "derived" (commit 1) (time 1) "/nix/store/a", RevisionSeed 1 "First" "derived" (commit 4) (time 4) "/nix/store/b"]
+        (revisionsFromHistory (fst (evaluationsOf [atCommit 4 [(1, "First", "derived", Just "/nix/store/b")], atCommit 1 [(1, "First", "derived", Just "/nix/store/a")]])) [(commit 4, time 4), (commit 3, time 3), (commit 1, time 1)])
+
+checkEvaluationLog :: IO ()
+checkEvaluationLog = do
+    let (evaluations, records) = evaluationsOf sampleHistory
+        encoded = encodeEvaluationRecords records
+        tornRecord = LBS.take 9 (encodeEvaluationRecords (snd (recordEvaluation (commit 5) (Map.singleton 3 (CachedStep "New" (Just "/nix/store/z") "derived")) evaluations)))
+    assertEqual "the log reloads to the same evaluations" (evaluations, LBS.length encoded) (decodeEvaluationLog encoded)
+    assertEqual "a torn last record is dropped and only the valid prefix counts" (evaluations, LBS.length encoded) (decodeEvaluationLog (encoded <> tornRecord))
 
 checkDirectReaders :: IO ()
 checkDirectReaders = do
@@ -196,7 +210,7 @@ sampleLog =
         , "steps/1.nix"
         ]
 
-sampleHistory :: [HistoryCommit]
+sampleHistory :: [(Text, UTCTime, Map Int CachedStep)]
 sampleHistory =
     [ atCommit 4 [(1, "First", "derived", Just "/nix/store/b"), (2, "Second", "upload", Just "/nix/store/y")]
     , atCommit 3 [(1, "First", "derived", Just "/nix/store/a")]
@@ -204,12 +218,20 @@ sampleHistory =
     , atCommit 1 [(1, "First", "derived", Just "/nix/store/a"), (2, "Extract", "download", Just "/nix/store/x")]
     ]
 
-atCommit :: Integer -> [(Int, Text, Text, Maybe Text)] -> HistoryCommit
+atCommit :: Integer -> [(Int, Text, Text, Maybe Text)] -> (Text, UTCTime, Map Int CachedStep)
 atCommit seconds steps =
-    HistoryCommit
-        (commit seconds)
-        (time seconds)
-        (Map.fromList [(stepId, CachedStep name path kind) | (stepId, name, kind, path) <- steps])
+    ( commit seconds
+    , time seconds
+    , Map.fromList [(stepId, CachedStep name path kind) | (stepId, name, kind, path) <- steps]
+    )
+
+evaluationsOf :: [(Text, UTCTime, Map Int CachedStep)] -> (StepEvaluations, [EvaluationRecord])
+evaluationsOf = foldl' record (emptyStepEvaluations, [])
+  where
+    record (evaluations, written) (scanned, _, steps) = fmap (written ++) (recordEvaluation scanned steps evaluations)
+
+seedsOf :: [(Text, UTCTime, Map Int CachedStep)] -> [RevisionSeed]
+seedsOf history = revisionsFromHistory (fst (evaluationsOf history)) [(scanned, at) | (scanned, at, _) <- history]
 
 commit :: Integer -> Text
 commit seconds = T.pack (take 40 (cycle (show seconds)))

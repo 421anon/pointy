@@ -1,8 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module StorageHistory (
-    CachedStep (..),
-    HistoryCommit (..),
     RevisionSeed (..),
     ColdSummary (..),
     parseHistory,
@@ -12,8 +10,9 @@ module StorageHistory (
 ) where
 
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..))
-import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Char (isDigit, isHexDigit)
+import Data.Int (Int32)
+import qualified Data.IntMap.Strict as IntMap
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -23,31 +22,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import qualified Data.Vector.Unboxed as VU
+import StepEvaluations (CachedStep (..), StepEvaluations, commitEvaluation, internedStep)
 import Text.Read (readMaybe)
-
-data CachedStep = CachedStep
-    { cachedStepName :: Text
-    , cachedStepPath :: Maybe Text
-    , cachedStepKind :: Text
-    }
-    deriving (Eq, Show)
-
-instance FromJSON CachedStep where
-    parseJSON = withObject "cached step" $ \fields ->
-        CachedStep
-            <$> fields .:? "name" .!= ""
-            <*> fields .:? "path"
-            <*> fields .: "kind"
-
-instance ToJSON CachedStep where
-    toJSON step = object ["name" .= cachedStepName step, "path" .= cachedStepPath step, "kind" .= cachedStepKind step]
-
-data HistoryCommit = HistoryCommit
-    { historyCommit :: Text
-    , historyTime :: UTCTime
-    , historySteps :: Map Int CachedStep
-    }
-    deriving (Eq, Show)
 
 data RevisionSeed = RevisionSeed
     { seedStep :: Int
@@ -87,28 +64,51 @@ parseHistory output = reverse (map ordered (finish (foldl' step (Nothing, []) (l
                 Just (T.pack commit, posixSecondsToUTCTime (fromIntegral value))
         _ -> Nothing
 
-revisionsFromHistory :: [HistoryCommit] -> [RevisionSeed]
-revisionsFromHistory history = sortOn seedOrder (Map.elems seeds)
+revisionsFromHistory :: StepEvaluations -> [(Text, UTCTime)] -> [RevisionSeed]
+revisionsFromHistory evaluations history = sortOn seedOrder (Map.elems seeds)
   where
-    (_, seeds) = foldl' addCommit (Map.empty, Map.empty) (reverse history)
-    addCommit (current, found) commit = foldl' (addStep commit) (current, found) (Map.toList (historySteps commit))
-    addStep commit (current, found) (stepId, cached) = case cachedStepPath cached of
-        Nothing -> (Map.delete stepId current, found)
-        Just path
-            | Map.lookup stepId current == Just path -> (current, found)
-            | otherwise ->
-                ( Map.insert stepId path current
-                , Map.insertWith
-                    ( \later earlier ->
-                        if T.null (seedName earlier) && not (T.null (seedName later))
-                            then earlier{seedName = seedName later, seedKind = seedKind later}
-                            else earlier
-                    )
-                    path
-                    (RevisionSeed stepId (cachedStepName cached) (cachedStepKind cached) (historyCommit commit) (historyTime commit) path)
-                    found
-                )
+    (_, _, seeds) = foldl' addCommit (VU.empty, IntMap.empty, Map.empty) (reverse history)
+    addCommit state@(previous, current, found) (commit, time) = case commitEvaluation commit evaluations of
+        Nothing -> state
+        Just entries ->
+            let (current', found') = foldl' (addStep commit time) (current, found) (changedSince previous entries)
+             in (entries, current', found')
+    addStep commit time (current, found) (stepId32, stepRef) =
+        let stepId = fromIntegral stepId32
+            cached = internedStep evaluations stepRef
+         in case cachedStepPath cached of
+                Nothing -> (IntMap.delete stepId current, found)
+                Just path
+                    | IntMap.lookup stepId current == Just path -> (current, found)
+                    | otherwise ->
+                        ( IntMap.insert stepId path current
+                        , Map.insertWith
+                            ( \later earlier ->
+                                if T.null (seedName earlier) && not (T.null (seedName later))
+                                    then earlier{seedName = seedName later, seedKind = seedKind later}
+                                    else earlier
+                            )
+                            path
+                            (RevisionSeed stepId (cachedStepName cached) (cachedStepKind cached) commit time path)
+                            found
+                        )
     seedOrder seed = (seedStep seed, seedCommitTime seed, seedPath seed)
+
+changedSince :: VU.Vector (Int32, Int32) -> VU.Vector (Int32, Int32) -> [(Int32, Int32)]
+changedSince previous entries = go 0 0
+  where
+    go older newer
+        | newer >= VU.length entries = []
+        | older >= VU.length previous = VU.toList (VU.drop newer entries)
+        | otherwise =
+            let before = previous VU.! older
+                after = entries VU.! newer
+             in case compare (fst before) (fst after) of
+                    LT -> go (older + 1) newer
+                    GT -> after : go older (newer + 1)
+                    EQ
+                        | before == after -> go (older + 1) (newer + 1)
+                        | otherwise -> after : go (older + 1) (newer + 1)
 
 directReadersOf :: Map Int (Set Int) -> Int -> Set Int
 directReadersOf dependencies stepId =

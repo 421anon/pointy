@@ -90,6 +90,7 @@ library
     Search.Store
     SlurmWatch
     Sse
+    StepEvaluations
     StepLog
     Storage
     StorageBus
@@ -242,6 +243,21 @@ executable pointy-migrate-project-tree
     , filepath
     , text
     , vector
+
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
+executable pointy-migrate-storage-history
+  import:           warnings
+  main-is:          MigrateStorageHistory.hs
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , bytestring
+    , containers
+    , directory
+    , text
 
   hs-source-dirs:   app
   default-language: Haskell2010

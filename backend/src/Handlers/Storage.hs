@@ -23,15 +23,13 @@ import Control.Concurrent.Async (replicateConcurrently_)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, retry, writeTVar)
-import Control.Exception (SomeException, bracket_, catch, displayException, try)
+import Control.Exception (SomeException, bracket_, displayException, try)
 import Control.Monad (join, unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict', encode, object, withObject, (.!=), (.:), (.:?), (.=))
-import Data.Aeson.Types (Parser)
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.!=), (.:), (.:?))
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as LBS
-import Data.IORef (atomicModifyIORef', newIORef)
 import Data.List (isPrefixOf, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -51,12 +49,11 @@ import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err500, err502, err503)
+import StepEvaluations (CachedStep (..), StepEvaluations, appendEvaluationRecords, evaluatedCommit, loadStepEvaluations, recordEvaluation)
 import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageBlocker (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
-import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
-import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
+import StorageHistory (ColdSummary (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
@@ -93,21 +90,6 @@ instance FromJSON EvalEntry where
         kind <- fields .: "kind"
         pure (EvalEntry (stepId, CachedStep name path kind))
 
-newtype EvaluationFile = EvaluationFile (Map Text (Map Int CachedStep))
-
-instance FromJSON EvaluationFile where
-    parseJSON = withObject "storage evaluations" $ \fields -> do
-        commits <- fields .: "commits" :: Parser (Map Text (Map Text CachedStep))
-        pure . EvaluationFile . Map.map (Map.fromList . mapMaybe numbered . Map.toList) $ commits
-      where
-        numbered (key, step) = (\stepId -> (stepId, step)) <$> readMaybe (T.unpack key)
-
-instance ToJSON EvaluationFile where
-    toJSON (EvaluationFile commits) =
-        object
-            [ "commits" .= Map.map (Map.mapKeys (T.pack . show)) commits
-            ]
-
 data Caches = Caches
     { cachedHead :: Maybe Text
     , cachedRelevant :: [(Text, UTCTime)]
@@ -121,9 +103,6 @@ storageHistoryLimit = 5000
 
 scanRetryDelaySeconds :: Int
 scanRetryDelaySeconds = 60
-
-persistEvery :: Int
-persistEvery = 50
 
 pathInfoChunkSize :: Int
 pathInfoChunkSize = 200
@@ -142,7 +121,7 @@ cachesVar :: TVar Caches
 cachesVar = unsafePerformIO (newTVarIO (Caches Nothing [] (Left "The repository has not been read yet.") Map.empty Nothing))
 
 {-# NOINLINE evaluationsRef #-}
-evaluationsRef :: MVar (Maybe (Map Text (Map Int CachedStep)))
+evaluationsRef :: MVar (Maybe StepEvaluations)
 evaluationsRef = unsafePerformIO (newMVar Nothing)
 
 {-# NOINLINE movablePathsVar #-}
@@ -439,9 +418,9 @@ refresh work running = do
             else pure previous
     evaluations <- liftIO readEvaluations
     let relevant = cachedRelevant caches
-        seeds = revisionsFromHistory [HistoryCommit commit time (Map.findWithDefault Map.empty commit evaluations) | (commit, time) <- relevant]
-        scannedCount = length [() | (commit, _) <- relevant, Map.member commit evaluations]
-        pending = [commit | (commit, _) <- relevant, Map.notMember commit evaluations]
+        seeds = revisionsFromHistory evaluations relevant
+        scannedCount = length [() | (commit, _) <- relevant, evaluatedCommit commit evaluations]
+        pending = [commit | (commit, _) <- relevant, not (evaluatedCommit commit evaluations)]
         toScan = take (max 0 (storageHistoryLimit - scannedCount)) pending
         seedPaths = Set.fromList (map seedPath seeds)
         unknown = Set.filter (unknownSize (invalidOutputs work) (cachedSizes caches)) seedPaths
@@ -739,13 +718,10 @@ startScan repoPath pending = do
 scanCommits :: FilePath -> [Text] -> IO (Maybe (UTCTime, Text))
 scanCommits repoPath pending = do
     queue <- newMVar (ScanQueue pending Nothing)
-    persistLock <- newMVar ()
-    completed <- newIORef 0
-    replicateConcurrently_ historyEvaluatorWorkers (scanWorker queue persistLock completed)
-    persistEvaluations persistLock
+    replicateConcurrently_ historyEvaluatorWorkers (scanWorker queue)
     queueFailure <$> readMVar queue
   where
-    scanWorker queue persistLock completed = do
+    scanWorker queue = do
         next <- takeScanCommit queue
         case next of
             Nothing -> pure ()
@@ -757,9 +733,7 @@ scanCommits repoPath pending = do
                     Right (Right steps) -> do
                         insertEvaluation commit steps
                         viewInputsChanged
-                        count <- atomicModifyIORef' completed (\done -> let total = succ done in (total, total))
-                        when (count `mod` persistEvery == 0) (persistEvaluations persistLock)
-                        scanWorker queue persistLock completed
+                        scanWorker queue
 
 takeScanCommit :: MVar ScanQueue -> IO (Maybe Text)
 takeScanCommit queue =
@@ -776,14 +750,10 @@ stopScanQueue queue reason = do
 insertEvaluation :: Text -> Map Int CachedStep -> IO ()
 insertEvaluation commit steps =
     modifyMVar_ evaluationsRef $ \cached -> do
-        current <- maybe loadEvaluations pure cached
-        pure (Just (Map.insert commit steps current))
-
-persistEvaluations :: MVar () -> IO ()
-persistEvaluations lock =
-    modifyMVar_ lock $ \_ -> do
-        evaluations <- readEvaluations
-        storeEvaluations evaluations
+        current <- maybe loadStepEvaluations pure cached
+        let (updated, records) = recordEvaluation commit steps current
+        appendEvaluationRecords records
+        pure (Just updated)
 
 evalFailureMessage :: EvalFailure -> Text
 evalFailureMessage failure = case failure of
@@ -866,37 +836,7 @@ stepEvaluationMapper =
         ++ " kind = kind;"
         ++ " path = if path.success then path.value else null; })"
 
-readEvaluations :: IO (Map Text (Map Int CachedStep))
+readEvaluations :: IO StepEvaluations
 readEvaluations = modifyMVar evaluationsRef $ \cached -> do
-    evaluations <- maybe loadEvaluations pure cached
+    evaluations <- maybe loadStepEvaluations pure cached
     pure (Just evaluations, evaluations)
-
-loadEvaluations :: IO (Map Text (Map Int CachedStep))
-loadEvaluations = do
-    path <- evaluationsPath
-    present <- doesFileExist path
-    if not present
-        then pure Map.empty
-        else do
-            contents <- LBS.readFile path `catch` \(_ :: SomeException) -> pure LBS.empty
-            pure $ case eitherDecodeStrict' (LBS.toStrict contents) of
-                Right (EvaluationFile commits) -> commits
-                Left _ -> Map.empty
-
-storeEvaluations :: Map Text (Map Int CachedStep) -> IO ()
-storeEvaluations evaluations = do
-    path <- evaluationsPath
-    directory <- storageDirectory
-    createDirectoryIfMissing True directory
-    LBS.writeFile (path ++ ".tmp") (encode (EvaluationFile evaluations))
-    renameFile (path ++ ".tmp") path
-
-evaluationsPath :: IO FilePath
-evaluationsPath = do
-    directory <- storageDirectory
-    pure (directory </> "evaluations-v2.json")
-
-storageDirectory :: IO FilePath
-storageDirectory = do
-    home <- getHomeDirectory
-    pure (home </> ".local" </> "state" </> "pointy" </> "storage")
