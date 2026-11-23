@@ -1997,8 +1997,21 @@ $delimited-grid-row-height: 28px;
 .artifact-viewer-actions {
   position: absolute;
   bottom: var(--spacing-md);
+  left: var(--spacing-md);
   right: var(--spacing-md);
   z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-xs);
+  pointer-events: none;
+
+  > * {
+    pointer-events: auto;
+  }
+}
+
+.artifact-viewer-action-group {
   display: flex;
   gap: var(--spacing-xs);
 }
@@ -2018,6 +2031,7 @@ $delimited-grid-row-height: 28px;
   font-weight: 600;
   cursor: pointer;
   text-decoration: none;
+  white-space: nowrap;
   opacity: 0.88;
 
   .material-symbols-outlined {
@@ -2039,21 +2053,46 @@ $delimited-grid-row-height: 28px;
   padding: var(--spacing-xs) var(--spacing-md);
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--bg-secondary);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-elevated);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
-  opacity: 0.88;
+  margin-right: auto;
+
+  &:has(> .artifact-viewer-revision-action:last-child) {
+    padding-right: var(--spacing-xs);
+  }
+
+  .status-indicator-wrapper {
+    padding: var(--spacing-xs);
+  }
 }
 
 .artifact-viewer-revision-action {
-  padding: 0;
-  border: none;
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: var(--spacing-xs);
+  padding: 2px var(--spacing-sm);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-elevated);
   color: var(--text-primary);
   font: inherit;
   font-weight: 600;
-  text-decoration: underline;
+  line-height: 1.4;
   cursor: pointer;
+  white-space: nowrap;
+
+  .material-symbols-outlined {
+    font-size: 16px;
+    margin-left: -2px;
+  }
+
+  &:hover,
+  &:focus-visible {
+    background: var(--bg-hover);
+  }
 }
 
 @media (max-width: 600px) {
