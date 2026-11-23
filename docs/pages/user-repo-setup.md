@@ -38,7 +38,7 @@ At minimum, the user repository needs:
 
 `flake.nix` calls `pointy-stdlib.lib.mkFlake { inherit inputs; }`; `pointy.nix` supplies `pkgs` and the language `source` as `{ pkgs; source = ./main.pointy; }`. A stdlib that publishes `pointy.schemaVersion` enables key-based certificate evaluation; older locks fall back to the slower per-folder evaluation. Upgrade the notebook and its user-repository inputs together rather than assuming every stdlib branch emits the same format.
 
-For the concrete flake setup, see [Minimal `flake.nix` and `pointy.nix`](#minimal-flake-nix-and-pointy-nix).
+For the concrete flake setup, see [Minimal `flake.nix` and `pointy.nix`](#minimal-flakenix-and-pointynix).
 
 Folder definitions must choose either a preset or a custom template list; the root's empty `templates = [ ]` counts as a list. If templates, presets, or step ids disappear from the user repository, Pointy keeps the folder loadable where possible and shows validation errors in the UI. A folder whose header fails to evaluate is served as a placeholder named `Project <id>`.
 

@@ -14,31 +14,17 @@ Click **Run** on the step you want to run. If it needs results from other steps,
 
 ![A step row with the Run button, status indicator, and other step actions.](screenshots/light/step-derivation-header.png)
 
-<style>
-@keyframes doc-status-spin { to { transform: rotate(360deg); } }
-.doc-status-spinner {
-  display: inline-block;
-  width: 9px; height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(100,100,100,0.25);
-  border-top-color: #666;
-  animation: doc-status-spin 0.8s linear infinite;
-  box-sizing: border-box;
-  vertical-align: middle;
-}
-</style>
-
 ## Step statuses
 
 The dot beside a step shows its progress:
 
-- <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,0.4),#808080 60%);box-shadow:inset 1px 1px 2px rgba(255,255,255,0.6),0 2px 4px rgba(0,0,0,0.1);vertical-align:middle"></span> **Not Started**: there is no result available yet.
-- <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,0.4),#e2b714 60%);box-shadow:inset 1px 1px 2px rgba(255,255,255,0.6),0 2px 4px rgba(0,0,0,0.1);vertical-align:middle"></span> **Running**: the step is queued or running. Uploading and indexing also show this dot.
-- <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,0.4),#2ea043 60%);box-shadow:inset 1px 1px 2px rgba(255,255,255,0.6),0 2px 4px rgba(0,0,0,0.1);vertical-align:middle"></span> **Success**: the program finished and its output files are available.
-- <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,0.4),#e05252 60%);box-shadow:inset 1px 1px 2px rgba(255,255,255,0.6),0 2px 4px rgba(0,0,0,0.1);vertical-align:middle"></span> **Failure**: the run failed. Hover over the dot for an error summary, or click it to read the log.
-- <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#0969da;vertical-align:middle"></span> **Inputs in Cold Storage**: the run was refused before it started because files it reads, directly or through the steps it depends on, are offloaded to cold storage. Click the dot to see the files and their steps and choose **Copy back**; the popover follows the copy while it is open, and offers **Run step** once the files are local; see [Storage](storage.md#cold-storage).
-- <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,0.4),transparent 60%),linear-gradient(90deg,#2ea043 50%,#808080 50%);box-shadow:inset 1px 1px 2px rgba(255,255,255,0.6),0 2px 4px rgba(0,0,0,0.1);vertical-align:middle"></span> **Not Certified**: the step's output was built, but Pointy has not confirmed that it matches the output type its template declares.
-- <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,0.4),transparent 60%),linear-gradient(90deg,#2ea043 50%,#e05252 50%);box-shadow:inset 1px 1px 2px rgba(255,255,255,0.6),0 2px 4px rgba(0,0,0,0.1);vertical-align:middle"></span> **Certification Failed**: the step's output was built, but the check against the declared output type failed. Click the dot to read the log.
+- <span class="doc-status-dot doc-status-dot--not-started"></span> **Not Started**: there is no result available yet.
+- <span class="doc-status-dot doc-status-dot--running"></span> **Running**: the step is queued or running. Uploading and indexing also show this dot.
+- <span class="doc-status-dot doc-status-dot--success"></span> **Success**: the program finished and its output files are available.
+- <span class="doc-status-dot doc-status-dot--failure"></span> **Failure**: the run failed. Hover over the dot for an error summary, or click it to read the log.
+- <span class="doc-status-dot doc-status-dot--cold"></span> **Inputs in Cold Storage**: the run was refused before it started because files it reads, directly or through the steps it depends on, are offloaded to cold storage. Click the dot to see the files and their steps and choose **Copy back**; the popover follows the copy while it is open, and offers **Run step** once the files are local; see [Storage](storage.md#cold-storage).
+- <span class="doc-status-dot doc-status-dot--not-certified"></span> **Not Certified**: the step's output was built, but Pointy has not confirmed that it matches the output type its template declares.
+- <span class="doc-status-dot doc-status-dot--cert-failed"></span> **Certification Failed**: the step's output was built, but the check against the declared output type failed. Click the dot to read the log.
 - <span class="doc-status-spinner"></span> **Loading**: Pointy is checking the status, or waiting for a run to start.
 
 The display updates automatically; you do not need to keep refreshing the page.
@@ -55,7 +41,7 @@ The summary covers the whole instance, so a step you upload or start on this pag
 
 While the connection to the server is down, for example during a deploy, the status bar shows **Server unreachable · Reconnecting…** in place of the computing service state (just **Reconnecting…** on narrow screens), hides the step counts, and closes the activity panel, since none of them can be refreshed. Once the connection is back, they return, and the panel reopens if you had it open.
 
-The bar also identifies the version you are viewing: the branch, with the commit on hover. From an older version it shows **Past · View current**, which returns you to the current version. **Agent**, **Docs**, the light/dark control, and the **Notifications** bell are here too, along with the account menu when you are signed in.
+The bar also identifies the version you are viewing: the branch, with the commit on hover. From an older version it shows **Past · View current**, which returns you to the current version. **Storage** (the drive icon; see [Storage panel](storage-panel.md)), **Agent**, **Docs**, the light/dark control, and the **Notifications** bell are here too, along with the account menu when you are signed in.
 
 ![The status bar counting one running and one queued step, with the activity panel open on its Running and Queued groups; the queued step waits for Resources.](screenshots/light/status-bar.png)
 

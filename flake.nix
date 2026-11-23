@@ -152,7 +152,14 @@
               buildInputs = oldAttrs.buildInputs ++ (with pkgs; [ haskell-language-server cabal-install fourmolu ]);
             });
           };
-          checks = nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          checks = {
+            docs-links = pkgs.runCommand "pointy-docs-links" {
+              nativeBuildInputs = [ pkgs.nodejs ];
+            } ''
+              node ${./docs/check-docs.mjs} ${./docs/pages}
+              touch $out
+            '';
+          } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
             hub-realise = import ./tests/hub-realise.nix { inherit pkgs; };
           };
         })

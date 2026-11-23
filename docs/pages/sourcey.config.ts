@@ -36,6 +36,7 @@ const PAGE_GROUPS = [
       "steps",
       "execution",
       "outputs",
+      "storage-panel",
       "reviews",
       "sharing",
       "agent",

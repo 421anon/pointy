@@ -30,7 +30,7 @@ Use **Agent** in the bottom status bar. The panel is available on every workspac
 
 Type your request and click **Send**, or press **Ctrl+Enter** (**Cmd+Enter** on macOS). The reply appears in the chat as the agent works. Until the first reply arrives, the chat shows **Waiting for a reply**. You can keep inspecting the folder while you wait. Each reply is labeled **Coder** or **Answerer** after the model that wrote it; without a second model, every reply is a **Coder** reply.
 
-The agent can also show you an image, such as a chart it drew to answer your question. The image appears inside its reply, at the point where the agent showed it.
+The agent can also show you an image, such as a chart it drew to answer your question. The image appears inside its reply, at the point where the agent showed it. When a step's upstream inputs are already built, the agent can also test commands or inspect data inside that step's build environment without submitting a full run; see [Step shell](sandbox.md#step-shell).
 
 ### Steering a running turn
 

@@ -12,8 +12,8 @@ This is also a useful way to separate a repository problem from a web or backend
 
 ### Definitions and form configuration
 
-| <div style="width: 220px">Attribute</div> | What it contains |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Attribute | What it contains |
+| --- | --- |
 | `pointy.schemaVersion` | The version of the output shape, `1`. The backend uses it to detect that this repository publishes step keys and certificates; an older stdlib does not have it. |
 | `pointy.agentSchema` | Markdown reference for the embedded agent: the editable step and folder shapes, dependency references, apply behavior, and the output list below. The backend does not read it; `nix eval --raw .#pointy.agentSchema` prints it. |
 | `pointy.stepConfig` | Version 4 form document: `{ version; templates; }`, generated from language declarations and template bindings. |
@@ -22,8 +22,8 @@ This is also a useful way to separate a repository problem from a web or backend
 
 ### Builds and helper functions
 
-| <div style="width: 220px">Attribute</div> | What it contains |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Attribute | What it contains |
+| --- | --- |
 | `pointy.steps.<id>` | The fully evaluated derivation for step `<id>`. A run builds the step's certificate, which builds this output; the backend submits it from a pinned Git commit through Slurm. |
 | `pointy.steps.<id>.def` | The step definition from `steps/<id>.nix`: type, name, raw argument values, and review fields, with its integer `id`. |
 | `pointy.steps.<id>.meta.pointy` | Resolved step metadata: `id` (string), `type`, `requirements`, and `args`, with `notices` and `extras` when present. |
@@ -36,8 +36,8 @@ This is also a useful way to separate a repository problem from a web or backend
 
 ### Linked data and dependencies
 
-| <div style="width: 220px">Attribute</div> | What it contains |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Attribute | What it contains |
+| --- | --- |
 | `pointy.root` | The folder tree, one node per folder record starting at the root folder `0`. Each step node is `pointy.steps.<id>` plus `turtle` and `fileTurtle` documents for artifact permalinks. |
 | `pointy.staleDependencies` | Dependency references whose recorded `path` no longer holds the referenced step at this commit, sorted by dependent step id. Each entry is `{ step; dependency; }`. |
 

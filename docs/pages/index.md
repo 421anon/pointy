@@ -54,21 +54,21 @@ The frontend and backend are self-hosted. A NixOS module is provided for easy se
 
 ### Using Pointy Web
 
-- [Managing Folders](projects.md): organize an analysis in folders: create, nest, move, link, hide, and delete folders and steps, and jump to any step.
-- [Working with Steps](steps.md): create steps from templates, set their inputs and parameters, and edit or clone them.
-- [Running Steps and Viewing Results](execution.md): run and stop steps, upload files, inspect and compare outputs, work with source files, review results, and create share links.
-- [AI Agent](agent.md): ask the built-in agent to set up or change an analysis, and let it apply its changes or review them first.
+- [Folders](projects.md), [Organize](organize.md), and [Search](search.md): navigate Home and nested folders, move, link, hide, reorder, and find any step.
+- [Steps](steps.md) and [Runs](execution.md): create, edit, and duplicate steps, upload data, start or stop builds, and follow cluster activity.
+- [Outputs](outputs.md) and [Storage panel](storage-panel.md): browse, preview, and compare outputs and source files, and freeze, rewarm, or delete old revisions.
+- [Reviews](reviews.md) and [Sharing](sharing.md): lock and compare reviewed results, and create commit-pinned read-only links.
+- [Agent](agent.md), [Changesets](changesets.md), and [Chats](chats.md): ask the built-in agent to set up or investigate an analysis, review or auto-apply its edits, and manage chat history.
 
-### Defining and hosting workflows
+### Hosting and configuring workflows
 
-- [Instance Admin Guide](admin.md): runtime architecture, backend configuration, Slurm, uploads, status streaming, the agent runner, and GC roots.
-- [Setting Up the User Repository](user-repo-setup.md): create the Git-backed flake that defines templates, steps, folders, and source files.
-- [Type Reference](type-reference.md): settings for template inputs and the form widgets they produce.
-- [CLI Reference](cli-reference.md): inspect and build flake outputs directly with `nix`.
+- [Hosting](admin.md): runtime architecture, host setup, [Login](login.md), [Clusters](clusters.md), [Config](config.md), [Providers](providers.md), [NixOS](nixos.md), [Storage](storage.md), [Sync](sync.md), [Sandbox](sandbox.md), [Builds](builds.md), [Troubleshooting](troubleshooting.md), [Backups](backups.md), and [Upgrading](upgrading.md).
+- [Repository](user-repo-setup.md): create the Git-backed flake with [Templates](templates.md), [Step files](step-files.md), [Presets](presets.md), [Resources](resources.md), [Extras](extras.md), [Linked data](linked-data.md), [Types](type-reference.md), and [Forms](forms.md).
 
-### Using the backend API
+### Developing and integrating
 
-- [Using the Backend API](api-guide.md): read a consistent revision, change folders and steps, follow runs, and work with files from your own client.
-- [Backend API Reference](api/): explore endpoints or build a client from the generated OpenAPI reference.
+- [CLI](cli-reference.md): inspect and build user-repository flake outputs directly with `nix`.
+- [API](api-guide.md), [Streams](streams.md), [Files](files.md), [Agent API](agent-api.md), and [API Reference](api/): read consistent revisions, mutate folders and steps, stream live status, and work with files from custom clients.
+- [Contributing](contributing.md): build Pointy itself and run the development VM.
 
 Pointy is distributed under the GNU AGPL v3.

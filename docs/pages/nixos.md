@@ -54,6 +54,24 @@ For a plain multi-node cluster:
 | `services.pointy-node.hub.sshKeyFile` | _(required)_ | Private SSH key this node presents to the hub; the Slurm build user must be able to read it. |
 | `services.pointy-node.hub.hostPublicKey` | `null` | Base64 SSH host public key used to pin the hub. `null` uses the node's known hosts. |
 
+For the local Slurm event broker (`pointy.nixosModules.slurm-events`, imported automatically by `single-node-slurm`):
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `services.pointy-slurm-events.enable` | `false` | Enable the local Slurm event broker and lifecycle hooks. |
+| `services.pointy-slurm-events.socketPath` | `/run/pointy-slurm-events/broker.sock` | Local UNIX socket for broker, watcher, and notifier communication. |
+| `services.pointy-slurm-events.group` | `pointy-slurm-events` _(read-only)_ | Group allowed to connect to the broker socket. |
+| `services.pointy-slurm-events.extraUsers` | `[]` | Users added to `group` so the backend or runner can watch and notify. |
+| `services.pointy-slurm-events.heartbeatIntervalSeconds` | `10` | Seconds between broker heartbeat frames; heartbeats never run Slurm commands. |
+| `services.pointy-slurm-events.accountWatchUsers` | `[]` | Users permitted to open account-filtered watches (such as a cluster gateway). |
+| `services.pointy-slurm-events.scopePrefix` | `null` | Job-name prefix placed before a Slurm account name for account-filtered watches; `null` refuses account watches. |
+| `services.pointy-slurm-events.stateFile` | `/var/lib/pointy-slurm-events/terminal-state.json` | Persisted bounded terminal-job hints across broker and controller restarts. |
+| `services.pointy-slurm-events.trustedUsers` | `[ "root" "slurm" ]` | Producer users allowed to submit terminal, start, node, and reset events. |
+| `services.pointy-slurm-events.configureSlurm` | `true` | Wire `JobComp`, `Prolog`, `strigger` node hooks, and `slurmd` lifecycle notifications into `services.slurm`. |
+| `services.pointy-slurm-events.jobCompletionFile` | `null` | Optional `jobcomp/filetxt` log appended alongside the completion hook to preserve `sacct -f` accounting. |
+| `services.pointy-slurm-events.slurmPackage` | `config.services.slurm.package` | Slurm package providing `squeue`, `sinfo`, `scontrol`, and `strigger`. |
+| `services.pointy-slurm-events.watchCommand`, `.notifyCommand`, `.brokerCommand`, `.jobCompletionHook`, `.prologHook`, `.nodeTriggerHook`, `.package` | generated paths _(read-only)_ | Store paths of the watcher, notifier, broker, and hook scripts for custom Slurm or gateway wiring. |
+
 The nginx configuration keeps `/backend/` SSE responses unbuffered and allows hour-long reads. If you replace the supplied reverse proxy, preserve those settings for the `/events` stream and the agent-turn streams.
 
 ## NixOS integration

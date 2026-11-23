@@ -126,3 +126,18 @@ pkgs = inputs.nixpkgs.legacyPackages.x86_64-linux.extend (_: prev: {
 ```
 
 Templates can then use `pkgs.myLab.helper`. `packages/` is copied into the same store path as `pointy.nix` and the templates, but Pointy never loads its files as templates: import them explicitly. A package edit is visible to step evaluation. A flake-parts module that needs the same package set reads it from the `pointyRepo` module argument, as `pointyRepo.cfg.pkgs`.
+
+## Exposing tools to the agent's step shell
+
+The embedded agent has a `step_shell` tool that runs commands inside a step's build environment (`nix print-dev-env`) to test scripts or inspect upstream outputs without submitting a Slurm build. If a template runs tools that are not listed in `buildInputs` / `nativeBuildInputs` (for example, interpreters wrapped only inside `installPhase`), list them in `mkDerivation.passthru.devPackages`:
+
+```nix
+mkDerivation = {
+  passthru.devPackages = [ pkgs.python3 pkgs.jq ];
+  installPhase = ''
+    ...
+  '';
+};
+```
+
+`step_shell` prepends `devPackages` to `PATH`. Because it is a `passthru` attribute, adding or changing `devPackages` does not alter the step's derivation hash or trigger rebuilds. See [Step shell](sandbox.md#step-shell).
