@@ -48,6 +48,8 @@ The agent may pause to ask you a question. For a single-choice question, click a
 
 While the chat waits for your answer, its entry in the chat history shows **Needs input**, and the agent's time budget is paused: time spent waiting for your answer does not count against it.
 
+![The agent panel paused on a single-choice question with clickable threshold options.](screenshots/light/agent-question.png)
+
 ### Attaching images
 
 Click **Attach images** inside the prompt field, or paste or drop image files into the chat. Pointy accepts PNG, JPEG, GIF, and WebP images. You can send images without any text.

@@ -186,7 +186,7 @@ appliedAnswer document applyExpr attr
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.steps", "uploaded.hash" `isInfixOf` applyExpr = Right (encodeValue (stepEvaluationsValue document (Map.keys (documentOutPaths document))))
     | "uploaded.hash" `isInfixOf` applyExpr = Right (encodeValue (stepEvaluationsValue document (idsIn applyExpr)))
-    | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.steps" = Right (encodeValue (toJSON (Map.keys (documentOutPaths document))))
+    | applyExpr == "steps: builtins.attrNames steps", attr == "#pointy.steps" = Right (encodeValue (toJSON (Map.keys (documentOutPaths document))))
     | "stepRefsOf" `isInfixOf` applyExpr = Right (encodeValue (headStepsValue document))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))

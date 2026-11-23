@@ -32,6 +32,8 @@ Files with a browser-friendly type — HTML, plain text, CSS, XML, JSON, JavaScr
 
 When the step's current version may produce a different output from the one shown, the view says so, with the current version's status dot. Until that output is built, the notice has a **Run** button that builds it; while it builds, the notice says so and the dot shows it running. Once the output is built and differs, the dot turns green and **View newer revision** opens it. The chat in this view works with the step's current version, so **Run** in the notice or in a step mention builds the current version, not the one shown; when that build produces output, the view switches to it.
 
+![An older revision of an HTML output open in the full-window viewer, with the newer-revision notice showing a green status dot and a View newer revision button.](screenshots/light/output-file-newer-revision.png)
+
 Images open inline, and PDB output files have an interactive molecular viewer. Zip archives can be expanded like directories, so you can inspect their contents without downloading and unpacking the whole archive. The archive's download button still retrieves the zip file itself.
 
 ![The output files browser open on a fastqc step, showing chim_R1_fastqc.html previewed inline with its FastQC Report content visible alongside the other output files.](screenshots/light/output-files-html-preview.png)

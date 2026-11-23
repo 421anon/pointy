@@ -31,6 +31,8 @@ The display updates automatically; you do not need to keep refreshing the page.
 
 ![The step rows of a folder, with the Failure message shown for a failed step.](screenshots/light/project-view-status-tooltip.png)
 
+![A step refused with Inputs in Cold Storage, with its blue-dot popover listing the offloaded upstream files and offering Copy back.](screenshots/light/step-inputs-cold-popover.png)
+
 ### Keeping track of work
 
 The bottom status bar shows the state of the computing service and how many steps are active. It reads **Connecting** while the status loads, **Cluster OK** when the service is available, and **Degraded**, **Unavailable**, or **Cluster unknown** when there is a problem; a short reason follows the label when one is known, and hovering shows the full sentence.

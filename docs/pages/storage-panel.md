@@ -6,6 +6,8 @@ description: "See how much disk and cold storage step outputs use, and freeze, r
 
 Open **Storage** from the drive icon in the bottom status bar to see how much space built step outputs take on this server and, when configured, in cold storage.
 
+![The Storage panel open above the status bar, showing warm quota and cold storage bars, steps grouped by size, and an expanded step with its revision actions.](screenshots/light/storage-panel.png)
+
 ## Warm and cold capacity
 
 At the top of the panel, capacity bars show how much space is in use:

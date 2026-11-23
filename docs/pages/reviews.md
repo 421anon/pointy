@@ -22,6 +22,8 @@ The review shows how the result for the version you are viewing compares with th
 | **Differs** | The files differ. Choose **View diff** to compare them here or in a new tab; the reviewed result is still shown. |
 | **Check failed** | Pointy could not complete the comparison. Hover or focus the chip for the error, including the Nix error behind a failed check; this does not mean the results differ. |
 
+![A reviewed step row whose current output differs from its reviewed revision, showing the locked edit icon, the reviewed revision badge, and the View diff controls.](screenshots/light/step-review-differs.png)
+
 You can update an existing review while the results match. If they differ, inspect the difference, remove the old review, and review the new result when you are satisfied. **Remove review** also unlocks the step. If the reviewed files are no longer available, Pointy explains why it cannot compare them; rerun the reviewed version or remove the review.
 
 A step has the same review wherever it appears, including in older versions of a folder. **Reviewed by** is the name entered by the reviewer, not a verified identity. The agent cannot change a reviewed step either.

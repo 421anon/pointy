@@ -25,3 +25,5 @@ A [share link](#share-links) opens a folder at a fixed commit; its URL carries `
 Editing, uploading, and organizing are disabled: there are no checkboxes or action bar, no **New** menu, **Link existing**, **Unhide all**, or clipboard controls, no dragging, no **Edit project**, and no inline rename. Step rows offer **Inspect Parameters** instead of **Edit**; folder rows offer neither.
 
 Use **Past · View current** in the status bar to return to the current version.
+
+![A folder opened in read-only mode from a commit-pinned link: editing and organize controls are hidden, step rows offer Inspect Parameters, and the status bar shows Past · View current.](screenshots/light/sharing-readonly-view.png)
