@@ -5247,6 +5247,11 @@ a.storage-panel__step-id:focus-visible {
   color: var(--state-warning);
 }
 
+.storage-panel__blocked a.storage-panel__step-id {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .storage-panel__error {
   margin-block-start: var(--spacing-2xs);
   font-size: var(--font-size-sm);

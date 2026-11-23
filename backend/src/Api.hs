@@ -520,7 +520,7 @@ type GetStorage =
 type OffloadStorage =
     "storage"
         :> "offload"
-        :> Description "Starts moving every local file of a step revision's output to cold storage and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while a step that reads this output is running or queued."
+        :> Description "Starts moving every local file of a step revision's output to cold storage and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while a step that directly reads this output is running or queued."
         :> ReqId
         :> QueryParam "commit" Text
         :> Post '[JSON] NoContent
@@ -528,14 +528,14 @@ type OffloadStorage =
 type OffloadStorageStep =
     "storage"
         :> "offload-step"
-        :> Description "Starts moving every local or failed revision of a step's outputs to cold storage, one output after another in a single background thread, and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while the step, or a step that reads its output, is running or queued."
+        :> Description "Starts moving every local or failed revision of a step's outputs to cold storage, one output after another in a single background thread, and returns before any bytes move. Progress, completion and the provider's failure reason arrive as storage events on /events. Refuses with 409 while the step, or a step that directly reads its output, is running or queued."
         :> ReqId
         :> Post '[JSON] NoContent
 
 type OnloadStorageRevision =
     "storage"
         :> "onload"
-        :> Description "Starts copying every offloaded file of one revision's output back to this server and returns before the bytes arrive. Each file already local or already copying is skipped, so repeating it is safe. Progress arrives as storage events on /events. Refuses with 409 while the step, or a step that reads its output, is running or queued; 503 when the cold status is unavailable."
+        :> Description "Starts copying every offloaded file of one revision's output back to this server and returns before the bytes arrive. Each file already local or already copying is skipped, so repeating it is safe. Progress arrives as storage events on /events. Refuses with 409 while the step, or a step that directly reads its output, is running or queued; 503 when the cold status is unavailable."
         :> ReqId
         :> QueryParam "commit" Text
         :> Post '[JSON] NoContent
@@ -543,7 +543,7 @@ type OnloadStorageRevision =
 type DeleteStorageRevision =
     "storage"
         :> "delete"
-        :> Description "Deletes one revision's step output from this server's store and returns 200 with an empty body. Removes Pointy's GC root before deleting, so repeating it is safe. Refuses with 409 while the step, or a step that reads its output, is running or queued, while an offload of the output is running, when the output still has files in cold storage (Pointy does not delete the provider's copy), or when the store will not delete a rooted or alive path; 503 when the backend cannot tell which steps are running or cannot read the cold storage status."
+        :> Description "Deletes one revision's step output from this server's store and returns 200 with an empty body. Removes Pointy's GC root before deleting, so repeating it is safe. Refuses with 409 while the step, or a step that directly reads its output, is running or queued, while an offload of the output is running, when the output still has files in cold storage (Pointy does not delete the provider's copy), or when the store will not delete a rooted or alive path; 503 when the backend cannot tell which steps are running or cannot read the cold storage status."
         :> ReqId
         :> QueryParam "commit" Text
         :> Post '[JSON] NoContent

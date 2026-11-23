@@ -242,6 +242,11 @@ type alias StorageView =
     }
 
 
+type StorageBlocker
+    = StorageBlockerStep Int String String
+    | StorageBlockerError String
+
+
 type alias StorageRevision =
     { step : Int
     , name : String
@@ -255,7 +260,7 @@ type alias StorageRevision =
     , done : Int
     , total : Int
     , error : Maybe String
-    , blocked : Maybe String
+    , blocked : Maybe StorageBlocker
     }
 
 

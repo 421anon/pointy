@@ -14,7 +14,7 @@ import Html.Lazy
 import Iso8601
 import Json.Decode as Decode
 import List.Extra as List
-import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, StorageCapacity, StorageKind(..), StorageRevision, StorageState(..), StorageView, TrayState(..), TrayStep)
+import Model.Core as Model exposing (BackendConnection(..), ClusterStatus(..), Model, StorageBlocker(..), StorageCapacity, StorageKind(..), StorageRevision, StorageState(..), StorageView, TrayState(..), TrayStep)
 import Model.Lenses exposing (loadedProjects, route, toastHistory)
 import Model.Lib exposing (canonicalNamePath, canonicalPathNames, rootProjectName)
 import Route
@@ -1470,7 +1470,7 @@ type alias StorageGroup =
     , revisionCount : Int
     , localRevisionCount : Int
     , movableLocal : Int
-    , blocked : Maybe String
+    , blocked : Maybe StorageBlocker
     , revisions : List StorageRevision
     }
 
@@ -1577,7 +1577,7 @@ viewStorageGroup model coldConfigured stepRoutes expandedSteps group =
             , attribute "role" "list"
             ]
             (if expanded then
-                List.map (viewStorageRow model coldConfigured group.name) group.revisions
+                List.map (viewStorageRow model coldConfigured stepRoutes group.name) group.revisions
 
              else
                 []
@@ -1685,7 +1685,7 @@ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
                 ]
             , Html.div [ class "storage-panel__meta" ]
                 [ Html.text (storageCount group.revisionCount "revision" "revisions") ]
-            , storageBlockedReason blockedId group.blocked
+            , storageBlockedReason group.stepId stepRoutes blockedId group.blocked
             ]
          , Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.local) ]
          ]
@@ -1703,7 +1703,7 @@ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
         )
 
 
-viewStorageStepId : Dict Int Route.Route -> Int -> Html (Flow Model ())
+viewStorageStepId : Dict Int Route.Route -> Int -> Html msg
 viewStorageStepId stepRoutes stepId =
     case Dict.get stepId stepRoutes of
         Just route_ ->
@@ -1756,8 +1756,8 @@ storageKindLabel kind =
             "Upload"
 
 
-viewStorageRow : Model -> Bool -> String -> StorageRevision -> Html (Flow Model ())
-viewStorageRow model coldConfigured parentName revision =
+viewStorageRow : Model -> Bool -> Dict Int Route.Route -> String -> StorageRevision -> Html (Flow Model ())
+viewStorageRow model coldConfigured stepRoutes parentName revision =
     let
         blockedId =
             "storage-blocked-" ++ String.fromInt revision.step ++ "-" ++ revision.revision
@@ -1792,7 +1792,7 @@ viewStorageRow model coldConfigured parentName revision =
                     [ Html.text (Time.Distance.inWords revision.committedAt (Model.getNow model)) ]
                 , inlineAction
                 ]
-            , storageBlockedReason blockedId revision.blocked
+            , storageBlockedReason revision.step stepRoutes blockedId revision.blocked
             , Html.viewMaybe
                 (\message -> Html.div [ class "storage-panel__error" ] [ Html.text message ])
                 revision.error
@@ -1811,12 +1811,22 @@ viewStorageRow model coldConfigured parentName revision =
         )
 
 
-storageBlockedReason : String -> Maybe String -> Html msg
-storageBlockedReason blockedId blocked =
+storageBlockedReason : Int -> Dict Int Route.Route -> String -> Maybe StorageBlocker -> Html msg
+storageBlockedReason ownStepId stepRoutes blockedId blocked =
     Html.div [ class "storage-panel__blocked", id blockedId ]
         (case blocked of
-            Just reason ->
-                [ Html.text reason ]
+            Just (StorageBlockerStep blockerStep blockerName blockerState) ->
+                if blockerStep == ownStepId then
+                    [ Html.text ("This step is " ++ blockerState ++ ".") ]
+
+                else
+                    [ Html.text "Step "
+                    , viewStorageStepId stepRoutes blockerStep
+                    , Html.text (" (" ++ blockerName ++ ") is " ++ blockerState ++ " and reads this output.")
+                    ]
+
+            Just (StorageBlockerError message) ->
+                [ Html.text message ]
 
             Nothing ->
                 []

@@ -6,7 +6,7 @@ import BuildLog (buildStepStore, rawStatusesBatched, validPaths)
 import BuildStatus (StepPaths (..), checkStatus)
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..))
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import Data.Aeson (eitherDecode)
+import Data.Aeson (eitherDecode, object, toJSON, (.=))
 import Fixture.Document (FixtureDocument (..))
 import Data.Either (isLeft)
 import Data.Map.Strict (Map)
@@ -19,14 +19,16 @@ import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Interpreters.Fixture (newFixtureState, runFixture)
 import Handlers.Storage (HeadStep (..), pathOwners)
-import StorageBus (StorageCapacity (..), StorageRevision (..), parseStorageCapacity, revisionMovable)
-import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
+import StorageBus (StorageBlocker (..), StorageCapacity (..), StorageRevision (..), parseStorageCapacity, revisionMovable)
+import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
 
 main :: IO ()
 main = do
     checkHistoryParsing
     checkRevisions
-    checkDependents
+    checkDirectReaders
+    checkHeadStepInputs
+    checkBlockerShape
     checkCold
     checkRevisionMovable
     checkCapacity
@@ -60,14 +62,32 @@ checkRevisions = do
         [RevisionSeed 1 "N" "upload" (commit 1) (time 1) "/nix/store/a", RevisionSeed 1 "N" "derived" (commit 3) (time 3) "/nix/store/b"]
         (revisionsFromHistory [atCommit 3 [(1, "N", "derived", Just "/nix/store/b")], atCommit 2 [(1, "N", "derived", Nothing)], atCommit 1 [(1, "N", "upload", Just "/nix/store/a")]])
 
-checkDependents :: IO ()
-checkDependents = do
-    assertEqual "a step's readers are transitive" (Set.fromList [2, 3]) (dependentsOf graph 1)
-    assertEqual "a leaf has no readers" Set.empty (dependentsOf graph 3)
-    assertEqual "a cycle terminates" (Set.fromList [1, 2]) (dependentsOf (Map.fromList [(1, Set.singleton 2), (2, Set.singleton 1)]) 1)
+checkDirectReaders :: IO ()
+checkDirectReaders = do
+    assertEqual "only direct readers are reported" (Set.fromList [2]) (directReadersOf graph 1)
+    assertEqual "a reader's own reader is not a direct reader" (Set.fromList [3]) (directReadersOf graph 2)
+    assertEqual "a leaf has no readers" Set.empty (directReadersOf graph 3)
   where
     graph :: Map Int (Set Int)
     graph = Map.fromList [(1, Set.empty), (2, Set.singleton 1), (3, Set.singleton 2)]
+
+checkHeadStepInputs :: IO ()
+checkHeadStepInputs =
+    assertEqual
+        "head steps decode their direct inputs"
+        (Right (HeadStep "reader" (Set.singleton 2) "/nix/store/out" "/nix/store/cert"))
+        (eitherDecode "{\"name\":\"reader\",\"inputs\":[2],\"output\":\"/nix/store/out\",\"certificate\":\"/nix/store/cert\"}")
+
+checkBlockerShape :: IO ()
+checkBlockerShape = do
+    assertEqual
+        "a step blocker names the reading step and its state"
+        (object ["kind" .= ("step" :: Text), "step" .= (2 :: Int), "name" .= ("reader" :: Text), "state" .= ("queued" :: Text)])
+        (toJSON (StorageBlockerStep 2 "reader" "queued"))
+    assertEqual
+        "an error blocker carries its message"
+        (object ["kind" .= ("error" :: Text), "message" .= ("unknown" :: Text)])
+        (toJSON (StorageBlockerError "unknown"))
 
 checkCold :: IO ()
 checkCold = do

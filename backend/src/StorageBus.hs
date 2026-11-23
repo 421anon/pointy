@@ -4,6 +4,7 @@ module StorageBus (
     StorageView (..),
     StorageCapacity (..),
     parseStorageCapacity,
+    StorageBlocker (..),
     StorageRevision (..),
     Invalidation (..),
     ColdRecheck (..),
@@ -44,6 +45,32 @@ import Data.Text (Text)
 import Data.Time.Clock (UTCTime)
 import System.IO.Unsafe (unsafePerformIO)
 
+data StorageBlocker
+    = StorageBlockerStep
+        { blockerStep :: Int
+        , blockerName :: Text
+        , blockerState :: Text
+        }
+    | StorageBlockerError
+        { blockerMessage :: Text
+        }
+    deriving (Eq, Show)
+
+instance ToJSON StorageBlocker where
+    toJSON blocker = case blocker of
+        StorageBlockerStep step name state ->
+            object
+                [ "kind" .= ("step" :: Text)
+                , "step" .= step
+                , "name" .= name
+                , "state" .= state
+                ]
+        StorageBlockerError message ->
+            object
+                [ "kind" .= ("error" :: Text)
+                , "message" .= message
+                ]
+
 data StorageRevision = StorageRevision
     { revisionStep :: Int
     , revisionName :: Text
@@ -57,7 +84,7 @@ data StorageRevision = StorageRevision
     , revisionDone :: Integer
     , revisionTotal :: Integer
     , revisionError :: Maybe Text
-    , revisionBlocked :: Maybe Text
+    , revisionBlocked :: Maybe StorageBlocker
     }
     deriving (Eq, Show)
 

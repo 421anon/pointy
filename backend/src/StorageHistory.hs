@@ -7,7 +7,7 @@ module StorageHistory (
     ColdSummary (..),
     parseHistory,
     revisionsFromHistory,
-    dependentsOf,
+    directReadersOf,
     summarizeCold,
 ) where
 
@@ -110,14 +110,9 @@ revisionsFromHistory history = sortOn seedOrder (Map.elems seeds)
                 )
     seedOrder seed = (seedStep seed, seedCommitTime seed, seedPath seed)
 
-dependentsOf :: Map Int (Set Int) -> Int -> Set Int
-dependentsOf dependencies stepId = go Set.empty [stepId]
-  where
-    inverse = Map.fromListWith Set.union [(dependency, Set.singleton step) | (step, stepDependencies) <- Map.toList dependencies, dependency <- Set.toList stepDependencies]
-    go seen [] = seen
-    go seen (current : rest) =
-        let next = maybe [] (filter (`Set.notMember` seen) . Set.toList) (Map.lookup current inverse)
-         in go (foldl' (flip Set.insert) seen next) (next ++ rest)
+directReadersOf :: Map Int (Set Int) -> Int -> Set Int
+directReadersOf dependencies stepId =
+    Map.keysSet (Map.filter (Set.member stepId) dependencies)
 
 summarizeCold :: Integer -> Maybe ColdStatus -> ColdSummary
 summarizeCold narSize status = case status of

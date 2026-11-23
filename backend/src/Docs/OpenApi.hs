@@ -33,7 +33,7 @@ import Handlers.SrcFiles (UserRepoInfo)
 import Handlers.StepReview (ReviewRequest, StepComparison, StepReviewReport)
 import Handlers.ChatSearch (ChatSearchRequest, ChatSearchResponse)
 import Handlers.StepSearch (StepSearchInfo, StepSearchRequest, StepSearchResponse)
-import StorageBus (StorageCapacity, StorageRevision, StorageView)
+import StorageBus (StorageBlocker, StorageCapacity, StorageRevision, StorageView)
 import Handlers.Store (ByteOffset, DirEntry, FileChunk, LineOffset)
 import Network.HTTP.Media ((//))
 import Servant
@@ -307,8 +307,41 @@ instance ToSchema ColdInputsView where
                     & required .~ ["path", "size"]
                     & properties .~ fromList [("path", stringField), ("size", integerField)]
 
-instance ToSchema StorageRevision where
+instance ToSchema StorageBlocker where
     declareNamedSchema _ =
+        pure . NamedSchema (Just "StorageBlocker") $
+            mempty
+                & oneOf ?~ [stepBlockerSchema, errorBlockerSchema]
+                & description ?~ "A step that directly reads the output, or an error that prevents telling which steps read it."
+      where
+        stepBlockerSchema =
+            Inline $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & required .~ ["kind", "step", "name", "state"]
+                    & properties
+                        .~ fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["step"]))
+                            , ("step", integerField)
+                            , ("name", stringField)
+                            , ("state", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["running", "queued"]))
+                            ]
+        errorBlockerSchema =
+            Inline $
+                mempty
+                    & type_ ?~ OpenApiObject
+                    & required .~ ["kind", "message"]
+                    & properties
+                        .~ fromList
+                            [ ("kind", Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ ["error"]))
+                            , ("message", stringField)
+                            ]
+
+instance ToSchema StorageRevision where
+    declareNamedSchema _ = do
+        blockerSchema <- declareSchemaRef (Proxy :: Proxy StorageBlocker)
+        let nullableBlocker =
+                Inline (mempty & type_ ?~ OpenApiObject & nullable ?~ True & allOf ?~ [blockerSchema])
         pure $
             objectSchema
                 "StorageRevision"
@@ -324,7 +357,7 @@ instance ToSchema StorageRevision where
                 , ("done", integerField)
                 , ("total", integerField)
                 , ("error", nullableField OpenApiString)
-                , ("blocked", nullableField OpenApiString)
+                , ("blocked", nullableBlocker)
                 ]
 
 instance ToSchema StorageCapacity where

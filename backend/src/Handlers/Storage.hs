@@ -51,8 +51,8 @@ import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err500, err502, err503)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
-import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), dependentsOf, parseHistory, revisionsFromHistory, summarizeCold)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageBlocker (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
+import StorageHistory (CachedStep (..), ColdSummary (..), HistoryCommit (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory, renameFile)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
@@ -64,7 +64,7 @@ import UserRepo (commitContext, commitContextEff, runGitIn, runHistoryEvalJsonAp
 
 data HeadStep = HeadStep
     { headStepName :: Text
-    , headStepDeps :: Set Int
+    , headStepInputs :: Set Int
     , headStepOutput :: Text
     , headStepCertificate :: Text
     }
@@ -74,7 +74,7 @@ instance FromJSON HeadStep where
     parseJSON = withObject "head step" $ \fields ->
         HeadStep
             <$> fields .:? "name" .!= ""
-            <*> (Set.fromList <$> fields .:? "deps" .!= [])
+            <*> (Set.fromList <$> fields .:? "inputs" .!= [])
             <*> fields .: "output"
             <*> fields .: "certificate"
 
@@ -330,8 +330,8 @@ refusePathBusy outPath = do
         (Left err, _) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 err)}
         (_, Left err) -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 err)}
         (Right steps, Right states) ->
-            case mapMaybe (\stepId -> runningRefusal steps states stepId) (pathOwners steps outPath) of
-                firstRefusal : _ -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 firstRefusal)}
+            case [(owner, blocker) | owner <- pathOwners steps outPath, Just blocker <- [runningRefusal steps states owner]] of
+                (owner, blocker) : _ -> throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 (storageBlockerMessage owner blocker))}
                 [] -> pure ()
 
 pathOwners :: Map Int HeadStep -> Text -> [Int]
@@ -362,20 +362,32 @@ runningStepStates jobs =
         , jobCommentKind comment == "step" || jobCommentKind comment == "extras"
         ]
 
-runningRefusal :: Map Int HeadStep -> Map Int Text -> Int -> Maybe Text
+runningRefusal :: Map Int HeadStep -> Map Int Text -> Int -> Maybe StorageBlocker
 runningRefusal headSteps running stepId =
-    case sortOn fst (Map.toList (Map.restrictKeys running (Set.insert stepId dependents))) of
-        [] -> Nothing
-        (blocker, jobState) : _ ->
-            let stateWord = if jobState `elem` ["PENDING", "CONFIGURING"] then "queued" else "running"
-             in if blocker == stepId
-                    then Just ("This step is " <> stateWord <> ".")
-                    else Just ("Step " <> T.pack (show blocker) <> " (" <> stepName blocker <> ") is " <> stateWord <> " and reads this output.")
+    case Map.lookup stepId running of
+        Just jobState -> Just (blockerFor stepId jobState)
+        Nothing ->
+            case sortOn fst [(reader, jobState) | reader <- Set.toList readers, Just jobState <- [Map.lookup reader running]] of
+                [] -> Nothing
+                (reader, jobState) : _ -> Just (blockerFor reader jobState)
   where
-    dependents = dependentsOf (Map.map headStepDeps headSteps) stepId
-    stepName blocker = case Map.lookup blocker headSteps of
+    readers = directReadersOf (Map.map headStepInputs headSteps) stepId
+    blockerFor blockerId jobState =
+        StorageBlockerStep
+            { blockerStep = blockerId
+            , blockerName = stepName blockerId
+            , blockerState = if jobState `elem` ["PENDING", "CONFIGURING"] then "queued" else "running"
+            }
+    stepName blockerId = case Map.lookup blockerId headSteps of
         Just step | not (T.null (headStepName step)) -> headStepName step
-        _ -> "step " <> T.pack (show blocker)
+        _ -> "step " <> T.pack (show blockerId)
+
+storageBlockerMessage :: Int -> StorageBlocker -> Text
+storageBlockerMessage owner blocker = case blocker of
+    StorageBlockerStep step name state
+        | step == owner -> "This step is " <> state <> "."
+        | otherwise -> "Step " <> T.pack (show step) <> " (" <> name <> ") is " <> state <> " and reads this output."
+    StorageBlockerError message -> message
 
 runStorageCenter :: IO ()
 runStorageCenter = do
@@ -455,7 +467,7 @@ refresh work running = do
     scanFailure <- liftIO (fmap (fmap snd . scanUnavailable) (readMVar scanStateRef))
     let blockedReason = case cachedHeadSteps caches of
             Right headSteps -> runningRefusal headSteps running
-            Left _ -> const (Just "Cannot tell which steps read this output until the current revision evaluates.")
+            Left _ -> const (Just (StorageBlockerError "Cannot tell which steps read this output until the current revision evaluates."))
         revisionsWithSeeds =
             [ (seed, storageRevision coldConfigured (Map.lookup (seedPath seed) colds) (Map.lookup (seedPath seed) offloads) (blockedReason (seedStep seed)) (headStepName <$> either (const Nothing) (Map.lookup (seedStep seed)) (cachedHeadSteps caches)) seed narSize)
             | seed <- seeds
@@ -523,7 +535,7 @@ stepOutputCapacity used capacity =
         )
         capacity
 
-storageRevision :: Bool -> Maybe (Maybe ColdStatus) -> Maybe OffloadState -> Maybe Text -> Maybe Text -> RevisionSeed -> Integer -> StorageRevision
+storageRevision :: Bool -> Maybe (Maybe ColdStatus) -> Maybe OffloadState -> Maybe StorageBlocker -> Maybe Text -> RevisionSeed -> Integer -> StorageRevision
 storageRevision coldConfigured status offload blocked currentName seed narSize =
     StorageRevision
         { revisionStep = seedStep seed
@@ -579,13 +591,24 @@ evalHeadSteps repoPath headHash = do
 headStepsExpression :: String
 headStepsExpression =
     unlines
-        [ "steps: builtins.mapAttrs (id: s:"
+        [ "steps:"
+        , "let"
+        , "  stepRefsOf = value:"
+        , "    if builtins.isAttrs value && (value.type or null) != \"derivation\" then"
+        , "      (if value ? step && (builtins.isInt value.step || builtins.isString value.step) then [ (toString value.step) ] else [ ])"
+        , "      ++ builtins.concatMap stepRefsOf (builtins.attrValues value)"
+        , "    else if builtins.isList value then builtins.concatMap stepRefsOf value"
+        , "    else [ ];"
+        , "  inputsOf = id:"
+        , "    let upstream = steps.${id}.dependencies or [ ];"
+        , "    in builtins.filter (ref: builtins.elem ref upstream) (stepRefsOf (steps.${id}.def.args or { }));"
+        , "in builtins.mapAttrs (id: s:"
         , "  let name = builtins.tryEval (s.def.name or (s.name or \"\"));"
         , "      output = builtins.tryEval s.outPath;"
         , "      certificate = builtins.tryEval ((s.certificate or s).outPath);"
         , "  in if output.success && certificate.success then {"
         , "    name = if name.success && builtins.isString name.value then name.value else \"\";"
-        , "    deps = builtins.map builtins.fromJSON (s.dependencies or [ ]);"
+        , "    inputs = builtins.map builtins.fromJSON (inputsOf id);"
         , "    output = output.value;"
         , "    certificate = certificate.value;"
         , "  } else null) steps"

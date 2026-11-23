@@ -1160,7 +1160,27 @@ storageRevision =
         |> required "done" Decode.int
         |> required "total" Decode.int
         |> optional "error" (maybe Decode.string) Nothing
-        |> optional "blocked" (maybe Decode.string) Nothing
+        |> optional "blocked" (maybe storageBlocker) Nothing
+
+
+storageBlocker : Decoder Model.StorageBlocker
+storageBlocker =
+    Decode.field "kind" Decode.string
+        |> Decode.andThen
+            (\kind ->
+                case kind of
+                    "step" ->
+                        Decode.succeed Model.StorageBlockerStep
+                            |> required "step" Decode.int
+                            |> required "name" Decode.string
+                            |> required "state" Decode.string
+
+                    "error" ->
+                        Decode.map Model.StorageBlockerError (Decode.field "message" Decode.string)
+
+                    other ->
+                        Decode.fail ("unknown storage blocker kind " ++ other)
+            )
 
 
 storageKind : String -> Decoder Model.StorageKind
