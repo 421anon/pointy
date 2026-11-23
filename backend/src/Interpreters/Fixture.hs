@@ -9,6 +9,7 @@ module Interpreters.Fixture (
     FixtureState (..),
     FixtureJob (..),
     newFixtureState,
+    newFixtureStateAtHead,
     resetFixture,
     runFixture,
     startFixtureWatcher,
@@ -17,6 +18,7 @@ module Interpreters.Fixture (
 import BuildLog (isStorePath)
 import BuildRunner (parseSlurmJobLine)
 import ClusterBus (ClusterStatus (..), applySnapshot, wholeSeconds)
+import ColdRefusal (clearAllColdRefusals)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad (filterM, forever, void)
@@ -40,9 +42,9 @@ import qualified Data.Vector.Unboxed as VU
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effects (AppEffects, ColdStorage (..), Eval (..), Inference (..), LogStamp (..), Nix (..), Slurm (..), SlurmQuery (..), SubmitRequest (..))
-import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageStatus, derivationAnswer, derivationOutputs, jsonAnswer, logAnswer, pseudoHash, rawAnswer)
+import Fixture.Document (FixtureDocument (..), appliedAnswer, coldStorageStatus, derivationAnswer, derivationOutputs, forPriorCommit, jsonAnswer, logAnswer, narSizeFor, pseudoHash, rawAnswer)
 import JobWatch (markJobNameEnded)
-import NixEvaluator (EvalFailure (..))
+import NixEvaluator (EvalFailure (..), RepoSource (..))
 import Processes (cli)
 import ProviderHttp (JudgeTask (..))
 import Text.Read (readMaybe)
@@ -53,6 +55,7 @@ import System.FilePath (takeFileName)
 
 data FixtureState = FixtureState
     { fixtureDocument :: FixtureDocument
+    , fixtureHeadCommit :: String
     , fixtureJobs :: TVar (Map.Map String FixtureJob)
     , fixtureNextJob :: TVar Int
     , fixtureJobTicks :: TVar (Map.Map String Int)
@@ -66,8 +69,11 @@ data FixtureJob = FixtureJob
     }
 
 newFixtureState :: FixtureDocument -> IO FixtureState
-newFixtureState document =
-    FixtureState document
+newFixtureState document = newFixtureStateAtHead document ""
+
+newFixtureStateAtHead :: FixtureDocument -> String -> IO FixtureState
+newFixtureStateAtHead document headCommit =
+    FixtureState document headCommit
         <$> newTVarIO Map.empty
         <*> newTVarIO 1
         <*> newTVarIO Map.empty
@@ -81,6 +87,7 @@ resetFixture state = do
         writeTVar (fixtureJobTicks state) Map.empty
         pure (Map.keys jobs)
     markJobNameEnded names
+    clearAllColdRefusals
 
 startFixtureWatcher :: FixtureState -> IO ()
 startFixtureWatcher state = void $ forkIO $ forever $ do
@@ -164,11 +171,24 @@ cosine a b = realToFrac (VU.sum (VU.zipWith (*) a b))
 
 runEvalFixture :: (IOE :> es) => FixtureState -> Eff (Eval : es) a -> Eff es a
 runEvalFixture state = interpret $ \_ -> \case
-    EvalJson _ attr -> pure (fmap bytes (jsonAnswer (fixtureDocument state) attr))
-    EvalRaw _ attr -> pure (fmap bytes (rawAnswer (fixtureDocument state) attr))
-    EvalJsonApply _ applyExpr attr -> pure (fmap bytes (appliedAnswer (fixtureDocument state) applyExpr attr))
-    EvalHistoryJsonApply _ applyExpr attr -> pure (first EvalError (fmap bytes (appliedAnswer (fixtureDocument state) applyExpr attr)))
+    EvalJson ref attr -> pure (fmap bytes (jsonAnswer (documentForRef state ref) attr))
+    EvalRaw ref attr -> pure (fmap bytes (rawAnswer (documentForRef state ref) attr))
+    EvalJsonApply ref applyExpr attr -> pure (fmap bytes (appliedAnswer (documentForRef state ref) applyExpr attr))
+    EvalHistoryJsonApply ref applyExpr attr -> pure (first EvalError (fmap bytes (appliedAnswer (documentForRef state ref) applyExpr attr)))
     EvalImpure expression -> liftIO $ evalNixJson state expression
+
+documentForRef :: FixtureState -> RepoSource -> FixtureDocument
+documentForRef state (RepoRef ref) = case commitFromRef ref of
+    Just rev | not (null (fixtureHeadCommit state)) && rev /= fixtureHeadCommit state -> forPriorCommit (fixtureDocument state)
+    _ -> fixtureDocument state
+documentForRef state (RepoWorktree _) = fixtureDocument state
+
+commitFromRef :: String -> Maybe String
+commitFromRef ref = case T.breakOn "rev=" (T.pack ref) of
+    (_, rest) | not (T.null rest) ->
+        let value = T.takeWhile (\c -> c /= '&' && c /= '#') (T.drop 4 rest)
+         in if T.null value then Nothing else Just (T.unpack value)
+    _ -> Nothing
 
 
 evalNixJson :: FixtureState -> String -> IO (Either String BS.ByteString)
@@ -274,14 +294,16 @@ pathInfoAnswer document paths
     | any (not . isStorePath) paths = pure (ExitFailure 1, BS.empty, bytes "error: path is not in the Nix store")
     | otherwise = do
         validity <- traverse (fixturePathValid document) paths
-        pure (ExitSuccess, bytes (pathInfoJson (zip paths validity)), BS.empty)
+        pure (ExitSuccess, bytes (pathInfoJson document (zip paths validity)), BS.empty)
 
-pathInfoJson :: [(FilePath, Bool)] -> String
-pathInfoJson entries =
+pathInfoJson :: FixtureDocument -> [(FilePath, Bool)] -> String
+pathInfoJson document entries =
     T.unpack . TE.decodeUtf8 . LBS.toStrict . A.encode $
         object
             [ Key.fromText (T.pack path)
-                .= if valid then object ["narHash" .= pseudoHash path, "valid" .= True] else A.Null
+                .= if valid
+                    then object ["narHash" .= pseudoHash path, "narSize" .= narSizeFor document path, "valid" .= True]
+                    else A.Null
             | (path, valid) <- entries
             ]
 

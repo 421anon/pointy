@@ -269,6 +269,9 @@ document =
         , documentLogs = Map.empty
         , documentReferences = Map.empty
         , documentOutputs = Map.empty
+        , documentNarSizes = Map.empty
+        , documentPriorOutPaths = Map.empty
+        , documentPriorCertificates = Map.empty
         }
 
 refreshDocument :: FilePath -> FixtureDocument

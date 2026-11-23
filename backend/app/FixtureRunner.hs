@@ -14,7 +14,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import Fixture.Document (FixtureAgent (..), FixtureAgentEdit (..))
+import Fixture.Document (FixtureAgent (..), FixtureAgentEdit (..), FixtureAgentQuestion (..))
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
@@ -63,25 +63,41 @@ runRpc plan = do
     handle worktree handledInitial event = case textField "type" event of
         Just "prompt" -> do
             let initial = textField "id" event == Just "initial"
+                promptMessage = fromMaybe "" (textField "message" event)
             if initial && not handledInitial
-                then do
-                    outcome <-
-                        if null (agentEditsOf plan)
-                            then pure (Right ())
-                            else applyScriptedEdits worktree (agentEditsOf plan)
-                    case outcome of
-                        Left err -> do
-                            emitObject (assistantEnd ("Fixture agent could not make its scripted edits: " <> err) "error" err)
-                            hFlush stdout
-                            exitWith (ExitFailure 1)
-                        Right () -> do
-                            emitObject (assistantEnd (replyOf plan) "endTurn" "")
-                            emitObject (object ["type" .= ("agent_end" :: T.Text)])
-                            pure True
+                then case matchingQuestion plan promptMessage of
+                    Just question -> do
+                        emitObject $
+                            object
+                                [ "type" .= ("extension_ui_request" :: T.Text)
+                                , "id" .= ("fixture-question-1" :: T.Text)
+                                , "method" .= ("select" :: T.Text)
+                                , "title" .= questionTitle question
+                                , "options" .= (questionOptions question ++ ["Type your own answer"])
+                                ]
+                        pure True
+                    Nothing -> do
+                        outcome <-
+                            if null (agentEditsOf plan)
+                                then pure (Right ())
+                                else applyScriptedEdits worktree (agentEditsOf plan)
+                        case outcome of
+                            Left err -> do
+                                emitObject (assistantEnd ("Fixture agent could not make its scripted edits: " <> err) "error" err)
+                                hFlush stdout
+                                exitWith (ExitFailure 1)
+                            Right () -> do
+                                emitObject (assistantEnd (replyOf plan) "endTurn" "")
+                                emitObject (object ["type" .= ("agent_end" :: T.Text)])
+                                pure True
                 else do
                     emitObject (assistantEnd (replyOf plan) "endTurn" "")
                     emitObject (object ["type" .= ("agent_end" :: T.Text)])
                     pure True
+        Just "extension_ui_response" -> do
+            emitObject (assistantEnd (replyOf plan) "endTurn" "")
+            emitObject (object ["type" .= ("agent_end" :: T.Text)])
+            pure handledInitial
         Just "get_session_stats" -> do
             emitObject $
                 object
@@ -105,6 +121,13 @@ runRpc plan = do
 
 agentEditsOf :: Maybe FixtureAgent -> [FixtureAgentEdit]
 agentEditsOf = maybe [] agentEdits
+
+matchingQuestion :: Maybe FixtureAgent -> T.Text -> Maybe FixtureAgentQuestion
+matchingQuestion plan promptMessage = do
+    question <- agentQuestion =<< plan
+    if not (T.null (questionPromptMatch question)) && questionPromptMatch question `T.isInfixOf` promptMessage
+        then Just question
+        else Nothing
 
 replyOf :: Maybe FixtureAgent -> T.Text
 replyOf = fromMaybe "" . (agentReply =<<)

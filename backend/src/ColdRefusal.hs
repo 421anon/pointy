@@ -2,6 +2,7 @@
 
 module ColdRefusal (
     applyColdRefusals,
+    clearAllColdRefusals,
     clearColdRefusals,
     recordColdRefusal,
 ) where
@@ -19,6 +20,9 @@ recordColdRefusal :: Int -> Text -> Text -> IO ()
 recordColdRefusal stepId commit message =
     modifyMVar_ coldRefusals $ \refusals ->
         pure $ Map.insert stepId (commit, message) refusals
+
+clearAllColdRefusals :: IO ()
+clearAllColdRefusals = modifyMVar_ coldRefusals (const (pure Map.empty))
 
 clearColdRefusals :: Text -> [Int] -> IO ()
 clearColdRefusals commit stepIds =

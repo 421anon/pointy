@@ -4,6 +4,7 @@ module Fixture.Document (
     FixtureDocument (..),
     FixtureAgent (..),
     FixtureAgentEdit (..),
+    FixtureAgentQuestion (..),
     loadDocument,
     jsonAnswer,
     rawAnswer,
@@ -12,6 +13,8 @@ module Fixture.Document (
     derivationOutputs,
     logAnswer,
     coldStorageStatus,
+    forPriorCommit,
+    narSizeFor,
     pseudoHash,
 ) where
 
@@ -22,9 +25,10 @@ import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit, ord)
-import Data.List (isInfixOf, stripPrefix)
+import Data.List (isInfixOf, nub, stripPrefix)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -51,12 +55,22 @@ data FixtureDocument = FixtureDocument
     , documentOutputs :: Map.Map FilePath [FilePath]
     , documentAgent :: Maybe FixtureAgent
     , documentColdStorage :: Maybe (Map.Map String Value)
+    , documentNarSizes :: Map.Map FilePath Integer
+    , documentPriorOutPaths :: Map.Map String Text
+    , documentPriorCertificates :: Map.Map String Text
     }
 
 data FixtureAgent = FixtureAgent
     { agentTitle :: Maybe Text
     , agentReply :: Maybe Text
     , agentEdits :: [FixtureAgentEdit]
+    , agentQuestion :: Maybe FixtureAgentQuestion
+    }
+
+data FixtureAgentQuestion = FixtureAgentQuestion
+    { questionPromptMatch :: Text
+    , questionTitle :: Text
+    , questionOptions :: [Text]
     }
 
 data FixtureAgentEdit = FixtureAgentEdit
@@ -66,20 +80,37 @@ data FixtureAgentEdit = FixtureAgentEdit
     , editReplace :: Maybe Text
     }
 
+instance FromJSON FixtureAgentQuestion where
+    parseJSON = withObject "FixtureAgentQuestion" $ \obj ->
+        FixtureAgentQuestion
+            <$> obj .: "promptMatch"
+            <*> obj .: "title"
+            <*> obj .: "options"
+
+instance ToJSON FixtureAgentQuestion where
+    toJSON question =
+        object
+            [ "promptMatch" .= questionPromptMatch question
+            , "title" .= questionTitle question
+            , "options" .= questionOptions question
+            ]
+
 instance FromJSON FixtureAgent where
     parseJSON = withObject "FixtureAgent" $ \obj ->
         FixtureAgent
             <$> obj .:? "title"
             <*> obj .:? "reply"
             <*> (obj .:? "edits" .!= Object KeyMap.empty >>= parseAgentEdits)
+            <*> obj .:? "question"
 
 instance ToJSON FixtureAgent where
     toJSON agent =
-        object
+        object $
             [ "title" .= agentTitle agent
             , "reply" .= agentReply agent
             , "edits" .= agentEdits agent
             ]
+                ++ maybe [] (\question -> ["question" .= question]) (agentQuestion agent)
 
 instance FromJSON FixtureAgentEdit where
     parseJSON = withObject "FixtureAgentEdit" $ \obj ->
@@ -133,6 +164,9 @@ instance FromJSON FixtureDocument where
             <*> (Map.mapKeys T.unpack <$> obj .:? "outputs" .!= Map.empty)
             <*> obj .:? "agent"
             <*> obj .:? "coldStorage"
+            <*> (Map.mapKeys T.unpack <$> obj .:? "narSizes" .!= Map.empty)
+            <*> (Map.mapKeys T.unpack <$> obj .:? "priorOutPaths" .!= Map.empty)
+            <*> (Map.mapKeys T.unpack <$> obj .:? "priorCertificates" .!= Map.empty)
 
 loadDocument :: FilePath -> IO (Either String FixtureDocument)
 loadDocument path = eitherDecode <$> LBS.readFile path
@@ -150,9 +184,13 @@ appliedAnswer document applyExpr attr
     | "pointy.root or null" `isInfixOf` applyExpr = Right (encodeValue (object ["missing" .= ("linked-data" :: Text)]))
     | "flake.outPath + \"/steps\"" `isInfixOf` applyExpr = Right (encodeValue (object []))
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.projects" = Right (encodeValue (toJSON (projectIds document)))
+    | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.steps", "uploaded.hash" `isInfixOf` applyExpr = Right (encodeValue (stepEvaluationsValue document (Map.keys (documentOutPaths document))))
+    | "uploaded.hash" `isInfixOf` applyExpr = Right (encodeValue (stepEvaluationsValue document (idsIn applyExpr)))
+    | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.steps" = Right (encodeValue (toJSON (Map.keys (documentOutPaths document))))
+    | "stepRefsOf" `isInfixOf` applyExpr = Right (encodeValue (headStepsValue document))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
-    | "stepRefsIn" `isInfixOf` applyExpr = Right (encodeValue (toJSON [(stepId, [] :: [Int]) | stepId <- map stepIdNumber (take 1 (idsIn applyExpr))]))
+    | "stepRefsIn" `isInfixOf` applyExpr = Right (encodeValue (toJSON (inputGraphValue document (take 1 (idsIn applyExpr)))))
     | "genericClosure" `isInfixOf` applyExpr = Right (encodeValue (toJSON [stepBuildValue stepId path | stepId <- Map.keys (documentOutPaths document), Just path <- [statusPathOf document stepId]]))
     | "step.certificate or step" `isInfixOf` applyExpr, attr == "#pointy.steps" = maybe (Left "fixture has no build target for one of the steps") (Right . encodeValue . toJSON . map stepTarget) (traverse (statusPathOf document) (idsIn applyExpr))
     | "step.certificate or step" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
@@ -294,6 +332,102 @@ derivationOutputs document drv = [path | (path, deriver) <- Map.toList (document
 coldStorageStatus :: FixtureDocument -> Text -> Value
 coldStorageStatus document outPath =
     fromMaybe (object ["files" .= ([] :: [Value])]) (documentColdStorage document >>= Map.lookup (T.unpack outPath))
+
+forPriorCommit :: FixtureDocument -> FixtureDocument
+forPriorCommit document =
+    document
+        { documentOutPaths = Map.union (documentPriorOutPaths document) (documentOutPaths document)
+        , documentCertificates = Map.union (documentPriorCertificates document) (documentCertificates document)
+        , documentRaw = Map.union priorRawOutPaths (documentRaw document)
+        }
+  where
+    priorRawOutPaths =
+        Map.fromList
+            [ ("#pointy.steps." ++ stepId ++ ".outPath", path)
+            | (stepId, path) <- Map.toList (documentPriorOutPaths document)
+            ]
+
+narSizeFor :: FixtureDocument -> FilePath -> Integer
+narSizeFor document path = Map.findWithDefault 16384 path (documentNarSizes document)
+
+stepDirectInputs :: FixtureDocument -> String -> [String]
+stepDirectInputs document stepId =
+    nub [ref | ref <- defRefs, ref `elem` upstream]
+  where
+    upstream = case Map.lookup ("#pointy.steps." ++ stepId ++ ".dependencies") (documentJson document) of
+        Just (Array values) -> mapMaybe valueId (Vector.toList values)
+        _ -> []
+    defRefs = case Map.lookup ("#pointy.steps." ++ stepId ++ ".def") (documentJson document) of
+        Just (Object def) -> maybe [] collectStepRefs (KeyMap.lookup "args" def)
+        _ -> []
+
+collectStepRefs :: Value -> [String]
+collectStepRefs (Object obj)
+    | KeyMap.lookup "type" obj == Just (String "derivation") = []
+    | otherwise =
+        maybe [] (\v -> maybe [] (: []) (valueId v)) (KeyMap.lookup "step" obj)
+            ++ concatMap collectStepRefs (KeyMap.elems obj)
+collectStepRefs (Array values) = concatMap collectStepRefs (Vector.toList values)
+collectStepRefs _ = []
+
+inputGraphValue :: FixtureDocument -> [String] -> [(Int, [Int])]
+inputGraphValue document = go Set.empty []
+  where
+    go _ acc [] = reverse acc
+    go seen acc (stepId : rest)
+        | Set.member stepId seen = go seen acc rest
+        | otherwise =
+            let inputs = stepDirectInputs document stepId
+                entry = (fromMaybe 0 (readMaybe stepId), mapMaybe readMaybe inputs)
+             in go (Set.insert stepId seen) (entry : acc) (rest ++ inputs)
+
+headStepsValue :: FixtureDocument -> Value
+headStepsValue document =
+    object
+        [ Key.fromString stepId
+            .= object
+                [ "name" .= stepNameFromJson document stepId
+                , "inputs" .= (mapMaybe readMaybe (stepDirectInputs document stepId) :: [Int])
+                , "output" .= output
+                , "certificate" .= fromMaybe output (statusPathOf document stepId)
+                ]
+        | (stepId, output) <- Map.toList (documentOutPaths document)
+        ]
+
+stepEvaluationsValue :: FixtureDocument -> [String] -> Value
+stepEvaluationsValue document stepIds =
+    toJSON
+        [ object
+            [ "id" .= (fromMaybe 0 (readMaybe stepId) :: Int)
+            , "name" .= stepNameFromJson document stepId
+            , "kind" .= stepKindFromJson document stepId
+            , "path" .= Map.lookup stepId (documentOutPaths document)
+            ]
+        | stepId <- stepIds
+        ]
+
+stepNameFromJson :: FixtureDocument -> String -> Text
+stepNameFromJson document stepId = case Map.lookup ("#pointy.steps." ++ stepId ++ ".def") (documentJson document) of
+    Just (Object def) -> case KeyMap.lookup "name" def of
+        Just (String name) -> name
+        _ -> ""
+    _ -> ""
+
+stepKindFromJson :: FixtureDocument -> String -> Text
+stepKindFromJson document stepId = case Map.lookup ("#pointy.steps." ++ stepId ++ ".def") (documentJson document) of
+    Just (Object def) -> case KeyMap.lookup "args" def of
+        Just (Object args)
+            | hasHash "uploaded" args -> "upload"
+            | hasHash "downloaded" args -> "download"
+        _ -> "derived"
+    _ -> "derived"
+  where
+    hasHash field args = case KeyMap.lookup field args of
+        Just (Object nested) -> case KeyMap.lookup "hash" nested of
+            Just Null -> False
+            Just _ -> True
+            Nothing -> False
+        _ -> False
 
 logAnswer :: FixtureDocument -> FilePath -> IO (Maybe String)
 logAnswer document drv = case Map.lookup drv (documentLogs document) of

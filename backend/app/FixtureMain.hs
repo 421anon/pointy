@@ -15,9 +15,9 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Fixture.Document (FixtureAgent (..), FixtureDocument (..), loadDocument)
 import Fixture.Server (fixtureApp)
-import Interpreters.Fixture (newFixtureState, resetFixture, runFixture, startFixtureWatcher)
+import Interpreters.Fixture (newFixtureStateAtHead, resetFixture, runFixture, startFixtureWatcher)
 import Processes (cli)
-import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, removeFile, setCurrentDirectory)
+import System.Directory (createDirectoryIfMissing, getPermissions, removeDirectoryRecursive, removeFile, setCurrentDirectory, setOwnerExecutable, setPermissions)
 import System.Environment (getArgs, getExecutablePath, setEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeDirectory, (</>))
@@ -60,12 +60,15 @@ run options = do
         configPath = workDir </> "config.toml"
         keyfile = workDir </> "key"
         planPath = workDir </> "agent-plan.json"
+        capacityCommand = workDir </> "storage-capacity"
     createDirectoryIfMissing True home
     setEnv "HOME" home
     setEnv "XDG_CACHE_HOME" (workDir </> "cache")
     setEnv "GIT_CONFIG_GLOBAL" (workDir </> "gitconfig")
     writeFile (workDir </> "gitconfig") "[safe]\n\tdirectory = *\n"
     writeFile keyfile ""
+    writeCapacityCommand capacityCommand
+    setEnv "POINTY_STORAGE_CAPACITY_COMMAND" capacityCommand
     resetAgentSessions
     document <- either (\err -> error ("fixture document: " ++ err)) pure =<< loadDocument (optionState options)
     exeDir <- takeDirectory <$> getExecutablePath
@@ -90,7 +93,8 @@ run options = do
     config <- loadConfig configPath
     setCurrentDirectory workDir
     ensureUserRepo config
-    state <- newFixtureState document
+    headCommit <- readBranchHead origin (documentBranch document)
+    state <- newFixtureStateAtHead document headCommit
     let reset = do
             resetFixture state
             resetAgentSessions
@@ -175,6 +179,21 @@ cloneRepo source target = do
     case outcome of
         (ExitSuccess, _, _) -> pure ()
         (ExitFailure code, _, err) -> error ("git clone --bare " ++ source ++ " failed (exit " ++ show code ++ "): " ++ err)
+
+readBranchHead :: FilePath -> T.Text -> IO String
+readBranchHead repo branch = do
+    outcome <- cli "git" ["-C", repo, "rev-parse", "refs/heads/" ++ T.unpack branch]
+    case outcome of
+        (ExitSuccess, out, _) -> pure (T.unpack (T.strip (T.pack out)))
+        (ExitFailure code, _, err) -> error ("git rev-parse failed (exit " ++ show code ++ "): " ++ err)
+
+writeCapacityCommand :: FilePath -> IO ()
+writeCapacityCommand path = do
+    writeFile
+        path
+        "#!/bin/sh\nprintf '%s\\n' '{\"kind\":\"quota\",\"label\":\"account quota\",\"totalBytes\":2147483648}'\n"
+    permissions <- getPermissions path
+    setPermissions path (setOwnerExecutable True permissions)
 
 removePath :: FilePath -> IO ()
 removePath path = do
