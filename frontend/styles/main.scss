@@ -2053,10 +2053,10 @@ $delimited-grid-row-height: 28px;
   padding: var(--spacing-xs) var(--spacing-md);
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--bg-secondary);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-elevated);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
-  opacity: 0.88;
   margin-right: auto;
 
   &:has(> .artifact-viewer-revision-action:last-child) {
