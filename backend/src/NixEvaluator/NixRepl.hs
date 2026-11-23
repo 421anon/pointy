@@ -318,7 +318,7 @@ nextLine handle leftover = do
     case BS.uncons rest of
         Just (_, after) -> pure (Just (before, after))
         Nothing -> do
-            chunk <- BS.hGet handle 65536
+            chunk <- BS.hGetSome handle 65536
             if BS.null chunk
                 then pure $ if BS.null leftover then Nothing else Just (leftover, BS.empty)
                 else nextLine handle (leftover <> chunk)

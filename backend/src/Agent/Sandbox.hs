@@ -26,7 +26,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import NixStore (NixStore (..), nixStore)
+import NixStore (NixStore (..), nixStore, rootedPath)
 import Storage (scratchDirectory)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, doesPathExist, getHomeDirectory)
 import System.Environment (getEnvironment, lookupEnv)
@@ -57,7 +57,7 @@ nixDaemonBindArgs = do
                 Nothing -> pure []
                 Just root -> do
                     rootExists <- doesPathExist root
-                    pure (if rootExists then ["--ro-bind", root, root] else [])
+                    pure (if rootExists then bindPathReadOnly root ++ ["--ro-bind", rootedPath "/nix/store", "/nix/store"] else [])
             pure ((if socketExists then ["--bind", socket, socket] else []) ++ rootArgs)
 
 bindPath :: FilePath -> [String]
