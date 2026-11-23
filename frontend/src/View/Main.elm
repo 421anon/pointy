@@ -199,22 +199,33 @@ viewNewerRevisionNotice model stepId { revision, built } =
     let
         shortRevision =
             String.left 12 revision
+
+        mStep =
+            stepAtRevision model stepId revision
+
+        isBuilding =
+            Maybe.andThen (stepStatus >> ApiData.toMaybe) mStep == Just Model.StatusRunning
     in
     Html.div [ Html.Attributes.class "artifact-viewer-revision-notice", Html.Attributes.attribute "role" "status" ]
-        (if built then
-            [ Html.text ("Newer revision " ++ shortRevision ++ " is built.")
-            , Html.button
-                [ Html.Attributes.class "artifact-viewer-revision-action"
-                , Html.Attributes.type_ "button"
-                , Html.Events.onClick (Actions.showArtifactRevision revision)
-                ]
-                [ Html.text "View newer revision" ]
-            ]
+        (Maybe.unwrap [] (viewRevisionStatusDot model stepId) mStep
+            ++ (if built then
+                    [ Html.text ("Newer revision " ++ shortRevision ++ " is built.")
+                    , Html.button
+                        [ Html.Attributes.class "artifact-viewer-revision-action"
+                        , Html.Attributes.type_ "button"
+                        , Html.Events.onClick (Actions.showArtifactRevision revision)
+                        ]
+                        [ Html.text "View newer revision" ]
+                    ]
 
-         else
-            Maybe.unwrap [ Html.text ("Newer revision " ++ shortRevision ++ " is not built yet.") ]
-                (viewUnbuiltRevisionStatus model stepId shortRevision)
-                (stepAtRevision model stepId revision)
+                else if isBuilding then
+                    [ Html.text ("Newer revision " ++ shortRevision ++ " is building.") ]
+
+                else
+                    [ Html.text ("Newer revision " ++ shortRevision ++ " is not built yet.")
+                    , Html.viewMaybe (viewRunRevisionButton stepId) mStep
+                    ]
+               )
         )
 
 
@@ -230,27 +241,31 @@ stepAtRevision model stepId revision =
             )
 
 
-viewUnbuiltRevisionStatus : Model -> Int -> String -> ( Model.StepRecord, StepConfigEntry ) -> List (Html (Flow Model ()))
-viewUnbuiltRevisionStatus model stepId shortRevision ( step, entry ) =
+stepStatus : ( Model.StepRecord, StepConfigEntry ) -> ApiData Model.Status
+stepStatus ( step, entry ) =
+    TableSpec.getStatus (Specs.steps step.type_ entry) step
+
+
+viewRevisionStatusDot : Model -> Int -> ( Model.StepRecord, StepConfigEntry ) -> List (Html (Flow Model ()))
+viewRevisionStatusDot model stepId ( step, entry ) =
     let
-        spec =
-            Specs.steps step.type_ entry
-
-        status =
-            TableSpec.getStatus spec step
-
         stepRevision =
             Model.stepRevision model step
 
         log =
             Dict.get (Model.stepLogKey stepId stepRevision) (Model.getStepLogs model)
                 |> Maybe.withDefault NotAsked
+    in
+    [ View.Table.viewStepRecordStatus step.type_ entry False step
+    , View.Table.viewStepRecordStatusPopover step.type_ entry (Model.coldInputsAt stepId stepRevision model) log False step
+    ]
 
-        isBuilding =
-            ApiData.toMaybe status == Just Model.StatusRunning
 
+viewRunRevisionButton : Int -> ( Model.StepRecord, StepConfigEntry ) -> Html (Flow Model ())
+viewRunRevisionButton stepId ( step, entry ) =
+    let
         canRun =
-            case status of
+            case stepStatus ( step, entry ) of
                 Loading _ ->
                     False
 
@@ -263,27 +278,14 @@ viewUnbuiltRevisionStatus model stepId shortRevision ( step, entry ) =
                 _ ->
                     True
     in
-    [ View.Table.viewStepRecordStatus step.type_ entry False step
-    , View.Table.viewStepRecordStatusPopover step.type_ entry (Model.coldInputsAt stepId stepRevision model) log False step
-    , Html.text
-        ("Newer revision "
-            ++ shortRevision
-            ++ (if isBuilding then
-                    " is building."
-
-                else
-                    " is not built yet."
-               )
-        )
-    , Html.viewIf canRun
+    Html.viewIf canRun
         (Html.button
             [ Html.Attributes.class "artifact-viewer-revision-action"
             , Html.Attributes.type_ "button"
-            , Html.Events.onClick (Actions.runStep spec stepId)
+            , Html.Events.onClick (Actions.runStep (Specs.steps step.type_ entry) stepId)
             ]
             [ iconCustom True "play_arrow" [ Html.Attributes.attribute "aria-hidden" "true" ], Html.text "Run" ]
         )
-    ]
 
 
 view404 : Html (Flow Model ())
