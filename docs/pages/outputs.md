@@ -30,7 +30,7 @@ Files with a browser-friendly type — HTML, plain text, CSS, XML, JSON, JavaScr
 
 ![An HTML output opened in the full-window view, with the Ask agent, Open agent, and View in Pointy buttons at the bottom right.](screenshots/light/output-file-external-view.png)
 
-When the step's current version may produce a different output from the one shown, the view says so. Until that output is built, the notice shows the current version's status dot and a **Run** button that builds it; while it builds, the notice says so and the dot shows it running. Once the output is built and differs, **View newer revision** opens it. The chat in this view works with the step's current version, so **Run** in the notice or in a step mention builds the current version, not the one shown; when that build produces output, the view switches to it.
+When the step's current version may produce a different output from the one shown, the view says so, with the current version's status dot. Until that output is built, the notice has a **Run** button that builds it; while it builds, the notice says so and the dot shows it running. Once the output is built and differs, the dot turns green and **View newer revision** opens it. The chat in this view works with the step's current version, so **Run** in the notice or in a step mention builds the current version, not the one shown; when that build produces output, the view switches to it.
 
 Images open inline, and PDB output files have an interactive molecular viewer. Zip archives can be expanded like directories, so you can inspect their contents without downloading and unpacking the whole archive. The archive's download button still retrieves the zip file itself.
 
