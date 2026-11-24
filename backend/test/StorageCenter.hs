@@ -18,7 +18,8 @@ import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Interpreters.Fixture (newFixtureState, runFixture)
-import Handlers.Storage (HeadStep (..), pathOwners)
+import Handlers.Storage (HeadStep (..), RunningJob (..), pathOwners, runningRefusal, runningStepStates)
+import BuildRunner (JobComment (..), encodeJobComment, parseSlurmJobLine)
 import StepEvaluations (CachedStep (..), EvaluationRecord, StepEvaluations, decodeEvaluationLog, emptyStepEvaluations, encodeEvaluationRecords, recordEvaluation)
 import StorageBus (StorageBlocker (..), StorageCapacity (..), StorageRevision (..), parseStorageCapacity, revisionMovable)
 import StorageHistory (ColdSummary (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
@@ -31,6 +32,7 @@ main = do
     checkDirectReaders
     checkHeadStepInputs
     checkBlockerShape
+    checkRunningBlocker
     checkCold
     checkRevisionMovable
     checkCapacity
@@ -102,6 +104,36 @@ checkBlockerShape = do
         "an error blocker carries its message"
         (object ["kind" .= ("error" :: Text), "message" .= ("unknown" :: Text)])
         (toJSON (StorageBlockerError "unknown"))
+
+checkRunningBlocker :: IO ()
+checkRunningBlocker = do
+    let headSteps =
+            Map.fromList
+                [ (1, HeadStep "owner" Set.empty "/nix/store/owner-out" "/nix/store/owner-cert")
+                , (2, HeadStep "reader" (Set.singleton 1) "/nix/store/reader-out" "/nix/store/reader-cert")
+                , (3, HeadStep "extras-reader" (Set.singleton 1) "/nix/store/other-out" "/nix/store/other-cert")
+                ]
+        certificateOnly = RunningJob "RUNNING" "step" "/nix/store/reader-cert"
+    assertEqual
+        "a certificate-only reader run does not block the output"
+        Nothing
+        (runningRefusal headSteps (Map.singleton 2 certificateOnly) 1)
+    assertEqual
+        "a full build of the reader blocks the output"
+        (Just (StorageBlockerStep 2 "reader" "running"))
+        (runningRefusal headSteps (Map.singleton 2 (RunningJob "RUNNING" "step" "/nix/store/reader-out")) 1)
+    assertEqual
+        "an extras build blocks the output it reads"
+        (Just (StorageBlockerStep 3 "extras-reader" "queued"))
+        (runningRefusal headSteps (Map.singleton 3 (RunningJob "PENDING" "extras" "/nix/store/other-cert")) 1)
+    assertEqual
+        "the owner's own certificate run still blocks its output"
+        (Just (StorageBlockerStep 1 "owner" "running"))
+        (runningRefusal headSteps (Map.singleton 1 (RunningJob "RUNNING" "step" "/nix/store/owner-cert")) 1)
+    assertEqual
+        "a squeue line keeps the step's job kind and certificate path"
+        (Just (Map.singleton 2 certificateOnly))
+        (runningStepStates <$> traverse parseSlurmJobLine ["42|pointy-nix-build-abc|" ++ encodeJobComment (JobComment "step" 2 "c0ffee" "/nix/store/reader-cert") ++ "|RUNNING|1:00|None"])
 
 checkCold :: IO ()
 checkCold = do

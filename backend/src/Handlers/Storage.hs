@@ -11,6 +11,9 @@ module Handlers.Storage (
     onloadRevisionHandler,
     pathOwners,
     HeadStep (..),
+    RunningJob (..),
+    runningRefusal,
+    runningStepStates,
     runStorageCenter,
     storageHandler,
 ) where
@@ -326,38 +329,48 @@ refuseOffloadRunning outPath = do
             throwError err409{errBody = "This output is being moved to cold storage. Wait for the move to finish, then try again."}
         _ -> pure ()
 
-runningSteps :: AppM (Either Text (Map Int Text))
+runningSteps :: AppM (Either Text (Map Int RunningJob))
 runningSteps = do
     result <- lift (querySlurm AllJobs)
     pure $ case result of
         Left err -> Left (T.pack err)
         Right output -> Right (runningStepStates (mapMaybe parseSlurmJobLine (lines output)))
 
-runningStepStates :: [SlurmJob] -> Map Int Text
+data RunningJob = RunningJob
+    { runningJobState :: Text
+    , runningJobKind :: String
+    , runningJobOutPath :: String
+    }
+    deriving (Eq, Show)
+
+runningStepStates :: [SlurmJob] -> Map Int RunningJob
 runningStepStates jobs =
     Map.fromList
-        [ (jobCommentStep comment, T.pack (slurmJobState job))
+        [ (jobCommentStep comment, RunningJob (T.pack (slurmJobState job)) (jobCommentKind comment) (jobCommentOutPath comment))
         | job <- jobs
         , isRunningState (slurmJobState job)
         , Just comment <- [decodeJobComment =<< slurmJobComment job]
         , jobCommentKind comment == "step" || jobCommentKind comment == "extras"
         ]
 
-runningRefusal :: Map Int HeadStep -> Map Int Text -> Int -> Maybe StorageBlocker
+runningRefusal :: Map Int HeadStep -> Map Int RunningJob -> Int -> Maybe StorageBlocker
 runningRefusal headSteps running stepId =
     case Map.lookup stepId running of
-        Just jobState -> Just (blockerFor stepId jobState)
+        Just job -> Just (blockerFor stepId job)
         Nothing ->
-            case sortOn fst [(reader, jobState) | reader <- Set.toList readers, Just jobState <- [Map.lookup reader running]] of
+            case sortOn fst [(reader, job) | reader <- Set.toList readers, Just job <- [Map.lookup reader running], buildsOwnOutput reader job] of
                 [] -> Nothing
-                (reader, jobState) : _ -> Just (blockerFor reader jobState)
+                (reader, job) : _ -> Just (blockerFor reader job)
   where
     readers = directReadersOf (Map.map headStepInputs headSteps) stepId
-    blockerFor blockerId jobState =
+    buildsOwnOutput reader job = case Map.lookup reader headSteps of
+        Just step -> runningJobKind job /= "step" || runningJobOutPath job == T.unpack (headStepOutput step)
+        Nothing -> True
+    blockerFor blockerId job =
         StorageBlockerStep
             { blockerStep = blockerId
             , blockerName = stepName blockerId
-            , blockerState = if jobState `elem` ["PENDING", "CONFIGURING"] then "queued" else "running"
+            , blockerState = if runningJobState job `elem` ["PENDING", "CONFIGURING"] then "queued" else "running"
             }
     stepName blockerId = case Map.lookup blockerId headSteps of
         Just step | not (T.null (headStepName step)) -> headStepName step
@@ -410,7 +423,7 @@ runStorageCenter = do
                     }
                 )
 
-refresh :: Invalidation -> Map Int Text -> Eff AppEffects ()
+refresh :: Invalidation -> Map Int RunningJob -> Eff AppEffects ()
 refresh work running = do
     repoPath <- liftIO userRepoPath
     previous <- liftIO (readTVarIO cachesVar)
