@@ -189,17 +189,18 @@ submitGraph halted ctx graph stepIds = do
     targets <- resolveStepTargets ctx stepIds
     built <- validPaths (Set.toList (Set.fromList [path | Right target <- Map.elems targets, path <- [stepTargetPath target, stepTargetOutput target]]))
     let isCertified certificate output = maybe ((&&) <$> isBuilt certificate <*> pathValid output) (return . Set.isSubsetOf (Set.fromList [certificate, output])) built
+        isOutputBuilt output = maybe (pathValid output) (return . Set.member output) built
         submitOne outcomes (sid, target) = do
             stop <- liftIO halted
             if stop
                 then return outcomes
                 else do
-                    outcome <- submitStep ctx isCertified outcomes (Map.findWithDefault [] sid graph) sid target
+                    outcome <- submitStep ctx isCertified isOutputBuilt outcomes (Map.findWithDefault [] sid graph) sid target
                     return $ Map.insert sid outcome outcomes
     foldM submitOne Map.empty [(sid, target) | sid <- stepIds, Just target <- [Map.lookup sid targets]]
 
-submitStep :: App es => ReadRepoContext -> (FilePath -> FilePath -> Eff es Bool) -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Either String StepTarget -> Eff es SubmitOutcome
-submitStep ctx isCertified outcomes deps sid resolvedTarget
+submitStep :: App es => ReadRepoContext -> (FilePath -> FilePath -> Eff es Bool) -> (FilePath -> Eff es Bool) -> Map.Map Int SubmitOutcome -> [Int] -> Int -> Either String StepTarget -> Eff es SubmitOutcome
+submitStep ctx isCertified isOutputBuilt outcomes deps sid resolvedTarget
     | not (null failedOn) =
         return $ NotSubmitted $ "dependency step(s) " ++ show failedOn ++ " could not be scheduled"
     | otherwise = do
@@ -218,7 +219,8 @@ submitStep ctx isCertified outcomes deps sid resolvedTarget
                             (rootedTarget, root) <- ExceptT $ ensureRooted ctx sid target
                             return $ Enqueued (stepTargetPath rootedTarget) buildKey existing root
                         else do
-                            check <- checkOffloadedInputs ctx sid builtInputs
+                            outputBuilt <- lift $ isOutputBuilt (stepTargetOutput target)
+                            check <- if outputBuilt then return InputsLocal else checkOffloadedInputs ctx sid builtInputs
                             case (check, coldRoots) of
                                 (InputsLocal, []) -> submitBuild ctx sid depJobIds certificate target buildKey
                                 (InputsLocal, _) -> return (coldRefusal coldRoots [])
