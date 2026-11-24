@@ -1,0 +1,12 @@
+tex-math math {
+  font-family: "STIX Two Math", math;
+  font-size: 1.15em;
+}
+
+tex-math[display="block"] {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: var(--spacing-xs) 0;
+}

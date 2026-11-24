@@ -76,6 +76,10 @@ A step reference in a reply links to the step's output in the folder you have op
 
 When a run fails, or a step fails certification, open the step's log and choose **Investigate with agent**. Pointy starts a new chat and sends the step's build log to the agent right away, asking it to investigate the failure.
 
+### Formulas
+
+Replies show formulas typeset, both inline and on their own line. The agent writes them in TeX; if a formula has a TeX error, the chat shows its source and the error in red instead.
+
 ### Long conversations and errors
 
 In a long chat, Pointy shows a strip under the chat title when the conversation has used about half of the context the model can consider at once. It tells you the percentage and token counts in use and offers **Compact**. While the agent is not working, **Compact** asks it to summarize the earlier conversation to free space. The strip says **Compacting the conversation to free context.** while that runs. If compaction fails, the strip shows the error and a **Try again** button. Restate important constraints after compacting if you need to, or start a new chat for a separate task.
