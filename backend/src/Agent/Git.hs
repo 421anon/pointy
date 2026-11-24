@@ -80,6 +80,7 @@ import qualified Data.Text.IO as TIO
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import DependencyRefs (decodeStepDefinitions, flakeStepDefinitionsExpression, rewriteDependencyRefs, stepRelocations, stripReferencePaths)
 import EffectRunner (runAppEffects)
+import FlakeInputs (ensureFlakeInputs)
 import GHC.Generics (Generic)
 import Handlers.Statuses (broadcastProjectStatus, broadcastStatusForStepProjects)
 import Handlers.StepReview (readableStepReviews)
@@ -267,6 +268,7 @@ refreshSessionBase session_ = do
                 pure ["Warning: could not fetch latest repo state: " <> T.pack err]
     repoPath <- liftIO userRepoPath
     latest <- stripOutput <$> runGitChecked repoPath ["rev-parse", T.unpack (targetBranch session_)]
+    liftIO $ ensureFlakeInputs repoPath (T.unpack latest)
     worktreeExists <- liftIO $ doesDirectoryExist (worktreePath session_)
     if latest == baseCommit session_ || not worktreeExists
         then return (session_, fetchNotes, Nothing)

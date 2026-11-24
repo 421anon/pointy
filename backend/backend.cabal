@@ -39,6 +39,7 @@ library
     EffectRunner
     Effects
     Fixture.Document
+    FlakeInputs
     Fixture.Server
     Handlers.Agent
     Handlers.ChatSearch
@@ -282,6 +283,21 @@ test-suite download-metadata
     , backend
     , base
     , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite flake-inputs
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          FlakeInputArchive.hs
+  build-depends:
+    , backend
+    , base
+    , directory
+    , filepath
+    , process
+    , temporary
 
   hs-source-dirs:   test
   default-language: Haskell2010

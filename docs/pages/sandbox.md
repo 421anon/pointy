@@ -52,6 +52,8 @@ The module grants the `backend` user a narrow polkit rule for managing systemd u
 
 The bundled `pointy-step-shell` extension gives agents a `step_shell` tool that runs a command in a step's build environment through the tool sandbox's `bash`, under the same limits. It evaluates the step from the session worktree, including unapplied edits, and refuses to run when an upstream step has no output, so it never builds one. Otherwise it sources `nix print-dev-env` of the step's derivation and adds the derivation's `devPackages` passthru to `PATH`. Templates whose tools are not build inputs, such as a script template that wraps its interpreters in its install phase, list them there; the passthru does not change the derivation's hash. The command runs in `$HOME/steps/<id>/`, which holds the step's `srcFiles` linked from the worktree, each upstream output linked as `<id>/`, `out/`, and any files the agent left there earlier.
 
+The tool sandbox has no network and no Git credentials, so it resolves the user-repo flake's inputs from the Nix store. Before a turn, the backend archives the target branch's locked inputs with `nix flake archive` when `flake.lock` changes, and registers a GC root for every input under `/home/backend/.local/state/pointy/flake-inputs/<flake-lock-blob>/`. It keeps the current and previous lock's roots; older ones are removed.
+
 ### Placeholder expansion
 
 For a normal turn, placeholders in `sbox-args` (tool sandbox) and `runner-args` (runner sandbox) are expanded before the process starts:

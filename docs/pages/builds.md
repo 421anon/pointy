@@ -46,3 +46,5 @@ When a watched run ends successfully, the backend registers output roots with `n
 - extras outputs are rooted.
 
 Output roots are created only on run paths. A build that finished while nothing watched it, a status probe, a review, and an ingested upload create no output root. Output roots remain until an explicit revision delete (`POST /storage/delete` or **Delete** in the [Storage panel](storage-panel.md)) removes both the output root and its matching certificate root before calling `nix-store --delete`. A GC root is a reference, not a backup: removing one permits collection and can make old share links or reviewed outputs unavailable.
+
+The agent's step shell needs the user-repo flake's inputs in the store, because its sandbox has no network or Git credentials. When the target branch's `flake.lock` changes, the backend runs `nix flake archive` against the new head and registers a root for every input under `/home/backend/.local/state/pointy/flake-inputs/<flake-lock-blob>/`. It keeps the current and previous lock's roots and removes older ones. The archive runs before a turn, outside the sandbox.
