@@ -449,6 +449,24 @@ test-suite certificate-status
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite build-log-mirror
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          BuildLogMirror.hs
+  ghc-options:      -threaded
+  build-depends:
+    , aeson
+    , backend
+    , base
+    , bytestring
+    , directory
+    , effectful
+    , filepath
+    , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite step-log-view
   import:           warnings
   type:             exitcode-stdio-1.0

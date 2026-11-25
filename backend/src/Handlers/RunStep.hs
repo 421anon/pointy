@@ -16,7 +16,7 @@ module Handlers.RunStep (
 ) where
 
 import Bisect (bisectBatch)
-import BuildLog (LogAccess (..), resolveBuildLog, validPaths)
+import BuildLog (LogAccess (..), mirrorBuildLog, resolveBuildLog, validPaths)
 import BuildRunner (BuildKey (..), JobComment (..), JobId (..), SlurmJob (..), StepRequirements (..), buildKeyForOutPath, cancel, decodeJobComment, encodeJobComment, isDerivationPath, isRunningState, queryJobIds, querySlurmJobs, realiseCommand, runningJobNames, submitAndWait, submitJob, waitForCompletion)
 import Certificates (renderIdList)
 import ClusterBus (buildingSteps, clearBuildRequest, markQueued, requestBuild, requestStop, stopRequested, takeStopRequest)
@@ -367,7 +367,9 @@ finishStep ctx (sid, outcome) = case outcome of
                 registerCertificationRoots ctx sid certificate
                 liftIO outputsBuilt
                 broadcastSingleStepForProjects sid targetCommitText certificate
-            else broadcastFailedStepForProjects sid targetCommitText
+            else do
+                mirrorBuildLog certificate
+                broadcastFailedStepForProjects sid targetCommitText
         broadcastStepCertificateAtMovedHead sid targetCommitText
         when certified $ buildExtras ctx sid
     NotSubmitted err -> do
@@ -666,7 +668,9 @@ watchRestoredJob ctx comment job = do
         then do
             registerCertificationRoots ctx stepId certificate
             broadcastSingleStepForProjects stepId commitText certificate
-        else broadcastFailedStepForProjects stepId commitText
+        else do
+            mirrorBuildLog certificate
+            broadcastFailedStepForProjects stepId commitText
     broadcastStepCertificateAtMovedHead stepId commitText
     when certified $ buildExtras ctx stepId
 

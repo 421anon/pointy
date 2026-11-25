@@ -10,6 +10,10 @@ module BuildLog (
     isStorePath,
     lookupDeriver,
     lastMeaningfulLine,
+    mirrorBuildLog,
+    mirrorDirectory,
+    mirroredLog,
+    storeMirroredLog,
     StepStore,
     buildStepStore,
     rawStatusesBatched,
@@ -19,7 +23,8 @@ module BuildLog (
 import Bisect (bisectBatch)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
-import Control.Monad (forM_, guard, join, unless, (>=>))
+import Control.Exception (IOException, try)
+import Control.Monad (forM_, guard, join, unless, when, (>=>))
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (FromJSON (..), Object, Value (Null, Object), eitherDecodeStrict, withObject, (.:), (.:?), (.!=))
@@ -39,7 +44,11 @@ import qualified Data.Text.Encoding as TE
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift), (:>), withEffToIO)
 import Effectful.Exception (bracket_)
 import Effects (LogStamp (..), Nix, localLogStamp, pathValid, runNixStoreCli)
+import System.Directory (createDirectoryIfMissing, doesFileExist, renameFile)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
+import System.FilePath (takeFileName, (</>))
+import System.IO (hClose, openBinaryTempFile)
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (runNix)
 
@@ -158,14 +167,91 @@ logAvailable LocalLogs drv = isJust <$> localLogStamp drv
 logAvailable RemoteLogs _ = return True
 
 fetchStepLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> Eff es (Maybe ByteString)
-fetchStepLog access drv = do
-    available <- logAvailable access drv
-    if available then nonEmptyLog <$> runLog access ["log", drv] else return Nothing
+fetchStepLog access drv = case access of
+    LocalLogs -> do
+        mirrored <- liftIO (mirroredLog drv)
+        case mirrored of
+            Just buildLog -> return (Just buildLog)
+            Nothing -> localStoreLog access drv ["log", drv]
+    RemoteLogs -> remoteLog access drv ["log", drv]
 
 fetchInputLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> Eff es (Maybe ByteString)
-fetchInputLog access drv = do
+fetchInputLog access drv = case access of
+    LocalLogs -> do
+        mirrored <- liftIO (mirroredLog drv)
+        case mirrored of
+            Just buildLog -> return (Just buildLog)
+            Nothing -> localStoreLog access drv ["--offline", "log", drv]
+    RemoteLogs -> remoteLog access drv ["--offline", "log", drv]
+
+localStoreLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> [String] -> Eff es (Maybe ByteString)
+localStoreLog access drv args = do
     available <- logAvailable access drv
-    if available then nonEmptyLog <$> runLog access ["--offline", "log", drv] else return Nothing
+    if available then nonEmptyLog <$> runLog access args else return Nothing
+
+remoteLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> [String] -> Eff es (Maybe ByteString)
+remoteLog access drv args = do
+    fetched <- nonEmptyLog <$> runLog access args
+    case fetched of
+        Just buildLog -> return (Just buildLog)
+        Nothing -> liftIO (mirroredLog drv)
+
+mirrorDirectory :: IO (Maybe FilePath)
+mirrorDirectory = do
+    configured <- lookupEnv "POINTY_BUILD_LOG_MIRROR"
+    pure $ case configured of
+        Just directory | not (null directory) -> Just directory
+        _ -> Nothing
+
+mirrorLogPath :: FilePath -> FilePath -> FilePath
+mirrorLogPath directory drv = directory </> takeFileName drv
+
+mirroredLog :: FilePath -> IO (Maybe ByteString)
+mirroredLog drv = do
+    configured <- mirrorDirectory
+    case configured of
+        Nothing -> pure Nothing
+        Just directory -> do
+            let path = mirrorLogPath directory drv
+            outcome <-
+                try
+                    ( do
+                        exists <- doesFileExist path
+                        if exists then Just <$> BS.readFile path else pure Nothing
+                    ) ::
+                    IO (Either IOException (Maybe ByteString))
+            pure (either (const Nothing) id outcome)
+
+storeMirroredLog :: FilePath -> ByteString -> IO ()
+storeMirroredLog drv buildLog = do
+    configured <- mirrorDirectory
+    case configured of
+        Nothing -> pure ()
+        Just directory -> do
+            let destination = mirrorLogPath directory drv
+            outcome <-
+                try
+                    ( do
+                        createDirectoryIfMissing True directory
+                        (temporary, handle) <- openBinaryTempFile directory (takeFileName drv ++ ".tmp")
+                        BS.hPut handle buildLog
+                        hClose handle
+                        renameFile temporary destination
+                    ) ::
+                    IO (Either IOException ())
+            pure (either (const ()) id outcome)
+
+mirrorBuildLog :: (Nix :> es, IOE :> es) => FilePath -> Eff es ()
+mirrorBuildLog certificate = do
+    configured <- liftIO mirrorDirectory
+    when (isJust configured) $ do
+        mDrv <- lookupDeriver certificate
+        case mDrv of
+            Nothing -> return ()
+            Just drv -> do
+                resolved <- resolveBuildLog RemoteLogs drv
+                forM_ resolved $ \entry ->
+                    liftIO $ storeMirroredLog (resolvedDrv entry) (resolvedLog entry)
 
 {-# NOINLINE localLogLineCache #-}
 localLogLineCache :: IORef (Map FilePath (LogStamp, Maybe (Maybe Text)))
@@ -173,6 +259,13 @@ localLogLineCache = unsafePerformIO (newIORef Map.empty)
 
 localLogLine :: (Nix :> es, IOE :> es) => FilePath -> Eff es (Maybe (Maybe Text))
 localLogLine drv = do
+    mirrored <- liftIO (mirroredLog drv)
+    case mirrored of
+        Just buildLog -> return (Just (lastMeaningfulLine buildLog))
+        Nothing -> localStoreLogLine drv
+
+localStoreLogLine :: (Nix :> es, IOE :> es) => FilePath -> Eff es (Maybe (Maybe Text))
+localStoreLogLine drv = do
     mStamp <- localLogStamp drv
     case mStamp of
         Nothing -> return Nothing

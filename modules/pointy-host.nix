@@ -66,6 +66,7 @@ let
   }
   // lib.optionalAttrs (cfg.storeUrl != null) { NIX_REMOTE = cfg.storeUrl; }
   // lib.optionalAttrs (cfg.scratchDirectory != null) { POINTY_SCRATCH_DIR = cfg.scratchDirectory; }
+  // lib.optionalAttrs (cfg.buildLogMirror != null) { POINTY_BUILD_LOG_MIRROR = cfg.buildLogMirror; }
   // lib.optionalAttrs (cfg.uploadDirectory != null) { POINTY_UPLOAD_DIR = cfg.uploadDirectory; }
   // lib.optionalAttrs (cfg.coldStorage.command != null) { POINTY_COLD_STORAGE_COMMAND = cfg.coldStorage.command; }
   // lib.optionalAttrs (cfg.storageDiskPath != null) { POINTY_STORAGE_DISK_PATH = cfg.storageDiskPath; }
@@ -234,6 +235,18 @@ in
       example = "/data";
     };
 
+    buildLogMirror = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Directory that keeps build logs fetched from the configured substituters, so
+        status resolution finds the log of a remotely failed build locally. The backend
+        user must own it. Exported as POINTY_BUILD_LOG_MIRROR. Null keeps logs only in
+        the Nix store's log directory.
+      '';
+      example = "/var/lib/pointy-cloud-account/build-logs";
+    };
+
     uploadDirectory = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -398,9 +411,9 @@ in
     };
     users.groups.${cfg.group} = { };
 
-    systemd.tmpfiles.rules = lib.optional (
-      cfg.uploadDirectory != null
-    ) "d ${cfg.uploadDirectory} 0750 ${cfg.user} ${cfg.group} -";
+    systemd.tmpfiles.rules =
+      lib.optional (cfg.uploadDirectory != null) "d ${cfg.uploadDirectory} 0750 ${cfg.user} ${cfg.group} -"
+      ++ lib.optional (cfg.buildLogMirror != null) "d ${cfg.buildLogMirror} 0700 ${cfg.user} ${cfg.group} -";
 
     systemd.slices."pointy-builds" = {
       description = "Slice for background nix builds";

@@ -29,6 +29,7 @@ Import `pointy.nixosModules.pointy-host` to install the backend service, nginx v
 | `services.pointy-backend.coldStorage.command` | `null` | Executable of a cold storage provider implementing the [provider interface](storage.md#provider-interface), exported as `POINTY_COLD_STORAGE_COMMAND`. `null` disables cold storage. |
 | `services.pointy-backend.scratchDirectory` | `null` | Directory users browse to wrap a whole subdirectory into a file-upload step. `null` hides the feature. |
 | `services.pointy-backend.uploadDirectory` | `null` | Where uploads are staged before ingest. `null` uses the system temporary directory. |
+| `services.pointy-backend.buildLogMirror` | `null` | Directory holding the build logs fetched from the configured substituters after a remotely failed build, exported as `POINTY_BUILD_LOG_MIRROR`. Status probes read it like a local log, so a cluster build's failure stays visible after the job ends. `null` disables fetching. See [Termination reasons](builds.md#termination-reasons). |
 | `services.pointy-backend.agentMemoryMax` | `24G` | Memory limit shared by every agent sandbox, including sandbox `/tmp`. `null` leaves them unlimited. See [Sandbox and credential boundaries](sandbox.md#sandbox-and-credential-boundaries). |
 | `services.pointy-backend.slurm.package` | `config.services.slurm.package` | Slurm package whose client commands the backend runs. |
 | `services.pointy-backend.slurm.confFile` | the host's `services.slurm` `slurm.conf` | Cluster configuration the backend submits to, exported as `SLURM_CONF`. |
