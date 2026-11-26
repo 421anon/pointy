@@ -24,6 +24,7 @@ import Model.Shadow exposing (StepConfigEntry)
 import Model.TableSpec as TableSpec
 import Organize
 import Route
+import Set
 import Specs
 import Toast
 import View.AreaCapture as AreaCapture
@@ -206,8 +207,19 @@ viewNewerRevisionNotice model stepId { revision, built } =
         mStep =
             stepAtRevision model stepId revision
 
+        mStatus =
+            Maybe.andThen (stepStatus >> ApiData.toMaybe) mStep
+
         isBuilding =
-            Maybe.andThen (stepStatus >> ApiData.toMaybe) mStep == Just Model.StatusRunning
+            mStatus == Just Model.StatusRunning
+
+        hasFrozenFiles =
+            case mStatus of
+                Just (Model.StatusInputsCold _) ->
+                    True
+
+                _ ->
+                    False
     in
     Html.div [ Html.Attributes.class "artifact-viewer-revision-notice", Html.Attributes.attribute "role" "status" ]
         (Maybe.unwrap [] (viewRevisionStatusDot model stepId) mStep
@@ -223,6 +235,11 @@ viewNewerRevisionNotice model stepId { revision, built } =
 
                 else if isBuilding then
                     [ Html.text ("Newer revision " ++ shortRevision ++ " is building.") ]
+
+                else if hasFrozenFiles then
+                    [ Html.text ("Newer revision " ++ shortRevision ++ " has frozen files. Click the blue status dot to rewarm them.")
+                    , Html.viewMaybe (viewRunRevisionButton stepId) mStep
+                    ]
 
                 else
                     [ Html.text ("Newer revision " ++ shortRevision ++ " is not built yet.")
@@ -258,9 +275,12 @@ viewRevisionStatusDot model stepId ( step, entry ) =
         log =
             Dict.get (Model.stepLogKey stepId stepRevision) (Model.getStepLogs model)
                 |> Maybe.withDefault NotAsked
+
+        coldPopoverOpen =
+            Set.member stepId (Model.getOpenColdInputs model)
     in
-    [ View.Table.viewStepRecordStatus step.type_ entry False step
-    , View.Table.viewStepRecordStatusPopover step.type_ entry (Model.coldInputsAt stepId stepRevision model) log False step
+    [ View.Table.viewStepRecordStatus step.type_ entry False coldPopoverOpen step
+    , View.Table.viewStepRecordStatusPopover step.type_ entry (Model.coldInputsAt stepId stepRevision model) log False coldPopoverOpen step
     ]
 
 

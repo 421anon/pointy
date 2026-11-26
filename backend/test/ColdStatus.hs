@@ -32,6 +32,7 @@ main = do
     assertEqual "output that is not JSON" Nothing (parseColdStatus "not json")
     checkColdInputReaders
     checkColdRefusals
+    checkColdRefusalRetention
 
 checkColdInputReaders :: IO ()
 checkColdInputReaders = do
@@ -67,19 +68,22 @@ checkColdRefusals = do
         "a retained refusal replaces an unstarted or failed step but not another status"
         (Map.fromList [(7, ("inputs-cold", Just "cold files")), (8, ("inputs-cold", Just "cold files")), (9, ("success", Nothing))])
         retained
-    clearColdRefusalsForPath "/nix/store/out7"
+    clearedOut7 <- clearColdRefusalsForPath "/nix/store/out7"
+    assertEqual "clearing the only cold path of a refusal reports it as cleared" [(7, "refusal-commit")] clearedOut7
     partiallyCleared <- applyColdRefusals "refusal-commit" statuses
     assertEqual
         "a refusal clears when all of its cold paths are local"
         (Map.fromList [(7, ("not-started", Nothing)), (8, ("inputs-cold", Just "cold files")), (9, ("success", Nothing))])
         partiallyCleared
-    clearColdRefusalsForPath "/nix/store/out8"
+    clearedOut8 <- clearColdRefusalsForPath "/nix/store/out8"
+    assertEqual "clearing one of two cold paths clears no refusal" [] clearedOut8
     stillRefused <- applyColdRefusals "refusal-commit" statuses
     assertEqual
         "a refusal stays while another of its cold paths is still cold"
         (Map.fromList [(7, ("not-started", Nothing)), (8, ("inputs-cold", Just "cold files")), (9, ("success", Nothing))])
         stillRefused
-    clearColdRefusalsForPath "/nix/store/out9"
+    clearedOut9 <- clearColdRefusalsForPath "/nix/store/out9"
+    assertEqual "clearing the last cold path of a refusal reports it as cleared" [(8, "refusal-commit")] clearedOut9
     fullyCleared <- applyColdRefusals "refusal-commit" statuses
     assertEqual "clearing every cold path leaves statuses unchanged" statuses fullyCleared
     recordColdRefusal 7 "refusal-commit" (Set.singleton "/nix/store/out7") "cold files"
@@ -88,6 +92,31 @@ checkColdRefusals = do
     assertEqual "clearing a refusal by commit leaves statuses unchanged" statuses cleared
   where
     statuses = Map.fromList [(7, ("not-started", Nothing)), (8, ("failure", Just "old build")), (9, ("success", Nothing))]
+
+checkColdRefusalRetention :: IO ()
+checkColdRefusalRetention = do
+    recordColdRefusal 10 "retention-commit" (Set.singleton "/nix/store/out10") "cold files"
+    recordColdRefusal 11 "retention-commit" (Set.singleton "/nix/store/out11") "cold files"
+    retained <- applyColdRefusals "retention-commit" statuses
+    assertEqual
+        "a refusal replaces certificate-only statuses but never a running or successful one"
+        ( Map.fromList
+            [ (10, ("inputs-cold", Just "cold files"))
+            , (11, ("inputs-cold", Just "cold files"))
+            , (12, ("running", Nothing))
+            , (13, ("success", Nothing))
+            ]
+        )
+        retained
+    clearColdRefusals "retention-commit" [10, 11]
+  where
+    statuses =
+        Map.fromList
+            [ (10, ("built-not-certified", Nothing))
+            , (11, ("certification-failed", Just "bad certificate"))
+            , (12, ("running", Nothing))
+            , (13, ("success", Nothing))
+            ]
 
 assertEqual :: (Eq a, Show a) => String -> a -> a -> IO ()
 assertEqual label expected actual

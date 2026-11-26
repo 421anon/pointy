@@ -49,7 +49,7 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), liftIO, withEffToIO, (:>))
 import EvalOutput (evalOutputText)
 import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageDelete, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
-import Handlers.Cold (coldStatusFor, mapColdProvider, onloadable, startOnload)
+import Handlers.Cold (clearRefusalsAndBroadcast, coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.RunStep (stepInputsNixDefs)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
@@ -278,6 +278,7 @@ deleteRevisionHandler stepId mCommit = do
                         let message = "The store refused to delete this output: " <> storeErrorLine (TE.decodeUtf8Lenient err)
                         throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
         liftIO $ do
+            clearRefusalsAndBroadcast outPath
             recheckCold outPath
             invalidate mempty{invalidOutputs = True}
         pure NoContent

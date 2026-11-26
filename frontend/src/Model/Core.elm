@@ -472,6 +472,17 @@ type alias StatusReport =
     }
 
 
+type PendingBuildKind
+    = RunFromWorkspace
+    | BuildForReview
+
+
+type alias PendingBuild =
+    { revision : String
+    , kind : PendingBuildKind
+    }
+
+
 type ReviewComparison
     = SameOutPath
     | SameContent
@@ -2049,7 +2060,7 @@ type Model
         , notices : Dict String (ApiData (List Notice))
         , stepStatusHooks : Dict Int (Flow Model ())
         , stepStatusBuffer : Dict String (Dict Int StatusReport)
-        , pendingBuilds : Dict Int String
+        , pendingBuilds : Dict Int PendingBuild
         , pendingStops : Set Int
         , openDiff : Maybe ( Int, Float )
         , reviewDraft : Maybe ReviewDraft
@@ -2565,7 +2576,7 @@ getStepStatusBuffer (Model model) =
     model.stepStatusBuffer
 
 
-getPendingBuilds : Model -> Dict Int String
+getPendingBuilds : Model -> Dict Int PendingBuild
 getPendingBuilds (Model model) =
     model.pendingBuilds
 

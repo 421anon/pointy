@@ -8,6 +8,7 @@ module Handlers.Cold (
     requireColdFiles,
     refuseColdFile,
     refuseOffloadedIn,
+    clearRefusalsAndBroadcast,
     coldStatusHandler,
     onloadHandler,
     startOnload,
@@ -33,6 +34,7 @@ import qualified Data.Text.Encoding as TE
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift, SeqUnlift), liftIO, withEffToIO, (:>))
 import Effects (AppM, ColdStorage, coldStorageConfigured, coldStorageOnload, coldStorageStatus)
+import Handlers.Statuses (broadcastStatusForStepProjects)
 import Handlers.StepOutput (resolveStepOutPath)
 import Servant (NoContent (..), ServerError (..), err400, err409, err502, err503, throwError)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
@@ -70,6 +72,12 @@ coldStatusFor outPath = do
             liftIO (recordColdStatus outPath status)
             pure status
 
+clearRefusalsAndBroadcast :: Text -> IO ()
+clearRefusalsAndBroadcast outPath = do
+    cleared <- clearColdRefusalsForPath outPath
+    forM_ cleared $ \(stepId, commit) ->
+        runAppEffects (broadcastStatusForStepProjects stepId commit Nothing)
+
 startOnload :: (ColdStorage :> es, IOE :> es) => Text -> FilePath -> Eff es (Either Text ())
 startOnload outPath rel = do
     liftIO (clearOffloadError outPath)
@@ -102,7 +110,7 @@ followOnloads outPath = do
                 | all (notOnloading . coldFileState) (coldStatusFiles cold) -> do
                     stopWatching
                     when (null (coldStatusFiles cold)) $ do
-                        clearColdRefusalsForPath outPath
+                        clearRefusalsAndBroadcast outPath
                         clearOffloadError outPath
                     recheckCold outPath
                 | otherwise -> watchUnavailable 0

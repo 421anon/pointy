@@ -1895,18 +1895,34 @@ runStep spec id =
                                         revision =
                                             stepRevisionById id current
                                     in
-                                    registerStepStatusHook id
-                                        (Flow.forAll (stepRecordById id << runState << success << status << success << where_ ((==) StatusSuccess))
-                                            (\_ -> addToast True ("Step" ++ quotedName ++ " completed"))
-                                            |> Flow.seq (Maybe.unwrap (Flow.pure ()) (showBuiltArtifactRevision id) revision)
-                                        )
-                                        |> Flow.seq (callApi void (Api.runStep id revision))
+                                    trackPendingBuild id Model.RunFromWorkspace revision
+                                        |> Flow.seq
+                                            (registerStepStatusHook id
+                                                (Flow.forAll (stepRecordById id << runState << success << status << success << where_ ((==) StatusSuccess))
+                                                    (\_ -> addToast True ("Step" ++ quotedName ++ " completed"))
+                                                    |> Flow.seq (Maybe.unwrap (Flow.pure ()) (showBuiltArtifactRevision id) revision)
+                                                )
+                                                |> Flow.seq (callApi void (Api.runStep id revision))
+                                            )
                                 )
                         )
             )
         |> FlowError.foldResult
             (\_ -> Flow.pure ())
-            (\_ -> setStatus (Success (StatusFailure Nothing)))
+            (\_ ->
+                Flow.over pendingBuilds (Dict.remove id)
+                    |> Flow.seq (setStatus (Success (StatusFailure Nothing)))
+            )
+
+
+trackPendingBuild : Int -> Model.PendingBuildKind -> Maybe String -> Flow Model ()
+trackPendingBuild id kind mRevision =
+    case mRevision of
+        Just revision ->
+            Flow.over pendingBuilds (Dict.insert id { revision = revision, kind = kind })
+
+        Nothing ->
+            Flow.pure ()
 
 
 buildViewedRevision : StepSpec -> Int -> Flow Model ()
@@ -1917,7 +1933,7 @@ buildViewedRevision spec id =
                 Flow.fromMaybe (Model.viewedRevision model)
                     (\revision ->
                         Flow.when (model |> has (TableSpec.getLens spec << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
-                            |> Flow.seq (Flow.over pendingBuilds (Dict.insert id revision))
+                            |> Flow.seq (Flow.over pendingBuilds (Dict.insert id { revision = revision, kind = Model.BuildForReview }))
                             |> Flow.seq (clearStepDetails id (Just revision))
                             |> Flow.seq (callApi void (Api.runStep id (Just revision)))
                     )
@@ -5518,6 +5534,9 @@ applyListedStatuses statuses model =
             Dict.toList statuses
                 |> List.map (\( stepId, report ) -> settlePendingBuild report.commit stepId report.status)
 
+        coldUpdates =
+            openColdInputsUpdates model statuses
+
         reviewReloads =
             all (stepRecordsListed statuses) model
                 |> List.filter (renewsReview statuses)
@@ -5525,8 +5544,53 @@ applyListedStatuses statuses model =
     in
     Flow.over (remkT stepRecords) (applyStatusToStepRecord model statuses)
         |> Flow.seq runBuiltStepStatusHooks
-        |> Flow.seq (Flow.batchM (settles ++ reviewReloads))
+        |> Flow.seq (Flow.batchM (settles ++ coldUpdates ++ reviewReloads))
         |> Flow.seq settlePendingStops
+
+
+openColdInputsUpdates : Model -> Dict Int Model.StatusReport -> List (Flow Model ())
+openColdInputsUpdates model statuses =
+    Model.getOpenColdInputs model
+        |> Set.toList
+        |> List.filterMap
+            (\stepId ->
+                Dict.get stepId statuses
+                    |> Maybe.filter (\report -> Maybe.unwrap True ((==) report.commit) (stepRevisionById stepId model))
+                    |> Maybe.andThen (\report -> openColdInputsUpdate model stepId report.status)
+            )
+
+
+openColdInputsUpdate : Model -> Int -> Status -> Maybe (Flow Model ())
+openColdInputsUpdate model stepId status_ =
+    case status_ of
+        StatusRunning ->
+            Just (Flow.over openColdInputs (Set.remove stepId))
+
+        StatusSuccess ->
+            Just (Flow.over openColdInputs (Set.remove stepId))
+
+        _ ->
+            if leftColdStatus stepId model status_ then
+                Just (loadColdInputs stepId)
+
+            else
+                Nothing
+
+
+leftColdStatus : Int -> Model -> Status -> Bool
+leftColdStatus stepId model status_ =
+    not (isColdStatus status_)
+        && Maybe.unwrap False isColdStatus (try (stepRecordById stepId << runState << success << status << success) model)
+
+
+isColdStatus : Status -> Bool
+isColdStatus status_ =
+    case status_ of
+        StatusInputsCold _ ->
+            True
+
+        _ ->
+            False
 
 
 settlePendingStops : Flow Model ()
@@ -5609,44 +5673,99 @@ applySnapshotToRecord report record =
 
 settlePendingBuild : String -> Int -> Status -> Flow Model ()
 settlePendingBuild snapshotCommit stepId status_ =
-    let
-        settled =
-            case status_ of
-                StatusSuccess ->
-                    Just
-                        (Flow.async loadProjectReviews
-                            |> Flow.seq (addToast True "The viewed revision is built. Comparing with the reviewed output.")
-                        )
+    if not (settlesBuild status_) then
+        Flow.pure ()
 
-                StatusFailure (Just error) ->
-                    Just (addToast False ("Building this revision failed: " ++ error))
+    else
+        Flow.get
+            |> Flow.andThen
+                (\model ->
+                    case Dict.get stepId (Model.getPendingBuilds model) of
+                        Just pending ->
+                            Flow.over pendingBuilds (Dict.remove stepId)
+                                |> Flow.seq
+                                    (if pending.revision == snapshotCommit then
+                                        settlePendingBuildFor pending.kind stepId status_
 
-                StatusFailure Nothing ->
-                    Just (addToast False "Building this revision failed.")
+                                     else
+                                        Flow.pure ()
+                                    )
 
-                StatusInputsCold (Just error) ->
-                    Just (addToast False ("Frozen in cold storage: " ++ error))
+                        Nothing ->
+                            Flow.pure ()
+                )
 
-                StatusCertificationFailed mError ->
-                    Just
-                        (Flow.async loadProjectReviews
-                            |> Flow.seq (addToast False ("The viewed revision is built but its certification failed" ++ Maybe.unwrap "." ((++) ": ") mError))
-                        )
 
-                _ ->
-                    Nothing
-    in
-    Flow.get
-        |> Flow.andThen
-            (\model ->
-                case ( settled, Dict.get stepId (Model.getPendingBuilds model) ) of
-                    ( Just report, Just requestedRevision ) ->
-                        Flow.over pendingBuilds (Dict.remove stepId)
-                            |> Flow.seq (Flow.when (requestedRevision == snapshotCommit) report)
+settlesBuild : Status -> Bool
+settlesBuild status_ =
+    case status_ of
+        StatusSuccess ->
+            True
 
-                    _ ->
-                        Flow.pure ()
-            )
+        StatusFailure _ ->
+            True
+
+        StatusInputsCold _ ->
+            True
+
+        StatusCertificationFailed _ ->
+            True
+
+        _ ->
+            False
+
+
+settlePendingBuildFor : Model.PendingBuildKind -> Int -> Status -> Flow Model ()
+settlePendingBuildFor kind stepId status_ =
+    case status_ of
+        StatusInputsCold mError ->
+            Flow.over stepStatusHooks (Dict.remove stepId)
+                |> Flow.seq
+                    (addToast False
+                        (Maybe.withDefault "This step reads files frozen in cold storage. Click its blue status dot to rewarm them." mError)
+                    )
+
+        _ ->
+            case kind of
+                Model.BuildForReview ->
+                    settleReviewedBuild status_
+
+                Model.RunFromWorkspace ->
+                    settleWorkspaceRun stepId status_
+
+
+settleReviewedBuild : Status -> Flow Model ()
+settleReviewedBuild status_ =
+    case status_ of
+        StatusSuccess ->
+            Flow.async loadProjectReviews
+                |> Flow.seq (addToast True "The viewed revision is built. Comparing with the reviewed output.")
+
+        StatusFailure (Just error) ->
+            addToast False ("Building this revision failed: " ++ error)
+
+        StatusFailure Nothing ->
+            addToast False "Building this revision failed."
+
+        StatusCertificationFailed mError ->
+            Flow.async loadProjectReviews
+                |> Flow.seq (addToast False ("The viewed revision is built but its certification failed" ++ Maybe.unwrap "." ((++) ": ") mError))
+
+        _ ->
+            Flow.pure ()
+
+
+settleWorkspaceRun : Int -> Status -> Flow Model ()
+settleWorkspaceRun stepId status_ =
+    case status_ of
+        StatusFailure _ ->
+            Flow.over stepStatusHooks (Dict.remove stepId)
+
+        StatusCertificationFailed _ ->
+            Flow.over stepStatusHooks (Dict.remove stepId)
+
+        _ ->
+            Flow.pure ()
 
 
 listenAndProcessClusterStatus : Flow Model Never

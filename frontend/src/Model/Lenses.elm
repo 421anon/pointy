@@ -13,7 +13,7 @@ import Http
 import Json.Decode exposing (Value)
 import List.Extra as List
 import Maybe.Extra as Maybe
-import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareContent, ComparePane, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, StorageDeleteUpload, Table, TemplateSource, TextContent, UploadProgress, UserRepoInfo)
+import Model.Core as Model exposing (AgentLiveTurn, AgentSession, AgentSessionSummary, AgentSessionView, AgentState, ChatEntry, ChildRef, ClusterStatus, CompareActiveData, CompareContent, ComparePane, CompareSelection, CompareState(..), DelimitedGrid, DirectoryFile, DirectoryFolder, DirectoryItem(..), IngestJob, ListingPreferences, ListingSort, Model(..), OrganizeQueue, PendingBuild, PendingQuestion, ProjectRecord, RelatedSearchJob, RelatedSearchState, ReviewDraft, ScratchState, SearchInfo, SessionTimestamp, StepRecord, StorageDeleteUpload, Table, TemplateSource, TextContent, UploadProgress, UserRepoInfo)
 import Model.Shadow exposing (Presets, StepConfig)
 import Route exposing (HighlightTarget(..), Page(..), ProjectParams, Route)
 import Set exposing (Set)
@@ -806,7 +806,7 @@ stepStatusBuffer =
     lens ".stepStatusBuffer" Model.getStepStatusBuffer (\(Model m) buf -> Model { m | stepStatusBuffer = buf })
 
 
-pendingBuilds : Lens ls Model (Dict Int String) x y
+pendingBuilds : Lens ls Model (Dict Int PendingBuild) x y
 pendingBuilds =
     lens ".pendingBuilds" Model.getPendingBuilds (\(Model m) builds -> Model { m | pendingBuilds = builds })
 

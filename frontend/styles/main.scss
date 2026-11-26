@@ -3224,8 +3224,9 @@ button.step-log-via-chip {
   }
 
   &.status-inputs-cold {
-    background: var(--state-cold);
-    box-shadow: none;
+    background: radial-gradient(circle at 30% 30%,
+        rgba(255, 255, 255, 0.4),
+        var(--state-cold) 60%);
   }
 
   &.status-built-not-certified {
@@ -3273,7 +3274,7 @@ button.step-log-via-chip {
   }
 
   &.status-inputs-cold {
-    background: #0969da;
+    background: var(--state-cold);
   }
 
   &.status-built-not-certified {

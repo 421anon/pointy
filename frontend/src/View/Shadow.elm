@@ -788,6 +788,11 @@ listingRow model projects_ parentId stepConfig presentTypes link =
                         |> Maybe.map (\id -> Model.coldInputsAt id (Model.stepRevision model step) model)
                         |> Maybe.withDefault Model.noColdInputs
 
+                coldPopoverOpen =
+                    step.id
+                        |> Maybe.map (\id -> Set.member id (Model.getOpenColdInputs model))
+                        |> Maybe.withDefault False
+
                 uploads =
                     Model.getUploadProgress model
 
@@ -887,10 +892,11 @@ listingRow model projects_ parentId stepConfig presentTypes link =
             , typeName = step.type_
             , typeIcon = entry.icon
             , statusPill =
-                Html.Lazy.lazy4 viewStepRecordStatus
+                Html.Lazy.lazy5 viewStepRecordStatus
                     step.type_
                     entry
                     isIngesting
+                    coldPopoverOpen
                     step
             , validationErrors = TableSpec.getValidationErrors spec step
             , alwaysVisibleActions =
@@ -934,12 +940,13 @@ listingRow model projects_ parentId stepConfig presentTypes link =
             , expanders = expanders
             , form = formView
             , popovers =
-                [ Html.Lazy.lazy6 viewStepRecordStatusPopover
+                [ Html.Lazy.lazy7 viewStepRecordStatusPopover
                     step.type_
                     entry
                     recordColdInputs
                     recordLog
                     isIngesting
+                    coldPopoverOpen
                     step
                 , Html.viewMaybe identity (Maybe.andThen .popover review)
                 ]

@@ -639,8 +639,8 @@ viewMtimeBadge mPosix now =
         mPosix
 
 
-viewStatusApiData : String -> Maybe Int -> ApiData Status -> Html (Flow Model ())
-viewStatusApiData tableName mRecordId status =
+viewStatusApiData : String -> Maybe Int -> ApiData Status -> Bool -> Html (Flow Model ())
+viewStatusApiData tableName mRecordId status keepColdAnchor =
     let
         viewStatusPill s =
             let
@@ -656,28 +656,44 @@ viewStatusApiData tableName mRecordId status =
                             "Failure: " ++ err
 
                         StatusInputsCold (Just err) ->
-                            "Frozen in cold storage: " ++ err
+                            err
 
                         _ ->
                             presentation.label
             in
-            case ( hasStatusPopover s, mRecordId ) of
+            case ( hasStatusPopover s || keepColdAnchor, mRecordId ) of
                 ( True, Just stepId ) ->
                     let
                         popoverId =
                             statusPopoverId tableName stepId
+
+                        dot =
+                            Html.span
+                                [ class ("status-indicator " ++ colorClass) ]
+                                []
                     in
-                    Html.button
-                        [ class "status-indicator-wrapper status-popover-trigger"
-                        , title statusText
-                        , attribute "popovertarget" popoverId
-                        , style "anchor-name" ("--anchor-" ++ popoverId)
-                        , Events.stopPropagationOn "click" (Decode.succeed ( Actions.loadStepDetails s stepId, True ))
-                        ]
-                        [ Html.span
-                            [ class ("status-indicator " ++ colorClass) ]
-                            []
-                        ]
+                    if hasStatusPopover s then
+                        Html.button
+                            [ class "status-indicator-wrapper status-popover-trigger"
+                            , title statusText
+                            , attribute "popovertarget" popoverId
+                            , style "anchor-name" ("--anchor-" ++ popoverId)
+                            , Events.stopPropagationOn "click"
+                                (Decode.succeed
+                                    ( statusPillClickFlow s stepId keepColdAnchor
+                                    , True
+                                    )
+                                )
+                            ]
+                            [ dot ]
+
+                    else
+                        Html.span
+                            [ class "status-indicator-wrapper"
+                            , title statusText
+                            , style "anchor-name" ("--anchor-" ++ popoverId)
+                            ]
+                            [ dot ]
 
                 _ ->
                     Html.span
@@ -731,6 +747,15 @@ hasStatusPopover status =
 statusPopoverId : String -> Int -> String
 statusPopoverId tableName stepId =
     "status-popover-" ++ tableName ++ "-" ++ String.fromInt stepId
+
+
+statusPillClickFlow : Status -> Int -> Bool -> Flow Model ()
+statusPillClickFlow status stepId keepColdAnchor =
+    if keepColdAnchor then
+        Flow.pure ()
+
+    else
+        Actions.loadStepDetails status stepId
 
 
 viewStatusPopover : String -> List (Html.Attribute (Flow Model ())) -> String -> List (Html (Flow Model ())) -> List (Html (Flow Model ())) -> Html (Flow Model ())
@@ -1219,27 +1244,49 @@ stepRecordStatus name entry ingesting record =
         TableSpec.getStatus (Specs.steps name entry) record
 
 
-viewStepRecordStatus : String -> StepConfigEntry -> Bool -> StepRecord -> Html (Flow Model ())
-viewStepRecordStatus name entry ingesting record =
-    viewStatusApiData name record.id (stepRecordStatus name entry ingesting record)
+viewStepRecordStatus : String -> StepConfigEntry -> Bool -> Bool -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatus name entry ingesting coldPopoverOpen record =
+    viewStatusApiData name record.id (stepRecordStatus name entry ingesting record) coldPopoverOpen
 
 
-viewStepRecordStatusPopover : String -> StepConfigEntry -> Model.ColdInputEntry -> ApiData StepLog -> Bool -> StepRecord -> Html (Flow Model ())
-viewStepRecordStatusPopover name entry coldInputs_ logState ingesting record =
+viewStepRecordStatusPopover : String -> StepConfigEntry -> Model.ColdInputEntry -> ApiData StepLog -> Bool -> Bool -> StepRecord -> Html (Flow Model ())
+viewStepRecordStatusPopover name entry coldInputs_ logState ingesting coldPopoverOpen record =
     let
         status =
             stepRecordStatus name entry ingesting record
                 |> ApiData.foldVisible Nothing identity Just (always (Just statusFetchFailure))
     in
-    case ( status, record.id ) of
-        ( Just (StatusInputsCold _), Just stepId ) ->
-            viewColdInputsPopover name (Specs.steps name entry) coldInputs_ stepId
+    case record.id of
+        Just stepId ->
+            if showsColdInputsPopover coldPopoverOpen status then
+                viewColdInputsPopover name (Specs.steps name entry) coldInputs_ stepId
 
-        ( Just status_, Just stepId ) ->
-            Html.viewIf (hasStatusPopover status_) (viewStepLogPopover name logState stepId)
+            else
+                case status of
+                    Just status_ ->
+                        Html.viewIf (hasStatusPopover status_) (viewStepLogPopover name logState stepId)
+
+                    Nothing ->
+                        Html.nothing
+
+        Nothing ->
+            Html.nothing
+
+
+showsColdInputsPopover : Bool -> Maybe Status -> Bool
+showsColdInputsPopover coldPopoverOpen status =
+    case status of
+        Just (StatusInputsCold _) ->
+            True
+
+        Just StatusRunning ->
+            False
+
+        Just StatusSuccess ->
+            False
 
         _ ->
-            Html.nothing
+            coldPopoverOpen
 
 
 actionsPopoverId : ChildLink -> String

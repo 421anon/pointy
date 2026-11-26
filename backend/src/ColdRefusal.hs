@@ -8,7 +8,7 @@ module ColdRefusal (
     recordColdRefusal,
 ) where
 
-import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -42,10 +42,13 @@ clearColdRefusals commit stepIds =
         | c == refusalCommit refusal = Nothing
         | otherwise = Just refusal
 
-clearColdRefusalsForPath :: Text -> IO ()
+clearColdRefusalsForPath :: Text -> IO [(Int, Text)]
 clearColdRefusalsForPath outPath =
-    modifyMVar_ coldRefusals $ \refusals ->
-        pure $ Map.mapMaybe (withoutPath outPath) refusals
+    modifyMVar coldRefusals $ \refusals ->
+        let assessed = [(stepId, refusal, withoutPath outPath refusal) | (stepId, refusal) <- Map.toList refusals]
+            remaining = Map.fromList [(stepId, kept) | (stepId, _, Just kept) <- assessed]
+            cleared = [(stepId, refusalCommit refusal) | (stepId, refusal, Nothing) <- assessed]
+         in pure (remaining, cleared)
   where
     withoutPath path refusal =
         let remaining = Set.delete path (refusalPaths refusal)
@@ -57,7 +60,7 @@ applyColdRefusals commit statuses = do
     pure $ Map.mapWithKey (retained refusals) statuses
   where
     retained refusals stepId entry@(state, _)
-        | state `notElem` ["not-started", "failure"] = entry
+        | state `notElem` ["not-started", "failure", "built-not-certified", "certification-failed"] = entry
         | otherwise = case Map.lookup stepId refusals of
             Just refusal
                 | refusalCommit refusal == commit -> ("inputs-cold", Just (refusalMessage refusal))
