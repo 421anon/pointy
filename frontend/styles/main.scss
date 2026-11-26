@@ -3057,9 +3057,8 @@ button.step-log-via-chip {
 
 .cold-source {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs);
-  align-items: baseline;
+  flex-direction: column;
+  gap: var(--spacing-2xs);
 }
 
 .cold-source-step {
@@ -3070,7 +3069,7 @@ button.step-log-via-chip {
 
 .cold-card .cold-source-files {
   margin: 0;
-  padding-left: var(--spacing-md);
+  padding-left: var(--spacing-lg);
   overflow-wrap: anywhere;
 }
 
