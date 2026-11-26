@@ -10,16 +10,16 @@ Open **Storage** from the drive icon in the bottom status bar to see how much sp
 
 ## Warm and cold capacity
 
-At the top of the panel, capacity bars show how much space is in use:
+The panel header shows compact capacity meters next to the **Storage** title. Hover a meter for its full description:
 
 - **Warm storage** covers step outputs stored on this server. On a filesystem, the bar compares step output bytes against those bytes plus the filesystem's free space; on an account quota, it compares step output bytes against the quota total, so freezing or deleting outputs frees quota immediately.
-- **Cold storage** appears only when your administrator configured a cold storage provider. When the provider reports available space across its storage boxes, the panel shows a capacity bar; otherwise it shows your cold bytes without a bar. A short explanation of freezing and rewarming appears beneath the cold tier bar.
+- **Cold storage**, marked with a snowflake, appears only when your administrator configured a cold storage provider. When the provider reports available space across its storage boxes, the meter shows a capacity bar; otherwise it shows your cold bytes without a bar. Its tooltip explains freezing and rewarming.
 
 Space is measured from the NAR sizes Nix records for each output path. **Checked** shows when Pointy last finished checking storage state.
 
 ## Steps and revisions
 
-Below the bars, Pointy lists every step that still has built output revisions in the store, ordered by the larger of each step's warm and cold bytes so frozen steps stay easy to find.
+Below the header, Pointy lists every step that still has built output revisions in the store, ordered by the larger of each step's warm and cold bytes so frozen steps stay easy to find.
 
 Each step row shows its total local bytes, cold bytes (when cold storage is enabled), and revision count. A step row shows active freeze or rewarm progress even when it is collapsed. Click a step's id to open its output page, or expand the row to inspect individual revisions:
 

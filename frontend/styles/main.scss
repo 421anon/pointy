@@ -4967,6 +4967,7 @@ body:has(dialog[open]) {
 .storage-panel__header {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-sm);
   padding: var(--spacing-sm) var(--spacing-md);
@@ -4988,78 +4989,44 @@ body:has(dialog[open]) {
 }
 
 .storage-panel__usage {
-  flex: 0 0 auto;
-  padding: var(--spacing-md);
-  border-block-end: 1px solid var(--border-color);
-}
-
-.storage-panel__cold-help {
-  margin: var(--spacing-sm) 0 0;
-  font-size: var(--font-size-sm);
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
-.storage-panel__tier + .storage-panel__tier {
-  margin-block-start: var(--spacing-sm);
-  padding-block-start: var(--spacing-sm);
-  border-block-start: 1px solid var(--line-color);
-}
-
-.storage-panel__totals {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-md);
-  align-items: baseline;
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
+  align-items: center;
+  gap: var(--spacing-xs) var(--spacing-lg);
+  min-width: 0;
+  margin-inline-start: var(--spacing-md);
 }
 
-.storage-panel__total strong,
-.storage-panel__of strong {
-  font-size: var(--font-size-md);
+.storage-panel__tier {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  white-space: nowrap;
+  cursor: help;
+}
+
+.storage-panel__tier strong {
   font-weight: 600;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
 
-.storage-panel__of {
-  color: var(--text-muted);
-}
-
-.storage-panel__of strong {
-  color: var(--text-secondary);
-}
-
-.storage-panel__cold-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-xs);
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-}
-
-.storage-panel__cold-line > .material-symbols-outlined {
+.storage-panel__tier--cold > .material-symbols-outlined {
   font-size: var(--font-size-md);
   color: var(--state-cold);
 }
 
-.storage-panel__cold-line strong {
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.storage-panel__cold-note {
+.storage-panel__remainder {
+  font-size: var(--font-size-sm);
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .storage-panel__bar {
   display: flex;
-  height: var(--spacing-sm);
-  margin-block-start: var(--spacing-sm);
+  flex: 0 0 auto;
+  width: 5rem;
+  height: var(--spacing-xs);
   overflow: hidden;
   background: var(--bg-hover);
   border-radius: var(--radius-xs);
@@ -5214,6 +5181,16 @@ body:has(dialog[open]) {
   min-width: 0;
 }
 
+.storage-panel__step-main {
+  --storage-chevron-size: 20px;
+  --storage-chevron-gap: var(--spacing-xs);
+}
+
+.storage-panel__step-main > .storage-panel__meta,
+.storage-panel__step-main > .storage-panel__blocked {
+  padding-inline-start: calc(var(--storage-chevron-size) + var(--storage-chevron-gap));
+}
+
 .storage-panel__step-heading {
   display: flex;
   flex-wrap: wrap;
@@ -5225,9 +5202,9 @@ body:has(dialog[open]) {
 .storage-panel__step-toggle {
   @include mixins.button-base;
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--spacing-xs);
+  gap: var(--storage-chevron-gap);
+  min-width: 0;
   max-width: 100%;
   padding: 0;
   font: inherit;
@@ -5242,9 +5219,31 @@ body:has(dialog[open]) {
 }
 
 .storage-panel__chevron {
+  display: inline-flex;
   flex: 0 0 auto;
-  font-size: var(--font-size-md);
-  color: var(--text-muted);
+  align-items: center;
+  align-self: center;
+  justify-content: center;
+  width: var(--storage-chevron-size);
+  height: var(--storage-chevron-size);
+  font-size: var(--storage-chevron-size);
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.storage-panel__step-toggle:hover .storage-panel__chevron,
+.storage-panel__step-toggle:focus-visible .storage-panel__chevron {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.storage-panel__step-toggle:hover .storage-panel__step-name {
+  text-decoration: underline;
+  text-decoration-color: var(--text-muted);
+  text-underline-offset: 0.2em;
 }
 
 .storage-panel__step-name {

@@ -1132,6 +1132,7 @@ viewStoragePanel model =
         [ Html.div [ class "storage-panel__header" ]
             [ iconCustom False "hard_drive" [ attribute "aria-hidden" "true" ]
             , Html.strong [ id "storage-panel-title" ] [ Html.text "Storage" ]
+            , Html.viewMaybe viewStorageUsage (ApiData.toMaybe (Model.getStorageView model))
             , Html.span [ class "storage-panel__updated" ]
                 [ Html.viewMaybe
                     (\snapshot ->
@@ -1196,8 +1197,7 @@ viewStorageContent model snapshot =
             storageStepRoutes model
     in
     Html.div [ class "storage-panel__content" ]
-        [ viewStorageUsage snapshot
-        , viewStorageScan snapshot
+        [ viewStorageScan snapshot
         , Html.viewIf snapshot.truncated <|
             Html.div [ class "storage-panel__notice" ]
                 [ Html.text "Older history is not scanned; the scan stops after 5000 changes." ]
@@ -1258,56 +1258,68 @@ viewStorageUsage snapshot =
         [ viewStorageWarmTier snapshot
         , Html.viewIf snapshot.coldConfigured <|
             viewStorageColdTier snapshot
-        , Html.viewIf snapshot.coldConfigured <|
-            Html.p [ class "storage-panel__cold-help" ]
-                [ Html.text "Freeze moves outputs to cold storage to free space on this server. Frozen files stay listed and must be rewarmed before they can be opened or run." ]
         ]
 
 
 viewStorageWarmTier : StorageView -> Html msg
 viewStorageWarmTier snapshot =
-    Html.div [ class "storage-panel__tier" ]
-        [ Html.div [ class "storage-panel__totals" ]
-            ([ storageTotal (max 0 snapshot.local) "step outputs" ]
+    let
+        local =
+            max 0 snapshot.local
+
+        summary =
+            Model.formatStorageSize local
+                ++ " of step outputs on this server"
                 ++ (case snapshot.capacity of
                         Just capacity ->
-                            [ capacityRemainder capacity ]
+                            " · " ++ capacityRemainderString capacity
 
                         Nothing ->
-                            []
+                            ""
                    )
-            )
-        , Html.viewMaybe
-            (\capacity -> viewStorageCapacityBar False capacity (max 0 snapshot.local))
-            snapshot.capacity
-        ]
-
-
-viewStorageColdTier : StorageView -> Html msg
-viewStorageColdTier snapshot =
-    Html.div [ class "storage-panel__tier storage-panel__tier--cold" ]
-        ([ Html.div [ class "storage-panel__cold-line" ]
-            ([ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
-             , Html.strong [] [ Html.text (Model.formatStorageSize snapshot.cold) ]
-             , Html.text " in cold storage"
-             ]
-                ++ case snapshot.coldCapacity of
+    in
+    Html.div [ class "storage-panel__tier", title summary ]
+        (Html.strong [] [ Html.text (Model.formatStorageSize local) ]
+            :: (case snapshot.capacity of
                     Just capacity ->
-                        [ Html.span [ class "storage-panel__cold-note" ]
-                            [ Html.text "· "
-                            , Html.strong [] [ Html.text (Model.formatStorageSize capacity.availableBytes) ]
-                            , Html.text " free"
-                            ]
+                        [ viewStorageCapacityBar False capacity local
+                        , Html.span [ class "storage-panel__remainder" ] [ Html.text (capacityRemainderShort capacity) ]
                         ]
 
                     Nothing ->
                         []
-            )
+               )
+        )
+
+
+viewStorageColdTier : StorageView -> Html msg
+viewStorageColdTier snapshot =
+    let
+        summary =
+            Model.formatStorageSize snapshot.cold
+                ++ " in cold storage"
+                ++ (case snapshot.coldCapacity of
+                        Just capacity ->
+                            " · " ++ Model.formatStorageSize capacity.availableBytes ++ " free"
+
+                        Nothing ->
+                            ""
+                   )
+                ++ ". Freeze moves outputs to cold storage to free space on this server. Frozen files stay listed and must be rewarmed before they can be opened or run."
+    in
+    Html.div [ class "storage-panel__tier storage-panel__tier--cold", title summary ]
+        ([ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ]
+         , Html.strong [] [ Html.text (Model.formatStorageSize snapshot.cold) ]
          ]
-            ++ [ Html.viewMaybe
-                    (\capacity -> viewStorageCapacityBar True capacity snapshot.cold)
-                    snapshot.coldCapacity
-               ]
+            ++ (case snapshot.coldCapacity of
+                    Just capacity ->
+                        [ viewStorageCapacityBar True capacity snapshot.cold
+                        , Html.span [ class "storage-panel__remainder" ] [ Html.text (Model.formatStorageSize capacity.availableBytes ++ " free") ]
+                        ]
+
+                    Nothing ->
+                        []
+               )
         )
 
 
@@ -1334,22 +1346,16 @@ viewStorageCapacityBar cold capacity used =
         (Model.storageCapacityFraction used (Just capacity))
 
 
-capacityRemainder : StorageCapacity -> Html msg
-capacityRemainder capacity =
-    case capacity.kind of
-        Model.CapacityQuota ->
-            Html.span [ class "storage-panel__of" ]
-                [ Html.strong [] [ Html.text (Model.formatStorageSize capacity.availableBytes) ]
-                , Html.text " left of "
-                , Html.strong [] [ Html.text (Model.formatStorageSize capacity.totalBytes) ]
-                , Html.text (" " ++ capacity.label)
-                ]
+capacityRemainderShort : StorageCapacity -> String
+capacityRemainderShort capacity =
+    Model.formatStorageSize capacity.availableBytes
+        ++ (case capacity.kind of
+                Model.CapacityQuota ->
+                    " left"
 
-        Model.CapacityFilesystem ->
-            Html.span [ class "storage-panel__of" ]
-                [ Html.strong [] [ Html.text (Model.formatStorageSize capacity.availableBytes) ]
-                , Html.text " free"
-                ]
+                Model.CapacityFilesystem ->
+                    " free"
+           )
 
 
 capacityRemainderString : StorageCapacity -> String
@@ -1364,14 +1370,6 @@ capacityRemainderString capacity =
             else
                 " free"
            )
-
-
-storageTotal : Int -> String -> Html msg
-storageTotal bytes label =
-    Html.span [ class "storage-panel__total" ]
-        [ Html.strong [] [ Html.text (Model.formatStorageSize bytes) ]
-        , Html.text (" " ++ label)
-        ]
 
 
 viewStorageScan : StorageView -> Html msg
