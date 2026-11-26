@@ -99,8 +99,8 @@ The backend builds the storage view from Git history by scanning commits that ch
 
 #### Cold-input guards before runs
 
-Before submitting a step's build, Pointy checks the cold status of each direct input step that is already built (not steps further upstream, whose files the build never reads).
+Before submitting a step's build, Pointy checks the cold status of the files the build reads. A step whose output is not built reads each direct input step that is already built (not steps further upstream, whose files the build never reads). A step whose output is built but not certified builds only its certificate, which reads every file of that output and none of its inputs.
 
-- If any direct input has files that are not local, the build is refused before submission: the step — and any dependent steps waiting on it — get status `inputs-cold` naming the offloaded files and the steps holding them. If cold status is unknown, submission is also refused.
+- If any of those files is not local, the build is refused before submission: the step — and any dependent steps waiting on it — get status `inputs-cold` naming the offloaded files and the steps holding them. If cold status is unknown, submission is also refused.
 - Comparing a step against a reviewed output fails with a message naming any offloaded files, unless the comparison is already cached.
 - `GET /step-inputs/cold` and `POST /step-inputs/onload` drive the **Copy back** card in the step's status popover, which refreshes every three seconds while open and offers **Run step** once every file is local; see [API](api-guide.md#running-work).

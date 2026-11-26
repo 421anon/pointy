@@ -5,6 +5,7 @@ module Handlers.StepInputs (
     ColdInputSource (..),
     ColdInputsView (..),
     coldInputReaders,
+    runReads,
     coldInputsHandler,
     coldInputsOnloadHandler,
 ) where
@@ -19,7 +20,6 @@ import Data.Aeson (ToJSON (..), object, (.=))
 import Data.Containers.ListUtils (nubOrd)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -29,7 +29,6 @@ import ColdProvider (ColdFile (..), ColdStatus (..))
 import Effects (AppM, coldStorageConfigured)
 import Handlers.Cold (coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.RunStep (StepTarget (..), getInputGraph, resolveStepTargets)
-import Handlers.StepReview (stepOutPaths)
 import Servant (ServerError (..), err500, err502, err503)
 import System.IO.Unsafe (unsafePerformIO)
 import UserRepo (ReadRepoContext (..), commitContextEff, withReadRepoTransaction)
@@ -70,8 +69,7 @@ instance ToJSON ColdInputsView where
             ]
 
 data RunInputs = RunInputs
-    { runInputsGraph :: Map Int [Int]
-    , runInputsBuilt :: Set Int
+    { runInputsReads :: Map Int [Int]
     , runInputsOutPaths :: Map Int Text
     }
 
@@ -116,7 +114,7 @@ runInputsOf :: Int -> Maybe Text -> AppM RunInputs
 runInputsOf eid commit = do
     configured <- lift coldStorageConfigured
     if not configured
-        then pure (RunInputs Map.empty Set.empty Map.empty)
+        then pure (RunInputs Map.empty Map.empty)
         else do
             context <- orFail err500 =<< lift (withReadRepoTransaction (\head_ -> maybe (pure head_) (commitContextEff (readRepoPath head_)) commit))
             graph <- orFail err500 =<< lift (runExceptT (getInputGraph (pure False) context eid))
@@ -126,15 +124,20 @@ runInputsOf eid commit = do
                 [] -> do
                     unless (Map.member eid targets) $
                         failWith err500 ("Step " ++ show eid ++ " has no build target at " ++ readCommitHash context ++ ".")
-                    let certificates = Map.fromList [(sid, stepTargetPath target) | (sid, Right target) <- Map.toList targets]
-                    valid <- maybe (failWith err500 "Cannot tell which upstream steps are already built.") pure =<< lift (validPaths (Set.toList (Set.fromList (Map.elems certificates))))
-                    let built = Map.keysSet (Map.filter (`Set.member` valid) certificates)
-                        builtInputs = nubOrd [dep | (sid, deps) <- Map.toList graph, Set.notMember sid built, dep <- deps, Set.member dep built]
-                    evaluated <- orFail err500 =<< lift (runExceptT (stepOutPaths context builtInputs))
-                    let (unresolved, outPaths) = Map.mapEither id evaluated
-                    case Map.keys unresolved of
-                        step : _ -> failWith err503 ("The output path of step " ++ show step ++ " could not be evaluated. Try again.")
-                        [] -> pure (RunInputs graph built (Map.map T.pack outPaths))
+                    let resolved = Map.fromList [(sid, target) | (sid, Right target) <- Map.toList targets]
+                    valid <- maybe (failWith err500 "Cannot tell which upstream steps are already built.") pure =<< lift (validPaths (Set.toList (Set.fromList (concat [[stepTargetPath target, stepTargetOutput target] | target <- Map.elems resolved]))))
+                    let isValid select sid = maybe False ((`Set.member` valid) . select) (Map.lookup sid resolved)
+                        stepReads = runReads graph (isValid stepTargetPath) (isValid stepTargetOutput)
+                        readSteps = nubOrd (concat (Map.elems stepReads))
+                    pure (RunInputs stepReads (Map.fromList [(sid, T.pack (stepTargetOutput target)) | sid <- readSteps, Just target <- [Map.lookup sid resolved]]))
+
+runReads :: Map Int [Int] -> (Int -> Bool) -> (Int -> Bool) -> Map Int [Int]
+runReads graph certified outputBuilt = Map.mapMaybeWithKey readsOf graph
+  where
+    readsOf sid deps
+        | certified sid = Nothing
+        | outputBuilt sid = Just [sid]
+        | otherwise = Just (filter certified deps)
 
 coldInputsView :: RunInputs -> AppM ColdInputsView
 coldInputsView inputs = do
@@ -147,20 +150,13 @@ coldInputsView inputs = do
             let files = Map.fromList [(step, coldStatusFiles status) | (step, Just status) <- statuses]
                 filesOf step = Map.findWithDefault [] step files
                 backOf step = returnedFiles (maybe Map.empty (\outPath -> Map.findWithDefault Map.empty outPath requested) (Map.lookup step (runInputsOutPaths inputs))) (filesOf step)
-                built = (`Set.member` runInputsBuilt inputs)
-                readers = coldInputReaders (runInputsGraph inputs) built (not . null . filesOf)
-                involved = coldInputReaders (runInputsGraph inputs) built (\step -> not (null (filesOf step)) || not (null (backOf step)))
+                readers = coldInputReaders (runInputsReads inputs) (not . null . filesOf)
+                involved = coldInputReaders (runInputsReads inputs) (\step -> not (null (filesOf step)) || not (null (backOf step)))
                 sources = nubOrd (concat (Map.elems involved))
             pure (ColdInputsView (Map.keys readers) [ColdInputSource step (filesOf step) (backOf step) | step <- sources])
 
-coldInputReaders :: Map Int [Int] -> (Int -> Bool) -> (Int -> Bool) -> Map Int [Int]
-coldInputReaders graph built holdsColdFiles = Map.mapMaybeWithKey coldInputsOfStep graph
-  where
-    coldInputsOfStep sid deps
-        | built sid = Nothing
-        | otherwise = case filter (\dep -> built dep && holdsColdFiles dep) deps of
-            [] -> Nothing
-            coldDeps -> Just coldDeps
+coldInputReaders :: Map Int [Int] -> (Int -> Bool) -> Map Int [Int]
+coldInputReaders stepReads holdsColdFiles = Map.filter (not . null) (Map.map (filter holdsColdFiles) stepReads)
 
 orFail :: ServerError -> Either String a -> AppM a
 orFail err = either (failWith err) pure

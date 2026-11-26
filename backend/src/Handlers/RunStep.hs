@@ -182,7 +182,7 @@ data SubmitOutcome
     | NotSubmitted String
     | NotSubmittedCold [Int] String
 
-data InputCheck = InputsLocal | InputsCold String
+data ColdCheck = FilesLocal | FilesCold String
 
 submitGraph :: App es => IO Bool -> ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
 submitGraph halted ctx graph stepIds = do
@@ -220,11 +220,11 @@ submitStep ctx isCertified isOutputBuilt outcomes deps sid resolvedTarget
                             return $ Enqueued (stepTargetPath rootedTarget) buildKey existing root
                         else do
                             outputBuilt <- lift $ isOutputBuilt (stepTargetOutput target)
-                            check <- if outputBuilt then return InputsLocal else checkOffloadedInputs ctx sid builtInputs
+                            check <- if outputBuilt then checkOffloadedOutput sid (stepTargetOutput target) else checkOffloadedInputs ctx sid builtInputs
                             case (check, coldRoots) of
-                                (InputsLocal, []) -> submitBuild ctx sid depJobIds certificate target buildKey
-                                (InputsLocal, _) -> return (coldRefusal coldRoots [])
-                                (InputsCold ownReads, _) -> return (coldRefusal (sid : coldRoots) [ownReads])
+                                (FilesLocal, []) -> submitBuild ctx sid depJobIds certificate target buildKey
+                                (FilesLocal, _) -> return (coldRefusal coldRoots [])
+                                (FilesCold ownReads, _) -> return (coldRefusal (sid : coldRoots) [ownReads])
         return $ either NotSubmitted id result
   where
     builtInputs = [dep | dep <- deps, Just AlreadyCertified{} <- [Map.lookup dep outcomes]]
@@ -260,11 +260,29 @@ submitBuild ctx sid depJobIds certificate target buildKey = do
             throwError err
         Right jobId -> return $ Enqueued certificate buildKey [jobId] root
 
-checkOffloadedInputs :: App es => ReadRepoContext -> Int -> [Int] -> ExceptT String (Eff es) InputCheck
+checkOffloadedOutput :: App es => Int -> FilePath -> ExceptT String (Eff es) ColdCheck
+checkOffloadedOutput sid output = do
+    configured <- lift coldStorageConfigured
+    if not configured
+        then pure FilesLocal
+        else do
+            coldFiles <- lift $ coldFilesFor (T.pack output)
+            case coldFiles of
+                Nothing ->
+                    throwError $
+                        "Cannot check whether the output of step " ++ show sid ++ ", which its certificate reads, has files offloaded to cold storage. Run again when storage status is available."
+                Just files
+                    | Set.null files -> pure FilesLocal
+                    | otherwise ->
+                        pure $
+                            FilesCold $
+                                "Certifying step " ++ show sid ++ " reads its output, which has files offloaded to cold storage: " ++ fileList (Set.toList files) ++ "."
+
+checkOffloadedInputs :: App es => ReadRepoContext -> Int -> [Int] -> ExceptT String (Eff es) ColdCheck
 checkOffloadedInputs ctx sid builtInputs = do
     configured <- lift coldStorageConfigured
     if not configured
-        then pure InputsLocal
+        then pure FilesLocal
         else do
             outPaths <- mapM (getStepOutPath ctx) builtInputs
             inputColdFiles <- lift $ zip builtInputs <$> mapColdProvider coldFilesFor outPaths
@@ -275,17 +293,19 @@ checkOffloadedInputs ctx sid builtInputs = do
                     "Cannot check whether " ++ stepList unknown ++ ", read by step " ++ show sid ++ ", " ++ hasOrHave unknown ++ " files offloaded to cold storage. Run again when storage status is available."
             pure $
                 if null offloaded
-                    then InputsLocal
+                    then FilesLocal
                     else
-                        InputsCold $
+                        FilesCold $
                             "Step " ++ show sid ++ " reads files offloaded to cold storage: "
                                 ++ intercalate "; " [fileList files ++ " of step " ++ show input | (input, files) <- offloaded]
                                 ++ "."
   where
     hasOrHave inputs = if length inputs == 1 then "has" else "have"
-    fileList files = case splitAt 3 files of
-        (named, []) -> intercalate ", " (map T.unpack named)
-        (named, rest) -> intercalate ", " (map T.unpack named) ++ " and " ++ show (length rest) ++ " more"
+
+fileList :: [T.Text] -> String
+fileList files = case splitAt 3 files of
+    (named, []) -> intercalate ", " (map T.unpack named)
+    (named, rest) -> intercalate ", " (map T.unpack named) ++ " and " ++ show (length rest) ++ " more"
 
 stepList :: [Int] -> String
 stepList steps = "step" ++ (if length steps == 1 then " " else "s ") ++ intercalate ", " (map show steps)

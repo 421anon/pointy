@@ -5,7 +5,7 @@ module Main (main) where
 import ColdRefusal (applyColdRefusals, clearColdRefusals, recordColdRefusal)
 import qualified Data.Map.Strict as Map
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), parseColdStatus)
-import Handlers.StepInputs (coldInputReaders)
+import Handlers.StepInputs (coldInputReaders, runReads)
 
 main :: IO ()
 main = do
@@ -37,15 +37,23 @@ checkColdInputReaders = do
     assertEqual
         "every unbuilt step names its own built inputs with cold files, even behind an unbuilt step that also reads some"
         (Map.fromList [(3, [2]), (4, [1])])
-        (coldInputReaders graph (`elem` [1, 2]) (`elem` [1, 2]))
+        (coldInputReaders (runReads graph (`elem` [1, 2]) (`elem` [1, 2])) (`elem` [1, 2]))
     assertEqual
         "cold files in an input that is not built do not count, since the run rebuilds it"
         Map.empty
-        (coldInputReaders graph (const False) (const True))
+        (coldInputReaders (runReads graph (const False) (const False)) (const True))
     assertEqual
         "a built step reads nothing, even when its inputs hold cold files"
         Map.empty
-        (coldInputReaders graph (const True) (const True))
+        (coldInputReaders (runReads graph (const True) (const True)) (const True))
+    assertEqual
+        "an uncertified step whose output is built reads its own output, not its inputs"
+        (Map.fromList [(3, [3]), (4, [1])])
+        (coldInputReaders (runReads graph (`elem` [1, 2]) (`elem` [1, 2, 3])) (`elem` [1, 2, 3]))
+    assertEqual
+        "cold inputs do not block certifying an already built output"
+        Map.empty
+        (coldInputReaders (runReads graph (`elem` [1, 2]) (`elem` [1, 2, 3])) (`elem` [2]))
   where
     graph = Map.fromList [(1, []), (2, []), (3, [2]), (4, [1, 3])]
 
