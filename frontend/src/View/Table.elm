@@ -1943,19 +1943,6 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                                         [ "id: " ++ String.fromInt id ]
                             )
 
-                toHighlightRoute stepId =
-                    try (route << Route.page << Route.project) model
-                        |> Maybe.map
-                            (\params ->
-                                Route.fromPage
-                                    (Route.Project
-                                        { params
-                                            | mHighlight = Just { id = stepId, target = Route.Output, path = [], range = Nothing }
-                                            , mCompare = Nothing
-                                        }
-                                    )
-                            )
-
                 menuLabel item =
                     Maybe.map2 (\id s -> "[" ++ String.fromInt id ++ "] [" ++ typeDisplayName s.type_ ++ "] " ++ item.name) item.id (getStep item.id) |> Maybe.withDefault item.name
             in
@@ -1972,7 +1959,7 @@ viewStepExtraFormFields model readOnly tableId stepDef =
                 , inputIcon = Nothing
                 , toInputItemName = .name
                 , toInputItemTooltip = toTooltip
-                , onInputItemClick = .id >> Maybe.andThen toHighlightRoute >> Maybe.map Actions.goToRoute
+                , onInputItemClick = .id >> Maybe.map Actions.openStep
                 , related = []
                 , statusNotice = Nothing
                 , emptyNotice = Nothing
