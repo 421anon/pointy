@@ -250,8 +250,8 @@ viewOutputDirectory model stepId commit directory =
         directory.children
 
 
-viewColdFetchProgress : Maybe ( Int, Int ) -> Html msg
-viewColdFetchProgress progress =
+viewColdFetchProgress : String -> Maybe ( Int, Int ) -> Html msg
+viewColdFetchProgress extraClass progress =
     let
         mPercent =
             progress
@@ -275,7 +275,7 @@ viewColdFetchProgress progress =
                     ( [], class "upload-progress-fill--indeterminate" )
     in
     Html.span
-        (class "upload-progress-bar cold-fetch-progress-bar"
+        (class ("upload-progress-bar " ++ extraClass)
             :: Html.Attributes.attribute "role" "progressbar"
             :: Html.Attributes.attribute "aria-label" "Rewarming from cold storage"
             :: valueAttrs
@@ -313,7 +313,7 @@ viewColdFile contextKey onload path availability =
             case availability of
                 Model.Core.Rewarming progress ->
                     ( "Rewarming from cold storage…"
-                    , [ viewColdFetchProgress progress
+                    , [ viewColdFetchProgress "file-cold-popover-progress" progress
                       , note "Rewarming continues on the server even if you leave this page. The file's actions appear when it is ready."
                       ]
                     )
@@ -634,7 +634,7 @@ viewDirectoryItemWithPath model specName mRecordId mDirCtx isLocked directoryPat
                                 Html.nothing
                         , case file.availability of
                             Model.Core.Rewarming progress ->
-                                viewColdFetchProgress progress
+                                viewColdFetchProgress "cold-fetch-progress-bar" progress
 
                             _ ->
                                 Html.nothing
