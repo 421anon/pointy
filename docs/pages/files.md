@@ -37,7 +37,7 @@ To rewarm every frozen file a run needs at once, use `GET /step-inputs/cold` and
 
 In the output file browser, a frozen ZIP shows the same snowflake as any other frozen file. Rewarm the ZIP before browsing its entries. Once the folder listing confirms the archive is local, its row becomes expandable again.
 
-The 409 response depends on Pointy knowing that the file is frozen. If the configured cold store cannot report its status, download, seek, raw, and bundle requests and listings inside a ZIP return **503** `Cannot check whether this file is offloaded to cold storage. Try again when storage status is available.` instead of reading the file.
+The 409 response depends on Pointy knowing that the file is frozen. If the configured cold store cannot report its status, download, seek, raw, and bundle requests and listings inside a ZIP return **503** `Cannot check whether this file is frozen in cold storage. Try again when storage status is available.` instead of reading the file.
 
 ### Artifacts as Turtle
 

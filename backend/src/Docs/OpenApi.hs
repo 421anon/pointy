@@ -292,20 +292,13 @@ instance ToSchema ColdInputsView where
             Inline $
                 mempty
                     & type_ ?~ OpenApiObject
-                    & required .~ ["step", "files", "back"]
+                    & required .~ ["step", "files"]
                     & properties
                         .~ fromList
                             [ ("step", integerField)
                             , ("files", arrayOf coldFileSchema)
-                            , ("back", arrayOf returnedFileSchema)
                             ]
-                    & description ?~ "An upstream step whose output holds files read by the run: `files` are still offloaded, `back` were asked to be copied back since the backend started and are local again."
-        returnedFileSchema =
-            Inline $
-                mempty
-                    & type_ ?~ OpenApiObject
-                    & required .~ ["path", "size"]
-                    & properties .~ fromList [("path", stringField), ("size", integerField)]
+                    & description ?~ "An upstream step whose output holds files read by the run that are still offloaded."
 
 instance ToSchema StorageBlocker where
     declareNamedSchema _ =

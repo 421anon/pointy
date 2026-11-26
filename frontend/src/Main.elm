@@ -13,11 +13,12 @@ import Json.Decode as Decode
 import Json.Decode.Extra as Decode
 import Maybe.Extra as Maybe
 import Model.Core exposing (AddMode(..), Flags, Model, initialModel)
-import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, gutterDrag, mCommit, mHighlight, now, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
+import Model.Lenses exposing (areaCapture, areaCaptureDragging, commitHash, gutterDrag, mCommit, mHighlight, now, openColdInputs, presets, projectForms, projectPath, projectRollups, projects, route, runState, searchInfo, stepConfig, stepForms, steps)
 import Model.Selection as Selection
 import Organize
 import Ports
 import Route exposing (Route)
+import Set
 import Specs
 import Time
 import Url exposing (Url)
@@ -177,6 +178,7 @@ applyRoute forceRevealHighlight newRoute =
                         set route newRoute resetModel
                     )
                     |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute) (Flow.modify Selection.clear))
+                    |> Flow.seq (Flow.when (listingContext currentRoute /= listingContext newRoute || pageTarget currentRoute /= pageTarget newRoute) (Flow.setAll openColdInputs Set.empty))
                     |> Flow.seq (Flow.when (viewedCommitOf currentRoute /= viewedCommitOf newRoute) (Flow.setAll projectRollups Dict.empty))
                     |> Flow.seq (Flow.when (pageTarget currentRoute /= pageTarget newRoute) Actions.resetPageScroll)
                     |> Flow.seq (Flow.when projectRoute (Actions.expandSidebarPath expandPath))

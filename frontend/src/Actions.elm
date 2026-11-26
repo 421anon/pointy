@@ -1316,13 +1316,18 @@ loadColdInputs id =
                 let
                     ( revision, key ) =
                         stepDetailsKey id model
-
-                    setState state =
-                        updateColdInputs key (\entry -> { entry | state = state })
                 in
-                setState (ApiData.toLoading (Model.coldInputsAt id revision model).state)
+                updateColdInputs key (\entry -> { entry | state = ApiData.toLoading entry.state })
                     |> Flow.seq (Api.fetchStepInputsCold id revision)
-                    |> Flow.andThen (setState << ApiData.fromResult)
+                    |> Flow.andThen
+                        (\result ->
+                            case result of
+                                Ok inputs ->
+                                    updateColdInputs key (Model.recordColdInputSnapshot inputs)
+
+                                Err error ->
+                                    updateColdInputs key (\entry -> { entry | state = ApiData.Error error })
+                        )
             )
 
 
@@ -1345,7 +1350,10 @@ onloadColdInputs id =
                             (\result ->
                                 case result of
                                     Ok inputs ->
-                                        updateColdInputs key (\current -> { current | state = Success inputs, starting = False })
+                                        updateColdInputs key
+                                            (\current ->
+                                                Model.recordColdInputSnapshot inputs { current | starting = False }
+                                            )
 
                                     Err error ->
                                         addToast False (Http.errorMessage error)
@@ -1364,6 +1372,19 @@ setColdInputsOpen id open =
          else
             Set.remove id
         )
+        |> Flow.seq
+            (Flow.when (not open)
+                (Flow.get
+                    |> Flow.andThen
+                        (\model ->
+                            let
+                                ( _, key ) =
+                                    stepDetailsKey id model
+                            in
+                            Flow.over coldInputs (Dict.update key (Maybe.map (\entry -> { entry | seen = Dict.empty })))
+                        )
+                )
+            )
 
 
 coldInputsToPoll : Model -> List Int
@@ -1884,6 +1905,7 @@ runStep spec id =
                     |> Flow.seq (Flow.async (toggleSrcEntry id (Just False) []))
                     |> Flow.seq (Flow.async (toggleOutputEntry id (Just False) []))
                     |> Flow.seq (Flow.get |> Flow.andThen (clearStepDetails id << stepRevisionById id))
+                    |> Flow.seq (Flow.over openColdInputs (Set.remove id))
                     |> Flow.seq (Flow.over pendingStops (Set.remove id))
                     |> Flow.seq (setStatus (ApiData.loading <| Just StatusRunning))
                     |> Flow.seq (Flow.whenHas (stepArtifact id) (\_ -> addToast True ("Building step" ++ quotedName ++ "…")))
@@ -1911,6 +1933,7 @@ runStep spec id =
             (\_ -> Flow.pure ())
             (\_ ->
                 Flow.over pendingBuilds (Dict.remove id)
+                    |> Flow.seq (Flow.over stepStatusHooks (Dict.remove id))
                     |> Flow.seq (setStatus (Success (StatusFailure Nothing)))
             )
 
@@ -1934,6 +1957,7 @@ buildViewedRevision spec id =
                     (\revision ->
                         Flow.when (model |> has (TableSpec.getLens spec << edited << just << recordId << just << where_ ((==) id))) (TableSpec.getUpsertRecord spec)
                             |> Flow.seq (Flow.over pendingBuilds (Dict.insert id { revision = revision, kind = Model.BuildForReview }))
+                            |> Flow.seq (Flow.over openColdInputs (Set.remove id))
                             |> Flow.seq (clearStepDetails id (Just revision))
                             |> Flow.seq (callApi void (Api.runStep id (Just revision)))
                     )
@@ -2975,7 +2999,7 @@ outputColdFileTarget stepId revision =
     , revision = revision
     , availabilityAt = fileAvailabilityAt stepId
     , itemAt = directoryItemAtPath stepId
-    , current = always True
+    , current = try (stepOutputsRevision stepId) >> (==) (Just revision)
     }
 
 
@@ -2998,8 +3022,16 @@ rewarmOutputFile recordId path =
 
 rewarmFailed : ColdFileTarget -> List String -> String -> Flow Model ()
 rewarmFailed target path reason =
-    Flow.setAll (target.availabilityAt path) (Model.RewarmFailed reason)
-        |> Flow.seq (addToast False ("Failed to rewarm " ++ String.join "/" path ++ ": " ++ reason))
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                if target.current model then
+                    Flow.setAll (target.availabilityAt path) (Model.RewarmFailed reason)
+                        |> Flow.seq (addToast False ("Failed to rewarm " ++ String.join "/" path ++ ": " ++ reason))
+
+                else
+                    Flow.pure ()
+            )
 
 
 rewarmColdFile : ColdFileTarget -> List String -> Flow Model ()

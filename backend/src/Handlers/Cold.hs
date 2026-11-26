@@ -3,6 +3,7 @@
 module Handlers.Cold (
     coldFilesFor,
     coldStatusFor,
+    isOffloadingFile,
     mapColdProvider,
     onloadable,
     requireColdFiles,
@@ -20,8 +21,8 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
-import Control.Exception (bracket_)
-import Control.Monad (forM_, when)
+import Control.Exception (bracket_, finally)
+import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.Trans.Class (lift)
 import qualified Data.ByteString.Lazy as LBS
@@ -54,13 +55,15 @@ coldOutPath stepId mCommit = case mCommit of
             withEffToIO SeqUnlift $ \unlift ->
                 cachedSuccess coldOutPaths (stepId, commit) (unlift (runExceptT (resolveStepOutPath stepId (Just commit))))
 
+isOffloadingFile :: ColdFile -> Bool
+isOffloadingFile file = case coldFileState file of
+    Offloading _ _ -> True
+    _ -> False
+
 coldFilesFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe (Set Text))
 coldFilesFor outPath = fmap notLocalPaths <$> coldStatusFor outPath
   where
-    notLocalPaths = Set.fromList . map (T.pack . normalise . T.unpack . coldFilePath) . filter (not . isOffloading) . coldStatusFiles
-    isOffloading file = case coldFileState file of
-        Offloading _ _ -> True
-        _ -> False
+    notLocalPaths = Set.fromList . map (T.pack . normalise . T.unpack . coldFilePath) . filter (not . isOffloadingFile) . coldStatusFiles
 
 coldStatusFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe ColdStatus)
 coldStatusFor outPath = do
@@ -69,14 +72,21 @@ coldStatusFor outPath = do
         then pure (Just (ColdStatus [] Nothing Nothing))
         else do
             status <- either (const Nothing) parseColdStatus <$> coldStorageStatus outPath
-            liftIO (recordColdStatus outPath status)
+            liftIO $ do
+                recordColdStatus outPath status
+                case status of
+                    Just cold | null (coldStatusFiles cold) -> clearRefusalsAndBroadcast outPath
+                    _ -> pure ()
             pure status
 
 clearRefusalsAndBroadcast :: Text -> IO ()
 clearRefusalsAndBroadcast outPath = do
     cleared <- clearColdRefusalsForPath outPath
-    forM_ cleared $ \(stepId, commit) ->
-        runAppEffects (broadcastStatusForStepProjects stepId commit Nothing)
+    unless (null cleared) $
+        void $
+            forkIO $
+                forM_ cleared $ \(stepId, commit) ->
+                    runAppEffects (broadcastStatusForStepProjects stepId commit Nothing)
 
 startOnload :: (ColdStorage :> es, IOE :> es) => Text -> FilePath -> Eff es (Either Text ())
 startOnload outPath rel = do
@@ -95,26 +105,23 @@ onloadWatchersRef = unsafePerformIO (newMVar Set.empty)
 followOnloads :: Text -> IO ()
 followOnloads outPath = do
     watching <- modifyMVar onloadWatchersRef (\watchers -> pure (Set.insert outPath watchers, Set.notMember outPath watchers))
-    when watching $ do
-        _ <- forkIO (watchUnavailable 0)
-        pure ()
+    when watching $
+        void $
+            forkIO $
+                watchUnavailable 0 `finally` modifyMVar_ onloadWatchersRef (pure . Set.delete outPath)
   where
     watchUnavailable unavailableChecks = do
         threadDelay 1000000
         status <- runAppEffects (coldStatusFor outPath)
         case status of
             Nothing
-                | unavailableChecks + 1 >= 15 -> stopWatching
+                | unavailableChecks + 1 >= 15 -> pure ()
                 | otherwise -> watchUnavailable (unavailableChecks + 1)
             Just cold
                 | all (notOnloading . coldFileState) (coldStatusFiles cold) -> do
-                    stopWatching
-                    when (null (coldStatusFiles cold)) $ do
-                        clearRefusalsAndBroadcast outPath
-                        clearOffloadError outPath
+                    when (null (coldStatusFiles cold)) (clearOffloadError outPath)
                     recheckCold outPath
                 | otherwise -> watchUnavailable 0
-    stopWatching = modifyMVar_ onloadWatchersRef (pure . Set.delete outPath)
     notOnloading Onloading{} = False
     notOnloading _ = True
 
@@ -141,7 +148,7 @@ offloadedEnclosing coldFiles rel = find (`Set.member` coldFiles) enclosing
 
 requireColdFiles :: Maybe (Set Text) -> AppM (Set Text)
 requireColdFiles =
-    maybe (throwError err503{errBody = "Cannot check whether this file is offloaded to cold storage. Try again when storage status is available."}) pure
+    maybe (throwError err503{errBody = "Cannot check whether this file is frozen in cold storage. Try again when storage status is available."}) pure
 
 refuseColdFile :: Text -> FilePath -> AppM ()
 refuseColdFile storePath rel = do

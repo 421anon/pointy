@@ -376,13 +376,6 @@ type alias ColdInputFile =
 type alias ColdInputSource =
     { stepId : Int
     , files : List ColdInputFile
-    , back : List ColdInputReturned
-    }
-
-
-type alias ColdInputReturned =
-    { path : String
-    , size : Int
     }
 
 
@@ -395,6 +388,7 @@ type alias ColdInputs =
 type alias ColdInputEntry =
     { state : ApiData ColdInputs
     , starting : Bool
+    , seen : Dict ( Int, String ) Int
     }
 
 
@@ -407,7 +401,7 @@ type alias ColdInputTotals =
 
 noColdInputs : ColdInputEntry
 noColdInputs =
-    { state = NotAsked, starting = False }
+    { state = NotAsked, starting = False, seen = Dict.empty }
 
 
 coldInputFiles : ColdInputs -> List ColdInputFile
@@ -415,20 +409,53 @@ coldInputFiles inputs =
     List.concatMap .files inputs.sources
 
 
-coldInputsReturned : ColdInputs -> List ColdInputReturned
-coldInputsReturned inputs =
-    List.concatMap .back inputs.sources
+coldInputFileMap : ColdInputs -> Dict ( Int, String ) Int
+coldInputFileMap inputs =
+    inputs.sources
+        |> List.concatMap (\source -> List.map (\file -> ( ( source.stepId, file.path ), file.size )) source.files)
+        |> Dict.fromList
 
 
-coldInputsTotal : ColdInputs -> ColdInputTotals
-coldInputsTotal inputs =
+recordColdInputSnapshot : ColdInputs -> ColdInputEntry -> ColdInputEntry
+recordColdInputSnapshot inputs entry =
     let
-        sizes =
-            List.map .size (coldInputFiles inputs) ++ List.map .size (coldInputsReturned inputs)
+        current =
+            coldInputFileMap inputs
+
+        copying =
+            List.any (.state >> isOnloading) (coldInputFiles inputs)
+
+        seen =
+            if copying || Dict.isEmpty current then
+                Dict.union current entry.seen
+
+            else
+                current
     in
-    { files = List.length sizes
-    , bytes = List.sum sizes
-    , sources = List.length inputs.sources
+    { entry | state = Success inputs, seen = seen }
+
+
+coldInputsReturned : ColdInputEntry -> ColdInputs -> List Int
+coldInputsReturned entry inputs =
+    Dict.diff entry.seen (coldInputFileMap inputs)
+        |> Dict.values
+
+
+coldInputsTotal : ColdInputEntry -> ColdInputs -> ColdInputTotals
+coldInputsTotal entry inputs =
+    let
+        tracked =
+            Dict.union (coldInputFileMap inputs) entry.seen
+
+        sources =
+            Dict.keys tracked
+                |> List.map Tuple.first
+                |> Set.fromList
+                |> Set.size
+    in
+    { files = Dict.size tracked
+    , bytes = List.sum (Dict.values tracked)
+    , sources = sources
     }
 
 

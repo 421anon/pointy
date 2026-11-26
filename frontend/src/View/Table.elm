@@ -906,9 +906,9 @@ viewColdInputsPending stepId entry inputs =
                 )
             ]
         , Html.p [ class "cold-text" ]
-            [ Html.text (coldInputsDescription stepId inputs (Model.coldInputsTotal inputs)) ]
+            [ Html.text (coldInputsDescription stepId inputs (Model.coldInputsTotal entry inputs)) ]
         , viewColdSources inputs
-        , Html.viewIf (copying || not (List.isEmpty (Model.coldInputsReturned inputs))) (viewColdProgress inputs)
+        , Html.viewIf (copying || not (List.isEmpty (Model.coldInputsReturned entry inputs))) (viewColdProgress entry inputs)
         , Html.viewIf (not (List.isEmpty failures)) (Html.ul [ class "cold-failures" ] failures)
         , Html.div [ class "cold-actions" ]
             [ Html.viewIf (not (List.isEmpty startable) && not entry.starting)
@@ -983,17 +983,17 @@ viewOnloadFailure stepId file =
             Nothing
 
 
-viewColdProgress : Model.ColdInputs -> Html msg
-viewColdProgress inputs =
+viewColdProgress : Model.ColdInputEntry -> Model.ColdInputs -> Html msg
+viewColdProgress entry inputs =
     let
         total =
-            Model.coldInputsTotal inputs
+            Model.coldInputsTotal entry inputs
 
         returned =
-            Model.coldInputsReturned inputs
+            Model.coldInputsReturned entry inputs
 
         bytesBack =
-            clamp 0 total.bytes (List.sum (List.map .size returned) + List.sum (List.map onloadedBytes (Model.coldInputFiles inputs)))
+            clamp 0 total.bytes (List.sum returned + List.sum (List.map onloadedBytes (Model.coldInputFiles inputs)))
 
         percent =
             if total.bytes > 0 then

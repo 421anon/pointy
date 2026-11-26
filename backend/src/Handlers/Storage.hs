@@ -21,14 +21,14 @@ module Handlers.Storage (
 
 import BuildRunner (JobComment (..), SlurmJob (..), decodeJobComment, isRunningState, parseSlurmJobLine)
 import ClusterBus (latestSlurmJobs)
-import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), OffloadProgress (..))
+import ColdProvider (ColdFile (..), ColdStatus (..), OffloadProgress (..))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (replicateConcurrently_)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, retry, writeTVar)
 import Control.Exception (SomeException, bracket_, displayException, try)
-import Control.Monad (forM_, join, unless, void, when)
+import Control.Monad (join, unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.!=), (.:), (.:?))
@@ -49,7 +49,7 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), liftIO, withEffToIO, (:>))
 import EvalOutput (evalOutputText)
 import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageDelete, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
-import Handlers.Cold (clearRefusalsAndBroadcast, coldStatusFor, mapColdProvider, onloadable, startOnload)
+import Handlers.Cold (clearRefusalsAndBroadcast, coldStatusFor, isOffloadingFile, mapColdProvider, onloadable, startOnload)
 import Handlers.RunStep (stepInputsNixDefs)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
@@ -201,45 +201,38 @@ onloadRevisionHandler stepId mCommit = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
     outPath <- resolveStepOutPath stepId mCommit
-    withStorageMutationLock $ do
-        refusePathBusy outPath
-        refuseOffloadRunning outPath
-        status <- lift (coldStatusFor outPath)
-        case status of
-            Nothing -> throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
-            Just cold -> do
-                let files = filter onloadable (coldStatusFiles cold)
-                outcomes <- lift $ mapColdProvider (startOnload outPath . T.unpack . coldFilePath) files
-                let failures =
-                        [ coldFilePath file <> ": " <> message
-                        | (file, Left message) <- zip files outcomes
-                        ]
-                unless (null failures) $
-                    throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start rewarming: " <> T.intercalate "; " failures))}
-                pure NoContent
+    onloadOutPaths [outPath]
 
 onloadStepHandler :: Int -> AppM NoContent
 onloadStepHandler stepId = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
+    paths <- liftIO (Set.toList . Map.findWithDefault Set.empty stepId <$> readTVarIO rewarmablePathsVar)
+    onloadOutPaths paths
+
+onloadOutPaths :: [Text] -> AppM NoContent
+onloadOutPaths paths = do
     withStorageMutationLock $ do
-        paths <- liftIO (Map.findWithDefault Set.empty stepId <$> readTVarIO rewarmablePathsVar)
-        mapM_ refusePathBusy (Set.toList paths)
-        mapM_ refuseOffloadRunning (Set.toList paths)
-        forM_ (Set.toList paths) $ \outPath -> do
-            status <- lift (coldStatusFor outPath)
-            cold <- case status of
-                Nothing -> throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
-                Just cold -> pure cold
-            let files = filter onloadable (coldStatusFiles cold)
-            outcomes <- lift $ mapColdProvider (startOnload outPath . T.unpack . coldFilePath) files
-            let failures =
-                    [ coldFilePath file <> ": " <> message
-                    | (file, Left message) <- zip files outcomes
-                    ]
-            unless (null failures) $
-                throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start rewarming: " <> T.intercalate "; " failures))}
-        pure NoContent
+        mapM_ refusePathBusy paths
+        mapM_ refuseOffloadRunning paths
+    statuses <- lift $ mapColdProvider (\outPath -> fmap ((,) outPath) (coldStatusFor outPath)) paths
+    when (any (isNothing . snd) statuses) $
+        throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
+    when (any (maybe False (any isOffloadingFile . coldStatusFiles) . snd) statuses) $
+        throwError err409{errBody = "This output is freezing to cold storage. Wait for it to finish, then try again."}
+    let requests =
+            [ (outPath, file)
+            | (outPath, Just cold) <- statuses
+            , file <- filter onloadable (coldStatusFiles cold)
+            ]
+    outcomes <- lift $ mapColdProvider (\(outPath, file) -> startOnload outPath (T.unpack (coldFilePath file))) requests
+    let failures =
+            [ coldFilePath file <> ": " <> message
+            | ((_, file), Left message) <- zip requests outcomes
+            ]
+    unless (null failures) $
+        throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start rewarming: " <> T.intercalate "; " failures))}
+    pure NoContent
 
 deleteRevisionHandler :: Int -> Maybe Text -> AppM NoContent
 deleteRevisionHandler stepId mCommit = do
@@ -259,7 +252,7 @@ deleteRevisionHandler stepId mCommit = do
                 case cold of
                     Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
                     Just status
-                        | any offloadingFile (coldStatusFiles status) ->
+                        | any isOffloadingFile (coldStatusFiles status) ->
                             throwError err409{errBody = "This output is freezing to cold storage. Wait for it to finish, then try again."}
                         | null (coldStatusFiles status) -> pure ()
                         | otherwise -> do
@@ -282,10 +275,6 @@ deleteRevisionHandler stepId mCommit = do
             recheckCold outPath
             invalidate mempty{invalidOutputs = True}
         pure NoContent
-  where
-    offloadingFile file = case coldFileState file of
-        Offloading _ _ -> True
-        _ -> False
 
 {-# NOINLINE pathMutationSemaphore #-}
 pathMutationSemaphore :: QSem
