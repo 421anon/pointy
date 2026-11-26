@@ -14,10 +14,13 @@ module Handlers.Cold (
 ) where
 
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), parseColdStatus)
+import ColdRefusal (clearColdRefusalsForPath)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (mapConcurrently)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Exception (bracket_)
-import Control.Monad (forM_)
+import Control.Monad (forM_, when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.Trans.Class (lift)
 import qualified Data.ByteString.Lazy as LBS
@@ -27,12 +30,13 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, Limit (Unlimited), Persistence (Persistent), UnliftStrategy (ConcUnlift, SeqUnlift), liftIO, withEffToIO, (:>))
 import Effects (AppM, ColdStorage, coldStorageConfigured, coldStorageOnload, coldStorageStatus)
 import Handlers.StepOutput (resolveStepOutPath)
-import Servant (NoContent (..), ServerError (..), err409, err502, err503, throwError)
+import Servant (NoContent (..), ServerError (..), err400, err409, err502, err503, throwError)
 import SingleFlightCache (SingleFlightCache, cachedSuccess, newSingleFlightCache)
-import StorageBus (recheckCold, recordColdStatus)
+import StorageBus (clearOffloadError, recheckCold, recordColdStatus)
 import System.FilePath (joinPath, normalise, splitDirectories)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -51,7 +55,10 @@ coldOutPath stepId mCommit = case mCommit of
 coldFilesFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe (Set Text))
 coldFilesFor outPath = fmap notLocalPaths <$> coldStatusFor outPath
   where
-    notLocalPaths = Set.fromList . map (T.pack . normalise . T.unpack . coldFilePath) . coldStatusFiles
+    notLocalPaths = Set.fromList . map (T.pack . normalise . T.unpack . coldFilePath) . filter (not . isOffloading) . coldStatusFiles
+    isOffloading file = case coldFileState file of
+        Offloading _ _ -> True
+        _ -> False
 
 coldStatusFor :: (ColdStorage :> es, IOE :> es) => Text -> Eff es (Maybe ColdStatus)
 coldStatusFor outPath = do
@@ -65,9 +72,43 @@ coldStatusFor outPath = do
 
 startOnload :: (ColdStorage :> es, IOE :> es) => Text -> FilePath -> Eff es (Either Text ())
 startOnload outPath rel = do
+    liftIO (clearOffloadError outPath)
     result <- coldStorageOnload outPath rel
+    case result of
+        Right () -> liftIO (followOnloads outPath)
+        Left _ -> pure ()
     liftIO (recheckCold outPath)
     pure result
+
+{-# NOINLINE onloadWatchersRef #-}
+onloadWatchersRef :: MVar (Set Text)
+onloadWatchersRef = unsafePerformIO (newMVar Set.empty)
+
+followOnloads :: Text -> IO ()
+followOnloads outPath = do
+    watching <- modifyMVar onloadWatchersRef (\watchers -> pure (Set.insert outPath watchers, Set.notMember outPath watchers))
+    when watching $ do
+        _ <- forkIO (watchUnavailable 0)
+        pure ()
+  where
+    watchUnavailable unavailableChecks = do
+        threadDelay 1000000
+        status <- runAppEffects (coldStatusFor outPath)
+        case status of
+            Nothing
+                | unavailableChecks + 1 >= 15 -> stopWatching
+                | otherwise -> watchUnavailable (unavailableChecks + 1)
+            Just cold
+                | all (notOnloading . coldFileState) (coldStatusFiles cold) -> do
+                    stopWatching
+                    when (null (coldStatusFiles cold)) $ do
+                        clearColdRefusalsForPath outPath
+                        clearOffloadError outPath
+                    recheckCold outPath
+                | otherwise -> watchUnavailable 0
+    stopWatching = modifyMVar_ onloadWatchersRef (pure . Set.delete outPath)
+    notOnloading Onloading{} = False
+    notOnloading _ = True
 
 onloadable :: ColdFile -> Bool
 onloadable file = case coldFileState file of
@@ -102,7 +143,7 @@ refuseColdFile storePath rel = do
 refuseOffloadedIn :: Set Text -> FilePath -> AppM ()
 refuseOffloadedIn coldFiles rel =
     forM_ (offloadedEnclosing coldFiles rel) $ \_ ->
-        throwError err409{errBody = "This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again."}
+        throwError err409{errBody = "This file is frozen in cold storage. Rewarm it, then try again."}
 
 coldStatusHandler :: Int -> Maybe Text -> AppM ColdStatus
 coldStatusHandler stepId mCommit = do
@@ -120,7 +161,7 @@ onloadHandler :: Int -> Maybe Text -> FilePath -> AppM NoContent
 onloadHandler stepId mCommit rel = do
     configured <- lift coldStorageConfigured
     if not configured
-        then throwError err503{errBody = "Cold storage is not configured."}
+        then throwError err400{errBody = "Cold storage is not configured."}
         else do
             outPath <- coldOutPath stepId mCommit
             result <- lift (startOnload outPath rel)

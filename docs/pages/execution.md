@@ -10,7 +10,7 @@ Run a step and Pointy keeps the result together with the inputs, software, and p
 
 Click **Run** on the step you want to run. If it needs results from other steps, Pointy runs those first. It reuses results that are already available for the same inputs and settings.
 
-**Run** is offered on steps that are **Not Started**, **Failure**, **Inputs in Cold Storage**, **Not Certified**, or **Certification Failed**; it disappears while a step is running or successful. If the step's form is open, **Run** saves it first and builds the saved version.
+**Run** is offered on steps that are **Not Started**, **Failure**, **Frozen in Cold Storage**, **Not Certified**, or **Certification Failed**; it disappears while a step is running or successful. If the step's form is open, **Run** saves it first and builds the saved version.
 
 ![A step row with the Run button, status indicator, and other step actions.](screenshots/light/step-derivation-header.png)
 
@@ -22,7 +22,7 @@ The dot beside a step shows its progress:
 - <span class="doc-status-dot doc-status-dot--running"></span> **Running**: the step is queued or running. Uploading and indexing also show this dot.
 - <span class="doc-status-dot doc-status-dot--success"></span> **Success**: the program finished and its output files are available.
 - <span class="doc-status-dot doc-status-dot--failure"></span> **Failure**: the run failed. Hover over the dot for an error summary, or click it to read the log.
-- <span class="doc-status-dot doc-status-dot--cold"></span> **Inputs in Cold Storage**: the run was refused before it started because files it reads, directly or through the steps it depends on, are offloaded to cold storage. Click the dot to see the files and their steps and choose **Copy back**; the popover follows the copy while it is open, and offers **Run step** once the files are local; see [Storage](storage.md#cold-storage).
+- <span class="doc-status-dot doc-status-dot--cold"></span> **Frozen in Cold Storage**: the run was refused before it started because files it reads, directly or through the steps it depends on, are frozen in cold storage. Click the dot to see the frozen files and their steps and choose **Rewarm**; the popover follows the rewarm while it is open, and offers **Run step** once the files are local; see [Storage](storage.md#cold-storage).
 - <span class="doc-status-dot doc-status-dot--not-certified"></span> **Not Certified**: the step's output was built, but Pointy has not confirmed that it matches the output type its template declares.
 - <span class="doc-status-dot doc-status-dot--cert-failed"></span> **Certification Failed**: the step's output was built, but the check against the declared output type failed. Click the dot to read the log.
 - <span class="doc-status-spinner"></span> **Loading**: Pointy is checking the status, or waiting for a run to start.
@@ -31,7 +31,7 @@ The display updates automatically; you do not need to keep refreshing the page.
 
 ![The step rows of a folder, with the Failure message shown for a failed step.](screenshots/light/project-view-status-tooltip.png)
 
-![A step refused with Inputs in Cold Storage, with its blue-dot popover listing the offloaded upstream files and offering Copy back.](screenshots/light/step-inputs-cold-popover.png)
+![A step refused with Frozen in Cold Storage, with its blue-dot popover listing the frozen upstream files and offering Rewarm.](screenshots/light/step-inputs-cold-popover.png)
 
 ### Keeping track of work
 

@@ -71,14 +71,14 @@ The interface says nothing about what reading an offloaded file through the stor
 
 ### What Pointy does with it
 
-Listings mark files that are not local and do not read them; when the status is unknown, a listing reads no file of that output. A download, seek, raw, or bundle request for an offloaded file returns `409` (`This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again.`), and `503` when the status is unknown. Pointy asks for an onload only when explicitly requested — through the file browser's snowflake (**Copy back to this server**), **Rewarm** in the [Storage panel](storage-panel.md), `POST /step-files/onload`, `POST /step-inputs/onload`, or `POST /storage/onload`.
+Listings mark files that are not local and do not read them; when the status is unknown, a listing reads no file of that output. A download, seek, raw, or bundle request for a frozen file returns `409` (`This file is frozen in cold storage. Rewarm it, then try again.`), and `503` when the status is unknown. Pointy asks for an onload only when explicitly requested — through the file browser's snowflake (**Rewarm file**), **Rewarm** in the [Storage panel](storage-panel.md), **Rewarm** in the step's status popover, `POST /step-files/onload`, `POST /step-inputs/onload`, `POST /storage/onload`, or `POST /storage/onload-step`, which rewarms every cold or failed revision of a step. Any onload started this way follows provider status updates into the Storage panel and clears stale `inputs-cold` refusals once the path is local.
 
 #### Storage panel and deletion lifecycle
 
 The status bar's [Storage panel](storage-panel.md) lists every step output revision still present in the store, grouped by step and ordered by the larger of each step's warm and cold bytes. See [Storage endpoints](api-guide.md#storage-endpoints) for the `/storage*` routes, response fields, and HTTP error codes.
 
 - **Freeze** (`POST /storage/offload` or `POST /storage/offload-step`) moves local output files to cold storage; step-level freezes run one revision at a time in a single background thread so they do not hammer the provider in parallel.
-- **Rewarm** (`POST /storage/onload`) starts copying every offloaded file back and follows provider-status checks until progress stops, pushing updated local and cold byte totals to the panel.
+- **Rewarm** (`POST /storage/onload` for one revision, `POST /storage/onload-step` for every cold or failed revision of a step) starts copying every frozen file back and follows provider-status checks until progress stops, pushing updated local and cold byte totals to the panel.
 - **Delete** (`POST /storage/delete`) removes cold files through the provider (`delete <output-path>`) first when present; if provider deletion fails (`502`), Pointy leaves the local output alone. Once cold copies are gone, Pointy removes the output's GC root and matching certificate root, then runs `nix-store --delete`. If the store refuses the local delete (`409`), Pointy restores both roots and reports the refusal without recreating the provider's copy. A later Run always requires the output path itself rather than accepting a surviving certificate alone.
 - **Concurrency guards**: freeze, rewarm, and delete are refused with `409` while any owner of the output, or a step that directly reads it, is running or queued (steps further upstream are not treated as readers), or while an offload of that output is active. Step-level freezes recheck before each revision.
 
@@ -86,7 +86,7 @@ The status bar's [Storage panel](storage-panel.md) lists every step output revis
 
 The panel never polls. The backend keeps the storage view in memory and pushes it as a `storage` event on the [live event stream](streams.md#live-event-stream) whenever the branch moves, a build finishes, the Slurm watcher reports a step starting or stopping, an offload started by Pointy reports progress, or another part of Pointy observes a provider status change.
 
-Opening the panel triggers a refresh and pushes a `storage` event even when nothing changed, advancing `updatedAt` (**Updated**). New paths are fetched once; builds and deletions invalidate sizes, while freezes, rewarms, deletions, and observed provider reads refresh cold status. A transfer started outside Pointy appears after the next observed status change or when the panel is reopened.
+Opening the panel triggers a refresh and pushes a `storage` event even when nothing changed, advancing `updatedAt` (**Checked**). New paths are fetched once; builds and deletions invalidate sizes, while freezes, rewarms, deletions, and observed provider reads refresh cold status. A rewarm started from the file browser or a cold-inputs popover appears here as its provider status changes, and a transfer started outside Pointy appears after the next observed status change or when the panel is reopened.
 
 #### History scan
 
@@ -101,6 +101,6 @@ The backend builds the storage view from Git history by scanning commits that ch
 
 Before submitting a step's build, Pointy checks the cold status of the files the build reads. A step whose output is not built reads each direct input step that is already built (not steps further upstream, whose files the build never reads). A step whose output is built but not certified builds only its certificate, which reads every file of that output and none of its inputs.
 
-- If any of those files is not local, the build is refused before submission: the step — and any dependent steps waiting on it — get status `inputs-cold` naming the offloaded files and the steps holding them. If cold status is unknown, submission is also refused.
-- Comparing a step against a reviewed output fails with a message naming any offloaded files, unless the comparison is already cached.
-- `GET /step-inputs/cold` and `POST /step-inputs/onload` drive the **Copy back** card in the step's status popover, which refreshes every three seconds while open and offers **Run step** once every file is local; see [API](api-guide.md#running-work).
+- If any of those files is not local, the build is refused before submission: the step — and any dependent steps waiting on it — get status `inputs-cold` naming the frozen files and the steps holding them. If cold status is unknown, submission is also refused.
+- Comparing a step against a reviewed output fails with a message naming any frozen files, unless the comparison is already cached. When cold storage status is unavailable, the comparison fails closed.
+- `GET /step-inputs/cold` and `POST /step-inputs/onload` drive the **Rewarm** card in the step's status popover, which lists the frozen files and the steps holding them, refreshes every three seconds while open, and offers **Run step** once every file is local; see [API](api-guide.md#running-work).

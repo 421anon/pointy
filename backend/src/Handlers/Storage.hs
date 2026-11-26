@@ -9,6 +9,7 @@ module Handlers.Storage (
     offloadHandler,
     offloadStepHandler,
     onloadRevisionHandler,
+    onloadStepHandler,
     pathOwners,
     HeadStep (..),
     RunningJob (..),
@@ -27,7 +28,7 @@ import Control.Concurrent.QSem (QSem, newQSem, signalQSem, waitQSem)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, retry, writeTVar)
 import Control.Exception (SomeException, bracket_, displayException, try)
-import Control.Monad (join, unless, void, when)
+import Control.Monad (forM_, join, unless, void, when)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.!=), (.:), (.:?))
@@ -37,7 +38,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.List (isPrefixOf, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -48,14 +49,15 @@ import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), liftIO, withEffToIO, (:>))
 import EvalOutput (evalOutputText)
 import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageDelete, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
-import Handlers.Cold (coldFilesFor, coldStatusFor, mapColdProvider, onloadable, startOnload)
+import Handlers.Cold (coldStatusFor, mapColdProvider, onloadable, startOnload)
+import Handlers.RunStep (stepInputsNixDefs)
 import Handlers.StepOutput (resolveStepOutPath)
 import NixEvaluator (EvalFailure (..), historyEvaluatorWorkers)
 import NixStore (rootedPath)
 import Processes (cli)
 import Servant (NoContent (..), ServerError (..), err400, err409, err500, err502, err503)
 import StepEvaluations (CachedStep (..), StepEvaluations, appendEvaluationRecords, evaluatedCommit, loadStepEvaluations, recordEvaluation)
-import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageBlocker (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
+import StorageBus (ColdRecheck (..), Invalidation (..), OffloadState (..), StorageBlocker (..), StorageCapacity (..), StorageRevision (..), StorageView (..), beginOffload, clearOffloadError, currentView, endOffload, invalidate, knownColdCapacity, knownColdStatuses, offloadStates, parseStorageCapacity, publishView, recordOffloadProgress, recheckCold, revisionMovable, takeInvalidation, trackPaths, viewInputsChanged)
 import StorageHistory (ColdSummary (..), RevisionSeed (..), directReadersOf, parseHistory, revisionsFromHistory, summarizeCold)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
@@ -133,6 +135,10 @@ evaluationsRef = unsafePerformIO (newMVar Nothing)
 movablePathsVar :: TVar (Map Int (Set Text))
 movablePathsVar = unsafePerformIO (newTVarIO Map.empty)
 
+{-# NOINLINE rewarmablePathsVar #-}
+rewarmablePathsVar :: TVar (Map Int (Set Text))
+rewarmablePathsVar = unsafePerformIO (newTVarIO Map.empty)
+
 data ScanState = ScanState
     { scanRunning :: Bool
     , scanUnavailable :: Maybe (UTCTime, Text)
@@ -161,7 +167,7 @@ offloadHandler stepId mCommit = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
     outPath <- resolveStepOutPath stepId mCommit
-    withPathLock outPath $ do
+    withStorageMutationLock $ do
         refusePathBusy outPath
         started <- liftIO (beginOffload outPath)
         when started $ liftIO $ void $ forkIO $ do
@@ -173,7 +179,7 @@ offloadStepHandler :: Int -> AppM NoContent
 offloadStepHandler stepId = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
-    withPathLock (T.pack (show stepId)) $ do
+    withStorageMutationLock $ do
         paths <- liftIO (Map.findWithDefault Set.empty stepId <$> readTVarIO movablePathsVar)
         mapM_ refusePathBusy (Set.toList paths)
         unless (Set.null paths) $
@@ -181,11 +187,11 @@ offloadStepHandler stepId = do
         pure NoContent
   where
     offloadPath outPath = do
-        outcome <- runAppEffects (runExceptT (withPathLock outPath $ do
+        outcome <- runAppEffects (runExceptT (withStorageMutationLock $ do
             refusePathBusy outPath
             liftIO (beginOffload outPath)))
         case outcome of
-            Left refused -> endOffload outPath (Left (TE.decodeUtf8Lenient (LBS.toStrict (errBody refused))))
+            Left _ -> pure ()
             Right started -> when started $ do
                 result <- try (runAppEffects (coldStorageOffload outPath (recordOffloadProgress outPath)))
                 endOffload outPath (either (\(err :: SomeException) -> Left (T.pack (displayException err))) id result)
@@ -195,7 +201,7 @@ onloadRevisionHandler stepId mCommit = do
     configured <- lift coldStorageConfigured
     unless configured $ throwError err400{errBody = "Cold storage is not configured."}
     outPath <- resolveStepOutPath stepId mCommit
-    withPathLock outPath $ do
+    withStorageMutationLock $ do
         refusePathBusy outPath
         refuseOffloadRunning outPath
         status <- lift (coldStatusFor outPath)
@@ -204,37 +210,41 @@ onloadRevisionHandler stepId mCommit = do
             Just cold -> do
                 let files = filter onloadable (coldStatusFiles cold)
                 outcomes <- lift $ mapColdProvider (startOnload outPath . T.unpack . coldFilePath) files
-                liftIO (followOnloads outPath)
                 let failures =
                         [ coldFilePath file <> ": " <> message
                         | (file, Left message) <- zip files outcomes
                         ]
                 unless (null failures) $
-                    throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start copying back: " <> T.intercalate "; " failures))}
+                    throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start rewarming: " <> T.intercalate "; " failures))}
                 pure NoContent
 
-{-# NOINLINE onloadWatchersRef #-}
-onloadWatchersRef :: MVar (Set Text)
-onloadWatchersRef = unsafePerformIO (newMVar Set.empty)
-
-followOnloads :: Text -> IO ()
-followOnloads outPath = do
-    start <- modifyMVar onloadWatchersRef (\watchers -> pure (Set.insert outPath watchers, Set.notMember outPath watchers))
-    when start $ void $ forkIO $ do
-        threadDelay 1000000
-        settled <- runAppEffects $ do
-            status <- coldStatusFor outPath
-            pure $ maybe False (all (notOnloading . coldFileState) . coldStatusFiles) status
-        modifyMVar_ onloadWatchersRef (pure . Set.delete outPath)
-        if settled then recheckCold outPath else followOnloads outPath
-  where
-    notOnloading Onloading{} = False
-    notOnloading _ = True
+onloadStepHandler :: Int -> AppM NoContent
+onloadStepHandler stepId = do
+    configured <- lift coldStorageConfigured
+    unless configured $ throwError err400{errBody = "Cold storage is not configured."}
+    withStorageMutationLock $ do
+        paths <- liftIO (Map.findWithDefault Set.empty stepId <$> readTVarIO rewarmablePathsVar)
+        mapM_ refusePathBusy (Set.toList paths)
+        mapM_ refuseOffloadRunning (Set.toList paths)
+        forM_ (Set.toList paths) $ \outPath -> do
+            status <- lift (coldStatusFor outPath)
+            cold <- case status of
+                Nothing -> throwError err503{errBody = "Cannot read the cold storage status. Try again when storage status is available."}
+                Just cold -> pure cold
+            let files = filter onloadable (coldStatusFiles cold)
+            outcomes <- lift $ mapColdProvider (startOnload outPath . T.unpack . coldFilePath) files
+            let failures =
+                    [ coldFilePath file <> ": " <> message
+                    | (file, Left message) <- zip files outcomes
+                    ]
+            unless (null failures) $
+                throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not start rewarming: " <> T.intercalate "; " failures))}
+        pure NoContent
 
 deleteRevisionHandler :: Int -> Maybe Text -> AppM NoContent
 deleteRevisionHandler stepId mCommit = do
     outPath <- resolveStepOutPath stepId mCommit
-    withPathLock outPath $ do
+    withStorageMutationLock $ do
         refusePathBusy outPath
         refuseOffloadRunning outPath
         certificate <- certificateForPath stepId mCommit outPath
@@ -245,16 +255,19 @@ deleteRevisionHandler stepId mCommit = do
             Left err -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 ("Cannot check whether the output exists: " <> TE.decodeUtf8Lenient (LBS.toStrict err)))}
             Right False -> pure ()
             Right True -> do
-                cold <- lift (coldFilesFor outPath)
+                cold <- lift (coldStatusFor outPath)
                 case cold of
                     Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
-                    Just files
-                        | Set.null files -> pure ()
+                    Just status
+                        | any offloadingFile (coldStatusFiles status) ->
+                            throwError err409{errBody = "This output is freezing to cold storage. Wait for it to finish, then try again."}
+                        | null (coldStatusFiles status) -> pure ()
                         | otherwise -> do
                             deleted <- lift (coldStorageDelete outPath)
                             case deleted of
                                 Left message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not delete the output from cold storage: " <> message))}
                                 Right () -> liftIO (recheckCold outPath)
+                liftIO (clearOffloadError outPath)
                 lift (removeCertificationEvidence path certificatePath)
                 (code, _, err) <- lift (runNixStoreCli ["--delete", path])
                 case code of
@@ -268,13 +281,17 @@ deleteRevisionHandler stepId mCommit = do
             recheckCold outPath
             invalidate mempty{invalidOutputs = True}
         pure NoContent
+  where
+    offloadingFile file = case coldFileState file of
+        Offloading _ _ -> True
+        _ -> False
 
 {-# NOINLINE pathMutationSemaphore #-}
 pathMutationSemaphore :: QSem
 pathMutationSemaphore = unsafePerformIO (newQSem 1)
 
-withPathLock :: Text -> AppM a -> AppM a
-withPathLock _ action = ExceptT $ withEffToIO SeqUnlift $ \unlift ->
+withStorageMutationLock :: AppM a -> AppM a
+withStorageMutationLock action = ExceptT $ withEffToIO SeqUnlift $ \unlift ->
     bracket_ (waitQSem pathMutationSemaphore) (signalQSem pathMutationSemaphore) (unlift (runExceptT action))
 
 storeErrorLine :: Text -> Text
@@ -326,7 +343,7 @@ refuseOffloadRunning outPath = do
     offloads <- liftIO offloadStates
     case Map.lookup outPath offloads of
         Just (OffloadRunning _) ->
-            throwError err409{errBody = "This output is being moved to cold storage. Wait for the move to finish, then try again."}
+            throwError err409{errBody = "This output is freezing to cold storage. Wait for it to finish, then try again."}
         _ -> pure ()
 
 runningSteps :: AppM (Either Text (Map Int RunningJob))
@@ -410,7 +427,6 @@ runStorageCenter = do
                     , storageLocal = 0
                     , storageCold = 0
                     , storageCapacity = Nothing
-                    , storageCapacityFreeBytes = Nothing
                     , storageColdCapacity = Nothing
                     , storageScanning = False
                     , storageScanned = 0
@@ -459,11 +475,16 @@ refresh work running = do
     capacity <- liftIO (capacityUsage (invalidBroadcast work))
     now <- liftIO getCurrentTime
     scanFailure <- liftIO (fmap (fmap snd . scanUnavailable) (readMVar scanStateRef))
-    let blockedReason = case cachedHeadSteps caches of
-            Right headSteps -> runningRefusal headSteps running
-            Left _ -> const (Just (StorageBlockerError "Cannot tell which steps read this output until the current revision evaluates."))
+    let blockedFor seed = case cachedHeadSteps caches of
+            Right headSteps ->
+                listToMaybe
+                    [ blocker
+                    | owner <- pathOwners headSteps (seedPath seed)
+                    , Just blocker <- [runningRefusal headSteps running owner]
+                    ]
+            Left _ -> Just (StorageBlockerError "Cannot tell which steps read this output until the current revision evaluates.")
         revisionsWithSeeds =
-            [ (seed, storageRevision coldConfigured (Map.lookup (seedPath seed) colds) (Map.lookup (seedPath seed) offloads) (blockedReason (seedStep seed)) (headStepName <$> either (const Nothing) (Map.lookup (seedStep seed)) (cachedHeadSteps caches)) seed narSize)
+            [ (seed, storageRevision coldConfigured (Map.lookup (seedPath seed) colds) (Map.lookup (seedPath seed) offloads) (blockedFor seed) (headStepName <$> either (const Nothing) (Map.lookup (seedStep seed)) (cachedHeadSteps caches)) seed narSize)
             | seed <- seeds
             , Just narSize <- [Map.lookup (seedPath seed) present]
             ]
@@ -477,9 +498,18 @@ refresh work running = do
                 | (seed, revision) <- revisionsWithSeeds
                 , revisionMovable revision
                 ]
+        rewarmablePaths =
+            Map.fromListWith Set.union
+                [ (seedStep seed, Set.singleton (seedPath seed))
+                | (seed, revision) <- revisionsWithSeeds
+                , revisionCold revision > 0
+                , revisionState revision `elem` ["cold", "failed"]
+                ]
         localBytes = sum (map revisionLocal revisions)
         coldBytes = sum (map revisionCold revisions)
-    liftIO $ atomically $ writeTVar movablePathsVar movablePaths
+    liftIO $ atomically $ do
+        writeTVar movablePathsVar movablePaths
+        writeTVar rewarmablePathsVar rewarmablePaths
     liftIO $
         publishView
             (invalidBroadcast work)
@@ -488,7 +518,6 @@ refresh work running = do
                 , storageLocal = localBytes
                 , storageCold = coldBytes
                 , storageCapacity = stepOutputCapacity localBytes capacity
-                , storageCapacityFreeBytes = if maybe False ((== "filesystem") . capacityKind) capacity then capacityAvailableBytes <$> capacity else Nothing
                 , storageColdCapacity = if coldConfigured then coldCapacityBytes else Nothing
                 , storageScanning = not (null toScan)
                 , storageScanned = scannedCount
@@ -552,7 +581,7 @@ storageRevision coldConfigured status offload blocked currentName seed narSize =
         | otherwise = ColdSummary "local" narSize 0 0 0 Nothing
     summary = case offload of
         Just (OffloadRunning (OffloadProgress done total)) -> provided{coldSummaryState = "offloading", coldSummaryDone = done, coldSummaryTotal = total}
-        Just (OffloadFailed message) -> provided{coldSummaryError = Just ("Moving to cold storage failed: " <> message)}
+        Just (OffloadFailed message) -> provided{coldSummaryError = Just ("Freezing failed: " <> message)}
         Nothing -> provided
 
 refreshHistory :: FilePath -> Caches -> Eff AppEffects Caches
@@ -584,29 +613,22 @@ evalHeadSteps repoPath headHash = do
 
 headStepsExpression :: String
 headStepsExpression =
-    unlines
+    unlines $
         [ "steps:"
         , "let"
-        , "  stepRefsOf = value:"
-        , "    if builtins.isAttrs value && (value.type or null) != \"derivation\" then"
-        , "      (if value ? step && (builtins.isInt value.step || builtins.isString value.step) then [ (toString value.step) ] else [ ])"
-        , "      ++ builtins.concatMap stepRefsOf (builtins.attrValues value)"
-        , "    else if builtins.isList value then builtins.concatMap stepRefsOf value"
-        , "    else [ ];"
-        , "  inputsOf = id:"
-        , "    let upstream = steps.${id}.dependencies or [ ];"
-        , "    in builtins.filter (ref: builtins.elem ref upstream) (stepRefsOf (steps.${id}.def.args or { }));"
-        , "in builtins.mapAttrs (id: s:"
-        , "  let name = builtins.tryEval (s.def.name or (s.name or \"\"));"
-        , "      output = builtins.tryEval s.outPath;"
-        , "      certificate = builtins.tryEval ((s.certificate or s).outPath);"
-        , "  in if output.success && certificate.success then {"
-        , "    name = if name.success && builtins.isString name.value then name.value else \"\";"
-        , "    inputs = builtins.map builtins.fromJSON (inputsOf id);"
-        , "    output = output.value;"
-        , "    certificate = certificate.value;"
-        , "  } else null) steps"
         ]
+            ++ stepInputsNixDefs
+            ++ [ "in builtins.mapAttrs (id: s:"
+               , "  let name = builtins.tryEval (s.def.name or (s.name or \"\"));"
+               , "      output = builtins.tryEval s.outPath;"
+               , "      certificate = builtins.tryEval ((s.certificate or s).outPath);"
+               , "  in if output.success && certificate.success then {"
+               , "    name = if name.success && builtins.isString name.value then name.value else \"\";"
+               , "    inputs = builtins.map builtins.fromJSON (inputsOf id);"
+               , "    output = output.value;"
+               , "    certificate = certificate.value;"
+               , "  } else null) steps"
+               ]
 
 pathSizes :: (Nix :> es) => [Text] -> Eff es (Either Text (Map Text Integer))
 pathSizes paths = go paths

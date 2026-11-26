@@ -1115,7 +1115,7 @@ type alias StorageMeter =
 
 storageMeter : StorageView -> Maybe StorageMeter
 storageMeter snapshot =
-    Model.storageCapacityFraction (max 0 snapshot.local) snapshot.capacity snapshot.capacityFreeBytes
+    Model.storageCapacityFraction (max 0 snapshot.local) snapshot.capacity
         |> Maybe.map (\usedPercent -> { usedPercent = usedPercent, low = usedPercent >= 90 })
 
 
@@ -1258,6 +1258,9 @@ viewStorageUsage snapshot =
         [ viewStorageWarmTier snapshot
         , Html.viewIf snapshot.coldConfigured <|
             viewStorageColdTier snapshot
+        , Html.viewIf snapshot.coldConfigured <|
+            Html.p [ class "storage-panel__cold-help" ]
+                [ Html.text "Freeze moves outputs to cold storage to free space on this server. Frozen files stay listed and must be rewarmed before they can be opened or run." ]
         ]
 
 
@@ -1293,7 +1296,7 @@ viewStorageColdTier snapshot =
                         [ Html.span [ class "storage-panel__cold-note" ]
                             [ Html.text "· "
                             , Html.strong [] [ Html.text (Model.formatStorageSize capacity.availableBytes) ]
-                            , Html.text " free on cold storage"
+                            , Html.text " free"
                             ]
                         ]
 
@@ -1328,7 +1331,7 @@ viewStorageCapacityBar cold capacity used =
                 ]
                 [ Html.span [ class "storage-panel__bar-used", style "width" (String.fromInt percent ++ "%") ] [] ]
         )
-        (Model.storageCapacityFraction used (Just capacity) (Just capacity.availableBytes))
+        (Model.storageCapacityFraction used (Just capacity))
 
 
 capacityRemainder : StorageCapacity -> Html msg
@@ -1412,38 +1415,55 @@ storageLiveStatus snapshot moving =
             else
                 ""
 
-        activeMoves =
-            List.filter revisionIsMoving snapshot.revisions
+        progressSuffix revisions =
+            let
+                done =
+                    List.sum (List.map .done revisions)
 
-        movingNow =
-            Actions.storageMoveInFlight moving || not (List.isEmpty activeMoves)
-
-        moveStatus =
-            if not movingNow then
-                ""
-
-            else if List.isEmpty activeMoves then
-                " Freezing revisions to cold storage."
+                total =
+                    List.sum (List.map .total revisions)
+            in
+            if total > 0 then
+                ": " ++ String.fromInt (ratioPercent done total) ++ "%."
 
             else
-                let
-                    done =
-                        List.sum (List.map .done activeMoves)
+                "."
 
-                    total =
-                        List.sum (List.map .total activeMoves)
-                in
+        freezing =
+            List.filter (\revision -> revision.state == StorageOffloading) snapshot.revisions
+
+        rewarming =
+            List.filter (\revision -> revision.state == StorageOnloading) snapshot.revisions
+
+        freezeStatus =
+            if List.isEmpty freezing then
+                if Actions.storageMoveInFlight moving then
+                    " Freezing revisions to cold storage."
+
+                else
+                    ""
+
+            else
                 " Freezing "
-                    ++ storageCount (List.length activeMoves) "revision" "revisions"
+                    ++ storageCount (List.length freezing) "revision" "revisions"
                     ++ " to cold storage"
-                    ++ (if total > 0 then
-                            ": " ++ String.fromInt (ratioPercent done total) ++ "%."
+                    ++ progressSuffix freezing
 
-                        else
-                            "."
-                       )
+        rewarmStatus =
+            if List.isEmpty rewarming then
+                if Actions.storageRewarmInFlight moving then
+                    " Rewarming revisions from cold storage."
+
+                else
+                    ""
+
+            else
+                " Rewarming "
+                    ++ storageCount (List.length rewarming) "revision" "revisions"
+                    ++ " from cold storage"
+                    ++ progressSuffix rewarming
     in
-    String.trim (scan ++ moveStatus)
+    String.trim (scan ++ freezeStatus ++ rewarmStatus)
 
 
 viewStorageFooter : StorageView -> Int -> Html msg
@@ -1499,11 +1519,11 @@ summarizeStorageGroup : Int -> List StorageRevision -> StorageGroup
 summarizeStorageGroup stepId revisions =
     let
         name =
-            case List.filterMap .currentName revisions of
-                current :: _ ->
+            case List.filterMap .currentName revisions |> List.find (\current -> not (String.isEmpty (String.trim current))) of
+                Just current ->
                     current
 
-                [] ->
+                Nothing ->
                     case List.maximumBy (\revision -> ( Time.posixToMillis revision.committedAt, revision.revision )) revisions of
                         Just newest ->
                             if String.isEmpty (String.trim newest.name) then
@@ -1537,7 +1557,7 @@ storageRevisionRewarmable revision =
 
 storageRevisionMovable : StorageRevision -> Bool
 storageRevisionMovable revision =
-    revision.state == StorageLocal || revision.state == StorageFailed
+    revision.state == StorageLocal
 
 
 compareStorageGroups : StorageGroup -> StorageGroup -> Order
@@ -1600,8 +1620,12 @@ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
         rewarmRevisions =
             List.filter storageRevisionRewarmable group.revisions
 
+        rewarmColdBytes =
+            List.sum (List.map .cold rewarmRevisions)
+
         rewarming =
-            List.any (\revision -> Set.member (Actions.storageRewarmKey revision) pending) rewarmRevisions
+            Set.member (Actions.storageRewarmStepKey group.stepId) pending
+                || List.any (\revision -> Set.member (Actions.storageRewarmKey revision) pending) rewarmRevisions
 
         busy =
             List.any (Actions.storageRevisionActionPending model) group.revisions
@@ -1609,20 +1633,46 @@ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
         rewarmCount =
             List.length rewarmRevisions
 
+        freezingRevisions =
+            List.filter (\revision -> revision.state == StorageOffloading) group.revisions
+
+        rewarmingRevisions =
+            List.filter (\revision -> revision.state == StorageOnloading) group.revisions
+
+        progressFor label revisions =
+            storageProgress label (List.sum (List.map .done revisions)) (List.sum (List.map .total revisions))
+
+        transferProgress =
+            (if List.isEmpty freezingRevisions then
+                []
+
+             else
+                [ progressFor "Freezing" freezingRevisions ]
+            )
+                ++ (if List.isEmpty rewarmingRevisions then
+                        []
+
+                    else
+                        [ progressFor "Rewarming" rewarmingRevisions ]
+                   )
+
         rewarmButton =
             Html.viewIf (coldConfigured && rewarmCount > 0) <|
                 Html.button
                     [ class "icon-btn storage-panel__rev-action"
-                    , classList [ ( "storage-panel__rev-action--starting", rewarming ) ]
+                    , classList
+                        [ ( "storage-panel__rev-action--starting", rewarming )
+                        , ( "storage-panel__rev-action--rewarm", True )
+                        ]
                     , type_ "button"
                     , disabled (rewarming || busy || group.blocked /= Nothing)
-                    , Events.onClick (Actions.storageRewarmRevisions rewarmRevisions)
+                    , Events.onClick (Actions.storageRewarmStepRevisions group.stepId)
                     , title
-                        (if rewarming then
-                            "Rewarming " ++ storageCount rewarmCount "cold revision" "cold revisions" ++ "."
-
-                         else
-                            "Rewarm " ++ storageCount rewarmCount "cold revision" "cold revisions" ++ "."
+                        ("Rewarm "
+                            ++ storageCount rewarmCount "cold revision" "cold revisions"
+                            ++ " ("
+                            ++ Model.formatStorageSize rewarmColdBytes
+                            ++ ")."
                         )
                     , attribute "aria-label"
                         (if rewarming then
@@ -1639,16 +1689,19 @@ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
             Html.viewIf (coldConfigured && group.localRevisionCount > 0) <|
                 Html.button
                     [ class "icon-btn storage-panel__rev-action"
-                    , classList [ ( "storage-panel__rev-action--starting", starting ) ]
+                    , classList
+                        [ ( "storage-panel__rev-action--starting", starting )
+                        , ( "storage-panel__rev-action--freeze", True )
+                        ]
                     , type_ "button"
                     , disabled (starting || busy || group.blocked /= Nothing)
                     , Events.onClick (Actions.confirmStorageStepOffload group.stepId group.name group.movableLocal group.localRevisionCount)
                     , title
-                        (if starting then
-                            "Starting to freeze " ++ storageCount group.localRevisionCount "local revision" "local revisions" ++ " to cold storage."
-
-                         else
-                            "Freeze " ++ storageCount group.localRevisionCount "local revision" "local revisions" ++ " to cold storage."
+                        ("Freeze "
+                            ++ storageCount group.localRevisionCount "local revision" "local revisions"
+                            ++ " ("
+                            ++ Model.formatStorageSize group.movableLocal
+                            ++ ")."
                         )
                     , attribute "aria-label"
                         (if starting then
@@ -1693,7 +1746,7 @@ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
                     [ Html.span [ class "storage-panel__size" ] [ Html.text (Model.formatStorageSize group.cold) ]
                     , Html.div [ class "storage-panel__action" ]
                         [ Html.div [ class "storage-panel__rev-actions" ]
-                            [ rewarmButton, moveButton ]
+                            (transferProgress ++ [ rewarmButton, moveButton ])
                         ]
                     ]
 
@@ -1703,7 +1756,7 @@ viewStorageStepRow model coldConfigured stepRoutes childrenId expanded group =
         )
 
 
-viewStorageStepId : Dict Int Route.Route -> Int -> Html msg
+viewStorageStepId : Dict Int Route.Route -> Int -> Html (Flow Model ())
 viewStorageStepId stepRoutes stepId =
     case Dict.get stepId stepRoutes of
         Just route_ ->
@@ -1711,6 +1764,7 @@ viewStorageStepId stepRoutes stepId =
                 [ href (Route.toString route_)
                 , class "storage-panel__step-id"
                 , title ("Open step " ++ String.fromInt stepId)
+                , Events.onClick Actions.closeStoragePanel
                 ]
                 [ Html.text ("#" ++ String.fromInt stepId) ]
 
@@ -1811,7 +1865,7 @@ viewStorageRow model coldConfigured stepRoutes parentName revision =
         )
 
 
-storageBlockedReason : Int -> Dict Int Route.Route -> String -> Maybe StorageBlocker -> Html msg
+storageBlockedReason : Int -> Dict Int Route.Route -> String -> Maybe StorageBlocker -> Html (Flow Model ())
 storageBlockedReason ownStepId stepRoutes blockedId blocked =
     Html.div [ class "storage-panel__blocked", id blockedId ]
         (case blocked of
@@ -1870,7 +1924,7 @@ storageRevisionActions model coldConfigured revision blockedId =
                 else
                     []
                )
-            ++ [ storageRevisionDeleteButton model revision ]
+            ++ [ storageRevisionDeleteButton model revision blockedId ]
         )
 
 
@@ -1885,17 +1939,14 @@ storageRevisionRewarmButton model revision blockedId =
     in
     Html.button
         [ class "icon-btn storage-panel__rev-action"
-        , classList [ ( "storage-panel__rev-action--starting", rewarming ) ]
+        , classList
+            [ ( "storage-panel__rev-action--starting", rewarming )
+            , ( "storage-panel__rev-action--rewarm", True )
+            ]
         , type_ "button"
         , disabled (busy || revision.blocked /= Nothing)
         , Events.onClick (Actions.storageRewarmRevision revision)
-        , title
-            (if rewarming then
-                "Rewarming this revision."
-
-             else
-                "Rewarm this revision."
-            )
+        , title ("Rewarm this revision (" ++ Model.formatStorageSize revision.cold ++ ").")
         , attribute "aria-label"
             (if rewarming then
                 "Rewarming revision " ++ String.left 7 revision.revision
@@ -1908,8 +1959,8 @@ storageRevisionRewarmButton model revision blockedId =
         [ iconCustom False "mode_heat" [ attribute "aria-hidden" "true" ] ]
 
 
-storageRevisionDeleteButton : Model -> StorageRevision -> Html (Flow Model ())
-storageRevisionDeleteButton model revision =
+storageRevisionDeleteButton : Model -> StorageRevision -> String -> Html (Flow Model ())
+storageRevisionDeleteButton model revision blockedId =
     let
         pending =
             Model.getStorageMoving model
@@ -1948,12 +1999,14 @@ storageRevisionDeleteButton model revision =
         , classList
             [ ( "storage-panel__rev-action--armed", armed )
             , ( "storage-panel__rev-action--starting", deleting )
+            , ( "storage-panel__rev-action--delete", True )
             ]
         , type_ "button"
-        , disabled busy
+        , disabled (busy || revision.blocked /= Nothing)
         , Events.onClick (Actions.storageDeleteRevision revision)
         , title tooltip
         , attribute "aria-label" label
+        , attribute "aria-describedby" blockedId
         ]
         (if armed then
             [ Html.text "Delete?" ]
@@ -1994,19 +2047,18 @@ storageRevisionMoveButton model revision blockedId =
     in
     Html.button
         [ class "icon-btn storage-panel__rev-action"
-        , classList [ ( "storage-panel__rev-action--starting", starting ) ]
+        , classList
+            [ ( "storage-panel__rev-action--starting", starting )
+            , ( "storage-panel__rev-action--freeze", True )
+            ]
         , type_ "button"
         , disabled (busy || revision.blocked /= Nothing)
         , Events.onClick (Actions.confirmOffload revision)
+        , title ("Freeze this revision (" ++ Model.formatStorageSize revision.local ++ ").")
         , attribute "aria-label" label
         , attribute "aria-describedby" blockedId
         ]
         [ iconCustom False "ac_unit" [ attribute "aria-hidden" "true" ] ]
-
-
-revisionIsMoving : StorageRevision -> Bool
-revisionIsMoving revision =
-    revision.state == StorageOffloading || revision.state == StorageOnloading
 
 
 storageProgress : String -> Int -> Int -> Html msg

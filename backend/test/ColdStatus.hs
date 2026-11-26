@@ -2,8 +2,9 @@
 
 module Main (main) where
 
-import ColdRefusal (applyColdRefusals, clearColdRefusals, recordColdRefusal)
+import ColdRefusal (applyColdRefusals, clearColdRefusals, clearColdRefusalsForPath, recordColdRefusal)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), parseColdStatus)
 import Handlers.StepInputs (coldInputReaders, runReads)
 
@@ -59,16 +60,32 @@ checkColdInputReaders = do
 
 checkColdRefusals :: IO ()
 checkColdRefusals = do
-    recordColdRefusal 7 "refusal-commit" "cold files"
-    recordColdRefusal 8 "refusal-commit" "cold files"
+    recordColdRefusal 7 "refusal-commit" (Set.singleton "/nix/store/out7") "cold files"
+    recordColdRefusal 8 "refusal-commit" (Set.fromList ["/nix/store/out8", "/nix/store/out9"]) "cold files"
     retained <- applyColdRefusals "refusal-commit" statuses
     assertEqual
         "a retained refusal replaces an unstarted or failed step but not another status"
         (Map.fromList [(7, ("inputs-cold", Just "cold files")), (8, ("inputs-cold", Just "cold files")), (9, ("success", Nothing))])
         retained
-    clearColdRefusals "refusal-commit" [7, 8]
+    clearColdRefusalsForPath "/nix/store/out7"
+    partiallyCleared <- applyColdRefusals "refusal-commit" statuses
+    assertEqual
+        "a refusal clears when all of its cold paths are local"
+        (Map.fromList [(7, ("not-started", Nothing)), (8, ("inputs-cold", Just "cold files")), (9, ("success", Nothing))])
+        partiallyCleared
+    clearColdRefusalsForPath "/nix/store/out8"
+    stillRefused <- applyColdRefusals "refusal-commit" statuses
+    assertEqual
+        "a refusal stays while another of its cold paths is still cold"
+        (Map.fromList [(7, ("not-started", Nothing)), (8, ("inputs-cold", Just "cold files")), (9, ("success", Nothing))])
+        stillRefused
+    clearColdRefusalsForPath "/nix/store/out9"
+    fullyCleared <- applyColdRefusals "refusal-commit" statuses
+    assertEqual "clearing every cold path leaves statuses unchanged" statuses fullyCleared
+    recordColdRefusal 7 "refusal-commit" (Set.singleton "/nix/store/out7") "cold files"
+    clearColdRefusals "refusal-commit" [7]
     cleared <- applyColdRefusals "refusal-commit" statuses
-    assertEqual "clearing refusals leaves statuses unchanged" statuses cleared
+    assertEqual "clearing a refusal by commit leaves statuses unchanged" statuses cleared
   where
     statuses = Map.fromList [(7, ("not-started", Nothing)), (8, ("failure", Just "old build")), (9, ("success", Nothing))]
 

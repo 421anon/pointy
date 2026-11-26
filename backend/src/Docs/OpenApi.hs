@@ -385,7 +385,6 @@ instance ToSchema StorageView where
                 , ("local", integerField)
                 , ("cold", integerField)
                 , ("capacity", nullableCapacity)
-                , ("capacityFreeBytes", nullableField OpenApiInteger)
                 , ("coldCapacity", nullableCapacity)
                 , ("scanning", boolField)
                 , ("scanned", integerField)

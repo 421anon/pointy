@@ -25,7 +25,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import ColdProvider (ColdFile (..), ColdStatus (..))
+import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..))
 import Effects (AppM, coldStorageConfigured)
 import Handlers.Cold (coldStatusFor, mapColdProvider, onloadable, startOnload)
 import Handlers.RunStep (StepTarget (..), getInputGraph, resolveStepTargets)
@@ -107,7 +107,7 @@ coldInputsOnloadHandler eid commit = do
             | ((step, _, rel), Left message) <- zip requests outcomes
             ]
     unless (null failures) $
-        failWith err502 ("Could not start copying back: " ++ T.unpack (T.intercalate "; " failures))
+        failWith err502 ("Could not start rewarming: " ++ T.unpack (T.intercalate "; " failures))
     coldInputsView inputs
 
 runInputsOf :: Int -> Maybe Text -> AppM RunInputs
@@ -142,18 +142,39 @@ runReads graph certified outputBuilt = Map.mapMaybeWithKey readsOf graph
 coldInputsView :: RunInputs -> AppM ColdInputsView
 coldInputsView inputs = do
     statuses <- lift $ mapColdProvider (\(step, outPath) -> (step,) <$> coldStatusFor outPath) (Map.toList (runInputsOutPaths inputs))
-    liftIO $ recordCopyBackRequests [(outPath, file) | (step, Just status) <- statuses, Just outPath <- [Map.lookup step (runInputsOutPaths inputs)], file <- coldStatusFiles status, not (onloadable file)]
-    requested <- liftIO $ readMVar copyBackRequests
+    liftIO $ recordCopyBackRequests [(outPath, file) | (step, Just status) <- statuses, Just outPath <- [Map.lookup step (runInputsOutPaths inputs)], file <- coldStatusFiles status, isOnloadingFile file]
     case [step | (step, Nothing) <- statuses] of
         step : _ -> failWith err503 ("Cold storage status is unavailable for step " ++ show step ++ ". Try again.")
         [] -> do
-            let files = Map.fromList [(step, coldStatusFiles status) | (step, Just status) <- statuses]
-                filesOf step = Map.findWithDefault [] step files
-                backOf step = returnedFiles (maybe Map.empty (\outPath -> Map.findWithDefault Map.empty outPath requested) (Map.lookup step (runInputsOutPaths inputs))) (filesOf step)
+            let filesByStep = Map.fromList [(step, coldStatusFiles status) | (step, Just status) <- statuses]
+                outPathOf step = Map.lookup step (runInputsOutPaths inputs)
+                staleOutPaths = Set.fromList [outPath | (step, coldFiles) <- Map.toList filesByStep, not (null coldFiles), all isOffloadedOrFailed coldFiles, Just outPath <- [outPathOf step]]
+            liftIO $ clearCopyBackRequests staleOutPaths
+            requested <- liftIO $ readMVar copyBackRequests
+            let filesOf step = Map.findWithDefault [] step filesByStep
+                backOf step = returnedFiles (maybe Map.empty (\outPath -> Map.findWithDefault Map.empty outPath requested) (outPathOf step)) (filesOf step)
                 readers = coldInputReaders (runInputsReads inputs) (not . null . filesOf)
                 involved = coldInputReaders (runInputsReads inputs) (\step -> not (null (filesOf step)) || not (null (backOf step)))
                 sources = nubOrd (concat (Map.elems involved))
+                localOutPaths = Set.fromList [outPath | (step, coldFiles) <- Map.toList filesByStep, null coldFiles, Just outPath <- [outPathOf step]]
+            liftIO $ clearCopyBackRequests localOutPaths
             pure (ColdInputsView (Map.keys readers) [ColdInputSource step (filesOf step) (backOf step) | step <- sources])
+
+isOnloadingFile :: ColdFile -> Bool
+isOnloadingFile file = case coldFileState file of
+    Onloading _ _ -> True
+    _ -> False
+
+isOffloadedOrFailed :: ColdFile -> Bool
+isOffloadedOrFailed file = case coldFileState file of
+    Offloaded -> True
+    OnloadFailed _ -> True
+    _ -> False
+
+clearCopyBackRequests :: Set.Set Text -> IO ()
+clearCopyBackRequests outPaths =
+    modifyMVar_ copyBackRequests $ \known ->
+        pure (Map.withoutKeys known outPaths)
 
 coldInputReaders :: Map Int [Int] -> (Int -> Bool) -> Map Int [Int]
 coldInputReaders stepReads holdsColdFiles = Map.filter (not . null) (Map.map (filter holdsColdFiles) stepReads)

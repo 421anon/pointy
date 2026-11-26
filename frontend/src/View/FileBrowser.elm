@@ -277,7 +277,7 @@ viewColdFetchProgress progress =
     Html.span
         (class "upload-progress-bar cold-fetch-progress-bar"
             :: Html.Attributes.attribute "role" "progressbar"
-            :: Html.Attributes.attribute "aria-label" "Copying back from cold storage"
+            :: Html.Attributes.attribute "aria-label" "Rewarming from cold storage"
             :: valueAttrs
         )
         [ Html.span [ class "upload-progress-fill", fillAttr ] []
@@ -292,7 +292,7 @@ viewColdFile contextKey onload path availability =
 
         onloadButton label =
             Html.button
-                [ class "btn file-cold-unfreeze-btn"
+                [ class "btn file-cold-rewarm-btn"
                 , type_ "button"
                 , Html.Events.onClick (onload path)
                 ]
@@ -301,9 +301,9 @@ viewColdFile contextKey onload path availability =
         note text =
             Html.p [ class "file-cold-popover-note" ] [ Html.text text ]
 
-        isUnfreezeFailed =
+        isRewarmFailed =
             case availability of
-                Model.Core.UnfreezeFailed _ ->
+                Model.Core.RewarmFailed _ ->
                     True
 
                 _ ->
@@ -311,24 +311,26 @@ viewColdFile contextKey onload path availability =
 
         ( title, body ) =
             case availability of
-                Model.Core.Unfreezing _ ->
-                    ( "Copying back from cold storage…"
-                    , [ note "The copy continues on the server even if you leave this page. The file's buttons appear when it is done." ]
+                Model.Core.Rewarming progress ->
+                    ( "Rewarming from cold storage…"
+                    , [ viewColdFetchProgress progress
+                      , note "Rewarming continues on the server even if you leave this page. The file's actions appear when it is ready."
+                      ]
                     )
 
-                Model.Core.UnfreezeFailed reason ->
-                    ( "Copying back failed"
-                    , [ note "The file could not be copied back from cold storage, so it is still not on this server."
+                Model.Core.RewarmFailed reason ->
+                    ( "Rewarming failed"
+                    , [ note "This file could not be rewarmed from cold storage."
                       , note reason
                       , onloadButton "Try again"
                       ]
                     )
 
                 _ ->
-                    ( "Offloaded to cold storage"
-                    , [ note "This file was offloaded to cold storage and isn't on this server, so it can't be viewed, shared, or downloaded."
-                      , note "Copying it back takes longer for larger files; afterwards it works like any other file."
-                      , onloadButton "Copy back to this server"
+                    ( "Frozen in cold storage"
+                    , [ note "This file is in cold storage, not on this server, so it cannot be viewed, shared, or downloaded."
+                      , note "Rewarming takes longer for larger files; afterwards it works like any other file."
+                      , onloadButton "Rewarm file"
                       ]
                     )
     in
@@ -336,13 +338,13 @@ viewColdFile contextKey onload path availability =
         [ Html.button
             [ class "file-cold-btn"
             , type_ "button"
-            , Html.Attributes.title "Offloaded to cold storage, not on this server"
+            , Html.Attributes.title "Frozen in cold storage"
             , Html.Attributes.attribute "popovertarget" popoverId
             , Html.Attributes.style "anchor-name" ("--anchor-" ++ popoverId)
             ]
             [ icon False "ac_unit" ]
         , Html.div
-            [ classList [ ( "file-cold-popover", True ), ( "is-failed", isUnfreezeFailed ) ]
+            [ classList [ ( "file-cold-popover", True ), ( "is-failed", isRewarmFailed ) ]
             , id popoverId
             , Html.Attributes.attribute "popover" "auto"
             , Html.Attributes.style "position-anchor" ("--anchor-" ++ popoverId)
@@ -623,15 +625,15 @@ viewDirectoryItemWithPath model specName mRecordId mDirCtx isLocked directoryPat
                                 Html.nothing
 
                             ( availability, Just (OutputDir stepId_ commit_) ) ->
-                                viewColdFile ("cold-" ++ String.fromInt stepId_ ++ "-" ++ String.left 7 commit_) (Actions.unfreezeOutputFile stepId_) path availability
+                                viewColdFile ("cold-" ++ String.fromInt stepId_ ++ "-" ++ String.left 7 commit_) (Actions.rewarmOutputFile stepId_) path availability
 
                             ( availability, Just (StorageDeleteDir stepId_ commit_) ) ->
-                                viewColdFile ("cold-delete-" ++ String.fromInt stepId_ ++ "-" ++ String.left 7 commit_) Actions.unfreezeStorageDeleteFile path availability
+                                viewColdFile ("cold-delete-" ++ String.fromInt stepId_ ++ "-" ++ String.left 7 commit_) Actions.rewarmStorageDeleteFile path availability
 
                             _ ->
                                 Html.nothing
                         , case file.availability of
-                            Model.Core.Unfreezing progress ->
+                            Model.Core.Rewarming progress ->
                                 viewColdFetchProgress progress
 
                             _ ->

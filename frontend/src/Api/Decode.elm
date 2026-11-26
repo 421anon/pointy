@@ -1111,7 +1111,6 @@ storageView =
         |> required "local" Decode.int
         |> required "cold" Decode.int
         |> required "capacity" (Decode.nullable storageCapacity)
-        |> optional "capacityFreeBytes" (Decode.nullable Decode.int) Nothing
         |> required "coldCapacity" (Decode.nullable storageCapacity)
         |> required "scanning" Decode.bool
         |> required "scanned" Decode.int

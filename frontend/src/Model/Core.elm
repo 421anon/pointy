@@ -8,6 +8,7 @@ import Components.Select exposing (Item, Ranked, SelectState, initSelectState)
 import Csv.Parser
 import Debounce exposing (Debounce)
 import Dict exposing (Dict)
+import Filesize
 import Flow exposing (Flow)
 import Fuzzy
 import Grid
@@ -189,8 +190,8 @@ type alias StepRunState =
 type Availability
     = Local
     | Cold
-    | Unfreezing (Maybe ( Int, Int ))
-    | UnfreezeFailed String
+    | Rewarming (Maybe ( Int, Int ))
+    | RewarmFailed String
 
 
 type alias ColdStatus =
@@ -229,7 +230,6 @@ type alias StorageView =
     , local : Int
     , cold : Int
     , capacity : Maybe StorageCapacity
-    , capacityFreeBytes : Maybe Int
     , coldCapacity : Maybe StorageCapacity
     , scanning : Bool
     , scanned : Int
@@ -307,29 +307,24 @@ storageStepKey stepId =
     "step#" ++ String.fromInt stepId
 
 
-storageCapacityFraction : Int -> Maybe StorageCapacity -> Maybe Int -> Maybe Int
-storageCapacityFraction used capacity freeBytes =
+storageCapacityFraction : Int -> Maybe StorageCapacity -> Maybe Int
+storageCapacityFraction used capacity =
     let
-        denominator =
-            case capacity of
-                Just { kind, totalBytes } ->
-                    case kind of
-                        CapacityQuota ->
-                            Just totalBytes
-
-                        CapacityFilesystem ->
-                            Maybe.map ((+) used) freeBytes
-
-                Nothing ->
-                    Maybe.map ((+) used) freeBytes
-    in
-    case denominator of
-        Just total ->
+        fraction total =
             if total > 0 then
                 Just (clamp 0 100 (used * 100 // total))
 
             else
                 Nothing
+    in
+    case capacity of
+        Just cap ->
+            case cap.kind of
+                CapacityQuota ->
+                    fraction cap.totalBytes
+
+                CapacityFilesystem ->
+                    fraction (used + cap.availableBytes)
 
         Nothing ->
             Nothing
@@ -337,29 +332,7 @@ storageCapacityFraction used capacity freeBytes =
 
 formatStorageSize : Int -> String
 formatStorageSize bytes =
-    if bytes < 1024 then
-        String.fromInt (max 0 bytes) ++ " B"
-
-    else
-        formatStorageUnit (round (toFloat bytes / 1024 * 10)) [ "KiB", "MiB", "GiB", "TiB", "PiB" ]
-
-
-formatStorageUnit : Int -> List String -> String
-formatStorageUnit tenths units =
-    case units of
-        unit :: rest ->
-            if tenths >= 10240 && rest /= [] then
-                formatStorageUnit (tenths // 1024) rest
-
-            else
-                String.fromInt (tenths // 10)
-                    ++ "."
-                    ++ String.fromInt (modBy 10 tenths)
-                    ++ " "
-                    ++ unit
-
-        [] ->
-            String.fromInt tenths ++ " B"
+    Filesize.formatBase2 (max 0 bytes)
 
 
 getStorageOpen : Model -> Bool
@@ -462,6 +435,16 @@ isOnloading : ColdFileState -> Bool
 isOnloading state =
     case state of
         Onloading _ _ ->
+            True
+
+        _ ->
+            False
+
+
+isOffloading : ColdFileState -> Bool
+isOffloading state =
+    case state of
+        Offloading _ _ ->
             True
 
         _ ->
@@ -932,6 +915,8 @@ type alias ModalConfirmConfig =
     , title : String
     , subtitle : Maybe String
     , bodyLines : List String
+    , confirmLabel : String
+    , isDanger : Bool
     , onConfirm : Flow Model ()
     }
 
@@ -942,6 +927,8 @@ initModalConfirmConfig =
     , title = ""
     , subtitle = Nothing
     , bodyLines = []
+    , confirmLabel = "Confirm"
+    , isDanger = True
     , onConfirm = Flow.pure ()
     }
 
@@ -2307,15 +2294,15 @@ getSteps (Model model) =
     model.steps
 
 
-stepsUnfreezing : Model -> List { id : Int, commit : String, paths : List (List String) }
-stepsUnfreezing model =
+stepsRewarming : Model -> List { id : Int, commit : String, paths : List (List String) }
+stepsRewarming model =
     getSteps model
         |> Dict.values
         |> List.filterMap
             (\step ->
                 case ( step.id, ApiData.toMaybe step.runState ) of
                     ( Just id, Just runState_ ) ->
-                        case filePathsWhere (.availability >> isUnfreezing) [] runState_.directoryView of
+                        case filePathsWhere (.availability >> isRewarming) [] runState_.directoryView of
                             [] ->
                                 Nothing
 
@@ -2327,10 +2314,10 @@ stepsUnfreezing model =
             )
 
 
-isUnfreezing : Availability -> Bool
-isUnfreezing availability =
+isRewarming : Availability -> Bool
+isRewarming availability =
     case availability of
-        Unfreezing _ ->
+        Rewarming _ ->
             True
 
         _ ->

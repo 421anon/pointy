@@ -11,6 +11,7 @@ import Fixture.Document (FixtureDocument (..))
 import Data.Either (isLeft)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (listToMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -39,6 +40,7 @@ main = do
     checkCertificationRequiresOutput
     checkValidityBatchSkipsNonStorePaths
     checkSharedOutputOwners
+    checkRevisionBlockScope
 
 checkHistoryParsing :: IO ()
 checkHistoryParsing = do
@@ -139,7 +141,7 @@ checkCold :: IO ()
 checkCold = do
     assertEqual "unknown status keeps the output local and unmovable" (ColdSummary "unknown" 1000 0 0 0 (Just "Cold storage status is unavailable.")) (summarizeCold 1000 Nothing)
     assertEqual "an untracked output is local" (ColdSummary "local" 1000 0 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [] Nothing Nothing)))
-    assertEqual "an offloading output reports its progress" (ColdSummary "offloading" 100 900 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Offloading 400 900)] Nothing Nothing)))
+    assertEqual "an offloading output is still local and reports its progress" (ColdSummary "offloading" 1000 0 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Offloading 400 900)] Nothing Nothing)))
     assertEqual "an onloading output counts its returned bytes as local" (ColdSummary "onloading" 500 500 400 900 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (Onloading 400 900)] Nothing Nothing)))
     assertEqual "a failed onload leaves the file cold and names the error" (ColdSummary "failed" 100 900 0 0 (Just "box down")) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 (OnloadFailed "box down")] Nothing Nothing)))
     assertEqual "an offloaded output is cold and uses no local bytes" (ColdSummary "cold" 0 900 0 0 Nothing) (summarizeCold 1000 (Just (ColdStatus [file "big.bin" 900 Offloaded] Nothing Nothing)))
@@ -153,7 +155,7 @@ checkCold = do
 checkRevisionMovable :: IO ()
 checkRevisionMovable = do
     assertEqual "a local revision is movable" True (revisionMovable (revision 1 "Name" 1 10 0 "local" Nothing))
-    assertEqual "a failed revision is movable" True (revisionMovable (revision 1 "Name" 1 10 0 "failed" Nothing))
+    assertEqual "a failed onload is not movable" False (revisionMovable (revision 1 "Name" 1 10 0 "failed" Nothing))
     assertEqual "an offloading revision is not movable" False (revisionMovable (revision 1 "Name" 1 10 0 "offloading" Nothing))
     assertEqual "a cold revision is not movable" False (revisionMovable (revision 1 "Name" 1 0 10 "cold" Nothing))
   where
@@ -224,6 +226,35 @@ checkSharedOutputOwners :: IO ()
 checkSharedOutputOwners = do
     let owners = Map.fromList [(1, HeadStep "one" Set.empty "/nix/store/shared" "/nix/store/cert1"), (2, HeadStep "two" Set.empty "/nix/store/other" "/nix/store/cert2"), (3, HeadStep "three" Set.empty "/nix/store/shared" "/nix/store/cert3")]
     assertEqual "all owners of a shared output are protected" [1, 3] (pathOwners owners "/nix/store/shared")
+
+checkRevisionBlockScope :: IO ()
+checkRevisionBlockScope = do
+    let headSteps =
+            Map.fromList
+                [ (1, HeadStep "runner" Set.empty "/nix/store/shared" "/nix/store/runner-cert")
+                , (4, HeadStep "also-owner" Set.empty "/nix/store/shared" "/nix/store/also-owner-cert")
+                , (5, HeadStep "unrelated" Set.empty "/nix/store/other" "/nix/store/unrelated-cert")
+                ]
+        running = Map.singleton 1 (RunningJob "RUNNING" "step" "/nix/store/shared")
+    assertEqual
+        "a historical revision that no HEAD output owns is not blocked"
+        Nothing
+        (blockedFor headSteps running "/nix/store/old-output")
+    assertEqual
+        "a shared output owned by another running step is blocked"
+        (Just (StorageBlockerStep 1 "runner" "running"))
+        (blockedFor headSteps running "/nix/store/shared")
+    assertEqual
+        "an output owned only by an idle step is not blocked"
+        Nothing
+        (blockedFor headSteps running "/nix/store/other")
+  where
+    blockedFor headSteps running outPath =
+        listToMaybe
+            [ blocker
+            | owner <- pathOwners headSteps outPath
+            , Just blocker <- [runningRefusal headSteps running owner]
+            ]
 
 sampleLog :: String
 sampleLog =

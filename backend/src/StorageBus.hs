@@ -17,6 +17,7 @@ module StorageBus (
     viewInputsChanged,
     trackPaths,
     recordColdStatus,
+    clearOffloadError,
     knownColdStatuses,
     knownColdCapacity,
     beginOffload,
@@ -30,7 +31,7 @@ module StorageBus (
     revisionMovable,
 ) where
 
-import ColdProvider (ColdStatus (..), OffloadProgress (..))
+import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..), OffloadProgress (..))
 import Control.Concurrent.STM (STM, TChan, TVar, atomically, dupTChan, modifyTVar', newBroadcastTChanIO, newTVarIO, readTVar, readTVarIO, stateTVar, writeTChan, writeTVar)
 import Control.Monad (unless, when)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, encode, object, withObject, (.:), (.:?), (.!=), (.=))
@@ -107,7 +108,7 @@ instance ToJSON StorageRevision where
             ]
 
 revisionMovable :: StorageRevision -> Bool
-revisionMovable revision = revisionState revision `elem` ["local", "failed"]
+revisionMovable revision = revisionState revision == "local"
 
 data StorageCapacity = StorageCapacity
     { capacityKind :: Text
@@ -166,7 +167,6 @@ data StorageView = StorageView
     , storageLocal :: Integer
     , storageCold :: Integer
     , storageCapacity :: Maybe StorageCapacity
-    , storageCapacityFreeBytes :: Maybe Integer
     , storageColdCapacity :: Maybe StorageCapacity
     , storageScanning :: Bool
     , storageScanned :: Int
@@ -186,7 +186,6 @@ instance ToJSON StorageView where
             , "local" .= storageLocal view
             , "cold" .= storageCold view
             , "capacity" .= storageCapacity view
-            , "capacityFreeBytes" .= storageCapacityFreeBytes view
             , "coldCapacity" .= storageColdCapacity view
             , "scanning" .= storageScanning view
             , "scanned" .= storageScanned view
@@ -303,11 +302,34 @@ recordColdStatus path status = atomically $ do
                             }
             _ -> previousCapacity
         capacityChanged = nextCapacity /= previousCapacity
+        alreadyCold = case status of
+            Just cold -> any (not . isOffloadingState . coldFileState) (coldStatusFiles cold)
+            Nothing -> False
     when capacityChanged $ writeTVar coldCapacityVar nextCapacity
     when (tracked && known /= Just status) $
         modifyTVar' coldVar (Map.insert path status)
-    when (capacityChanged || (tracked && known /= Just status)) $
+    clearedOffload <- if alreadyCold then clearOffloadFailedSTM path else pure False
+    when (capacityChanged || clearedOffload || (tracked && known /= Just status)) $
         invalidateSTM mempty{invalidView = True}
+
+isOffloadingState :: ColdFileState -> Bool
+isOffloadingState state = case state of
+    Offloading _ _ -> True
+    _ -> False
+
+clearOffloadFailedSTM :: Text -> STM Bool
+clearOffloadFailedSTM path = do
+    offloads <- readTVar offloadsVar
+    case Map.lookup path offloads of
+        Just (OffloadFailed _) -> do
+            writeTVar offloadsVar (Map.delete path offloads)
+            pure True
+        _ -> pure False
+
+clearOffloadError :: Text -> IO ()
+clearOffloadError path = atomically $ do
+    cleared <- clearOffloadFailedSTM path
+    when cleared $ invalidateSTM mempty{invalidView = True}
 
 knownColdStatuses :: IO (Map Text (Maybe ColdStatus))
 knownColdStatuses = readTVarIO coldVar

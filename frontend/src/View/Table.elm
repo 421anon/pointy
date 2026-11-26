@@ -656,7 +656,7 @@ viewStatusApiData tableName mRecordId status =
                             "Failure: " ++ err
 
                         StatusInputsCold (Just err) ->
-                            "Inputs in cold storage: " ++ err
+                            "Frozen in cold storage: " ++ err
 
                         _ ->
                             presentation.label
@@ -798,34 +798,41 @@ viewStepLogPopover tableName logState stepId =
 viewColdInputsPopover : String -> TableSpec.StepSpec -> Model.ColdInputEntry -> Int -> Html (Flow Model ())
 viewColdInputsPopover tableName spec entry stepId =
     let
+        popoverId =
+            statusPopoverId tableName stepId
+
         viewInputs =
-            viewColdInputs spec stepId entry
+            viewColdInputs popoverId spec stepId entry
     in
-    viewStatusPopover (statusPopoverId tableName stepId)
+    viewStatusPopover popoverId
         [ Events.on "toggle" (Decode.field "newState" Decode.string |> Decode.map (\state -> Actions.setColdInputsOpen stepId (state == "open"))) ]
-        ("Inputs of step " ++ String.fromInt stepId ++ " in cold storage")
+        ("Frozen files blocking step " ++ String.fromInt stepId)
         []
         [ ApiData.foldVisible
             Html.nothing
-            (Maybe.unwrap (Html.p [ class "step-log-note" ] [ Html.text "Checking whether this step's inputs are in cold storage…" ]) viewInputs)
+            (Maybe.unwrap (Html.p [ class "step-log-note" ] [ Html.text "Checking for frozen files…" ]) viewInputs)
             viewInputs
-            (\err -> Html.p [ class "step-log-note" ] [ Html.text ("Could not check the cold storage inputs: " ++ Http.errorMessage err) ])
+            (\err -> Html.p [ class "step-log-note" ] [ Html.text ("Could not check cold storage status: " ++ Http.errorMessage err) ])
             entry.state
         ]
 
 
-viewColdInputs : TableSpec.StepSpec -> Int -> Model.ColdInputEntry -> Model.ColdInputs -> Html (Flow Model ())
-viewColdInputs spec stepId entry inputs =
+viewColdInputs : String -> TableSpec.StepSpec -> Int -> Model.ColdInputEntry -> Model.ColdInputs -> Html (Flow Model ())
+viewColdInputs popoverId spec stepId entry inputs =
     if List.isEmpty (Model.coldInputFiles inputs) then
         Html.div [ class "cold-card cold-card-done" ]
             [ Html.div [ class "cold-title" ]
                 [ icon True "check_circle"
-                , Html.text "All inputs are back"
+                , Html.text "All files rewarmed"
                 ]
             , Html.p [ class "cold-text" ]
                 [ Html.text ("Step " ++ String.fromInt stepId ++ " can run now.") ]
             , Html.div [ class "cold-actions" ]
-                [ coldButton (icon True "play_arrow") ("Run step " ++ String.fromInt stepId) (Actions.runStep spec stepId) ]
+                [ coldButton
+                    (icon True "play_arrow")
+                    ("Run step " ++ String.fromInt stepId)
+                    (Actions.hidePopover popoverId |> Flow.seq (Actions.runStep spec stepId))
+                ]
             ]
 
     else
@@ -842,43 +849,93 @@ viewColdInputsPending stepId entry inputs =
             List.any (.state >> Model.isOnloading) files
 
         startable =
-            List.filter (not << Model.isOnloading << .state) files
+            List.filter (\file -> not (Model.isOnloading file.state || Model.isOffloading file.state)) files
+
+        startableBytes =
+            List.sum (List.map .size startable)
 
         failures =
             List.concatMap (\source -> List.filterMap (viewOnloadFailure source.stepId) source.files) inputs.sources
+
+        rewarmLabel =
+            (if List.length startable == List.length files then
+                "Rewarm "
+
+             else
+                "Rewarm remaining "
+            )
+                ++ coldInputCount startable
+                ++ " ("
+                ++ Filesize.formatBase2 startableBytes
+                ++ ")"
     in
     Html.div [ class "cold-card" ]
         [ Html.div [ class "cold-title" ]
             [ icon False "ac_unit"
             , Html.text
                 (if copying then
-                    "Copying inputs back from cold storage"
+                    "Rewarming from cold storage"
 
                  else
-                    "Not run: inputs are in cold storage"
+                    "Not run: files are frozen"
                 )
             ]
         , Html.p [ class "cold-text" ]
-            [ Html.text (coldInputsDescription stepId inputs.blocked (Model.coldInputsTotal inputs)) ]
+            [ Html.text (coldInputsDescription stepId inputs (Model.coldInputsTotal inputs)) ]
+        , viewColdSources inputs
         , Html.viewIf (copying || not (List.isEmpty (Model.coldInputsReturned inputs))) (viewColdProgress inputs)
         , Html.viewIf (not (List.isEmpty failures)) (Html.ul [ class "cold-failures" ] failures)
         , Html.div [ class "cold-actions" ]
             [ Html.viewIf (not (List.isEmpty startable) && not entry.starting)
                 (coldButton
-                    (icon True "download")
-                    ("Copy back "
-                        ++ String.fromInt (List.length startable)
-                        ++ " of "
-                        ++ String.fromInt (List.length files)
-                        ++ " files ("
-                        ++ Filesize.formatBase2 (List.sum (List.map .size startable))
-                        ++ ")"
-                    )
+                    (icon True "mode_heat")
+                    rewarmLabel
                     (Actions.onloadColdInputs stepId)
                 )
             ]
-        , Html.viewIf entry.starting (Html.p [ class "cold-hint" ] [ Html.text "Starting copies…" ])
+        , Html.viewIf entry.starting (Html.p [ class "cold-hint" ] [ Html.text "Starting rewarm…" ])
         ]
+
+
+coldInputCount : List a -> String
+coldInputCount items =
+    let
+        count =
+            List.length items
+    in
+    String.fromInt count ++ " " ++ (if count == 1 then "file" else "files")
+
+
+viewColdSources : Model.ColdInputs -> Html msg
+viewColdSources inputs =
+    let
+        sources =
+            List.filter (\source -> not (List.isEmpty source.files)) inputs.sources
+    in
+    Html.viewIf (not (List.isEmpty sources)) <|
+        Html.div [ class "cold-sources" ]
+            (List.map
+                (\source ->
+                    Html.div [ class "cold-source" ]
+                        [ Html.span [ class "cold-source-step" ] [ Html.text ("Step #" ++ String.fromInt source.stepId) ]
+                        , Html.ul [ class "cold-source-files" ]
+                            (List.map
+                                (\file ->
+                                    Html.li []
+                                        [ Html.text (file.path ++ " (" ++ Filesize.formatBase2 file.size ++ ")") ]
+                                )
+                                (List.take 4 source.files)
+                                ++ (if List.length source.files > 4 then
+                                        [ Html.li [] [ Html.text ("+ " ++ String.fromInt (List.length source.files - 4) ++ " more") ] ]
+
+                                    else
+                                        []
+                                   )
+                            )
+                        ]
+                )
+                sources
+            )
 
 
 coldButton : Html (Flow Model ()) -> String -> Flow Model () -> Html (Flow Model ())
@@ -928,7 +985,9 @@ viewColdProgress inputs =
                 (String.fromInt (List.length returned)
                     ++ " of "
                     ++ String.fromInt total.files
-                    ++ " files back ("
+                    ++ " "
+                    ++ (if total.files == 1 then "file" else "files")
+                    ++ " rewarmed ("
                     ++ Filesize.formatBase2 bytesBack
                     ++ " of "
                     ++ Filesize.formatBase2 total.bytes
@@ -948,29 +1007,43 @@ onloadedBytes file =
             0
 
 
-coldInputsDescription : Int -> List Int -> Model.ColdInputTotals -> String
-coldInputsDescription stepId readers totals =
+coldInputsDescription : Int -> Model.ColdInputs -> Model.ColdInputTotals -> String
+coldInputsDescription stepId inputs totals =
     let
+        countFiles =
+            String.fromInt totals.files ++ " " ++ (if totals.files == 1 then "file" else "files")
+
+        countSources =
+            String.fromInt totals.sources ++ " " ++ (if totals.sources == 1 then "step" else "steps")
+
         subject =
-            case readers of
+            case inputs.blocked of
                 [ reader ] ->
                     if reader == stepId then
                         "This step reads"
 
                     else
-                        "Step " ++ stepSpans readers ++ " reads"
+                        "Step " ++ stepSpans inputs.blocked ++ " reads"
+
+                [] ->
+                    "This run reads"
 
                 _ ->
-                    "Steps " ++ stepSpans readers ++ " read"
+                    "Steps " ++ stepSpans inputs.blocked ++ " read"
+
+        size =
+            Filesize.formatBase2 totals.bytes
     in
-    subject
-        ++ " "
-        ++ String.fromInt totals.files
-        ++ " files ("
-        ++ Filesize.formatBase2 totals.bytes
-        ++ ") held in cold storage by "
-        ++ String.fromInt totals.sources
-        ++ (if totals.sources == 1 then " earlier step." else " earlier steps.")
+    case inputs.sources of
+        [ source ] ->
+            if source.stepId == stepId then
+                "Certifying this step reads its own output, which has " ++ countFiles ++ " (" ++ size ++ ") frozen in cold storage."
+
+            else
+                subject ++ " " ++ countFiles ++ " (" ++ size ++ ") frozen in cold storage in " ++ countSources ++ "."
+
+        _ ->
+            subject ++ " " ++ countFiles ++ " (" ++ size ++ ") frozen in cold storage in " ++ countSources ++ "."
 
 
 stepSpans : List Int -> String

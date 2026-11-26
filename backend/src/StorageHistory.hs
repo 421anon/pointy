@@ -142,6 +142,7 @@ summarizeCold narSize status = case status of
 
 coldBytesFor :: ColdFile -> Integer
 coldBytesFor file = case coldFileState file of
+    Offloading _ _ -> 0
     Onloading done _ -> max 0 (coldFileSize file - done)
     _ -> coldFileSize file
 

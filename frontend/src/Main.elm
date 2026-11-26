@@ -240,7 +240,7 @@ subscriptions : Model -> Sub (Flow Model ())
 subscriptions model =
     Sub.batch
         [ uploadProgressSubscription model
-        , unfreezeSubscription model
+        , rewarmSubscription model
         , coldInputsSubscription model
         , gutterDragSubscription model
         , areaCaptureSubscription model
@@ -261,13 +261,13 @@ subscriptions model =
         ]
 
 
-unfreezeSubscription : Model -> Sub (Flow Model ())
-unfreezeSubscription model =
-    if List.isEmpty (Model.Core.stepsUnfreezing model) && not (Actions.storageDeleteHasUnfreezing model) then
+rewarmSubscription : Model -> Sub (Flow Model ())
+rewarmSubscription model =
+    if List.isEmpty (Model.Core.stepsRewarming model) && not (Actions.storageDeleteHasRewarming model) then
         Sub.none
 
     else
-        Time.every 1000 (\_ -> Actions.pollUnfreezing)
+        Time.every 1000 (\_ -> Actions.pollRewarming)
 
 
 coldInputsSubscription : Model -> Sub (Flow Model ())

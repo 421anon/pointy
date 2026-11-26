@@ -14,10 +14,12 @@ viewConfirm :
     , title : String
     , subtitle : Maybe String
     , bodyLines : List String
+    , confirmLabel : String
+    , isDanger : Bool
     , onConfirm : Flow Model a
     }
     -> Html (Flow Model ())
-viewConfirm { id, title, subtitle, bodyLines, onConfirm } =
+viewConfirm { id, title, subtitle, bodyLines, confirmLabel, isDanger, onConfirm } =
     Html.node "dialog"
         [ Html.Attributes.id id
         , Html.Attributes.class "dialog"
@@ -31,11 +33,11 @@ viewConfirm { id, title, subtitle, bodyLines, onConfirm } =
                 [ Html.form [ Html.Attributes.attribute "method" "dialog" ]
                     [ Html.button
                         [ Html.Attributes.attribute "value" "confirm"
-                        , Html.Attributes.class "btn btn-danger"
+                        , Html.Attributes.classList [ ( "btn", True ), ( "btn-danger", isDanger ) ]
                         , Html.Attributes.autofocus True
                         , Ev.onClick onConfirm |> Html.Attributes.map (Flow.map (always ()))
                         ]
-                        [ Html.text "Confirm" ]
+                        [ Html.text confirmLabel ]
                     , Html.button
                         [ Html.Attributes.attribute "value" "cancel"
                         , Html.Attributes.class "btn"

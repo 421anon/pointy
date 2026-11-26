@@ -11,6 +11,7 @@ module Handlers.RunStep (
     resolveStepTargets,
     restoreJobsFromSlurm,
     runStepHandler,
+    stepInputsNixDefs,
     stepLogHandler,
     stopStepHandler,
 ) where
@@ -180,9 +181,9 @@ data SubmitOutcome
     = AlreadyCertified FilePath
     | Enqueued FilePath BuildKey [JobId] FilePath
     | NotSubmitted String
-    | NotSubmittedCold [Int] String
+    | NotSubmittedCold [Int] (Set.Set T.Text) String
 
-data ColdCheck = FilesLocal | FilesCold String
+data ColdCheck = FilesLocal | FilesCold (Set.Set T.Text) String
 
 submitGraph :: App es => IO Bool -> ReadRepoContext -> Map.Map Int [Int] -> [Int] -> Eff es (Map.Map Int SubmitOutcome)
 submitGraph halted ctx graph stepIds = do
@@ -223,8 +224,8 @@ submitStep ctx isCertified isOutputBuilt outcomes deps sid resolvedTarget
                             check <- if outputBuilt then checkOffloadedOutput sid (stepTargetOutput target) else checkOffloadedInputs ctx sid builtInputs
                             case (check, coldRoots) of
                                 (FilesLocal, []) -> submitBuild ctx sid depJobIds certificate target buildKey
-                                (FilesLocal, _) -> return (coldRefusal coldRoots [])
-                                (FilesCold ownReads, _) -> return (coldRefusal (sid : coldRoots) [ownReads])
+                                (FilesLocal, _) -> return (coldRefusal coldRoots [] Set.empty)
+                                (FilesCold ownReads ownMessage, _) -> return (coldRefusal (sid : coldRoots) [ownMessage] ownReads)
         return $ either NotSubmitted id result
   where
     builtInputs = [dep | dep <- deps, Just AlreadyCertified{} <- [Map.lookup dep outcomes]]
@@ -232,12 +233,13 @@ submitStep ctx isCertified isOutputBuilt outcomes deps sid resolvedTarget
     depFailed (Just NotSubmitted{}) = True
     depFailed Nothing = True
     depFailed _ = False
-    coldRoots = nub (concat [readers | d <- deps, Just (NotSubmittedCold readers _) <- [Map.lookup d outcomes]])
-    coldRefusal readers ownReads =
-        NotSubmittedCold readers $
-            unwords (ownReads ++ [dependsOnColdReaders | not (null coldRoots)] ++ ["Copy them back from the step's status, then run again."])
+    coldRoots = nub (concat [readers | d <- deps, Just (NotSubmittedCold readers _ _) <- [Map.lookup d outcomes]])
+    coldRootPaths = Set.unions [paths | d <- deps, Just (NotSubmittedCold _ paths _) <- [Map.lookup d outcomes]]
+    coldRefusal readers ownMessages ownPaths =
+        NotSubmittedCold readers (Set.union coldRootPaths ownPaths) $
+            unwords (ownMessages ++ [dependsOnColdReaders | not (null coldRoots)] ++ ["Rewarm them from the step's status, then run again."])
     dependsOnColdReaders =
-        "Step " ++ show sid ++ " depends on " ++ stepList coldRoots ++ ", which " ++ (if length coldRoots == 1 then "reads" else "read") ++ " files offloaded to cold storage."
+        "Step " ++ show sid ++ " depends on " ++ stepList coldRoots ++ ", which " ++ (if length coldRoots == 1 then "reads" else "read") ++ " files frozen in cold storage."
     depJobIds = nub [jobId | d <- deps, Just (Enqueued _ _ jobIds _) <- [Map.lookup d outcomes], jobId <- jobIds]
 
 submitBuild :: App es => ReadRepoContext -> Int -> [JobId] -> FilePath -> StepTarget -> BuildKey -> ExceptT String (Eff es) SubmitOutcome
@@ -270,13 +272,13 @@ checkOffloadedOutput sid output = do
             case coldFiles of
                 Nothing ->
                     throwError $
-                        "Cannot check whether the output of step " ++ show sid ++ ", which its certificate reads, has files offloaded to cold storage. Run again when storage status is available."
+                        "Cannot check whether the output of step " ++ show sid ++ ", which its certificate reads, has files frozen in cold storage. Run again when storage status is available."
                 Just files
                     | Set.null files -> pure FilesLocal
                     | otherwise ->
                         pure $
-                            FilesCold $
-                                "Certifying step " ++ show sid ++ " reads its output, which has files offloaded to cold storage: " ++ fileList (Set.toList files) ++ "."
+                            FilesCold (Set.singleton (T.pack output)) $
+                                "Certifying step " ++ show sid ++ " reads its output, which has files frozen in cold storage: " ++ fileList (Set.toList files) ++ "."
 
 checkOffloadedInputs :: App es => ReadRepoContext -> Int -> [Int] -> ExceptT String (Eff es) ColdCheck
 checkOffloadedInputs ctx sid builtInputs = do
@@ -285,19 +287,19 @@ checkOffloadedInputs ctx sid builtInputs = do
         then pure FilesLocal
         else do
             outPaths <- mapM (getStepOutPath ctx) builtInputs
-            inputColdFiles <- lift $ zip builtInputs <$> mapColdProvider coldFilesFor outPaths
-            let unknown = [input | (input, Nothing) <- inputColdFiles]
-                offloaded = [(input, Set.toList files) | (input, Just files) <- inputColdFiles, not (Set.null files)]
+            inputColdFiles <- lift $ zip3 builtInputs outPaths <$> mapColdProvider coldFilesFor outPaths
+            let unknown = [input | (input, _, Nothing) <- inputColdFiles]
+                offloaded = [(input, outPath, Set.toList files) | (input, outPath, Just files) <- inputColdFiles, not (Set.null files)]
             unless (null unknown) $
                 throwError $
-                    "Cannot check whether " ++ stepList unknown ++ ", read by step " ++ show sid ++ ", " ++ hasOrHave unknown ++ " files offloaded to cold storage. Run again when storage status is available."
+                    "Cannot check whether " ++ stepList unknown ++ ", read by step " ++ show sid ++ ", " ++ hasOrHave unknown ++ " files frozen in cold storage. Run again when storage status is available."
             pure $
                 if null offloaded
                     then FilesLocal
                     else
-                        FilesCold $
-                            "Step " ++ show sid ++ " reads files offloaded to cold storage: "
-                                ++ intercalate "; " [fileList files ++ " of step " ++ show input | (input, files) <- offloaded]
+                        FilesCold (Set.fromList [outPath | (_, outPath, _) <- offloaded]) $
+                            "Step " ++ show sid ++ " reads files frozen in cold storage: "
+                                ++ intercalate "; " [fileList files ++ " of step " ++ show input | (input, _, files) <- offloaded]
                                 ++ "."
   where
     hasOrHave inputs = if length inputs == 1 then "has" else "have"
@@ -395,8 +397,8 @@ finishStep ctx (sid, outcome) = case outcome of
     NotSubmitted err -> do
         liftIO $ putStrLn $ "buildStep error: " ++ err
         broadcastKnownStepStatus sid targetCommitText ("failure", Just (T.pack err))
-    NotSubmittedCold _ err -> do
-        liftIO $ recordColdRefusal sid targetCommitText (T.pack err)
+    NotSubmittedCold _ paths err -> do
+        liftIO $ recordColdRefusal sid targetCommitText paths (T.pack err)
         liftIO $ putStrLn $ "buildStep inputs in cold storage: " ++ err
         broadcastKnownStepStatus sid targetCommitText ("inputs-cold", Just (T.pack err))
   where
@@ -516,6 +518,19 @@ validateStepRequirements requirements
   where
     hasExportDelimiter = T.any (\c -> c == ',' || c == '\n' || c == '\r' || c == '\0')
 
+stepInputsNixDefs :: [String]
+stepInputsNixDefs =
+    [ "  stepRefsOf = value:"
+    , "    if builtins.isAttrs value && (value.type or null) != \"derivation\" then"
+    , "      (if value ? step && (builtins.isInt value.step || builtins.isString value.step) then [ (toString value.step) ] else [ ])"
+    , "      ++ builtins.concatMap stepRefsOf (builtins.attrValues value)"
+    , "    else if builtins.isList value then builtins.concatMap stepRefsOf value"
+    , "    else [ ];"
+    , "  inputsOf = id:"
+    , "    let upstream = steps.${id}.dependencies or [ ];"
+    , "    in builtins.filter (ref: builtins.elem ref upstream) (stepRefsOf (steps.${id}.def.args or { }));"
+    ]
+
 getInputGraph :: (Eval :> es, IOE :> es) => IO Bool -> ReadRepoContext -> Int -> ExceptT String (Eff es) (Map.Map Int [Int])
 getInputGraph halted ctx root = do
     stop <- liftIO halted
@@ -529,24 +544,17 @@ getInputGraph halted ctx root = do
             return $ Map.fromList [(sid, nub inputs) | (sid, inputs) <- entries :: [(Int, [Int])]]
   where
     expression =
-        unlines
+        unlines $
             [ "steps:"
             , "let"
-            , "  stepRefsIn = value:"
-            , "    if builtins.isAttrs value && (value.type or null) != \"derivation\" then"
-            , "      (if value ? step && (builtins.isInt value.step || builtins.isString value.step) then [ (toString value.step) ] else [ ])"
-            , "      ++ builtins.concatMap stepRefsIn (builtins.attrValues value)"
-            , "    else if builtins.isList value then builtins.concatMap stepRefsIn value"
-            , "    else [ ];"
-            , "  inputsOf = id:"
-            , "    let upstream = steps.${id}.dependencies or [ ];"
-            , "    in builtins.filter (ref: builtins.elem ref upstream) (stepRefsIn (steps.${id}.def.args or { }));"
-            , "  closure = builtins.genericClosure {"
-            , "    startSet = [ { key = \"" ++ show root ++ "\"; } ];"
-            , "    operator = entry: map (id: { key = id; }) (inputsOf entry.key);"
-            , "  };"
-            , "in map (entry: [ (builtins.fromJSON entry.key) (map builtins.fromJSON (inputsOf entry.key)) ]) closure"
             ]
+                ++ stepInputsNixDefs
+                ++ [ "  closure = builtins.genericClosure {"
+                   , "    startSet = [ { key = \"" ++ show root ++ "\"; } ];"
+                   , "    operator = entry: map (id: { key = id; }) (inputsOf entry.key);"
+                   , "  };"
+                   , "in map (entry: [ (builtins.fromJSON entry.key) (map builtins.fromJSON (inputsOf entry.key)) ]) closure"
+                   ]
 
 topoOrder :: Map.Map Int [Int] -> Either String [Int]
 topoOrder graph = go Set.empty [] (Map.keys graph)

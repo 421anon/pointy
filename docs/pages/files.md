@@ -18,7 +18,7 @@ Use these routes for file contents:
 | `GET /step-files/bundle/<step-id>/<commit>/<path>` | Raw output bytes at a path that keeps relative HTML/CSS/image requests in the same pinned bundle. |
 | `GET /src-files/raw?id=…&path=…&commit=…` | Raw source bytes, without attachment disposition. This route may appear without a GET operation in the generated reference. |
 
-Raw and bundle routes are raw handlers, so any method works, and they send no sandboxing headers. An unbuilt output gives 500 `Something went wrong` when listing and 404 with an empty body from download, raw, and bundle. Reading a file that is offloaded to cold storage — through download, seek, raw, or bundle — returns **409** `This file is offloaded to cold storage. Copy it back from its snowflake in the file browser, then try again.` and does not fetch it; copy it back with `POST /step-files/onload` first. `GET /src-files` returns `[]` when the step has no source directory and 500 `Failed to evaluate the source files of step <id>: …` when the revision cannot be evaluated. Source files can be read at past revisions; on the current stdlib this works for `derivation` templates with `withSrcFiles` and an existing `srcFiles/<id>`.
+Raw and bundle routes are raw handlers, so any method works, and they send no sandboxing headers. An unbuilt output gives 500 `Something went wrong` when listing and 404 with an empty body from download, raw, and bundle. Reading a file that is frozen in cold storage — through download, seek, raw, or bundle — returns **409** `This file is frozen in cold storage. Rewarm it, then try again.` and does not fetch it; rewarm it with `POST /step-files/onload` first. `GET /src-files` returns `[]` when the step has no source directory and 500 `Failed to evaluate the source files of step <id>: …` when the revision cannot be evaluated. Source files can be read at past revisions; on the current stdlib this works for `derivation` templates with `withSrcFiles` and an existing `srcFiles/<id>`.
 
 Encode paths and query values. Raw HTML is executable content: a custom client should sandbox its previews, as Pointy's UI does, rather than inserting it into the application's DOM.
 
@@ -29,15 +29,15 @@ For large text files, use `/step-files/seek` or `/src-files/seek`. Supply `id`, 
 Instances can offload step outputs to a cold storage provider, configured as described in [Storage](storage.md#cold-storage). Two routes report and drive it:
 
 - `GET /step-files/cold?id=…&commit=…` returns `{ "files": [ … ] }`, the provider's status for the step's output: each file that is not local, with `path`, `size` in bytes, and `state` (`offloaded`; `onloading` with `done` and `total` bytes; or `failed` with `error`). Without a provider it returns `{"files": []}`; when the provider's status is unknown it returns **503** `Cannot read the cold storage status. Try again when storage status is available.`
-- `POST /step-files/onload?id=…&commit=…&path=<relative file>` asks the provider to start onloading one file and returns **200** with an empty body. Without a provider it returns **503** `Cold storage is not configured.`; when the provider refuses, **502** with its message.
+- `POST /step-files/onload?id=…&commit=…&path=<relative file>` asks the provider to start onloading one file and returns **200** with an empty body. Without a provider it returns **400** `Cold storage is not configured.`; when the provider refuses, **502** with its message.
 
 Poll `/step-files/cold` after an onload until the file leaves `files` or turns `failed`; the file listing then reports its `cold` as false. Source files are never cold.
 
-To copy back every offloaded file a run needs at once, use `GET /step-inputs/cold` and `POST /step-inputs/onload`, described in the [API guide](api-guide.md#running-work).
+To rewarm every frozen file a run needs at once, use `GET /step-inputs/cold` and `POST /step-inputs/onload`, described in the [API guide](api-guide.md#running-work).
 
-In the output file browser, an offloaded ZIP shows the same snowflake as any other offloaded file. Copy the ZIP back before browsing its entries. Once the folder listing confirms the archive is local, its row becomes expandable again.
+In the output file browser, a frozen ZIP shows the same snowflake as any other frozen file. Rewarm the ZIP before browsing its entries. Once the folder listing confirms the archive is local, its row becomes expandable again.
 
-The 409 response depends on Pointy knowing that the file is offloaded. If the configured cold store cannot report its status, download, seek, raw, and bundle requests and listings inside a ZIP return **503** `Cannot check whether this file is offloaded to cold storage. Try again when storage status is available.` instead of reading the file.
+The 409 response depends on Pointy knowing that the file is frozen. If the configured cold store cannot report its status, download, seek, raw, and bundle requests and listings inside a ZIP return **503** `Cannot check whether this file is offloaded to cold storage. Try again when storage status is available.` instead of reading the file.
 
 ### Artifacts as Turtle
 

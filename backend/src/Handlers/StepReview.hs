@@ -228,12 +228,21 @@ renderReport stepId reviewed viewed = do
     let reportPath = dir </> "step-" ++ show stepId ++ "-" ++ storeHash reviewed ++ "-" ++ storeHash viewed ++ ".html"
     cached <- liftIO $ createDirectoryIfMissing True dir >> doesFileExist reportPath
     unless cached $ do
-        offloaded <- lift (offloadedOf [("reviewed", reviewed), ("viewed", viewed)])
+        offloaded <-
+            fmap concat $
+                mapM
+                    ( \(label, output) -> do
+                        files <- lift (coldFilesFor (T.pack output))
+                        case files of
+                            Nothing -> throwError "Cannot check whether the outputs being compared have files in cold storage. Try again when storage status is available."
+                            Just cold -> pure (map (\file -> file <> " of the " <> label <> " output") (Set.toList cold))
+                    )
+                    [("reviewed", reviewed), ("viewed", viewed)]
         unless (null offloaded) $
             throwError $
-                "Comparing reads files that are offloaded to cold storage: "
+                "Comparing reads files frozen in cold storage: "
                     ++ T.unpack (T.intercalate ", " offloaded)
-                    ++ ". Copy them back from their snowflakes in the file browser, then compare again."
+                    ++ ". Rewarm them in the file browser or Storage panel, then compare again."
         reviewedSource <- liftIO $ resolveStorePath reviewed
         viewedSource <- liftIO $ resolveStorePath viewed
         let relabel = T.replace (T.pack viewedSource) (T.pack viewed) . T.replace (T.pack reviewedSource) (T.pack reviewed)
@@ -247,11 +256,6 @@ renderReport stepId reviewed viewed = do
     pure reportPath
   where
     storeHash = take 32 . takeFileName
-    offloadedOf outputs =
-        concat
-            <$> mapM
-                (\(label, output) -> maybe [] (map (\file -> file <> " of the " <> label <> " output") . Set.toList) <$> coldFilesFor (T.pack output))
-                outputs
     comparisonArgs out reviewedSource viewedSource =
         words "--jquery disable --no-progress --output-empty --timeout 120 --max-report-size 8388608"
             ++ ["--html", out, reviewedSource, viewedSource]

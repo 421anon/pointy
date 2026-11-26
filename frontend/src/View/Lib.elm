@@ -150,7 +150,7 @@ statusPresentation status =
             { className = "status-failure", label = "Failure" }
 
         Model.StatusInputsCold _ ->
-            { className = "status-inputs-cold", label = "Inputs in Cold Storage" }
+            { className = "status-inputs-cold", label = "Frozen in Cold Storage" }
 
         Model.StatusBuiltNotCertified ->
             { className = "status-built-not-certified", label = "Not Certified" }
