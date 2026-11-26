@@ -187,10 +187,10 @@ appliedAnswer document applyExpr attr
     | "attrNames" `isInfixOf` applyExpr, attr == "#pointy.steps", "uploaded.hash" `isInfixOf` applyExpr = Right (encodeValue (stepEvaluationsValue document (Map.keys (documentOutPaths document))))
     | "uploaded.hash" `isInfixOf` applyExpr = Right (encodeValue (stepEvaluationsValue document (idsIn applyExpr)))
     | applyExpr == "steps: builtins.attrNames steps", attr == "#pointy.steps" = Right (encodeValue (toJSON (Map.keys (documentOutPaths document))))
+    | "stepRefsOf" `isInfixOf` applyExpr, "genericClosure" `isInfixOf` applyExpr = Right (encodeValue (toJSON (inputGraphValue document (take 1 (idsIn applyExpr)))))
     | "stepRefsOf" `isInfixOf` applyExpr = Right (encodeValue (headStepsValue document))
     | "removeAttrs" `isInfixOf` applyExpr = jsonAnswer document attr
     | "project.certificates or project.outPaths" `isInfixOf` applyExpr = Right (encodeValue (projectStatusPaths document key))
-    | "stepRefsIn" `isInfixOf` applyExpr = Right (encodeValue (toJSON (inputGraphValue document (take 1 (idsIn applyExpr)))))
     | "genericClosure" `isInfixOf` applyExpr = Right (encodeValue (toJSON [stepBuildValue stepId path | stepId <- Map.keys (documentOutPaths document), Just path <- [statusPathOf document stepId]]))
     | "step.certificate or step" `isInfixOf` applyExpr, attr == "#pointy.steps" = maybe (Left "fixture has no build target for one of the steps") (Right . encodeValue . toJSON . map stepTarget) (traverse (statusPathOf document) (idsIn applyExpr))
     | "step.certificate or step" `isInfixOf` applyExpr = maybe (Left ("fixture has no build target for " ++ attr)) (Right . encodeValue . stepTarget) (statusPathOf document key)
