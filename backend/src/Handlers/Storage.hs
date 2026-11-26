@@ -160,7 +160,7 @@ capacityCacheRef = unsafePerformIO (newMVar Nothing)
 
 storageHandler :: AppM StorageView
 storageHandler = liftIO $ do
-    invalidate mempty{invalidView = True, invalidBroadcast = True}
+    invalidate mempty{invalidOutputs = True, invalidView = True, invalidBroadcast = True}
     atomically (currentView >>= maybe retry pure)
 
 offloadHandler :: Int -> Maybe Text -> AppM NoContent
