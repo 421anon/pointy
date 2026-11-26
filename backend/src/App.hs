@@ -4,7 +4,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
 
-module App (serveApp, runServer, server, stripBackendPrefix) where
+module App (serveApp, runServer, runServerWithDrain, server, stripBackendPrefix) where
 
 import Agent.Runner (awaitRunnersDrain, beginDrainingRunners)
 import Api (API)
@@ -40,7 +40,7 @@ import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler
 import Handlers.Upload (uploadHandler)
 import Data.String (fromString)
 import Network.Wai (Application, Request, pathInfo)
-import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setGracefulShutdownTimeout, setHost, setInstallShutdownHandler, setPort)
+import Network.Wai.Handler.Warp (Settings, defaultSettings, runSettings, setBeforeMainLoop, setGracefulShutdownTimeout, setHost, setInstallShutdownHandler, setPort)
 import Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 
 import Control.Monad.Except (mapExceptT)
@@ -52,7 +52,6 @@ import Storage (uploadStagingRoot)
 import System.Posix.Signals (installHandler, sigTERM)
 import qualified System.Posix.Signals as Signals
 import System.Timeout (timeout)
-import UserRepo (withUserRepoExclusiveIO)
 
 server :: ServerT API AppM
 server =
@@ -316,31 +315,37 @@ serveApp runEffects middleware =
 
 
 runServer :: (forall x. Eff AppEffects x -> IO x) -> (Application -> Application) -> String -> Int -> IO () -> IO ()
-runServer runEffects middleware host port warm = do
+runServer = runServerWithSettings id
+
+runServerWithDrain :: (forall x. Eff AppEffects x -> IO x) -> (Application -> Application) -> String -> Int -> IO () -> IO ()
+runServerWithDrain = runServerWithSettings (setInstallShutdownHandler installDrainShutdown)
+
+runServerWithSettings :: (Settings -> Settings) -> (forall x. Eff AppEffects x -> IO x) -> (Application -> Application) -> String -> Int -> IO () -> IO ()
+runServerWithSettings adjustShutdown runEffects middleware host port warm = do
     installRunner (EffectRunner.Runner runEffects)
     _ <- forkIO runStorageCenter
-    runSettings settings (serveApp runEffects middleware)
-  where
-    settings =
-        setHost (fromString host) $
-            setPort port $
-                setBeforeMainLoop warm $
-                    setGracefulShutdownTimeout (Just gracefulShutdownSeconds) $
-                        setInstallShutdownHandler installShutdown defaultSettings
+    runSettings (adjustShutdown (baseSettings host port warm)) (serveApp runEffects middleware)
 
-    installShutdown closeSocket = do
-        _ <- installHandler sigTERM (Signals.Catch (drainThenClose closeSocket)) Nothing
-        return ()
+baseSettings :: String -> Int -> IO () -> Settings
+baseSettings host port warm =
+    setHost (fromString host) $
+        setPort port $
+            setBeforeMainLoop warm $
+                setGracefulShutdownTimeout (Just gracefulShutdownSeconds) defaultSettings
 
-    drainThenClose closeSocket = do
-        beginDrainingRunners
-        void $ timeout drainTimeoutMicros $ do
-            void (withUserRepoExclusiveIO (pure ()))
-            awaitRunnersDrain
-        closeSocket
+installDrainShutdown :: IO () -> IO ()
+installDrainShutdown closeSocket = do
+    _ <- installHandler sigTERM (Signals.Catch (drainThenClose closeSocket)) Nothing
+    return ()
+
+drainThenClose :: IO () -> IO ()
+drainThenClose closeSocket = do
+    beginDrainingRunners
+    void $ timeout drainTimeoutMicros awaitRunnersDrain
+    closeSocket
 
 drainTimeoutMicros :: Int
 drainTimeoutMicros = 270 * 1000000
 
 gracefulShutdownSeconds :: Int
-gracefulShutdownSeconds = 20
+gracefulShutdownSeconds = 5

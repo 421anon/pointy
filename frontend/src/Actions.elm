@@ -5158,7 +5158,7 @@ retryAgentTurn sessionId prompt =
 canRetryAgentTurn : String -> Model.AgentSession -> Model.AgentState -> String -> Bool
 canRetryAgentTurn sessionId session agentState prompt =
     not (String.isEmpty (String.trim prompt))
-        && not (Model.agentSessionArchived session.status)
+        && not (List.member session.status [ "applied", "discarded", "archived" ])
         && not (Model.agentMutationPending agentState)
         && not (agentSessionRunning sessionId agentState)
 

@@ -4,7 +4,6 @@ import Api.AgentPaths as AgentPaths
 import Api.ApiData as ApiData exposing (ApiData(..))
 import Array
 import Browser.Navigation
-import Char
 import Components.Select exposing (Item, Ranked, SelectState, initSelectState)
 import Csv.Parser
 import Debounce exposing (Debounce)
@@ -1677,62 +1676,21 @@ chatStatusFromTurn turn =
             ChatDone
 
 
-humanizeAgentError : String -> String
-humanizeAgentError err =
+displayAgentError : String -> Maybe String
+displayAgentError err =
     case err of
         "runner_failed" ->
-            "The last turn stopped unexpectedly. Retry it, or send a new message."
+            Nothing
 
         "runner exited while backend was offline" ->
-            "The backend restarted while the last turn was running."
-
-        "server_restarting" ->
-            "The server is restarting. Try again in a moment."
-
-        "runner_active" ->
-            "A turn is already running in this chat."
-
-        "runner_not_active" ->
-            "No turn is running in this chat."
-
-        "runner_stopping" ->
-            "The running turn is stopping."
-
-        "steering_failed" ->
-            "Could not send that message to the running agent."
-
-        "compaction_active" ->
-            "This chat is already being compacted."
-
-        "nothing_to_compact" ->
-            "There is no conversation to compact yet."
-
-        "session_applied" ->
-            "This chat has already been applied."
-
-        "session_discarded" ->
-            "This chat has been discarded."
-
-        "session_archived" ->
-            "This chat has been archived."
+            Just "The backend restarted while the last turn was running."
 
         _ ->
             if String.startsWith "auto_commit_failed: " err then
-                "The agent's changes could not be saved. " ++ String.dropLeft 20 err
-
-            else if looksLikeInternalErrorCode err then
-                "Something went wrong. Try again."
+                Just ("The agent's changes could not be saved. " ++ String.dropLeft 20 err)
 
             else
-                err
-
-
-looksLikeInternalErrorCode : String -> Bool
-looksLikeInternalErrorCode value =
-    not (String.isEmpty value)
-        && not (String.contains " " value)
-        && String.contains "_" value
-        && String.all (\char -> Char.isLower char || Char.isDigit char || char == '_') value
+                Just err
 
 
 turnFailureMessage : AgentTurn -> String

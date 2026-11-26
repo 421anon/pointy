@@ -34,7 +34,7 @@ main = withSystemTempDirectory "dialog-test" $ \dir -> do
 checkSelectDialog :: FilePath -> IO ()
 checkSelectDialog dir = withInput $ \input -> do
     let logPath = dir </> "select.log"
-    handleDialog defaultAgentConfig logPath input (selectEvent "d1")
+    handleDialog "dialog-session" defaultAgentConfig logPath input (selectEvent "d1")
     logged <- TIO.readFile logPath
     assertContains "select: the question reaches the chat" "[stdout] Which layout should the demo use?" logged
     assertEqual "select: only the pickable rows become buttons" (Just (False, ["1. Compact card - a small card.", "2. Wide table row - one line."])) (questionIn logged)
@@ -57,7 +57,7 @@ checkMultiSelectDialog :: FilePath -> IO ()
 checkMultiSelectDialog dir = do
     withInput $ \input -> do
         let logPath = dir </> "multi.log"
-        handleDialog defaultAgentConfig logPath input multiSelectDialog
+        handleDialog "dialog-session" defaultAgentConfig logPath input multiSelectDialog
         logged <- TIO.readFile logPath
         assertContains "multi: the question reaches the chat" "[stdout] [Outputs] Which outputs" logged
         assertEqual "multi: the numbered rows in the title become a pick list" (Just (True, multiRows)) (questionIn logged)
@@ -71,7 +71,7 @@ checkMultiSelectDialog dir = do
             Nothing -> fail "multi: a picked answer should answer the question, not steer the agent"
     withInput $ \input -> do
         let logPath = dir </> "multi-typed.log"
-        handleDialog defaultAgentConfig logPath input multiSelectDialog
+        handleDialog "dialog-session" defaultAgentConfig logPath input multiSelectDialog
         typed <- latchedQuestion input
         reply <- newEmptyTMVarIO
         case planSteer "please use fastp" "steer-4" reply typed of
@@ -84,7 +84,7 @@ checkMultiSelectDialog dir = do
 checkCustomAnswerDialog :: FilePath -> IO ()
 checkCustomAnswerDialog dir = withInput $ \input -> do
     let logPath = dir </> "custom.log"
-    handleDialog defaultAgentConfig logPath input customAnswerDialog
+    handleDialog "dialog-session" defaultAgentConfig logPath input customAnswerDialog
     logged <- TIO.readFile logPath
     assertContains "custom: the question reaches the chat" "[stdout] Which layout should the demo use?" logged
     assertEqual "custom: a question without a numbered block offers no buttons" Nothing (questionIn logged)
@@ -103,7 +103,7 @@ checkReaderSurvivesFailure dir = withInput $ \input -> do
     hSetBuffering writer LineBuffering
     let logPath = dir </> "reader.log"
         cfg = defaultAgentConfig
-    reader <- async $ streamHandle cfg logPath "__BEGIN__" "stdout" (handleRpcEventSafely cfg logPath input) readerHandle
+    reader <- async $ streamHandle cfg logPath "__BEGIN__" "stdout" (handleRpcEventSafely "dialog-session" cfg logPath input) readerHandle
     TIO.hPutStrLn writer "__BEGIN__"
     writeLine writer (selectEvent "d1")
     writeLine writer (selectEvent "d1")
@@ -128,8 +128,8 @@ checkReaderSurvivesFailure dir = withInput $ \input -> do
 checkDeclinedDialogKeepsOtherQuestion :: FilePath -> IO ()
 checkDeclinedDialogKeepsOtherQuestion dir = withInput $ \input -> do
     let logPath = dir </> "other.log"
-    handleDialog defaultAgentConfig logPath input (selectEvent "d1")
-    handleRpcEventSafely defaultAgentConfig logPath input (selectEvent "d2")
+    handleDialog "dialog-session" defaultAgentConfig logPath input (selectEvent "d1")
+    handleRpcEventSafely "dialog-session" defaultAgentConfig logPath input (selectEvent "d2")
     control <- latchedQuestion input
     reply <- newEmptyTMVarIO
     case planSteer "1" "steer-7" reply control of

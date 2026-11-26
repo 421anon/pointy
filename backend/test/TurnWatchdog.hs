@@ -39,7 +39,7 @@ openQuestionDoesNotStopTheTurn :: FilePath -> IO ()
 openQuestionDoesNotStopTheTurn dir = do
     logPath <- writeTurnLog dir "question"
     input <- runnerInput
-    handleDialog defaultAgentConfig logPath input (selectEvent "d1")
+    handleDialog "watchdog-session" defaultAgentConfig logPath input (selectEvent "d1")
     _ <- forkIO (threadDelay 4000000 >> answerQuestion input)
     (abortedAfter, _) <- watchSleeper logPath input
     assertBool ("time waiting for the user's answer is not charged, aborted after " ++ show abortedAfter) (abortedAfter >= 4.5)

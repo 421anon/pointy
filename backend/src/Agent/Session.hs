@@ -327,8 +327,7 @@ instance FromJSON StoredAreaCapture where
 
 turnIsUnfinished :: AgentTurn -> Bool
 turnIsUnfinished turn =
-    turnStatus turn == "running"
-        || turnStatus turn `notElem` ["succeeded", "failed", "stopped", "interrupted"]
+    turnStatus turn == "running" || turnFinishedAt turn == Nothing
 
 applyChangesetPrompt :: Text
 applyChangesetPrompt = "Apply proposed changeset"

@@ -121,10 +121,15 @@ beginDrainingRunners = atomically $ writeTVar drainingRunners True
 isDrainingRunners :: IO Bool
 isDrainingRunners = atomically $ readTVar drainingRunners
 
+{-# NOINLINE openQuestionSessions #-}
+openQuestionSessions :: TVar (Set.Set Text)
+openQuestionSessions = unsafePerformIO $ newTVarIO Set.empty
+
 awaitRunnersDrain :: IO ()
 awaitRunnersDrain = atomically $ do
     runners <- readTVar activeRunners
-    check (Map.null runners)
+    asking <- readTVar openQuestionSessions
+    check (Map.null runners || all (`Set.member` asking) (Map.keys runners))
 
 {-# NOINLINE stopRequestedTurns #-}
 stopRequestedTurns :: TVar (Set.Set Text)
@@ -180,6 +185,7 @@ retireTurn sid tid = do
     when (owner == Just tid) $ do
         modifyTVar' activeRunners $ Map.delete sid
         modifyTVar' waitingSteers $ Map.delete sid
+        modifyTVar' openQuestionSessions $ Set.delete sid
 
 takeStopRequest :: Text -> STM Bool
 takeStopRequest tid = stateTVar stopRequestedTurns (\pending -> (Set.member tid pending, Set.delete tid pending))
@@ -193,8 +199,9 @@ resetAgentSessions = do
         writeTVar runnerInputs Map.empty
         writeTVar waitingSteers Map.empty
         writeTVar stopRequestedTurns Set.empty
+        writeTVar openQuestionSessions Set.empty
         return (currentRunners, currentInputs)
-    forM_ (Map.elems inputs) closeRunnerInput
+    forM_ (Map.toList inputs) (uncurry closeRunnerInput)
     forM_ (Map.elems runners) $ \(_, mProcess) ->
         forM_ mProcess $ \ph -> do
             void (try (terminateProcess ph) :: IO (Either SomeException ()))
@@ -276,9 +283,13 @@ steerAgentTurn sid rawPrompt = do
             Just plan | Just control <- current -> sendSteerPlan control plan
             _ -> return (current, SteerFailed)
     sendSteerPlan :: RunnerInput -> (Aeson.Value, RunnerInput, SteerOutcome) -> IO (Maybe RunnerInput, SteerOutcome)
-    sendSteerPlan control (message, updatedControl, outcome) =
-        (try (writeToRunner control message) :: IO (Either IOException ()))
-            >>= return . either (const (Just control, SteerFailed)) (const (Just updatedControl, outcome))
+    sendSteerPlan control (message, updatedControl, outcome) = do
+        sent <- try (writeToRunner control message) :: IO (Either IOException ())
+        case sent of
+            Left _ -> return (Just control, SteerFailed)
+            Right _ -> do
+                markQuestionState sid (Just updatedControl)
+                return (Just updatedControl, outcome)
     logAnsweredSteer tid answer = liftIO $ do
         cfg <- configAgent <$> (resolveConfigPath >>= loadConfig)
         logPath <- turnLogFilePath sid tid
@@ -295,13 +306,15 @@ writeRpc handle message = do
     LBS.hPut handle (Aeson.encode message <> "\n")
     hFlush handle
 
-closeRunnerInput :: MVar (Maybe RunnerInput) -> IO ()
-closeRunnerInput input = modifyMVar_ input $ \current -> do
-    forM_ current $ \control -> do
-        forM_ (inputPending control) $ \(_, reply) ->
-            atomically $ void $ tryPutTMVar reply False
-        void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
-    return Nothing
+closeRunnerInput :: Text -> MVar (Maybe RunnerInput) -> IO ()
+closeRunnerInput sid input = do
+    modifyMVar_ input $ \current -> do
+        forM_ current $ \control -> do
+            forM_ (inputPending control) $ \(_, reply) ->
+                atomically $ void $ tryPutTMVar reply False
+            void (try (hClose (inputHandle control)) :: IO (Either IOException ()))
+        return Nothing
+    atomically $ modifyTVar' openQuestionSessions $ Set.delete sid
 
 startAgentTurn :: Text -> Text -> [TurnImage] -> [AreaCapture] -> Maybe (ViewedArtifact, Text) -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
 startAgentTurn sid prompt images areaCaptures viewedArtifact mCurrentProjectId enabled client = do
@@ -700,10 +713,11 @@ runConfiguredProcess cfg session_ turn role promptText images isFirstTurn review
         sawWork <- readIORef (attemptSawAgentWork observation)
         transient <- readIORef (attemptSawTransientProviderFailure observation)
         stopped <- turnStopRequested (turnId turn)
-        if exitCode /= ExitSuccess && transient && not sawWork && not stopped && retryNumber <= maxProviderRetries
+        draining <- isDrainingRunners
+        if exitCode /= ExitSuccess && transient && not sawWork && not stopped && not draining && retryNumber <= maxProviderRetries
             then do
                 appendLogLine cfg (turnLogPath turn) "stdout" $
-                    "*Provider timed out; retrying (" <> T.pack (show retryNumber) <> "/" <> T.pack (show maxProviderRetries) <> ")...*"
+                    "*Temporary provider error; retrying (" <> T.pack (show retryNumber) <> "/" <> T.pack (show maxProviderRetries) <> ")...*"
                 threadDelay (providerRetryDelaysMicros !! (retryNumber - 1))
                 stoppedAfterDelay <- turnStopRequested (turnId turn)
                 if stoppedAfterDelay then return exitCode else runAttempt (retryNumber + 1)
@@ -716,10 +730,10 @@ runConfiguredProcess cfg session_ turn role promptText images isFirstTurn review
             input <- newRunnerInput hin
             let cleanup = do
                     atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
-                    closeRunnerInput input
+                    closeRunnerInput (sessionId session_) input
                 observe event = do
                     recordAttemptEvent observation event
-                    handleRpcEventSafely cfg (turnLogPath turn) input event
+                    handleRpcEventSafely (sessionId session_) cfg (turnLogPath turn) input event
                 run = do
                     stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
                     unless stopped $ do
@@ -767,13 +781,13 @@ runCompactionProcess cfg session_ logPath = do
     ended <- newTVarIO False
     withConfiguredRunner cfg session_ Coder logPath ["-c"] outputMarker [] $ \hin hout mErr ph -> do
         input <- newRunnerInput hin
-        let cleanup = closeRunnerInput input
+        let cleanup = closeRunnerInput (sessionId session_) input
             run = do
                 outReader <- async $ streamHandle cfg logPath outputMarker "stdout" (noteCompactionEvent input ended) hout
                 errReader <- maybe (async (return False)) (async . streamHandle cfg logPath outputMarker "stderr" (const $ return ())) mErr
                 writeRpc hin compactCommand
                 result <- timeout (agentTimeoutSeconds cfg * 1000000) (waitForProcess ph)
-                closeRunnerInput input
+                closeRunnerInput (sessionId session_) input
                 case result of
                     Nothing -> do
                         void (try (terminateProcess ph) :: IO (Either SomeException ()))
@@ -789,11 +803,11 @@ runCompactionProcess cfg session_ logPath = do
         run `finally` cleanup
   where
     noteCompactionEvent input ended event = do
-        handleRpcEventSafely cfg logPath input event
+        handleRpcEventSafely (sessionId session_) cfg logPath input event
         case event ^? key "type" . _String of
             Just "compaction_end" -> atomically $ writeTVar ended True
             Just "response"
-                | event ^? key "command" . _String == Just "compact" -> closeRunnerInput input
+                | event ^? key "command" . _String == Just "compact" -> closeRunnerInput (sessionId session_) input
             _ -> return ()
     noteCompactionFailure :: Text -> IO ()
     noteCompactionFailure message =
@@ -873,7 +887,7 @@ watchTurnBudget cfg turn input ph budgetMicros =
         appendLogLine cfg (turnLogPath turn) "system" "Runner timed out; aborting the turn"
         void (try (withMVar input $ mapM_ (flip writeToRunner abortCommand)) :: IO (Either SomeException ()))
         threadDelay budgetAbortGraceMicros
-        closeRunnerInput input
+        closeRunnerInput (turnSessionId turn) input
         void (try (terminateProcess ph) :: IO (Either SomeException ()))
     abortCommand = Aeson.object ["type" Aeson..= ("abort" :: Text)]
 
@@ -993,12 +1007,23 @@ numberedBlock block =
         guard (not (T.null digits) && T.isPrefixOf ". " rest)
         readMaybe (T.unpack digits)
 
-handleDialog :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
-handleDialog cfg logPath input event =
+markQuestionState :: Text -> Maybe RunnerInput -> IO ()
+markQuestionState sid current =
+    atomically $ modifyTVar' openQuestionSessions $ case current of
+        Just control
+            | isJust (inputQuestion control) -> Set.insert sid
+        _ -> Set.delete sid
+
+handleDialog :: Text -> AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleDialog sid cfg logPath input event =
     case (event ^? key "id" . _String, event ^? key "method" . _String) of
         (Just dialogId, Just method)
-            | method `elem` dialogMethods ->
-                modifyMVar input (answerDialog dialogId) >>= mapM_ (uncurry (appendLogLine cfg logPath))
+            | method `elem` dialogMethods -> do
+                answered <- modifyMVar input $ \current -> do
+                    (updated, lines_) <- answerDialog dialogId current
+                    markQuestionState sid updated
+                    return (updated, lines_)
+                mapM_ (uncurry (appendLogLine cfg logPath)) answered
             | otherwise -> withMVar input $ mapM_ (\control -> writeToRunner control (dialogDecline dialogId))
         _ -> return ()
   where
@@ -1017,8 +1042,8 @@ handleDialog cfg logPath input event =
             writeToRunner control (maybe (dialogDecline dialogId) (dialogResponse dialogId) stashed)
             return (Just $ maybe control (const control{inputQuestion = Nothing}) stashed, [])
 
-handleRpcEvent :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
-handleRpcEvent cfg logPath input event =
+handleRpcEvent :: Text -> AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleRpcEvent sid cfg logPath input event =
     case event ^? key "type" . _String of
         Just "message_end" -> send "get_session_stats"
         Just "message_start"
@@ -1029,7 +1054,7 @@ handleRpcEvent cfg logPath input event =
                     when (inputPromptSeen control) $
                         appendLogLine cfg logPath "steering" (TE.decodeUtf8 $ LBS.toStrict $ Aeson.encode prompt)
                     flushWaiting control{inputPromptSeen = True}
-        Just "extension_ui_request" -> handleDialog cfg logPath input event
+        Just "extension_ui_request" -> handleDialog sid cfg logPath input event
         Just "tool_execution_end"
             | event ^. key "toolName" . _String == "show_image"
             , event ^? key "isError" . _Bool /= Just True ->
@@ -1054,7 +1079,7 @@ handleRpcEvent cfg logPath input event =
                 Just "prompt"
                     | event ^? key "success" . _Bool == Just False
                     , event ^? key "id" . _String == Just "initial" ->
-                        closeRunnerInput input
+                        closeRunnerInput sid input
                     | otherwise -> send "get_state"
                 Just "get_state"
                     | stateFlag "isStreaming" == Just False
@@ -1063,8 +1088,10 @@ handleRpcEvent cfg logPath input event =
                         modifyMVar_ input $ \current -> case current of
                             Just control
                                 | isNothing (inputPending control)
-                                , not (inputRetrying control) ->
-                                    Nothing <$ hClose (inputHandle control)
+                                , not (inputRetrying control) -> do
+                                    hClose (inputHandle control)
+                                    markQuestionState sid Nothing
+                                    return Nothing
                             _ -> return current
                 _ -> return ()
         _ -> return ()
@@ -1078,9 +1105,9 @@ handleRpcEvent cfg logPath input event =
             fileName <- storeShownImage logPath image
             appendLogLine cfg logPath "image" (jsonLine (Aeson.object ["turnId" Aeson..= takeBaseName logPath, "file" Aeson..= fileName]))
 
-handleRpcEventSafely :: AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
-handleRpcEventSafely cfg logPath input event =
-    handleRpcEvent cfg logPath input event `catch` \(ex :: SomeException) ->
+handleRpcEventSafely :: Text -> AgentConfig -> FilePath -> MVar (Maybe RunnerInput) -> Aeson.Value -> IO ()
+handleRpcEventSafely sid cfg logPath input event =
+    handleRpcEvent sid cfg logPath input event `catch` \(ex :: SomeException) ->
         void (try (noteFailed ex) :: IO (Either SomeException ()))
   where
     noteFailed ex = do
@@ -1090,7 +1117,10 @@ handleRpcEventSafely cfg logPath input event =
             forM_ (event ^? key "id" . _String) declineAndForget
     declineAndForget dialogId = do
         void (try (withMVar input $ mapM_ (flip writeToRunner (dialogDecline dialogId))) :: IO (Either IOException ()))
-        modifyMVar_ input $ return . fmap (\control -> control{inputQuestion = withoutQuestionOf dialogId (inputQuestion control)})
+        modifyMVar_ input $ \current -> do
+            let updated = fmap (\control -> control{inputQuestion = withoutQuestionOf dialogId (inputQuestion control)}) current
+            markQuestionState sid updated
+            return updated
     eventKind = fromMaybe "unknown" (event ^? key "type" . _String)
 
 streamHandle :: AgentConfig -> FilePath -> Text -> Text -> (Aeson.Value -> IO ()) -> Handle -> IO Bool

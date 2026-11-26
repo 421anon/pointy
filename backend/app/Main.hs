@@ -4,7 +4,7 @@ module Main (main) where
 
 import Agent.Git (sweepStaleRunningSessions)
 import Agent.Sandbox (prepareAgentCgroup)
-import App (runServer)
+import App (runServerWithDrain)
 import Config (loadConfig, resolveConfigPath, warnMissingProviderKeys)
 import Control.Concurrent (forkIO)
 import Control.Monad.Except (runExceptT)
@@ -42,7 +42,7 @@ main = do
     portText <- lookupEnv "POINTY_LISTEN_PORT"
     let listenPort = maybe 8081 id (portText >>= readMaybe) :: Int
     putStrLn ("Starting server on " ++ listenHost ++ ":" ++ show listenPort ++ "...")
-    runServer runProduction id listenHost listenPort afterServerStart
+    runServerWithDrain runProduction id listenHost listenPort afterServerStart
   where
     afterServerStart = do
         putStrLn "Server listening."

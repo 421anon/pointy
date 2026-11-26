@@ -1079,8 +1079,8 @@ chatStatusLabel status =
 viewError : Model.AgentSession -> Html msg
 viewError session =
     Html.viewMaybe
-        (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text (Model.humanizeAgentError err) ])
-        session.lastError
+        (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text err ])
+        (session.lastError |> Maybe.andThen Model.displayAgentError)
 
 
 changesetRefused : Maybe Model.ChatChangeset -> Bool
@@ -1529,6 +1529,7 @@ retryTurnAction session agent runnerActive closedChat latestTurn turn =
                         == turn.turnId
                         && not (String.isEmpty turn.turnId)
                         && retryableTurnStatus turn.status
+                        && List.isEmpty turn.attachments
                         && not (String.isEmpty (String.trim prompt))
                 then
                     Just (Actions.retryAgentTurn session.sessionId prompt)
@@ -1687,17 +1688,10 @@ viewAgentMessage mentionSources autoApplyEcho retry turn =
                     ( "Stopped", "Stopped before a reply.", Nothing )
 
                 Model.ChatInterrupted ->
-                    ( "Interrupted", "No reply before the server restarted.", Nothing )
+                    ( "Interrupted", "Interrupted by a server restart.", Nothing )
 
                 Model.ChatFailed err ->
                     ( "Failed", "No reply before the task failed.", Just err )
-
-        interruptedMessage =
-            if turn.status == Model.ChatInterrupted then
-                Just "Interrupted by a server restart."
-
-            else
-                Nothing
 
         body =
             if isEmptyAssistant then
@@ -1714,7 +1708,7 @@ viewAgentMessage mentionSources autoApplyEcho retry turn =
                     [ ( "agent-panel__chat-status", True )
                     , ( "is-running", turn.status == Model.ChatPending )
                     , ( "is-failed", failedMessage /= Nothing )
-                    , ( "is-interrupted", interruptedMessage /= Nothing )
+                    , ( "is-interrupted", turn.status == Model.ChatInterrupted )
                     ]
                 , attribute "role" "status"
                 ]
@@ -1733,7 +1727,7 @@ viewAgentMessage mentionSources autoApplyEcho retry turn =
                 , ( "agent-panel__chat-bubble--agent", True )
                 , ( "is-pending", turn.status == Model.ChatPending && isEmptyAssistant )
                 , ( "is-failed", failedMessage /= Nothing )
-                , ( "is-interrupted", interruptedMessage /= Nothing )
+                , ( "is-interrupted", turn.status == Model.ChatInterrupted )
                 ]
             ]
             [ Html.Lazy.lazy6 viewAgentMessageContent
@@ -1749,9 +1743,6 @@ viewAgentMessage mentionSources autoApplyEcho retry turn =
         , Html.viewMaybe
             (\err -> Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ])
             failedMessage
-        , Html.viewMaybe
-            (\message -> Html.div [ class "agent-panel__chat-interrupted" ] [ Html.text message ])
-            interruptedMessage
         , Html.viewMaybe
             (\action ->
                 Html.button
