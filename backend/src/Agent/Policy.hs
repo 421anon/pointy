@@ -67,9 +67,9 @@ renderEmbeddedRules memoryMax =
             ++ maybe [] memoryCapLines memoryMax
             ++ [ "Follow the Embedded agents only section in AGENTS.md."
                , "Use only these entity-reference formats in every response:"
-               , "- Step: step <id>. This is the entire step reference; never include the step name."
-               , "- Project: @[project:<id>] <name>. Quote the name when it contains spaces."
-               , "Keep entity references as ordinary plain text: no inline code, no Markdown links, and no parentheses around an id. The chat turns them into links."
+               , "- Step: step <id>. Never include the step name."
+               , "- Project: project <id>. Never include the project name."
+               , "Always write the English word `step` or `project` before every id, even in non-English replies (for example \"a step 4097-et\", not \"a 4097-et\") and in lists (for example \"step 1 and step 2\", not \"steps 1 and 2\" or \"step 1/2\"). Keep entity references as ordinary plain text: no inline code, no Markdown links, and no parentheses around an id. The chat turns them into links with their names."
                , "The chat processes your reply in this order before showing it:"
                , "1. Math is cut out and typeset as TeX: `$...$` and `\\(...\\)` inline, `$$...$$` and `\\[...\\]` displayed. An inline `$...$` needs a non-space character right after the opening `$` and right before the closing `$`, and no digit right after the closing `$`. Math cannot span a blank line, and dollar signs and delimiters inside code spans and fenced code blocks stay literal. Write the TeX as is: Markdown escaping does not apply inside math. Write a literal dollar sign as `\\$`, and put shell variables and other code containing `$` in code spans."
                , "2. The rest is parsed as CommonMark Markdown with GitHub tables and strikethrough. Raw HTML may only use these tags, and their attributes are dropped: " <> T.intercalate ", " allowedHtmlTags <> ". Any other tag makes the whole reply show as unformatted source."

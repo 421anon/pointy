@@ -207,6 +207,16 @@ bareStructuredRegex =
     fromRegex "@\\[(step|project):([0-9]+)\\]"
 
 
+pluralListRegex : Regex
+pluralListRegex =
+    fromRegex "\\b(steps|projects)\\s+([0-9]+)((?:(?:,\\s+(?:and\\s+|és\\s+)?|\\s+(?:and|és|to|&)\\s+|\\s*[/&\\u2013-]\\s*)[0-9]+\\b)+)"
+
+
+singularListRegex : Regex
+singularListRegex =
+    fromRegex "\\b(step|project)\\s+([0-9]+)((?:(?:\\s+(?:and|és|&)\\s+|\\s*[/&\\u2013]\\s*)[0-9]+\\b)+)"
+
+
 legacyRegex : Regex
 legacyRegex =
     fromRegex "\\b(step|project)\\s+([0-9]+)\\b"
@@ -227,7 +237,7 @@ type alias ParsedMention =
 
 toEntityId : String -> Int -> EntityId
 toEntityId keyword id_ =
-    if String.toLower keyword == "step" then
+    if String.startsWith "step" (String.toLower keyword) then
         StepId id_
 
     else
@@ -324,8 +334,71 @@ mentionSpans text =
         (spansOf parseWholeQuoted wholeQuotedRegex text
             ++ spansOf parseStructured structuredRegex text
             ++ spansOf parseBareStructured bareStructuredRegex text
+            ++ listSpansOf pluralListRegex text
+            ++ listSpansOf singularListRegex text
             ++ spansOf parseLegacy legacyRegex text
         )
+
+
+listSpansOf : Regex -> String -> List MentionSpan
+listSpansOf regex text =
+    List.concatMap parseListMatch (Regex.find regex text)
+
+
+parseListMatch : Regex.Match -> List MentionSpan
+parseListMatch match =
+    case match.submatches of
+        [ Just keyword, Just firstDigits, Just tail ] ->
+            let
+                firstEnd =
+                    match.index + String.length match.match - String.length tail
+
+                firstRaw =
+                    String.dropRight (String.length tail) match.match
+
+                firstSpan =
+                    String.toInt firstDigits
+                        |> Maybe.map
+                            (\id_ ->
+                                { index = match.index
+                                , end = firstEnd
+                                , rawText = firstRaw
+                                , parsed =
+                                    { candidates = []
+                                    , fixedLabel = True
+                                    , entityId = toEntityId keyword id_
+                                    }
+                                }
+                            )
+
+                tailSpans =
+                    Regex.find digitsRegex tail
+                        |> List.filterMap
+                            (\digitMatch ->
+                                String.toInt digitMatch.match
+                                    |> Maybe.map
+                                        (\id_ ->
+                                            { index = firstEnd + digitMatch.index
+                                            , end = firstEnd + digitMatch.index + String.length digitMatch.match
+                                            , rawText = digitMatch.match
+                                            , parsed =
+                                                { candidates = []
+                                                , fixedLabel = True
+                                                , entityId = toEntityId keyword id_
+                                                }
+                                            }
+                                        )
+                            )
+            in
+            case firstSpan of
+                Just span ->
+                    span :: tailSpans
+
+                Nothing ->
+                    tailSpans
+
+        _ ->
+            []
 
 
 compareMentionSpans : MentionSpan -> MentionSpan -> Order
