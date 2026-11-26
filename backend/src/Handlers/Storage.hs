@@ -288,7 +288,8 @@ confirmStoreDeletion path certificatePath = do
         Right False -> pure ()
         Right True -> do
             restoreStoreRoots path certificatePath
-            throwError err409{errBody = "The store did not delete this output. It may still be kept by another store path or lower store."}
+            liftIO (putStrLn ("Storage delete left " ++ path ++ " valid after nix-store --delete; another store path or a lower store still holds it"))
+            throwError err409{errBody = "This output could not be deleted because it is still shared elsewhere. It has been kept."}
         Left err ->
             throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 ("Cannot check whether the store deleted the output: " <> TE.decodeUtf8Lenient (LBS.toStrict err)))}
 
