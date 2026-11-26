@@ -550,7 +550,7 @@ type OnloadStorageRevision =
 type DeleteStorageRevision =
     "storage"
         :> "delete"
-        :> Description "Deletes one revision's step output and returns 200 with an empty body. When the output has files in cold storage, deletes the provider's cold copy first (502 on provider failure), then removes Pointy's output and certificate GC roots and runs nix-store --delete; repeating it is safe once the output is gone. Refuses with 409 while the step, or a step that directly reads its output, is running or queued, while an offload of the output is running, or when the store will not delete a rooted or alive path; 503 when the backend cannot tell which steps are running or cannot read the cold storage status."
+        :> Description "Deletes one revision's step output and returns 200 with an empty body. When cold storage is configured, deletes the provider's cold copy first (502 on provider failure), then removes Pointy's output and certificate GC roots and runs nix-store --delete; repeating it is safe once the output is gone. Refuses with 409 while the step, or a step that directly reads its output, is running or queued, while an offload of the output is running, when the store refuses to delete a rooted or alive path, or when the store exits successfully but the output path is still valid (for example through another store path or a lower store); both GC roots are restored. 503 when the backend cannot tell which steps are running, cannot read the cold storage status, or cannot verify the deletion."
         :> ReqId
         :> QueryParam "commit" Text
         :> Post '[JSON] NoContent

@@ -1462,8 +1462,18 @@ storageLiveStatus snapshot moving =
                     ++ storageCount (List.length rewarming) "revision" "revisions"
                     ++ " from cold storage"
                     ++ progressSuffix rewarming
+
+        deleting =
+            Actions.storageDeleteInFlight moving
+
+        deleteStatus =
+            if deleting > 0 then
+                " Deleting " ++ storageCount deleting "revision" "revisions" ++ "."
+
+            else
+                ""
     in
-    String.trim (scan ++ freezeStatus ++ rewarmStatus)
+    String.trim (scan ++ freezeStatus ++ rewarmStatus ++ deleteStatus)
 
 
 viewStorageFooter : StorageView -> Int -> Html msg
@@ -1999,6 +2009,7 @@ storageRevisionDeleteButton model revision blockedId =
         , classList
             [ ( "storage-panel__rev-action--armed", armed )
             , ( "storage-panel__rev-action--starting", deleting )
+            , ( "storage-panel__rev-action--deleting", deleting )
             , ( "storage-panel__rev-action--delete", True )
             ]
         , type_ "button"
@@ -2008,7 +2019,10 @@ storageRevisionDeleteButton model revision blockedId =
         , attribute "aria-label" label
         , attribute "aria-describedby" blockedId
         ]
-        (if armed then
+        (if deleting then
+            [ Html.text "Deleting…" ]
+
+         else if armed then
             [ Html.text "Delete?" ]
 
          else

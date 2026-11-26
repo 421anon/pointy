@@ -6011,6 +6011,30 @@ storageRewarmInFlight pending =
     List.any (String.startsWith "rewarm:") (Set.toList pending)
 
 
+storageDeleteInFlight : Set String -> Int
+storageDeleteInFlight pending =
+    Set.size (Set.filter (String.startsWith "delete:") pending)
+
+
+storageViewWithoutRevision : Int -> String -> ApiData Model.StorageView -> ApiData Model.StorageView
+storageViewWithoutRevision stepId revision =
+    ApiData.map
+        (\view ->
+            let
+                remaining =
+                    List.filter
+                        (\candidate -> candidate.step /= stepId || candidate.revision /= revision)
+                        view.revisions
+            in
+            { view
+                | revisions = remaining
+                , local = List.sum (List.map .local remaining)
+                , cold = List.sum (List.map .cold remaining)
+                , revisionCount = List.length remaining
+            }
+        )
+
+
 storageDeleteRevision : Model.StorageRevision -> Flow Model ()
 storageDeleteRevision revision =
     case revision.kind of
@@ -6049,7 +6073,8 @@ armStorageDelete revision =
                                     |> Flow.seq
                                         (case result of
                                             Ok () ->
-                                                Flow.pure ()
+                                                Flow.over storageView
+                                                    (storageViewWithoutRevision revision.step revision.revision)
 
                                             Err error ->
                                                 addToast False (storageDeleteErrorMessage error)
@@ -6260,7 +6285,8 @@ confirmStorageDeleteUpload =
                                             |> Flow.seq
                                                 (case result of
                                                     Ok () ->
-                                                        Flow.pure ()
+                                                        Flow.over storageView
+                                                            (storageViewWithoutRevision target.stepId target.revision)
 
                                                     Err error ->
                                                         addToast False (storageDeleteErrorMessage error)

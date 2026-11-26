@@ -645,6 +645,8 @@ test-suite storage-center
     , base
     , bytestring
     , containers
+    , effectful
+    , mtl
     , text
     , time
 

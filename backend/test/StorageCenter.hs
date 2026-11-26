@@ -1,14 +1,19 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Main (main) where
 
 import BuildLog (buildStepStore, rawStatusesBatched, validPaths)
 import BuildStatus (StepPaths (..), checkStatus)
 import ColdProvider (ColdFile (..), ColdFileState (..), ColdStatus (..))
+import Control.Monad.Except (runExceptT)
+import Data.Aeson (eitherDecode, encode, object, toJSON, (.=))
+import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import Data.Aeson (eitherDecode, object, toJSON, (.=))
-import Fixture.Document (FixtureDocument (..))
 import Data.Either (isLeft)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (listToMaybe)
@@ -18,8 +23,12 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Effectful (Eff, IOE, liftIO, runEff, (:>))
+import Effectful.Dispatch.Dynamic (interpret)
+import Effects (ColdStorage (..))
+import Fixture.Document (FixtureDocument (..))
 import Interpreters.Fixture (newFixtureState, runFixture)
-import Handlers.Storage (HeadStep (..), RunningJob (..), pathOwners, runningRefusal, runningStepStates)
+import Handlers.Storage (HeadStep (..), RunningJob (..), deleteColdCopy, pathOwners, runningRefusal, runningStepStates)
 import BuildRunner (JobComment (..), encodeJobComment, parseSlurmJobLine)
 import StepEvaluations (CachedStep (..), EvaluationRecord, StepEvaluations, decodeEvaluationLog, emptyStepEvaluations, encodeEvaluationRecords, recordEvaluation)
 import StorageBus (StorageBlocker (..), StorageCapacity (..), StorageRevision (..), parseStorageCapacity, revisionMovable)
@@ -35,6 +44,7 @@ main = do
     checkBlockerShape
     checkRunningBlocker
     checkCold
+    checkColdCopyDeletion
     checkRevisionMovable
     checkCapacity
     checkCertificationRequiresOutput
@@ -151,6 +161,62 @@ checkCold = do
         (summarizeCold 1000 (Just (ColdStatus [file "a.bin" 300 Offloaded, file "b.bin" 500 (OnloadFailed "box down")] Nothing Nothing)))
   where
     file path size state = ColdFile path size state
+
+checkColdCopyDeletion :: IO ()
+checkColdCopyDeletion = do
+    unconfigured <- runColdCopyDeletion False (Left "unused") (Right ())
+    assertEqual
+        "cold copy deletion is skipped when cold storage is not configured"
+        (Right (), [])
+        unconfigured
+    empty <- runColdCopyDeletion True (Right (statusBytes (ColdStatus [] Nothing Nothing))) (Right ())
+    assertEqual
+        "an empty cold status still deletes the provider's copy"
+        (Right (), ["/nix/store/out"])
+        empty
+    offloaded <- runColdCopyDeletion True (Right (statusBytes (ColdStatus [ColdFile "big.bin" 10 Offloaded] Nothing Nothing))) (Right ())
+    assertEqual
+        "an offloaded output deletes the provider's copy"
+        (Right (), ["/nix/store/out"])
+        offloaded
+    offloading <- runColdCopyDeletion True (Right (statusBytes (ColdStatus [ColdFile "big.bin" 10 (Offloading 1 10)] Nothing Nothing))) (Right ())
+    assertEqual
+        "a freezing output is refused without deleting its cold copy"
+        (Left (), [])
+        offloading
+    unavailable <- runColdCopyDeletion True (Left "status unavailable") (Right ())
+    assertEqual
+        "an unreadable cold status is refused without deleting its cold copy"
+        (Left (), [])
+        unavailable
+    failed <- runColdCopyDeletion True (Right (statusBytes (ColdStatus [ColdFile "big.bin" 10 Offloaded] Nothing Nothing))) (Left "provider down")
+    assertEqual
+        "a provider failure reports no deletion"
+        (Left (), ["/nix/store/out"])
+        failed
+  where
+    statusBytes = LBS.toStrict . encode
+
+runColdCopyDeletion :: Bool -> Either Text ByteString -> Either Text () -> IO (Either () (), [Text])
+runColdCopyDeletion configured statusResult deleteResult = do
+    deleted <- newIORef []
+    outcome <-
+        runEff $
+            runColdStorageTest deleted configured statusResult deleteResult
+                (runExceptT (deleteColdCopy "/nix/store/out"))
+    recorded <- readIORef deleted
+    pure (either (const (Left ())) Right outcome, recorded)
+
+runColdStorageTest :: (IOE :> es) => IORef [Text] -> Bool -> Either Text ByteString -> Either Text () -> Eff (ColdStorage : es) a -> Eff es a
+runColdStorageTest deleted configured statusResult deleteResult =
+    interpret $ \_ operation -> case operation of
+        ColdStorageConfigured -> pure configured
+        ColdStorageStatus _ -> pure statusResult
+        ColdStorageOnload _ _ -> pure (Right ())
+        ColdStorageOffload _ _ -> pure (Right ())
+        ColdStorageDelete outPath -> do
+            liftIO (modifyIORef' deleted (outPath :))
+            pure deleteResult
 
 checkRevisionMovable :: IO ()
 checkRevisionMovable = do

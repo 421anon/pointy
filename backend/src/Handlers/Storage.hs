@@ -5,6 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 module Handlers.Storage (
+    deleteColdCopy,
     deleteRevisionHandler,
     offloadHandler,
     offloadStepHandler,
@@ -48,7 +49,7 @@ import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import EffectRunner (runAppEffects)
 import Effectful (Eff, IOE, UnliftStrategy (SeqUnlift), liftIO, withEffToIO, (:>))
 import EvalOutput (evalOutputText)
-import Effects (AppEffects, AppM, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageDelete, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
+import Effects (AppEffects, AppM, ColdStorage, Eval, Nix, SlurmQuery (..), coldStorageConfigured, coldStorageDelete, coldStorageOffload, pathValidity, querySlurm, rootStorePath, runNixCli, runNixStoreCli, unrootStorePath)
 import Handlers.Cold (clearRefusalsAndBroadcast, coldStatusFor, isOffloadingFile, mapColdProvider, onloadable, startOnload)
 import Handlers.RunStep (stepInputsNixDefs)
 import Handlers.StepOutput (resolveStepOutPath)
@@ -248,26 +249,14 @@ deleteRevisionHandler stepId mCommit = do
             Left err -> throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 ("Cannot check whether the output exists: " <> TE.decodeUtf8Lenient (LBS.toStrict err)))}
             Right False -> pure ()
             Right True -> do
-                cold <- lift (coldStatusFor outPath)
-                case cold of
-                    Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
-                    Just status
-                        | any isOffloadingFile (coldStatusFiles status) ->
-                            throwError err409{errBody = "This output is freezing to cold storage. Wait for it to finish, then try again."}
-                        | null (coldStatusFiles status) -> pure ()
-                        | otherwise -> do
-                            deleted <- lift (coldStorageDelete outPath)
-                            case deleted of
-                                Left message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not delete the output from cold storage: " <> message))}
-                                Right () -> liftIO (recheckCold outPath)
+                deleteColdCopy outPath
                 liftIO (clearOffloadError outPath)
                 lift (removeCertificationEvidence path certificatePath)
                 (code, _, err) <- lift (runNixStoreCli ["--delete", path])
                 case code of
-                    ExitSuccess -> pure ()
+                    ExitSuccess -> confirmStoreDeletion path certificatePath
                     ExitFailure _ -> do
-                        lift (rootStorePath path)
-                        lift (rootStorePath certificatePath)
+                        restoreStoreRoots path certificatePath
                         let message = "The store refused to delete this output: " <> storeErrorLine (TE.decodeUtf8Lenient err)
                         throwError err409{errBody = LBS.fromStrict (TE.encodeUtf8 message)}
         liftIO $ do
@@ -275,6 +264,38 @@ deleteRevisionHandler stepId mCommit = do
             recheckCold outPath
             invalidate mempty{invalidOutputs = True}
         pure NoContent
+
+deleteColdCopy :: (ColdStorage :> es, IOE :> es) => Text -> ExceptT ServerError (Eff es) ()
+deleteColdCopy outPath = do
+    configured <- lift coldStorageConfigured
+    when configured $ do
+        cold <- lift (coldStatusFor outPath)
+        case cold of
+            Nothing -> throwError err503{errBody = "Cannot check whether this output has files in cold storage. Try again when storage status is available."}
+            Just status
+                | any isOffloadingFile (coldStatusFiles status) ->
+                    throwError err409{errBody = "This output is freezing to cold storage. Wait for it to finish, then try again."}
+                | otherwise -> do
+                    deleted <- lift (coldStorageDelete outPath)
+                    case deleted of
+                        Left message -> throwError err502{errBody = LBS.fromStrict (TE.encodeUtf8 ("Could not delete the output from cold storage: " <> message))}
+                        Right () -> liftIO (recheckCold outPath)
+
+confirmStoreDeletion :: FilePath -> FilePath -> AppM ()
+confirmStoreDeletion path certificatePath = do
+    remaining <- lift (pathValidity path)
+    case remaining of
+        Right False -> pure ()
+        Right True -> do
+            restoreStoreRoots path certificatePath
+            throwError err409{errBody = "The store did not delete this output. It may still be kept by another store path or lower store."}
+        Left err ->
+            throwError err503{errBody = LBS.fromStrict (TE.encodeUtf8 ("Cannot check whether the store deleted the output: " <> TE.decodeUtf8Lenient (LBS.toStrict err)))}
+
+restoreStoreRoots :: FilePath -> FilePath -> AppM ()
+restoreStoreRoots path certificatePath = do
+    lift (rootStorePath path)
+    lift (rootStorePath certificatePath)
 
 {-# NOINLINE pathMutationSemaphore #-}
 pathMutationSemaphore :: QSem

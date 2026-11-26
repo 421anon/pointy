@@ -5391,7 +5391,8 @@ a.storage-panel__step-id:focus-visible {
   justify-content: flex-end;
 }
 
-.storage-panel__rev-action--armed {
+.storage-panel__rev-action--armed,
+.storage-panel__rev-action--deleting {
   width: auto;
   min-width: auto;
   padding: 0 var(--spacing-xs);
