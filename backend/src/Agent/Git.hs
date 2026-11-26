@@ -17,6 +17,8 @@ module Agent.Git (
     sessionDisplayTitle,
     sessionHasActiveRunner,
     commitAgentTurnOutputs,
+    attachAgentWorktreeToBranch,
+    advanceCleanWorktreeToCommit,
     refreshSessionBase,
     requireEditableSession,
     ApplyOrigin (..),
@@ -63,7 +65,7 @@ import Certificates (checkRevision, evalProjectDefinitions)
 import Config (Config (..), UserRepoConfig (..), loadConfig, resolveConfigPath)
 import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, SomeException, try)
 import Control.Monad (filterM, forM_, mfilter, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -207,21 +209,56 @@ nameUnnamedAgentSession sid title = do
 
 commitAgentTurnOutputs :: AgentSession -> AgentTurn -> ExceptT String IO (Maybe Text, [Text])
 commitAgentTurnOutputs session_ turn = do
-    _ <- runGitChecked (worktreePath session_) ["reset", "-q", "--"]
-    changedPaths <- changedWorktreePaths (worktreePath session_)
-    let allowedPaths = filter isAgentOutputPath changedPaths
-        skippedPaths = filter (not . isAgentOutputPath) changedPaths
-    case allowedPaths of
-        [] -> return (Nothing, skippedPaths)
-        _ -> do
-            _ <- runGitChecked (worktreePath session_) (["add", "-A", "--"] ++ map T.unpack allowedPaths)
-            staged <- hasStagedChanges (worktreePath session_)
-            if not staged
-                then return (Nothing, skippedPaths)
+    attached <- attachAgentWorktreeToBranch session_
+    case attached of
+        Nothing -> return (Nothing, [])
+        Just _ -> do
+            _ <- runGitChecked (worktreePath session_) ["reset", "-q", "--"]
+            changedPaths <- changedWorktreePaths (worktreePath session_)
+            let allowedPaths = filter isAgentOutputPath changedPaths
+                skippedPaths = filter (not . isAgentOutputPath) changedPaths
+            case allowedPaths of
+                [] -> return (Nothing, skippedPaths)
+                _ -> do
+                    _ <- runGitChecked (worktreePath session_) (["add", "-A", "--"] ++ map T.unpack allowedPaths)
+                    staged <- hasStagedChanges (worktreePath session_)
+                    if not staged
+                        then return (Nothing, skippedPaths)
+                        else do
+                            _ <- runGitChecked (worktreePath session_) ["commit", "-m", turnCommitSubject session_ turn, "-m", "Turn " ++ T.unpack (turnId turn)]
+                            head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
+                            return (Just head_, skippedPaths)
+
+attachAgentWorktreeToBranch :: AgentSession -> ExceptT String IO (Maybe Text)
+attachAgentWorktreeToBranch session_ = do
+    let worktree = worktreePath session_
+        branchName = T.unpack (agentBranch session_)
+    exists <- liftIO $ doesDirectoryExist worktree
+    if not exists
+        then return Nothing
+        else do
+            (branchCode, branchOutput, _) <- liftIO $ runGitIn worktree ["symbolic-ref", "--quiet", "--short", "HEAD"]
+            currentHead <- stripOutput <$> runGitChecked worktree ["rev-parse", "HEAD"]
+            if branchCode == ExitSuccess && T.strip (T.pack branchOutput) == agentBranch session_
+                then return (Just currentHead)
                 else do
-                    _ <- runGitChecked (worktreePath session_) ["commit", "-m", turnCommitSubject session_ turn, "-m", "Turn " ++ T.unpack (turnId turn)]
-                    head_ <- stripOutput <$> runGitChecked (worktreePath session_) ["rev-parse", "HEAD"]
-                    return (Just head_, skippedPaths)
+                    _ <- runGitChecked worktree ["checkout", "-B", branchName]
+                    attachedHead <- stripOutput <$> runGitChecked worktree ["rev-parse", "HEAD"]
+                    return (Just attachedHead)
+
+advanceCleanWorktreeToCommit :: AgentSession -> Text -> Text -> ExceptT String IO Bool
+advanceCleanWorktreeToCommit session_ expectedHead targetCommit = do
+    let worktree = worktreePath session_
+    worktreeHead <- stripOutput <$> runGitChecked worktree ["rev-parse", "HEAD"]
+    branchHead <- stripOutput <$> runGitChecked worktree ["rev-parse", T.unpack (agentBranch session_)]
+    unmerged <- worktreeUnmergedPaths worktree
+    dirty <- changedWorktreePaths worktree
+    staged <- hasStagedChanges worktree
+    if worktreeHead == branchHead && worktreeHead == expectedHead && null unmerged && null dirty && not staged
+        then do
+            resetWorktree worktree targetCommit
+            return True
+        else return False
 
 commitSubjectMaxLength :: Int
 commitSubjectMaxLength = 72
@@ -370,6 +407,7 @@ applyAgentChanges origin sid =
 applyPendingChanges :: ApplyOrigin -> Text -> ExceptT String IO ()
 applyPendingChanges origin sid = do
     session_ <- requireEditableSession sid
+    _ <- attachAgentWorktreeToBranch session_
     branchState <- collectGitState session_
     when (hasAgentCommits branchState) $ do
         unless (T.null (T.strip (branchDiff branchState))) $ liftIO $ announce origin (branchDiff branchState)
@@ -437,9 +475,13 @@ mergeCandidate repoPath session_ origin targetHead_ agentHead_ = do
                     return (Just committed)
                 else do
                     liftIO $ removeWorktreeIfExists repoPath applyWorktree
-                    resetWorktree (worktreePath session_) targetHead_
-                    saveSessionUpdate session_{status = "open", baseCommit = targetHead_, preparedApply = Nothing, lastError = remainingError origin}
-                    return Nothing
+                    advanced <- advanceCleanWorktreeToCommit session_ agentHead_ targetHead_
+                    if advanced
+                        then do
+                            saveSessionUpdate session_{status = "open", baseCommit = targetHead_, preparedApply = Nothing, lastError = remainingError origin}
+                            return Nothing
+                        else do
+                            throwError "The agent worktree has uncommitted or diverged changes; refusing to discard them while applying. Commit or discard those changes first."
 
 verifyCandidate :: FilePath -> PreparedApply -> [Int] -> IO (Either String ())
 verifyCandidate repoPath candidate changedSteps =
@@ -880,8 +922,20 @@ repairLoggedTerminalTurn session_ turn
     | not (turnLogHasFinalizationFailure (turnLog turn)) = return turn
     | otherwise =
         case inferTurnExitCode (turnLog turn) of
-            Nothing -> return turn
+            Nothing -> markTurnInterrupted session_ turn
             Just exitCode -> finalizeTurnWithExitCode session_ turn exitCode
+
+markTurnInterrupted :: AgentSession -> AgentTurn -> IO AgentTurn
+markTurnInterrupted session_ turn = do
+    finishedAt <- turnTerminalTime session_ turn
+    let interrupted =
+            turn
+                { turnStatus = "interrupted"
+                , turnExitCode = Nothing
+                , turnFinishedAt = Just finishedAt
+                }
+    saveTurnBestEffort interrupted
+    return interrupted
 
 finalizeTurnWithExitCode :: AgentSession -> AgentTurn -> Int -> IO AgentTurn
 finalizeTurnWithExitCode session_ turn exitCode = do
@@ -948,7 +1002,7 @@ sweepStaleRunningSessions = do
         mapM_ (repairStaleUnfinishedTurn session_) unfinishedTurns
         now <- getCurrentTime
         let hadPersistedRunner = status session_ == "running" || activeTurnId session_ /= Nothing
-            staleFailure = any ((/= Just 0) . inferTurnExitCode . turnLog) unfinishedTurns
+            staleFailure = any (maybe False (/= 0) . inferTurnExitCode . turnLog) unfinishedTurns
             shouldSave = hadPersistedRunner || staleFailure
             nextStatus =
                 if status session_ == "running"
@@ -968,8 +1022,11 @@ sweepStaleRunningSessions = do
                     }
 
     repairStaleUnfinishedTurn session_ turn =
-        let exitCode = maybe (-1) id (inferTurnExitCode (turnLog turn))
-         in void $ finalizeTurnWithExitCode session_ turn exitCode
+        case inferTurnExitCode (turnLog turn) of
+            Just exitCode -> void $ finalizeTurnWithExitCode session_ turn exitCode
+            Nothing -> do
+                void (try (runExceptT (commitAgentTurnOutputs session_ turn)) :: IO (Either SomeException (Either String (Maybe Text, [Text]))))
+                void $ markTurnInterrupted session_ turn
 
 turnTerminalTime :: AgentSession -> AgentTurn -> IO UTCTime
 turnTerminalTime session_ turn = do

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Agent.Router (JudgedMessage (..), Route (..), routeTurn) where
+module Agent.Router (JudgedMessage (..), Route (..), routeTurn, capExchangeHistory, routerHistoryCharacterBudget) where
 
 import Agent.Exchange (Exchange (..), exchangeReply, turnExchanges)
 import Agent.Model (AgentRole (..))
@@ -8,11 +8,14 @@ import Agent.Policy (RoutingChoice (..), routingChoices, routingInstructions)
 import Agent.Session (AgentTurn (..), ViewedArtifact (..), isChangesetLifecycleTurn, listTurnsWithLogs)
 import Config (Config (..), RouterConfig (..), loadConfig, resolveConfigPath)
 import Data.Aeson (Key, Value, object, (.=))
+import qualified Data.Aeson as Aeson
 import Data.List (find, sortOn, stripPrefix)
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import ProviderHttp (choiceRequest)
 import System.Exit (ExitCode (..))
 import UserRepo (runGitIn, userRepoPath)
@@ -77,7 +80,7 @@ viewingContext artifact = do
 earlierExchanges :: AgentTurn -> IO [Exchange]
 earlierExchanges current = do
     turns <- listTurnsWithLogs (turnSessionId current)
-    pure
+    pure . capExchangeHistory $
         [ exchange
         | turn <- sortOn turnStartedAt turns
         , turnId turn /= turnId current
@@ -85,6 +88,42 @@ earlierExchanges current = do
         , not (isChangesetLifecycleTurn turn)
         , exchange <- turnExchanges turn
         ]
+
+routerHistoryCharacterBudget :: Int
+routerHistoryCharacterBudget = 24000
+
+routerReplyCharacterBudget :: Int
+routerReplyCharacterBudget = 8000
+
+replyTruncationMarker :: Text
+replyTruncationMarker = "… [truncated]"
+
+capExchangeHistory :: [Exchange] -> [Exchange]
+capExchangeHistory exchanges = reverse (keepWithin routerHistoryCharacterBudget (reverse exchanges))
+  where
+    keepWithin _ [] = []
+    keepWithin remaining (exchange : older)
+        | remaining <= 0 = []
+        | overhead >= remaining = []
+        | otherwise =
+            let available = min routerReplyCharacterBudget (remaining - overhead)
+                reply = exchangeReply exchange
+                clippedReply
+                    | T.length reply <= available = reply
+                    | available <= T.length replyTruncationMarker = ""
+                    | otherwise = T.take (available - T.length replyTruncationMarker) reply <> replyTruncationMarker
+                clipped = exchange{exchangeReplyLines = [clippedReply]}
+                cost = exchangeCharacterCount clipped
+             in if cost > remaining
+                    then []
+                    else clipped : keepWithin (remaining - cost) older
+      where
+        overhead = exchangeCharacterCount exchange{exchangeReplyLines = []}
+
+    exchangeCharacterCount exchange =
+        T.length (exchangeMessage exchange)
+            + T.length (exchangeReply exchange)
+            + maybe 0 (T.length . TE.decodeUtf8Lenient . LBS.toStrict . Aeson.encode) (exchangeContext exchange)
 
 exchangeJson :: Exchange -> Value
 exchangeJson exchange =

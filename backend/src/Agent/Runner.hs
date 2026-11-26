@@ -20,6 +20,9 @@ module Agent.Runner (
     planSteer,
     watchTurnBudget,
     resetAgentSessions,
+    beginDrainingRunners,
+    isDrainingRunners,
+    awaitRunnersDrain,
 ) where
 
 import Agent.Git (AgentSessionView, ApplyOrigin (..), applyAgentChanges, commitAgentTurnOutputs, discardStaleApplyConflict, finalizeApplyResolution, findReviewedSteps, loadAgentSessionView, nameUnnamedAgentSession, refreshSessionBase, requireEditableSession, sessionHasActiveRunner)
@@ -66,7 +69,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (async, wait, withAsync)
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, withMVar)
-import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, stateTVar, takeTMVar, tryPutTMVar, writeTVar)
+import Control.Concurrent.STM (STM, TChan, TMVar, TVar, atomically, check, modifyTVar', newEmptyTMVarIO, newTVarIO, orElse, readTChan, readTVar, registerDelay, retry, stateTVar, takeTMVar, tryPutTMVar, writeTVar)
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, fromException, try)
 import Control.Lens (failing, filtered, (^.), (^..), (^?))
 import Control.Monad (filterM, forM_, guard, mfilter, unless, void, when)
@@ -78,6 +81,7 @@ import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (sort, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
@@ -106,6 +110,21 @@ import UserRepo (runGitIn, userRepoPath, withUserRepoExclusiveIO)
 {-# NOINLINE activeRunners #-}
 activeRunners :: TVar (Map.Map Text (Text, Maybe ProcessHandle))
 activeRunners = unsafePerformIO $ newTVarIO Map.empty
+
+{-# NOINLINE drainingRunners #-}
+drainingRunners :: TVar Bool
+drainingRunners = unsafePerformIO $ newTVarIO False
+
+beginDrainingRunners :: IO ()
+beginDrainingRunners = atomically $ writeTVar drainingRunners True
+
+isDrainingRunners :: IO Bool
+isDrainingRunners = atomically $ readTVar drainingRunners
+
+awaitRunnersDrain :: IO ()
+awaitRunnersDrain = atomically $ do
+    runners <- readTVar activeRunners
+    check (Map.null runners)
 
 {-# NOINLINE stopRequestedTurns #-}
 stopRequestedTurns :: TVar (Set.Set Text)
@@ -286,6 +305,8 @@ closeRunnerInput input = modifyMVar_ input $ \current -> do
 
 startAgentTurn :: Text -> Text -> [TurnImage] -> [AreaCapture] -> Maybe (ViewedArtifact, Text) -> Maybe Int -> Bool -> Maybe Text -> ExceptT String IO AgentTurn
 startAgentTurn sid prompt images areaCaptures viewedArtifact mCurrentProjectId enabled client = do
+    draining <- liftIO isDrainingRunners
+    when draining $ Except.throwError "server_restarting"
     session_ <- ExceptT $ loadSessionById sid
     when (status session_ == "applied") $ Except.throwError "session_applied"
     when (status session_ == "discarded") $ Except.throwError "session_discarded"
@@ -298,6 +319,8 @@ data TurnOrigin = UserTurn [TurnImage] [AreaCapture] (Maybe (ViewedArtifact, Tex
 
 beginAgentTurn :: AgentSession -> Text -> Maybe Int -> TurnOrigin -> ExceptT String IO AgentTurn
 beginAgentTurn session_ prompt mCurrentProjectId origin = do
+    draining <- liftIO isDrainingRunners
+    when draining $ Except.throwError "server_restarting"
     cfg <- liftIO $ resolveConfigPath >>= loadConfig
     (refreshedSession, syncNotes, upstreamContext) <- refreshSessionBase session_
     reviewedSteps <- findReviewedSteps refreshedSession
@@ -603,29 +626,114 @@ withConfiguredRunner cfg session_ role logPath sessionFlag outputMarker reviewed
         (Just hin, Just hout, mErr, ph) <- createProcess process
         action hin hout mErr ph
 
+data AttemptObservation = AttemptObservation
+    { attemptSawAgentWork :: IORef Bool
+    , attemptSawTransientProviderFailure :: IORef Bool
+    }
+
+newAttemptObservation :: IO AttemptObservation
+newAttemptObservation =
+    AttemptObservation <$> newIORef False <*> newIORef False
+
+recordAttemptEvent :: AttemptObservation -> Aeson.Value -> IO ()
+recordAttemptEvent observation event =
+    case event ^? key "type" . _String of
+        Just "message_end" -> do
+            let role = event ^. key "message" . key "role" . _String
+                stopReason = event ^. key "message" . key "stopReason" . _String
+                errorMessage = event ^. key "message" . key "errorMessage" . _String
+                prose = event ^. key "message" . key "content" . values . filtered isTextContent . key "text" . _String
+            when (role == "assistant" && not (T.null (T.strip prose))) $
+                writeIORef (attemptSawAgentWork observation) True
+            when (role == "assistant" && stopReason `elem` ["error", "aborted"] && isTransientProviderFailure errorMessage) $
+                writeIORef (attemptSawTransientProviderFailure observation) True
+        Just "tool_execution_start" -> writeIORef (attemptSawAgentWork observation) True
+        Just "tool_execution_end" -> writeIORef (attemptSawAgentWork observation) True
+        Just "response"
+            | event ^? key "command" . _String == Just "prompt"
+            , event ^? key "success" . _Bool == Just False
+            , Just message <- event ^? key "error" . _String
+            , isTransientProviderFailure message ->
+                writeIORef (attemptSawTransientProviderFailure observation) True
+        Just "auto_retry_end"
+            | event ^? key "success" . _Bool == Just False
+            , Just message <- event ^? key "finalError" . _String
+            , isTransientProviderFailure message ->
+                writeIORef (attemptSawTransientProviderFailure observation) True
+        _ -> return ()
+  where
+    isTextContent part = part ^. key "type" . _String == "text"
+
+isTransientProviderFailure :: Text -> Bool
+isTransientProviderFailure message =
+    any (`T.isInfixOf` lowered) transientProviderMarkers
+  where
+    lowered = T.toLower message
+
+transientProviderMarkers :: [Text]
+transientProviderMarkers =
+    [ "did not begin responding"
+    , "timed out"
+    , "timeout"
+    , "overloaded"
+    , "connection reset"
+    , "econnreset"
+    , "connection refused"
+    , "rate limit"
+    , "temporarily unavailable"
+    , "service unavailable"
+    , "502"
+    , "503"
+    , "504"
+    , "429"
+    ]
+
 runConfiguredProcess :: AgentConfig -> AgentSession -> AgentTurn -> AgentRole -> Text -> [TurnImage] -> Bool -> [Int] -> IO ExitCode
-runConfiguredProcess cfg session_ turn role promptText images isFirstTurn reviewedSteps = do
-    let outputMarker = "__POINTY_AGENT_OUTPUT_BEGIN__" <> turnId turn <> "__"
-        sessionFlag = if isFirstTurn then [] else ["-c"]
-    withConfiguredRunner cfg session_ role (turnLogPath turn) sessionFlag outputMarker reviewedSteps $ \hin hout mErr ph -> do
-        input <- newRunnerInput hin
-        let cleanup = do
-                atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
-                closeRunnerInput input
-            run = do
-                stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
-                unless stopped $ do
-                    writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText, "images" Aeson..= map piImageContent images]
-                    writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
-                    atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
-                    takeWaitingSteers (sessionId session_) input
-                outReader <- async $ streamHandle cfg (turnLogPath turn) outputMarker "stdout" (handleRpcEventSafely cfg (turnLogPath turn) input) hout
-                errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) outputMarker "stderr" (const $ return ())) mErr
-                exitCode <- watchTurnBudget cfg turn input ph (agentTimeoutSeconds cfg * 1000000)
-                modelFailed <- wait outReader
-                _ <- wait errReader
-                return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
-        run `finally` cleanup
+runConfiguredProcess cfg session_ turn role promptText images isFirstTurn reviewedSteps = runAttempt 1
+  where
+    maxProviderRetries = 2
+    providerRetryDelaysMicros = [2000000, 5000000]
+
+    runAttempt retryNumber = do
+        observation <- newAttemptObservation
+        exitCode <- runAttemptOnce observation
+        sawWork <- readIORef (attemptSawAgentWork observation)
+        transient <- readIORef (attemptSawTransientProviderFailure observation)
+        stopped <- turnStopRequested (turnId turn)
+        if exitCode /= ExitSuccess && transient && not sawWork && not stopped && retryNumber <= maxProviderRetries
+            then do
+                appendLogLine cfg (turnLogPath turn) "stdout" $
+                    "*Provider timed out; retrying (" <> T.pack (show retryNumber) <> "/" <> T.pack (show maxProviderRetries) <> ")...*"
+                threadDelay (providerRetryDelaysMicros !! (retryNumber - 1))
+                stoppedAfterDelay <- turnStopRequested (turnId turn)
+                if stoppedAfterDelay then return exitCode else runAttempt (retryNumber + 1)
+            else return exitCode
+
+    runAttemptOnce observation = do
+        let outputMarker = "__POINTY_AGENT_OUTPUT_BEGIN__" <> turnId turn <> "__"
+            sessionFlag = if isFirstTurn then [] else ["-c"]
+        withConfiguredRunner cfg session_ role (turnLogPath turn) sessionFlag outputMarker reviewedSteps $ \hin hout mErr ph -> do
+            input <- newRunnerInput hin
+            let cleanup = do
+                    atomically $ modifyTVar' runnerInputs (Map.delete (sessionId session_))
+                    closeRunnerInput input
+                observe event = do
+                    recordAttemptEvent observation event
+                    handleRpcEventSafely cfg (turnLogPath turn) input event
+                run = do
+                    stopped <- attachRunnerProcess (sessionId session_) (turnId turn) ph
+                    unless stopped $ do
+                        writeRpc hin $ Aeson.object ["id" Aeson..= ("initial" :: Text), "type" Aeson..= ("prompt" :: Text), "message" Aeson..= promptText, "images" Aeson..= map piImageContent images]
+                        writeRpc hin $ Aeson.object ["type" Aeson..= ("get_session_stats" :: Text)]
+                        atomically $ modifyTVar' runnerInputs (Map.insert (sessionId session_) input)
+                        takeWaitingSteers (sessionId session_) input
+                    outReader <- async $ streamHandle cfg (turnLogPath turn) outputMarker "stdout" observe hout
+                    errReader <- maybe (async (return False)) (async . streamHandle cfg (turnLogPath turn) outputMarker "stderr" (const $ return ())) mErr
+                    exitCode <- watchTurnBudget cfg turn input ph (agentTimeoutSeconds cfg * 1000000)
+                    modelFailed <- wait outReader
+                    _ <- wait errReader
+                    return $ if exitCode == ExitSuccess && modelFailed then ExitFailure 1 else exitCode
+            run `finally` cleanup
 
 compactAgentSession :: Text -> ExceptT String IO AgentSessionView
 compactAgentSession sid = do
@@ -1137,8 +1245,7 @@ finishTurn cfg _session turn sentCurrentProject exitCode = do
                                 Nothing -> return ()
                             return skippedError
                     let nextStatus = if status loaded == "running" then "open" else status loaded
-                        runnerError = if stopped || exitCode == ExitSuccess then Nothing else Just "runner_failed"
-                        nextError = combineErrorMessages [runnerError, autoCommitError]
+                        nextError = autoCommitError
                         nextCurrentProject = if sentCurrentProject && finalStatus /= "succeeded" then Nothing else agentCurrentProjectId loaded
                         updated = loaded{activeTurnId = Nothing, status = nextStatus, lastError = nextError, agentCurrentProjectId = nextCurrentProject}
                     applyResolution <- liftIO $ Except.runExceptT $ finalizeApplyResolution updated
@@ -1235,12 +1342,6 @@ finalizeWithRetry cfg turn attempt runAttempt = do
                 threadDelay (attempt * 1000000)
                 finalizeWithRetry cfg turn (attempt + 1) runAttempt
         _ -> return result
-
-combineErrorMessages :: [Maybe Text] -> Maybe Text
-combineErrorMessages messages =
-    case [msg | Just msg <- messages] of
-        [] -> Nothing
-        present -> Just (T.intercalate "; " present)
 
 summarizePaths :: [Text] -> Text
 summarizePaths paths =

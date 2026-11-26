@@ -430,6 +430,36 @@ test-suite apply-resolution
   hs-source-dirs:   test
   default-language: Haskell2010
 
+test-suite agent-git-recovery
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          AgentGitRecovery.hs
+  build-depends:
+    , backend
+    , base
+    , directory
+    , filepath
+    , mtl
+    , process
+    , temporary
+    , text
+    , time
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
+test-suite router-history
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  main-is:          RouterHistory.hs
+  build-depends:
+    , backend
+    , base
+    , text
+
+  hs-source-dirs:   test
+  default-language: Haskell2010
+
 test-suite certificate-status
   import:           warnings
   type:             exitcode-stdio-1.0

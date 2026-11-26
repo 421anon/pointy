@@ -454,6 +454,8 @@ in
         ExecStart = "${pointy.packages.backend}/bin/backend";
         Restart = "always";
         RestartSec = 5;
+        KillMode = "mixed";
+        TimeoutStopSec = "5min";
         User = cfg.user;
         Group = cfg.group;
         EnvironmentFile = "-${cfg.home}/agent-env";

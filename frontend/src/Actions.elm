@@ -4195,6 +4195,9 @@ finishedTurnMessage sessionId finishedTurnId agentState =
         Just (Model.ChatFailed reason) ->
             "Failed: " ++ reason
 
+        Just Model.ChatInterrupted ->
+            "Interrupted by a server restart."
+
         Just Model.ChatStopped ->
             "Stopped"
 
@@ -5092,6 +5095,40 @@ submitAgentPrompt =
                         )
                 )
         )
+
+
+retryAgentTurn : String -> String -> Flow Model ()
+retryAgentTurn sessionId prompt =
+    Flow.get
+        |> Flow.andThen
+            (\model ->
+                let
+                    agentState =
+                        Model.getAgent model
+
+                    sessionView =
+                        Dict.get sessionId agentState.sessionViews
+                            |> Maybe.andThen ApiData.toMaybe
+                in
+                case sessionView of
+                    Just view ->
+                        if canRetryAgentTurn sessionId view.session agentState prompt then
+                            sendAgentTurn (Flow.pure ()) view [] prompt
+
+                        else
+                            addToast False "This turn cannot be retried right now."
+
+                    Nothing ->
+                        addToast False "This chat is still loading."
+            )
+
+
+canRetryAgentTurn : String -> Model.AgentSession -> Model.AgentState -> String -> Bool
+canRetryAgentTurn sessionId session agentState prompt =
+    not (String.isEmpty (String.trim prompt))
+        && not (Model.agentSessionArchived session.status)
+        && not (Model.agentMutationPending agentState)
+        && not (agentSessionRunning sessionId agentState)
 
 
 withAgentPrompt : List Model.ComposerAttachment -> (String -> Flow Model ()) -> Flow Model ()

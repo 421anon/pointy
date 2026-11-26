@@ -1078,7 +1078,9 @@ chatStatusLabel status =
 
 viewError : Model.AgentSession -> Html msg
 viewError session =
-    Html.viewMaybe (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text err ]) session.lastError
+    Html.viewMaybe
+        (\err -> Html.pre [ class "agent-panel__error" ] [ Html.text (Model.humanizeAgentError err) ])
+        session.lastError
 
 
 changesetRefused : Maybe Model.ChatChangeset -> Bool
@@ -1482,8 +1484,29 @@ viewChatTurns mentionSources agent sessionView changeset changesetActions autoAp
                 |> Maybe.map (viewPendingSteer >> List.singleton)
                 |> Maybe.withDefault []
 
+        entries =
+            sessionEntries sessionView agent
+
+        latestTurn =
+            List.foldl
+                (\entry acc ->
+                    case entry of
+                        Model.ChatTurnEntry turn ->
+                            Just turn
+
+                        _ ->
+                            acc
+                )
+                Nothing
+                entries
+
         content =
-            List.map (viewChatEntry mentionSources sessionId agent.highlightTurnId autoApplyEcho) (sessionEntries sessionView agent) ++ pendingSteerNodes ++ pendingChangesetNodes ++ questionNodes
+            List.map
+                (viewChatEntry mentionSources sessionId agent.highlightTurnId autoApplyEcho (retryTurnAction sessionView.session agent runnerActive closedChat latestTurn))
+                entries
+                ++ pendingSteerNodes
+                ++ pendingChangesetNodes
+                ++ questionNodes
     in
     if List.isEmpty content then
         viewEmptyChat (EmptyMessages (not closedChat && not runnerActive))
@@ -1491,6 +1514,43 @@ viewChatTurns mentionSources agent sessionView changeset changesetActions autoAp
     else
         Html.div [ class "agent-panel__chat", id Actions.agentChatId ]
             (content ++ [ Html.div [ id Actions.agentChatEndId ] [] ])
+
+
+retryTurnAction : Model.AgentSession -> Model.AgentState -> Bool -> Bool -> Maybe Model.ChatTurn -> Model.ChatTurn -> Maybe (Flow Model ())
+retryTurnAction session agent runnerActive closedChat latestTurn turn =
+    if closedChat || runnerActive || Model.agentMutationPending agent || Model.agentSessionArchived session.status then
+        Nothing
+
+    else
+        case ( latestTurn, turn.prompt ) of
+            ( Just latest, Just prompt ) ->
+                if
+                    latest.turnId
+                        == turn.turnId
+                        && not (String.isEmpty turn.turnId)
+                        && retryableTurnStatus turn.status
+                        && not (String.isEmpty (String.trim prompt))
+                then
+                    Just (Actions.retryAgentTurn session.sessionId prompt)
+
+                else
+                    Nothing
+
+            _ ->
+                Nothing
+
+
+retryableTurnStatus : Model.ChatTurnStatus -> Bool
+retryableTurnStatus status =
+    case status of
+        Model.ChatFailed _ ->
+            True
+
+        Model.ChatInterrupted ->
+            True
+
+        _ ->
+            False
 
 
 type EmptyChat
@@ -1524,11 +1584,11 @@ viewEmptyChat state =
         ]
 
 
-viewChatEntry : AgentMentions.Sources -> String -> Maybe String -> Maybe Bool -> Model.ChatEntry -> Html (Flow Model ())
-viewChatEntry mentionSources sessionId highlightTurnId autoApplyEcho entry =
+viewChatEntry : AgentMentions.Sources -> String -> Maybe String -> Maybe Bool -> (Model.ChatTurn -> Maybe (Flow Model ())) -> Model.ChatEntry -> Html (Flow Model ())
+viewChatEntry mentionSources sessionId highlightTurnId autoApplyEcho retryFor entry =
     case entry of
         Model.ChatTurnEntry turn ->
-            viewChatTurn mentionSources sessionId (highlightTurnId == Just turn.turnId) autoApplyEcho turn
+            viewChatTurn mentionSources sessionId (highlightTurnId == Just turn.turnId) autoApplyEcho (retryFor turn) turn
 
         Model.ChatChangesetEntry changeset ->
             viewChangesetBox [] changeset
@@ -1543,8 +1603,8 @@ turnIdAttribute turn =
         [ id (Actions.agentTurnId turn.turnId) ]
 
 
-viewChatTurn : AgentMentions.Sources -> String -> Bool -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
-viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
+viewChatTurn : AgentMentions.Sources -> String -> Bool -> Maybe Bool -> Maybe (Flow Model ()) -> Model.ChatTurn -> Html (Flow Model ())
+viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho retry turn =
     Html.div
         (classList
             [ ( "agent-panel__chat-turn", True )
@@ -1574,7 +1634,7 @@ viewChatTurn mentionSources sessionId isHighlighted autoApplyEcho turn =
                     ]
             )
             turn.prompt
-        , viewAgentMessage mentionSources autoApplyEcho turn
+        , viewAgentMessage mentionSources autoApplyEcho retry turn
         ]
 
 
@@ -1602,8 +1662,8 @@ viewPendingSteer prompt =
         ]
 
 
-viewAgentMessage : AgentMentions.Sources -> Maybe Bool -> Model.ChatTurn -> Html (Flow Model ())
-viewAgentMessage mentionSources autoApplyEcho turn =
+viewAgentMessage : AgentMentions.Sources -> Maybe Bool -> Maybe (Flow Model ()) -> Model.ChatTurn -> Html (Flow Model ())
+viewAgentMessage mentionSources autoApplyEcho retry turn =
     let
         isEmptyAssistant =
             String.isEmpty (String.trim turn.assistant)
@@ -1626,8 +1686,18 @@ viewAgentMessage mentionSources autoApplyEcho turn =
                 Model.ChatStopped ->
                     ( "Stopped", "Stopped before a reply.", Nothing )
 
+                Model.ChatInterrupted ->
+                    ( "Interrupted", "No reply before the server restarted.", Nothing )
+
                 Model.ChatFailed err ->
                     ( "Failed", "No reply before the task failed.", Just err )
+
+        interruptedMessage =
+            if turn.status == Model.ChatInterrupted then
+                Just "Interrupted by a server restart."
+
+            else
+                Nothing
 
         body =
             if isEmptyAssistant then
@@ -1644,6 +1714,7 @@ viewAgentMessage mentionSources autoApplyEcho turn =
                     [ ( "agent-panel__chat-status", True )
                     , ( "is-running", turn.status == Model.ChatPending )
                     , ( "is-failed", failedMessage /= Nothing )
+                    , ( "is-interrupted", interruptedMessage /= Nothing )
                     ]
                 , attribute "role" "status"
                 ]
@@ -1662,6 +1733,7 @@ viewAgentMessage mentionSources autoApplyEcho turn =
                 , ( "agent-panel__chat-bubble--agent", True )
                 , ( "is-pending", turn.status == Model.ChatPending && isEmptyAssistant )
                 , ( "is-failed", failedMessage /= Nothing )
+                , ( "is-interrupted", interruptedMessage /= Nothing )
                 ]
             ]
             [ Html.Lazy.lazy6 viewAgentMessageContent
@@ -1677,6 +1749,18 @@ viewAgentMessage mentionSources autoApplyEcho turn =
         , Html.viewMaybe
             (\err -> Html.div [ class "agent-panel__chat-error" ] [ Html.text ("Failed: " ++ err) ])
             failedMessage
+        , Html.viewMaybe
+            (\message -> Html.div [ class "agent-panel__chat-interrupted" ] [ Html.text message ])
+            interruptedMessage
+        , Html.viewMaybe
+            (\action ->
+                Html.button
+                    [ class "small-btn agent-panel__chat-retry"
+                    , Events.onClick action
+                    ]
+                    [ Html.text "Retry" ]
+            )
+            retry
         ]
 
 

@@ -931,6 +931,11 @@
     color: var(--text-primary);
     background: var(--state-danger-outline);
   }
+
+  &.is-interrupted {
+    color: var(--text-primary);
+    background: var(--state-warning-outline);
+  }
 }
 
 .agent-panel__chat-auto-apply {
@@ -966,6 +971,11 @@
 
   &.is-failed {
     border-color: var(--state-danger);
+  }
+
+  &.is-interrupted {
+    border-color: var(--state-warning);
+    background: var(--state-warning-outline);
   }
 }
 
@@ -1240,6 +1250,17 @@
 .agent-panel__chat-error {
   margin-top: var(--spacing-2xs);
   font-style: italic;
+}
+
+.agent-panel__chat-interrupted {
+  margin-top: var(--spacing-2xs);
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.agent-panel__chat-retry {
+  align-self: flex-start;
+  margin-top: var(--spacing-2xs);
 }
 
 

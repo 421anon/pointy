@@ -6,6 +6,7 @@
 
 module App (serveApp, runServer, server, stripBackendPrefix) where
 
+import Agent.Runner (awaitRunnersDrain, beginDrainingRunners)
 import Api (API)
 
 import Effectful (Eff)
@@ -33,12 +34,13 @@ import Handlers.StepSearch (stepSearchHandler, stepSearchInfoHandler)
 import Handlers.ChatSearch (chatSearchHandler)
 import Handlers.Steps (noticesHandler, patchStepHandler, postStepHandler)
 import Control.Concurrent (forkIO)
+import Control.Monad (void)
 import Handlers.Storage (deleteRevisionHandler, offloadHandler, offloadStepHandler, onloadRevisionHandler, onloadStepHandler, runStorageCenter, storageHandler)
 import Handlers.Store (stepBundleHandler, stepDownloadHandler, stepExtrasHandler, stepListHandler, stepRawHandler, stepSeekHandler)
 import Handlers.Upload (uploadHandler)
 import Data.String (fromString)
 import Network.Wai (Application, Request, pathInfo)
-import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setHost, setPort)
+import Network.Wai.Handler.Warp (defaultSettings, runSettings, setBeforeMainLoop, setGracefulShutdownTimeout, setHost, setInstallShutdownHandler, setPort)
 import Network.Wai.Middleware.Cors (CorsResourcePolicy (..), cors, simpleCorsResourcePolicy)
 
 import Control.Monad.Except (mapExceptT)
@@ -47,6 +49,10 @@ import Servant (Context (..), Handler (..), Proxy (..), ServerT, hoistServer, se
 import Network.Wai.Parse (setMaxRequestNumFiles)
 import Servant.Multipart (MultipartOptions, Tmp, TmpBackendOptions (..), backendOptions, defaultMultipartOptions, generalOptions)
 import Storage (uploadStagingRoot)
+import System.Posix.Signals (installHandler, sigTERM)
+import qualified System.Posix.Signals as Signals
+import System.Timeout (timeout)
+import UserRepo (withUserRepoExclusiveIO)
 
 server :: ServerT API AppM
 server =
@@ -313,4 +319,28 @@ runServer :: (forall x. Eff AppEffects x -> IO x) -> (Application -> Application
 runServer runEffects middleware host port warm = do
     installRunner (EffectRunner.Runner runEffects)
     _ <- forkIO runStorageCenter
-    runSettings (setHost (fromString host) (setPort port (setBeforeMainLoop warm defaultSettings))) (serveApp runEffects middleware)
+    runSettings settings (serveApp runEffects middleware)
+  where
+    settings =
+        setHost (fromString host) $
+            setPort port $
+                setBeforeMainLoop warm $
+                    setGracefulShutdownTimeout (Just gracefulShutdownSeconds) $
+                        setInstallShutdownHandler installShutdown defaultSettings
+
+    installShutdown closeSocket = do
+        _ <- installHandler sigTERM (Signals.Catch (drainThenClose closeSocket)) Nothing
+        return ()
+
+    drainThenClose closeSocket = do
+        beginDrainingRunners
+        void $ timeout drainTimeoutMicros $ do
+            void (withUserRepoExclusiveIO (pure ()))
+            awaitRunnersDrain
+        closeSocket
+
+drainTimeoutMicros :: Int
+drainTimeoutMicros = 270 * 1000000
+
+gracefulShutdownSeconds :: Int
+gracefulShutdownSeconds = 20

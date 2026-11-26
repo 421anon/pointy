@@ -57,7 +57,7 @@ import GHC.Generics (Generic)
 import Handlers.Store (resolveStepOutPath)
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, responseFile, responseLBS)
-import Servant (Handler, NoContent (..), Tagged (..), err400, err404, err409, err500, errBody, throwError)
+import Servant (Handler, NoContent (..), Tagged (..), err400, err404, err409, err500, err503, errBody, throwError)
 import System.Directory (doesFileExist)
 import UserRepo (withUserRepoExclusiveIO, withUserRepoSharedIO)
 
@@ -234,6 +234,7 @@ throwAgentError err =
         [ ("empty_session_name", err400)
         , ("empty_prompt", err400)
         , ("session_not_found", err404)
+        , ("server_restarting", err503)
         ]
             ++ [(conflict, err409) | conflict <- conflicts]
     conflicts =
