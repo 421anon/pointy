@@ -34,7 +34,7 @@ main = do
     let package =
             stepLogView 4258 builds Nothing $
                 ResolvedLog extensionBuild (stdenvLog [("patchPhase", []), ("configurePhase", ["cmake ok"]), ("buildPhase", ["cmake error"])]) [editstatBuild]
-    assertEqual "unknown builds are packages" (PackageRef "duckdb-welkerlab-0.1.0") (viewFailed package)
+    assertEqual "unknown builds are packages" (PackageRef "duckdb-ext-0.1.0") (viewFailed package)
     assertEqual "via keeps only builds other than the requested step" [] (viewVia package)
     assertEqual "packages show the output of every phase" "cmake ok\ncmake error" (viewOutput package)
 
@@ -47,7 +47,7 @@ main = do
     editstatBuild = "/nix/store/kdsgwrw20dk83wrcrp26w1mjsgk3gr50-duckdb-1.drv"
     editstatCheck = "/nix/store/00000000000000000000000000000001-certificate.drv"
     alignBuild = "/nix/store/00000000000000000000000000000002-alignment-1.drv"
-    extensionBuild = "/nix/store/00000000000000000000000000000003-duckdb-welkerlab-0.1.0.drv"
+    extensionBuild = "/nix/store/00000000000000000000000000000003-duckdb-ext-0.1.0.drv"
     builds =
         [ StepBuild 4258 "editstat" editstatBuild (Just editstatCheck) ["installPhase"]
         , StepBuild 4246 "align" alignBuild Nothing ["installPhase"]

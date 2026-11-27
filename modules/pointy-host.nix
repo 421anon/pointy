@@ -193,7 +193,7 @@ in
         union of several directories on one disk, because the union reports their
         sizes summed. Null measures the store itself.
       '';
-      example = "/var/lib/pointy-cloud-account/upper";
+      example = "/var/lib/pointy-store/upper";
     };
 
     storageCapacityCommand = lib.mkOption {
@@ -244,7 +244,7 @@ in
         user must own it. Exported as POINTY_BUILD_LOG_MIRROR. Null keeps logs only in
         the Nix store's log directory.
       '';
-      example = "/var/lib/pointy-cloud-account/build-logs";
+      example = "/var/lib/pointy/build-logs";
     };
 
     uploadDirectory = lib.mkOption {

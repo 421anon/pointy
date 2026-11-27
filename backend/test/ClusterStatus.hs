@@ -19,7 +19,7 @@ main :: IO ()
 main = do
     assertEqual
         "a down node is degraded and reports no usable nodes"
-        (Degraded, Just "trotter down; no usable nodes")
+        (Degraded, Just "node1 down; no usable nodes")
         (clusterStatusFromAvailability (Right downNodeTranscript))
     assertEqual
         "idle nodes on up partitions are available"
@@ -35,8 +35,8 @@ main = do
         (clusterStatusFromAvailability (Right "pointy*|up|node1|idle*\n"))
     assertEqual
         "a flag is dropped when the state already explains the node"
-        (Degraded, Just "trotter down; no usable nodes")
-        (clusterStatusFromAvailability (Right "pointy*|up|trotter|down*\n"))
+        (Degraded, Just "node1 down; no usable nodes")
+        (clusterStatusFromAvailability (Right "pointy*|up|node1|down*\n"))
     assertEqual
         "a down partition is degraded"
         (Degraded, Just "partition debug down")
@@ -58,7 +58,7 @@ main = do
     assertBool
         "degraded payload carries status and detail"
         ( "\"status\":\"degraded\"" `occursIn` degradedPayload
-            && "\"detail\":\"trotter down; no usable nodes\"" `occursIn` degradedPayload
+            && "\"detail\":\"node1 down; no usable nodes\"" `occursIn` degradedPayload
         )
     assertBool
         "available payload carries a null detail"
@@ -195,10 +195,10 @@ savingPayload =
 
 downNodeTranscript :: String
 downNodeTranscript =
-    "pointy*|up|trotter|down\ndebug|up|trotter|down\n"
+    "pointy*|up|node1|down\ndebug|up|node1|down\n"
 
 degradedPayload :: BS.ByteString
-degradedPayload = payload (Degraded, Just "trotter down; no usable nodes")
+degradedPayload = payload (Degraded, Just "node1 down; no usable nodes")
 
 payload :: (ClusterStatus, Maybe Text) -> BS.ByteString
 payload (status, detail) =
