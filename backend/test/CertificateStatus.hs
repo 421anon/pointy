@@ -19,11 +19,13 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Fixture.Document (FixtureDocument (..))
 import Interpreters.Fixture (FixtureJob (..), FixtureState (..), newFixtureState, runFixture)
 import Effectful (Eff, IOE, liftIO, runEff)
 import Effectful.Dispatch.Dynamic (interpret)
-import Effects (Nix (..))
+import Effects (LogStamp (..), Nix (..))
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName)
@@ -101,6 +103,51 @@ main = do
         resolved
     mapM_ checkContentAddressedGraph [False, True]
     checkConcurrentLevelProbes
+    checkInputLogAccess
+
+checkInputLogAccess :: IO ()
+checkInputLogAccess = do
+    remote <- resolveRecordingLogs RemoteLogs
+    assertEqual
+        "remote search fetches the input log through substituters"
+        (Just (failedDrv, failedLog), [["log", rootDrv], ["log", failedDrv]])
+        remote
+    local <- resolveRecordingLogs LocalLogs
+    assertEqual
+        "local search reads the input log offline without substituters"
+        (Just (failedDrv, failedLog), [["--option", "substituters", "", "--offline", "log", failedDrv]])
+        local
+  where
+    rootDrv = "/nix/store/00000000000000000000000000000000-root.drv"
+    failedDrv = "/nix/store/11111111111111111111111111111111-failed-input.drv"
+    failedLog = "fixture input failed" :: BC.ByteString
+    inputsOf drv
+        | drv == rootDrv = [failedDrv]
+        | otherwise = []
+    derivations paths =
+        LBS.toStrict . encode $
+            Map.fromList
+                [ (drv, object ["outputs" .= object ["out" .= object ["hash" .= ("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" :: Text), "method" .= ("nar" :: Text)]], "inputDrvs" .= object [Key.fromString input .= (["out"] :: [Text]) | input <- inputsOf drv]])
+                | drv <- paths
+                ]
+    resolveRecordingLogs access = do
+        logInvocations <- newIORef []
+        resolved <-
+            runEff $ interpret (\_ -> \case
+                RunNixCli ("derivation" : "show" : paths) ->
+                    pure (ExitSuccess, derivations paths, "")
+                RunNixCli args | (drv : "log" : _) <- reverse args -> do
+                    liftIO $ modifyIORef' logInvocations (++ [args])
+                    pure $ if drv == failedDrv then (ExitSuccess, failedLog, "") else (ExitFailure 1, "", "")
+                RunNixStoreCli ("--realise" : "--dry-run" : paths) ->
+                    pure (ExitSuccess, "", BC.pack (unlines (("these " ++ show (length paths) ++ " derivations will be built:") : map ("  " ++) paths)))
+                LocalLogStamp drv ->
+                    pure (if drv == failedDrv then Just (LogStamp (posixSecondsToUTCTime 0) (fromIntegral (BC.length failedLog))) else Nothing)
+                _ -> liftIO (fail "input log access test: unexpected Nix operation")
+                )
+                (resolveBuildLog access rootDrv)
+        recorded <- readIORef logInvocations
+        pure (fmap (\result -> (resolvedDrv result, resolvedLog result)) resolved, recorded)
 
 checkConcurrentLevelProbes :: IO ()
 checkConcurrentLevelProbes = do
@@ -112,19 +159,20 @@ checkConcurrentLevelProbes = do
             runEff . interpret (\_ -> \case
                 RunNixCli ("derivation" : "show" : paths) ->
                     pure (ExitSuccess, derivations paths, "")
-                RunNixCli ["log", _] ->
-                    pure (ExitFailure 1, "", "")
-                RunNixCli ["--offline", "log", drv] -> do
-                    liftIO $ atomically $ modifyTVar' started (+1)
-                    arrived <- liftIO $ atomically $ do
-                        probed <- readTVar started
-                        outOfTime <- readTVar expired
-                        check (probed >= levelSize || outOfTime)
-                        pure (probed >= levelSize)
-                    liftIO $ unless arrived $ atomically $ writeTVar stalled True
-                    pure $ case Map.lookup drv siblingLogs of
-                        Just logText -> (ExitSuccess, logText, "")
-                        Nothing -> (ExitFailure 1, "", "")
+                RunNixCli ["log", drv]
+                    | drv == rootDrv ->
+                        pure (ExitFailure 1, "", "")
+                    | otherwise -> do
+                        liftIO $ atomically $ modifyTVar' started (+1)
+                        arrived <- liftIO $ atomically $ do
+                            probed <- readTVar started
+                            outOfTime <- readTVar expired
+                            check (probed >= levelSize || outOfTime)
+                            pure (probed >= levelSize)
+                        liftIO $ unless arrived $ atomically $ writeTVar stalled True
+                        pure $ case Map.lookup drv siblingLogs of
+                            Just logText -> (ExitSuccess, logText, "")
+                            Nothing -> (ExitFailure 1, "", "")
                 RunNixStoreCli ("--realise" : "--dry-run" : paths) ->
                     pure (ExitSuccess, "", BC.pack (unlines (("these " ++ show (length paths) ++ " derivations will be built:") : map ("  " ++) paths)))
                 _ -> liftIO (fail "concurrent level probe test: unexpected Nix operation")
@@ -194,9 +242,7 @@ checkContentAddressedGraph version4 = do
     runGraphFixture = runEff . interpret (\_ -> \case
         RunNixCli ("derivation" : "show" : paths) ->
             pure (ExitSuccess, derivations paths, "")
-        RunNixCli ["log", _] ->
-            pure (ExitFailure 1, "", "")
-        RunNixCli ["--offline", "log", drv] ->
+        RunNixCli ["log", drv] ->
             pure $ if drv == failedDrv then (ExitSuccess, "fixture dependency failed", "") else (ExitFailure 1, "", "")
         RunNixStoreCli ("--realise" : "--dry-run" : paths) ->
             pure (ExitSuccess, "", BC.pack (unlines (("these " ++ show (length paths) ++ " derivations will be built:") : map ("  " ++) paths)))

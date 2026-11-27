@@ -55,7 +55,6 @@ runNixFixture =
         RunNixCli ["log", target]
             | target == drv -> pure (ExitSuccess, latestLog, BC.empty)
         RunNixCli ["log", _] -> pure (ExitFailure 1, BC.empty, "no log")
-        RunNixCli ["--offline", "log", _] -> pure (ExitFailure 1, BC.empty, "no log")
         RunNixCli ["--option", "substituters", "", "log", _] -> pure (ExitFailure 1, BC.empty, "no log")
         RunNixCli ["--option", "substituters", "", "--offline", "log", _] -> pure (ExitFailure 1, BC.empty, "no log")
         RunNixCli ["derivation", "show", target] -> pure (ExitSuccess, derivationShow target, BC.empty)

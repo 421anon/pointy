@@ -229,7 +229,6 @@ fixtureLogStamp document drv = fmap (fmap stamp) (logAnswer document drv)
 answerNix :: FixtureDocument -> [String] -> IO (ExitCode, BS.ByteString, BS.ByteString)
 answerNix document args = case args of
     ["log", drv] -> logFor drv
-    ["--offline", "log", drv] -> logFor drv
     ["--option", "substituters", "", "log", drv] -> logFor drv
     ["--option", "substituters", "", "--offline", "log", drv] -> logFor drv
     ["path-info", "--derivation", path] -> pure $ case derivationAnswer document path of

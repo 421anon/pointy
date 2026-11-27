@@ -475,6 +475,7 @@ test-suite certificate-status
     , filepath
     , stm
     , text
+    , time
 
   hs-source-dirs:   test
   default-language: Haskell2010

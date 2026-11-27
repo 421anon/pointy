@@ -182,7 +182,7 @@ fetchInputLog access drv = case access of
         case mirrored of
             Just buildLog -> return (Just buildLog)
             Nothing -> localStoreLog access drv ["--offline", "log", drv]
-    RemoteLogs -> remoteLog access drv ["--offline", "log", drv]
+    RemoteLogs -> remoteLog access drv ["log", drv]
 
 localStoreLog :: (Nix :> es, IOE :> es) => LogAccess -> FilePath -> [String] -> Eff es (Maybe ByteString)
 localStoreLog access drv args = do
